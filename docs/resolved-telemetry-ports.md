@@ -94,7 +94,7 @@ recorded separately; source tests alone do not establish production acceptance.
 
 General graph-to-verified-contract resolution, Service/Workspace/Session scope
 identity and general state-dataset compatibility/leases remain in the
-[completion ledger](plugin-refactor-completion.md). This port lease is only an
+[completion ledger](history/plugin-refactor-completion.md). This port lease is only an
 in-process observation fence, not a durable state lease or exclusive state writer.
 Independent post-effect Plugin/native recovery and real account/device/managed
 policy cutover remain separate exits.

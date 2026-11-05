@@ -2,7 +2,7 @@
 
 The ordinary source-file Review now has a core-owned Code path. This is not a
 Plugin, an alternative resource registry, a Machine upgrade or a complete Code
-refactor. The [completion ledger](plugin-refactor-completion.md) still requires
+refactor. The [completion ledger](history/plugin-refactor-completion.md) still requires
 native destination rollout and
 supported-device acceptance.
 

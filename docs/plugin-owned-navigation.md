@@ -193,7 +193,7 @@ Before production cutover, still required:
 This source candidate does not publish a signed Catalog release, install a
 Plugin or authorize resident Machine maintenance. General DAG execution, state
 leases and independent recovery remain in the
-[completion ledger](plugin-refactor-completion.md).
+[completion ledger](history/plugin-refactor-completion.md).
 
 The [original candidate acceptance](releases/owned-navigation-candidate-2026-09-17.md)
 records the `1.10.0` plaintext and deterministic-fixture milestone. The

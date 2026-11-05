@@ -159,5 +159,5 @@ the separately authorized protocol-20 Machine maintenance and signed Zed 1.9
 publication/installation, actual native consumer and supported-device
 acceptance, and abandoned-browser/restart/independent post-effect recovery.
 General typed graph/site/state compatibility exits remain in the
-[completion ledger](../plugin-refactor-completion.md). None is closed by this
+[completion ledger](../history/plugin-refactor-completion.md). None is closed by this
 conditional Controller/Web delivery.

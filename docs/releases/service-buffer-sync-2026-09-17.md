@@ -125,7 +125,7 @@ confirmation/unknown presentation, ordinary Review content/position lifetimes,
 owned navigation destinations, separate authorized Machine maintenance, exact
 signed Zed rollout, supported-device acceptance and independently authorized
 post-effect/restart recovery. Process-local evidence cannot be reconstructed
-into a replay grant. Other [completion exits](../plugin-refactor-completion.md)
+into a replay grant. Other [completion exits](../history/plugin-refactor-completion.md)
 remain open; the Plugin refactor is not complete.
 
 ## Retained evidence

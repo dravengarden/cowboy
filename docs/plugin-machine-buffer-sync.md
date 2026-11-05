@@ -90,4 +90,4 @@ installing the Plugin. Production Review still needs that separate rollout,
 consumer cancellation/content changes, owned navigation destinations and
 supported clients. A reconnect cannot recover this operation's old authority;
 independent recovery is still required. See the
-[completion ledger](plugin-refactor-completion.md).
+[completion ledger](history/plugin-refactor-completion.md).

@@ -15,7 +15,7 @@ continues to use the accepted runtime revision.
 At this milestone all fresh Service installations, including the old generic
 path, were paused. Machine protocol-19 attempt writing was also disabled. This accepted the actual
 reader floor, **not** connected installation execution, writer cutover, independent
-restoration or the [whole refactor](../plugin-refactor-completion.md).
+restoration or the [whole refactor](../history/plugin-refactor-completion.md).
 
 ## Implemented and checked
 

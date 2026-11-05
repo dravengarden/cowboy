@@ -140,4 +140,4 @@ or session changed. Global retained-history/background-effect limits,
 independently authorized recovery, signed publication/installation and actual
 deployed consumer/native-generation and supported-device acceptance remain
 open. General graph/site/state leases remain in the
-[completion ledger](../plugin-refactor-completion.md).
+[completion ledger](../history/plugin-refactor-completion.md).

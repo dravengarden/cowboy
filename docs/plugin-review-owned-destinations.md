@@ -82,7 +82,7 @@ do not relabel unchanged binaries with the new Web revision.
 These gates do not replace native pre-acquisition resource bounds, registered
 Machine/exact installed-generation acceptance, supported-device checks or
 independently authorized post-effect recovery. Those remain open in the
-[completion ledger](plugin-refactor-completion.md).
+[completion ledger](history/plugin-refactor-completion.md).
 
 The [2026-09-18 Web release](releases/review-destination-reader-2026-09-18.md)
 records exact artifacts, browser/native gates and bounded production observations.

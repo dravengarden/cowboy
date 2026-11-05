@@ -144,4 +144,4 @@ contracts, independently authorized post-effect restoration,
 native-generation replacement or supported-device acceptance. A refusal is an
 ended observation: never a rollback, an undo, or proof that a read already
 under way has stopped. Those remain in the
-[completion ledger](../plugin-refactor-completion.md#code-work-still-required).
+[completion ledger](../history/plugin-refactor-completion.md#code-work-still-required).

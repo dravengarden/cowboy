@@ -64,4 +64,4 @@ confirms native peer removal; it does not resolve an uncertain acquisition.
 Independently authorized recovery and global retained
 buffer/history/background-effect budgets remain separate work. These candidate
 checks are not production installation or supported-device acceptance; see the
-[completion ledger](plugin-refactor-completion.md).
+[completion ledger](history/plugin-refactor-completion.md).

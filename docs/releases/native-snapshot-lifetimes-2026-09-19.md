@@ -155,7 +155,7 @@ does not apply this fix to an existing native process. Installation needs the
 separate exact-release Operator step; retained native owners are not adopted.
 Production private navigation remains closed. Global byte/history/background
 budgets, independent restoration, supported-device acceptance and the other
-[completion exits](../plugin-refactor-completion.md) remain open.
+[completion exits](../history/plugin-refactor-completion.md) remain open.
 
 ## Evidence
 

@@ -94,5 +94,5 @@ observes this same registry without readiness discovery or new resource effects.
 Remaining work includes Review integration, positional content and
 anchor semantics, independent Machine/Code activation, supported-device
 acceptance and independently authorized post-effect recovery. See the
-[completion ledger](plugin-refactor-completion.md); the overall Plugin refactor
+[completion ledger](history/plugin-refactor-completion.md); the overall Plugin refactor
 is not complete.

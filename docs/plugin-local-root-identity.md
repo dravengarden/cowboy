@@ -81,7 +81,7 @@ a claim about a read that already started.
   reader/writer leases, general graph contracts, independently authorized
   post-effect restoration, native-generation replacement and supported-device
   acceptance all remain open in the
-  [completion ledger](plugin-refactor-completion.md).
+  [completion ledger](history/plugin-refactor-completion.md).
 
 ## Evidence, and the coverage this does not have
 

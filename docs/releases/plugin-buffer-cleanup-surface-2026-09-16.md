@@ -98,4 +98,4 @@ with its own effect authority, owned navigation destinations, independently
 accepted/activated Machine and Code Plugin, abandoned-browser/restart recovery,
 post-effect restoration and supported-device acceptance. The panel explicitly
 describes this page only; an empty new page is not evidence of earlier native
-release. See the [completion ledger](../plugin-refactor-completion.md).
+release. See the [completion ledger](../history/plugin-refactor-completion.md).

@@ -95,4 +95,4 @@ initialization failures now report through the same bounded fixture result.
 Synthetic HTTP is not a logged-in product or physical-device test. Actual
 Machine/native rollout, independent restoration, abandoned-browser/restart
 recovery and general graph/state exits remain in the
-[completion ledger](plugin-refactor-completion.md).
+[completion ledger](history/plugin-refactor-completion.md).

@@ -99,7 +99,7 @@ approved maintenance and supported-session acceptance are not implied by this
 Controller update. Real account/device security checks, managed Victoria
 Operator/policy acceptance, general graph/state resolution, capability-specific
 acceptance, independently authorized post-effect recovery and archival remain
-in the [completion ledger](../plugin-refactor-completion.md). The iPhone pasted
+in the [completion ledger](../history/plugin-refactor-completion.md). The iPhone pasted
 image caret issue remains unrelated and unsolved.
 
 ## Evidence

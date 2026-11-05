@@ -196,5 +196,5 @@ No target platform is blocked for these six release artifacts. Machine
 installation/upgrade, real Operator/Provider authentication, actual native
 generation transitions, Review buffer/language consumers, independent
 post-effect recovery and managed Victoria cutover remain separate. Follow the
-[completion ledger](../plugin-refactor-completion.md); this publication is not
+[completion ledger](../history/plugin-refactor-completion.md); this publication is not
 a whole-refactor completion claim.

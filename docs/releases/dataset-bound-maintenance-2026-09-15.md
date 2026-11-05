@@ -151,7 +151,7 @@ attempts and corrected scope assessments alongside the successful receipts.
 | `floor-activation-audit.json` | `022895c8684abbeaa1ba2b010e15d7e23f5908f43956fb5ded93f9a4d5c3d6b8` |
 | `worker-reset-assessment.json` | `fda7be304b487b8321dbcf31fdfb3064abefddb54391546bc50742f0283238df` |
 
-The [completion ledger](../plugin-refactor-completion.md) still requires general
+The [completion ledger](../history/plugin-refactor-completion.md) still requires general
 live graph/state leases, capability-specific and native acceptance, independently
 authorized post-effect recovery and archival, real core-security account/device
 handoff and managed Victoria Operator/policy/ingestion acceptance. Old browser

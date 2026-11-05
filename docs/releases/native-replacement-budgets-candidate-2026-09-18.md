@@ -152,5 +152,5 @@ Close, observer cancellation and fixture teardown do not establish background
 drain or recovery. Public budget reconciliation, general graph/site/state leases,
 independently authorized post-effect restoration, actual deployed native-generation
 and supported-device acceptance remain separate
-[completion exits](../plugin-refactor-completion.md). No production Catalog,
+[completion exits](../history/plugin-refactor-completion.md). No production Catalog,
 account, policy, installation, Machine, component pointer or session changed.

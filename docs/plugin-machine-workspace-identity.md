@@ -100,7 +100,7 @@ never presented as a rollback, an undo or a restored continuation.
 ## Out of scope
 
 Explicitly not closed by this slice, and still open in the
-[completion ledger](plugin-refactor-completion.md):
+[completion ledger](history/plugin-refactor-completion.md):
 
 - Session read routes whose cwd is a session worktree rather than an advertised
   root. Those keep only the existing Controller observation fence.

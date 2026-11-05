@@ -77,4 +77,4 @@ that resolution. No automatic recovery is added here.
 
 Global retained-history/background-effect limits, independent post-effect
 recovery, signed publication/installation and actual deployed native/device
-acceptance remain in the [completion ledger](plugin-refactor-completion.md).
+acceptance remain in the [completion ledger](history/plugin-refactor-completion.md).

@@ -98,7 +98,7 @@ policy was changed. A slot observation lease is not a durable state lease, and
 resolution still grants no effect authority. Already emitted telemetry is
 `NoRestore`. General graph/scope/dataset resolution, independent post-effect
 Plugin/native recovery, actual Operator/managed policy cutover, supported-client
-acceptance and the other [completion exits](../plugin-refactor-completion.md)
+acceptance and the other [completion exits](../history/plugin-refactor-completion.md)
 remain open. PID continuity in this window does not prove a native generation
 swap or session restoration.
 

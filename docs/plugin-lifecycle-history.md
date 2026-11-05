@@ -67,7 +67,7 @@ replaces only the two core history consumers, not Plugin packages or the Catalog
 Telemetry binding/recovery already has separate typed surfaces and is not
 silently folded into a supposedly atomic lifecycle transaction. General graph
 diagnostics, post-effect restoration, archival and supported-native acceptance
-remain separate [completion exits](plugin-refactor-completion.md).
+remain separate [completion exits](history/plugin-refactor-completion.md).
 
 During the 2026-09-15 gate, newly published
 [GHSA-2mjx-qc3c-rqvc](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc)

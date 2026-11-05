@@ -15,7 +15,7 @@ archived adapters drop the signed configuration arguments. The old 3.1.13
 candidate passes alone; its normal coexistence attempt stops before the older
 worker becomes ready. These results do not establish the health of live
 sessions. Exact identities and immutable evidence are in
-[the handoff](../PLUGINIZATION-HANDOFF.md).
+[the handoff](history/pluginization-handoff.md).
 
 The post-rebase component release 2.7.0 has new candidate identities, including
 Codex DeepSeek 3.1.14. Previous receipts remain historical evidence, not

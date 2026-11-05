@@ -127,4 +127,4 @@ These are per-input and per-invocation limits, not global retained-history,
 background-concurrency, decoding-scratch or process-RSS bounds. Independent
 post-effect recovery, signed publication/installation, actual deployed
 native-generation and supported-device acceptance, and general graph/site/state
-leases remain in the [completion ledger](../plugin-refactor-completion.md).
+leases remain in the [completion ledger](../history/plugin-refactor-completion.md).

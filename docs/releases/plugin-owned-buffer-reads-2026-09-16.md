@@ -115,7 +115,7 @@ before/pre-dispatch/after snapshots and activation/HTTP audit. SHA-256 values:
 - Four-role reader audit: `b55397c506a30a21f47fe29adb38b20eeb3844cd6bdbb840ef78b129fe93ad87`.
 - Activation/HTTP audit: `f745c663a2033cca7c6eea83a3c0a23d207ee3ad504681222a150ee01e59cebc`.
 
-The [completion ledger](../plugin-refactor-completion.md) still requires separate
+The [completion ledger](../history/plugin-refactor-completion.md) still requires separate
 Machine/Code rollout, client pending/unknown/release handling, genuine positional
 content/anchor semantics, supported-device acceptance and independently
 authorized recovery. An old Machine fails the new core support probe; this

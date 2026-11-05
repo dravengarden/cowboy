@@ -90,7 +90,7 @@ The formerly live `1814cb19` negative control still fails Zed's nested runtime v
 Complete production-Catalog inspection verifies all 42 signatures and preserves
 the same 34 supported identities across two new-reader cold starts, without
 changing any of its 224 files. Exact receipts and limits are in
-`PLUGINIZATION-HANDOFF.md`, **Nested Code reader candidate and coexistence recheck**.
+`docs/history/pluginization-handoff.md`, **Nested Code reader candidate and coexistence recheck**.
 The user subsequently authorized its Controller-only activation. On 2026-09-07
 at 02:59:32Z the installed machine-owned activator committed `c0911dd0`, with
 matching live executable/profile, receipt and deployment Git pin. Rebuilding the

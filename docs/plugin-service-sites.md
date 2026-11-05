@@ -73,6 +73,6 @@ Victoria; the pre-existing GTK portal failed state was preserved, not cleared.
 
 Workspace/Session/security-domain resolution, general state leases, graph
 contract linking and independent post-effect/native restoration remain in the
-[completion ledger](plugin-refactor-completion.md). In particular, this finite
+[completion ledger](history/plugin-refactor-completion.md). In particular, this finite
 Site check does not make Agent-internal effects reversible, restore a turn or
 authorize a managed Victoria cutover.

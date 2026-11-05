@@ -10,14 +10,14 @@ Production at this reading: Machine writer release `9c79b9c3` (transaction
 `1791179356912329897-9c79b9c379ec`, worker generation `worker-748825b4…`,
 retained worker source `b97c2724…`); Controller and Web were moved by independent
 tasks. **Update 2026-10-06 (later):** the incarnation writer is also active on Hawk
-([release](releases/incarnation-writer-2026-10-06.md)); steps 1-3 of the durable
+([release](../releases/incarnation-writer-2026-10-06.md)); steps 1-3 of the durable
 incarnation design are done and step 4, carriage to the Controller with stale
 observation refusal, is implemented and tested but held on a local branch because
 its wire change would block host-only Machine releases until the worker pin
-advances ([record](plugin-session-incarnation-carriage.md)). Nothing consumes the
+advances ([record](../plugin-session-incarnation-carriage.md)). Nothing consumes the
 lineage in production yet. **Update 2026-10-07:** the carriage and the pin advance to
 it are on `main` (`f469cf04`) and active on Hawk's Machine and Controller
-([release](releases/worker-pin-incarnation-carriage-2026-10-07.md)); no live worker
+([release](../releases/worker-pin-incarnation-carriage-2026-10-07.md)); no live worker
 was drained. The connected Code failure that predated it was a test-relay gap (it
 refused the periodic `HostResources` event), not a product defect; the conformance now
 passes against the deployed Controller.
@@ -25,17 +25,17 @@ passes against the deployed Controller.
 **Update 2026-10-06:** another task completed the worker-pool maintenance (Machine
 `48d3054d`, `worker-135348a7…`, pin `8909c1c8`) and the items below are now active;
 the conformance on built artifacts passed (37 groups, see the
-[reader contract](plugin-session-incarnation-reader.md)). The incarnation floor is
+[reader contract](../plugin-session-incarnation-reader.md)). The incarnation floor is
 still unanchored. The paragraph below is the 2026-10-05 reading.
 
 Source on main but **not active** because host-only Machine releases are blocked
 (main carries the independent wire change `22de6bbf`, so the retained worker pin
 must advance first, which drains every live Hawk worker): the
-[incarnation reader](plugin-session-incarnation-reader.md), bounded in-process
+[incarnation reader](../plugin-session-incarnation-reader.md), bounded in-process
 cleanup retries, and the shared `namespace.rs` refactor. The refactor touches the
 active deletion journal, so its native old/new writer conformance must be re-run on
 a built artifact before it ships. The
-[worker-pool candidate](releases/machine-pool-candidate-2026-10-05.md)
+[worker-pool candidate](../releases/machine-pool-candidate-2026-10-05.md)
 (`worker-5e009066…`) has Codex execution, logs, session and Codex/Claude
 (Hawk-installed) coexistence accepted; Claude native execution (needs the
 3.4.7 runtime built) and connected Code (needs the exact Zed pair) are open. The
@@ -50,9 +50,9 @@ exit, not a proxy).
 
 | Exit | Implemented / verified / activated | Still missing, and what would close it |
 | --- | --- | --- |
-| A. P0 typed resolution, continuous identity | Finite release/Catalog, Service/Machine Site, telemetry and Code-read observations; Machine root/workspace identity (protocol 24/25) and Controller-local root identity; process-local lifecycle fence; terminal deletion journal and Hawk writer; **cleanup continuation (this release)** | General graph/Site/state-lease contracts; continuous Machine-owned Session/worktree/security-domain identity from launch through reset and termination; **durable Session incarnation**; state leases/policy ([design](plugin-state-lease-design.md): no consumer exists, so deliberately not built); binding resolved results to finite domain executors ([rule and inventory](plugin-domain-executor-binding.md): done for telemetry, the only domain with such an executor; nothing generic by design); portable deletion-writer admission; more refusal/cancel/change/independent-observation vectors |
+| A. P0 typed resolution, continuous identity | Finite release/Catalog, Service/Machine Site, telemetry and Code-read observations; Machine root/workspace identity (protocol 24/25) and Controller-local root identity; process-local lifecycle fence; terminal deletion journal and Hawk writer; **cleanup continuation (this release)** | General graph/Site/state-lease contracts; continuous Machine-owned Session/worktree/security-domain identity from launch through reset and termination; **durable Session incarnation**; state leases/policy ([design](../plugin-state-lease-design.md): no consumer exists, so deliberately not built); binding resolved results to finite domain executors ([rule and inventory](../plugin-domain-executor-binding.md): done for telemetry, the only domain with such an executor; nothing generic by design); portable deletion-writer admission; more refusal/cancel/change/independent-observation vectors |
 | B. Session cleanup | Preparation containment, original-root retention, bounded markers, target handles, `openat2` scans, descendant handles, leaf identity, deferred marker finalization, retry identity and marker progress — all activated; **durable continuation activated, startup/admission accepted, not exercised live** | Two non-transactional marker unlinks; non-atomic final identity comparison and name unlink; unfrozen same-inode/concurrent content; completed paths mean "original scan", not "empty now"; a hung system call is not interrupted (per-pass wall-clock budget exists in source, see the cleanup-targets contract); non-Linux fallback ordering; cross-Session retained-resource budget; crash/power-loss proof; a live deletion→restart→resume observation |
-| C. P3 state compatibility | Finite security, telemetry and browser dataset namespaces; [design](plugin-state-dataset-design.md) written, unimplemented | General state-dataset identity; actual old/new reader and writer coexistence; exclusive fenced ownership; principal change, crash/reopen, version change; independent workspace/generation coexistence; active, next-recovery and cold immutable readers. New migrations only; the deployed SQLx baselines stay byte-exact |
+| C. P3 state compatibility | Finite security, telemetry and browser dataset namespaces; [design](../plugin-state-dataset-design.md) written, unimplemented | General state-dataset identity; actual old/new reader and writer coexistence; exclusive fenced ownership; principal change, crash/reopen, version change; independent workspace/generation coexistence; active, next-recovery and cold immutable readers. New migrations only; the deployed SQLx baselines stay byte-exact |
 | D. P4 Agent/Plugin capability | Connected installation writer and Code HTTP chain accepted | Agent authentication projection lifecycle; actual native-generation replacement; each capability's install/upgrade/uninstall, cancel, crash and partial-effect boundary; same-ID dedup and changed-input refusal |
 | E. P4 Code consumer / native budgets | Finite sync/reload/remote-edit budgets, acquisition and snapshot lifetimes, single-use open and close confirmation | Global retained-history, snapshot and background-effect budgets for every writer; deployed Machine with the exact native/client pair accepted independently; owned Review consumption, cancel, stale text/positions; replacement of retained Sessions across generations. Production private navigation policy stays closed; it is not opened to manufacture a pass |
 | F. P4 recovery and evidence archival | Observation and Unknown retention; local disposal only | Independently authorized post-effect Plugin restoration; exact native-worker recovery and owner migration; installation CAS with fresh recovery purpose and budget; archival that keeps unresolved references. No restored-turn claim, no credential rollback, no user-data deletion |
@@ -102,7 +102,7 @@ protocol field that carries the Machine-minted value to the Controller. The
 installed owner (`machines/internal/cowboyrelease`) currently binds one floor to
 one dataset path, so the dependency order is:
 
-The full contract is the [incarnation design](plugin-session-incarnation-design.md).
+The full contract is the [incarnation design](../plugin-session-incarnation-design.md).
 
 1. Generalize the owner's floor and admission to a dataset key, reader-only first,
    without changing the deletion dataset's bytes or behaviour (Columbus work,
@@ -114,7 +114,7 @@ The full contract is the [incarnation design](plugin-session-incarnation-design.
    Falcon**, which keeps its older owner until its own host activation.
 2. Ship a Machine reader for the incarnation namespace with the writer disabled.
    **Implemented, verified and published** (`4d792318`, see the
-   [reader contract](plugin-session-incarnation-reader.md)); **not activated**:
+   [reader contract](../plugin-session-incarnation-reader.md)); **not activated**:
    main now carries an independent wire change that host-only Machine releases
    refuse, so activation waits for that task's separately accepted full Machine
    maintenance.

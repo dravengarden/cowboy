@@ -66,4 +66,4 @@ signed lifecycle and browser regressions remain required.
 This is finite outcome reconciliation, not independent post-effect restoration,
 all-writer/global native accounting, general graph/state leases, replacement of
 retained native owners or device acceptance. See the
-[completion ledger](plugin-refactor-completion.md).
+[completion ledger](history/plugin-refactor-completion.md).

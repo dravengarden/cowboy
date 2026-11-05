@@ -125,5 +125,5 @@ authorized post-effect recovery and cross-restart restoration remain unaccepted.
 The synthetic LSP does not prove production language semantics. Public cutover,
 actual signed publication/installation and resident Machine maintenance require
 their own evidence. General graph/state leases and the other exits in the
-[completion ledger](../plugin-refactor-completion.md) remain open. This does not
+[completion ledger](../history/plugin-refactor-completion.md) remain open. This does not
 report the whole Plugin refactor complete or enable production navigation.

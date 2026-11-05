@@ -145,7 +145,7 @@ public artifact). Selected SHA-256 receipts:
 | Component/HTTP acceptance     | `2b2e00e58406a1cbb1f748ba36e3540b90dff07d10ca17d5f7db565b7ec08bb9` |
 | Unsigned bound envelope       | `73339f0bb79dccac1208a465ebce9e2fcaafad452a2260dce71527bd8e6056cc` |
 
-The [completion ledger](../plugin-refactor-completion.md) remains open. Required
+The [completion ledger](../history/plugin-refactor-completion.md) remains open. Required
 work includes explicit disk/native synchronization with its own effect and
 shared/dirty-buffer rules, owned navigation destinations, Review's consumer and
 unresolved-resource UI, independent Machine/Code rollout, supported devices,

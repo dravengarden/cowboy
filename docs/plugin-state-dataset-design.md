@@ -1,7 +1,7 @@
 # General state-dataset compatibility — design (not implemented)
 
 Status: design for review; nothing here is built or activated. It addresses the
-P3 exit in the [completion ledger](plugin-refactor-completion.md): general
+P3 exit in the [completion ledger](history/plugin-refactor-completion.md): general
 state-dataset identity, actual old/new reader and writer coexistence, exclusive
 fenced ownership, principal change, crash/reopen, version change and independent
 workspace/generation coexistence. It reuses what the terminal-deletion journal,

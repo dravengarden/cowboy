@@ -2,7 +2,7 @@
 
 This is a finite core state boundary, not an installable Plugin or a serialized
 authorization. The generic composition checker still grants no live authority.
-The [completion ledger](plugin-refactor-completion.md) retains the remaining
+The [completion ledger](history/plugin-refactor-completion.md) retains the remaining
 general state, native and independently authorized recovery exits.
 
 ## Identity and transport

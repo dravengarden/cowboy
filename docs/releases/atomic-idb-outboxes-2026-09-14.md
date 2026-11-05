@@ -88,7 +88,7 @@ outbox data was removed or migrated.
 General principal/dataset identity, cross-version exclusive ownership,
 browser/host power loss, Safari/native acceptance, native runtime generation
 recovery and independent post-effect Plugin restoration remain explicit exits
-in the [completion ledger](../plugin-refactor-completion.md).
+in the [completion ledger](../history/plugin-refactor-completion.md).
 
 Private local evidence root: `/tmp/cowboy-outbox-delta.j5AOkY`. SHA-256:
 

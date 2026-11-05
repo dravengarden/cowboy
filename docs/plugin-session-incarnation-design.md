@@ -3,7 +3,7 @@
 Status: design for review. Nothing here is built, published or activated.
 It is the contract the first dependent slices must satisfy, written before any
 durable-identity code per the rule in the
-[October 5 status](plugin-refactor-status-2026-10-05.md).
+[October 5 status](history/plugin-refactor-status-2026-10-05.md).
 
 ## What exists and what is missing
 

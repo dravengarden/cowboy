@@ -111,5 +111,5 @@ activation/HTTP audit. SHA-256 identities:
 - Activation/HTTP audit:
   `dab850836d40a101b3f213d39541cef40222981462ff515b91f05f3055bbaa58`.
 
-The [completion ledger](../plugin-refactor-completion.md) retains the remaining
+The [completion ledger](../history/plugin-refactor-completion.md) retains the remaining
 resource/state, independent post-effect recovery and supported-client exits.

@@ -93,6 +93,6 @@ Activation/HTTP audit SHA-256:
 Continuous Machine-owned Workspace identity, cross-request file cursor lifetime,
 state leases, independent post-effect/native recovery and supported-device /
 account acceptance remain in the
-[completion ledger](../plugin-refactor-completion.md). Discarding a stale reply
+[completion ledger](../history/plugin-refactor-completion.md). Discarding a stale reply
 does not undo a dispatched read, Zed readiness operation or physical-path cache
 fill, and the final observation is not an atomic HTTP-delivery fence.

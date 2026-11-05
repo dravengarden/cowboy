@@ -138,5 +138,5 @@ coexistence, Agent/native-generation acceptance, remaining native/history
 budgets, supported-device consumers and independently authorized post-effect
 restoration. This read observation is not an authority, filesystem/inode proof,
 atomic HTTP-delivery fence or generic revertible effect. The
-[completion ledger](../plugin-refactor-completion.md#code-work-still-required)
+[completion ledger](../history/plugin-refactor-completion.md#code-work-still-required)
 retains those exits.

@@ -153,7 +153,7 @@ explicit refresh confirmation and retirement to the same owner, and fences
 ordinary cleanup while synchronization remains unresolved. Never
 mix new owner cleanup with old path-based open/read calls or silently downgrade
 an unsupported host. Independent post-effect recovery and browser-abandonment
-cleanup remain separate exits in the [completion ledger](plugin-refactor-completion.md).
+cleanup remain separate exits in the [completion ledger](history/plugin-refactor-completion.md).
 
 The subsequent [browser navigation continuation](plugin-browser-buffer-navigation.md)
 adds bounded, original-source Prepare/Execute/Query/Release ownership with a

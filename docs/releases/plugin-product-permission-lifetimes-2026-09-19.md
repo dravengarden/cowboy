@@ -125,4 +125,4 @@ or separate admin-cookie/host-delegation policy. General DAG resolution,
 Machine-owned identity/state leases, retained-history/background-effect budgets,
 Agent/native generation replacement, supported-device acceptance and independent
 post-effect restoration remain in the
-[completion ledger](../plugin-refactor-completion.md#code-work-still-required).
+[completion ledger](../history/plugin-refactor-completion.md#code-work-still-required).

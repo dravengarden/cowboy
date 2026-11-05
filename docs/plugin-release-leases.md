@@ -61,7 +61,7 @@ version, Machine protocol, SQL baseline, journal format or policy change.
 
 General verified graph resolution, Service/Workspace/Session identity, exclusive
 state leases, independent post-effect/native recovery and real account/device
-acceptance remain in the [completion ledger](plugin-refactor-completion.md).
+acceptance remain in the [completion ledger](history/plugin-refactor-completion.md).
 
 The [Controller release](releases/plugin-release-leases-2026-09-15.md) is
 published and active on Hawk. Complete source gates and 807 immutable role

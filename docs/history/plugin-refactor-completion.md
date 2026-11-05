@@ -1,6 +1,6 @@
 # Plugin refactor completion ledger
 
-Reviewed against the 2026-09-09 [target architecture](plugin-spatiotemporal-design.md)
+Reviewed against the 2026-09-09 [target architecture](../plugin-spatiotemporal-design.md)
 and current code on 2026-09-19. This is the current exit checklist, not a list of
 all historical slices. Passing a test, publishing a reader, enabling a policy
 and accepting a production effect are different milestones.
@@ -11,7 +11,7 @@ and accepting a production effect are different milestones.
   six independent Agent sources plus Zed, with no installable internal runtimes.
 - Core-owned communication, installation, security/native/Web host boundaries;
   isolated Provider accounts, exact session/workspace generations and sidecars.
-- [Controller-owned Catalog observation](unattended-release-adoption.md) uses
+- [Controller-owned Catalog observation](../unattended-release-adoption.md) uses
   bounded event settling, public trust-directory watches and read-only metadata
   fallback for missing/replaced roots. Unchanged hints skip host rebuilds;
   shutdown stops new attempts and drains admitted refreshes before storage
@@ -19,7 +19,7 @@ and accepting a production effect are different milestones.
   rejected candidates and distinguish a committed Plugin snapshot from a failed
   Provider projection. This is not unattended Machine installation, a new
   deployment credential, physical rollback or post-effect recovery. Its
-  [Controller release](releases/plugin-catalog-observer-2026-09-15.md) passed both
+  [Controller release](../releases/plugin-catalog-observer-2026-09-15.md) passed both
   complete gates and identical 69-release reads by actual candidate, predecessor
   and cold Controllers; it is published and activated with all 16 observed
   workers retained. Unattended installation remains explicitly deferred.
@@ -27,32 +27,32 @@ and accepting a production effect are different milestones.
   checkers in Rust and TypeScript; combined ownership/capability cycle checks
   and an 86-case real-CLI differential gate compare complete link reports. This
   is not verified live resolution or a grant.
-- [Finite live telemetry resolution](resolved-telemetry-ports.md) links exact
+- [Finite live telemetry resolution](../resolved-telemetry-ports.md) links exact
   verified contracts and original per-installation observation leases to the
   existing binding/export executors. An observed invalid installation cannot
   revive an old operation by returning to the same tuple. This is not general
   graph resolution, a state-dataset lease or new execution authority. Its
-  [Controller release](releases/resolved-telemetry-ports-2026-09-14.md) passed
+  [Controller release](../releases/resolved-telemetry-ports-2026-09-14.md) passed
   all 45 connected flows and nine Victoria pairs and was activated without
   restarting the resident Machine, workers or Victoria processes.
-- [Core verified release observations](plugin-release-leases.md) preserve the
+- [Core verified release observations](../plugin-release-leases.md) preserve the
   original exact Catalog lifetime across installation, uninstall and telemetry
   awaits. Accepted removal/re-addition or publisher-envelope replacement cannot
   revive old confirmation; rejected candidates and unrelated releases preserve
   continuity. This extends the finite trust boundary, not graph/state authority.
-  Its [Controller release](releases/plugin-release-leases-2026-09-15.md) passed
+  Its [Controller release](../releases/plugin-release-leases-2026-09-15.md) passed
   807 immutable role checks, including actual install/uninstall preflight ABA,
   and is activated with Machine and worker identities retained. This does not
   add generic graph execution or independent post-effect recovery.
-- [Service-bound execution Sites](plugin-service-sites.md) require a core-loaded
+- [Service-bound execution Sites](../plugin-service-sites.md) require a core-loaded
   identity owner and compare the exact Service/Machine pair in finite resolution,
   preflight and both final outgoing paths. All twelve scoped command variants,
   including historical queries, share the check; generic send/RPC entrypoints
-  cannot bypass it. The [Controller release](releases/plugin-service-sites-2026-09-15.md)
+  cannot bypass it. The [Controller release](../releases/plugin-service-sites-2026-09-15.md)
   passed all 807 immutable role checks and is active with Machine and all 15
   observed workers retained. This does not resolve Workspace/Session scopes,
   grant state ownership or authorize a graph.
-- [Finite code-read scopes](plugin-code-read-scopes.md) carry exact process-local
+- [Finite code-read scopes](../plugin-code-read-scopes.md) carry exact process-local
   Session incarnations through Zed requests/replies and all eleven buffered
   filesystem/Git HTTP readers, including cached, conditional and error replies.
   Cwd ABA and delete/recreate cannot revive them. Advertised Workspace snapshots
@@ -61,9 +61,9 @@ and accepting a production effect are different milestones.
   serialize the existing closed Rust operations with unchanged wire shapes.
   This does not fence all Code effects, supply continuous Workspace or filesystem
   identity, grant state authority or accept a native generation. The
-  [initial diff/Zed release](releases/plugin-code-read-scopes-2026-09-15.md)
+  [initial diff/Zed release](../releases/plugin-code-read-scopes-2026-09-15.md)
   passed the complete gate and retained its 15 observed workers. The expanded
-  [buffered-reader Controller release](releases/plugin-buffered-code-reads-2026-09-15.md)
+  [buffered-reader Controller release](../releases/plugin-buffered-code-reads-2026-09-15.md)
   adds six response-boundary tests and fourteen wire vectors, passed the complete
   gate, and is published and activated with all 16 observed workers retained.
   File continuations now bind the same original context and exact requested
@@ -72,16 +72,16 @@ and accepting a production effect are different milestones.
   stale cursor via `304`. Local and cached readers repair UTF-8 page/view
   boundaries and incomplete EOF. Independent Code adapter tests are part of the
   complete gate; source coverage is not a running remote adapter upgrade.
-  The [file-page Controller release](releases/plugin-file-page-scopes-2026-09-15.md)
+  The [file-page Controller release](../releases/plugin-file-page-scopes-2026-09-15.md)
   passed both complete gates and is published and activated with 16 workers
   retained; its independently built core adapter passed seven actual disposable
   process cases without upgrading a resident Machine.
-- [Continuous Workspace read scopes](plugin-workspace-read-scopes.md) replace
+- [Continuous Workspace read scopes](../plugin-workspace-read-scopes.md) replace
   reconstructible snapshots with opaque per-root authenticated connection
   observations. Removal/path ABA, ambiguous IDs, budget refusal and same-epoch
   reconnect cannot revive original requests, buffered replies or file/diff
   cursors; unchanged roots preserve continuity independently. The
-  [Controller release](releases/plugin-workspace-read-scopes-2026-09-19.md)
+  [Controller release](../releases/plugin-workspace-read-scopes-2026-09-19.md)
   passes 14 new regressions, the complete gate, the existing 19-check connected
   Code chain and actual 94-release Catalog/host floors. It is published and
   activated with all 16 observed workers retained. This is Controller-observed
@@ -94,21 +94,21 @@ and accepting a production effect are different milestones.
   message bytes are bounded, and non-ready worktrees cannot open buffers.
   Sixteen new source tests cover these boundaries. This is not native-generation
   ownership, cross-request buffer release, compensation or post-effect recovery;
-  see [the precise remaining lease gap](plugin-code-read-scopes.md#zed-operation-connection-lifetime).
-  The [Controller release](releases/plugin-zed-operation-scopes-2026-09-15.md)
+  see [the precise remaining lease gap](../plugin-code-read-scopes.md#zed-operation-connection-lifetime).
+  The [Controller release](../releases/plugin-zed-operation-scopes-2026-09-15.md)
   passed the complete gate and matching 72-release reads by actual candidate,
   predecessor and cold binaries. It is published and activated with all 12
   observed workers, Machine and Victoria retained in its deployment window.
-- [Prepared native buffer references](plugin-native-buffer-leases.md) implement
+- [Prepared native buffer references](../plugin-native-buffer-leases.md) implement
   effect-free preparation, non-recycled native identities, exact Machine runtime
   retention, path-free release/query, bounded capacity and cancellation-safe
   cleanup. Open/ambiguous effects do not expire or replay. This is a native/Machine
   candidate, not the ordinary Controller/Web resource owner or a production
-  native-generation acceptance claim. Its [candidate evidence](releases/plugin-native-buffer-leases-2026-09-15.md)
+  native-generation acceptance claim. Its [candidate evidence](../releases/plugin-native-buffer-leases-2026-09-15.md)
   includes 29 new tests, complete gates, immutable builds and real temporary
   signed Zed install/uninstall/path-removal drain. Production core-probe acceptance, client
   integration and separate Machine/Code Plugin activation remain required.
-- [Controller buffer ownership](plugin-controller-buffer-owners.md) adds a
+- [Controller buffer ownership](../plugin-controller-buffer-owners.md) adds a
   product-only, bounded prepare/open/query/release API over those references.
   It retains the original Session incarnation and authenticated Machine
   connection; observer cancellation cannot cancel an admitted mutation, and
@@ -117,36 +117,36 @@ and accepting a production effect are different milestones.
   Review consumers below use this interface; abandoned-browser cleanup,
   restart restoration and independent recovery remain open. Native-generation
   rollout and consumer/device acceptance are separately recorded.
-  Its [Controller candidate](releases/plugin-controller-buffer-owners-2026-09-15.md)
+  Its [Controller candidate](../releases/plugin-controller-buffer-owners-2026-09-15.md)
   passed the complete gate (1,317 all-feature Rust tests) and immutable build.
   Its original six-publication prerequisite is now closed by
-  [independent signed Agent releases](releases/agent-publication-2026-09-15.md):
+  [independent signed Agent releases](../releases/agent-publication-2026-09-15.md):
   Linux old/new worker gates, actual Mac probes, four immutable reader roles,
   all 24 public artifact URLs and automatic 78-release Catalog adoption passed.
   The separately activated Controller `0fded719` includes this implementation;
   the publication task retained all 13 observed workers and changed no installed
   Plugin or component. Authenticated Catalog API/native acceptance remains
-  unchecked. The later [Claude Code `3.1.23` publication](releases/claude-stream-recovery-2026-09-15.md)
+  unchecked. The later [Claude Code `3.1.23` publication](../releases/claude-stream-recovery-2026-09-15.md)
   now has its own Linux/Mac and 79-release reader/adoption evidence; neither
   publication installs it into retained sessions.
-  The subsequent [Claude Code `3.1.24` publication](releases/claude-plan-usage-2026-09-16.md)
+  The subsequent [Claude Code `3.1.24` publication](../releases/claude-plan-usage-2026-09-16.md)
   is also integrated; its native quota collector still requires separate Plugin
   activation. The owned-buffer release below accepts the resulting 80-release
   Catalog without changing an installed Plugin.
-- [Owned buffer observations](plugin-owned-buffer-reads.md) add closed diagnostics
+- [Owned buffer observations](../plugin-owned-buffer-reads.md) add closed diagnostics
   and symbol reads borrowing the original core/native owner, with fresh original
   credential, Session and connection checks and bounded typed result validation.
   Reads never re-resolve the source path or change effect evidence. Zed `1.4.0`
   consumes actual diagnostic buffer updates, acknowledges their transport and
   propagates native language transport failures rather than returning false empty
   success. Observed edits/reloads invalidate its bounded base coordinates.
-  Its [Controller release](releases/plugin-owned-buffer-reads-2026-09-16.md) passed
+  Its [Controller release](../releases/plugin-owned-buffer-reads-2026-09-16.md) passed
   the complete gate and actual static-Zed conformance and is active with all 13
   observed workers retained; the native Plugin remains an uninstalled candidate.
   Hover/navigation still need actual content/anchor version semantics;
   the open vector is only a lower bound. Review integration, Machine/Plugin
   activation and independent post-effect recovery are not implied by this API.
-- [Native edited-buffer coordinates](plugin-native-buffer-coordinates.md) advance
+- [Native edited-buffer coordinates](../plugin-native-buffer-coordinates.md) advance
   the private Zed candidate to `1.5.0`. A bounded passive mirror uses the exact
   pinned upstream text engine for edits, undo and insertion anchors, including
   UTF-16/UTF-8 validation over tombstones. Native language, hover, navigation and
@@ -155,25 +155,25 @@ and accepting a production effect are different milestones.
   base-only restriction above, not the closed owned-read API. Review content
   certificates, destination ownership, actual Plugin activation and supported
   device acceptance remain separate.
-  The [candidate acceptance](releases/plugin-native-coordinates-2026-09-16.md)
+  The [candidate acceptance](../releases/plugin-native-coordinates-2026-09-16.md)
   records 51 private tests, the complete gate and exact static-process acceptance.
   Real headless Zed does not automatically reload on disk changes: explicit
   content synchronization is still missing. The candidate is unsigned and
   uninstalled; no production component activation was issued by this task.
-- [Content-bound observations](plugin-content-bound-reads.md) add a closed
+- [Content-bound observations](../plugin-content-bound-reads.md) add a closed
   complete-text identity check through Web, Controller, Machine and private
   Zed `1.6.0`. Language/symbol/hover queries refuse mismatched content before
   native dispatch and reject in-flight edit/undo ABA. Mismatch does not reload
   or replace an owner. Browser capture/typed results and native text equality
   do not grant synchronization, owned navigation destinations, ordinary Review
   integration, native installation or device acceptance.
-  The [Controller/Web release](releases/plugin-content-bound-reads-2026-09-16.md)
+  The [Controller/Web release](../releases/plugin-content-bound-reads-2026-09-16.md)
   passed both complete gates, fourteen actual Firefox cases, static native
   conformance and identical 81-release reads by all four actual Controller
   roles. Both components are published and active; all fourteen observed workers,
   Machine and Victoria retained their processes. Machine/Zed `1.6.0` remain
   unactivated candidates, not production end-to-end Code acceptance.
-- [Core browser buffer owners](plugin-buffer-client-owner.md) implement the
+- [Core browser buffer owners](../plugin-buffer-client-owner.md) implement the
   typed client prerequisite: captured authority lifetime and input, one-shot
   preparation/open, strict bounded readonly observations, cancellation-safe
   continuations, and explicit original-ID cleanup. Pending/unknown/error is not
@@ -183,7 +183,7 @@ and accepting a production effect are different milestones.
   by ordinary Review: unresolved-resource presentation,
   positional semantics, actual Machine/Code rollout and supported-device
   acceptance remain required. That library publication changed no running component.
-- [Core product-context integration](plugin-buffer-product-context.md) connects
+- [Core product-context integration](../plugin-buffer-product-context.md) connects
   that registry to the production auth/dataset/session-end lifetime. Sign-out
   fences remote operations before cleanup callbacks; same-Service reconnects
   preserve owners, observed replacement cannot ABA-revive them, and permanent
@@ -194,9 +194,9 @@ and accepting a production effect are different milestones.
   product-store admission fixture also retains pending prompts without delivery.
   Review, native rollout, abandoned-browser recovery and device acceptance remain
   separate; the core facade is not a serialized grant or Plugin API.
-  Its [Web-only release](releases/plugin-buffer-product-context-2026-09-16.md)
+  Its [Web-only release](../releases/plugin-buffer-product-context-2026-09-16.md)
   is active with the full gate passing and all 13 observed workers retained.
-- [Core Code cleanup presentation](plugin-buffer-cleanup-surface.md) projects
+- [Core Code cleanup presentation](../plugin-buffer-cleanup-surface.md) projects
   original retained owners into Settings with stable typed observations,
   bounded local pagination and separately confirmed one-pass cleanup. Active
   consumers cannot be closed here; uncertain release is query-only, removed
@@ -204,11 +204,11 @@ and accepting a production effect are different milestones.
   View unmount does not cancel admitted work or replay it on remount. This closes
   the client cleanup-visibility prerequisite, not Review integration, durable
   native recovery, Machine/Plugin activation or supported-device acceptance.
-  Its [Web-only release](releases/plugin-buffer-cleanup-surface-2026-09-16.md)
+  Its [Web-only release](../releases/plugin-buffer-cleanup-surface-2026-09-16.md)
   passed the complete gate, nine new unit cases and thirty real-browser cases
   across four suites. It is published and active, with all fourteen workers,
   Controller, Machine and Victoria processes retained.
-- [Connected core Code acceptance](plugin-code-connected-conformance.md) now
+- [Connected core Code acceptance](../plugin-code-connected-conformance.md) now
   exercises supplied immutable Controller/Machine/Zed processes through real
   disposable login, enrollment and a temporary signed installation. Three runs
   pass all seven groups: cancellation without mutation replay, independent
@@ -216,18 +216,18 @@ and accepting a production effect are different milestones.
   and missing-path reads, plus connection/restart refusal without adoption.
   Original native replies are held, never fabricated. Cleanup waits and reaps
   fixture descendants behind private PID/network and read-only cgroup isolation.
-  Its [source-only delivery](releases/plugin-code-connected-conformance-2026-09-16.md)
+  Its [source-only delivery](../releases/plugin-code-connected-conformance-2026-09-16.md)
   passed the full gate after integrating main. Supplied artifacts are not actual
   host-role acceptance; forced fixture teardown is not production recovery.
-  The subsequent [installation and cleanup acceptance](releases/plugin-process-cleanup-2026-09-16.md)
+  The subsequent [installation and cleanup acceptance](../releases/plugin-process-cleanup-2026-09-16.md)
   replaces pre-seeding with real authenticated installation into an empty slot;
   two actual-process runs pass all eight groups, including cancellation after
   the Machine receipt and duplicate-ID refusal without another install dispatch.
   Review, content synchronization, owned navigation, native rollout and
   supported-device acceptance remain open. The
-  [native synchronization investigation](plugin-native-buffer-sync.md) records
+  [native synchronization investigation](../plugin-native-buffer-sync.md) records
   why adapter-side preflight plus upstream reload cannot safely close that gap.
-- The [private native synchronization primitive](plugin-native-buffer-sync.md)
+- The [private native synchronization primitive](../plugin-native-buffer-sync.md)
   is now implemented in a source-pinned static Zed server, with an additive
   typed protocol and new Zed `1.7.0` source manifest. Six native GPUI/filesystem
   tests include deterministic edit/undo, read-only, peer and worktree changes
@@ -235,13 +235,13 @@ and accepting a production effect are different milestones.
   identity. The real private-server gate verifies actual text propagation,
   stale-observation rejection, invalid source refusal, lost-response queries,
   duplicate refusal and process-instance loss. Adapter framing/correlation tests
-  also pass. The [signed 1.7.0 rollout](releases/zed-native-sync-2026-09-16.md)
+  also pass. The [signed 1.7.0 rollout](../releases/zed-native-sync-2026-09-16.md)
   includes eight-group exact-pair acceptance, compatible actual Catalog readers,
   separately authorized Hawk Machine maintenance and completed Plugin
   installation. This is not a public synchronization grant. Adapter multi-owner
   exclusion is accepted separately below; core purpose/authority, Review
   integration and independently authorized restoration remain required.
-- [Private synchronization ownership](plugin-buffer-sync-owners.md) adds the
+- [Private synchronization ownership](../plugin-buffer-sync-owners.md) adds the
   Zed `1.8.0` release: same-native-ID owner exclusion, conservative alias/open
   admission, retained Pending/Unknown fences and one-use Apply. Original-ID
   query/retirement cannot adopt replacements, replay an effect or dispose of
@@ -249,24 +249,24 @@ and accepting a production effect are different milestones.
   commands before generic runtime selection; its activation awaits separate
   maintenance. Focused cancellation/sharing/capacity tests, real native-owner
   synchronization, complete gates and both actual/candidate Machine connected
-  flows pass. The [signed Plugin rollout](releases/zed-sync-owners-2026-09-16.md)
+  flows pass. The [signed Plugin rollout](../releases/zed-sync-owners-2026-09-16.md)
   installed `1.8.0` on Hawk while retaining both original Code processes and all
   16 observed workers. This is not core writer authority, public Review cutover
   or independent recovery; the closed purpose declaration supplies none of them.
-- [Machine synchronization continuation](plugin-machine-buffer-sync.md) adds
+- [Machine synchronization continuation](../plugin-machine-buffer-sync.md) adds
   protocol-20 core routing and a non-serializable original-connection invocation,
   separate from generic Code forwarding. The Zed `1.9.0` source candidate adds
   a distinct ownership-support probe; native-only support cannot satisfy it.
   One-use Apply, unknown exclusion, original-process retention and bounded
   observation/retirement are implemented. Source tests cover cancellation,
   connection/queued-authority loss, malformed replies, capacity and runtime death.
-  Its [candidate acceptance](releases/machine-buffer-sync-candidate-2026-09-17.md)
+  Its [candidate acceptance](../releases/machine-buffer-sync-candidate-2026-09-17.md)
   passes the complete gate, exact static native/core synchronization across
   uninstall, eight connected Code regressions and six Nix checks. Publication,
   installation and Machine activation remain separate. That earlier candidate
   did not supply Service confirmation; the following slice adds it. Ordinary
   Review integration and independent recovery are still not enabled.
-- [Service synchronization continuations](plugin-service-buffer-sync.md) add
+- [Service synchronization continuations](../plugin-service-buffer-sync.md) add
   explicit original-owner preparation and fresh product confirmation on protocol
   20, with typed Site-bound transport, one-use Apply, independently owned jobs,
   conservative uncertainty and path-free original-ID cleanup. Authority and
@@ -274,14 +274,14 @@ and accepting a production effect are different milestones.
   buffer admission now clears expired inert Machine preparations too, without
   clearing possible effects. Response-authorization job exclusion also prevents
   an older Drop from reopening a successor's admission. Its
-  [Controller-only rollout](releases/service-buffer-sync-2026-09-17.md) passes
+  [Controller-only rollout](../releases/service-buffer-sync-2026-09-17.md) passes
   the complete gate, two actual 11-flow immutable process runs and all eight Nix
   checks; 15 original workers and four native Code processes survive activation.
   The resident Machine and installed Zed remain unchanged, so this is not
   production end-to-end synchronization. The browser follow-up below now adds
   ownership/presentation; ordinary Review, signed Plugin rollout, separate Machine maintenance and
   independent restoration remain required.
-- [Browser synchronization ownership](plugin-browser-buffer-sync.md) connects
+- [Browser synchronization ownership](../plugin-browser-buffer-sync.md) connects
   the Service continuation to the actual core product identity lifetime and
   bounded Settings presentation. Complete-text captures and one-use opaque
   confirmation tokens bind the original buffer, content and observation;
@@ -289,32 +289,32 @@ and accepting a production effect are different milestones.
   effects fence ordinary buffer cleanup, terminal evidence is immutable, and
   retirement is explicit rather than an undo. Closed Rust/Web wire fixtures,
   focused unit/compile tests and an eight-case isolated React/browser gate
-  cover these boundaries. Its [Web-only release](releases/browser-buffer-sync-2026-09-17.md)
+  cover these boundaries. Its [Web-only release](../releases/browser-buffer-sync-2026-09-17.md)
   passed the full gate and 38 browser cases, is published and active, and
   retained all 16 observed workers plus four native Code processes. This does
   not itself switch ordinary Review or activate a Machine/Code Plugin; production end-to-end synchronization, navigation,
   independent recovery and supported-device acceptance remain separate.
-- The [ordinary Review source consumer](plugin-review-owned-consumer.md) now
+- The [ordinary Review source consumer](../plugin-review-owned-consumer.md) now
   selects core-owned language, hover and Outline from a protocol-20 Service
   observation. Exact displayed LF content, serialized/cancellation-safe reads,
   original-ID Open checks, explicit refresh preparation and stale Apply fencing
   share one owner without legacy fallback. Its
-  [Controller/Web delivery](releases/review-owned-consumer-2026-09-17.md) passes
+  [Controller/Web delivery](../releases/review-owned-consumer-2026-09-17.md) passes
   the full gate, 44 browser cases, two actual eleven-group process runs and Nix
   checks; all 16 original workers and four Code processes survive activation.
   That delivery retained the then-protocol-19 Machine and Zed 1.8; it did not
   accept native/device cutover or owned navigation/diff integration.
-- [Owned working-diff reads](plugin-review-owned-diff.md) now validate complete
+- [Owned working-diff reads](../plugin-review-owned-diff.md) now validate complete
   patches against bounded complete current-file text and map only exact new-side
   UTF-16 positions. Projection replacement ends old observers even for equal
   source text; deleted/header taps cannot borrow nearby symbols. Staged/history
   views remain render-only, and no owned diff uses legacy resource operations or
-  prepares synchronization. Its [Web-only delivery](releases/review-owned-diff-2026-09-17.md)
+  prepares synchronization. Its [Web-only delivery](../releases/review-owned-diff-2026-09-17.md)
   passes the full gate, 55 browser cases and two eleven-group native runs;
   all 16 workers and two observed Code processes survive activation. The already
   deployed protocol-20 Machine is unchanged, and production Zed remains 1.8.
   Native, cross-file navigation and device acceptance remain separate.
-- [Owned native navigation](plugin-owned-navigation.md) adds a Zed `1.10.0`
+- [Owned native navigation](../plugin-owned-navigation.md) adds a Zed `1.10.0`
   source candidate with preallocated group identities, one-use native queries,
   exact target ID/content/epoch retention, path-free local release and conservative
   Unknown admission fences. Same-native-ID aliases now prevent premature peer
@@ -322,11 +322,11 @@ and accepting a production effect are different milestones.
   selecting a runtime. This is not a Service/Web navigation cutover, verified
   native cleanup, independent recovery or production native-generation acceptance;
   original-runtime routing and actual nonempty-LSP consumer acceptance remain open.
-  Its [candidate acceptance](releases/owned-navigation-candidate-2026-09-17.md)
+  Its [candidate acceptance](../releases/owned-navigation-candidate-2026-09-17.md)
   passes the full gate, static builds, signed temporary lifecycle and all eleven
   connected Code regressions; the actual plaintext navigation gate does not
   establish nonempty-LSP acquisition, native allocation bounds or recovery.
-- The Zed `1.11.0` [private handoff extension](plugin-owned-navigation.md#exact-destination-handoff)
+- The Zed `1.11.0` [private handoff extension](../plugin-owned-navigation.md#exact-destination-handoff)
   adds a bounded ordinary-owner reservation from an exact retained navigation
   target. Atomic handoff performs no native/path I/O and survives parent release;
   cancelled waits, lost replies, equal-content ABA and capacity retain their
@@ -335,19 +335,19 @@ and accepting a production effect are different milestones.
   arriving before their asynchronous target shares. Execute waits for the exact
   original shares and registers newly retained targets once, with failure
   retaining Unknown and original pins. Its
-  [candidate acceptance](releases/owned-navigation-handoff-2026-09-17.md) passes
+  [candidate acceptance](../releases/owned-navigation-handoff-2026-09-17.md) passes
   four nonempty-LSP static-pair runs, temporary signed lifecycle, all eleven
   connected regressions and complete source gates after integrating main. This
   is not core acquisition authority, Machine/Service/Web navigation routing, a
   native allocation budget, independent recovery or a production rollout.
-- [Machine navigation continuation](plugin-machine-buffer-navigation.md) adds
+- [Machine navigation continuation](../plugin-machine-buffer-navigation.md) adds
   protocol-21 Site/connection-bound acquisition and exact-runtime route ownership.
   Its separate `navigation:` identities retain one-use execution, query-only
   uncertainty and release, bounded inert expiry and historical target evidence.
   Exact destination reservations join the ordinary buffer lifecycle/capacity,
   with saved lookup after observer loss and no path/installation reselection.
   Zed `1.12.0` adds the distinct actual-pair support probe; native dependencies
-  are unchanged. Its [candidate acceptance](releases/machine-navigation-candidate-2026-09-17.md)
+  are unchanged. Its [candidate acceptance](../releases/machine-navigation-candidate-2026-09-17.md)
   records 22 new core tests, complete gates, static native and signed-lifecycle
   nonempty-LSP acceptance, and eleven connected buffer regressions. Independent
   review also closed expired inert synchronization fences blocking direct
@@ -355,7 +355,7 @@ and accepting a production effect are different milestones.
   Service/principal/Session authority to the subsequent candidate below.
   Public cutover, native allocation budgets, independent recovery and production
   rollout remain separate; neither completes the Code-consumer or general DAG exits.
-- [Service navigation continuation](plugin-service-buffer-navigation.md) adds
+- [Service navigation continuation](../plugin-service-buffer-navigation.md) adds
   default-closed, product Operator/Session-bound acquisition on protocol 21.
   Original connection and one-use outcome records survive HTTP observer loss;
   unknown acquisition/release is query-only. Destination preparation enters the
@@ -363,36 +363,36 @@ and accepting a production effect are different milestones.
   original capacity/TTL through uncertainty. The connected gate advances to v4
   and 17 required checks, including nonempty Unicode navigation, lost replies,
   handoff after uninstall and independent reads after parent/path removal. Its
-  [candidate acceptance](releases/service-navigation-candidate-2026-09-17.md)
+  [candidate acceptance](../releases/service-navigation-candidate-2026-09-17.md)
   records the complete final source gate, unchanged exact native pair, supplied
   Controller/Machine and two successful 17-check connected runs.
   Full destination views, native budgets, Web integration, rollout and recovery
   remain separate.
-- [Complete original native text](plugin-native-text-reads.md) adds the finite
+- [Complete original native text](../plugin-native-text-reads.md) adds the finite
   Zed `1.13.0` reader through Machine, Service and the typed browser owner.
   Bounded UTF-8 pages retain the original owner/revision, refuse content or
   snapshot changes and never reopen a path. The browser returns only a complete
   SHA-256-verified capture, drains cancellation and stops further page admission.
-  Its [candidate acceptance](releases/native-text-reads-candidate-2026-09-18.md)
+  Its [candidate acceptance](../releases/native-text-reads-candidate-2026-09-18.md)
   passes the complete source gate, static native and temporary signed-lifecycle
   gates, 49 isolated browser cases and two v5 connected runs with all 18 checks.
   These include two-page Unicode reads after uninstall, parent release and path
   removal. Navigation acquisition remains default closed; this reader does not
   supply the intended Review destination owner/view, native allocation bounds,
   production rollout, supported-device acceptance or independent recovery.
-- [Browser navigation continuation](plugin-browser-buffer-navigation.md) adds
+- [Browser navigation continuation](../plugin-browser-buffer-navigation.md) adds
   core original-source preparation, one-use Execute, query-only uncertainty and
   separately observed Release. Source cleanup cannot bypass a retained group;
   bounded local capacity includes pending preparation, and only inert expiry or
   actual group release frees a slot. Closed Rust/Web wire evidence, disjoint
   types and a passive recovery projection reject imported destination IDs and
   redact ended identity labels. Its
-  [candidate record](releases/browser-navigation-candidate-2026-09-18.md) covers
+  [candidate record](../releases/browser-navigation-candidate-2026-09-18.md) covers
   complete source/Nix gates, 56 browser cases (18 in the owner suite) and all
   18 connected v5 checks against the unchanged exact native pair. Destination handoff,
   intended Review views, native budgets, production activation and independent
   recovery remain separate; acquisition is still default closed.
-- [Browser destination handoff](plugin-browser-buffer-destinations.md) adds
+- [Browser destination handoff](../plugin-browser-buffer-destinations.md) adds
   original opaque target tokens, ordinary-owner capacity reserved before the
   single POST, and closed Service receipt adoption into that same local slot.
   Query can reconcile lost replies without another preparation; view close
@@ -404,51 +404,51 @@ and accepting a production effect are different milestones.
   the exact static pair and all 18 connected v5 checks pass. Input review also
   repairs the upstream private-runtime version mismatch in a Zed `1.13.2`
   candidate, without publishing or installing it. Verification is recorded in the
-  [candidate acceptance](releases/browser-destination-candidate-2026-09-18.md).
-- [Single-use native Open](plugin-native-open-once.md) advances the Zed candidate
+  [candidate acceptance](../releases/browser-destination-candidate-2026-09-18.md).
+- [Single-use native Open](../plugin-native-open-once.md) advances the Zed candidate
   to `1.14.1` without changing private server `1.1.0` or third-party pins. Missing
   initial sharing no longer triggers implicit Close/reopen. A one-use original-
   owner commit ends the acquisition fence; cancellation/error retains it even
   before the native ID is known. New opens, navigation, synchronization and
   destination handoff cannot bypass it, while known safe reads/releases remain
-  available. Its [candidate acceptance](releases/native-open-once-candidate-2026-09-18.md)
+  available. Its [candidate acceptance](../releases/native-open-once-candidate-2026-09-18.md)
   passes 115 adapter tests, actual normal-timeout/original-peer and immutable
   socket failure checks, temporary signed lifecycle, all 18 connected v5 and
   24 browser checks, plus the complete source/Nix gates. This is not native close
   acknowledgement, independent recovery or a production native rollout.
-- [Original-peer native close](plugin-native-close-confirmation.md) advances the
+- [Original-peer native close](../plugin-native-close-confirmation.md) advances the
   Zed candidate to `1.15.0` / private server `1.2.0`. Ordinary last-owner and
   navigation-group release now require an exact original-instance native batch
   confirmation before local pin removal. Lost native ACKs retain uncertainty,
   original pins and exclusion with no replay; unrelated confirmed releases
   cannot clear that fence. This verifies native peer-map removal, not all buffer
   deallocation, background-effect drain, recovery or a production rollout.
-  Its [candidate acceptance](releases/native-close-confirmation-candidate-2026-09-18.md)
+  Its [candidate acceptance](../releases/native-close-confirmation-candidate-2026-09-18.md)
   passes 124 adapter tests, 19 native tests, the exact static pair, temporary
   signed lifecycle, all 18 connected v5 and 24 browser checks, plus the complete
   source/Nix gates. Source-test loss of a real native Closed reply remains
   Unknown; a completed upper-layer release still settles by original Query.
-- [Native reload input/cleanup](plugin-native-reload-bounds.md) advances the
+- [Native reload input/cleanup](../plugin-native-reload-bounds.md) advances the
   candidate to Zed `1.15.1` / private server `1.2.1`. The existing reload route
   now bounds actual raw reads and decoded text before diff/CRDT mutation, and
   failed/no-file exits retire only their own completed task. Reentrant
   replacement is protected by nonserialized invocation identity; no Unknown
   owner, effect authority or read fallback changes. Its
-  [candidate acceptance](releases/native-reload-bounds-candidate-2026-09-18.md)
+  [candidate acceptance](../releases/native-reload-bounds-candidate-2026-09-18.md)
   passes the complete source gate, 24 native tests, the exact static pair,
   temporary signed lifecycle, all 18 connected v5 and 24 browser checks.
   Global retained-history/background budgets and production rollout remain open.
-- [Native acquisition lifetime budgets](plugin-native-acquisition-budgets.md)
+- [Native acquisition lifetime budgets](../plugin-native-acquisition-budgets.md)
   advance the source candidate to Zed `1.16.0` / private server `1.3.0`.
   One application-wide 64-slot pool covers local file/untitled loading and
   live buffer entities across worktrees. Actual loader/CRDT results and buffers
   retain shared charges, not Close ACKs or observers. Released weak indexes
   are removed only for their original entity. Its
-  [candidate acceptance](releases/native-acquisition-budgets-candidate-2026-09-18.md)
+  [candidate acceptance](../releases/native-acquisition-budgets-candidate-2026-09-18.md)
   passes the complete source gate, 32 native tests, the exact static pair,
   temporary signed lifecycle, 18 connected v5 and 24 browser checks. This is
   not a total byte/history/snapshot/background budget or production cutover.
-- [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
+- [Core process cleanup](../plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
   `ESRCH` as absence; permission errors retain the fence. Missing/hostile PATH,
@@ -456,63 +456,63 @@ and accepting a production effect are different milestones.
   tests pass. This does not add PID-reuse immunity, escaped-descendant
   containment or independently verified native recovery. Controller activation
   and the initial separate Machine candidate are recorded in the same acceptance
-  note; the subsequent [Hawk maintenance](releases/zed-native-sync-2026-09-16.md)
+  note; the subsequent [Hawk maintenance](../releases/zed-native-sync-2026-09-16.md)
   activates this repair in Machine too, without an ambient helper workaround.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
-- [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
+- [Atomic IDB outbox deltas](../atomic-idb-outboxes.md) preserve updated peers'
   pending mutations and confirmations in one transaction, with explicit load
   handoff and strict durable-send failure. The v1 data format is unchanged;
   that release alone does not fence pre-upgrade blind writers or grant general
   dataset authority.
-  The [Web release](releases/atomic-idb-outboxes-2026-09-14.md) passed both
+  The [Web release](../releases/atomic-idb-outboxes-2026-09-14.md) passed both
   real-browser suites and activation checks without restarting live workers.
-- [Core product browser datasets](product-sync-datasets.md) now implement
+- [Core product browser datasets](../product-sync-datasets.md) now implement
   immutable Service/principal binding, closed Service/Session keys, exact IDB v2
   writer fencing, transaction-lifetime connections and bounded read-only legacy
   export. Source gates include 16 real-browser outbox cases and eight connection
-  lifetime cases. The historical [Controller bridge](releases/product-datasets-and-lifecycle-2026-09-15.md)
-  is superseded by the [activated Web, bound Controller and compatible cold floor](releases/dataset-bound-maintenance-2026-09-15.md).
+  lifetime cases. The historical [Controller bridge](../releases/product-datasets-and-lifecycle-2026-09-15.md)
+  is superseded by the [activated Web, bound Controller and compatible cold floor](../releases/dataset-bound-maintenance-2026-09-15.md).
   Actual active/next-recovery/cold Controllers all pass bound-mode acceptance.
   This closes the finite deployment sequence, not general exclusive state
   leases, physical-device acceptance or adoption of unowned browser records.
 - Service uninstall journal, Machine uninstall receipts, installation-incarnation
   CAS, execution leases, continuous Operator checks, read-only recovery and a
   separately confirmed abort of a proven pre-effect Service interruption.
-- [Durable Service installation attempts](plugin-install-journal.md), including
+- [Durable Service installation attempts](../plugin-install-journal.md), including
   exact operation identity, original confirmation/connection, prior-committed
   effect phases, install/uninstall claim exclusion and restart fences; closed,
   reloadable history is shared by the two installation clients. The
-  [historical schema-one writer milestone](releases/plugin-install-journal-2026-09-14.md)
-  is now superseded by the [accepted Service/Machine receipt reader floor](releases/plugin-install-receipt-readers-2026-09-14.md)
-  and [activated protocol-19 writer](releases/plugin-install-writers-2026-09-14.md).
+  [historical schema-one writer milestone](../releases/plugin-install-journal-2026-09-14.md)
+  is now superseded by the [accepted Service/Machine receipt reader floor](../releases/plugin-install-receipt-readers-2026-09-14.md)
+  and [activated protocol-19 writer](../releases/plugin-install-writers-2026-09-14.md).
   Two complete 45-case connected installation runs and another 240 actual-role
   reader checks passed. No production Plugin installation or native-generation
   swap is claimed.
 - Core local-security ownership implementation and crash-recoverable adoption,
   without moving credentials or changing historical SQL bytes.
-- [Unified core lifecycle history](plugin-lifecycle-history.md) projects the
+- [Unified core lifecycle history](../plugin-lifecycle-history.md) projects the
   actual install/uninstall journals and independently confirmed pre-effect
   resolution with domain-disjoint IDs, bounded no-store reads and no Machine
   RPC or effect path. Both installation clients share the view; source tests
   include the exact Rust/Web fixture and six real React/browser lifecycle cases.
   Its actual immutable Controller HTTP acceptance and Controller activation
-  [passed](releases/product-datasets-and-lifecycle-2026-09-15.md); the shared Web
-  consumer is now [activated with the dataset release](releases/dataset-bound-maintenance-2026-09-15.md).
+  [passed](../releases/product-datasets-and-lifecycle-2026-09-15.md); the shared Web
+  consumer is now [activated with the dataset release](../releases/dataset-bound-maintenance-2026-09-15.md).
 - Finite Victoria binding/revoke/restore, independently authorized recovery and
   settlement, bounded managed OTLP export, standing policy and private admission.
   Actual immutable role gates cover 96 reader, 294 writer, 78 startup and 45
-  connected-flow cases; [real Victoria acceptance](releases/telemetry-victoria-conformance-2026-09-14.md)
+  connected-flow cases; [real Victoria acceptance](../releases/telemetry-victoria-conformance-2026-09-14.md)
   adds nine database-backed role pairs and reopen/no-replay checks.
 
 ## Code work still required
 
-The [buffered read authority](plugin-code-read-authority.md) now attaches original
+The [buffered read authority](../plugin-code-read-authority.md) now attaches original
 product credentials and current Session visibility to those eleven readers.
 It shares credential continuation with Operator approval without granting
 Viewer/automation reads mutation authority. It discards cached, conditional,
 raw and error replies after observed logout/revocation or visibility loss.
-Its [Controller rollout](releases/plugin-code-read-authority-2026-09-19.md)
+Its [Controller rollout](../releases/plugin-code-read-authority-2026-09-19.md)
 passes the connected v8/21-check chain (including a held real file reply and
 product-API logout), an old-artifact negative test and the clean complete gate.
 It is published and activated; the release records both its sixteen-worker
@@ -522,7 +522,7 @@ unobserved principal ABA protection or an atomic delivery fence.
 
 The same boundary now covers the four legacy Session language queries through
 closed command types and the original pre-authorization connection observation.
-Its [accepted Controller rollout](releases/plugin-language-read-authority-2026-09-19.md)
+Its [accepted Controller rollout](../releases/plugin-language-read-authority-2026-09-19.md)
 passes all 25 connected v9 checks, the old-artifact negative test and the
 complete quality gate. It retains all 16 original workers in its own bounded
 deployment window. Native open/close and original-ID resource cleanup remain
@@ -530,7 +530,7 @@ separate; discarding a legacy navigation reply is not destination release or
 post-effect restoration. None of the broader exits below is closed by this
 finite extension.
 
-The [ordinary buffer outcome rollout](releases/plugin-buffer-outcome-authority-2026-09-19.md)
+The [ordinary buffer outcome rollout](../releases/plugin-buffer-outcome-authority-2026-09-19.md)
 now separates native effect recording from response authority for Open, Query
 and Release, including saved observations and remote failures. One original
 credential and absolute deadline span admission, the owned task and response;
@@ -543,7 +543,7 @@ window. The separately completed earlier Machine maintenance is recorded, not
 attributed to this Controller release. This does not close general graph/state
 authority, abandoned-browser/restart recovery or independent effect restoration.
 
-The [core product permission lifetime](plugin-product-permission-lifetimes.md)
+The [core product permission lifetime](../plugin-product-permission-lifetimes.md)
 now binds verified product requests to the effective role observed at original
 authentication. Core policy changes end affected observations before unlocking;
 role restoration without an intervening poll cannot revive old requests, and
@@ -551,19 +551,19 @@ promotion cannot expand them. Unchanged users/roles retain their observations.
 Both current and ended generations count against bounded live retention.
 Code responses and Operator install/uninstall/telemetry continuations share this
 core-only boundary while recording actual native effects independently. Its
-[accepted Controller rollout](releases/plugin-product-permission-lifetimes-2026-09-19.md)
+[accepted Controller rollout](../releases/plugin-product-permission-lifetimes-2026-09-19.md)
 passes the source role-ABA negative/positive gates, complete quality gate, all
 28 connected v10 checks, 24 browser cases and actual Catalog/host floors.
 It is published and activated, retaining all 16 original workers in its bounded
 deployment window. This does not open the single-user permission API, supply
 durable principal epochs or close the broader graph/state/recovery exits below.
 
-The [continuation finalization](plugin-continuation-finalization.md) extends the
+The [continuation finalization](../plugin-continuation-finalization.md) extends the
 same original-user response boundary to owned read, synchronization and
 navigation failures and saved outcomes. An expired original deadline cannot
 consume a new attempt; owned reads retain one total deadline across support,
 read and observer cancellation. Effect records and unresolved fences remain
-independent. Its [accepted Controller rollout](releases/plugin-continuation-finalization-2026-09-19.md)
+independent. Its [accepted Controller rollout](../releases/plugin-continuation-finalization-2026-09-19.md)
 passes the source and old-artifact negatives, two complete 31-check v11 chains,
 complete quality gate, 24 browser cases and actual Catalog/configuration floors.
 It is published and activated, retaining all 14 original workers in its bounded
@@ -571,29 +571,29 @@ deployment window without changing Machine, Web or Plugin identities. This is
 a finite Controller extension, not remote cancellation, independent restoration
 or the general state/background-budget exit below.
 
-The [Session read-route binding](plugin-session-read-routes.md) additionally
+The [Session read-route binding](../plugin-session-read-routes.md) additionally
 separates logical Session identity from the original core/Machine execution
 route. All eleven buffered readers, manifest readiness/selection and both
 continuation caches now preserve that route through reconnection. Its
-[accepted Controller-only rollout](releases/plugin-session-read-routes-2026-09-19.md)
+[accepted Controller-only rollout](../releases/plugin-session-read-routes-2026-09-19.md)
 includes an old-artifact negative test, two v7/20-check actual-process runs,
 complete integrated gates and activation retaining all 16 original workers.
 That initial rollout did not supply Machine-owned filesystem identity, a state
 lease, native adoption or independent recovery.
 
-[Machine-owned Session filesystem observations](plugin-session-root-observations.md)
+[Machine-owned Session filesystem observations](../plugin-session-root-observations.md)
 now add a private protocol-25 directory incarnation to buffered filesystem/Git
 reads after original product authorization. Retained directory handles prevent
 inode reuse, bounded eviction/configuration retirement ends old observations,
 and original-connection verification covers cached, conditional and error
-responses. The [October 3 rollout](releases/plugin-session-root-observations-2026-10-03.md)
+responses. The [October 3 rollout](../releases/plugin-session-root-observations-2026-10-03.md)
 passes an actual old-artifact 304 negative and 38 connected checks, then activates
 Controller and Machine separately with all 14 workers and two execution keepers
 retained across each activation. This is finite physical read observation;
 continuous Session/worktree ownership, security domains, state leases, native
 adoption and recovery remain open.
 
-[Controller-owned identity for locally executed reads](plugin-local-root-identity.md)
+[Controller-owned identity for locally executed reads](../plugin-local-root-identity.md)
 states the other half of the same rule: the party that touches the filesystem
 owns the root's identity. A colocated Machine's advertised roots, and a
 colocated or standalone `local` Session's worktree, are read by the Controller
@@ -607,14 +607,14 @@ unsound, because a recreated directory reuses its inode immediately on the
 deployed filesystem; the Controller compares creation time and refuses any root
 that cannot report one, rather than reading it unfenced. Resolution never
 refuses: an unobservable root is recorded as such and refused only where it
-would be read. Its [accepted Controller rollout](releases/plugin-local-root-identity-2026-09-21.md)
+would be read. Its [accepted Controller rollout](../releases/plugin-local-root-identity-2026-09-21.md)
 records four source negatives verified against the previous behaviour, the
 complete quality gate and the unchanged connected chain. Its colocated branch now has
-real-process coverage too: [v13 check 33](releases/plugin-colocated-connected-2026-09-25.md)
+real-process coverage too: [v13 check 33](../releases/plugin-colocated-connected-2026-09-25.md)
 reads a permitted local Machine's root with no Machine command at all, refuses
 a replaced root, and restores reads by explicit refresh. That coverage became
 honest only once colocated execution required a permission.
-The [v14 withdrawal acceptance](releases/plugin-colocated-withdrawal-2026-09-28.md)
+The [v14 withdrawal acceptance](../releases/plugin-colocated-withdrawal-2026-09-28.md)
 retains the same Machine and local declaration, withdraws only the fixture
 Controller's permission, and requires the same read to dispatch exactly one
 Machine command. This closes the connected withdrawal gap left by v13;
@@ -629,12 +629,12 @@ check cannot separate the cases, because the public origin is reverse-proxied
 to loopback. The declaration is now a request, and an explicit operator
 permission decides: both the declaration and membership of
 `COWBOY_COLOCATED_MACHINES` are required, and neither is sufficient. Its
-[accepted rollout](releases/plugin-colocated-permission-2026-09-24.md) lands the
+[accepted rollout](../releases/plugin-colocated-permission-2026-09-24.md) lands the
 permission in the host unit first — an older Controller ignores an unknown
 environment variable, and the retained service does not restart — and then the
 Controller that enforces it, so the deployment is never in a broken order.
 
-[Machine-owned Workspace root identity](plugin-machine-workspace-identity.md)
+[Machine-owned Workspace root identity](../plugin-machine-workspace-identity.md)
 gives the advertised root an owner for the first time. The Machine mints one
 opaque incarnation per root object, pins that object with a retained directory
 handle so reused device/inode numbers cannot alias a replacement, and re-checks
@@ -647,26 +647,26 @@ The Machine's closed `WorkspaceRootIdentityChanged` refusal — not a detail
 string — retires exactly that slot, so the Controller's own caches, ETags and
 page/diff continuations cannot answer for a replaced root either; the next
 inventory mints a new identity, so a fence is not a lost root. Its
-[accepted Controller rollout](releases/plugin-machine-workspace-identity-2026-09-20.md)
+[accepted Controller rollout](../releases/plugin-machine-workspace-identity-2026-09-20.md)
 records the source regressions that fail against the previous implementation,
 the complete quality gate and two v12/32-check connected runs including an
 actual advertised-root replacement. That September task activated only the
-Controller. The later [October 2 Machine activation](releases/plugin-root-identity-adoption-2026-10-03.md)
+Controller. The later [October 2 Machine activation](../releases/plugin-root-identity-adoption-2026-10-03.md)
 adopted the root-object fence on Hawk at protocol 24.
 This is one root-object fence. Session routes executing in session worktrees,
 Session/security-domain identity, state leases, general graph
 contracts and independent post-effect restoration all remain open below.
 Controller-local execution is fenced by the separately activated slice above.
-The [configuration identity candidate](plugin-workspace-configuration-identity.md)
+The [configuration identity candidate](../plugin-workspace-configuration-identity.md)
 now retires a root when the Machine accepts an intervening removal, path change
 or ID change, even if inventory publication skips that configuration. Snapshot
 and identity capture share the original registry lock. The same October 2
 Machine activation includes this fix; its maintenance receipt establishes
 adoption rather than a new production configuration-ABA acceptance test.
-Its [candidate acceptance](releases/plugin-workspace-configuration-identity-2026-09-28.md)
+Its [candidate acceptance](../releases/plugin-workspace-configuration-identity-2026-09-28.md)
 records the failing old-behaviour regression, complete gate and 34-check
 connected chain against the exact immutable Machine.
-The [alias-identity release](releases/plugin-workspace-alias-identity-2026-10-03.md)
+The [alias-identity release](../releases/plugin-workspace-alias-identity-2026-10-03.md)
 then keeps one Machine incarnation/handle for several configured IDs naming
 the same root, including aliases after handle-budget overflow. Its protocol-24
 connected negative reproduces an erroneous 410 on the preceding production
@@ -675,41 +675,41 @@ and native pair. The final freshly integrated artifact repeats all 36 checks
 and is activated on Hawk by the October 3 Machine maintenance transaction,
 with all 14 workers and two execution keepers retaining their original PIDs.
 
-The [continuous Workspace read scope](plugin-workspace-read-scopes.md) now
+The [continuous Workspace read scope](../plugin-workspace-read-scopes.md) now
 connects authenticated per-root observations to the finite Code executor,
 buffered responses and file/diff continuations. Observed removal/path ABA,
 duplicate IDs and same-epoch reconnection cannot revive old reads. This is a
 Controller observation fence, not the remaining Machine-owned filesystem,
 Session/security-domain identity or state reader/writer lease contract.
-Its [accepted Controller release](releases/plugin-workspace-read-scopes-2026-09-19.md)
+Its [accepted Controller release](../releases/plugin-workspace-read-scopes-2026-09-19.md)
 is active; those broader P0/P3 requirements remain open below.
 
-The [ordinary Review source consumer](plugin-review-owned-consumer.md) now selects
+The [ordinary Review source consumer](../plugin-review-owned-consumer.md) now selects
 owned language/Outline/hover and explicit refresh preparation from a protocol-20
 Service observation. It retains content/owner lifetimes without legacy fallback;
 protocol-19 Machines remain on their pre-cutover route. This is not owned
 navigation, native activation or supported-device acceptance. The later
-[working-diff integration](plugin-review-owned-diff.md) supplies explicit
+[working-diff integration](../plugin-review-owned-diff.md) supplies explicit
 complete-current-file projection without adopting staged/history coordinates.
-The [source Controller/Web release](releases/review-owned-consumer-2026-09-17.md)
-and later [working-diff Web release](releases/review-owned-diff-2026-09-17.md)
+The [source Controller/Web release](../releases/review-owned-consumer-2026-09-17.md)
+and later [working-diff Web release](../releases/review-owned-diff-2026-09-17.md)
 record exact accepted artifacts and bounded production continuity observations.
 
-The [Session worktree preparation containment](plugin-session-worktree-containment.md)
+The [Session worktree preparation containment](../plugin-session-worktree-containment.md)
 refuses linked checkouts and selected directories escaping the isolated checkout
 before mutating a reused branch. It is a preparation-time check; continuous
 Session/worktree ownership and durable incarnation remain open.
 
-The [terminal cleanup directory observation](plugin-session-cleanup-root.md)
+The [terminal cleanup directory observation](../plugin-session-cleanup-root.md)
 retains the original directory handle across worker exit and refuses observed
 root replacement. Linux cleanup accesses the captured object through its handle;
 continuous launch-time ownership and nested directory mutation remain separate.
 
-The [bounded cleanup marker probes](plugin-session-cleanup-markers.md) reject
+The [bounded cleanup marker probes](../plugin-session-cleanup-markers.md) reject
 linked/nonregular markers and bound cache tags without waiting for FIFO writers.
 They do not complete the independent nested-directory removal fence.
 
-The [observed cleanup targets](plugin-session-cleanup-targets.md) retain at most
+The [observed cleanup targets](../plugin-session-cleanup-targets.md) retain at most
 128 target handles, revalidate directory identity/markers and anchor Linux
 contents to those handles. Cleanup retains the empty target directory to avoid
 the final pathname-unlink race. Linux scan and recursive content opens reject
@@ -723,21 +723,21 @@ handle and refuses observed replacement or file mount crossing before unlink.
 The final comparison/name unlink remains non-atomic; this does not complete
 continuous ownership or freeze filesystem mutations.
 
-The [cleanup retry plan](releases/plugin-session-cleanup-retry-2026-10-05.md)
+The [cleanup retry plan](../releases/plugin-session-cleanup-retry-2026-10-05.md)
 retains the first complete target scan and successful-target progress through
 ordinary I/O errors. Cloned workspaces do not rescan or admit same-path marked
 replacements during that plan. It remains process-local, not durable across a
 resident restart; continuous launch-time ownership and Session incarnation
 remain open.
 
-The [marker finalization progress](releases/plugin-session-cleanup-marker-progress-2026-10-05.md)
+The [marker finalization progress](../releases/plugin-session-cleanup-marker-progress-2026-10-05.md)
 records successful marker unlinks and retains the pending original marker handles.
 I/O retry finishes only that phase, refusing marker recreation/replacement or
 identity changes and preserving late contents. This extends the process-local
 plan; it is not a durable cleanup journal or a filesystem transaction.
 
-The [durable cleanup continuation](plugin-session-cleanup-continuation.md)
-([Hawk release](releases/plugin-session-cleanup-continuation-2026-10-05.md), activated;
+The [durable cleanup continuation](../plugin-session-cleanup-continuation.md)
+([Hawk release](../releases/plugin-session-cleanup-continuation-2026-10-05.md), activated;
 startup/admission accepted, no live resume exercised yet) adds
 a separate advisory nomination of the original worktree root for a deletion
 already committed in the terminal journal. A writer-admitted Machine that
@@ -759,57 +759,57 @@ wall-clock budget (source only until released) bounds long walks but not a hung 
 
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
-| P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Session and security-domain identity, state leases and policy; link exact resolved results to finite domain executors. Advertised-root and accepted-configuration identity are adopted by Hawk's October 2 protocol-24 Machine; the colocated Controller root fence is active. Protocol-25 Session filesystem read observations are adopted; continuous Session/worktree ownership remains open. The [worker snapshot placement fence](plugin-session-snapshot-placement.md) protects declared runtime placement and staged reset from worker observations. The [process-local lifecycle fence](plugin-session-lifecycle-fence.md) serializes launch declarations with deletion/reset/cleanup and refuses late declarations after deletion. The [reader-first terminal deletion journal](plugin-session-deletion-journal.md) adds bounded cold-reader and IPC fixtures; its Hawk's [production writer](releases/plugin-deletion-production-writer-2026-10-04.md) is active after exact native/IPC/startup-authority acceptance; installed component-owner activation, fallback and recovery enforce the durable reader floor. Portable writer admission and continuous ownership remain open. Durable Session incarnation remains open | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader, advertised-root and telemetry installation fences and shared structural link vectors; no serialized authorization |
+| P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Session and security-domain identity, state leases and policy; link exact resolved results to finite domain executors. Advertised-root and accepted-configuration identity are adopted by Hawk's October 2 protocol-24 Machine; the colocated Controller root fence is active. Protocol-25 Session filesystem read observations are adopted; continuous Session/worktree ownership remains open. The [worker snapshot placement fence](../plugin-session-snapshot-placement.md) protects declared runtime placement and staged reset from worker observations. The [process-local lifecycle fence](../plugin-session-lifecycle-fence.md) serializes launch declarations with deletion/reset/cleanup and refuses late declarations after deletion. The [reader-first terminal deletion journal](../plugin-session-deletion-journal.md) adds bounded cold-reader and IPC fixtures; its Hawk's [production writer](../releases/plugin-deletion-production-writer-2026-10-04.md) is active after exact native/IPC/startup-authority acceptance; installed component-owner activation, fallback and recovery enforce the durable reader floor. Portable writer admission and continuous ownership remain open. Durable Session incarnation remains open | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader, advertised-root and telemetry installation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
-| P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; the supplied Code HTTP installation/read/uninstall chain is now accepted separately. Extend this to Agent authentication projection and actual native-generation replacement | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from telemetry or forced fixture teardown |
-| P4 / Code consumer | The [Review destination reader](plugin-review-owned-destinations.md) connects explicit navigation, original-target handoff, independently owned native-text display and passive Settings recovery. The [native input candidate](plugin-native-input-bounds.md) bounds single inputs; the [whole-query candidate](plugin-native-navigation-budgets.md) adds aggregate pre-acquisition location/target budgets, original-worktree-only opens and typed refusal. [Single-use Open](plugin-native-open-once.md) removes implicit replay and fences unobserved acquisition; [native close confirmation](plugin-native-close-confirmation.md) verifies original-peer removal. Global retained-history/background-effect limits and independent acceptance of the deployed Machine/exact native pair remain open | Actual deployed consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; aggregate native lifetime/resource limits and supported-client native acceptance |
+| P4 / capability acceptance | The core [connected installation writer](../releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; the supplied Code HTTP installation/read/uninstall chain is now accepted separately. Extend this to Agent authentication projection and actual native-generation replacement | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from telemetry or forced fixture teardown |
+| P4 / Code consumer | The [Review destination reader](../plugin-review-owned-destinations.md) connects explicit navigation, original-target handoff, independently owned native-text display and passive Settings recovery. The [native input candidate](../plugin-native-input-bounds.md) bounds single inputs; the [whole-query candidate](../plugin-native-navigation-budgets.md) adds aggregate pre-acquisition location/target budgets, original-worktree-only opens and typed refusal. [Single-use Open](../plugin-native-open-once.md) removes implicit replay and fences unobserved acquisition; [native close confirmation](../plugin-native-close-confirmation.md) verifies original-peer removal. Global retained-history/background-effect limits and independent acceptance of the deployed Machine/exact native pair remain open | Actual deployed consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; aggregate native lifetime/resource limits and supported-client native acceptance |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | Extend the deployed unified install/uninstall/resolution Web consumer as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 
-The [native reload-input candidate](plugin-native-reload-bounds.md) also closes
+The [native reload-input candidate](../plugin-native-reload-bounds.md) also closes
 the existing reload reader's per-input byte/decoded-text gap and completed-task
 cleanup. It does not introduce automatic reload or replace the remaining
 aggregate retained-history/background-effect limits in the Code row.
-The [acquisition lifetime candidate](plugin-native-acquisition-budgets.md) adds
+The [acquisition lifetime candidate](../plugin-native-acquisition-budgets.md) adds
 shared pre-load admission and actual-object release accounting across worktrees;
 retained history, detached snapshots and general background budgets remain open.
-The [text-snapshot lifetime extension](plugin-native-snapshot-lifetimes.md)
+The [text-snapshot lifetime extension](../plugin-native-snapshot-lifetimes.md)
 extends the original charge through native text snapshots, branches and
 background previews, including after BufferStore entity/index teardown.
 It addresses early release of acquisition capacity, not global snapshot
 counts, retained bytes/history or general background-effect budgets.
-Its [acceptance and signed publication](releases/native-snapshot-lifetimes-2026-09-19.md)
+Its [acceptance and signed publication](../releases/native-snapshot-lifetimes-2026-09-19.md)
 passes 48 native, 19 connected v6 and 24 browser checks, the complete source gate
 and the actual active/next-recovery/cold readers of the full 88-release Catalog.
 Zed `1.19.0` is available and the separately authorized
-[Hawk upgrade](releases/zed-snapshot-install-2026-09-19.md) records the exact
+[Hawk upgrade](../releases/zed-snapshot-install-2026-09-19.md) records the exact
 installed generation with Service `completed` and Machine `applied` receipts.
 Its resident Machine and all 18 original ACP workers remain unchanged. A
 separate concurrent Controller/Web deployment is recorded explicitly; this
 Plugin upgrade is not native-owner recovery or full continuity of every process.
-The [sync/reload replacement candidate](plugin-native-replacement-budgets.md)
+The [sync/reload replacement candidate](../plugin-native-replacement-budgets.md)
 adds shared actual-job/result lifetimes, bounded diff output and pre-mutation
 retained-history checks for those two writers. Its
-[candidate acceptance](releases/native-replacement-budgets-candidate-2026-09-18.md)
+[candidate acceptance](../releases/native-replacement-budgets-candidate-2026-09-18.md)
 passes the complete source gate, 43 native tests, the exact static pair,
 temporary signed lifecycle, 18 connected v5 and 24 browser checks. Other writers,
 global snapshot lifetimes remain open; no production native generation changed.
-The [private remote-edit admission](plugin-native-remote-edits.md) extends finite
+The [private remote-edit admission](../plugin-native-remote-edits.md) extends finite
 history admission to the local native server's incoming edit/undo batches.
 Unknown IDs cannot accumulate waiting operations, original sharing peers are
 checked, and a bounded native scratch branch validates the complete causal/
 Unicode/history result before publishing any prefix. Its
-[Zed 1.20.0 acceptance and signed publication](releases/native-remote-edit-budgets-2026-09-19.md)
+[Zed 1.20.0 acceptance and signed publication](../releases/native-remote-edit-budgets-2026-09-19.md)
 passes 57 native tests, two 19-check connected v6 runs, 24 browser checks and
 the complete source gate. All 89 Catalog releases pass actual-role reader
 preflights. Hawk remains on separately installed 1.19.0 in that observation;
 independent Machine/Controller changes invalidate an all-process continuity
 claim. The later, separately authorized
-[Hawk 1.20.0 installation](releases/zed-remote-edit-install-2026-09-19.md) records
+[Hawk 1.20.0 installation](../releases/zed-remote-edit-install-2026-09-19.md) records
 Service `completed`, Machine `applied` and the matching new installation revision.
 It retains all 17 original ACP workers and unchanged component profiles in its
 own observation window, without revising the earlier continuity failure.
-The subsequent [Agent publication and Hawk rollout](releases/agent-upgrades-2026-09-19.md)
+The subsequent [Agent publication and Hawk rollout](../releases/agent-upgrades-2026-09-19.md)
 closes all five missing exact publications, installs their signed generations
 and activates the Controller's Operator lock fix from integrated `e10bdaf3`.
 The final 94-release reader floor and empty convergence plan pass; all 18
@@ -817,28 +817,28 @@ original ACP workers survive this rollout. The independent Web changes and
 their failed-then-reconciled continuity checks are retained in that record.
 This is not an all-writer or global memory budget, independent recovery or
 supported-device acceptance.
-The subsequent [Budget outcome continuation](plugin-sync-budget-outcomes.md)
+The subsequent [Budget outcome continuation](../plugin-sync-budget-outcomes.md)
 adds exact terminal-refusal projection and original-ID reconciliation through
 adapter/Machine/Service/Web, retaining Unknown for ambiguous evidence and
 requiring separate retirement. It does not adopt old processes or implement
 independently authorized post-effect recovery. Its
-[acceptance](releases/sync-budget-outcomes-2026-09-19.md) passes all 19 connected
+[acceptance](../releases/sync-budget-outcomes-2026-09-19.md) passes all 19 connected
 v6 checks and records Controller/Web reader activation. The separately authorized
-[Machine and signed Zed rollout](releases/zed-budget-rollout-2026-09-19.md) repeats
+[Machine and signed Zed rollout](../releases/zed-budget-rollout-2026-09-19.md) repeats
 those 19 checks and 72 Machine installation-reader checks, activates the new
 resident generation and installs the exact Zed `1.18.0` pair on Hawk. All 16
 original ACP workers are retained in the bounded observation window; complete
 drain, native-owner migration/resume and supported-device acceptance remain open.
-The subsequent [Hawk cold-reader refresh](releases/plugin-cold-reader-floor-2026-09-19.md)
+The subsequent [Hawk cold-reader refresh](../releases/plugin-cold-reader-floor-2026-09-19.md)
 closes the old Controller's current-Catalog runtime-binding incompatibility.
 The exact active/next-recovery/cold artifacts pass the complete 87-release
 Catalog and all 420 journal/dataset/policy checks before and after host activation.
 It retains the independently advanced resident Machine and all 18 observed ACP
 workers; this is not native-owner adoption or general post-effect recovery.
 
-The [install continuation repair](plugin-install-continuation.md) closes live
+The [install continuation repair](../plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It
-is [published and activated on Controller/Web](releases/plugin-install-continuation-2026-09-14.md),
+is [published and activated on Controller/Web](../releases/plugin-install-continuation-2026-09-14.md),
 and the subsequent Service installation journal adds restart protection.
 The Machine/Service receipt writer now has its own connected acceptance and
 activation evidence; none of these closes the independent recovery row above. Local disposal does
@@ -849,8 +849,8 @@ unconstrained workflow executor to hide these gaps.
 ## Production and supported-client acceptance still required
 
 - **Historical persistence loss:** the two append rejections after the
-  [1.8.0 installation window](releases/zed-sync-owners-2026-09-16.md#later-persistence-degradation--unresolved)
-  led to a separately [repaired and activated Controller admission queue](releases/persistence-admission-2026-09-16.md).
+  [1.8.0 installation window](../releases/zed-sync-owners-2026-09-16.md#later-persistence-degradation--unresolved)
+  led to a separately [repaired and activated Controller admission queue](../releases/persistence-admission-2026-09-16.md).
   Local/public health is now 200, with zero drops/failed batches in the new
   epoch and all 16 worker/four Code process identities retained. The original
   rejected contents and recovery remain unknown; no replay or DB edit was used
@@ -868,7 +868,7 @@ unconstrained workflow executor to hide these gaps.
   them individually.
 - **Supported browser and retained-worker acceptance:** dataset-aware Web, bound
   Controller, compatible cold recovery and independently authorized Machine
-  maintenance are [activated](releases/dataset-bound-maintenance-2026-09-15.md).
+  maintenance are [activated](../releases/dataset-bound-maintenance-2026-09-15.md).
   The TLS floor is active in Controller and resident Machine, but retained worker
   generations were not force-replaced; their native-generation acceptance and
   actual supported-device reload/storage checks remain. One independent client
@@ -890,15 +890,15 @@ unconstrained workflow executor to hide these gaps.
   generation swap or native resume. No forced rebind, login or worker restart is
   authorized merely by a Controller/Web release.
 - **Remote core Code adapter:** the shared UTF-8 paging and owned Code changes
-  are now [activated on Hawk](releases/zed-native-sync-2026-09-16.md) through the
+  are now [activated on Hawk](../releases/zed-native-sync-2026-09-16.md) through the
   separately authorized Machine release, with exact connected acceptance and
-  installed Zed 1.7.0 evidence. The [subsequent 1.8.0 Plugin-only upgrade](releases/zed-sync-owners-2026-09-16.md)
+  installed Zed 1.7.0 evidence. The [subsequent 1.8.0 Plugin-only upgrade](../releases/zed-sync-owners-2026-09-16.md)
   retained that Machine and existing Code connections; its new explicit generic
   synchronization guard was then a verified Machine candidate. The later
-  [working-diff release observation](releases/review-owned-diff-2026-09-17.md)
+  [working-diff release observation](../releases/review-owned-diff-2026-09-17.md)
   records an already-active protocol-20 Machine and retained Zed 1.8, not
   installation of the exact 1.9 native pair used by the owned-buffer gates.
-  The subsequent [Budget rollout](releases/zed-budget-rollout-2026-09-19.md)
+  The subsequent [Budget rollout](../releases/zed-budget-rollout-2026-09-19.md)
   records actual protocol-21 Machine activation and signed Zed `1.18.0`
   installation, with the exact adapter `1.18.0` / private server `1.4.0` pair
   and 19 connected v6 checks. Retained workers were not force-replaced and the

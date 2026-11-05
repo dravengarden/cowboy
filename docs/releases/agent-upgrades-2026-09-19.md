@@ -6,7 +6,7 @@ Controller containing the local Operator lock-release repair is also activated.
 A fresh whole-inventory convergence plan has no steps or skips. This closes the
 specific publication/activation prerequisite recorded by the
 [Zed remote-edit release](native-remote-edit-budgets-2026-09-19.md), not every
-[Plugin refactor completion exit](../plugin-refactor-completion.md).
+[Plugin refactor completion exit](../history/plugin-refactor-completion.md).
 
 ## Exact independently published releases
 

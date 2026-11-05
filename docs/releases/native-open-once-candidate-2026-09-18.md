@@ -122,4 +122,4 @@ nor proof that background effects stopped. Native close acknowledgement, global
 retained-buffer/history/background-effect budgets, independently authorized
 recovery, signed publication and actual deployed consumer/native-generation and
 supported-device acceptance remain open. General graph/state-lease work remains
-in the [completion ledger](../plugin-refactor-completion.md).
+in the [completion ledger](../history/plugin-refactor-completion.md).

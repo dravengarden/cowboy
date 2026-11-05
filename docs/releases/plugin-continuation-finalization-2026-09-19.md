@@ -149,4 +149,4 @@ restart, independent post-effect restoration, general DAG/state leases,
 Machine-owned Workspace/Session/security-domain identity, global retained-history
 or background-effect budgets, Agent/native generation replacement, abandoned
 browser recovery or supported-device acceptance. Those remain in the
-[completion ledger](../plugin-refactor-completion.md#code-work-still-required).
+[completion ledger](../history/plugin-refactor-completion.md#code-work-still-required).

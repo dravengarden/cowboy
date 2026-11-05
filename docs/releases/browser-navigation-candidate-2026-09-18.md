@@ -131,4 +131,4 @@ The seven final `*-product.log` browser receipts bind the fixture hashes above.
 No production account, policy, installation, Controller, Machine, native worker
 or PWA activation was changed. The separate acquisition budget, intended view,
 supported-device and recovery exits in the
-[completion ledger](../plugin-refactor-completion.md) remain open.
+[completion ledger](../history/plugin-refactor-completion.md) remain open.

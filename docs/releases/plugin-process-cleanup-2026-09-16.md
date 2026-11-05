@@ -142,5 +142,5 @@ server primitive is a new delivery decision, not an already-accepted fix.
 Review, owned navigation, independently authorized Machine/Code activation,
 post-effect/native recovery, broader graph/state leases and account/device
 acceptance remain open in the
-[completion ledger](../plugin-refactor-completion.md). This release does **not**
+[completion ledger](../history/plugin-refactor-completion.md). This release does **not**
 complete the entire Plugin refactor.

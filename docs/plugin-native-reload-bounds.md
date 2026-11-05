@@ -66,7 +66,7 @@ This is a per-input bound, not a limit on total retained buffer/history,
 background concurrency, decoding scratch, process RSS or worktree scanning.
 No independently authorized recovery, actual deployed generation replacement
 or supported-device acceptance follows. See the
-[completion ledger](plugin-refactor-completion.md).
+[completion ledger](history/plugin-refactor-completion.md).
 
 The subsequent [acquisition lifetime candidate](plugin-native-acquisition-budgets.md)
 bounds the number of initial loads and live acquired buffers across worktrees,

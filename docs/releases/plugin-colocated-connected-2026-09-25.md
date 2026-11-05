@@ -85,4 +85,4 @@ reader/writer leases, general graph contracts, independently authorized
 post-effect restoration, native-generation replacement or supported-device
 acceptance, nor does it drive an authenticated read through the deployed
 Controller. Those remain in the
-[completion ledger](../plugin-refactor-completion.md#code-work-still-required).
+[completion ledger](../history/plugin-refactor-completion.md#code-work-still-required).

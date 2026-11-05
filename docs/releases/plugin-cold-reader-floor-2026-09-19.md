@@ -155,7 +155,7 @@ copied Service or Provider credentials.
 | `settled-host-readers.json` | `6e09b61753bb3afde8c2b4edbf0035d5372537cf299014efcc3e9fdfcfe12ff8` |
 | Successful host receipt | `74277c19907fb3e99ad843e553770d6fc44da0fbaedd35d3dbbf71a584f8e7d3` |
 
-The [completion ledger](../plugin-refactor-completion.md) still requires general
+The [completion ledger](../history/plugin-refactor-completion.md) still requires general
 typed graph/site/state leases, remaining global native resource bounds,
 capability/device acceptance and independently authorized post-effect recovery.
 Production security, managed telemetry and private navigation policies remain

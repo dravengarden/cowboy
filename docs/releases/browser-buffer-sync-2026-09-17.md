@@ -114,4 +114,4 @@ Remaining: ordinary Review content/position lifetimes and navigation owners,
 actual Machine/Code rollout, independently authorized restoration and
 abandoned-browser/restart recovery, plus supported-device acceptance. General
 typed resolution/state compatibility exits remain separately tracked in the
-[completion ledger](../plugin-refactor-completion.md).
+[completion ledger](../history/plugin-refactor-completion.md).

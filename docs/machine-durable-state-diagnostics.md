@@ -3,7 +3,7 @@
 A read-only, content-free report of the durable datasets a Machine owns, so an
 operator or an AI assistant can see their state without reading logs and state files
 by hand. It extends the diagnostics row of the
-[completion ledger](plugin-refactor-completion.md) to the new finite domains. It
+[completion ledger](history/plugin-refactor-completion.md) to the new finite domains. It
 changes no dataset and grants nothing.
 
 ## Surface

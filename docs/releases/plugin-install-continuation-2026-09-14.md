@@ -26,7 +26,7 @@ connection replacement/late ACKs and fourteen authority/identity changes.
 
 This attempt is process-local, not a durable install protocol. Restart recovery,
 installation receipt correlation, independent post-effect restoration and the
-other [refactor exits](../plugin-refactor-completion.md) remain unfinished.
+other [refactor exits](../history/plugin-refactor-completion.md) remain unfinished.
 
 ## Gates and exact artifacts
 
@@ -126,7 +126,7 @@ The subsequent core-only [Rust/TS structural linker](../plugin-composition-check
 adds its differential gate without changing these production artifacts. It
 does not satisfy live verified resolution, durable installation, general state
 coexistence, recovery or actual client/Operator acceptance. The
-[completion ledger](../plugin-refactor-completion.md) remains authoritative.
+[completion ledger](../history/plugin-refactor-completion.md) remains authoritative.
 
 The subsequent full `check-compact` also passed (`quality-3.log`), including all
 86 complete-report differential cases. Its Web `dist` is byte-for-byte equal

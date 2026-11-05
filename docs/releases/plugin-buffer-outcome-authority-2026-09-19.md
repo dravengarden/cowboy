@@ -131,5 +131,5 @@ passing gates; its diagnostic remains in the private evidence directory.
 This is finite outcome authorization, not continuous security epochs, state
 reader/writer leases, general graph execution, abandoned-browser/restart
 restoration, native-generation adoption or independently authorized post-effect
-recovery. None of the broader [completion exits](../plugin-refactor-completion.md)
+recovery. None of the broader [completion exits](../history/plugin-refactor-completion.md)
 is closed merely by preserving an effect receipt or denying its response.

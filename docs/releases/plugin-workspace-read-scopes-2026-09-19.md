@@ -145,5 +145,5 @@ Machine configuration replacement. Continuous Machine-owned Workspace/Session/
 security-domain identity, general graph linking, state reader/writer leases,
 independent post-effect recovery, aggregate native lifetimes and supported
 client/account acceptance remain open in the
-[completion ledger](../plugin-refactor-completion.md). No cancelled observation
+[completion ledger](../history/plugin-refactor-completion.md). No cancelled observation
 or stale-response refusal is described as undoing an already-dispatched effect.

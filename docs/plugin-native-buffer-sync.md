@@ -163,6 +163,6 @@ file/outline results and positions, own navigation destinations, and run its
 real consumer/browser/device checks. None of these follows from the native
 primitive's gate or its installation.
 
-See the [completion ledger](plugin-refactor-completion.md). Conditional reload,
+See the [completion ledger](history/plugin-refactor-completion.md). Conditional reload,
 independent post-effect restoration and verified native generation recovery
 remain separate from local resource disposal and structural graph validation.

@@ -2,7 +2,7 @@
 
 Closes the analysis of the "link exact resolved results to finite domain executors; no
 serialized authorization" part of the P0 exit in the
-[completion ledger](plugin-refactor-completion.md). It adds no code. Its finding is that the
+[completion ledger](history/plugin-refactor-completion.md). It adds no code. Its finding is that the
 mechanism already exists in the one domain whose executor needs it, and that a generic version
 is what the ledger forbids.
 

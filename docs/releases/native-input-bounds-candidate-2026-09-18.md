@@ -117,4 +117,4 @@ target opens; typed whole-query refusal instead of upstream omission of failed
 responses; external-worktree admission before acquisition; aggregate retained
 history/background-effect/deadline limits; independently authorized recovery.
 Single-input limits do not close those gaps or enable navigation. General
-graph/state-lease work remains in the [completion ledger](../plugin-refactor-completion.md).
+graph/state-lease work remains in the [completion ledger](../history/plugin-refactor-completion.md).

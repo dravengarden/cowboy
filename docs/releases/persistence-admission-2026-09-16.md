@@ -102,4 +102,4 @@ The original queue rejection logs contain no sufficient event identity/content
 to reconstruct the two lost intents. Their recovery remains unknown. The
 verified but unactivated Machine candidate, independent Web recovery, core
 buffer synchronization authority/Review integration and other
-[Plugin completion exits](../plugin-refactor-completion.md) remain separate.
+[Plugin completion exits](../history/plugin-refactor-completion.md) remain separate.

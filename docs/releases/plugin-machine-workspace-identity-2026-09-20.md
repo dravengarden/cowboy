@@ -177,4 +177,4 @@ general graph contracts, independently authorized post-effect restoration,
 native-generation replacement or supported-device acceptance. A refusal is an
 ended observation: it is never a rollback, an undo, or proof that a read the
 Code adapter already started has stopped. Those remain in the
-[completion ledger](../plugin-refactor-completion.md#code-work-still-required).
+[completion ledger](../history/plugin-refactor-completion.md#code-work-still-required).

@@ -142,4 +142,4 @@ activation changed. There is no SW version bump or production deployment receipt
 Production navigation acquisition remains default closed. Intended destination
 view integration, native acquisition budgets, supported-device acceptance,
 runtime rollout and independently authorized post-effect recovery remain
-separate exits in the [completion ledger](../plugin-refactor-completion.md).
+separate exits in the [completion ledger](../history/plugin-refactor-completion.md).

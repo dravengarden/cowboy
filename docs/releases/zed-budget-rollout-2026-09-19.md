@@ -176,7 +176,7 @@ complete a native resume, validate a supported physical device or change managed
 Victoria admission/destination policy. General graph/site/state leases,
 all-writer/global native history/snapshot/background limits, other capability
 acceptance and independent post-effect recovery remain in the
-[completion ledger](../plugin-refactor-completion.md).
+[completion ledger](../history/plugin-refactor-completion.md).
 
 ## Retained evidence
 

@@ -147,4 +147,4 @@ Service credentials, grant production maintenance or accept native recovery.
 Publication, Machine maintenance and actual Zed installation remain separate
 release steps. A Controller-only deployment cannot activate these Machine/native
 mechanisms. General graph resolution, state leases and independently authorized
-post-effect recovery remain in the [completion ledger](plugin-refactor-completion.md).
+post-effect recovery remain in the [completion ledger](history/plugin-refactor-completion.md).

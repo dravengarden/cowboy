@@ -118,4 +118,4 @@ Still separate: ordinary Review content/position lifetimes, owned navigation
 destinations, signed Plugin installation, explicit Machine maintenance and
 supported-device acceptance. No browser call site, SDK grant, state-journal
 schema, host policy or public Plugin release changes in this Service slice. See the
-[completion ledger](plugin-refactor-completion.md).
+[completion ledger](history/plugin-refactor-completion.md).

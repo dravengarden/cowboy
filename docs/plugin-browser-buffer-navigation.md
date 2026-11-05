@@ -107,4 +107,4 @@ results belong in the [candidate record](releases/browser-navigation-candidate-2
 This is not complete intended destination-view integration, native acquisition
 pre-allocation bounds, intended-consumer or supported-device acceptance, a
 production rollout or independently authorized post-effect recovery. Those
-remain explicit exits in the [completion ledger](plugin-refactor-completion.md).
+remain explicit exits in the [completion ledger](history/plugin-refactor-completion.md).

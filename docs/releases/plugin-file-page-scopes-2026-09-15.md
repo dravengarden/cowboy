@@ -113,5 +113,5 @@ audit. SHA-256 identities:
 
 Continuous Machine-owned Workspace identity, general state leases, independent
 post-effect/native recovery and supported-device/account acceptance remain in
-the [completion ledger](../plugin-refactor-completion.md). A read observation or
+the [completion ledger](../history/plugin-refactor-completion.md). A read observation or
 discarded stale response does not undo an already-dispatched effect.

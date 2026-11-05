@@ -146,5 +146,5 @@ pre-acquisition bounds, OS filesystem isolation, supported-device acceptance,
 signed rollout and separately authorized Machine maintenance remain unaccepted.
 So do abandoned-browser/restart restoration, independently authorized
 post-effect recovery, general graph/state leases and the other
-[completion exits](../plugin-refactor-completion.md). This closes the complete
+[completion exits](../history/plugin-refactor-completion.md). This closes the complete
 native text prerequisite, not the whole Plugin refactor or production navigation.

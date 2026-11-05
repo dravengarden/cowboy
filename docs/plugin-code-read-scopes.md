@@ -230,7 +230,7 @@ The final observation is not an atomic transaction with HTTP delivery or a
 future streaming-body fence. Continuous Workspace observations, principal/policy
 admission, general state leases and independent post-effect/native recovery remain
 in the
-[completion ledger](plugin-refactor-completion.md). Tests use disposable state
+[completion ledger](history/plugin-refactor-completion.md). Tests use disposable state
 and synthetic transport replies, not a production login or native-generation
 acceptance.
 

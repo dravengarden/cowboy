@@ -104,5 +104,5 @@ diagnostics acceptance, separately authorized and accepted Machine/Zed rollout,
 abandoned-browser/restart recovery, post-effect restoration and supported
 devices. No production process was restarted, and no production Plugin
 installation was changed by this task.
-See the [completion ledger](../plugin-refactor-completion.md); this is not whole
+See the [completion ledger](../history/plugin-refactor-completion.md); this is not whole
 Plugin-refactor completion.

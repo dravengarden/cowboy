@@ -113,4 +113,4 @@ Zed's close protocol has no ACK. It is not compensation, file-edit undo, full
 worktree-cache reclamation, independent progress through arbitrary native stalls,
 durable cross-process recovery, or restored Agent-session evidence. General DAG,
 state-lease and post-effect recovery exits remain open in the
-[completion ledger](../plugin-refactor-completion.md).
+[completion ledger](../history/plugin-refactor-completion.md).

@@ -111,7 +111,7 @@ changed. Catalog checks do not claim immediate trust-file revocation or atomic
 remote cancellation after dispatch. Already emitted telemetry is `NoRestore`.
 General graph/scope/state leases, independent post-effect/native recovery and
 real account/device/managed-policy acceptance remain in the
-[completion ledger](../plugin-refactor-completion.md).
+[completion ledger](../history/plugin-refactor-completion.md).
 
 Private evidence root: `/tmp/cowboy-plugin-release-leases-Y3LlMFxS`. SHA-256:
 

@@ -135,5 +135,5 @@ General verified DAG resolution, cross-tab/state-writer coexistence,
 independently authorized post-effect restoration and archival, actual Agent/code
 capability and native-generation acceptance, production core-security handoff
 and managed Victoria cutover remain separate exits. See the
-[completion ledger](../plugin-refactor-completion.md). A successful installation
+[completion ledger](../history/plugin-refactor-completion.md). A successful installation
 receipt is not proof that all effects are reversible or the refactor is complete.

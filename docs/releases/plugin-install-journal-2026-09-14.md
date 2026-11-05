@@ -138,5 +138,5 @@ Private create-only proof is under `/tmp/cowboy-install-journal.8bYhHA`:
 Machine install/staging/activation receipts and CAS, independently authorized
 restoration, live composition resolution, general state coexistence, real
 core-security/device handoff and managed Victoria cutover remain separate
-[refactor exits](../plugin-refactor-completion.md). This release closes the
+[refactor exits](../history/plugin-refactor-completion.md). This release closes the
 Service restart gap; it does not complete the whole refactor.

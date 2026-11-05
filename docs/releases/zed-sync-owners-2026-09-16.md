@@ -189,4 +189,4 @@ probe and original-generation continuation, actual Review and owned-navigation
 integration, independently authorized post-effect recovery, general live graph
 and state leases, managed Victoria cutover and supported account/device checks.
 The private purpose enum and native protocol probe cannot provide those grants.
-The [completion ledger](../plugin-refactor-completion.md) remains open.
+The [completion ledger](../history/plugin-refactor-completion.md) remains open.

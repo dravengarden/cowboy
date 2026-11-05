@@ -3,7 +3,7 @@
 Status: design for review. Nothing is implemented, and the central finding is that
 nothing should be until a real consumer exists. This addresses the "state leases and
 policy" part of the P0 exit and the "exclusive fenced ownership" part of P3 in the
-[completion ledger](plugin-refactor-completion.md). It follows the target text in
+[completion ledger](history/plugin-refactor-completion.md). It follows the target text in
 [the spatiotemporal design](plugin-spatiotemporal-design.md) (sections 4, 5.4, 6.1–6.3
 and the stable-namespace rule: *instances hold authorized reader/writer leases over a
 dataset bound to Service, security domain, dataset and logical scope; two incompatible

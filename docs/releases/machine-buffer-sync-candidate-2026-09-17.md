@@ -111,6 +111,6 @@ owned navigation destinations, supported-client acceptance, separately
 authorized Machine maintenance and exact signed Plugin rollout. Abandoned
 owners, Machine restart and post-effect recovery need independent authority;
 missing process-local evidence cannot grant a replay. General graph/state
-leases and the other exits in the [completion ledger](../plugin-refactor-completion.md)
+leases and the other exits in the [completion ledger](../history/plugin-refactor-completion.md)
 remain open. This task does not resolve the independent Web recovery journal,
 historical persistence loss, host-security adoption or managed Victoria policy.

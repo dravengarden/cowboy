@@ -253,7 +253,7 @@ This bounds one more writer. Remote-replica bootstrap, other native/LSP writers,
 global retained bytes and snapshot counts, general background budgets,
 independently authorized post-effect restoration and supported-device consumer
 acceptance remain open, alongside the broader typed graph/state-compatibility
-[completion exits](../plugin-refactor-completion.md). Forced fixture cleanup,
+[completion exits](../history/plugin-refactor-completion.md). Forced fixture cleanup,
 successful Catalog reads and native refusal do not close those exits.
 
 ## Evidence

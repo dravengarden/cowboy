@@ -105,5 +105,5 @@ audit. SHA-256 identities:
 
 General graph/site/state leases, independent post-effect/native recovery and
 account/device acceptance remain in the
-[completion ledger](../plugin-refactor-completion.md). Draining an owned task is
+[completion ledger](../history/plugin-refactor-completion.md). Draining an owned task is
 not cross-site compensation or generic DAG authority.

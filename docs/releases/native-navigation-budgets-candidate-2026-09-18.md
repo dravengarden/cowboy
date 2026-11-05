@@ -125,4 +125,4 @@ Still required: aggregate native live-buffer/history and background-effect
 limits, independently authorized uncertain-acquisition recovery and verified
 native close. Observation deadlines and one admitted handler do not guarantee
 that background loads have stopped. General graph/state-lease work remains in
-the [completion ledger](../plugin-refactor-completion.md).
+the [completion ledger](../history/plugin-refactor-completion.md).

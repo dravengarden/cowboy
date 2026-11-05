@@ -183,5 +183,5 @@ Still open: general graph/site/state leases, additional Agent authentication and
 generation acceptance, all-writer/global native history/snapshot/background
 limits, independently authorized post-effect restoration, exact production
 Machine/native cutover and supported-device acceptance. See the
-[completion ledger](../plugin-refactor-completion.md). No Plugin Catalog bytes,
+[completion ledger](../history/plugin-refactor-completion.md). No Plugin Catalog bytes,
 installation, account, policy, Machine pointer or worker generation changed.

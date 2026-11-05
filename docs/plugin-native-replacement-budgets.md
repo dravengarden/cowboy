@@ -91,4 +91,4 @@ lifecycle, connected v5, browser and complete source gates remain required.
 
 Publication, registered Machine installation, actual generation replacement and
 supported-device acceptance are independent from these disposable fixtures.
-See the [completion ledger](plugin-refactor-completion.md).
+See the [completion ledger](history/plugin-refactor-completion.md).

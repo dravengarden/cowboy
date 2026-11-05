@@ -142,4 +142,4 @@ audit. No production credential was copied or used.
 
 Native pre-acquisition budgets, exact registered native generation / intended
 consumer device acceptance, independent post-effect recovery and the general
-graph/state-lease exits remain in the [completion ledger](../plugin-refactor-completion.md).
+graph/state-lease exits remain in the [completion ledger](../history/plugin-refactor-completion.md).

@@ -1,6 +1,6 @@
 # Cowboy：跨 Service / Machine 的时空可组合架构
 
-Current exit status is consolidated in the [completion ledger](plugin-refactor-completion.md).
+Current exit status is consolidated in the [completion ledger](history/plugin-refactor-completion.md).
 The historical slices below are evidence of individual steps, not whole-refactor completion.
 The [install/upgrade continuation repair](plugin-install-continuation.md) closes live
 ownership and authorization gaps. The subsequent [Service install journal](plugin-install-journal.md)
@@ -839,8 +839,8 @@ Agent 内部工具。
 | 现有位置                                              | 已有基础 / 需要补足                                                                  |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | [plugin_runtime](../src/plugin_runtime.rs)            | 精确 host 快照与 namespace；不是通用跨端 typed resolver                              |
-| [Machine Plugins](../src/machine_plugins.rs)          | 签名制品、generation、安装/回收；耐久卸载回执与独立 installation CAS，写入受 reader-floor 切换约束 |
-| [server uninstall](../src/server/plugin_uninstall.rs) | Service 卸载账本、事务完成、重启 fence 与只读 Machine 核对；仍缺恢复授权与补偿步骤 |
+| [Machine Plugins](../components/machine/src/machine_plugins.rs)          | 签名制品、generation、安装/回收；耐久卸载回执与独立 installation CAS，写入受 reader-floor 切换约束 |
+| [server uninstall](../components/server/src/server/plugin_uninstall.rs) | Service 卸载账本、事务完成、重启 fence 与只读 Machine 核对；仍缺恢复授权与补偿步骤 |
 | [Plugin storage](../src/plugin_storage.rs)            | namespace/迁移执行；补 reader-writer 共存、稳定数据身份与恢复契约                    |
 | [Web core host](../web/src/pluginHost/inventory.ts) / [旧 plugin-api](../components/plugin-api/types.ts) | 产品 Web 已脱离旧 SDK runtime，闭集 slot/context、owned 观察与 core native port 已落地；旧公开 SDK/原生 ABI 尚未退役，typed authoring 仍需迁移 |
 | [state-store](../components/state-store/store.ts)     | 已有强类型 codec、owned 订阅、进程内资源 scope、state-sync 排空与 IDB owner/事务租约；其他宿主与跨 tab 仲裁仍待迁移 |

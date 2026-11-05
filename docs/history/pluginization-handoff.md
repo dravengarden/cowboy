@@ -39,8 +39,8 @@ are retired. Host activation retained the Controller, Machines and independent
 model-gateway PIDs; subsequent explicit Machine maintenance dropped the old
 socket arguments. Legacy state and signed archives remain recoverable.
 See **Device approval and registered-Machine rollout** at the end and
-[the publication record](docs/releases/plugin-publication-2026-09-07.md) and
-[completion record](docs/releases/plugin-completion-2026-09-08.md) for exact
+[the publication record](../releases/plugin-publication-2026-09-07.md) and
+[completion record](../releases/plugin-completion-2026-09-08.md) for exact
 versions, authorization boundaries and receipts.
 
 Earlier sections are chronological evidence, not current pending-state lists.
@@ -2112,7 +2112,7 @@ SHA-256 `1998d59477f4ec0d04f0c970abd1d8eec0afdd3466f6b8c9b44c964087ff56bf`.
 ### Separate diagnostic, unchanged release gate
 
 Commit `bb69829b` adds `just agent-generation-failure-isolation` and
-[`docs/plugin-generation-migration.md`](docs/plugin-generation-migration.md).
+[`docs/plugin-generation-migration.md`](../plugin-generation-migration.md).
 
 It starts a healthy candidate before a historical worker, permits only an
 explicit terminal rejection before any observed native-session allocation,
@@ -2289,7 +2289,7 @@ not merely settings enqueued before the prompt. Actual upstream native-history
 resume, Controller/Machine integration and a reviewed broken-baseline
 release/retirement policy also remain open. None is implied by this turn's
 protocol tests or new-session worker receipt. See
-[`docs/plugin-generation-migration.md`](docs/plugin-generation-migration.md).
+[`docs/plugin-generation-migration.md`](../plugin-generation-migration.md).
 
 ## Full candidate publication — 2026-09-07
 
@@ -2325,7 +2325,7 @@ An authorized Product API token was requested for Hawk/Falcon installation but
 not supplied; unauthenticated `/api/plugins` returns 401. Do not scrape cookies,
 borrow Provider credentials, mint bypass tokens, or weaken endpoint auth.
 
-See [the complete publication record](docs/releases/plugin-publication-2026-09-07.md)
+See [the complete publication record](../releases/plugin-publication-2026-09-07.md)
 for exact identities, immutable Nix outputs, evidence paths, host-policy findings
 and remaining live-transition boundaries. Historical native-resume / first-turn
 configuration acceptance remains open; new-session startup did not prove it.
@@ -2387,7 +2387,7 @@ installed Plugin is upgraded. Use explicit native device approval or a
 user-supplied mode-0600 token file on Hawk; Catalog refresh separately requires
 `AdminOperator` authority.
 
-See [the updated release record](docs/releases/plugin-publication-2026-09-07.md)
+See [the updated release record](../releases/plugin-publication-2026-09-07.md)
 for exact closures, source commits and retained evidence. Detailed ignored
 receipts are under `dist/provider-runtime-cache/host-cutover-20260907/`,
 including `live-release.json`; durable host/component receipts remain in their

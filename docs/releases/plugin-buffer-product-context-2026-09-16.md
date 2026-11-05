@@ -65,7 +65,7 @@ The new facade is not yet an ordinary Review consumer. Native positional
 content/anchor semantics, unresolved-resource presentation, Machine/Code rollout,
 supported-device acceptance and independent post-effect recovery remain open.
 Session-end `drained` proves the registered local barriers, not native release.
-The [completion ledger](../plugin-refactor-completion.md) is not closed.
+The [completion ledger](../history/plugin-refactor-completion.md) is not closed.
 
 Installed PWAs must accept Update or reload to load these bytes; reconnecting a
 WebSocket does not replace the current JavaScript.

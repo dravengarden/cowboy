@@ -692,6 +692,10 @@ feature-check:
     cargo check --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install
     cargo check --locked --no-default-features --features code-adapter --bin cowboy-code-adapter
 
+# docs/INDEX.md links every docs/ Markdown page and no local link is broken.
+docs-index-check:
+    bash tools/check-docs-index.sh
+
 # Size ratchet: no production file, function or TSX hook count over its limit
 # may appear or grow (tools/structure-baseline.json). After moving an offender
 # unchanged, record the move with: bun tools/check-structure.ts --update
@@ -764,7 +768,7 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
       --default-reader-release "{{DEFAULT_READER}}" --receipt "{{RECEIPT}}" \
       --host-mount-ns "$host_mount" --host-net-ns "$host_net"
 
-check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check release-sources-check structure-check test test-postgres logs-conformance build
+check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check release-sources-check structure-check docs-index-check test test-postgres logs-conformance build
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.

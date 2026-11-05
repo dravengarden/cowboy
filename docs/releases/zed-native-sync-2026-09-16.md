@@ -158,5 +158,5 @@ synchronization purpose/authority, actual Review and owned-navigation cutover,
 independently authorized post-effect restoration, general live graph/state
 leases, managed Victoria policy/ingestion cutover and supported account/device
 acceptance. A single native peer is not exclusive adapter ownership. Native
-process loss is not restoration. The [completion ledger](../plugin-refactor-completion.md)
+process loss is not restoration. The [completion ledger](../history/plugin-refactor-completion.md)
 therefore remains open; this release does not complete the whole refactor.

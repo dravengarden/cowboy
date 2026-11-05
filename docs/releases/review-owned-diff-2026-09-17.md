@@ -156,5 +156,5 @@ public artifact. Selected SHA-256:
 Owned navigation destinations, separately authorized exact native installation
 and actual consumer/device acceptance, abandoned-browser/restart recovery,
 independent post-effect restoration and general graph/site/state leases remain
-in the [completion ledger](../plugin-refactor-completion.md). Staged/history
+in the [completion ledger](../history/plugin-refactor-completion.md). Staged/history
 coordinates are intentionally excluded, not made safe by a current-file hash.

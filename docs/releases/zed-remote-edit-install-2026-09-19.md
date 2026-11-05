@@ -95,7 +95,7 @@ The core Operator lock repair remains undeployed by this task: its separate
 Controller gate still lacks five exact Agent publications, as recorded in the
 release receipt. Private navigation policy, existing native-owner adoption,
 global resource limits, independently authorized post-effect recovery and the
-broader [completion exits](../plugin-refactor-completion.md) are unchanged.
+broader [completion exits](../history/plugin-refactor-completion.md) are unchanged.
 Whole-refactor completion is not claimed.
 
 The later [Agent publication and Hawk rollout](agent-upgrades-2026-09-19.md)

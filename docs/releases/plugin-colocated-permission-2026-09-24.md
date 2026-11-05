@@ -129,4 +129,4 @@ This does not close Machine-owned Session or security-domain identity, state
 reader/writer leases, general graph contracts, independently authorized
 post-effect restoration, native-generation replacement or supported-device
 acceptance. Those remain in the
-[completion ledger](../plugin-refactor-completion.md#code-work-still-required).
+[completion ledger](../history/plugin-refactor-completion.md#code-work-still-required).

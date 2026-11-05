@@ -178,7 +178,7 @@ primary phone/desktop product path.
 - [`releases/plugin-zed-operation-scopes-2026-09-15.md`](releases/plugin-zed-operation-scopes-2026-09-15.md) — Connection-bound Zed operations and verified Controller activation with 12 workers retained; cross-request resource recovery remains separate
 - [`releases/plugin-service-sites-2026-09-15.md`](releases/plugin-service-sites-2026-09-15.md) — Accepted Controller Site isolation, 807 immutable checks and production activation
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Master target design for components, Plugins, Service/Machine scopes, authority, generations, state, effects, migration and acceptance gates
-- [`plugin-refactor-completion.md`](plugin-refactor-completion.md) — Current implementation, production-acceptance and independent-recovery exit checklist
+- [`history/plugin-refactor-completion.md`](history/plugin-refactor-completion.md) — Current implementation, production-acceptance and independent-recovery exit checklist
 - [`plugin-domain-executor-binding.md`](plugin-domain-executor-binding.md) — The rule for binding resolved results to domain executors as the telemetry code states it, an inventory of which domains have it, and why no generic mechanism is built
 - [`plugin-state-lease-design.md`](plugin-state-lease-design.md) — Design (unimplemented, deliberately): the contract a state lease must satisfy, and the finding that no dataset has multiple holders so there is no consumer to build it for yet
 - [`plugin-state-dataset-design.md`](plugin-state-dataset-design.md) — Design (unimplemented) for general state-dataset compatibility: inventory, advisory versus safety-critical rule, ten-point contract and factoring of the duplicated namespace and owner code
@@ -189,7 +189,7 @@ primary phone/desktop product path.
 - [`plugin-session-incarnation-writer.md`](plugin-session-incarnation-writer.md) — Incarnation writer source: mint before declaring, rotate before a reset's first effect, end after the deletion commit, floor-gated admission before any namespace opens
 - [`plugin-session-incarnation-reader.md`](plugin-session-incarnation-reader.md) — Schema-1 incarnation namespace reader with the writer disabled: closed record, exclusive ownership and startup refusal
 - [`plugin-session-incarnation-design.md`](plugin-session-incarnation-design.md) — Design (unimplemented) for a Machine-minted durable Session incarnation, its reader-first floor, carriage and acceptance evidence
-- [`plugin-refactor-status-2026-10-05.md`](plugin-refactor-status-2026-10-05.md) — Dated per-exit status against production receipts, corrected historical Web recovery and the dependency order for durable Session incarnation
+- [`history/plugin-refactor-status-2026-10-05.md`](history/plugin-refactor-status-2026-10-05.md) — Dated per-exit status against production receipts, corrected historical Web recovery and the dependency order for durable Session incarnation
 - [`plugin-session-worktree-containment.md`](plugin-session-worktree-containment.md) — Preparation refuses linked checkouts and escaping selections before mutating reused branches
 - [`plugin-session-cleanup-root.md`](plugin-session-cleanup-root.md) — Terminal cleanup retains the original directory handle and retires after observed root replacement
 - [`plugin-session-cleanup-markers.md`](plugin-session-cleanup-markers.md) — Directory-relative regular-file marker probes, FIFO refusal and 8 KiB tag bounds
@@ -225,6 +225,215 @@ primary phone/desktop product path.
 - [`machine-operations.md`](machine-operations.md) — Machine operations, including Provider installation and Service-auth replica convergence
 - [`plugin-packages.md`](plugin-packages.md) — Package, typed UI, authentication/Transcript presentation, and release contract for independently released, Machine-scoped Provider packages
 - [`provider-auth-sync-coordination.md`](provider-auth-sync-coordination.md) — Bounded same-generation reconciliation on one authenticated connection, cancellation and late-receipt fencing
+
+### Plugin platform notes
+
+- [`machine-plugin-operation-receipts.md`](machine-plugin-operation-receipts.md) — Machine-owned Plugin uninstall receipts
+- [`plugin-browser-buffer-destinations.md`](plugin-browser-buffer-destinations.md) — Browser-owned navigation destinations
+- [`plugin-browser-buffer-navigation.md`](plugin-browser-buffer-navigation.md) — Browser-owned navigation continuation
+- [`plugin-browser-buffer-sync.md`](plugin-browser-buffer-sync.md) — Browser-owned Code synchronization
+- [`plugin-buffer-cleanup-surface.md`](plugin-buffer-cleanup-surface.md) — Core Code cleanup in Settings
+- [`plugin-code-connected-conformance.md`](plugin-code-connected-conformance.md) — Connected core Code buffer acceptance
+- [`plugin-code-read-authority.md`](plugin-code-read-authority.md) — Buffered Code read authority
+- [`plugin-content-bound-reads.md`](plugin-content-bound-reads.md) — Reads conditional on displayed content
+- [`plugin-continuation-finalization.md`](plugin-continuation-finalization.md) — Core Code continuation finalization
+- [`plugin-generation-migration.md`](plugin-generation-migration.md) — Broken Plugin generation migration preparation
+- [`plugin-install-connected-conformance.md`](plugin-install-connected-conformance.md) — Connected installation acceptance
+- [`plugin-install-continuation.md`](plugin-install-continuation.md) — Core-owned install and upgrade attempts
+- [`plugin-install-journal.md`](plugin-install-journal.md) — Durable core installation attempts
+- [`plugin-local-root-identity.md`](plugin-local-root-identity.md) — Controller-owned identity for locally executed reads
+- [`plugin-machine-buffer-navigation.md`](plugin-machine-buffer-navigation.md) — Machine-owned navigation continuation
+- [`plugin-machine-buffer-sync.md`](plugin-machine-buffer-sync.md) — Machine-owned buffer synchronization
+- [`plugin-machine-install-attempts.md`](plugin-machine-install-attempts.md) — Machine installation attempts
+- [`plugin-machine-workspace-identity.md`](plugin-machine-workspace-identity.md) — Machine-owned Workspace root identity
+- [`plugin-native-acquisition-budgets.md`](plugin-native-acquisition-budgets.md) — Private native acquisition lifetime budgets
+- [`plugin-native-buffer-coordinates.md`](plugin-native-buffer-coordinates.md) — Native coordinates without replacing buffer owners
+- [`plugin-native-close-confirmation.md`](plugin-native-close-confirmation.md) — Original-peer native close confirmation
+- [`plugin-native-input-bounds.md`](plugin-native-input-bounds.md) — Private native input budgets
+- [`plugin-native-navigation-budgets.md`](plugin-native-navigation-budgets.md) — Private whole-query navigation budgets
+- [`plugin-native-open-once.md`](plugin-native-open-once.md) — Single-use native buffer acquisition
+- [`plugin-native-reload-bounds.md`](plugin-native-reload-bounds.md) — Private native reload input bounds
+- [`plugin-native-remote-edits.md`](plugin-native-remote-edits.md) — Private native remote-edit admission
+- [`plugin-native-replacement-budgets.md`](plugin-native-replacement-budgets.md) — Private native sync/reload replacement budgets
+- [`plugin-native-snapshot-lifetimes.md`](plugin-native-snapshot-lifetimes.md) — Private native text-snapshot lifetimes
+- [`plugin-native-text-reads.md`](plugin-native-text-reads.md) — Complete text from an original native buffer
+- [`plugin-operation-journal.md`](plugin-operation-journal.md) — Plugin uninstall: Service operation journal
+- [`plugin-owned-navigation.md`](plugin-owned-navigation.md) — Owned native navigation candidate
+- [`plugin-product-permission-lifetimes.md`](plugin-product-permission-lifetimes.md) — Core product permission lifetimes
+- [`plugin-release-leases.md`](plugin-release-leases.md) — Core verified release observations
+- [`plugin-review-owned-consumer.md`](plugin-review-owned-consumer.md) — Content-owned Review source consumer
+- [`plugin-review-owned-destinations.md`](plugin-review-owned-destinations.md) — Review-owned navigation destination reader
+- [`plugin-review-owned-diff.md`](plugin-review-owned-diff.md) — Content-owned working diff reads
+- [`plugin-runtime-bindings.md`](plugin-runtime-bindings.md) — Connection-scoped runtime bindings
+- [`plugin-service-buffer-navigation.md`](plugin-service-buffer-navigation.md) — Service-owned navigation continuation
+- [`plugin-service-buffer-sync.md`](plugin-service-buffer-sync.md) — Service-owned buffer synchronization
+- [`plugin-session-lifecycle-fence.md`](plugin-session-lifecycle-fence.md) — Machine Session declaration/deletion fence
+- [`plugin-session-read-routes.md`](plugin-session-read-routes.md) — Session read routes
+- [`plugin-session-root-observations.md`](plugin-session-root-observations.md) — Machine-owned Session filesystem observations
+- [`plugin-session-snapshot-placement.md`](plugin-session-snapshot-placement.md) — Session launch declarations and worker snapshots
+- [`plugin-sync-budget-outcomes.md`](plugin-sync-budget-outcomes.md) — Original-operation synchronization budget outcomes
+- [`plugin-workspace-configuration-identity.md`](plugin-workspace-configuration-identity.md) — Workspace identity across accepted configuration changes
+- [`plugin-workspace-read-scopes.md`](plugin-workspace-read-scopes.md) — Continuous Workspace read scopes
+
+### Telemetry notes
+
+- [`client-opentelemetry.md`](client-opentelemetry.md) — Client OpenTelemetry
+- [`machine-telemetry-writer-preflight.md`](machine-telemetry-writer-preflight.md) — Machine telemetry writer-policy preflight
+- [`resolved-telemetry-ports.md`](resolved-telemetry-ports.md) — Finite live telemetry resolution
+- [`telemetry-background-policy.md`](telemetry-background-policy.md) — Explicit managed background export policy
+- [`telemetry-background-startup-conformance.md`](telemetry-background-startup-conformance.md) — Managed background startup conformance
+- [`telemetry-binding-journal.md`](telemetry-binding-journal.md) — Durable telemetry binding reader bridge
+- [`telemetry-binding-surface.md`](telemetry-binding-surface.md) — Core telemetry binding confirmation
+- [`telemetry-binding-transactions.md`](telemetry-binding-transactions.md) — Finite Machine telemetry binding transactions
+- [`telemetry-binding-wire.md`](telemetry-binding-wire.md) — Finite cross-site telemetry binding protocol
+- [`telemetry-connected-conformance.md`](telemetry-connected-conformance.md) — Connected immutable telemetry conformance
+- [`telemetry-execution-leases.md`](telemetry-execution-leases.md) — Telemetry attempt ownership
+- [`telemetry-machine-recovery-surface.md`](telemetry-machine-recovery-surface.md) — Core Machine recovery confirmation surface
+- [`telemetry-managed-attempts.md`](telemetry-managed-attempts.md) — Managed telemetry: one bounded OTLP attempt
+- [`telemetry-plugins.md`](telemetry-plugins.md) — Telemetry backends
+- [`telemetry-policy-preflight.md`](telemetry-policy-preflight.md) — Telemetry startup policy preflight
+- [`telemetry-reader-conformance.md`](telemetry-reader-conformance.md) — Populated telemetry reader conformance
+- [`telemetry-recovery-audit-discovery.md`](telemetry-recovery-audit-discovery.md) — Durable Machine recovery audit discovery
+- [`telemetry-resolution-surface.md`](telemetry-resolution-surface.md) — Core telemetry resolution confirmation
+- [`telemetry-service-coordination.md`](telemetry-service-coordination.md) — Service telemetry binding coordination and reader floor
+- [`telemetry-victoria-conformance.md`](telemetry-victoria-conformance.md) — Connected Victoria database conformance
+- [`telemetry-writer-admission.md`](telemetry-writer-admission.md) — Per-target telemetry writer admission
+- [`telemetry-writer-conformance.md`](telemetry-writer-conformance.md) — Immutable telemetry writer-policy conformance
+
+### Product and runtime notes
+
+- [`atomic-idb-outboxes.md`](atomic-idb-outboxes.md) — Atomic browser outbox deltas
+- [`branding-and-app-icons.md`](branding-and-app-icons.md) — Cowboy brand and app icons
+- [`catalog-reader-bridge.md`](catalog-reader-bridge.md) — Pre-cutover Catalog reader bridge
+- [`claude-stream-recovery.md`](claude-stream-recovery.md) — Recovering after a partial Claude response
+- [`codex-durable-resume.md`](codex-durable-resume.md) — Codex restore and durable media
+- [`core-security-ownership.md`](core-security-ownership.md) — CoreSecurity namespace ownership
+- [`core-web-plugin-host.md`](core-web-plugin-host.md) — Core-owned Web Plugin presentation
+- [`native-projects.md`](native-projects.md) — Native projects and AI placement
+- [`ovh-machine-maintenance.md`](ovh-machine-maintenance.md) — OVH Machine host maintenance
+- [`owned-component-scopes.md`](owned-component-scopes.md) — Owned component lifetimes
+- [`owned-idb-connections.md`](owned-idb-connections.md) — Owned IndexedDB connections
+- [`pending-disclosure-performance.md`](pending-disclosure-performance.md) — Pending panel disclosure during live updates
+- [`provider-credential-observation.md`](provider-credential-observation.md) — Provider credential observation
+- [`provider-management-ownership.md`](provider-management-ownership.md) — Core-owned Provider sign-in and confirmation
+- [`provider-ui-ownership.md`](provider-ui-ownership.md) — Provider UI authoring and core-owned execution
+- [`remote-pr-review.md`](remote-pr-review.md) — Session remote pull request review
+- [`remote-session-badge-state.md`](remote-session-badge-state.md) — Remote session badges
+- [`transcript-streaming-turn-boundary.md`](transcript-streaming-turn-boundary.md) — Streaming carets belong to the current turn
+- [`workspace-extensions.md`](workspace-extensions.md) — Workspace extensions
+
+### Experiments and measurements
+
+- [`experiments/claude-execution-integration-2026-10-02.md`](experiments/claude-execution-integration-2026-10-02.md) — Claude execution integration
+- [`experiments/claude-mods-execution-2026-10-02.md`](experiments/claude-mods-execution-2026-10-02.md) — Claude native tools through Mods
+
+### Historical records
+
+- [`history/pluginization-handoff.md`](history/pluginization-handoff.md) — Pluginization handoff ledger from the September core extraction (moved from the repository root; finished work)
+
+### Release records
+
+- [`releases/about-recovery-2026-09-15.md`](releases/about-recovery-2026-09-15.md) — About: compact local recovery and separate telemetry diagnostics
+- [`releases/agent-refresh-2026-10-01.md`](releases/agent-refresh-2026-10-01.md) — Agent runtime and Recommended refresh — 2026-10-01
+- [`releases/agent-settings-usage-2026-09-08.md`](releases/agent-settings-usage-2026-09-08.md) — Agent settings, delivery feedback and usage — 2026-09-08
+- [`releases/agent-upgrades-2026-09-19.md`](releases/agent-upgrades-2026-09-19.md) — Agent publication, Hawk upgrades and Controller activation — 2026-09-19
+- [`releases/atomic-idb-outboxes-2026-09-14.md`](releases/atomic-idb-outboxes-2026-09-14.md) — Atomic browser outbox Web release — 2026-09-14
+- [`releases/browser-buffer-sync-2026-09-17.md`](releases/browser-buffer-sync-2026-09-17.md) — Browser buffer synchronization delivery — 2026-09-17
+- [`releases/browser-destination-candidate-2026-09-18.md`](releases/browser-destination-candidate-2026-09-18.md) — Browser destination handoff candidate — 2026-09-18
+- [`releases/browser-navigation-candidate-2026-09-18.md`](releases/browser-navigation-candidate-2026-09-18.md) — Browser navigation continuation candidate — 2026-09-18
+- [`releases/catalog-null-digest-2026-09-30.md`](releases/catalog-null-digest-2026-09-30.md) — Nullable Catalog digest convergence repair
+- [`releases/claude-mods-execution-2026-10-02.md`](releases/claude-mods-execution-2026-10-02.md) — Claude native tool Mods, 2026-10-02
+- [`releases/claude-native-execution-2026-10-02.md`](releases/claude-native-execution-2026-10-02.md) — Claude native execution rollout, 2026-10-02
+- [`releases/claude-presets-2026-10-02.md`](releases/claude-presets-2026-10-02.md) — Claude recommendations and default, 2026-10-02
+- [`releases/claude-stream-recovery-2026-09-15.md`](releases/claude-stream-recovery-2026-09-15.md) — Claude partial-stream recovery — 2026-09-15
+- [`releases/claude-tool-concurrency-2026-10-02.md`](releases/claude-tool-concurrency-2026-10-02.md) — Claude remote tool scheduling, 2026-10-02
+- [`releases/codex-resume-2026-09-12.md`](releases/codex-resume-2026-09-12.md) — Codex resume transport — 2026-09-12
+- [`releases/cowboy-upgrades-2026-09-30.md`](releases/cowboy-upgrades-2026-09-30.md) — Cowboy dependency upgrade — 2026-09-30
+- [`releases/curlseal-lilac-flow-2026-09-19.md`](releases/curlseal-lilac-flow-2026-09-19.md) — Curlseal / Lilac Flow branding release
+- [`releases/device-transport-security-2026-10-03.md`](releases/device-transport-security-2026-10-03.md) — Mandatory device authentication and HTTPS — 2026-10-03
+- [`releases/execution-binding-readers-2026-10-01.md`](releases/execution-binding-readers-2026-10-01.md) — Execution binding readers, 2026-10-01
+- [`releases/machine-buffer-sync-candidate-2026-09-17.md`](releases/machine-buffer-sync-candidate-2026-09-17.md) — Machine-owned synchronization candidate — 2026-09-17
+- [`releases/machine-installer-refresh-2026-10-03.md`](releases/machine-installer-refresh-2026-10-03.md) — Enrolled Machine installer refresh — 2026-10-03
+- [`releases/machine-navigation-candidate-2026-09-17.md`](releases/machine-navigation-candidate-2026-09-17.md) — Machine navigation continuation candidate — 2026-09-17
+- [`releases/machine-writer-preflight-2026-09-14.md`](releases/machine-writer-preflight-2026-09-14.md) — Machine writer-policy preflight candidate: 2026-09-14
+- [`releases/machine-writer-preflight-activation-2026-09-14.md`](releases/machine-writer-preflight-activation-2026-09-14.md) — Machine writer-policy preflight activation: 2026-09-14
+- [`releases/native-acquisition-budgets-candidate-2026-09-18.md`](releases/native-acquisition-budgets-candidate-2026-09-18.md) — Native acquisition lifetime candidate — 2026-09-18
+- [`releases/native-close-confirmation-candidate-2026-09-18.md`](releases/native-close-confirmation-candidate-2026-09-18.md) — Original-peer native close candidate — 2026-09-18
+- [`releases/native-execution-rollout-2026-10-02.md`](releases/native-execution-rollout-2026-10-02.md) — Native execution rollout, 2026-10-02
+- [`releases/native-input-bounds-candidate-2026-09-18.md`](releases/native-input-bounds-candidate-2026-09-18.md) — Native input-bounds candidate — 2026-09-18
+- [`releases/native-navigation-budgets-candidate-2026-09-18.md`](releases/native-navigation-budgets-candidate-2026-09-18.md) — Native whole-query navigation candidate — 2026-09-18
+- [`releases/native-open-once-candidate-2026-09-18.md`](releases/native-open-once-candidate-2026-09-18.md) — Single-use native Open candidate — 2026-09-18
+- [`releases/native-reload-bounds-candidate-2026-09-18.md`](releases/native-reload-bounds-candidate-2026-09-18.md) — Native reload input/cleanup candidate — 2026-09-18
+- [`releases/native-remote-edit-budgets-2026-09-19.md`](releases/native-remote-edit-budgets-2026-09-19.md) — Native remote-edit admission release — 2026-09-19
+- [`releases/native-replacement-budgets-candidate-2026-09-18.md`](releases/native-replacement-budgets-candidate-2026-09-18.md) — Native sync/reload replacement candidate — 2026-09-18
+- [`releases/native-snapshot-lifetimes-2026-09-19.md`](releases/native-snapshot-lifetimes-2026-09-19.md) — Native text-snapshot lifetime release — 2026-09-19
+- [`releases/native-text-reads-candidate-2026-09-18.md`](releases/native-text-reads-candidate-2026-09-18.md) — Original native text reader candidate — 2026-09-18
+- [`releases/owned-navigation-candidate-2026-09-17.md`](releases/owned-navigation-candidate-2026-09-17.md) — Owned native navigation candidate — 2026-09-17
+- [`releases/owned-navigation-handoff-2026-09-17.md`](releases/owned-navigation-handoff-2026-09-17.md) — Owned navigation handoff candidate — 2026-09-17
+- [`releases/plugin-buffer-cleanup-surface-2026-09-16.md`](releases/plugin-buffer-cleanup-surface-2026-09-16.md) — Core Code cleanup Web delivery — 2026-09-16
+- [`releases/plugin-buffer-outcome-authority-2026-09-19.md`](releases/plugin-buffer-outcome-authority-2026-09-19.md) — Owned buffer outcome authority — 2026-09-19
+- [`releases/plugin-code-connected-conformance-2026-09-16.md`](releases/plugin-code-connected-conformance-2026-09-16.md) — Connected core Code acceptance — 2026-09-16
+- [`releases/plugin-code-read-authority-2026-09-19.md`](releases/plugin-code-read-authority-2026-09-19.md) — Buffered Code read authority — accepted Controller release
+- [`releases/plugin-cold-reader-floor-2026-09-19.md`](releases/plugin-cold-reader-floor-2026-09-19.md) — Plugin cold-reader recovery floor — 2026-09-19
+- [`releases/plugin-colocated-connected-2026-09-25.md`](releases/plugin-colocated-connected-2026-09-25.md) — Connected coverage of the colocated topology — 2026-09-25
+- [`releases/plugin-colocated-permission-2026-09-24.md`](releases/plugin-colocated-permission-2026-09-24.md) — Colocated execution needs permission, not a claim — 2026-09-24
+- [`releases/plugin-colocated-withdrawal-2026-09-28.md`](releases/plugin-colocated-withdrawal-2026-09-28.md) — Connected colocation permission withdrawal — 2026-09-28
+- [`releases/plugin-completion-2026-09-08.md`](releases/plugin-completion-2026-09-08.md) — Plugin completion and retirement — 2026-09-08
+- [`releases/plugin-content-bound-reads-2026-09-16.md`](releases/plugin-content-bound-reads-2026-09-16.md) — Content-bound Code observations — 2026-09-16
+- [`releases/plugin-continuation-finalization-2026-09-19.md`](releases/plugin-continuation-finalization-2026-09-19.md) — Core Code continuation finalization — 2026-09-19
+- [`releases/plugin-install-continuation-2026-09-14.md`](releases/plugin-install-continuation-2026-09-14.md) — Core Plugin installation continuation release: 2026-09-14
+- [`releases/plugin-install-journal-2026-09-14.md`](releases/plugin-install-journal-2026-09-14.md) — Durable core installation release: 2026-09-14
+- [`releases/plugin-install-receipt-readers-2026-09-14.md`](releases/plugin-install-receipt-readers-2026-09-14.md) — Typed installation receipt readers: 2026-09-14
+- [`releases/plugin-install-writers-2026-09-14.md`](releases/plugin-install-writers-2026-09-14.md) — Durable installation writer activation — 2026-09-14
+- [`releases/plugin-language-read-authority-2026-09-19.md`](releases/plugin-language-read-authority-2026-09-19.md) — Legacy language read authority — 2026-09-19
+- [`releases/plugin-local-root-identity-2026-09-21.md`](releases/plugin-local-root-identity-2026-09-21.md) — Controller-owned identity for locally executed reads — 2026-09-21
+- [`releases/plugin-machine-workspace-identity-2026-09-20.md`](releases/plugin-machine-workspace-identity-2026-09-20.md) — Machine-owned Workspace root identity — 2026-09-20
+- [`releases/plugin-native-coordinates-2026-09-16.md`](releases/plugin-native-coordinates-2026-09-16.md) — Zed native-coordinate candidate — 2026-09-16
+- [`releases/plugin-product-permission-lifetimes-2026-09-19.md`](releases/plugin-product-permission-lifetimes-2026-09-19.md) — Core product permission lifetimes — 2026-09-19
+- [`releases/plugin-publication-2026-09-07.md`](releases/plugin-publication-2026-09-07.md) — Plugin publication — 2026-09-07
+- [`releases/plugin-release-leases-2026-09-15.md`](releases/plugin-release-leases-2026-09-15.md) — Verified release observations — Controller release, 2026-09-15
+- [`releases/plugin-root-identity-adoption-2026-10-03.md`](releases/plugin-root-identity-adoption-2026-10-03.md) — Hawk root-identity adoption observed October 3
+- [`releases/plugin-session-lifecycle-fence-2026-10-03.md`](releases/plugin-session-lifecycle-fence-2026-10-03.md) — Machine Session declaration/deletion fence — 2026-10-03
+- [`releases/plugin-session-read-routes-2026-09-19.md`](releases/plugin-session-read-routes-2026-09-19.md) — Session read routes — accepted Controller release
+- [`releases/plugin-session-root-observations-2026-10-03.md`](releases/plugin-session-root-observations-2026-10-03.md) — Machine-owned Session read roots — October 3
+- [`releases/plugin-session-snapshot-placement-2026-10-03.md`](releases/plugin-session-snapshot-placement-2026-10-03.md) — Session worker snapshot placement fence — 2026-10-03
+- [`releases/plugin-workspace-alias-identity-2026-10-03.md`](releases/plugin-workspace-alias-identity-2026-10-03.md) — Workspace aliases share the Machine root identity — October 3
+- [`releases/plugin-workspace-configuration-identity-2026-09-28.md`](releases/plugin-workspace-configuration-identity-2026-09-28.md) — Workspace configuration identity candidate — 2026-09-28
+- [`releases/plugin-workspace-read-scopes-2026-09-19.md`](releases/plugin-workspace-read-scopes-2026-09-19.md) — Continuous Workspace reads — Controller release, 2026-09-19
+- [`releases/product-datasets-and-lifecycle-2026-09-15.md`](releases/product-datasets-and-lifecycle-2026-09-15.md) — Product dataset bridge and durable lifecycle diagnostics
+- [`releases/provider-auth-sync-2026-09-14.md`](releases/provider-auth-sync-2026-09-14.md) — Controller Provider-auth reconciliation release: 2026-09-14
+- [`releases/remote-pr-review-2026-10-01.md`](releases/remote-pr-review-2026-10-01.md) — Remote PR review implementation — 2026-10-01
+- [`releases/resolved-telemetry-ports-2026-09-14.md`](releases/resolved-telemetry-ports-2026-09-14.md) — Resolved telemetry ports — Controller release, 2026-09-14
+- [`releases/review-destination-reader-2026-09-18.md`](releases/review-destination-reader-2026-09-18.md) — Review-owned destination reader — 2026-09-18
+- [`releases/review-owned-consumer-2026-09-17.md`](releases/review-owned-consumer-2026-09-17.md) — Content-owned Review source delivery — 2026-09-17
+- [`releases/review-owned-diff-2026-09-17.md`](releases/review-owned-diff-2026-09-17.md) — Content-owned working diff delivery — 2026-09-17
+- [`releases/service-buffer-sync-2026-09-17.md`](releases/service-buffer-sync-2026-09-17.md) — Service-owned synchronization — 2026-09-17
+- [`releases/service-navigation-candidate-2026-09-17.md`](releases/service-navigation-candidate-2026-09-17.md) — Service navigation continuation candidate — 2026-09-17
+- [`releases/session-auto-update-2026-10-01.md`](releases/session-auto-update-2026-10-01.md) — Session automatic updates and cached transcript recovery — 2026-10-01
+- [`releases/sync-budget-outcomes-2026-09-19.md`](releases/sync-budget-outcomes-2026-09-19.md) — Original-operation Budget outcomes — 2026-09-19
+- [`releases/telemetry-2026-09-08.md`](releases/telemetry-2026-09-08.md) — Local-first telemetry and OTel rollout — 2026-09-08
+- [`releases/telemetry-background-policy-2026-09-13.md`](releases/telemetry-background-policy-2026-09-13.md) — Managed background policy implementation: 2026-09-13
+- [`releases/telemetry-background-startup-2026-09-13.md`](releases/telemetry-background-startup-2026-09-13.md) — Managed telemetry startup availability: 2026-09-13
+- [`releases/telemetry-binding-resolution-2026-09-12.md`](releases/telemetry-binding-resolution-2026-09-12.md) — Service binding resolution reader-only release — 2026-09-12
+- [`releases/telemetry-binding-surface-2026-09-13.md`](releases/telemetry-binding-surface-2026-09-13.md) — Ordinary telemetry binding surface acceptance — 2026-09-13
+- [`releases/telemetry-binding-wire-2026-09-12.md`](releases/telemetry-binding-wire-2026-09-12.md) — Telemetry binding reader/transport rollout — 2026-09-12
+- [`releases/telemetry-cold-start-floor-2026-09-13.md`](releases/telemetry-cold-start-floor-2026-09-13.md) — Managed telemetry cold-start floor: 2026-09-13
+- [`releases/telemetry-connected-conformance-2026-09-13.md`](releases/telemetry-connected-conformance-2026-09-13.md) — Authenticated immutable telemetry pair acceptance: 2026-09-13
+- [`releases/telemetry-machine-recovery-2026-09-12.md`](releases/telemetry-machine-recovery-2026-09-12.md) — Machine binding recovery reader-only release — 2026-09-12
+- [`releases/telemetry-machine-recovery-surface-2026-09-13.md`](releases/telemetry-machine-recovery-surface-2026-09-13.md) — Machine recovery surface acceptance — 2026-09-13
+- [`releases/telemetry-managed-attempts-2026-09-12.md`](releases/telemetry-managed-attempts-2026-09-12.md) — Managed single-attempt telemetry rollout — 2026-09-12
+- [`releases/telemetry-managed-delivery-conformance-2026-09-13.md`](releases/telemetry-managed-delivery-conformance-2026-09-13.md) — Immutable managed OTLP delivery acceptance: 2026-09-13
+- [`releases/telemetry-policy-preflight-2026-09-14.md`](releases/telemetry-policy-preflight-2026-09-14.md) — Controller telemetry policy preflight release: 2026-09-14
+- [`releases/telemetry-reader-floors-2026-09-13.md`](releases/telemetry-reader-floors-2026-09-13.md) — Populated telemetry reader floors — 2026-09-13
+- [`releases/telemetry-recovery-audit-discovery-2026-09-13.md`](releases/telemetry-recovery-audit-discovery-2026-09-13.md) — Durable recovery audit discovery: Hawk acceptance
+- [`releases/telemetry-resolution-surface-2026-09-13.md`](releases/telemetry-resolution-surface-2026-09-13.md) — Core telemetry resolution surface — 2026-09-13
+- [`releases/telemetry-victoria-conformance-2026-09-14.md`](releases/telemetry-victoria-conformance-2026-09-14.md) — Real Victoria database conformance: 2026-09-14
+- [`releases/telemetry-writer-admission-2026-09-13.md`](releases/telemetry-writer-admission-2026-09-13.md) — Per-target writer admission implementation: 2026-09-13
+- [`releases/telemetry-writer-conformance-2026-09-13.md`](releases/telemetry-writer-conformance-2026-09-13.md) — Immutable telemetry writer-policy acceptance: 2026-09-13
+- [`releases/workspace-extensions-2026-09-29.md`](releases/workspace-extensions-2026-09-29.md) — Workspace extensions — 2026-09-29
+- [`releases/zed-budget-rollout-2026-09-19.md`](releases/zed-budget-rollout-2026-09-19.md) — Zed Budget rollout — 2026-09-19
+- [`releases/zed-remote-edit-install-2026-09-19.md`](releases/zed-remote-edit-install-2026-09-19.md) — Hawk Zed remote-edit admission installation — 2026-09-19
+- [`releases/zed-snapshot-install-2026-09-19.md`](releases/zed-snapshot-install-2026-09-19.md) — Hawk Zed snapshot-lifetime installation — 2026-09-19
 
 ### Integrations
 

@@ -110,4 +110,4 @@ It never opens a real account, native Plugin or production endpoint.
 These gates do not prove ordinary Review integration, production end-to-end
 synchronization, owned navigation destinations, abandoned-browser/restart
 recovery, independently authorized restoration or physical iOS/WebKit/native
-acceptance. Those exits remain in the [completion ledger](plugin-refactor-completion.md).
+acceptance. Those exits remain in the [completion ledger](history/plugin-refactor-completion.md).

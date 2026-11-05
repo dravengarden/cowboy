@@ -136,5 +136,5 @@ history bytes, detached snapshots, parsing/LSP jobs, worktree scanning or proces
 RSS. Close remains peer-ownership confirmation, not background drain. General
 graph/site/state leases, independently authorized post-effect recovery, actual
 deployed native-generation and supported-device acceptance remain separate
-[completion exits](../plugin-refactor-completion.md). No production Catalog,
+[completion exits](../history/plugin-refactor-completion.md). No production Catalog,
 account, policy, installation, Machine, component pointer or session changed.

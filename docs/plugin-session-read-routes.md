@@ -78,7 +78,7 @@ Machine-owned filesystem/inode identity, proof of native runtime continuity,
 principal authority (now separately checked at finite boundaries by
 [buffered read authority](plugin-code-read-authority.md)), a state reader/writer lease, atomic HTTP delivery or
 independent post-effect recovery. Those broader exits remain in the
-[completion ledger](plugin-refactor-completion.md).
+[completion ledger](history/plugin-refactor-completion.md).
 
 ## Protocol 25 filesystem extension
 

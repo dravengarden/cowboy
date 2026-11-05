@@ -100,7 +100,7 @@ a generic state lease; unscoped legacy wire commands retain their own domain
 checks. Workspace/Session/security-domain resolution, verified graph contract
 linking, independent post-effect/native recovery and real account/device/managed
 cutover acceptance remain in the
-[completion ledger](../plugin-refactor-completion.md).
+[completion ledger](../history/plugin-refactor-completion.md).
 
 Private evidence: `/tmp/cowboy-plugin-service-sites-M3UDaQWm`. The initial
 unwrapped capture stopped because `jq` was absent; its empty partial directory

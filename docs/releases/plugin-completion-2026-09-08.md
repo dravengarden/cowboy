@@ -2,7 +2,7 @@
 
 This records completed production work, not unconditional closure of every
 legacy session or physical-device acceptance. The original extraction and
-signed Plugin publication remain in [the handoff](../../PLUGINIZATION-HANDOFF.md)
+signed Plugin publication remain in [the handoff](../history/pluginization-handoff.md)
 and [publication record](plugin-publication-2026-09-07.md).
 
 ## Published and active
