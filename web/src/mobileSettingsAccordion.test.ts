@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 import { readAppSource } from "./appSource.test.ts";
