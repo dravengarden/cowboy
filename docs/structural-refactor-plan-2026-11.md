@@ -384,7 +384,7 @@ Phase 0 is landed except where noted; every guard runs in `just check`.
 | 0.1 | `tools/check-structure.ts` + `tools/structure-baseline.json` (`structure-check`); seeded with 58 files, 276 functions and 7 TSX files over their limits |
 | 0.2 | `release-sources-check` type-checks the exact `machine-src` and `code-adapter-src` trees; reintroducing the October module gap fails with E0583 |
 | 0.3 | Simplified: instead of a content hash and a new generation index, the Nix web build sets `VERSION` to `cowboy-v<flake lastModified>`. Numeric order, two-generation retention and rollback stay untouched; the source value is frozen and a test rejects hand bumps. Residual risk: a descendant commit whose committer time is older than the deployed one would get a lower generation |
-| 0.4 | Event family: `contracts/protocol/event.json` from `src/protocol_contract.rs`, generated `web/src/protocol.fixtures.generated.ts` held by the ordinary web typecheck (`protocol-contract-check`); found the undeclared `turn_end.usage`. Outbound and Inbound families remain |
+| 0.4 | Event family: `contracts/protocol/event.json` from `src/protocol_contract.rs`, generated `web/src/protocol.fixtures.generated.ts` held by the ordinary web typecheck (`protocol-contract-check`); found the undeclared `turn_end.usage`. Extended to every Outbound variant (`contracts/protocol/outbound.json`), which found global errors serialized as `session_id: null` that the web hid (fixed on both sides). Inbound flows web → Controller, so its check must parse TypeScript-typed literals in Rust instead; it remains |
 | 0.5 | `tools/check-module-layers.ts` + `tools/module-edges-baseline.json`: cycles may not grow or merge and no new edge may join two members of one cycle; ordinary new edges stay allowed. Per-module import allowlists wait until modules are extracted |
 | 0.6 | 57 stale `dead_code` allowances and three dead functions removed; the two in `components/plugin-sdk` stay because changing that signed component needs a component release |
 | 0.7 | `docs/INDEX.md` covers all 403 pages (`docs-index-check`); finished ledgers moved to `docs/history/` |
@@ -421,6 +421,13 @@ exempt from the 200-line target. The remaining sequential bodies (`serve`,
 `spawn_provider_reset_timer`, `confirmed_reconcile_install`) are single
 `select!` loops or ordered security sequences; each further cut needs the
 lifecycle or connection-level test that 1.5/1.6 name first.
+
+### Phase 2 status (2026-11-05)
+
+| Slice | Outcome |
+|---|---|
+| 2.1 | `store.rs` test modules moved to files. Instead of a proc macro (a new crate is a Cargo maintenance boundary), a contract is an `async fn(&Store)` with a SQLite test and an ignored `postgres_` twin over shared fixtures (`store/storage_contract_tests/test_support.rs`). OIDC logout scoping, session replacement fencing, capacity fairness and compact restore now run on PostgreSQL; the gate runs 59 PostgreSQL tests, all passing, with no divergence found. Remaining SQLite-only coverage: the 29 HTTP-level product-auth tests in `cowboy-server`, which need the same fixture exported to that crate |
+| 2.2–2.3 | Not started; 2.1 found no backend divergence, which per the slice text lowers the value of 2.3 |
 
 ## 6. Not worth doing
 
