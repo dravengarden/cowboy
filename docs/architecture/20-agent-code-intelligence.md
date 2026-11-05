@@ -116,6 +116,20 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
 - Save-triggered analyzers (rust-analyzer flycheck, gopls vet) are reported per
   server as `stale` when their analyzed version is older than the content.
   Automatic refresh never counts as a save.
+- **Analysis-frontier evidence (implemented, private Zed server 1.7.0).** For
+  every diagnostics set a server publishes into a buffer, the server records
+  the version Zed mapped it onto: the exact analyzed snapshot when the LSP named
+  a version, otherwise the text at publication (an upper bound), plus saved
+  version, disk-based and carried-over flags (`CowboyAnalysisFrontier`). The
+  adapter lists every server running for the buffer and compares each against
+  the mirror its diagnostics are read from and the stamp of the set it holds:
+  `document_current` only for a versioned, not disk-based, not merged set of
+  exactly that text; `stale` when the analyzed version is older; otherwise
+  `unknown` with a reason (`unpublished`, `in_flight`, `unversioned`,
+  `save_triggered`, `merged`). `code.diagnostics` reports a file as
+  `document_current` only when every listed server is. This is document
+  evidence only; the input frontier for dependencies and configuration is
+  still open, so nothing reports `fresh`.
 
 ### Acquisition: gated
 
@@ -168,7 +182,7 @@ immediately.
 | --- | --- |
 | `code.search(query, {regex?, case_sensitive?, path?, limit?})` | bounded content matches with lines (core; implemented) |
 | `code.outline(path)`, `code.symbols(query, {limit?})` | syntax structure (tree-sitter tags; implemented, `heuristic`); language-engine refinement later |
-| `code.diagnostics(paths)` | implemented for files a Code pane already holds: `last_observed` diagnostics and counts, or `not_open`/`restricted`/`refused`/`unavailable`; acquires nothing. Baseline comparison and analysis-frontier freshness come with P0/P2 |
+| `code.diagnostics(paths)` | implemented for files a Code pane already holds: diagnostics and counts with a per-file state from per-server analysis-frontier evidence (`document_current`, `stale`, otherwise `last_observed`), or `not_open`/`restricted`/`refused`/`unavailable`; acquires nothing. Baseline comparison comes with P2 |
 | `code.summary()` | observed-scope counts with coverage |
 | `code.definition/references/implementations(locator)`, `code.hover(locator)` | after owned-navigation acceptance only |
 

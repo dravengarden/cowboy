@@ -39,7 +39,7 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.6.0";
+  version = "1.7.0";
   inherit src cargoDeps;
   patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ./server/acquisition-bounds.patch ./server/replacement-bounds.patch ./server/snapshot-lifetimes.patch ./server/remote-edits.patch ];
   postPatch = ''
@@ -64,6 +64,9 @@ in platform.buildRustPackage {
     mkdir -p crates/project/src/lsp_store/cowboy_navigation
     cp ${./server/cowboy_navigation.rs} crates/project/src/lsp_store/cowboy_navigation.rs
     cp ${./server/navigation_tests.rs} crates/project/src/lsp_store/cowboy_navigation/tests.rs
+    mkdir -p crates/project/src/lsp_store/cowboy_frontier
+    cp ${./server/cowboy_frontier.rs} crates/project/src/lsp_store/cowboy_frontier.rs
+    cp ${./server/frontier_tests.rs} crates/project/src/lsp_store/cowboy_frontier/tests.rs
     substituteInPlace crates/proto/proto/zed.proto \
       --replace-fail 'import "buffer.proto";' 'import "buffer.proto";
     import "cowboy-buffer.proto";' \
@@ -73,7 +76,9 @@ in platform.buildRustPackage {
         CowboyNavigation cowboy_navigation = 1002;
         CowboyNavigationResponse cowboy_navigation_response = 1003;
         CowboyCloseBuffers cowboy_close_buffers = 1004;
-        CowboyCloseBuffersResponse cowboy_close_buffers_response = 1005;'
+        CowboyCloseBuffersResponse cowboy_close_buffers_response = 1005;
+        CowboyAnalysisFrontier cowboy_analysis_frontier = 1006;
+        CowboyAnalysisFrontierResponse cowboy_analysis_frontier_response = 1007;'
     substituteInPlace crates/proto/src/proto.rs \
       --replace-fail '(ReloadBuffers, Foreground),' '(ReloadBuffers, Foreground),
         (CowboyBufferSync, Foreground),
@@ -81,23 +86,70 @@ in platform.buildRustPackage {
         (CowboyNavigation, Foreground),
         (CowboyNavigationResponse, Foreground),
         (CowboyCloseBuffers, Foreground),
-        (CowboyCloseBuffersResponse, Foreground),' \
+        (CowboyCloseBuffersResponse, Foreground),
+        (CowboyAnalysisFrontier, Foreground),
+        (CowboyAnalysisFrontierResponse, Foreground),' \
       --replace-fail '(ReloadBuffers, ReloadBuffersResponse),' '(ReloadBuffers, ReloadBuffersResponse),
         (CowboyBufferSync, CowboyBufferSyncResponse),
         (CowboyNavigation, CowboyNavigationResponse),
-        (CowboyCloseBuffers, CowboyCloseBuffersResponse),' \
+        (CowboyCloseBuffers, CowboyCloseBuffersResponse),
+        (CowboyAnalysisFrontier, CowboyAnalysisFrontierResponse),' \
       --replace-fail '    ReloadBuffers,' '    ReloadBuffers,
         CowboyBufferSync,
         CowboyNavigation,
-        CowboyCloseBuffers,'
+        CowboyCloseBuffers,
+        CowboyAnalysisFrontier,'
     substituteInPlace crates/project/src/lsp_store.rs \
       --replace-fail 'pub struct LspStore {' 'mod cowboy_navigation;
+    mod cowboy_frontier;
     pub struct LspStore {
         cowboy_navigation: cowboy_navigation::State,' \
       --replace-fail 'next_hint_id: Arc::default(),' 'next_hint_id: Arc::default(),
             cowboy_navigation: Default::default(),' \
       --replace-fail 'client.add_entity_request_handler(Self::handle_lsp_query);' 'client.add_entity_request_handler(Self::handle_lsp_query);
-        client.add_entity_request_handler(Self::handle_cowboy_navigation);'
+        client.add_entity_request_handler(Self::handle_cowboy_navigation);
+        client.add_entity_request_handler(Self::handle_cowboy_analysis_frontier);' \
+      --replace-fail '    buffer_snapshots: HashMap<BufferId, HashMap<LanguageServerId, Vec<LspBufferSnapshot>>>, // buffer_id -> server_id -> vec of snapshots' '    buffer_snapshots: HashMap<BufferId, HashMap<LanguageServerId, Vec<LspBufferSnapshot>>>, // buffer_id -> server_id -> vec of snapshots
+        cowboy_frontier: cowboy_frontier::State,' \
+      --replace-fail '                buffer_snapshots: Default::default(),' '                buffer_snapshots: Default::default(),
+                    cowboy_frontier: Default::default(),' \
+      --replace-fail '        let snapshot = self.buffer_snapshot_for_lsp_version(buffer, server_id, version, cx)?;
+
+            let edits_since_save' '        let snapshot = self.buffer_snapshot_for_lsp_version(buffer, server_id, version, cx)?;
+            let cowboy_evidence = (
+                version.is_some(),
+                snapshot.version().clone(),
+                diagnostics.iter().any(|(new, entry)| *new && entry.diagnostic.is_disk_based),
+                diagnostics.iter().any(|(new, _)| !*new),
+            );
+
+            let edits_since_save' \
+      --replace-fail '            buffer.update_diagnostics(server_id, set, cx)
+            });
+
+            Ok(())
+        }
+
+        fn register_language_server_for_invisible_worktree(' '            buffer.update_diagnostics(server_id, set, cx);
+                let (versioned, published, disk_based, reused) = cowboy_evidence;
+                self.cowboy_frontier.record(
+                    buffer.remote_id(),
+                    server_id,
+                    cowboy_frontier::Evidence {
+                        stamp: buffer.cowboy_diagnostics_timestamp(),
+                        versioned,
+                        published,
+                        saved: buffer.saved_version().clone(),
+                        disk_based,
+                        reused,
+                    },
+                );
+            });
+
+            Ok(())
+        }
+
+        fn register_language_server_for_invisible_worktree('
     substituteInPlace crates/project/src/buffer_store.rs \
       --replace-fail '/// A set of open buffers.' 'mod cowboy_sync;
     mod cowboy_close;
@@ -137,6 +189,11 @@ in platform.buildRustPackage {
                 && !self.has_conflict && self.reload_task.is_none()
                 && self.encoding == encoding_rs::UTF_8 && !self.has_bom
                 && self.line_ending() == LineEnding::Unix
+        }
+
+        /// Private Cowboy analysis evidence: the newest diagnostics operation.
+        pub fn cowboy_diagnostics_timestamp(&self) -> clock::Lamport {
+            self.diagnostics_timestamp
         }
 
         /// Reloads the contents of the buffer from disk.'

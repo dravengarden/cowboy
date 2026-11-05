@@ -109,3 +109,35 @@ message CowboyCloseBuffersResponse {
   Outcome outcome = 3;
   repeated uint64 buffer_ids = 4;
 }
+
+// Which document version each language server's current diagnostics set for a
+// buffer was computed against. Every server running for the buffer is listed;
+// `published` is false when no set is retained for it. The adapter compares
+// `analyzed` with its own mirror and the set's stamp; no field is authority.
+message CowboyAnalysisFrontier {
+  uint64 project_id = 1;
+  uint32 protocol = 2;
+  uint64 buffer_id = 3;
+}
+
+message CowboyAnalysisServer {
+  uint64 server_id = 1;
+  string name = 2;
+  bool published = 3;
+  uint32 replica_id = 4;
+  uint32 lamport_timestamp = 5;
+  // The server named the document version it analyzed.
+  bool versioned = 6;
+  // Analyzed version when versioned; otherwise the version at publication.
+  repeated CowboyBufferSyncVersion analyzed = 7;
+  repeated CowboyBufferSyncVersion saved = 8;
+  // New entries include disk-based (save-triggered) diagnostics.
+  bool disk_based = 9;
+  // The set keeps entries carried over from an earlier analysis.
+  bool reused = 10;
+}
+
+message CowboyAnalysisFrontierResponse {
+  uint32 protocol = 1;
+  repeated CowboyAnalysisServer servers = 2;
+}

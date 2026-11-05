@@ -219,6 +219,27 @@ pub(super) fn file_tree_http_response(
     response
 }
 
+/// Which document version a language server's diagnostics were computed
+/// against, relative to the text they are reported on. Never project-wide.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AnalysisState {
+    DocumentCurrent,
+    Stale,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ServerAnalysis {
+    pub(super) server_id: u64,
+    pub(super) name: String,
+    pub(super) state: AnalysisState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) reason: Option<String>,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(super) enum ZedAdapterResponse {
@@ -238,6 +259,9 @@ pub(super) enum ZedAdapterResponse {
         diagnostics: Vec<CodeDiagnostic>,
         inlay_hints: Vec<CodeInlayHint>,
         semantic_tokens: Vec<u32>,
+        /// Per-server analysis evidence; absent from engines without it.
+        #[serde(default)]
+        analysis: Option<Vec<ServerAnalysis>>,
     },
     BufferHover {
         api_version: u8,

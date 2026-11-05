@@ -564,12 +564,14 @@ export interface Cowboy {
 export type CodeDiagnostic = {severity:"error"|"warning"|"information"|"hint";line:number;column:number;endLine:number;source:string|null;message:string};
 export interface Cowboy {
   code: { // language engine's last observation of files a Code pane already has open; opens nothing
-    diagnostics(paths:string[]): Promise<{freshness:"last_observed";coverage:"open_buffers";files:({path:string;
-      state:"last_observed";counts:Record<"error"|"warning"|"information"|"hint",number>;diagnostics:CodeDiagnostic[];truncated:boolean}
+    diagnostics(paths:string[]): Promise<{coverage:"open_buffers";files:({path:string;
+      state:"document_current"|"stale"|"last_observed";counts:Record<"error"|"warning"|"information"|"hint",number>;diagnostics:CodeDiagnostic[];truncated:boolean;
+      analysis?:{server:string;state:"document_current"|"stale"|"unknown";reason:string|null}[]}
       | {path:string;state:"not_open"|"restricted"|"refused"|"unavailable"})[]}>; // 1..20 paths, <=50 per file, 1-based
   };
 }
-// not_open/unavailable is never "clean"; last_observed may lag your newest edit. Compile to confirm.
+// document_current: every language server analysed exactly this text (other files/config may differ); stale: one analysed
+// an older version; last_observed: no such evidence. not_open/unavailable is never "clean". Compile to confirm.
 export type CheckRun = {runId:string;check:string;state:"running"|"passed"|"failed"|"timed_out"|"error";startedAtMs:number;
   finishedAtMs?:number;exitCode?:number;error?:string;outputTruncated:boolean;truncated:boolean;
   diagnostics:{path:string;line:number;column:number;severity:"error"|"warning"|"note";code?:string;message:string}[]};

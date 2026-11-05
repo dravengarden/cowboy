@@ -4,6 +4,7 @@ use super::*;
 
 #[allow(
     dead_code,
+    clippy::struct_excessive_bools,
     reason = "generated complete private wire codec, shared with the native server"
 )]
 pub(super) mod wire {
@@ -202,10 +203,12 @@ impl Transport {
                 match value.payload? {
                     response @ (Payload::Response(_)
                     | Payload::NavigationResponse(_)
-                    | Payload::CloseResponse(_)) => Some(response),
+                    | Payload::CloseResponse(_)
+                    | Payload::AnalysisResponse(_)) => Some(response),
                     Payload::Request(_)
                     | Payload::NavigationRequest(_)
-                    | Payload::CloseRequest(_) => None,
+                    | Payload::CloseRequest(_)
+                    | Payload::AnalysisRequest(_) => None,
                 }
             });
         // Test-only loss of an actual native acknowledgement, never a synthetic

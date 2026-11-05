@@ -309,6 +309,16 @@ impl Cache {
         ))
     }
 
+    /// The stamp of the set held for each server, as `(lamport, replica)`.
+    pub(crate) fn held(&self, id: u64, revision: u64) -> Result<BTreeMap<u64, (u32, u32)>> {
+        self.check(id, revision)?;
+        Ok(self.buffers[&id]
+            .servers
+            .iter()
+            .map(|(server, value)| (*server, value.stamp))
+            .collect())
+    }
+
     pub(crate) fn anchor_offset(&self, id: u64, anchor: &proto::Anchor) -> Result<u64> {
         self.text(id)?.offset(anchor)
     }

@@ -19,6 +19,7 @@ pub(crate) async fn fixture() -> (Arc<ZedRuntime>, mpsc::UnboundedReceiver<proto
         diagnostics: Arc::default(),
         next_message_id: AtomicU32::new(1),
         next_lsp_request_id: AtomicU64::new(1),
+        frontier: crate::analysis::Frontier::default(),
     });
     {
         let mut cache = zed.diagnostics.lock().unwrap();
