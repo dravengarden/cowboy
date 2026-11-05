@@ -140,6 +140,9 @@ test("a replaced session reopens its continuation, not the first session", () =>
   assertEquals(resolveActiveSession([base, second, third], "source", null), third);
   assertEquals(continuationOf([base], "source"), undefined);
   assertEquals(resolveActiveSession([base], "source", null), base);
+  // A middle hop that was replaced too is walked through, not opened.
+  assertEquals(resolveActiveSession([base, third], "source", null, [second]), third);
+  assertEquals(continuationOf([base], "source", [second]), undefined);
   // A cycle never loops.
   const loopA: SessionMeta = { ...base, id: "a", continued_from: "b" };
   const loopB: SessionMeta = { ...base, id: "b", continued_from: "a" };

@@ -1,19 +1,22 @@
 import type { SessionMeta } from "./protocol";
 
 /** The live session that carries on `sessionId`'s work: its continuation, or
- *  that continuation's own, when a Replace trashed the source. */
+ *  that continuation's own, when a Replace trashed the source. A hop that was
+ *  itself replaced (and so is trashed) is walked through, never opened. */
 export function continuationOf(
   sessions: readonly SessionMeta[],
   sessionId: string,
+  trashed: readonly SessionMeta[] = [],
 ): SessionMeta | undefined {
+  const hops = [...sessions, ...trashed];
   const seen = new Set<string>([sessionId]);
-  let found: SessionMeta | undefined;
-  for (;;) {
-    const from = found?.id ?? sessionId;
-    const next = sessions.find((session) => session.continued_from === from);
-    if (!next || seen.has(next.id)) return found;
+  let live: SessionMeta | undefined;
+  for (let from = sessionId; ;) {
+    const next = hops.find((session) => session.continued_from === from);
+    if (!next || seen.has(next.id)) return live;
     seen.add(next.id);
-    found = next;
+    if (sessions.includes(next)) live = next;
+    from = next.id;
   }
 }
 
@@ -23,10 +26,11 @@ export function resolveActiveSession(
   sessions: readonly SessionMeta[],
   activeId: string | null,
   pendingCreatedSession: SessionMeta | null,
+  trashed: readonly SessionMeta[] = [],
 ): SessionMeta | null {
   return sessions.find((session) => session.id === activeId) ??
     (pendingCreatedSession?.id === activeId
       ? pendingCreatedSession
-      : (activeId === null ? undefined : continuationOf(sessions, activeId)) ??
+      : (activeId === null ? undefined : continuationOf(sessions, activeId, trashed)) ??
         sessions[0] ?? null);
 }

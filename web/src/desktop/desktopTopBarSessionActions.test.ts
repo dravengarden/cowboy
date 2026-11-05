@@ -149,12 +149,13 @@ test("top-bar shortcut availability does not select every control", () => {
   assertEquals(composerSource.includes("desktopShortcutActive"), false);
 });
 
-test("desktop Stop remains mounted and becomes disabled while idle", () => {
+test("desktop Stop holds its slot while idle", () => {
   const start = toolbarSource.indexOf('id: "stop"');
   const stop = toolbarSource.slice(start, toolbarSource.indexOf("})}", start));
   assert(start >= 0);
-  assert(stop.includes("disabled: !session.stop.busy"));
-  assert(stop.includes('"Stop current turn" : "No turn is running"'));
+  // Idle Stop keeps its width invisibly; it appears, red, while a turn runs.
+  assert(stop.includes("held: !session.stop.busy"));
+  assert(toolbarSource.includes('...(held && { visibility: "hidden" })'));
   assert(stop.includes('tone: "error"'));
   assertEquals(toolbarSource.includes("session.stop.busy && action("), false);
 });
