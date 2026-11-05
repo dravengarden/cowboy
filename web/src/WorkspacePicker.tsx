@@ -1,5 +1,5 @@
 import { glyphSize } from "./surface/desktopSize";
-import { isImeKeyEvent } from "./imeKey";
+import { shortcutKey } from "./desktop/commands/imeShortcut";
 import { useMemo, useState } from "react";
 import {
   Box,
@@ -210,8 +210,8 @@ export function WorkspacePicker(
           openPicker(event.currentTarget);
         }}
         onKeyDown={(event) => {
-          if (isImeKeyEvent(event.nativeEvent)) return;
-          if (["Enter", " ", "ArrowDown"].includes(event.key)) {
+          const key = shortcutKey(event.nativeEvent);
+          if (key !== null && ["Enter", " ", "ArrowDown"].includes(key)) {
             event.preventDefault();
             event.stopPropagation();
             openPicker(event.currentTarget);

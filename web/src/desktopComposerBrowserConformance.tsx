@@ -1,4 +1,5 @@
 import { checkInputVim } from "./desktop/inputVimBrowserConformance";
+import { checkImeShortcutChrome } from "./desktop/imeShortcutBrowserConformance";
 import { checkDeliveryPicker } from "./deliveryPickerBrowserConformance";
 import { checkNativeMarkdownLinks, checkUnavailableMarkdownImage } from "./nativeMarkdownLinksBrowserConformance";
 import { checkComposerDraftPersistence } from "./composer/composerDraftBrowserConformance";
@@ -620,6 +621,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
     results.push(await checkPendingPreviewTouchDisclosure());
     results.push(await checkNativeMarkdownLinks());
     results.push(await checkUnavailableMarkdownImage());
+    results.push(await checkImeShortcutChrome());
     results.push(await checkDraftDestinationDialog());
     flushSync(() => root.render(null));
     results.push(await checkDeliveryPicker());

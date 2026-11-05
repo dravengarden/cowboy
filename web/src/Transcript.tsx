@@ -41,7 +41,7 @@ import {
 import { alpha, type Theme } from "@mui/material/styles";
 import { DESKTOP_INSET_RADIUS } from "./desktop/DesktopEmbeddedControl";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
-import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
+import { desktopImeOwnsKey, shortcutKey } from "./desktop/commands/imeShortcut";
 import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import {
@@ -767,8 +767,8 @@ function ConversationEmptyState({
         focusPrimaryComposer();
       }}
       onKeyDown={(event): void => {
-        if (isImeKeyEvent(event.nativeEvent)) return;
-        if (event.key !== "Enter" && event.key !== " ") return;
+        const key = shortcutKey(event.nativeEvent);
+        if (key !== "Enter" && key !== " ") return;
         if (!writeFromEmpty(event)) return;
         event.preventDefault();
         focusPrimaryComposer();
@@ -1743,8 +1743,8 @@ function ToolCard({
             "aria-expanded": selected,
             "aria-haspopup": "dialog" as const,
             onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
-              if (isImeKeyEvent(event.nativeEvent)) return;
-              if (event.key === "Enter" || event.key === " ") {
+              const key = shortcutKey(event.nativeEvent);
+              if (key === "Enter" || key === " ") {
                 event.preventDefault();
                 openDetail();
               }

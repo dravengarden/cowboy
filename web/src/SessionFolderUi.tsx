@@ -17,6 +17,7 @@
 // The Rename shell's mount point is the one placement proven on devices, so
 // the folder sheets share its exact ancestry.
 
+import { shortcutKey } from "./desktop/commands/imeShortcut";
 import {
   Button,
   List,
@@ -169,10 +170,11 @@ export function flattenFolders(
 
 /** Vim/arrow motion among the picker rows; Enter activates the focused row. */
 function pickerKeyDown(event: React.KeyboardEvent<HTMLElement>): void {
-  if (isImeKeyEvent(event.nativeEvent)) return;
-  const delta = event.key === "ArrowDown" || event.key === "j"
+  const key = shortcutKey(event.nativeEvent);
+  if (key === null) return;
+  const delta = key === "ArrowDown" || key === "j"
     ? 1
-    : event.key === "ArrowUp" || event.key === "k"
+    : key === "ArrowUp" || key === "k"
     ? -1
     : 0;
   if (delta === 0 || event.metaKey || event.ctrlKey || event.altKey) return;

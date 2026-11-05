@@ -383,8 +383,11 @@ New Desktop key handlers classify a keydown through `desktopKeyIntent`
 
 Do not compare `event.key` letters or digits in Desktop handlers or add another
 local `isComposing`/229 check; extend the classifier and its tests instead.
-Older handlers (`desktopImeOwnsKey`, `workspaceCommandKey`) retain their
-established behavior and should move onto it when touched.
+`desktopImeOwnsKey` is this classifier's `ime` answer, and a component-local
+handler reads `shortcutKey(event)` (`null` while an IME owns the key, else the
+physical key) instead of `event.key`. macOS input sources label keys on
+dialog buttons and lists `Process`/229 even with no field focused; those
+labels never disable a shortcut there.
 
 ### Modals
 

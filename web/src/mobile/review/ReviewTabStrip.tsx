@@ -1,4 +1,5 @@
 import { Close, PushPinOutlined } from "@mui/icons-material";
+import { shortcutKey } from "../../desktop/commands/imeShortcut";
 import {
   Box,
   IconButton,
@@ -9,7 +10,6 @@ import {
 } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import { navigationHaptic } from "../../haptic";
-import { isImeKeyEvent } from "../../imeKey";
 import { isPairedTouchClick } from "../../touchGestures";
 import { type ReviewTab, reviewTabKey } from "./reviewTabs";
 
@@ -160,8 +160,7 @@ export function ReviewTabStrip({
               }}
               onKeyDown={(event) => {
                 if (
-                  !isImeKeyEvent(event.nativeEvent) &&
-                  (event.key === "Enter" || event.key === " ")
+                  ["Enter", " "].includes(shortcutKey(event.nativeEvent) ?? "")
                 ) {
                   event.preventDefault();
                   onActivate(tab);
