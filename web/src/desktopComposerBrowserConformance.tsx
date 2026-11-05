@@ -12,6 +12,7 @@ import {
 } from "./pendingPanelBrowserConformance";
 import { createRef, StrictMode, useState } from "react";
 import { flushSync } from "react-dom";
+import { checkCallNoticeLayout } from "./callNoticeBrowserConformance";
 import { createRoot } from "react-dom/client";
 import { Box, CssBaseline } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
@@ -664,6 +665,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
     );
     results.push(await checkComposerDraftPersistence());
     results.push(await checkPendingPanelLayout());
+    results.push(await checkCallNoticeLayout());
     results.push(await checkPendingPreviewTouchDisclosure());
     results.push(await checkNativeMarkdownLinks());
     results.push(await checkUnavailableMarkdownImage());

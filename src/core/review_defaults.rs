@@ -43,7 +43,7 @@ impl Hub {
         operation: &str,
         input: &Change,
     ) -> Result<(), &'static str> {
-        if input.scope != "zed" {
+        if !crate::review_directory::is_scope(&input.scope) {
             return Err("unknown_scope");
         }
         let directory = parse_change(&input.change)?;
@@ -53,8 +53,15 @@ impl Hub {
         }) {
             return Err("permission_denied");
         }
+        // Both spellings hash as the legacy scope, matching retained receipts.
+        let replay = crate::review_directory::Change {
+            scope: crate::review_directory::LEGACY_SCOPE.to_owned(),
+            folder_id: input.folder_id.clone(),
+            expected: input.expected.clone(),
+            change: input.change.clone(),
+        };
         let fingerprint =
-            crate::admin::hex_sha256(&serde_json::to_vec(input).map_err(|_| "invalid_argument")?);
+            crate::admin::hex_sha256(&serde_json::to_vec(&replay).map_err(|_| "invalid_argument")?);
         {
             let mut receipts = self.inner.review_default_receipts.lock();
             if let Some(previous) = receipts.get(operation) {
@@ -117,6 +124,38 @@ impl Hub {
             .lock()
             .insert(operation.to_owned(), fingerprint);
         Ok(())
+    }
+}
+
+impl Hub {
+    /// Whether Review may run the worktree's configured language servers for
+    /// this session: the owner's "Project language servers" directory default,
+    /// inherited live like the Review directory. Unset or null means on, the
+    /// visible migrated default; only an explicit `"off"` restricts. An unknown
+    /// session is restricted.
+    #[must_use]
+    pub fn language_servers_allowed(&self, session_id: &str) -> bool {
+        let sessions = self.inner.sessions.lock();
+        let Some(session) = sessions.get(session_id) else {
+            return false;
+        };
+        let actor = FolderActor {
+            user_id: session.meta.owner_user_id.clone(),
+            sees_all: false,
+        };
+        let project = super::session_continuation::sidebar_project(&session.meta);
+        let folders = self.inner.folders.lock();
+        let Some(folder) = folders.display_folder(&actor, session_id, project) else {
+            return true;
+        };
+        folders
+            .resolve_defaults(&actor, &folder)
+            .map_or(true, |resolved| {
+                !matches!(
+                    resolved.values.get(&DefaultKey::LanguageServers),
+                    Some(Some(value)) if value == "off"
+                )
+            })
     }
 }
 

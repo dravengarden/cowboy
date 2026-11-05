@@ -102,6 +102,12 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
   worktree revision suitable for conditional revalidation.
 - `GET /tree?path=<relative>&limit=<n>` returns immediate directory children.
 - `GET /search?q=<query>&limit=<n>` returns gitignore-aware fuzzy-ranked files.
+- `GET /content-search?q=<text>&regex=<bool>&caseSensitive=<bool>&path=<prefix>&limit=<n>`
+  returns bounded line matches (path, 1-based line, UTF-16 column, line text)
+  from the session worktree only, skipping hidden, ignored, binary and large
+  files and never following symlinks. `stopped` names the bound (`limit`,
+  `files`, `bytes`, `deadline`) that ended an incomplete scan. It runs no
+  project code. A Machine whose adapter predates it answers `503`.
 - `GET /changes` returns normalized working-tree change records, with line
   counts where Git has them, and the revision of that exact status snapshot. Each record may carry a
   `fingerprint` that changes whenever that entry's diff can: its Git status,

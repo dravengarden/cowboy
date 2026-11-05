@@ -12,6 +12,8 @@ import {
   originProviderId,
 } from "./promptOriginPresentation";
 import { ProviderIcon } from "./ProviderIcon";
+import { parseCallNotice } from "./callNotice";
+import { CallNoticeLine } from "./CallNoticeLine";
 import { providerVisual } from "./providerVisual";
 
 function messageText(chunks: ContentChunk[]): string {
@@ -226,6 +228,20 @@ export function PromptOriginNote({
   providerDigest?: string | undefined;
 }): React.JSX.Element {
   const text = messageText(chunks);
+  const notice = origin.actor === "cowboy" && origin.source === "managed_call"
+    ? parseCallNotice(text)
+    : null;
+  if (notice) {
+    return (
+      <Box
+        data-prompt-origin-actor="cowboy"
+        data-prompt-origin-source={origin.source}
+        sx={{ alignSelf: "stretch", py: 0.25 }}
+      >
+        <CallNoticeLine notice={notice} />
+      </Box>
+    );
+  }
   if (origin.actor === "agent") {
     return (
       <AgentOriginNote

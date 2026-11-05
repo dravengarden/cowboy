@@ -78,14 +78,18 @@ Today the Controller sends `"trusted": true` for every Session worktree
 - A **core-owned, revocable trust record** keyed by (Machine, canonical root
   identity, implementation generation). Trust is **granted by a person**, never
   derived from execution or from an agent request.
-- The grant is a **"Project language servers"** default in the existing
-  folder/session defaults (inherited like `review_directory`), recorded per
-  root on first use, plus a one-tap grant offered in Review.
-- Migration keeps today's behaviour without silent trust: the top-level
-  default is migrated to **on for session worktrees**, explicitly visible and
+- The grant is a **"Project language servers"** directory default
+  (`language_servers`: `on`/`off`, inherited live like `review_directory`).
+  *Implemented:* the Controller derives `trusted` from it for every
+  `ensureWorktree`, reports `restricted`, and refuses language reads and new
+  buffers when it is off. *Planned:* a per-session override, a per-root record
+  with generation, and a one-tap grant in Review.
+- Migration keeps today's behaviour without silent trust: unset resolves to
+  **on** for session worktrees, shown as such in directory defaults and
   switchable off. Browse-only contexts (`workspace::`, `worktree::`, linked
   sessions read without executing) default to **restricted**.
-- **Revocation** fences new work, restricts the original backend, and observes
+- **Revocation** (planned native operation; today the Controller only stops
+  using the backend) fences new work, restricts the original backend, and observes
   quiescence of its project-code processes. The adapter today only promotes
   Restricted → trusted (`plugins/zed/adapter/src/main.rs`, `ensure_worktree`);
   revocation needs a new private operation.
@@ -139,7 +143,7 @@ maintenance/pin churn.
 | Capability | Today | Choice and why |
 | --- | --- | --- |
 | Manifest, tree, file pages, cache, filename search | core | Keep: fast, no project code, static binary. |
-| Content search (`search@1`) | none | Core, ripgrep library crates; bounded bytes/time/results; works restricted. First user-visible slice. |
+| Content search (`search@1`) | core (implemented) | `src/code_review/content_search.rs`: gitignore-aware walk (`ignore`), `regex` literal or pattern with smart case; bounded files, bytes, time, matches and line length, with the stopping bound reported; no symlinks, no aggregate projection; works restricted. Review **Text** search and `cowboy.code.search`. Remote Machines answer after their next Machine maintenance. |
 | Changes, commits, diffs | core (Git) | Keep, with the hardened Git reader. Structural diff later as `diff@2` from structure. |
 | Syntax highlighting | browser Lezer + Zed matcher snapshot | Keep client-side; replace the snapshot with a Cowboy-owned detection table shared with structure. |
 | Outline, document symbols | language engine | Add structure fallback: tree-sitter grammars and tag queries **compiled into the execution-Machine core** (MIT, static, no project code, macOS too). Browser parsing stays presentation-only. |
@@ -175,7 +179,7 @@ Buffer-mirror accounting is not an RSS bound
 | --- | --- | --- |
 | Web strings | "Review directory", "Review defaults", "Code intelligence" chip, outline error text | implemented |
 | Agent/SDK wording | "Review directory defaults"; scope id unchanged | implemented |
-| MCP preference scope | canonical `code`; `zed` accepted as an undocumented alias. Both spellings normalize to one fingerprint representation compatible with already retained `zed` fingerprints and the `zed:{operation}` dedupe key (`src/core/review_defaults.rs`). Storage stays in folder/mobile-review state. | planned |
+| MCP preference scope | canonical `code`; `zed` accepted as an undocumented alias. Both spellings hash as the legacy scope, matching retained `zed` fingerprints and the `zed:{operation}` dedupe key (`src/core/review_defaults.rs`). Storage stays in folder/mobile-review state. The manifest's `language.provider` reads `language`. | implemented |
 | Code manifest | add per-capability `state`/`precision` as optional fields; keep `provider` until no retained reader needs it | planned |
 | Controller internals | route by capability; rename `zed_session.rs`, `ZedAdapterResponse` | planned |
 | Plugin identity | signed id `zed` retained; product surfaces (`machines.read`, Extensions) show a projection named "Code Review language engine". Migration only with a separate justification; retained releases must stay resolvable. GPL attribution stays on the license surface. | decided |
@@ -186,9 +190,9 @@ Buffer-mirror accounting is not an RSS bound
 | Phase | Scope |
 | --- | --- |
 | R0a | User-visible strings; hardened Git reader (done) |
-| R0b | `code` scope with fingerprint-compatible alias; optional manifest state fields (readers first) |
-| R1 | Trust record, grant UI, revocation; non-projecting agent resolver (see 20); platform axis |
-| R2 | Content search on core; tree-sitter structure in Machine core; router generalized with provenance binding |
+| R0b | `code` scope with fingerprint-compatible alias (done); optional manifest state fields (readers first) |
+| R1 | Trust default (done), per-session override and grant UI, native revocation; non-projecting agent resolver (see 20); platform axis |
+| R2 | Content search on core (done); tree-sitter structure in Machine core; router generalized with provenance binding |
 | P0–P3 | Agent code intelligence per [20](20-agent-code-intelligence.md) |
 | R3 | `check@1` ingestion and explicit runs (parallel with P0–P2) |
 | R4 | Per-language re-evaluation of the language engine, driven by measured gaps |

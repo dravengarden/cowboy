@@ -52,8 +52,8 @@ would then remain. Claude and Codex share the same stdio MCP server.
 ## Transport and authority
 
 Review directory defaults use `cowboy.preferences.schema()` and
-`cowboy.preferences.get("zed")`. The existing `preferences.update` action
-accepts `{scope:"zed", folder_id?, expected, change}`: omit `folder_id` for the
+`cowboy.preferences.get("code")`. The existing `preferences.update` action
+accepts `{scope:"code", folder_id?, expected, change}`: omit `folder_id` for the
 calling session, otherwise select an owned directory. Copy its exact `override`
 object into `expected`; use `change:{inherit:true}` to remove the override, or
 `change:{directory:null|string}` to choose Automatic or a stable code-context
@@ -161,6 +161,7 @@ function with `format: "module"`; `language: "js"` selects JavaScript.
 | `documents`     | `list({after?,limit?,include_deleted?})`, `read(id, window?)`: the owner's Draft documents                                                                                 |
 | `preferences`   | `schema()`, `get("about")`: typed account preferences and compact ordering choices                                                                                         |
 | `accounts` | `list()`, `login_options(account_id,machine_id)`: subscription metadata and local login readiness; no credentials or probes |
+| `code`          | `search(query, {regex?,case_sensitive?,path?,limit?})`: bounded content search of this session's own worktree; `state:"partial"` names the stopping bound; runs no project code |
 
 `session.events` projects the retained hot log: message chunks coalesce,
 tool-call updates fold into their call, thoughts are omitted and text is

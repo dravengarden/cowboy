@@ -110,6 +110,10 @@ impl SessionCodeScope {
         &self.machine_id
     }
 
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
     pub fn cwd(&self) -> &str {
         &self.cwd
     }

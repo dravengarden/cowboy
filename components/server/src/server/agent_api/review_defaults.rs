@@ -20,6 +20,7 @@ pub(super) async fn read(
     state: &AppState,
     meta: &SessionMeta,
     owner: &str,
+    scope: &str,
 ) -> Result<Value, &'static str> {
     let review = state.hub.sync_value(&format!("mobile-review:{}", meta.id));
     let own = review
@@ -37,7 +38,7 @@ pub(super) async fn read(
         .map_err(|_| "unavailable")?;
     let projects = machines.iter().flat_map(|m| m.workspaces.iter().map(|w| json!({"directory":format!("workspace::{}::{}",m.id,w.id),"machine":m.display_name,"project":w.display_name,"path":w.canonical_path}))).collect::<Vec<_>>();
     Ok(
-        json!({"scope":"zed","session_id":meta.id,"override":own,"placement":tree["placement"].get(&meta.id),
+        json!({"scope":scope,"session_id":meta.id,"override":own,"placement":tree["placement"].get(&meta.id),
         "project":meta.workspace_name.as_ref().or(meta.workspace_id.as_ref()),"directories":directories,"projects":projects,
         "semantics":"Missing override inherits; null is Automatic; project follows the associated checkout; session::<id> follows that visible session worktree. Defaults never change Agent execution."}),
     )

@@ -43,8 +43,8 @@ operations! {
     "projects.policy_set", true, "{machine:string,body:{expected_revision:string,policy:{agent_mode:'disabled'|'local'|'remote'|'either',hosts_projects:boolean,remote_targets:string[]|null},preferred:boolean}}; read projects.policies first";
     "folders.list", false, "{}";
     "folders.defaults", false, "{folder:string}";
-    "folders.create", true, "{body:{name:string,parent?:string|null,defaults?:Record<string,string|null>}}; defaults keys: project,machine,runtime_machine,provider,preset,review_directory";
-    "folders.defaults_set", true, "{folder:string,body:{values:Record<string,string|null>,inherit?:string[]}}; keys: project,machine,runtime_machine,provider,preset,review_directory; null blocks inheritance; inherit removes override";
+    "folders.create", true, "{body:{name:string,parent?:string|null,defaults?:Record<string,string|null>}}; defaults keys: project,machine,runtime_machine,provider,preset,review_directory,language_servers (on|off)";
+    "folders.defaults_set", true, "{folder:string,body:{values:Record<string,string|null>,inherit?:string[]}}; keys: project,machine,runtime_machine,provider,preset,review_directory,language_servers (on|off); null blocks inheritance; inherit removes override";
     "tools.defaults", false, "{}";
     "tools.session", false, "{session_id:string}";
     "tools.defaults_set", true, "{provider:string,body:{settings:AgentTools|null}}; owner role; tools.defaults supplies shape and choices";

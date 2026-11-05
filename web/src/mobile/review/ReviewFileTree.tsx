@@ -36,7 +36,6 @@ import { NetworkIconButton } from "../../NetworkActionFeedback";
 import {
   type CodeTreeEntry as FileTreeEntry,
   type CodeTreePage,
-  fetchCodeSearch,
   fetchCodeTree,
 } from "./codeApi";
 import { directoryPrefetchTargets } from "./directoryPrefetch";
@@ -51,6 +50,12 @@ import {
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { useReviewRecovery } from "./useReviewRecovery";
 import { ReviewNavigationActions } from "./ReviewNavigationActions";
+import {
+  firstReviewSearchResult,
+  type ReviewSearchMode,
+  ReviewSearchResults,
+  useReviewSearch,
+} from "./ReviewSearchResults";
 
 type DirectoryPage = CodeTreePage & { cachedAt: number };
 
@@ -103,7 +108,7 @@ function DirectoryRows({
   depth = 0,
 }: {
   entries: FileTreeEntry[];
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
   expanded: ReadonlySet<string>;
   pages: ReadonlyMap<string, DirectoryPage>;
   loading: ReadonlySet<string>;
@@ -232,7 +237,7 @@ export function ReviewFileTree({
 }: {
   sessionId: string | undefined;
   cwd: string | undefined;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
   currentPath: string | undefined;
   onClose: () => void;
   refreshToken: number;
@@ -254,9 +259,7 @@ export function ReviewFileTree({
   const [error, setError] = useState(false);
   const [revision, setRevision] = useState(0);
   const [query, setQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<string[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [searchFailed, setSearchFailed] = useState(false);
+  const [searchMode, setSearchMode] = useState<ReviewSearchMode>("files");
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [pages, setPages] = useState<ReadonlyMap<string, DirectoryPage>>(
     new Map(),
@@ -268,7 +271,6 @@ export function ReviewFileTree({
     new Set(),
   );
   const controllerRef = useRef<AbortController | null>(null);
-  const searchControllerRef = useRef<AbortController | null>(null);
   const directoryControllers = useRef(new Map<string, AbortController>());
   const prefetchControllers = useRef(new Map<string, AbortController>());
   const prefetchQueue = useRef<string[]>([]);
@@ -617,7 +619,6 @@ export function ReviewFileTree({
     void load();
     return () => {
       controllerRef.current?.abort();
-      searchControllerRef.current?.abort();
       directoryControllers.current.forEach((controller) => controller.abort());
       resetPrefetch();
     };
@@ -629,45 +630,7 @@ export function ReviewFileTree({
     void load(true);
   }, [load, refreshToken]);
 
-  useEffect(() => {
-    searchControllerRef.current?.abort();
-    const trimmed = query.trim();
-    if (!sessionId || !trimmed) {
-      searchControllerRef.current = null;
-      setSearchResults([]);
-      setSearching(false);
-      setSearchFailed(false);
-      return undefined;
-    }
-    const controller = new AbortController();
-    searchControllerRef.current = controller;
-    setSearching(true);
-    setSearchFailed(false);
-    const timer = globalThis.setTimeout(() => {
-      void fetchCodeSearch(sessionId, trimmed, controller.signal)
-        .then((result) => {
-          if (!controller.signal.aborted) setSearchResults(result.files);
-        })
-        .catch((error) => {
-          if (
-            !controller.signal.aborted &&
-            !(error instanceof DOMException && error.name === "AbortError")
-          ) {
-            setSearchFailed(true);
-          }
-        })
-        .finally(() => {
-          if (searchControllerRef.current === controller) {
-            searchControllerRef.current = null;
-            setSearching(false);
-          }
-        });
-    }, 180);
-    return () => {
-      globalThis.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [query, revision, sessionId]);
+  const search = useReviewSearch(sessionId, query, revision, searchMode);
 
   const trimmedQuery = query.trim();
   const findBar = (
@@ -697,16 +660,17 @@ export function ReviewFileTree({
         }}
         onKeyDown={(event) => {
           if (isImeKeyEvent(event.nativeEvent)) return;
-          if (event.key === "Enter" && trimmedQuery && searchResults[0]) {
+          const first = firstReviewSearchResult(search, searchMode);
+          if (event.key === "Enter" && trimmedQuery && first) {
             event.preventDefault();
-            onOpenFile(searchResults[0]);
+            onOpenFile(first.path, first.line);
           } else if (event.key === "Escape" && query) {
             event.preventDefault();
             setQuery("");
           }
         }}
-        placeholder="Find a file"
-        aria-label="Find a file"
+        placeholder={searchMode === "text" ? "Find text" : "Find a file"}
+        aria-label={searchMode === "text" ? "Find text" : "Find a file"}
         size="small"
         fullWidth
         disabled={!sessionId}
@@ -720,7 +684,7 @@ export function ReviewFileTree({
           input: {
             startAdornment: (
               <InputAdornment position="start">
-                {searching
+                {search.searching
                   ? <CircularProgress size={16} aria-label="Searching" />
                   : <Search fontSize="small" />}
               </InputAdornment>
@@ -751,6 +715,17 @@ export function ReviewFileTree({
           // 16px keeps iOS from zooming the page when the field takes focus.
           "& input": { fontSize: 16 },
         }}
+      />
+      <Chip
+        data-review-text-search
+        variant={searchMode === "text" ? "filled" : "outlined"}
+        color={searchMode === "text" ? "primary" : "default"}
+        aria-pressed={searchMode === "text"}
+        aria-label="Search file contents"
+        label="Text"
+        onClick={() =>
+          setSearchMode((mode) => mode === "text" ? "files" : "text")}
+        sx={{ height: 36, borderRadius: 999, flex: "0 0 auto" }}
       />
       {documentChanges && (
         <Chip
@@ -823,58 +798,13 @@ export function ReviewFileTree({
                 </Typography>
               )}
               {trimmedQuery
-                ? searching && searchResults.length === 0
-                  ? (
-                    <Box sx={{ display: "grid", placeItems: "center", pt: 6 }}>
-                      <CircularProgress size={24} />
-                    </Box>
-                  )
-                  : searchFailed
-                  ? <Alert severity="error">File search is unavailable</Alert>
-                  : searchResults.length === 0
-                  ? (
-                    <Typography
-                      color="text.secondary"
-                      textAlign="center"
-                      sx={{ pt: 6 }}
-                    >
-                      No matching files
-                    </Typography>
-                  )
-                  : (
-                    <List disablePadding>
-                      {searchResults.map((path) => {
-                        const split = path.lastIndexOf("/");
-                        return (
-                          <ListItemButton
-                            key={path}
-                            onClick={() => onOpenFile(path)}
-                            sx={{ minHeight: 48, borderRadius: 2 }}
-                          >
-                            <ListItemIcon
-                              sx={{ minWidth: 34, color: "text.secondary" }}
-                            >
-                              <DescriptionOutlined fontSize="small" />
-                            </ListItemIcon>
-                            <ListItemText
-                              primary={split >= 0
-                                ? path.slice(split + 1)
-                                : path}
-                              secondary={split >= 0
-                                ? path.slice(0, split)
-                                : undefined}
-                              primaryTypographyProps={{
-                                noWrap: true,
-                                fontFamily: "var(--cowboy-font-mono)",
-                                fontSize: "0.875rem",
-                              }}
-                              secondaryTypographyProps={{ noWrap: true }}
-                            />
-                          </ListItemButton>
-                        );
-                      })}
-                    </List>
-                  )
+                ? (
+                  <ReviewSearchResults
+                    state={search}
+                    mode={searchMode}
+                    onOpen={onOpenFile}
+                  />
+                )
                 : loading
                 ? (
                   <Box sx={{ display: "grid", placeItems: "center", pt: 6 }}>

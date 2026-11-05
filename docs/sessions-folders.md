@@ -368,7 +368,7 @@ creation does not require a live worker or silently change an unavailable bindin
 
 The existing authenticated CLI is the AI fallback for directory controls:
 `cowboy dir new --defaults`, `dir defaults`, and `dir set` use the same scoped
-writers. Review directory defaults additionally expose the typed `zed` preference
+writers. Review directory defaults additionally expose the typed `code` preference
 scope through MCP; see [Agent API](agent-api.md). This uses an explicit
 acceptance receipt for the existing write-behind queue, not a durable commit
 receipt. Other directory mutations retain their CLI fallback until typed
@@ -377,7 +377,9 @@ operations are available; there is no generic agent sync-write action.
 Directories store a sparse `defaults` object in the existing owner-scoped synced
 folder state. Supported keys are `project` (registered workspace ID), `machine`
 (files and command execution), `runtime_machine` (agent process), `provider`,
-`preset` (`provider/preset-id`), and `review_directory` (Zed code-context identity).
+`preset` (`provider/preset-id`), `review_directory` (Review code-context identity), and `language_servers`
+(`on`/`off`, whether Review may run the worktree's configured language
+servers; unset means on).
 Presets come from the signed Provider
 catalog and include its supported model/reasoning combinations; Cowboy does not
 invent model IDs or copy permission, credential, prompt or tool policies into

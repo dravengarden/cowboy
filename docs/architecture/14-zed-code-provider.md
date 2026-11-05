@@ -66,8 +66,15 @@ because they belong to the worktree. UI settings are ignored.
 ## Trust
 
 Opening a worktree does not execute project-provided language-server, task, MCP,
-or formatter commands until Cowboy records an explicit trust grant for that
-canonical path. Restricted worktrees still provide files, Git state, and
+or formatter commands without the owner's grant. The grant is the
+"Project language servers" directory default (`language_servers`), inherited
+live through the session's directory like the Review directory; unset means on,
+an explicit `off` restricts. The Controller sends that value as `trusted` and,
+when it is off, reports `restricted` and refuses language reads and new
+buffers even if the adapter still holds the worktree trusted from before.
+Turning it off does not yet stop servers already running for that worktree;
+they end with its last lease or adapter generation (a native revocation
+operation is planned, see [19](19-code-review-engine.md)). Restricted worktrees still provide files, Git state, and
 client-side syntax highlighting. The stable API reports restricted capability
 instead of silently treating absent LSP results as success.
 

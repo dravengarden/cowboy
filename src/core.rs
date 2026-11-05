@@ -9498,6 +9498,23 @@ mod core_tests {
         hub.review_directory_update(&actor, "zed-agent", "one", &input)
             .unwrap();
         assert!(hub.review_default_receipt("one"));
+        // The canonical spelling replays the same decision, not a conflict.
+        let canonical = crate::review_directory::Change {
+            scope: "code".into(),
+            folder_id: None,
+            expected: input.expected.clone(),
+            change: input.change.clone(),
+        };
+        hub.review_directory_update(&actor, "zed-agent", "one", &canonical)
+            .unwrap();
+        let unknown = crate::review_directory::Change {
+            scope: "review".into(),
+            ..canonical
+        };
+        assert_eq!(
+            hub.review_directory_update(&actor, "zed-agent", "one", &unknown),
+            Err("unknown_scope")
+        );
         let remembered = std::mem::take(&mut *hub.inner.review_default_receipts.lock());
         assert_eq!(
             hub.review_directory_update(&actor, "zed-agent", "one", &input),
@@ -9553,6 +9570,48 @@ mod core_tests {
                 "zed-agent",
                 "four",
                 &input
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn project_language_servers_follow_the_session_directory_default() {
+        let hub = hub_with_session("ls");
+        assert!(hub.language_servers_allowed("ls"), "the top level means on");
+        assert!(!hub.language_servers_allowed("missing"));
+        let apply = |op: &str, mutation: &str, args: serde_json::Value| {
+            hub.sync_apply("folders", op.into(), mutation, &args)
+                .unwrap();
+        };
+        apply(
+            "ls-parent",
+            "create",
+            serde_json::json!({"id":"ls-parent","name":"P","defaults":{"language_servers":"off"}}),
+        );
+        apply(
+            "ls-child",
+            "create",
+            serde_json::json!({"id":"ls-child","name":"C","parent":"ls-parent"}),
+        );
+        apply(
+            "ls-place",
+            "place",
+            serde_json::json!({"session_ids":["ls"],"folder":"ls-child"}),
+        );
+        assert!(!hub.language_servers_allowed("ls"), "inherited off");
+        apply(
+            "ls-on",
+            "defaults",
+            serde_json::json!({"id":"ls-child","values":{"language_servers":"on"}}),
+        );
+        assert!(hub.language_servers_allowed("ls"), "nearer on wins");
+        assert!(
+            hub.sync_apply(
+                "folders",
+                "ls-bad".into(),
+                "defaults",
+                &serde_json::json!({"id":"ls-child","values":{"language_servers":"maybe"}}),
             )
             .is_err()
         );

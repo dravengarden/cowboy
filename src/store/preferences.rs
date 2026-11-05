@@ -55,9 +55,9 @@ pub fn defaults(scope: &str) -> Option<Preferences> {
 }
 
 pub fn schema() -> Value {
-    json!({"scopes":{"zed":{"storage":"database via existing folder/mobile-review sync","ownership":"calling session or its owner's folder",
-        "read":"cowboy.preferences.get('zed')",
-        "update":{"action":"preferences.update","arguments":{"scope":"zed","folder_id":"optional owned folder ID; omit for this session","expected":"exact override object from get: {} or {directory: value}","change":"{inherit:true} or {directory:null|'project'|'workspace::<machine>::<workspace>'|'session::<id>'}"}},
+    json!({"scopes":{"code":{"meaning":"Review directory defaults: the code context Review opens for a session","storage":"database via existing folder/mobile-review sync","ownership":"calling session or its owner's folder",
+        "read":"cowboy.preferences.get('code')",
+        "update":{"action":"preferences.update","arguments":{"scope":"code","folder_id":"optional owned folder ID; omit for this session","expected":"exact override object from get: {} or {directory: value}","change":"{inherit:true} or {directory:null|'project'|'workspace::<machine>::<workspace>'|'session::<id>'}"}},
         "receipts":"preferences domain; accepted means queued, not committed. The 4096 most recently used receipts expire on eviction or Controller restart. On unknown, read current state before retry; retain expected/input/operation.",
         "activation":"Next code-context entry or Open default directory; never moves Agent workspace or starts a worker."},
         "subscriptions":{"storage":"database","ownership":"current_user",

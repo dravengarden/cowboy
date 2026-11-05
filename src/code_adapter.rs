@@ -61,6 +61,10 @@ pub enum CodeOperation {
     FileRaw {
         path: String,
     },
+    /// Bounded content search; Machines that predate it refuse the request.
+    ContentSearch {
+        query: crate::code_review::content_search::ContentQuery,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -76,6 +80,7 @@ pub enum CodeAdapterResponse {
     Diff(crate::code_review::DiffDocument),
     File(crate::code_review::FileDocument),
     FileRaw(crate::code_review::RawFileDocument),
+    ContentSearch(crate::code_review::content_search::ContentSearchResult),
 }
 
 pub async fn serve(socket: &Path, roots: Vec<PathBuf>) -> Result<()> {
@@ -140,7 +145,7 @@ fn execute(request: CodeAdapterRequest, roots: &[PathBuf]) -> Result<CodeAdapter
     {
         bail!("workspace is outside the trusted Machine roots");
     }
-    let provider = LocalCodeProvider::new(root);
+    let provider = LocalCodeProvider::new(&root);
     Ok(match request.operation {
         CodeOperation::Manifest => {
             CodeAdapterResponse::Manifest(provider.manifest().map_err(anyhow::Error::msg)?)
@@ -196,6 +201,10 @@ fn execute(request: CodeAdapterRequest, roots: &[PathBuf]) -> Result<CodeAdapter
         CodeOperation::FileRaw { path } => {
             CodeAdapterResponse::FileRaw(provider.file_raw(&path).map_err(anyhow::Error::msg)?)
         }
+        CodeOperation::ContentSearch { query } => CodeAdapterResponse::ContentSearch(
+            crate::code_review::content_search::search(&root, &query)
+                .map_err(anyhow::Error::msg)?,
+        ),
     })
 }
 
