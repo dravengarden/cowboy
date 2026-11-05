@@ -17,6 +17,8 @@ use super::super::{AppState, CodeReadScope};
 use super::only_keys;
 use crate::core::SessionMeta;
 
+mod diagnostics;
+
 /// Smaller than Review's bound: replies pass the 256 KiB broker limit.
 const MAX_AGENT_LIMIT: usize = 200;
 
@@ -31,6 +33,10 @@ pub(super) async fn read(
         "code.outline" => {
             only_keys(args, &["path"])?;
             Request::Outline(text(args, "path")?)
+        }
+        "code.diagnostics" => {
+            only_keys(args, &["paths"])?;
+            Request::Diagnostics(paths(args)?)
         }
         "code.symbols" => {
             only_keys(args, &["query", "limit"])?;
@@ -56,6 +62,13 @@ pub(super) async fn read(
             format!("invalid_argument: {message}")
         }
     };
+    if let Request::Diagnostics(paths) = request {
+        let value = diagnostics::read(state, observed, paths).await;
+        if !session::current(&state.hub, &state.machine_control, observed) {
+            return Err("code_context_changed".into());
+        }
+        return Ok(value);
+    }
     let value = match request {
         Request::Search(params) => {
             let result = content_search(state, &scope, cwd, params.query())
@@ -73,6 +86,7 @@ pub(super) async fn read(
                 .map_err(failed)?;
             json!({"state":"complete","precision":"heuristic","path":path,"symbols":symbols})
         }
+        Request::Diagnostics(_) => unreachable!("answered above"),
         Request::Symbols(query, limit) => {
             let found = workspace_symbols(state, &scope, cwd, query, limit)
                 .await
@@ -92,6 +106,7 @@ pub(super) async fn read(
 
 enum Request {
     Search(ContentSearchParams),
+    Diagnostics(Vec<String>),
     Outline(String),
     Symbols(String, usize),
 }
@@ -101,6 +116,28 @@ fn text(args: &Value, key: &str) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| format!("invalid_argument: {key} must be a string"))
+}
+
+fn paths(args: &Value) -> Result<Vec<String>, String> {
+    let paths = args
+        .get("paths")
+        .and_then(Value::as_array)
+        .filter(|paths| !paths.is_empty() && paths.len() <= diagnostics::MAX_PATHS)
+        .ok_or_else(|| {
+            format!(
+                "invalid_argument: paths must list 1..={} worktree-relative files",
+                diagnostics::MAX_PATHS
+            )
+        })?;
+    paths
+        .iter()
+        .map(|path| {
+            path.as_str()
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| "invalid_argument: paths must be strings".to_owned())
+        })
+        .collect()
 }
 
 fn limit(args: &Value) -> Result<Option<usize>, &'static str> {
@@ -149,6 +186,18 @@ mod tests {
         assert_eq!(parsed.case_sensitive, Some(true));
         assert_eq!(parsed.path.as_deref(), Some("docs"));
         assert_eq!(parsed.limit, Some(MAX_AGENT_LIMIT));
+        assert_eq!(
+            paths(&json!({"paths":["a.rs","b.rs"]})).unwrap(),
+            ["a.rs", "b.rs"]
+        );
+        for bad in [
+            json!({}),
+            json!({"paths":[]}),
+            json!({"paths":[1]}),
+            json!({"paths":"a"}),
+        ] {
+            assert!(paths(&bad).is_err(), "{bad}");
+        }
         for bad in [
             json!({}),
             json!({"query":7}),

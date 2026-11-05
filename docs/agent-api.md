@@ -161,7 +161,7 @@ function with `format: "module"`; `language: "js"` selects JavaScript.
 | `documents`     | `list({after?,limit?,include_deleted?})`, `read(id, window?)`: the owner's Draft documents                                                                                 |
 | `preferences`   | `schema()`, `get("about")`: typed account preferences and compact ordering choices                                                                                         |
 | `accounts` | `list()`, `login_options(account_id,machine_id)`: subscription metadata and local login readiness; no credentials or probes |
-| `code`          | `search(query, {regex?,case_sensitive?,path?,limit?})`, `outline(path)`, `symbols(query,{limit?})`: bounded content search and syntax structure (`heuristic`) of this session's own worktree; `state:"partial"` names the stopping bound; runs no project code |
+| `code`          | `search(query, {regex?,case_sensitive?,path?,limit?})`, `outline(path)`, `symbols(query,{limit?})`, `diagnostics(paths)`: bounded content search, syntax structure (`heuristic`) and the language engine's last observation of already open files, for this session's own worktree; `state:"partial"` names the stopping bound; runs no project code |
 
 `session.events` projects the retained hot log: message chunks coalesce,
 tool-call updates fold into their call, thoughts are omitted and text is

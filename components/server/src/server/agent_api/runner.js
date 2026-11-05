@@ -240,6 +240,7 @@ const cowboy = strict(Object.freeze({
     search: (text, q) =>
       typeof text === "string" ? ({ ...q, query: text }) : (text ?? {}),
     outline: keyed("path", []),
+    diagnostics: (paths) => Array.isArray(paths) ? ({ paths }) : (paths ?? {}),
     symbols: (text, q) =>
       typeof text === "string" ? ({ ...q, query: text }) : (text ?? {}),
   }),
