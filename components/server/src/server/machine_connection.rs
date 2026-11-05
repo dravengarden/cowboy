@@ -3,6 +3,9 @@
 
 use super::*;
 
+mod frames;
+use frames::*;
+
 #[derive(Clone)]
 pub(super) struct MachineSnapshots {
     pub(super) store: Option<Store>,
@@ -833,42 +836,7 @@ pub(super) async fn handle_machine_ws(
             observed_at_ms: now_ms(),
         },
     );
-    if protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
-        let sync_state = Arc::clone(&state);
-        let machine_id = hello.machine_id.clone();
-        tokio::spawn(async move {
-            if let Err(error) = reconcile_machine_account_grants(&sync_state, &machine_id).await {
-                tracing::warn!(%error, %machine_id, "cannot reconcile account credential grants");
-            }
-        });
-    }
-    // A Machine that restarted mid-install proves an interrupted staging
-    // attempt durably at startup; release its Service fence without an Operator.
-    tokio::spawn(plugin_install::recover_interrupted_staging(
-        Arc::clone(&state),
-        hello.machine_id.clone(),
-        connection.clone(),
-    ));
-    for authentication in state.provider_auth.replica_statuses() {
-        let sync_state = Arc::clone(&state);
-        let machine_id = hello.machine_id.clone();
-        tokio::spawn(async move {
-            let outcome = distribute_provider_auth(&sync_state, &authentication.provider_id).await;
-            match sync_state.provider_auth.mark_distribution(
-                &authentication.provider_id,
-                authentication.auth_generation,
-                outcome.state(),
-            ) {
-                Ok(marked) => {
-                    let replicas = BTreeMap::from([(marked.provider_id.clone(), outcome)]);
-                    recover_failed_provider_sessions(&sync_state, &[marked], &replicas);
-                }
-                Err(error) => {
-                    tracing::warn!(%error, %machine_id, provider_id = %authentication.provider_id, "recording reconnected Machine Provider auth convergence");
-                }
-            }
-        });
-    }
+    spawn_machine_reconnect_sync(&state, &hello, &connection, protocol);
     let (runtime_core, runtime_tunnel) = match UnixStream::pair() {
         Ok(pair) => pair,
         Err(error) => {
@@ -903,68 +871,21 @@ pub(super) async fn handle_machine_ws(
         runtime_write_rx,
     ));
     let (runtime_tx, mut runtime_rx) = tokio::sync::oneshot::channel();
-    {
-        let router = Arc::clone(&state.runtime_router);
-        let hub = state.hub.clone();
-        let provider_auth = Arc::clone(&state.provider_auth);
-        let machine_snapshots = state.machine_snapshots.clone();
-        let runtime_telemetry = state.observability.clone();
-        let machine_id = hello.machine_id.clone();
-        let generation = hello
-            .components
-            .iter()
-            .find(|component| {
-                component.id.kind == crate::machine_protocol::ComponentKind::AcpRuntime
-                    && component.state == crate::machine_protocol::ComponentState::Active
-            })
-            .map_or_else(
-                || hello.host_build.clone(),
-                |component| component.generation.clone(),
-            );
-        let label = PathBuf::from(format!("machine://{machine_id}"));
-        // Install before the broker handshake finishes. Snapshot replay of
-        // restored workers can take seconds; without a runtime in the router
-        // every send/open in that window fails with "hawk is not connected".
-        let runtime = RemoteRuntime::connecting(
-            hub,
-            machine_id.clone(),
-            label.clone(),
-            generation,
-            provider_auth,
-            protocol,
-            if protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
-                hello.encryption_public_key.clone()
-            } else {
-                None
-            },
-        );
-        runtime.attach_telemetry(machine_id.clone(), runtime_telemetry);
-        if let Some(store) = state.store.as_ref() {
-            runtime.attach_native_admission(machine_id.clone(), store.clone());
-        }
-        router.install(machine_id.clone(), Arc::clone(&runtime));
-        tokio::spawn(async move {
-            match RemoteBootstrap::from_stream(label, runtime_core).await {
-                Ok(bootstrap) => {
-                    runtime.start(bootstrap);
-                    machine_snapshots.publish().await;
-                    let _ = runtime_tx.send(runtime);
-                }
-                Err(error) => {
-                    tracing::warn!(%error, machine = %machine_id, "Machine runtime handshake failed");
-                    router.remove_if_current(&machine_id, &runtime);
-                }
-            }
-        });
-    }
+    install_machine_runtime(&state, &hello, protocol, runtime_core, runtime_tx);
     let mut connected_runtime: Option<Arc<RemoteRuntime>> = None;
     let mut runtime_registration_pending = true;
-    let mut current_components = hello.components.clone();
-    let mut current_workspaces = hello.workspaces.clone();
-    let mut current_workspace_identities = hello.workspace_identities.clone();
-    let mut current_workspace_revision = hello.workspace_revision.clone();
-    let mut current_workspace_owner = hello.workspace_owner;
-    let mut current_providers = hello.plugins.clone();
+    let mut inventory = MachineInventory::from_hello(&hello);
+    let link = MachineLink {
+        state: &state,
+        store: &store,
+        hello: &hello,
+        challenge_id: &challenge_id,
+        connection: &connection,
+        machine_write_tx: &machine_write_tx,
+        execution_calls: &execution_calls,
+        lanes: &lanes,
+        runtime_write_tx: &runtime_write_tx,
+    };
     // The last usage batch this connection declined, reported once per batch.
     let mut declined_usage_batch: Option<(String, u64)> = None;
     let mut revocation_check = tokio::time::interval(std::time::Duration::from_secs(2));
@@ -1139,377 +1060,16 @@ pub(super) async fn handle_machine_ws(
         if !state.machine_control.is_current(&connection) {
             break;
         }
-        let result = match frame {
-            crate::machine_protocol::MachineFrame::Heartbeat { .. } => {
-                heartbeat_watchdog.observe_at(std::time::Instant::now());
-                store
-                    .machine_seen(&hello.machine_id, &challenge_id, None)
-                    .await
-            }
-            crate::machine_protocol::MachineFrame::Event {
-                event:
-                    crate::machine_protocol::MachineEvent::Inventory {
-                        components,
-                        workspaces,
-                        workspace_identities,
-                        workspace_revision,
-                        workspace_owner,
-                        ..
-                    },
-            } => {
-                current_components = components;
-                if workspaces.is_some() {
-                    current_workspace_owner = workspace_owner;
-                }
-                apply_workspace_inventory(
-                    &mut current_workspaces,
-                    &mut current_workspace_identities,
-                    &mut current_workspace_revision,
-                    workspaces,
-                    workspace_identities,
-                    workspace_revision,
-                );
-                state.machine_control.record_remote(
-                    &connection,
-                    crate::machine_protocol::MachineEvent::Inventory {
-                        components: current_components.clone(),
-                        workspaces: Some(current_workspaces.clone()),
-                        workspace_identities: Some(current_workspace_identities.clone()),
-                        workspace_revision: current_workspace_revision.clone(),
-                        workspace_owner: current_workspace_owner,
-                        observed_at_ms: now_ms(),
-                    },
-                );
-                let inventory = serde_json::json!({
-                    "components": &current_components,
-                    "providers": &current_providers,
-                    "provider_contracts": &hello.provider_contracts,
-                    "plugin_contracts": &hello.plugin_contracts,
-                    "workspaces": &current_workspaces,
-                    "workspace_revision": &current_workspace_revision,
-                    "workspace_owner": &current_workspace_owner,
-                    "capacity": &hello.capacity,
-                });
-                let result = store
-                    .machine_seen(&hello.machine_id, &challenge_id, Some(&inventory))
-                    .await;
-                if result.is_ok() {
-                    state.machine_snapshots.publish().await;
-                }
-                result
-            }
-            crate::machine_protocol::MachineFrame::Event {
-                event:
-                    crate::machine_protocol::MachineEvent::PluginInventory {
-                        plugins,
-                        observed_at_ms,
-                    },
-            } => {
-                current_providers = plugins;
-                let failed_provider_auth = failed_provider_auth_projection_ids(&current_providers);
-                state.machine_control.record_remote(
-                    &connection,
-                    crate::machine_protocol::MachineEvent::PluginInventory {
-                        plugins: current_providers.clone(),
-                        observed_at_ms,
-                    },
-                );
-                let inventory = serde_json::json!({
-                    "components": &current_components,
-                    "plugins": &current_providers,
-                    "provider_contracts": &hello.provider_contracts,
-                    "plugin_contracts": &hello.plugin_contracts,
-                    "workspaces": &current_workspaces,
-                    "workspace_revision": &current_workspace_revision,
-                    "workspace_owner": &current_workspace_owner,
-                    "capacity": &hello.capacity,
-                });
-                let result = store
-                    .machine_seen(&hello.machine_id, &challenge_id, Some(&inventory))
-                    .await;
-                if result.is_ok() {
-                    state.machine_snapshots.publish().await;
-                    for provider_id in failed_provider_auth {
-                        let repair_state = Arc::clone(&state);
-                        let repair_machine_id = hello.machine_id.clone();
-                        tokio::spawn(async move {
-                            if let Err(error) = sync_provider_auth_to_machine(
-                                &repair_state,
-                                &repair_machine_id,
-                                &provider_id,
-                            )
-                            .await
-                            {
-                                tracing::warn!(
-                                    %error,
-                                    machine = %repair_machine_id,
-                                    %provider_id,
-                                    "repairing failed Provider credential projection"
-                                );
-                            }
-                        });
-                    }
-                }
-                result
-            }
-            crate::machine_protocol::MachineFrame::Event {
-                event:
-                    crate::machine_protocol::MachineEvent::ProviderUsageBatch {
-                        producer_id,
-                        first_sequence,
-                        last_sequence,
-                        events,
-                    },
-            } => {
-                ingest_machine_usage_batch(
-                    &state,
-                    &store,
-                    &hello,
-                    &challenge_id,
-                    &machine_write_tx,
-                    &current_providers,
-                    &mut declined_usage_batch,
-                    producer_id,
-                    first_sequence,
-                    last_sequence,
-                    events,
-                )
-                .await
-            }
-            crate::machine_protocol::MachineFrame::Event {
-                event: crate::machine_protocol::MachineEvent::NativeProfileCompleted { profile },
-            } => {
-                let completion_state = Arc::clone(&state);
-                let completion_connection = connection.clone();
-                tokio::spawn(async move {
-                    if let Err(code) = provider_accounts::login::accept_native_completion(
-                        &completion_state,
-                        &completion_connection,
-                        &profile,
-                    )
-                    .await
-                    {
-                        // Do not log account identity or let rejected events
-                        // overwrite another request's legitimate status.
-                        tracing::warn!(%code, "native Provider completion was not recorded");
-                    }
-                });
-                store
-                    .machine_seen(&hello.machine_id, &challenge_id, None)
-                    .await
-            }
-            crate::machine_protocol::MachineFrame::Event {
-                event:
-                    crate::machine_protocol::MachineEvent::ServiceAuthCandidate {
-                        request_id,
-                        provider_id,
-                        account_id,
-                        native_identity,
-                        auth_method,
-                        provider_version,
-                        generation_digest,
-                        auth_contract_fingerprint,
-                        portable_schema,
-                        bundle,
-                        account_label,
-                    },
-            } => {
-                accept_machine_service_auth_candidate(
-                    &state,
-                    &store,
-                    &hello,
-                    &challenge_id,
-                    request_id,
-                    provider_id,
-                    account_id,
-                    native_identity,
-                    auth_method,
-                    provider_version,
-                    generation_digest,
-                    auth_contract_fingerprint,
-                    portable_schema,
-                    bundle,
-                    account_label,
-                )
-                .await
-            }
-            crate::machine_protocol::MachineFrame::Event {
-                event:
-                    crate::machine_protocol::MachineEvent::ProviderAuthRefreshCandidate {
-                        native_identity,
-                        request_id,
-                        provider_id,
-                        account_id,
-                        expected_generation,
-                        provider_version,
-                        generation_digest,
-                        auth_contract_fingerprint,
-                        portable_schema,
-                        auth_method,
-                        bundle,
-                    },
-            } => {
-                accept_machine_auth_refresh_candidate(
-                    &state,
-                    &store,
-                    &hello,
-                    &challenge_id,
-                    &current_providers,
-                    native_identity,
-                    request_id,
-                    provider_id,
-                    account_id,
-                    expected_generation,
-                    provider_version,
-                    generation_digest,
-                    auth_contract_fingerprint,
-                    portable_schema,
-                    auth_method,
-                    bundle,
-                )
-                .await
-            }
-            crate::machine_protocol::MachineFrame::Event {
-                event:
-                    crate::machine_protocol::MachineEvent::ManagedCall {
-                        request_id,
-                        grant,
-                        action,
-                    },
-            } => {
-                // Handled off the read loop: the reply travels on this same
-                // connection and the action may wait for a bounded interval.
-                let call_state = Arc::clone(&state);
-                let call_connection = connection.clone();
-                let outgoing = machine_write_tx.clone();
-                let permit = Arc::clone(&execution_calls).try_acquire_owned();
-                tokio::spawn(async move {
-                    let response = if let Ok(_permit) = permit {
-                        managed_calls::handle(&call_state, &call_connection, grant, *action).await
-                    } else {
-                        serde_json::json!({"schema":1,"state":"error",
-                            "error":{"code":"capacity","admission":"not_submitted"}})
-                    };
-                    if call_state.machine_control.is_current(&call_connection) {
-                        let _ = queue_machine_json(
-                            &outgoing,
-                            &crate::machine_protocol::MachineFrame::Command {
-                                command:
-                                    crate::machine_protocol::MachineCommand::ManagedCallReply {
-                                        request_id,
-                                        response,
-                                    },
-                            },
-                        );
-                    }
-                });
-                continue;
-            }
-            crate::machine_protocol::MachineFrame::Event {
-                event:
-                    crate::machine_protocol::MachineEvent::MemoryRelayRequest {
-                        request_id,
-                        session_id,
-                        request,
-                    },
-            } => {
-                // Off the read loop, like a managed call: a slow home Machine
-                // must not hold this connection. An exhausted budget is an
-                // ordinary unavailable answer.
-                let relay_state = Arc::clone(&state);
-                let relay_connection = connection.clone();
-                let relay_machine = hello.machine_id.clone();
-                let outgoing = machine_write_tx.clone();
-                let permit = state.memory_relay.try_admit();
-                tokio::spawn(async move {
-                    let response = if let Some(_permit) = permit {
-                        memory_relay::handle(&relay_state, &relay_machine, &session_id, request)
-                            .await
-                    } else {
-                        crate::machine_protocol::memory_relay::Response::unavailable()
-                    };
-                    if relay_state.machine_control.is_current(&relay_connection) {
-                        let _ = queue_machine_json(
-                            &outgoing,
-                            &crate::machine_protocol::MachineFrame::Command {
-                                command:
-                                    crate::machine_protocol::MachineCommand::MemoryRelayReply {
-                                        request_id,
-                                        response,
-                                    },
-                            },
-                        );
-                    }
-                });
-                continue;
-            }
-            crate::machine_protocol::MachineFrame::Event {
-                event:
-                    crate::machine_protocol::MachineEvent::MemoryRelayResponse {
-                        request_id,
-                        response,
-                    },
-            } => {
-                state
-                    .memory_relay
-                    .complete(&hello.machine_id, &request_id, response);
-                continue;
-            }
-            crate::machine_protocol::MachineFrame::Event { event } => {
-                if let crate::machine_protocol::MachineEvent::LoginState {
-                    request_id,
-                    provider,
-                    state: auth_state,
-                    ..
-                } = &event
-                    && matches!(
-                        auth_state,
-                        crate::machine_protocol::AuthState::SignedOut
-                            | crate::machine_protocol::AuthState::Unsupported
-                            | crate::machine_protocol::AuthState::Error
-                    )
-                {
-                    let executors = state.provider_auth_executors.lock();
-                    if let Some(executor) = executors.get(request_id).filter(|executor| {
-                        executor.machine_id == hello.machine_id
-                            && executor.provider_id == *provider
-                            && !executor.promotion_started
-                            && executor.active(&state.machine_control, now_ms())
-                    }) && let Some(scope) = executor.auth_scope(&state)
-                    {
-                        scope.fail_authentication(provider, request_id);
-                    }
-                }
-                state.machine_control.record_remote(&connection, event);
-                store
-                    .machine_seen(&hello.machine_id, &challenge_id, None)
-                    .await
-            }
-            crate::machine_protocol::MachineFrame::Runtime { frame } => {
-                if let crate::runtime_wire::Frame::ExecutionRequest { request } = frame {
-                    machine_lanes::spawn_execution_request(
-                        &state,
-                        &connection,
-                        &hello.machine_id,
-                        &execution_calls,
-                        request,
-                        machine_lanes::ReplyRoute {
-                            primary: machine_write_tx.clone(),
-                            lanes: Arc::clone(&lanes),
-                        },
-                    );
-                    continue;
-                }
-                if let Err(error) = runtime_write_tx.send(frame) {
-                    tracing::warn!(%error, machine = %hello.machine_id, "Machine runtime writer closed");
-                    break;
-                }
-                continue;
-            }
-            _ => continue,
-        };
-        if let Err(error) = result {
-            tracing::warn!(%error, machine = %hello.machine_id, "updating Machine state");
+        if link
+            .handle_frame(
+                &mut inventory,
+                &mut declined_usage_batch,
+                &mut heartbeat_watchdog,
+                frame,
+            )
+            .await
+            .is_break()
+        {
             break;
         }
     }
@@ -1533,4 +1093,113 @@ pub(super) async fn handle_machine_ws(
         tracing::warn!(%error, machine = %hello.machine_id, "marking Machine offline");
     }
     state.machine_snapshots.publish().await;
+}
+
+/// Converges a reconnected Machine's account grants, interrupted plugin
+/// staging and Provider authentication replicas off the connection loop.
+fn spawn_machine_reconnect_sync(
+    state: &Arc<AppState>,
+    hello: &crate::machine_protocol::MachineHello,
+    connection: &crate::machine_control::ConnectionToken,
+    protocol: u16,
+) {
+    if protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
+        let sync_state = Arc::clone(state);
+        let machine_id = hello.machine_id.clone();
+        tokio::spawn(async move {
+            if let Err(error) = reconcile_machine_account_grants(&sync_state, &machine_id).await {
+                tracing::warn!(%error, %machine_id, "cannot reconcile account credential grants");
+            }
+        });
+    }
+    // A Machine that restarted mid-install proves an interrupted staging
+    // attempt durably at startup; release its Service fence without an Operator.
+    tokio::spawn(plugin_install::recover_interrupted_staging(
+        Arc::clone(state),
+        hello.machine_id.clone(),
+        connection.clone(),
+    ));
+    for authentication in state.provider_auth.replica_statuses() {
+        let sync_state = Arc::clone(state);
+        let machine_id = hello.machine_id.clone();
+        tokio::spawn(async move {
+            let outcome = distribute_provider_auth(&sync_state, &authentication.provider_id).await;
+            match sync_state.provider_auth.mark_distribution(
+                &authentication.provider_id,
+                authentication.auth_generation,
+                outcome.state(),
+            ) {
+                Ok(marked) => {
+                    let replicas = BTreeMap::from([(marked.provider_id.clone(), outcome)]);
+                    recover_failed_provider_sessions(&sync_state, &[marked], &replicas);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, %machine_id, provider_id = %authentication.provider_id, "recording reconnected Machine Provider auth convergence");
+                }
+            }
+        });
+    }
+}
+
+/// Installs the Machine's RemoteRuntime in the router and finishes its
+/// broker handshake over the runtime tunnel in the background.
+fn install_machine_runtime(
+    state: &Arc<AppState>,
+    hello: &crate::machine_protocol::MachineHello,
+    protocol: u16,
+    runtime_core: UnixStream,
+    runtime_tx: tokio::sync::oneshot::Sender<Arc<RemoteRuntime>>,
+) {
+    let router = Arc::clone(&state.runtime_router);
+    let hub = state.hub.clone();
+    let provider_auth = Arc::clone(&state.provider_auth);
+    let machine_snapshots = state.machine_snapshots.clone();
+    let runtime_telemetry = state.observability.clone();
+    let machine_id = hello.machine_id.clone();
+    let generation = hello
+        .components
+        .iter()
+        .find(|component| {
+            component.id.kind == crate::machine_protocol::ComponentKind::AcpRuntime
+                && component.state == crate::machine_protocol::ComponentState::Active
+        })
+        .map_or_else(
+            || hello.host_build.clone(),
+            |component| component.generation.clone(),
+        );
+    let label = PathBuf::from(format!("machine://{machine_id}"));
+    // Install before the broker handshake finishes. Snapshot replay of
+    // restored workers can take seconds; without a runtime in the router
+    // every send/open in that window fails with "hawk is not connected".
+    let runtime = RemoteRuntime::connecting(
+        hub,
+        machine_id.clone(),
+        label.clone(),
+        generation,
+        provider_auth,
+        protocol,
+        if protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
+            hello.encryption_public_key.clone()
+        } else {
+            None
+        },
+    );
+    runtime.attach_telemetry(machine_id.clone(), runtime_telemetry);
+    if let Some(store) = state.store.as_ref() {
+        runtime.attach_native_admission(machine_id.clone(), store.clone());
+    }
+    router.install(machine_id.clone(), Arc::clone(&runtime));
+    tokio::spawn(async move {
+        match RemoteBootstrap::from_stream(label, runtime_core).await {
+            Ok(bootstrap) => {
+                runtime.start(bootstrap);
+                machine_snapshots.publish().await;
+                let _ = runtime_tx.send(runtime);
+            }
+            Err(error) => {
+                tracing::warn!(%error, machine = %machine_id, "Machine runtime handshake failed");
+                router.remove_if_current(&machine_id, &runtime);
+            }
+        }
+    });
 }
