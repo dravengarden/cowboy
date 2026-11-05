@@ -11,11 +11,15 @@
 //   - API and the unhashed root files (favicon, icons, manifest) stay
 //     network-first: a stale transcript or a pinned old icon is worse than an
 //     offline notice.
-// Bump VERSION to evict the old caches on the next activation.
-// Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
-// detects a new worker when this string changes. Every surface downloads the
-// deployed build as soon as it is detected, then reloads itself after a visible
-// countdown once its user is idle; a press only brings that reload forward.
+// VERSION names this worker's cache generation. A new value evicts the old
+// caches on the next activation, and the app's foreground update-check
+// (main.tsx) only detects a new worker when this string changes. Every surface
+// downloads the deployed build as soon as it is detected, then reloads itself
+// after a visible countdown once its user is idle; a press only brings that
+// reload forward.
+// Do not edit the number: it is the frozen development value. The Nix web
+// build (cowboy-web in flake.nix) replaces it with the source commit time,
+// which grows along main, so cache generations stay numerically ordered.
 const VERSION = "cowboy-v2108";
 importScripts("/device-proof.js");
 self.CowboyDeviceProof.install();

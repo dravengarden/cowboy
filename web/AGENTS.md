@@ -227,11 +227,12 @@ then the live app cross-fading in over it. Rules worth keeping:
 - `signalBootReady()` must fire when the content the user came for is on
   screen, not when React mounts, or the app is revealed mid-load.
 
-## Deploy (web changes reach the installed PWA only via a SW version bump)
+## Deploy (web changes reach the installed PWA through the SW version)
 
-1. Bump `web/public/sw.js` → `const VERSION = "cowboy-vNN"` (the foreground
-   update-check only fires when this string changes — it triggers the auto-reload
-   onto the fresh bundle).
+1. Do not edit `const VERSION` in `web/public/sw.js`. The Nix web build sets it
+   to the source commit time, so every deployed commit gets a new, larger cache
+   generation and the foreground update-check (which fires when the string
+   changes) reloads clients onto the fresh bundle.
 2. `bun run typecheck` + `bun run lint`, commit on the branch.
 3. Build picks up new npm deps via a deps-FOD; if you ADDED deps, capture the new
    `depsHash` with `nix build .#cowboy-web --option sandbox false` (DNS fails

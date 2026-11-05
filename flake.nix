@@ -308,7 +308,12 @@
       # changes (lib.fakeHash → build → copy "got"). Local component packages
       # contribute only their workspace manifests; their source stays in the
       # ordinary content-addressed build rather than the dependency tree.
-      cowboy-web = buildBunViteApp {
+      # The service worker's VERSION is the cache generation installed PWAs
+      # compare to detect an update and order their caches by. The build sets
+      # it to the source commit time: it grows along main and is identical for
+      # an identical rebuild, so web/public/sw.js is never bumped by hand.
+      service-worker-generation = toString self.lastModified;
+      cowboy-web = (buildBunViteApp {
         pname = "cowboy";
         version = "0.1.0";
         src = pkgs.lib.cleanSource ./.;
@@ -322,7 +327,13 @@
           "components/state-sync-idb"
         ];
         depsHash = "sha256-YW82drFh+3plT/fOezH6OokDZfvwEfA83ILB7HePufs=";
-      };
+      }).overrideAttrs (previous: {
+        installPhase = previous.installPhase + ''
+          test "${service-worker-generation}" -gt 2108
+          sed -i -E 's/^const VERSION = "cowboy-v[0-9]+";$/const VERSION = "cowboy-v${service-worker-generation}";/' "$out/sw.js"
+          grep -qx 'const VERSION = "cowboy-v${service-worker-generation}";' "$out/sw.js"
+        '';
+      });
 
       # This host's pinned Nixpkgs still has the first fetchCargoVendor
       # implementation, which downloads through crates.io's rate-limited API.

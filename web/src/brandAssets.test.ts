@@ -95,8 +95,14 @@ test("entry points use the current icon and the service worker changes generatio
     ),
   );
   const sw = await read("web/public/sw.js");
+  // The source keeps a frozen development generation; the Nix web build sets
+  // the deployed one (flake.nix cowboy-web). A hand bump here is a stale habit.
   const version = /const VERSION = "cowboy-v([1-9]\d*)"/.exec(sw);
-  assert(version && Number(version[1]) >= 1683);
+  assertEquals(
+    version?.[1],
+    "2108",
+    "web/public/sw.js VERSION is frozen; the Nix build sets the deployed value",
+  );
   assert(sw.includes('icon: "/cowboy-app-icon-192-v10.png"'));
 });
 
