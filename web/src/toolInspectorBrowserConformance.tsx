@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { CssBaseline } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
-import { ToolDetailsBrowser } from "./Transcript";
+import { ToolCard, ToolDetailsBrowser } from "./Transcript";
 import { derive, type RenderItem } from "./derive";
 import { toolRuns } from "./tools/runs";
 import { ToolBody } from "./tools/registry";
@@ -464,6 +464,56 @@ export async function runToolInspectorBrowserConformance(
       if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
       else Reflect.deleteProperty(navigator, "clipboard");
     }
+    // The app font scale shrinks rem geometry (65% by default). A tool status
+    // badge keeps MUI's 24px floor for its label inset, but it must sit inside
+    // the card's padding instead of growing the collapsed row.
+    const rootFont = document.documentElement.style.fontSize;
+    document.documentElement.style.fontSize = "65%";
+    const cards = document.createElement("div");
+    cards.style.width = "390px";
+    container.append(cards);
+    const cardsRoot = createRoot(cards);
+    try {
+      const card = (key: string, status: string): RenderItem => ({
+        key,
+        kind: "tool",
+        id: key,
+        toolKind: "execute",
+        toolName: "Bash",
+        status,
+        title: `cd /srv/storage/fast0/agent/sessions/sess-1793434378404 && ${key}`,
+        rawInput: { command: key },
+      });
+      flushSync(() =>
+        cardsRoot.render(
+          <BrowserProductTheme>
+            {[card("done", "completed"), card("queued", "pending")].map((item) => (
+              <ToolCard key={item.key} item={item as Extract<RenderItem, { kind: "tool" }>} desktop={false} selected={false} onOpen={() => {}} />
+            ))}
+          </BrowserProductTheme>,
+        )
+      );
+      await wait(100);
+      const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+      const chips = [...cards.querySelectorAll<HTMLElement>(".MuiChip-root")];
+      check(chips.length === 2, "tool cards lost their status badges");
+      check(chips.map((chip) => chip.textContent).join(",") === "Done,Pending", "tool status labels are not sentence case");
+      const heights = chips.map((chip) => chip.getBoundingClientRect().height);
+      check(heights.every((height) => height >= 23.5), `tool status badge lost its 24px floor: ${heights.join(",")}`);
+      check(Math.abs(heights[0]! - heights[1]!) < 0.5, "Done and Pending badges differ in height");
+      for (const chip of chips) {
+        const slot = chip.parentElement!.getBoundingClientRect();
+        check(Math.abs(slot.height - 1.5 * rem) < 0.5, `tool status badge slot grew the row: ${slot.height}`);
+        const paper = chip.closest<HTMLElement>(".MuiPaper-root")!.getBoundingClientRect();
+        const box = chip.getBoundingClientRect();
+        check(box.top >= paper.top && box.bottom <= paper.bottom, "tool status badge escapes its card");
+        check(Number.parseFloat(getComputedStyle(chip).borderTopLeftRadius) >= box.height / 2 - 0.5, "tool status badge is not a pill");
+      }
+    } finally {
+      flushSync(() => cardsRoot.unmount());
+      cards.remove();
+      document.documentElement.style.fontSize = rootFont;
+    }
     if (keepFixture) await show("long-result", window.innerWidth >= 1000);
     return [
       "long history descriptions ellipsize without panning the rail",
@@ -478,6 +528,7 @@ export async function runToolInspectorBrowserConformance(
       "other MCP servers retain their own search and document semantics",
       "phone, tablet and desktop MCP frames stay within their pane",
       "highlighted and large code controls stay separate, sticky and independently operable",
+      "scaled tool status badges keep their pill inset without growing the card",
     ];
   } finally {
     if (!keepFixture) {

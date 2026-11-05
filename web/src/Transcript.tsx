@@ -25,7 +25,6 @@ import {
   Box,
   Button,
   ButtonBase,
-  Chip,
   CircularProgress,
   Dialog,
   DialogContent,
@@ -138,6 +137,7 @@ import {
 } from "./turnRecovery";
 import { PromptOriginNote } from "./PromptOriginNote";
 import { TranscriptFileChip } from "./TranscriptFileChip";
+import { ToolStatusChip, toolStatusLabel } from "./tools/ToolStatusChip";
 import { optimisticQuestionKey } from "./explore/optimisticPages";
 import type { Envelope, Status } from "./protocol";
 
@@ -1135,32 +1135,6 @@ function CompactingWidget({
   );
 }
 
-function toolStatusLabel(status: string): string {
-  if (status === "completed") return "Done";
-  if (status === "in_progress") return "Doing";
-  // Other ACP states (pending, failed, interrupted) keep their wording but use
-  // the same sentence case, so a raw lowercase value never reads as a
-  // smaller, different badge beside Done/Doing.
-  const words = status.replace(/_/g, " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-// A one-word state badge needs less than MUI's 8px small-chip label inset;
-// the tighter inset keeps the title room in a narrow phone row.
-const TOOL_STATUS_CHIP_SX = {
-  flexShrink: 0,
-  "& .MuiChip-label": { px: 0.75 },
-} as const;
-
-function toolColor(
-  status: string,
-): "default" | "success" | "error" | "warning" {
-  if (status === "completed") return "success";
-  if (status === "failed") return "error";
-  if (status === "in_progress" || status === "interrupted") return "warning";
-  return "default";
-}
-
 function toolIcon(kind: string): React.ReactElement {
   // The tool-card leading icon tracks the theme accent (`color="primary"`,
   // was the default text colour) and the reading-size setting
@@ -1664,7 +1638,7 @@ const LIFECYCLE_ROW_SX = {
 // 1.5em equals the 1.5 line height, so the glyph spans the first line exactly.
 const LIFECYCLE_ICON_SX = { fontSize: "1.5em", flexShrink: 0 } as const;
 
-function ToolCard({
+export function ToolCard({
   item,
   desktop,
   selected,
@@ -1821,13 +1795,7 @@ function ToolCard({
           </Typography>
         )}
         </Box>
-        <Chip
-          size="small"
-          color={toolColor(item.status)}
-          label={toolStatusLabel(item.status)}
-          variant="outlined"
-          sx={TOOL_STATUS_CHIP_SX}
-        />
+        <ToolStatusChip status={item.status} />
         {hasDetail && (
           <ExpandMore
             fontSize="medium"
@@ -2470,13 +2438,7 @@ export function ToolDetailsBrowser({
           >
             {heading}
           </Typography>
-          <Chip
-            size="small"
-            color={toolColor(item.status)}
-            label={toolStatusLabel(item.status)}
-            variant="outlined"
-            sx={TOOL_STATUS_CHIP_SX}
-          />
+          <ToolStatusChip status={item.status} />
         </Stack>
         <Box sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
           {!rawOnly && (
