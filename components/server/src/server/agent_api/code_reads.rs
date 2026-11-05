@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::super::code_api::{ContentSearchParams, content_search};
 use super::super::code_reads::session;
 use super::super::{AppState, CodeReadScope};
-use super::{arg_str, only_keys};
+use super::only_keys;
 use crate::core::SessionMeta;
 
 /// Smaller than Review's bound: replies pass the 256 KiB broker limit.
@@ -27,24 +27,7 @@ pub(super) async fn read(
     if op != "code.search" {
         return Err("unknown_operation".into());
     }
-    only_keys(args, &["query", "regex", "case_sensitive", "path", "limit"])?;
-    let params = ContentSearchParams {
-        q: arg_str(args, "query")?.to_owned(),
-        regex: optional_bool(args, "regex")?.unwrap_or(false),
-        case_sensitive: optional_bool(args, "case_sensitive")?,
-        path: match args.get("path") {
-            None | Some(Value::Null) => None,
-            Some(path) => Some(path.as_str().ok_or("invalid_argument")?.to_owned()),
-        },
-        limit: match args.get("limit") {
-            None | Some(Value::Null) => None,
-            Some(limit) => Some(
-                usize::try_from(limit.as_u64().ok_or("invalid_argument")?)
-                    .map_err(|_| "invalid_argument")?
-                    .clamp(1, MAX_AGENT_LIMIT),
-            ),
-        },
-    };
+    let params = params(args)?;
     let scope = session::resolve(
         &state.hub,
         &state.machine_control,
@@ -75,9 +58,59 @@ pub(super) async fn read(
     }))
 }
 
+/// Free-text query, never an identifier: it may hold spaces and punctuation.
+fn params(args: &Value) -> Result<ContentSearchParams, String> {
+    only_keys(args, &["query", "regex", "case_sensitive", "path", "limit"])?;
+    Ok(ContentSearchParams {
+        q: args
+            .get("query")
+            .and_then(Value::as_str)
+            .ok_or("invalid_argument: query must be a string")?
+            .to_owned(),
+        regex: optional_bool(args, "regex")?.unwrap_or(false),
+        case_sensitive: optional_bool(args, "case_sensitive")?,
+        path: match args.get("path") {
+            None | Some(Value::Null) => None,
+            Some(path) => Some(path.as_str().ok_or("invalid_argument")?.to_owned()),
+        },
+        limit: match args.get("limit") {
+            None | Some(Value::Null) => None,
+            Some(limit) => Some(
+                usize::try_from(limit.as_u64().ok_or("invalid_argument")?)
+                    .map_err(|_| "invalid_argument")?
+                    .clamp(1, MAX_AGENT_LIMIT),
+            ),
+        },
+    })
+}
+
 fn optional_bool(args: &Value, key: &str) -> Result<Option<bool>, &'static str> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(value) => value.as_bool().map(Some).ok_or("invalid_argument"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn free_text_queries_and_bounded_options_parse() {
+        let parsed = params(&json!({"query":"Lasso instance (workspace)","regex":false,
+            "case_sensitive":true,"path":"docs","limit":5000}))
+        .unwrap();
+        assert_eq!(parsed.q, "Lasso instance (workspace)");
+        assert_eq!(parsed.case_sensitive, Some(true));
+        assert_eq!(parsed.path.as_deref(), Some("docs"));
+        assert_eq!(parsed.limit, Some(MAX_AGENT_LIMIT));
+        for bad in [
+            json!({}),
+            json!({"query":7}),
+            json!({"query":"x","regex":"yes"}),
+            json!({"query":"x","other":1}),
+        ] {
+            assert!(params(&bad).is_err(), "{bad}");
+        }
     }
 }
