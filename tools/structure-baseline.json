@@ -12,7 +12,7 @@
     "components/machine/src/machine_broker.rs": 5255,
     "components/machine/src/machine_cli.rs": 4797,
     "components/machine/src/machine_plugins.rs": 5514,
-    "components/plugin-sdk/src/host.rs": 1600,
+    "components/plugin-sdk/src/host.rs": 1602,
     "components/plugin-sdk/src/lib.rs": 1675,
     "components/provider-sdk/src/lib.rs": 4087,
     "components/provider-ui/src/index.ts": 3262,
