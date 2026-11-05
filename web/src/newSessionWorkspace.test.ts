@@ -4,7 +4,7 @@ import { assertEquals } from "@std/assert";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace.ts";
 import { continuationOf, resolveActiveSession } from "./sessionSelection.ts";
 import type { SessionMeta } from "./protocol.ts";
-import { readAppSource, readTranscriptSource } from "./appSource.test.ts";
+import { declarationSource, readAppSource, readTranscriptSource } from "./appSource.test.ts";
 
 const appSource = await readAppSource();
 const transcriptSource = await readTranscriptSource();
@@ -18,10 +18,7 @@ test("a session with its first message on the way drops the setup form", () => {
 });
 
 test("mobile new session actions stay in the non-overlay sheet footer", () => {
-  const dialog = appSource.slice(
-    appSource.indexOf("function CreateDialog("),
-    appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
-  );
+  const dialog = declarationSource(appSource, "CreateDialog");
   assertEquals(dialog.includes("<MobileDecisionActions"), true);
   assertEquals(dialog.includes("shelf"), true);
   assertEquals(dialog.includes("footerOverlay"), false);

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
-import { readAppSource } from "./appSource.test.ts";
+import { declarationSource, readAppSource } from "./appSource.test.ts";
 
 const source = await readFile(
   new URL("./MobileDecisionActions.tsx", import.meta.url), "utf8",
@@ -24,10 +24,7 @@ test("mobile decisions use a shared labeled action footer", () => {
 });
 
 test("mobile new session uses labeled Cancel and Create actions", () => {
-  const dialog = appSource.slice(
-    appSource.indexOf("function CreateDialog("),
-    appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
-  );
+  const dialog = declarationSource(appSource, "CreateDialog");
   assertEquals(dialog.includes("<MobileDecisionActions"), true);
   assertEquals(dialog.includes("shelf"), true);
   assertEquals(
