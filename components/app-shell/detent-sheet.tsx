@@ -306,8 +306,9 @@ export interface DetentSheetProps {
   /** The body does not scroll; its child fills it and owns its own scroller
    *  (an embedded transcript). Only meaningful with `cover`. Default false. */
   readonly fillBody?: boolean | undefined;
-  /** Show the grab handle. Without it the header alone is the drag bar, for a
-   * level whose header is already a dense, draggable title row. Default true. */
+  /** Reserve the drag strip's breathing room above the header. The strip has
+   * no visible pill (the whole bar drags); without it a dense, draggable title
+   * row sits flush at the edge. Default true. */
   readonly grabber?: boolean | undefined;
 }
 
@@ -724,14 +725,10 @@ export function DetentSheet(
     return null;
   }
 
-  // The grab strip (handle pill) — on the sheet's INNER edge, draggable.
-  const grabStrip = grabber
-    ? (
-      <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: 34, py: 0.75 }}>
-        <Box sx={{ width: 56, height: 6, borderRadius: 3, bgcolor: "text.disabled" }} />
-      </Box>
-    )
-    : null;
+  // The grab strip on the sheet's INNER edge: draggable clearance only. The
+  // pill is gone — the whole header bar drags and the island closes, so the
+  // bar only cost a row of height.
+  const grabStrip = grabber ? <Box sx={{ height: 12 }} /> : null;
   // The draggable bar: grab strip + header. For a top sheet it lives at the
   // BOTTOM edge with the handle below the header; for a bottom sheet at the top
   // with the handle above. touchAction:none so the browser doesn't claim the

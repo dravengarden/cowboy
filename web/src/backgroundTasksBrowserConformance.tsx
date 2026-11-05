@@ -420,6 +420,18 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
     check(location.hash === taskHash("call:call-1"), "the detail level is deep-linkable");
     check(document.querySelector("[data-call-transcript]"), "the full live transcript is mounted");
     check(!document.querySelector("[data-task-diagnostics]"), "execution metadata does not displace the transcript");
+    {
+      // The state row keeps the sheet gutter and stays on screen; the
+      // transcript runs to the inspector's bottom edge, under the island.
+      const level = document.querySelector<HTMLElement>("[data-mobile-task-level='conversation']")!.getBoundingClientRect();
+      const chip = document.querySelector<HTMLElement>("[data-mobile-task-level='conversation'] [data-task-chip]")!
+        .getBoundingClientRect();
+      const details = document.querySelector<HTMLElement>("[data-task-open-details]")!.getBoundingClientRect();
+      const transcript = document.querySelector<HTMLElement>("[data-call-transcript]")!.getBoundingClientRect();
+      check(chip.left - level.left >= 12, `T16 the state chip keeps the gutter (${String(chip.left - level.left)}px)`);
+      check(details.right <= level.right, "T16 Details stays inside the sheet");
+      check(Math.abs(transcript.bottom - level.bottom) < 1, "T16 the transcript reaches the island");
+    }
     document.querySelector<HTMLElement>("[data-task-open-details]")!.click();
     await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "call details open separately");
     check(history.length > historyBefore, "each level is a history entry");

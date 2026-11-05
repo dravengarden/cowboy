@@ -754,10 +754,12 @@ export function BackgroundTasksInspector({
         data-background-tasks-inspector={sessionId}
         data-mobile-task-level={level}
         sx={{
-          pb: "calc(16px + env(safe-area-inset-bottom, 0px))",
+          // A conversation's transcript passes under the floating island and
+          // reserves that clearance itself; padding here stopped it short.
+          pb: level === "conversation" ? 0 : "calc(16px + env(safe-area-inset-bottom, 0px))",
           color: "text.primary",
           typography: "body2",
-          ...(level === "conversation" ? { flex: 1, display: "flex", minHeight: 0 } : {}),
+          ...(level === "conversation" ? { flex: 1, display: "flex", minHeight: 0, minWidth: 0 } : {}),
         }}
       >
         {level === "list" || !selected
@@ -769,8 +771,17 @@ export function BackgroundTasksInspector({
           )
           : level === "conversation" && selected.call
           ? (
-            <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-              <Stack direction="row" alignItems="center" spacing={1} sx={{ pb: 1, borderBottom: 1, borderColor: "divider" }}>
+            // minWidth: an unbreakable transcript line must scroll in its block,
+            // not widen the row past the screen (it pushed the chip to the edge
+            // and Details off-screen). The fill body has no gutter, so the state
+            // row carries the sheet's own px.
+            <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={1}
+                sx={{ px: 2, pb: 1, borderBottom: 1, borderColor: "divider", minWidth: 0 }}
+              >
                 <TaskChip task={selected} />
                 <Typography variant="caption" color="text.secondary" sx={{ flex: 1, minWidth: 0 }}>
                   {selected.subtitle}
