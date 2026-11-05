@@ -4,7 +4,9 @@
 use super::*;
 
 mod search;
+mod structure;
 pub(super) use search::{ContentSearchParams, content_search, routes as search_routes};
+pub(super) use structure::{outline as structure_outline, workspace_symbols};
 
 /// Return one filesystem directory page for the mobile review tree.
 ///

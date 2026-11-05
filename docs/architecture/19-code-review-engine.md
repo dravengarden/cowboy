@@ -146,8 +146,8 @@ maintenance/pin churn.
 | Content search (`search@1`) | core (implemented) | `src/code_review/content_search.rs`: gitignore-aware walk (`ignore`), `regex` literal or pattern with smart case; bounded files, bytes, time, matches and line length, with the stopping bound reported; no symlinks, no aggregate projection; works restricted. Review **Text** search and `cowboy.code.search`. Remote Machines answer after their next Machine maintenance. |
 | Changes, commits, diffs | core (Git) | Keep, with the hardened Git reader. Structural diff later as `diff@2` from structure. |
 | Syntax highlighting | browser Lezer + Zed matcher snapshot | Keep client-side; replace the snapshot with a Cowboy-owned detection table shared with structure. |
-| Outline, document symbols | language engine | Add structure fallback: tree-sitter grammars and tag queries **compiled into the execution-Machine core** (MIT, static, no project code, macOS too). Browser parsing stays presentation-only. |
-| Workspace symbols | none | Structure tags first (bounded per-worktree index); language engine refines when trusted and warm. |
+| Outline, document symbols | language engine | Structure fallback implemented (`src/code_review/structure.rs`): tree-sitter grammars (Rust, Python, Go, JavaScript, TypeScript, TSX) and their upstream tag queries compiled into core (MIT, static, no project code, macOS too). Review's outline uses it, labelled `precision: "heuristic"`, when language servers are off or the engine cannot answer. Browser parsing stays presentation-only. |
+| Workspace symbols | structure (implemented) | Bounded tag scan per request (`cowboy.code.symbols`); an index and language-engine refinement when measured gaps justify them. |
 | Hover, definition, declaration, type definition, implementation, references | language engine | Keep Zed (server lifecycle, project settings, multi-server). Re-evaluate per language against a direct LSP host or content-matched SCIP only on measured gaps. |
 | Diagnostics | language engine, per open buffer | Extend per [20](20-agent-code-intelligence.md): analysis-frontier evidence, observed-scope summaries. |
 | Project checks (`check@1`) | agents run them in Bash | Ingest structured results (`cargo --message-format=json`, `tsc`, `go vet -json`, SARIF) as scoped evidence for their captured inputs. Running a check is an explicit, trust-gated effect in the session's execution lane, never a read and never on OVH. |
@@ -192,7 +192,7 @@ Buffer-mirror accounting is not an RSS bound
 | R0a | User-visible strings; hardened Git reader (done) |
 | R0b | `code` scope with fingerprint-compatible alias (done); optional manifest state fields (readers first) |
 | R1 | Trust default (done), per-session override and grant UI, native revocation; non-projecting agent resolver (see 20); platform axis |
-| R2 | Content search on core (done); tree-sitter structure in Machine core; router generalized with provenance binding |
+| R2 | Content search on core (done); tree-sitter structure in core (done); router generalized with provenance binding |
 | P0–P3 | Agent code intelligence per [20](20-agent-code-intelligence.md) |
 | R3 | `check@1` ingestion and explicit runs (parallel with P0–P2) |
 | R4 | Per-language re-evaluation of the language engine, driven by measured gaps |

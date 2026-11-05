@@ -68,6 +68,8 @@ pub const READ_OPERATIONS: &[&str] = &[
     "preferences.schema",
     "preferences.get",
     "code.search",
+    "code.outline",
+    "code.symbols",
     "accounts.list",
     "accounts.usage",
     "accounts.login_options",
@@ -522,7 +524,7 @@ export interface Cowboy {
 // page_required: pass {limit:50}; an unpaged list above 50 fails instead of truncating.
 "#,
 CODE_SDK: r#"
-export interface Cowboy { code: { search(query:string, q?:object): Promise<unknown> } } // help("code")
+export interface Cowboy { code: { search(query:string, q?:object): Promise<unknown>; outline(path:string): Promise<unknown>; symbols(query:string, q?:object): Promise<unknown> } } // help("code")
 "#,
 PREFERENCES_READ_SDK: r#"
 export interface Cowboy {
@@ -546,6 +548,16 @@ export interface Cowboy {
       result:{matches:CodeMatch[];stopped:null|"limit"|"files"|"bytes"|"deadline";filesScanned:number;filesSkipped:number;filesCapped:number}}>;
   };
 }
+export type Pos = {row:number;column:number}; // 0-based row, UTF-16 column
+export type CodeSymbol = {name:string;kind:number;start:Pos;end:Pos;selectionStart:Pos;selectionEnd:Pos;children:CodeSymbol[]}; // kind: LSP SymbolKind
+export interface Cowboy {
+  code: { // syntax only (tree-sitter: rs py go js ts tsx); precision "heuristic", no type information
+    outline(path:string): Promise<{state:"complete";precision:"heuristic";path:string;symbols:CodeSymbol[]}>;
+    symbols(query:string, q?:{limit?:number}): Promise<{state:"complete"|"partial";precision:"heuristic";
+      result:{symbols:{path:string;name:string;kind:number;selectionStart:Pos;text:string}[];stopped:null|"limit"|"files"|"bytes"|"deadline";filesParsed:number}}>;
+  };
+}
+// symbols: case-insensitive name substring across the worktree, default50/max200.
 // Gitignore-aware; hidden files, binaries, >2MiB files and symlinks are skipped. Smart case unless case_sensitive.
 // limit default100/max200, <=20 per file; line/column are 1-based (UTF-16 column). partial: a bound stopped the scan.
 "#;

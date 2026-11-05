@@ -167,7 +167,7 @@ immediately.
 | Operation | Returns |
 | --- | --- |
 | `code.search(query, {regex?, case_sensitive?, path?, limit?})` | bounded content matches with lines (core; implemented) |
-| `code.outline({path})`, `code.symbols({query})` | structure tags, refined by the language engine when available |
+| `code.outline(path)`, `code.symbols(query, {limit?})` | syntax structure (tree-sitter tags; implemented, `heuristic`); language-engine refinement later |
 | `code.diagnostics({paths?, compare?})` | per path: state, coverage, problems with source lines, counts |
 | `code.summary()` | observed-scope counts with coverage |
 | `code.definition/references/implementations(locator)`, `code.hover(locator)` | after owned-navigation acceptance only |
