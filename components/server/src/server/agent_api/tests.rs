@@ -81,6 +81,39 @@ fn large_text_pages_preserve_unicode_and_signal_the_exact_continuation() {
 }
 
 #[test]
+fn partial_result_pages_do_not_repeat_the_structured_parse() {
+    let findings: Vec<Value> = (0..200)
+        .map(|i| json!({"title":format!("finding {i}")}))
+        .collect();
+    let structured =
+        json!({"review_complete":true,"verdict":"needs-attention","findings":findings});
+    let text = structured.to_string();
+    let page = |args: Value| {
+        let mut result = json!({"text":text,"structured":structured,"truncated":false});
+        result_window(&mut result, &args).unwrap();
+        result
+    };
+    for args in [
+        json!({"offset":0,"chars":4000}),
+        json!({"offset":4000,"chars":4000}),
+    ] {
+        let result = page(args);
+        assert_eq!(
+            result["structured"],
+            json!({"review_complete":true,"verdict":"needs-attention"})
+        );
+        assert_eq!(result["structured_omitted"], json!(["findings"]));
+        assert!(serde_json::to_vec(&result).unwrap().len() < 16 * 1024);
+    }
+    // A page holding the whole text keeps the whole parse.
+    let small = json!({"verdict":"approve","findings":[{"title":"one"}]});
+    let mut complete = json!({"text":small.to_string(),"structured":small});
+    result_window(&mut complete, &json!({"offset":0,"chars":4000})).unwrap();
+    assert_eq!(complete["structured"], small);
+    assert!(complete.get("structured_omitted").is_none());
+}
+
+#[test]
 fn queued_messages_are_bounded_and_cursor_loss_is_explicit() {
     let messages: Vec<QueuedMessage> = (0..30)
         .map(|n| {

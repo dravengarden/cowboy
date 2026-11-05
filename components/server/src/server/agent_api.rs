@@ -464,7 +464,7 @@ impl Host for SessionHost<'_> {
                 only_keys(&args, &["call_id", "offset", "chars"])?;
                 let call_id = arg_str(&args, "call_id")?.to_owned();
                 let mut value = self.calls(Action::Result { call_id }).await?;
-                text_window(&mut value["result"], "text", &args)?;
+                result_window(&mut value["result"], &args)?;
                 Ok(value)
             }
             "calls.wait" => {
@@ -685,6 +685,37 @@ fn text_window(value: &mut Value, field: &str, args: &Value) -> Result<(), Strin
         value["range"] = json!({"offset":offset,"next":(end<total).then_some(end),"total":total});
     }
     Ok(())
+}
+
+/// A schema result's `structured` is `JSON.parse` of the complete text, so a
+/// page that holds only part of that text must not repeat the whole parse:
+/// it alone can exceed the response budget on every page. Scalars such as
+/// `verdict` stay; the omitted keys are listed for a caller that pages the
+/// text and parses it inside its program.
+fn result_window(result: &mut Value, args: &Value) -> Result<(), String> {
+    text_window(result, "text", args)?;
+    partial_structured(result);
+    Ok(())
+}
+
+fn partial_structured(result: &mut Value) {
+    let complete = result["range"]["offset"] == 0 && result["range"]["next"].is_null();
+    if complete || result.get("range").is_none() {
+        return;
+    }
+    let Some(structured) = result.get_mut("structured").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let omitted: Vec<String> = structured
+        .iter()
+        .filter(|(_, value)| value.is_object() || value.is_array())
+        .map(|(key, _)| key.clone())
+        .collect();
+    if omitted.is_empty() {
+        return;
+    }
+    structured.retain(|_, value| !value.is_object() && !value.is_array());
+    result["structured_omitted"] = json!(omitted);
 }
 
 fn content_text(content: &[Value]) -> String {

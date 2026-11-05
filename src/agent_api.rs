@@ -398,21 +398,17 @@ export type CallConfiguration = {model?:string;reasoning_effort?:string;effort?:
 export type CallUsage = {total_tokens:number;input_tokens:number;output_tokens:number;cached_input_tokens:number|null;uncached_input_tokens:number|null;cache_write_tokens:number|null;reasoning_tokens:number|null};
 export type CallSummary = CallTiming & {call_id:string;request_id:string;provider:string;provider_account_id:string|null;state:string;purpose:string;configuration:CallConfiguration|null;preset:string|null;has_result:boolean;verdict:string|null;findings:number|null;labels:Record<string,string>;input_revision:string|null;usage:CallUsage|null;reused_from:string|null};
 export type CallView = CallTiming & {
-  state: string; call_id: string; request_id: string;
-  resolved: { provider: string; provider_account_id:string|null; machine_id: string; workspace_id: string; child_session_id?: string | null; preset:string|null; configuration:CallConfiguration|null; selection:string|null };
-  labels?: Record<string, string>; cancel_requested: boolean;
-  usage: CallUsage|null; reused_from:string|null;
-  error: { code: string } | null; result?: unknown;
+  state:string;call_id:string;request_id:string;
+  resolved:{provider:string;provider_account_id:string|null;machine_id:string;workspace_id:string;child_session_id?:string|null;preset:string|null;configuration:CallConfiguration|null;selection:string|null};
+  labels?:Record<string,string>;cancel_requested:boolean;usage:CallUsage|null;reused_from:string|null;error:{code:string}|null;result?:{text:string;range:TextRange;structured_omitted?:string[]};//result() only
 };
 export type CallCapabilities = {
-  enabled: boolean; default: string;
-  capabilities: {id:string;enabled:boolean;providers:string[]}[];
-  review_input_reuse: boolean;
-  providers: { id: string; available: boolean; reason: string | null; presets: unknown[]; review_candidates:string[]; preset:string|null; options:Record<string,string>|null; quota_account:string|null }[];
-  review_selection:string;
-  review_preferences: {claude:string[];gpt:string[]};
-  quota: {observed_now_ms?:number;accounts?:{account:string;status:string;observed_at_ms:number|null;stale:boolean;limits:unknown;needs_read:boolean}[];unavailable_accounts?:string[];status?:string};
-  purposes: string[]; limits: Record<string, number>;
+  enabled:boolean;default:string;review_input_reuse:boolean;
+  capabilities:{id:string;enabled:boolean;providers:string[]}[];
+  providers:{id:string;available:boolean;reason:string|null;presets:unknown[];review_candidates:string[];preset:string|null;options:Record<string,string>|null;quota_account:string|null}[];
+  review_selection:string;review_preferences:{claude:string[];gpt:string[]};
+  quota:{observed_now_ms?:number;accounts?:{account:string;status:string;observed_at_ms:number|null;stale:boolean;limits:unknown;needs_read:boolean}[];unavailable_accounts?:string[];status?:string};
+  purposes:string[];limits:Record<string,number>;
 };
 export interface Cowboy {
   calls: {
