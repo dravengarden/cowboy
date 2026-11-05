@@ -4,6 +4,9 @@
 real-time WebSocket, accepts authenticated Machine connections, and serves the
 SPA files under `--web-root`. One process and one port (`:3333`) form the
 control plane, while the web files remain an independently replaceable release.
+The REST route table is grouped by domain in
+`components/server/src/server/routes.rs`; `serve_axum` merges those builders
+with the product-auth router, the SPA fallback, and the middleware layers.
 
 ## REST endpoints
 

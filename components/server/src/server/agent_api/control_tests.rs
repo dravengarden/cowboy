@@ -89,13 +89,16 @@ fn product_api_and_commands_must_be_covered_or_have_an_owned_exception() {
         "../../../../../contracts/agent-api-coverage.json"
     ))
     .unwrap();
-    let server = include_str!("../../server.rs")
+    let app = include_str!("../../server.rs")
         .split("    let app = Router::new()")
         .nth(1)
         .unwrap()
         .split("    let listener =")
         .next()
         .unwrap();
+    // The route table lives in server/routes.rs; serve_axum merges its domain
+    // builders and adds the remaining layers.
+    let server = &format!("{}{app}", include_str!("../routes.rs"));
     let pattern =
         regex::Regex::new(r"\b(?:get|post|put|patch|delete|any)\(\s*([a-z_][a-zA-Z0-9_:]*)\s*\)")
             .unwrap();
@@ -119,6 +122,7 @@ fn product_api_and_commands_must_be_covered_or_have_an_owned_exception() {
     let merges: BTreeSet<_> = pattern
         .captures_iter(server)
         .map(|m| m[1].to_owned())
+        .filter(|name| !name.starts_with("routes::"))
         .collect();
     for (surface, actual) in [
         ("http", handlers),
@@ -146,7 +150,10 @@ fn product_api_and_commands_must_be_covered_or_have_an_owned_exception() {
 
 #[test]
 fn adapter_paths_retain_the_product_route_and_permission_policy() {
-    let server = include_str!("../../server.rs");
+    let server = concat!(
+        include_str!("../../server.rs"),
+        include_str!("../routes.rs")
+    );
     let parameters = regex::Regex::new(r"\{[a-z_]+\}").unwrap();
     let root = parameters.replace_all(server, "{id}");
     let principal = |role| crate::product_auth::ProductPrincipal {

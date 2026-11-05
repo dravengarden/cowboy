@@ -897,3 +897,47 @@ pub(super) async fn api_admin_set_password(
     state.device_access.revoke_user(&id);
     StatusCode::NO_CONTENT.into_response()
 }
+
+/// Creates the admin setup state and, while no user exists, publishes the
+/// one-time setup token.
+pub(super) async fn prepare_admin_setup(
+    state: &Arc<AppState>,
+    data_dir: PathBuf,
+) -> anyhow::Result<Arc<crate::admin::AdminSetupState>> {
+    let setup = Arc::new(crate::admin::AdminSetupState::new(data_dir));
+    let setup_needed = match state.store.as_ref() {
+        Some(store) => store
+            .list_users()
+            .await
+            .map(|users| users.is_empty())
+            .unwrap_or(true),
+        None => true,
+    };
+    {
+        let mut identities = admin_identities(&state.hub);
+        match crate::admin::ensure_admin_setup_token(&setup.data_dir, &mut identities, setup_needed)
+        {
+            Ok(Some(token)) => {
+                persist_admin_identities(&state.hub, &identities);
+                tracing::warn!(
+                    path = %setup.token_path().display(),
+                    token,
+                    "admin_setup_token"
+                );
+            }
+            Ok(None) => {
+                persist_admin_identities(&state.hub, &identities);
+                if setup_needed {
+                    tracing::info!(
+                        path = %setup.token_path().display(),
+                        "admin_setup_token_ready"
+                    );
+                }
+            }
+            Err(error) => {
+                return Err(error).context("preparing admin setup token");
+            }
+        }
+    }
+    Ok(setup)
+}
