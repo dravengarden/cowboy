@@ -186,63 +186,9 @@ async fn create_checked(
     authenticated: &AuthenticatedProductRequest,
     mut request: CreateRequest,
 ) -> Result<crate::core::SessionMeta, String> {
-    use super::super::folder_defaults::{self, value};
-    use crate::session_folders::defaults::DefaultKey;
-    super::super::session_context::validate_sources(
-        state,
-        &authenticated.principal,
-        &request.context_sources,
-    )?;
-    let defaults = folder_defaults::resolve(
-        state,
-        &authenticated.principal,
-        request.folder_id.as_deref(),
-    )?;
-    if request.provider.is_empty() {
-        request.provider =
-            value(&defaults, DefaultKey::Provider).unwrap_or_else(|| "claude-code".into());
-    }
-    let provider_account_id = super::super::provider_accounts::resolve_for_create(
-        state,
-        &authenticated.principal.user_id,
-        &request.provider,
-        request.provider_account_id.as_ref(),
-    )
-    .await
-    .map_err(str::to_owned)?;
-    if request.machine_id.is_empty() {
-        request.machine_id = value(&defaults, DefaultKey::Machine).unwrap_or_default();
-    }
-    if request.runtime_machine_id.is_empty() {
-        request.runtime_machine_id = value(&defaults, DefaultKey::RuntimeMachine)
-            .or_else(|| {
-                state
-                    .project_placement
-                    .snapshot()
-                    .default_runtime_machine_id
-                    .clone()
-            })
-            .unwrap_or_default();
-    }
-    if request.cwd.is_empty() {
-        request.cwd = value(&defaults, DefaultKey::Project).unwrap_or_default();
-    }
-    if request.folder_id.is_some() && (request.machine_id.is_empty() || request.cwd.is_empty()) {
-        if request.cwd.is_empty() && defaults.values.get(&DefaultKey::Project) == Some(&None) {
-            return Err(
-                "This directory has no project binding; select a project explicitly".into(),
-            );
-        }
-        (request.machine_id, request.cwd) = folder_defaults::default_workspace(
-            state,
-            (!request.machine_id.is_empty()).then_some(request.machine_id.as_str()),
-            (!request.cwd.is_empty()).then_some(request.cwd.as_str()),
-        )
-        .await?;
-    }
-    if request.preset.is_none() {
-        request.preset = value(&defaults, DefaultKey::Preset);
-    }
+    use super::super::folder_defaults;
+    let provider_account_id =
+        apply_create_defaults(state, &authenticated.principal, &mut request).await?;
     if !state
         .supervisor
         .runtime_allowed(&request.provider, &request.runtime_machine_id)
@@ -422,6 +368,65 @@ async fn create_checked(
         .session_info(&session_id)
         .map(|info| info.meta)
         .ok_or_else(|| "Session was removed during preparation".into())
+}
+
+/// Fills unset Provider, Machines, project and preset from the directory
+/// defaults and resolves the Provider account the session will use.
+async fn apply_create_defaults(
+    state: &Arc<AppState>,
+    principal: &crate::product_auth::ProductPrincipal,
+    request: &mut CreateRequest,
+) -> Result<crate::provider_account::ProviderAccountId, String> {
+    use super::super::folder_defaults::{self, value};
+    use crate::session_folders::defaults::DefaultKey;
+    super::super::session_context::validate_sources(state, principal, &request.context_sources)?;
+    let defaults = folder_defaults::resolve(state, principal, request.folder_id.as_deref())?;
+    if request.provider.is_empty() {
+        request.provider =
+            value(&defaults, DefaultKey::Provider).unwrap_or_else(|| "claude-code".into());
+    }
+    let provider_account_id = super::super::provider_accounts::resolve_for_create(
+        state,
+        &principal.user_id,
+        &request.provider,
+        request.provider_account_id.as_ref(),
+    )
+    .await
+    .map_err(str::to_owned)?;
+    if request.machine_id.is_empty() {
+        request.machine_id = value(&defaults, DefaultKey::Machine).unwrap_or_default();
+    }
+    if request.runtime_machine_id.is_empty() {
+        request.runtime_machine_id = value(&defaults, DefaultKey::RuntimeMachine)
+            .or_else(|| {
+                state
+                    .project_placement
+                    .snapshot()
+                    .default_runtime_machine_id
+                    .clone()
+            })
+            .unwrap_or_default();
+    }
+    if request.cwd.is_empty() {
+        request.cwd = value(&defaults, DefaultKey::Project).unwrap_or_default();
+    }
+    if request.folder_id.is_some() && (request.machine_id.is_empty() || request.cwd.is_empty()) {
+        if request.cwd.is_empty() && defaults.values.get(&DefaultKey::Project) == Some(&None) {
+            return Err(
+                "This directory has no project binding; select a project explicitly".into(),
+            );
+        }
+        (request.machine_id, request.cwd) = folder_defaults::default_workspace(
+            state,
+            (!request.machine_id.is_empty()).then_some(request.machine_id.as_str()),
+            (!request.cwd.is_empty()).then_some(request.cwd.as_str()),
+        )
+        .await?;
+    }
+    if request.preset.is_none() {
+        request.preset = value(&defaults, DefaultKey::Preset);
+    }
+    Ok(provider_account_id)
 }
 
 pub(in crate::server) fn start_recovery(state: &Arc<AppState>) {
