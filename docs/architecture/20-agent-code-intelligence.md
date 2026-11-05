@@ -249,7 +249,7 @@ counts, states and latencies only, never diagnostic text.
 
 | Phase | Scope | Gate |
 | --- | --- | --- |
-| P0 | Machine watcher and Observer, executor receipts, standing continuation, analysis-frontier protocol extension | conformance on the pinned pair; gap/reset fixtures |
+| P0 | Machine watcher and Observer, executor receipts, standing continuation, analysis-frontier protocol extension (document evidence done: Zed 1.22.0) | conformance on the pinned pair; gap/reset fixtures |
 | P1 | `cowboy.code.search/outline/symbols`; `code.diagnostics/summary` over existing safe observations only; badges | non-projecting resolver and scope fixtures; no acquisition |
 | P2 | Acquisition gates (scoped fences, Unknown recovery, budgets) then automatic acquisition; baselines and matching | availability tests with lost replies and restart |
 | P3 | Navigation pull after owned-navigation acceptance | that route's acceptance |

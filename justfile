@@ -432,13 +432,14 @@ zed-plugin-runtime-build ARTIFACT_BASE:
 zed-plugin-conformance ADAPTER SERVER:
     cargo build --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml --example navigation_lsp
     cargo test --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_ZED_ADAPTER="$1" COWBOY_TEST_ZED_SERVER="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib machine_plugins::tests::released_zed_runtime_installs_and_drains -- --ignored --exact --nocapture' conformance "{{ADAPTER}}" "{{SERVER}}"
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export TMPDIR=/tmp; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_ZED_ADAPTER="$1" COWBOY_TEST_ZED_SERVER="$2"; exec cargo test --offline --locked -p cowboy -p cowboy-server -p cowboy-machine -p cowboy-wire --all-features --lib machine_plugins::tests::released_zed_runtime_installs_and_drains -- --ignored --exact --nocapture' conformance "{{ADAPTER}}" "{{SERVER}}"
 
 # Actual private native conditional effect, isolated from ordinary Zed and the
 # live Machine. No network, host PID visibility or writable cgroup hierarchy.
+# TMPDIR=/tmp keeps the private server's Unix socket paths within their limit.
 zed-native-sync-conformance SERVER:
     cargo build --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml --example navigation_lsp
-    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_NATIVE_SYNC_SERVER="$1"; exec cargo test --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml sync_native::connected::immutable_native_sync -- --ignored --exact --nocapture' conformance "{{SERVER}}"
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export TMPDIR=/tmp; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_NATIVE_SYNC_SERVER="$1"; exec cargo test --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml sync_native::connected::immutable_native_sync -- --ignored --exact --nocapture' conformance "{{SERVER}}"
 
 # The same isolated gate also drives the exact distributable adapter's socket.
 zed-native-navigation-conformance ADAPTER SERVER:

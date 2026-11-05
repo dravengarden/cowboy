@@ -31,6 +31,21 @@ fn main() -> Result<()> {
         if method == "exit" {
             break;
         }
+        // Versioned diagnostics for the opened navigation source: evidence
+        // that this server analysed exactly the document version it names.
+        if method == "textDocument/didOpen"
+            && document.is_some_and(|uri| uri.ends_with("/navigation.rs"))
+        {
+            send(
+                &mut output,
+                &json!({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {
+                    "uri": document, "version": message["params"]["textDocument"]["version"],
+                    "diagnostics": [{"range": {"start": {"line": 0, "character": 3},
+                        "end": {"line": 0, "character": 9}}, "severity": 2,
+                        "message": "fixture analysis"}]
+                }}),
+            )?;
+        }
         let Some(id) = message.get("id") else {
             continue;
         };
@@ -88,11 +103,16 @@ fn main() -> Result<()> {
         } else {
             json!({"jsonrpc": "2.0", "id": id, "result": result})
         };
-        let bytes = serde_json::to_vec(&response)?;
-        write!(output, "Content-Length: {}\r\n\r\n", bytes.len())?;
-        output.write_all(&bytes)?;
-        output.flush()?;
+        send(&mut output, &response)?;
     }
+    Ok(())
+}
+
+fn send(output: &mut impl std::io::Write, message: &Value) -> Result<()> {
+    let bytes = serde_json::to_vec(message)?;
+    write!(output, "Content-Length: {}\r\n\r\n", bytes.len())?;
+    output.write_all(&bytes)?;
+    output.flush()?;
     Ok(())
 }
 
