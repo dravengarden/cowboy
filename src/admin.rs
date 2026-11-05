@@ -21,7 +21,6 @@ use serde::{Deserialize, Serialize};
 
 pub const REGISTRATION_SETTING: &str = "cowboy.registration";
 pub const PERMISSIONS_SETTING: &str = "cowboy.permissions";
-#[allow(dead_code)]
 pub const SESSION_LIMITS_SETTING: &str = "cowboy.session_limits";
 pub const ADMIN_IDENTITIES_SETTING: &str = "cowboy.admin.identities";
 
@@ -504,7 +503,6 @@ impl AdminIdentities {
         self.accounts.is_empty()
     }
 
-    #[allow(dead_code)]
     #[must_use]
     pub fn status(&self, token: Option<&str>, now_ms: i64) -> AdminAuthStatus {
         match token.and_then(|token| self.principal(token, now_ms)) {
@@ -705,7 +703,6 @@ impl AdminIdentities {
         }
     }
 
-    #[allow(dead_code)]
     pub fn logout(&mut self, token: &str) {
         let token_hash = hex_sha256(token.as_bytes());
         self.sessions
@@ -1042,7 +1039,6 @@ impl Default for SessionLimits {
     }
 }
 
-#[allow(dead_code)]
 impl SessionLimits {
     pub fn from_setting(value: Option<&serde_json::Value>) -> Self {
         value

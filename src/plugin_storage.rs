@@ -160,7 +160,6 @@ impl PluginNamespace {
     ///
     /// # Errors
     /// Returns when the statement is forbidden or the backend rejects it.
-    #[allow(dead_code)]
     pub async fn execute(&self, sql: &str) -> Result<()> {
         let dialect = match self.backend {
             NamespaceBackend::Postgres { .. } => "postgres",

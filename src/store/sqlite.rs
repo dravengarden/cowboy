@@ -108,7 +108,6 @@ struct SqliteMachineRow {
     public_key: Option<String>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct SqliteProductUserRow {
     id: String,
@@ -120,7 +119,6 @@ struct SqliteProductUserRow {
     disabled_at_ms: Option<i64>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct SqliteProductUserSessionRow {
     token_hash: String,
@@ -173,7 +171,6 @@ impl SqliteActiveClientLeaseRow {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct SqliteProductApiTokenRow {
     id: String,
@@ -187,7 +184,6 @@ struct SqliteProductApiTokenRow {
     revoked_at_ms: Option<i64>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct SqliteProductDeviceRow {
     id: String,
@@ -199,7 +195,6 @@ struct SqliteProductDeviceRow {
     revoked_at_ms: Option<i64>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct SqliteProductDeviceRefreshTokenRow {
     token_hash: String,
@@ -211,7 +206,6 @@ struct SqliteProductDeviceRefreshTokenRow {
     revoked_at_ms: Option<i64>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct SqliteUserPasskeyRow {
     id: String,
@@ -237,7 +231,6 @@ impl SqliteUserPasskeyRow {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct SqlitePasskeyPolicyRow {
     passkey_reauth_enabled: i64,
@@ -257,7 +250,6 @@ impl SqlitePasskeyPolicyRow {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl From<SqliteProductUserRow> for ProductUser {
     fn from(row: SqliteProductUserRow) -> Self {
         Self {
@@ -272,7 +264,6 @@ impl From<SqliteProductUserRow> for ProductUser {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl From<SqliteProductUserSessionRow> for ProductUserSession {
     fn from(row: SqliteProductUserSessionRow) -> Self {
         Self {
@@ -301,7 +292,6 @@ impl From<SqliteProductUserSessionRow> for ProductUserSession {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl From<SqliteProductApiTokenRow> for ProductApiToken {
     fn from(row: SqliteProductApiTokenRow) -> Self {
         Self {
@@ -318,7 +308,6 @@ impl From<SqliteProductApiTokenRow> for ProductApiToken {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl From<SqliteProductDeviceRow> for ProductDevice {
     fn from(row: SqliteProductDeviceRow) -> Self {
         Self {
@@ -333,7 +322,6 @@ impl From<SqliteProductDeviceRow> for ProductDevice {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl From<SqliteProductDeviceRefreshTokenRow> for ProductDeviceRefreshToken {
     fn from(row: SqliteProductDeviceRefreshTokenRow) -> Self {
         Self {
@@ -2683,7 +2671,6 @@ impl SqliteStorage {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl SqliteStorage {
     pub(super) async fn insert_user(&self, user: &ProductUser) -> Result<()> {
         anyhow::ensure!(

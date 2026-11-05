@@ -73,7 +73,7 @@ pub enum Change {
     /// Internal promotion only. Public HTTP/MCP deserialization cannot produce
     /// this variant. The native verifier must establish identity before calling.
     #[serde(skip_deserializing)]
-    #[allow(dead_code)] // Native verifier integration is still rollout-gated.
+    // Native verifier integration is still rollout-gated.
     BindIdentity {
         id: ProviderAccountId,
         provider_id: String,

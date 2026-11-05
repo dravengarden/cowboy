@@ -332,7 +332,6 @@ impl Ledger {
 
 // Staged finite writer. Protocol 15 exists, but no HTTP mutation or production
 // admission switch is exported. Tests exercise these exact paths.
-#[cfg_attr(not(test), allow(dead_code))]
 pub mod writer {
     use super::*;
 
@@ -491,7 +490,6 @@ impl LegacyFence {
         !self.0.load(std::sync::atomic::Ordering::Acquire)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn close(&self) {
         self.0.store(true, std::sync::atomic::Ordering::Release);
     }

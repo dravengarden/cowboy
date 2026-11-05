@@ -1305,7 +1305,6 @@ impl MachineControl {
 
     // Reader bridge for the forthcoming durable Service coordinator. No live
     // mutation endpoint can manufacture an operation or invoke this as a grant.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn telemetry_binding_observation(
         &self,
         token: &ConnectionToken,

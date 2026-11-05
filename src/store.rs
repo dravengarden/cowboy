@@ -90,17 +90,14 @@ pub fn generate_machine_id() -> Result<String> {
     ))
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn valid_product_user_id(value: &str) -> bool {
     value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn normalized_product_username(username: &str) -> Result<String> {
     crate::product_auth::normalize_username(username)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn unique_constraint_error(
     error: sqlx::Error,
     unique_message: &str,
@@ -116,7 +113,6 @@ fn unique_constraint_error(
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn truncate_user_agent(user_agent: Option<&str>) -> Option<String> {
     let value = user_agent?.trim();
     if value.is_empty() {
@@ -867,7 +863,6 @@ pub struct EnrolledMachine {
     pub fingerprint: String,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductUser {
     pub id: String,
@@ -879,7 +874,6 @@ pub struct ProductUser {
     pub disabled_at_ms: Option<i64>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductUserSession {
     pub token_hash: String,
@@ -999,7 +993,6 @@ pub enum ActiveClientAdmission {
     },
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductApiToken {
     pub id: String,
@@ -1013,7 +1006,6 @@ pub struct ProductApiToken {
     pub revoked_at_ms: Option<i64>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductDevice {
     pub id: String,
@@ -1025,7 +1017,6 @@ pub struct ProductDevice {
     pub revoked_at_ms: Option<i64>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductDeviceRefreshToken {
     pub token_hash: String,
@@ -1037,7 +1028,6 @@ pub struct ProductDeviceRefreshToken {
     pub revoked_at_ms: Option<i64>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct ProductUserRow {
     id: String,
@@ -1049,7 +1039,6 @@ struct ProductUserRow {
     disabled_at: Option<DateTime<Utc>>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct ProductUserSessionRow {
     token_hash: String,
@@ -1102,7 +1091,6 @@ impl ActiveClientLeaseRow {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct ProductApiTokenRow {
     id: String,
@@ -1116,7 +1104,6 @@ struct ProductApiTokenRow {
     revoked_at: Option<DateTime<Utc>>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct ProductDeviceRow {
     id: String,
@@ -1128,7 +1115,6 @@ struct ProductDeviceRow {
     revoked_at: Option<DateTime<Utc>>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct ProductDeviceRefreshTokenRow {
     token_hash: String,
@@ -1140,7 +1126,6 @@ struct ProductDeviceRefreshTokenRow {
     revoked_at: Option<DateTime<Utc>>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct ProductPasskeyRow {
     id: String,
@@ -1166,7 +1151,6 @@ impl ProductPasskeyRow {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct ProductPasskeyPolicyRow {
     passkey_reauth_enabled: bool,
@@ -1186,7 +1170,6 @@ impl ProductPasskeyPolicyRow {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl ProductUser {
     fn from_pg(row: ProductUserRow) -> Self {
         Self {
@@ -1201,7 +1184,6 @@ impl ProductUser {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl ProductUserSession {
     fn from_pg(row: ProductUserSessionRow) -> Self {
         Self {
@@ -1230,7 +1212,6 @@ impl ProductUserSession {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl ProductApiToken {
     fn from_pg(row: ProductApiTokenRow) -> Self {
         Self {
@@ -1247,7 +1228,6 @@ impl ProductApiToken {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl ProductDevice {
     fn from_pg(row: ProductDeviceRow) -> Self {
         Self {
@@ -1262,7 +1242,6 @@ impl ProductDevice {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl ProductDeviceRefreshToken {
     fn from_pg(row: ProductDeviceRefreshTokenRow) -> Self {
         Self {
@@ -1915,7 +1894,6 @@ impl Store {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl Store {
     /// Persist a product user. The username is normalized before insert.
     ///
@@ -3837,7 +3815,6 @@ impl PostgresStorage {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl PostgresStorage {
     pub async fn insert_user(&self, user: &ProductUser) -> Result<()> {
         anyhow::ensure!(

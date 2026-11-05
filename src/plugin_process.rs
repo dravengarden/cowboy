@@ -84,7 +84,6 @@ pub struct PluginCommandOutput {
 #[derive(Debug)]
 pub struct PluginCommandFailure {
     pub started: bool,
-    #[allow(dead_code)]
     pub timed_out: bool,
     pub error: anyhow::Error,
 }

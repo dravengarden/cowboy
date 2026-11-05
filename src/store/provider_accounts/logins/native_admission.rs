@@ -25,7 +25,6 @@ enum BindingUse<'a> {
 impl Store {
     /// Call only after the exact Broker readmission ACK. The callback checks
     /// the live runtime connection; failure rolls back the finished flag.
-    #[allow(dead_code)]
     pub async fn finish_native_session_transition(
         &self,
         owner: &str,

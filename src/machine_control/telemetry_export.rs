@@ -7,7 +7,6 @@ use super::{
 use crate::machine_protocol::telemetry_export::{ATTEMPT_BUDGET, ExportAttempt, ExportReceipt};
 
 impl MachineControl {
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn telemetry_export_target_current(
         &self,
         token: &ConnectionToken,
@@ -29,7 +28,6 @@ impl MachineControl {
                 .is_some_and(|target| lease.matches(&live, token, target))
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn export_bound_telemetry(
         &self,
         token: &ConnectionToken,

@@ -4636,11 +4636,6 @@ fn persist_admin_identities(hub: &Hub, identities: &crate::admin::AdminIdentitie
     persist_admin_setting(hub, crate::admin::ADMIN_IDENTITIES_SETTING, identities);
 }
 
-#[allow(dead_code)]
-fn persist_registration_policy(hub: &Hub, policy: &crate::admin::RegistrationPolicy) {
-    persist_admin_setting(hub, crate::admin::REGISTRATION_SETTING, policy);
-}
-
 fn persist_admin_setting(hub: &Hub, key: &str, value: &impl Serialize) {
     hub.set_setting(
         key.to_owned(),
@@ -4998,28 +4993,6 @@ async fn api_admin_permissions_put(
 ) -> Response {
     let _ = (state, peer, headers, patch);
     (StatusCode::FORBIDDEN, "this instance is single-user").into_response()
-}
-
-#[allow(dead_code)]
-async fn api_admin_permissions_put_continue(
-    State(state): State<ProductAuthState>,
-    peer: ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Json(patch): Json<crate::admin::PermissionPolicy>,
-) -> Response {
-    let peer = peer_addr(peer);
-    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
-        return rejected;
-    }
-    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Owner) {
-        return status.into_response();
-    }
-    let mut policy = permission_policy(&state.hub);
-    if let Err(error) = policy.apply_patch(patch) {
-        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
-    }
-    persist_admin_setting(&state.hub, crate::admin::PERMISSIONS_SETTING, &policy);
-    Json(policy).into_response()
 }
 
 async fn api_admin_session_limits(
@@ -24852,10 +24825,7 @@ mod auth_capacity_boundary_tests {
 #[cfg(test)]
 mod product_auth_api_tests {
     use super::*;
-    use crate::admin::{
-        ADMIN_IDENTITIES_SETTING, AdminCredentials, AdminIdentities, REGISTRATION_SETTING,
-        RegistrationMode, RegistrationPolicy,
-    };
+    use crate::admin::{ADMIN_IDENTITIES_SETTING, AdminCredentials, AdminIdentities};
     use crate::product_auth::USER_SESSION_COOKIE;
     use crate::store::Store;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -25216,19 +25186,6 @@ mod product_auth_api_tests {
             .unwrap_or(set_cookie)
             .trim()
             .to_owned()
-    }
-
-    #[allow(dead_code)]
-    fn enable_open(hub: &Hub) {
-        hub.set_setting(
-            REGISTRATION_SETTING.to_owned(),
-            serde_json::to_value(RegistrationPolicy {
-                enabled: true,
-                mode: RegistrationMode::Open,
-                tokens: Vec::new(),
-            })
-            .unwrap(),
-        );
     }
 
     fn seed_admin(hub: &Hub) -> String {

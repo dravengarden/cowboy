@@ -38,7 +38,6 @@ impl Store {
 
     // Only the staged finite coordinator uses this. No production writer
     // endpoint exists; reader activation never inserts a row or adopts policy.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn change_telemetry_binding(
         &self,
         change: &Change<'_>,
@@ -61,7 +60,6 @@ macro_rules! journal {
                     .fetch_optional(&self.pool).await?.map(|record| record.decode(service)).transpose()
             }
 
-            #[cfg_attr(not(test), allow(dead_code))]
             async fn change_telemetry_binding(&self, change: &Change<'_>, within_budget: &(dyn Fn() -> bool + Sync)) -> Result<Updated> {
                 let mut tx = self.pool.begin().await?;
                 sqlx::query($durability).execute(&mut *tx).await?;

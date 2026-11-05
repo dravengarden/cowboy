@@ -2462,7 +2462,7 @@ impl Broker {
 
     /// Called only by current Controller migration admission, never ordinary
     /// Ensure/Reset. Preparing a declaration must not start a worker.
-    #[allow(dead_code)] // Wire dispatch remains gated until Controller admission is connected.
+    // Wire dispatch remains gated until Controller admission is connected.
     async fn readmit_account_session(
         self: &Arc<Self>,
         session: StartSession,

@@ -253,7 +253,6 @@ impl OperatorApproval {
 
     // A separate closed operation kind; an uninstall/resolution grant cannot
     // be converted into a telemetry binding or used to restore old credentials.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn bind_telemetry(
         self,
         intent: &crate::telemetry_binding::Intent,
@@ -386,7 +385,6 @@ impl UninstallAuthority {
 
 // Reader release: the authority is exercised in hermetic tests, not exposed by
 // a production mutation endpoint. Intentionally no Clone/serde/Debug.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct TelemetryBindingAuthority {
     approval: OperatorApproval,
     request_digest: crate::machine_protocol::telemetry_binding::BindingDigest,
@@ -394,7 +392,6 @@ pub(super) struct TelemetryBindingAuthority {
     revoked: AtomicBool,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl TelemetryBindingAuthority {
     pub(super) fn constrain_to_preview(mut self, preview: OperationBudget) -> Self {
         self.budget = self.budget.intersect(preview);
