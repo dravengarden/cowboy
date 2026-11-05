@@ -203,34 +203,66 @@ const runConfigFlow = async (): Promise<void> => {
     "The cursor opens on the active preset",
   );
   await shot("run-config-wide");
-  let mark = (await sent()).length;
+  const mark = (await sent()).length;
+  const pressed = (index: number) =>
+    page.evaluate<boolean>(
+      `document.querySelector("[data-config-preset='${String(index)}']")?.getAttribute("aria-pressed") === "true"`,
+    );
   await key("6");
-  await until(
-    "globalThis.__acceptance.sent.includes('model=fable') && globalThis.__acceptance.sent.includes('reasoning_effort=max')",
-    "6 applies the sixth preset",
-  );
-  results.push("Digit 6 applies the sixth preset (4–6 were dead before)");
-  await key("j");
-  check(await activeIn("[data-config-shortcut='a']"), "J moves to Agent mode");
-  mark = (await sent()).length;
-  await key("h");
   await sleep(200);
   check(
-    (await sentSince(mark)).includes("mode=auto"),
-    "H steps Agent mode left and applies it",
+    await pressed(5) && (await sentSince(mark)).length === 0 &&
+      await page.evaluate<boolean>(
+        "Boolean(document.querySelector('[data-config-apply-bar]'))",
+      ),
+    "6 stages the sixth preset without touching the agent",
+  );
+  results.push("Digit 6 stages the sixth preset (4–6 were dead before)");
+  await key("j");
+  check(await activeIn("[data-config-shortcut='a']"), "J moves to Agent mode");
+  await key("h");
+  await sleep(150);
+  check(
+    await page.evaluate<boolean>(
+      "document.querySelector(\"[data-config-shortcut='a'] [aria-pressed='true']\")?.textContent === 'Auto'",
+    ),
+    "H steps Agent mode left in the draft",
   );
   await key("j");
   check(await activeIn("[data-config-shortcut='m']"), "J moves to Model");
-  mark = (await sent()).length;
+  // Fable (staged) → Opus (the agent's, so no longer a change) → Sonnet.
   await key("h");
-  await sleep(200);
+  await key("h");
+  await sleep(150);
   check(
-    (await sentSince(mark)).includes("model=opus") &&
-      !(await page.evaluate<boolean>(
-        "Boolean(document.querySelector(\"[role='listbox']\"))",
-      )),
-    "H steps Model in place without opening its list",
+    !(await page.evaluate<boolean>(
+      "Boolean(document.querySelector(\"[role='listbox']\"))",
+    )) &&
+      await page.evaluate<boolean>(
+        "document.querySelector(\"[data-config-shortcut='m']\")?.hasAttribute('data-config-changed') && document.querySelector(\"[data-config-shortcut='m']\").textContent.includes('was Opus')",
+      ),
+    "H steps Model in place without opening its list, marked unsaved",
   );
+  check(
+    (await sentSince(mark)).length === 0,
+    "Nothing reaches the agent before Apply",
+  );
+  await shot("run-config-unsaved");
+  await key("Enter", mac ? 4 : 2);
+  await until(
+    "!document.querySelector('[data-config-apply-bar]')",
+    "Mod+Enter applies the draft",
+  );
+  const applied = await sentSince(mark);
+  check(
+    applied.includes("model=sonnet") &&
+      applied.includes("reasoning_effort=max") &&
+      applied.includes("mode=auto") &&
+      applied.indexOf("model=sonnet") <
+        applied.indexOf("reasoning_effort=max"),
+    `Apply sends every change once, the model first: ${JSON.stringify(applied)}`,
+  );
+  results.push("Edits stage until Mod+Enter applies them together, model first");
   results.push("J/K walk fields; H/L apply the neighbouring value, Model too");
   await key("G", 8);
   check(
@@ -342,6 +374,29 @@ const runConfigFlow = async (): Promise<void> => {
   );
   await shot("run-config-medium");
   results.push("A 1180px window keeps the two columns");
+  const beforeClose = (await sent()).length;
+  await key("g");
+  await key("g");
+  await key("f");
+  await sleep(150);
+  await key("Escape");
+  await sleep(200);
+  check(
+    await page.evaluate<boolean>(
+      "Boolean(document.querySelector('[data-run-config-panel]')) && document.querySelector('[data-config-apply-bar]')?.textContent.includes('Esc again')",
+    ),
+    "Esc with unsaved edits keeps the dialog and warns",
+  );
+  await key("Escape");
+  await until(
+    "!document.querySelector('[data-run-config-panel]')",
+    "A second Esc discards and closes",
+  );
+  check(
+    (await sentSince(beforeClose)).length === 0,
+    "Discarded edits never reach the agent",
+  );
+  results.push("Esc warns about unsaved edits; a second Esc discards them");
   await page.send("Emulation.clearDeviceMetricsOverride", {});
   const errors = await page.evaluate<string[]>("globalThis.__errors ?? []");
   check(errors.length === 0, `No page errors: ${JSON.stringify(errors)}`);

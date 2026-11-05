@@ -75,14 +75,17 @@ import {
 } from "../providerConfigOptions";
 import {
   activeRunConfigPreset,
+  type RunConfigDraft,
+  runConfigDraftChanges,
   type RunConfigPreset,
   runConfigPresetChanges,
   runConfigPresets,
+  withRunConfigDraft,
 } from "../runConfigPresets";
 import {
   loadUsageSnapshot,
   requestUsageRefresh,
-  send,
+  setSessionConfigOptions,
   useStoreSelector,
 } from "../store";
 import { NetworkButton } from "../NetworkActionFeedback";
@@ -917,13 +920,17 @@ function DesktopProviderUsage({
 
 function ConfigOptionControl({
   option,
-  sessionId,
   disabled,
+  savedName,
+  onChange,
 }: {
+  /** The option as the unsaved draft leaves it. */
   option: ConfigOption;
   presentation?: ProviderConfigOptionPresentation | undefined;
-  sessionId: string;
   disabled: boolean;
+  /** The agent's value when the draft changes it. */
+  savedName?: string | undefined;
+  onChange: (id: string, value: string | boolean) => void;
 }): React.JSX.Element {
   const label = optionLabel(option);
   const shortcut = optionShortcut(option);
@@ -933,12 +940,7 @@ function ConfigOptionControl({
       String(candidate.value) === value
     );
     if (!selected) return;
-    send({
-      type: "set_config_option",
-      session_id: sessionId,
-      config_id: option.id,
-      value: selected.value,
-    });
+    onChange(option.id, selected.value);
   };
   // `H/L` on a Select steps its value in place; `Enter` or the field's
   // letter opens the full list.
@@ -972,6 +974,7 @@ function ConfigOptionControl({
       ref={rowRef}
       data-config-row
       data-config-shortcut={shortcut?.toLowerCase()}
+      data-config-changed={savedName !== undefined || undefined}
       sx={{
         minWidth: 0,
         display: "grid",
@@ -980,6 +983,7 @@ function ConfigOptionControl({
         gap: 1.25,
       }}
     >
+      <Box sx={{ minWidth: 0 }}>
       <Tooltip title={option.description ?? ""} placement="right">
         <Stack direction="row" alignItems="center" spacing={0.5}>
           <Typography
@@ -1001,6 +1005,18 @@ function ConfigOptionControl({
           )}
         </Stack>
       </Tooltip>
+      {savedName !== undefined && (
+        <Typography
+          variant="caption"
+          color="warning.main"
+          noWrap
+          title={`Unsaved · the agent runs ${savedName}`}
+          sx={{ display: "block", fontSize: "0.625rem", fontWeight: 650 }}
+        >
+          was {savedName}
+        </Typography>
+      )}
+      </Box>
       {label === "Model"
         ? (
           <FormControl fullWidth size="small">
@@ -1140,11 +1156,14 @@ function RunConfigPane({
   pane,
   title,
   caption,
+  footer,
   children,
 }: {
   pane: "agent" | "context" | "tools";
   title: string;
   caption: string;
+  /** Pinned under the pane's scrolling body. */
+  footer?: React.ReactNode;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -1177,6 +1196,9 @@ function RunConfigPane({
           transition: "background-color 120ms",
         },
         "& [data-config-row]": { py: 0.5 },
+        "& [data-config-row][data-config-changed]": {
+          bgcolor: (theme) => alpha(theme.palette.warning.main, 0.07),
+        },
         "& [data-settings-row]": { py: 0.25, minHeight: 36 },
         "& [data-config-row]:has(:focus-visible), & [data-settings-row]:has(:focus-visible)":
           {
@@ -1229,18 +1251,89 @@ function RunConfigPane({
       >
         {children}
       </Stack>
+      {footer}
     </Box>
+  );
+}
+
+/** The Agent pane's pending edits: what Apply sends, and the way out. */
+function RunConfigApplyBar({
+  count,
+  applying,
+  discardArmed,
+  error,
+  onApply,
+  onDiscard,
+}: {
+  count: number;
+  applying: boolean;
+  discardArmed: boolean;
+  error: string;
+  onApply: () => void;
+  onDiscard: () => void;
+}): React.JSX.Element {
+  return (
+    <Stack
+      data-config-apply-bar
+      direction="row"
+      alignItems="center"
+      spacing={1}
+      sx={{
+        px: 2,
+        py: 1,
+        borderTop: 1,
+        borderColor: "divider",
+        bgcolor: (theme) => alpha(theme.palette.warning.main, 0.08),
+      }}
+    >
+      <Typography
+        variant="caption"
+        role="status"
+        color={error || discardArmed ? "error.main" : "text.secondary"}
+        sx={{ flex: 1, minWidth: 0, fontWeight: 650 }}
+      >
+        {error ||
+          (discardArmed
+            ? "Unsaved changes · Esc again discards them"
+            : `${count} unsaved ${count === 1 ? "change" : "changes"} · the agent keeps its current settings until you apply`)}
+      </Typography>
+      {count > 0 && (
+        <>
+          <Button
+            size="small"
+            disabled={applying}
+            onClick={onDiscard}
+            sx={{ textTransform: "none" }}
+          >
+            Discard
+          </Button>
+          <Button
+            size="small"
+            variant="contained"
+            disableElevation
+            disabled={applying}
+            onClick={onApply}
+            data-leader-key="s"
+            sx={{ textTransform: "none", gap: 0.75 }}
+          >
+            {applying ? "Applying…" : "Apply"}
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} availability="available" />
+          </Button>
+        </>
+      )}
+    </Stack>
   );
 }
 
 function RecommendedPresetControls({
   presets,
   options,
-  sessionId,
+  onChange,
 }: {
   presets: readonly RunConfigPreset[];
+  /** The options as the unsaved draft leaves them. */
   options: readonly ConfigOption[];
-  sessionId: string;
+  onChange: (id: string, value: string | boolean) => void;
 }): React.JSX.Element {
   const active = activeRunConfigPreset(presets, options);
   return (
@@ -1270,12 +1363,7 @@ function RecommendedPresetControls({
               aria-pressed={selected}
               onClick={(): void => {
                 for (const change of runConfigPresetChanges(preset, options)) {
-                  send({
-                    type: "set_config_option",
-                    session_id: sessionId,
-                    config_id: change.configId,
-                    value: change.value,
-                  });
+                  onChange(change.configId, change.value);
                 }
               }}
               sx={{
@@ -1483,6 +1571,75 @@ export function DesktopTopBarControls({
   const presetShortcutLabel = recommendedPresets
     .map((_, index) => String(index + 1))
     .join("/");
+  // Agent options are edited as a draft and sent together on Apply: stepping
+  // through choices must not switch the live agent (and its context or
+  // cache) once per key. Tools and linked sessions keep their own saves.
+  const [configDraft, setConfigDraft] = useState<RunConfigDraft>({});
+  const [discardArmed, setDiscardArmed] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState("");
+  const draftOptions = useMemo(
+    () => withRunConfigDraft(options, configDraft),
+    [options, configDraft],
+  );
+  const draftChanges = useMemo(
+    () => runConfigDraftChanges(options, configDraft),
+    [options, configDraft],
+  );
+  const unsaved = draftChanges.length > 0;
+  useEffect(() => {
+    if (configOpen) return;
+    setConfigDraft({});
+    setDiscardArmed(false);
+    setApplyError("");
+  }, [configOpen, sessionId]);
+  const editConfig = useCallback(
+    (id: string, value: string | boolean): void => {
+      setConfigDraft((draft) => ({ ...draft, [id]: value }));
+      setDiscardArmed(false);
+      setApplyError("");
+    },
+    [],
+  );
+  const discardConfig = useCallback((): void => {
+    setConfigDraft({});
+    setDiscardArmed(false);
+    setApplyError("");
+  }, []);
+  const applyConfig = async (): Promise<void> => {
+    if (applying || !unsaved) return;
+    setApplying(true);
+    setApplyError("");
+    try {
+      await setSessionConfigOptions(sessionId, draftChanges);
+      setConfigDraft({});
+      setDiscardArmed(false);
+    } catch (cause) {
+      setApplyError(
+        cause instanceof Error ? cause.message : "Could not apply changes",
+      );
+    } finally {
+      setApplying(false);
+    }
+  };
+  // Closing never drops edits silently: the first Esc warns, the second
+  // discards them.
+  const closeConfig = (): void => {
+    if (unsaved && !discardArmed) {
+      setDiscardArmed(true);
+      return;
+    }
+    setOpenSurface(null);
+  };
+  useConfirmEnter(configOpen && unsaved, () => void applyConfig(), {
+    suppressBareEnter: false,
+  });
+  const savedNames = new Map(
+    draftChanges.map(({ configId }) => {
+      const saved = options.find((option) => option.id === configId);
+      return [configId, saved ? currentOptionName(saved) : ""] as const;
+    }),
+  );
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     await (manual ? refreshAllUsage() : loadUsageSnapshot());
   }, []);
@@ -1936,11 +2093,11 @@ export function DesktopTopBarControls({
 
       <DesktopModal
         open={configOpen}
-        onClose={(): void => setOpenSurface(null)}
+        onClose={closeConfig}
         title="Run configuration"
         description={dead
-          ? "Changes are saved for your next message. The session stays asleep."
-          : "Changes apply immediately; Back restores them until your next message."}
+          ? "Changes are saved for your next message once you apply them; the session stays asleep. Tools and linked sessions save as you change them."
+          : "Agent changes wait for Apply; Back restores them until your next message. Tools and linked sessions save as you change them."}
         icon={<Tune sx={{ color: "primary.main" }} />}
         fill
         shortcutGroups={[{
@@ -1962,7 +2119,19 @@ export function DesktopTopBarControls({
             { shortcut: ENTER_LABEL, label: "Open · Toggle" },
             { shortcut: "␣", label: "Labels" },
           ],
-        }, { slots: [{ shortcut: "Esc", label: "Close" }] }]}
+        }, {
+          slots: [
+            {
+              shortcut: `${MOD_LABEL}${ENTER_LABEL}`,
+              label: "Apply",
+              availability: unsaved ? "available" : "inactive",
+            },
+            {
+              shortcut: "Esc",
+              label: unsaved ? (discardArmed ? "Discard" : "Close…") : "Close",
+            },
+          ],
+        }]}
       >
         <Box
           ref={configPanelRef}
@@ -1974,22 +2143,37 @@ export function DesktopTopBarControls({
             pane="agent"
             title="Agent"
             caption="How this agent runs"
+            footer={unsaved || applyError
+              ? (
+                <RunConfigApplyBar
+                  count={draftChanges.length}
+                  applying={applying}
+                  discardArmed={discardArmed}
+                  error={applyError}
+                  onApply={(): void => void applyConfig()}
+                  onDiscard={discardConfig}
+                />
+              )
+              : undefined}
           >
-            <ConfigRevertBack sessionId={sessionId} options={options} />
+            {!unsaved && (
+              <ConfigRevertBack sessionId={sessionId} options={options} />
+            )}
             {recommendedPresets.length > 0 && (
               <RecommendedPresetControls
                 presets={recommendedPresets}
-                options={options}
-                sessionId={sessionId}
+                options={draftOptions}
+                onChange={editConfig}
               />
             )}
-            {options.map((option) => (
+            {draftOptions.map((option) => (
               <ConfigOptionControl
                 key={option.id}
                 option={option}
                 presentation={optionPresentations.get(option.id)}
-                sessionId={sessionId}
-                disabled={providerConfigOptionDisabled(
+                savedName={savedNames.get(option.id)}
+                onChange={editConfig}
+                disabled={applying || providerConfigOptionDisabled(
                   status,
                   optionPresentations.get(option.id),
                 )}
