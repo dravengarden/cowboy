@@ -4,6 +4,9 @@
 use super::*;
 use std::ops::ControlFlow;
 
+mod fanout;
+use fanout::*;
+
 pub(super) fn authorize_ws_upgrade(
     headers: &HeaderMap,
     peer: SocketAddr,
@@ -395,21 +398,13 @@ pub(super) async fn handle_ws(
     lazy_bootstrap: bool,
     authentication: WebSocketAuthentication,
 ) {
-    let WebSocketAuthentication {
-        principal,
-        via_cookie,
-        cookie_token,
-        bearer,
-        device_identity,
-        capacity,
-    } = authentication;
     let (mut sink, mut stream) = socket.split();
 
     let capacity_policy = state.product_authentication.capacity;
     let enforce_capacity =
         capacity_policy.enforcement == crate::auth_plugins::CapacityEnforcement::Enforce;
     let channel_count = match state.capacity_runtime.open_channel(
-        &capacity.client_id,
+        &authentication.capacity.client_id,
         capacity_policy.websocket_channels_per_client,
         enforce_capacity,
     ) {
@@ -430,7 +425,7 @@ pub(super) async fn handle_ws(
     };
     if !enforce_capacity && channel_count > capacity_policy.websocket_channels_per_client {
         tracing::warn!(
-            client_id = capacity.client_id,
+            client_id = authentication.capacity.client_id,
             channel_count,
             limit = capacity_policy.websocket_channels_per_client,
             "observed logical-client WebSocket channel overflow"
@@ -439,7 +434,7 @@ pub(super) async fn handle_ws(
     let _capacity_channel = ActiveCapacityChannel {
         runtime: state.capacity_runtime.clone(),
         store: state.store.clone(),
-        client_id: capacity.client_id.clone(),
+        client_id: authentication.capacity.client_id.clone(),
         reservation_ms: capacity_policy.reservation_ms,
         per_user_limit: capacity_policy.active_clients_per_user,
     };
@@ -448,7 +443,7 @@ pub(super) async fn handle_ws(
     // deadlines before any transcript or Machine snapshot is disclosed. Push
     // the required proof to the client first, then close without bootstrapping
     // when the session is no longer fresh.
-    let initial_auth_deadline_ms = if let Some(token) = cookie_token.as_deref() {
+    let initial_auth_deadline_ms = if let Some(token) = authentication.cookie_token.as_deref() {
         let Some(snapshot) = product_auth_session_message(&state, token).await else {
             let _ = sink.send(ws_close_auth_required()).await;
             return;
@@ -456,7 +451,7 @@ pub(super) async fn handle_ws(
         if send_json(&mut sink, &snapshot.message).await.is_err() {
             return;
         }
-        if !snapshot.valid || snapshot.user_id != principal.user_id {
+        if !snapshot.valid || snapshot.user_id != authentication.principal.user_id {
             let _ = sink.send(ws_close_auth_required()).await;
             return;
         }
@@ -465,134 +460,31 @@ pub(super) async fn handle_ws(
         None
     };
 
-    let capacity_fencing_token = if capacity.principal_class == "system" {
-        None
-    } else {
-        let Some(store) = state.store.as_ref() else {
-            let message = active_capacity_message(
-                "unavailable",
-                None,
-                None,
-                Some(capacity_policy.reservation_ms),
-                Some(channel_count),
-                capacity_policy.websocket_channels_per_client,
-            );
-            let _ = send_json(&mut sink, &message).await;
-            let _ = sink.send(ws_close_capacity_required()).await;
-            return;
-        };
-        let mut capacity_shutdown = state.shutdown.clone();
-        loop {
-            if !principal_still_valid(
-                &state,
-                via_cookie,
-                cookie_token.as_deref(),
-                bearer.as_deref(),
-                device_identity.as_ref(),
-                &principal,
-            )
-            .await
-            {
-                let _ = sink.send(ws_close_auth_required()).await;
-                return;
-            }
-            let claim = crate::store::ActiveClientClaim {
-                client_id: capacity.client_id.clone(),
-                user_id: capacity.user_id.clone(),
-                principal_class: capacity.principal_class.clone(),
-                session_id: capacity.session_id.clone(),
-                client_kind: capacity.client_kind.clone(),
-                now_ms: auth_now_ms(),
-                lease_ms: capacity_policy.active_lease_ms,
-                reservation_ms: capacity_policy.reservation_ms,
-                per_user_limit: capacity_policy.active_clients_per_user,
-                service_limit: capacity_policy.active_clients_service,
-                automation_limit: state.product_authentication.automation.active_clients,
-                enforce: enforce_capacity,
-            };
-            match store.claim_active_client(&claim).await {
-                Ok(crate::store::ActiveClientAdmission::Granted {
-                    lease,
-                    capacity: counts,
-                    observed_overflow,
-                }) => {
-                    state
-                        .capacity_runtime
-                        .record_fence(&capacity.client_id, lease.fencing_token);
-                    if observed_overflow {
-                        tracing::warn!(
-                            client_id = capacity.client_id,
-                            user_id = capacity.user_id,
-                            "observed active-client capacity overflow"
-                        );
-                    }
-                    let message = active_capacity_message(
-                        "active",
-                        Some(&counts),
-                        None,
-                        None,
-                        Some(channel_count),
-                        capacity_policy.websocket_channels_per_client,
-                    );
-                    if send_json(&mut sink, &message).await.is_err() {
-                        return;
-                    }
-                    break Some(lease.fencing_token);
-                }
-                Ok(crate::store::ActiveClientAdmission::Waiting {
-                    position,
-                    retry_after_ms,
-                    capacity: counts,
-                }) => {
-                    let message = active_capacity_message(
-                        "waiting",
-                        Some(&counts),
-                        Some(position),
-                        Some(retry_after_ms),
-                        Some(channel_count),
-                        capacity_policy.websocket_channels_per_client,
-                    );
-                    if send_json(&mut sink, &message).await.is_err() {
-                        return;
-                    }
-                    tokio::select! {
-                        () = state.capacity_runtime.changed.notified() => {}
-                        () = tokio::time::sleep(std::time::Duration::from_millis(
-                            u64::try_from(retry_after_ms.max(1_000)).unwrap_or(1_000),
-                        )) => {}
-                        changed = capacity_shutdown.changed() => {
-                            if changed.is_err() || *capacity_shutdown.borrow() {
-                                return;
-                            }
-                        }
-                        frame = stream.next() => match frame {
-                            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
-                            Some(Ok(_)) => {}
-                        }
-                    }
-                }
-                Err(error) => {
-                    tracing::error!(%error, client_id = capacity.client_id, "active-client admission");
-                    let message = active_capacity_message(
-                        "unavailable",
-                        None,
-                        None,
-                        Some(capacity_policy.reservation_ms),
-                        Some(channel_count),
-                        capacity_policy.websocket_channels_per_client,
-                    );
-                    let _ = send_json(&mut sink, &message).await;
-                    let _ = sink.send(ws_close_capacity_required()).await;
-                    return;
-                }
-            }
-        }
+    let Some(capacity_fencing_token) = admit_active_client(
+        &state,
+        &mut sink,
+        &mut stream,
+        &authentication,
+        channel_count,
+        enforce_capacity,
+    )
+    .await
+    else {
+        return;
     };
+    let WebSocketAuthentication {
+        principal,
+        via_cookie,
+        cookie_token,
+        bearer,
+        device_identity,
+        capacity,
+    } = authentication;
 
     // Subscribe BEFORE snapshotting so no event slips through the gap; the
     // client dedups by (session_id, seq), so a brief overlap is harmless.
-    let mut rx = state.hub.subscribe();
-    let mut shutdown = state.shutdown.clone();
+    let rx = state.hub.subscribe();
+    let shutdown = state.shutdown.clone();
 
     let machine_snapshot = match state.machine_snapshots.connect_message().await {
         Ok(snapshot) => Some(snapshot),
@@ -612,202 +504,33 @@ pub(super) async fn handle_ws(
     // heartbeat (Outbound::Ping) so a client can detect a HALF-OPEN socket that
     // never fires `onclose` (see Outbound::Ping). Per-client interval — a failed
     // heartbeat send reaps a dead client here too.
-    let fanout_state = Arc::clone(&state);
-    let fanout_principal = principal.clone();
-    let fanout_cookie = cookie_token.clone();
-    let fanout_bearer = bearer.clone();
-    let fanout_device = device_identity.clone();
-    let fanout_capacity_store = state.store.clone();
-    let fanout_capacity_runtime = state.capacity_runtime.clone();
-    let fanout_capacity_client_id = capacity.client_id.clone();
-    let fanout_capacity_fencing_token = capacity_fencing_token;
-    let capacity_lease_ms = capacity_policy.active_lease_ms;
-    let capacity_heartbeat_ms = capacity_policy.heartbeat_ms;
-    let capacity_channel_limit = capacity_policy.websocket_channels_per_client;
-    let (direct_tx, mut direct_rx) =
+    let fanout_identity = ClientFanout {
+        state: Arc::clone(&state),
+        principal: principal.clone(),
+        via_cookie,
+        cookie: cookie_token.clone(),
+        bearer: bearer.clone(),
+        device: device_identity.clone(),
+        initial_auth_deadline_ms,
+        capacity_store: state.store.clone(),
+        capacity_runtime: state.capacity_runtime.clone(),
+        capacity_client_id: capacity.client_id.clone(),
+        capacity_fencing_token,
+        capacity_lease_ms: capacity_policy.active_lease_ms,
+        capacity_heartbeat_ms: capacity_policy.heartbeat_ms,
+        capacity_channel_limit: capacity_policy.websocket_channels_per_client,
+    };
+    let (direct_tx, direct_rx) =
         tokio::sync::mpsc::unbounded_channel::<Option<ProductAuthSessionSnapshot>>();
-    let (probe_tx, mut probe_rx) = tokio::sync::mpsc::channel::<u64>(1);
-    let mut fanout = tokio::spawn(async move {
-        let mut heartbeat = tokio::time::interval(HEARTBEAT);
-        let mut capacity_heartbeat = tokio::time::interval(std::time::Duration::from_millis(
-            u64::try_from(capacity_heartbeat_ms.max(1_000)).unwrap_or(1_000),
-        ));
-        let auth_deadline = tokio::time::sleep_until(product_auth_deadline_instant(
-            initial_auth_deadline_ms.unwrap_or(i64::MAX),
-        ));
-        tokio::pin!(auth_deadline);
-        // The first tick fires immediately; consume it so the first ping waits a
-        // full interval (the connect snapshot is fresh traffic already).
-        heartbeat.tick().await;
-        capacity_heartbeat.tick().await;
-        loop {
-            tokio::select! {
-                Some(nonce) = probe_rx.recv() => {
-                    if send_json(&mut sink, &Outbound::ConnectionProbe { nonce }).await.is_err() {
-                        break;
-                    }
-                }
-                Some(update) = direct_rx.recv() => {
-                    let Some(snapshot) = update else {
-                        let _ = sink.send(ws_close_auth_required()).await;
-                        break;
-                    };
-                    if send_json(&mut sink, &snapshot.message).await.is_err() {
-                            break;
-                    }
-                    if !snapshot.valid || snapshot.user_id != fanout_principal.user_id {
-                        let _ = sink.send(ws_close_auth_required()).await;
-                        break;
-                    }
-                    auth_deadline
-                        .as_mut()
-                        .reset(product_auth_deadline_instant(snapshot.next_due_at_ms));
-                }
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        break;
-                    }
-                }
-                _ = async {
-                    tokio::select! {
-                        _ = capacity_heartbeat.tick() => {}
-                        () = fanout_capacity_runtime.changed.notified() => {}
-                    }
-                }, if fanout_capacity_fencing_token.is_some() => {
-                    let Some(store) = fanout_capacity_store.as_ref() else {
-                        let _ = sink.send(ws_close_capacity_required()).await;
-                        break;
-                    };
-                    let fencing_token = fanout_capacity_fencing_token.unwrap_or_default();
-                    match store
-                        .heartbeat_active_client(
-                            &fanout_capacity_client_id,
-                            fencing_token,
-                            auth_now_ms(),
-                            capacity_lease_ms,
-                        )
-                        .await
-                    {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            let message = active_capacity_message(
-                                "lost",
-                                None,
-                                None,
-                                Some(capacity_heartbeat_ms),
-                                None,
-                                capacity_channel_limit,
-                            );
-                            let _ = send_json(&mut sink, &message).await;
-                            let _ = sink.send(ws_close_capacity_required()).await;
-                            fanout_capacity_runtime.notify_changed();
-                            break;
-                        }
-                        Err(error) => {
-                            // A transient database outage must not silently let
-                            // a client mutate beyond its fenced lease. Close and
-                            // let the normal reconnect path re-admit it.
-                            tracing::warn!(%error, client_id = fanout_capacity_client_id, "heartbeating active-client lease");
-                            let _ = sink.send(ws_close_capacity_required()).await;
-                            break;
-                        }
-                    }
-                }
-                msg = rx.recv() => match msg {
-                    Ok(msg) => {
-                        let result = if fanout_sends_shared_frame(&fanout_principal, msg.outbound()) {
-                            send_frame(&mut sink, msg.as_ref()).await
-                        } else {
-                            let visible = visible_session_ids(&fanout_state.hub, &fanout_principal);
-                            let Some(projected) = project_outbound(
-                                &fanout_state.hub,
-                                &fanout_principal,
-                                &visible,
-                                msg.outbound().clone(),
-                            ) else {
-                                continue;
-                            };
-                            send_json(&mut sink, &projected).await
-                        };
-                        if result.is_err() {
-                            break;
-                        }
-                    }
-                    // Lagged: a slow client (mobile/5G, or backgrounded) fell
-                    // >1024 events behind, so the broadcast DROPPED events for it.
-                    // Its timeline is now permanently inconsistent — e.g. it missed
-                    // the tool_call_update that completed a tool, so the UI shows a
-                    // stuck "pending" tool / "working" spinner on an idle session
-                    // (the observed bug). Continuing would keep serving newer events
-                    // over that hole forever. Instead CLOSE the socket: the client
-                    // reconnects and rebuilds a consistent state from a fresh
-                    // snapshot (the connect path re-sends sessions + snapshots).
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(dropped = n, "WS client lagged; closing to force a resync");
-                        break;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                },
-                _ = &mut auth_deadline, if via_cookie => {
-                    let Some(token) = fanout_cookie.as_deref() else {
-                        let _ = sink.send(ws_close_auth_required()).await;
-                        break;
-                    };
-                    let Some(snapshot) = product_auth_session_message(&fanout_state, token).await else {
-                        let _ = sink.send(ws_close_auth_required()).await;
-                        break;
-                    };
-                    if send_json(&mut sink, &snapshot.message).await.is_err() {
-                        break;
-                    }
-                    if !snapshot.valid || snapshot.user_id != fanout_principal.user_id {
-                        let _ = sink.send(ws_close_auth_required()).await;
-                        break;
-                    }
-                    auth_deadline
-                        .as_mut()
-                        .reset(product_auth_deadline_instant(snapshot.next_due_at_ms));
-                }
-                _ = heartbeat.tick() => {
-                    let valid = if via_cookie {
-                        match fanout_cookie.as_deref() {
-                            Some(token) => match product_auth_session_message(&fanout_state, token).await {
-                                Some(snapshot) => {
-                                    if send_json(&mut sink, &snapshot.message).await.is_err() {
-                                        break;
-                                    }
-                                    auth_deadline
-                                        .as_mut()
-                                        .reset(product_auth_deadline_instant(snapshot.next_due_at_ms));
-                                    snapshot.valid && snapshot.user_id == fanout_principal.user_id
-                                }
-                                None => false,
-                            },
-                            None => false,
-                        }
-                    } else {
-                        principal_still_valid(
-                            &fanout_state,
-                            false,
-                            None,
-                            fanout_bearer.as_deref(),
-                            fanout_device.as_ref(),
-                            &fanout_principal,
-                        )
-                        .await
-                    };
-                    if !valid {
-                        tracing::info!(reason = "disabled", "ws_rejected");
-                        let _ = sink.send(ws_close_auth_required()).await;
-                        break;
-                    }
-                    if send_json(&mut sink, &Outbound::Ping).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
+    let (probe_tx, probe_rx) = tokio::sync::mpsc::channel::<u64>(1);
+    let mut fanout = tokio::spawn(run_client_fanout(
+        fanout_identity,
+        sink,
+        rx,
+        shutdown,
+        direct_rx,
+        probe_rx,
+    ));
 
     // Edit-holds this connection set (session_id → message id + lease epoch). The
     // editing hold is GLOBAL server state, so a client that disconnects mid-edit
@@ -896,6 +619,150 @@ pub(super) async fn handle_ws(
         let _ = fanout.await;
     } else {
         fanout.abort();
+    }
+}
+
+/// Claims this logical client's active-client lease, waiting in line while
+/// capacity is full. `None` means the socket must close; `Some(token)` admits
+/// it, with no fencing token for system principals that hold no lease.
+async fn admit_active_client(
+    state: &Arc<AppState>,
+    sink: &mut futures::stream::SplitSink<WebSocket, Message>,
+    stream: &mut futures::stream::SplitStream<WebSocket>,
+    authentication: &WebSocketAuthentication,
+    channel_count: u32,
+    enforce_capacity: bool,
+) -> Option<Option<i64>> {
+    let WebSocketAuthentication {
+        principal,
+        via_cookie,
+        cookie_token,
+        bearer,
+        device_identity,
+        capacity,
+    } = authentication;
+    let capacity_policy = state.product_authentication.capacity;
+    if capacity.principal_class == "system" {
+        return Some(None);
+    }
+    let Some(store) = state.store.as_ref() else {
+        let message = active_capacity_message(
+            "unavailable",
+            None,
+            None,
+            Some(capacity_policy.reservation_ms),
+            Some(channel_count),
+            capacity_policy.websocket_channels_per_client,
+        );
+        let _ = send_json(sink, &message).await;
+        let _ = sink.send(ws_close_capacity_required()).await;
+        return None;
+    };
+    let mut capacity_shutdown = state.shutdown.clone();
+    loop {
+        if !principal_still_valid(
+            state,
+            *via_cookie,
+            cookie_token.as_deref(),
+            bearer.as_deref(),
+            device_identity.as_ref(),
+            principal,
+        )
+        .await
+        {
+            let _ = sink.send(ws_close_auth_required()).await;
+            return None;
+        }
+        let claim = crate::store::ActiveClientClaim {
+            client_id: capacity.client_id.clone(),
+            user_id: capacity.user_id.clone(),
+            principal_class: capacity.principal_class.clone(),
+            session_id: capacity.session_id.clone(),
+            client_kind: capacity.client_kind.clone(),
+            now_ms: auth_now_ms(),
+            lease_ms: capacity_policy.active_lease_ms,
+            reservation_ms: capacity_policy.reservation_ms,
+            per_user_limit: capacity_policy.active_clients_per_user,
+            service_limit: capacity_policy.active_clients_service,
+            automation_limit: state.product_authentication.automation.active_clients,
+            enforce: enforce_capacity,
+        };
+        match store.claim_active_client(&claim).await {
+            Ok(crate::store::ActiveClientAdmission::Granted {
+                lease,
+                capacity: counts,
+                observed_overflow,
+            }) => {
+                state
+                    .capacity_runtime
+                    .record_fence(&capacity.client_id, lease.fencing_token);
+                if observed_overflow {
+                    tracing::warn!(
+                        client_id = capacity.client_id,
+                        user_id = capacity.user_id,
+                        "observed active-client capacity overflow"
+                    );
+                }
+                let message = active_capacity_message(
+                    "active",
+                    Some(&counts),
+                    None,
+                    None,
+                    Some(channel_count),
+                    capacity_policy.websocket_channels_per_client,
+                );
+                if send_json(sink, &message).await.is_err() {
+                    return None;
+                }
+                break Some(Some(lease.fencing_token));
+            }
+            Ok(crate::store::ActiveClientAdmission::Waiting {
+                position,
+                retry_after_ms,
+                capacity: counts,
+            }) => {
+                let message = active_capacity_message(
+                    "waiting",
+                    Some(&counts),
+                    Some(position),
+                    Some(retry_after_ms),
+                    Some(channel_count),
+                    capacity_policy.websocket_channels_per_client,
+                );
+                if send_json(sink, &message).await.is_err() {
+                    return None;
+                }
+                tokio::select! {
+                    () = state.capacity_runtime.changed.notified() => {}
+                    () = tokio::time::sleep(std::time::Duration::from_millis(
+                        u64::try_from(retry_after_ms.max(1_000)).unwrap_or(1_000),
+                    )) => {}
+                    changed = capacity_shutdown.changed() => {
+                        if changed.is_err() || *capacity_shutdown.borrow() {
+                            return None;
+                        }
+                    }
+                    frame = stream.next() => match frame {
+                        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return None,
+                        Some(Ok(_)) => {}
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::error!(%error, client_id = capacity.client_id, "active-client admission");
+                let message = active_capacity_message(
+                    "unavailable",
+                    None,
+                    None,
+                    Some(capacity_policy.reservation_ms),
+                    Some(channel_count),
+                    capacity_policy.websocket_channels_per_client,
+                );
+                let _ = send_json(sink, &message).await;
+                let _ = sink.send(ws_close_capacity_required()).await;
+                return None;
+            }
+        }
     }
 }
 
