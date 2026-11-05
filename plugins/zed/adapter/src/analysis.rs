@@ -313,6 +313,17 @@ mod tests {
     }
 
     #[test]
+    fn owned_language_observations_never_carry_analysis() {
+        // Installed Machines parse owned reads with deny_unknown_fields.
+        let observation = crate::LanguageObservation {
+            analysis: Some(Vec::new()),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&observation).unwrap();
+        assert!(value.get("analysis").is_none(), "{value}");
+    }
+
+    #[test]
     fn responses_are_bounded_and_unique() {
         let ok = wire::CowboyAnalysisFrontierResponse {
             protocol: 1,

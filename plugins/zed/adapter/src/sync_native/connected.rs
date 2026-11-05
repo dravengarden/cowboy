@@ -451,6 +451,16 @@ async fn restart_does_not_adopt_old_ticket(
     stop(&replacement).await;
 }
 
+// The private server answers the analysis frontier for the peer's buffer;
+// with no language server running for a text file it lists none.
+async fn analysis_frontier_answers(zed: &ZedRuntime, buffer: u64) {
+    let frontier = zed.frontier.request(zed, buffer).await;
+    assert!(
+        matches!(&frontier, Ok(Some(servers)) if servers.is_empty()),
+        "analysis frontier: {frontier:?}"
+    );
+}
+
 #[tokio::test]
 #[ignore = "private child of immutable_native_sync, not directly invocable"]
 async fn native_process_child() {
@@ -472,6 +482,7 @@ async fn native_process_child() {
         .await
         .unwrap();
     duplicate_native_open_preserves_original_peer(&zed, worktree, buffer).await;
+    analysis_frontier_answers(&zed, buffer).await;
     let revision = zed.diagnostics.lock().unwrap().revision(buffer).unwrap();
     let id = prepare(&zed, &instance, buffer, &version, new.as_bytes())
         .await
