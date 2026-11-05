@@ -1138,8 +1138,19 @@ function CompactingWidget({
 function toolStatusLabel(status: string): string {
   if (status === "completed") return "Done";
   if (status === "in_progress") return "Doing";
-  return status;
+  // Other ACP states (pending, failed, interrupted) keep their wording but use
+  // the same sentence case, so a raw lowercase value never reads as a
+  // smaller, different badge beside Done/Doing.
+  const words = status.replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
+
+// A one-word state badge needs less than MUI's 8px small-chip label inset;
+// the tighter inset keeps the title room in a narrow phone row.
+const TOOL_STATUS_CHIP_SX = {
+  flexShrink: 0,
+  "& .MuiChip-label": { px: 0.75 },
+} as const;
 
 function toolColor(
   status: string,
@@ -1815,6 +1826,7 @@ function ToolCard({
           color={toolColor(item.status)}
           label={toolStatusLabel(item.status)}
           variant="outlined"
+          sx={TOOL_STATUS_CHIP_SX}
         />
         {hasDetail && (
           <ExpandMore
@@ -2463,7 +2475,7 @@ export function ToolDetailsBrowser({
             color={toolColor(item.status)}
             label={toolStatusLabel(item.status)}
             variant="outlined"
-            sx={{ flexShrink: 0 }}
+            sx={TOOL_STATUS_CHIP_SX}
           />
         </Stack>
         <Box sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
