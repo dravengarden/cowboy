@@ -2569,7 +2569,7 @@ pub(super) async fn api_auth_passkey_register_complete(
     clippy::result_large_err,
     reason = "HTTP rejection is an owned Axum response returned directly by its handler"
 )]
-async fn persist_product_passkey_registration(
+pub(super) async fn persist_product_passkey_registration(
     store: &Store,
     user: &crate::store::ProductUser,
     nickname: String,
@@ -2722,7 +2722,7 @@ pub(super) async fn api_auth_passkey_assert_complete(
     clippy::result_large_err,
     reason = "HTTP rejection is an owned Axum response returned directly by its handler"
 )]
-async fn persist_product_passkey_assertion(
+pub(super) async fn persist_product_passkey_assertion(
     state: &ProductAuthState,
     headers: &HeaderMap,
     store: &Store,
