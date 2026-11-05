@@ -109,6 +109,7 @@ pub(crate) async fn exercise(zed: &Zed, root: &Path) {
         .next()
         .unwrap()
         .remote_id;
+    analysed_exactly(&request, &workspace).await;
     let content = zed.diagnostics.lock().unwrap().content(source).unwrap();
     let retained = acquire_all(zed, root, &lease, &content, &worktrees, &buffers).await;
     exercise_refusals(zed, root, &workspace).await;
@@ -120,6 +121,43 @@ pub(crate) async fn exercise(zed: &Zed, root: &Path) {
     println!(
         "real native nonempty LSP: five kinds, two cross-file targets, UTF-16, duplicate no-replay, path-free read/release and independent handoff passed (synthetic LSP, no production consumer)"
     );
+}
+
+// The fixture published versioned diagnostics for the opened text, so the
+// language read reports that server's analysis as current for this document.
+async fn analysed_exactly<F, R>(request: &F, workspace: &Path)
+where
+    F: Fn(Request) -> R,
+    R: std::future::Future<Output = Result<Response>>,
+{
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let Response::BufferLanguage {
+                diagnostics,
+                analysis,
+                ..
+            } = request(Request::BufferLanguage {
+                worktree: workspace.to_path_buf(),
+                path: "navigation.rs".into(),
+            })
+            .await
+            .unwrap()
+            else {
+                panic!("not a language reply")
+            };
+            let analysis = analysis.expect("private server reports analysis evidence");
+            if analysis.len() == 1
+                && analysis[0].state == crate::analysis::State::DocumentCurrent
+                && diagnostics.len() == 1
+            {
+                assert_eq!(analysis[0].reason, None);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("versioned fixture diagnostics never became document_current");
 }
 
 async fn exercise_refusals(zed: &Zed, root: &Path, workspace: &Path) {
