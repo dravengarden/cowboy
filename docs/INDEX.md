@@ -437,6 +437,7 @@ primary phone/desktop product path.
 - [`releases/zed-budget-rollout-2026-09-19.md`](releases/zed-budget-rollout-2026-09-19.md) — Zed Budget rollout — 2026-09-19
 - [`releases/zed-remote-edit-install-2026-09-19.md`](releases/zed-remote-edit-install-2026-09-19.md) — Hawk Zed remote-edit admission installation — 2026-09-19
 - [`releases/zed-snapshot-install-2026-09-19.md`](releases/zed-snapshot-install-2026-09-19.md) — Hawk Zed snapshot-lifetime installation — 2026-09-19
+- [`releases/zed-trust-revocation-2026-11-05.md`](releases/zed-trust-revocation-2026-11-05.md) — Zed 1.21.0 native trust revocation publication and Hawk installation
 
 ### Integrations
 
