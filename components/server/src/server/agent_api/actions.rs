@@ -107,6 +107,9 @@ fn display_label(text: &str) -> String {
     format!("{}…", line[..end].trim_end())
 }
 
+const TASK_NEEDS_BASE: &str = "task binds reuse to a commit and needs base (full SHA from `git rev-parse <ref>`); omit both for an unbound review such as a design document";
+
+/// The request contract reports these context faults as one; name each.
 fn context_fault(files: &[String], root: Option<&str>) -> Option<&'static str> {
     if files.len() > 32 {
         return Some(
@@ -155,9 +158,7 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
         ));
     }
     if input.task.is_some() != input.base.is_some() {
-        return Err(refuse(
-            "task binds reuse to a commit and needs base (full SHA from `git rev-parse <ref>`); omit both for an unbound review such as a design document",
-        ));
+        return Err(refuse(TASK_NEEDS_BASE));
     }
     if input.capability.is_some() && input.purpose.is_some() {
         return Err(refuse("pass capability or purpose, not both"));
@@ -187,7 +188,6 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
             "files must be paths relative to root, without a leading /, '.' or '..' segments; capture files outside root into the worktree first",
         ));
     }
-    // The request contract reports these context faults as one; name each.
     if let Some(message) = context_fault(&input.files, input.root.as_deref()) {
         return Err(refuse(message));
     }
