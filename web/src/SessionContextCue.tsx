@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, Box, Button, ButtonBase, keyframes, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, ButtonBase, Chip, keyframes, Stack, Typography } from "@mui/material";
+import { alpha } from "@mui/material/styles";
+import { HintTooltip } from "./HintTooltip";
 import LinkOutlined from "@mui/icons-material/LinkOutlined";
 import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
 import LinkOffOutlined from "@mui/icons-material/LinkOffOutlined";
@@ -264,6 +266,50 @@ export function SessionContextCue(
         {action.label}
       </Button>
     </Box>
+  );
+}
+
+/** The Sessions-row form of the Composer cue: a staged next message is easy
+ *  to forget once you leave the session, so its row keeps saying so. Rows of
+ *  ordinary sessions fetch nothing. */
+export function SessionNextMessageBadge(
+  { sessionId }: { sessionId: string },
+): React.JSX.Element | null {
+  const context = useAnnouncedSessionContext(sessionId);
+  const { data: accounts } = useSubscriptionAccounts();
+  const cue = contextCue(
+    sessionId,
+    context,
+    (provider, account) => accountIdentity(accounts, provider, account).short,
+  );
+  if (!cue || cue.kind === "continued_in") return null;
+  const agent = cue.kind === "pending_agent";
+  const label = agent ? `Next · ${cue.label}` : `Next · +${cue.count} context`;
+  const description = agent
+    ? `Your next message starts a new agent · ${cue.label}`
+    : `Your next message links ${cue.count} session${cue.count === 1 ? "" : "s"} as context`;
+  return (
+    <HintTooltip title={description}>
+      <Chip
+        data-session-next-message={cue.kind}
+        size="small"
+        label={label}
+        aria-label={description}
+        icon={agent
+          ? <ProviderIcon provider={cue.provider} sx={{ fontSize: "0.875rem !important" }} />
+          : <LinkOutlined sx={{ fontSize: "0.875rem !important" }} />}
+        sx={{
+          height: "1.25rem", maxWidth: "10rem", minWidth: 0, flexShrink: 0,
+          fontSize: "0.6875rem", fontWeight: 600, boxShadow: "none",
+          color: "primary.main",
+          border: "1px solid",
+          borderColor: (theme) => alpha(theme.palette.primary.main, 0.45),
+          bgcolor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.2 : 0.1),
+          "& .MuiChip-icon": { ml: "0.375rem", mr: "-0.125rem", color: "inherit" },
+          "& .MuiChip-label": { px: "0.5rem", overflow: "hidden", textOverflow: "ellipsis" },
+        }}
+      />
+    </HintTooltip>
   );
 }
 

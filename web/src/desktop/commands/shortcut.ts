@@ -75,7 +75,9 @@ export function productLetterIgnoresShift(stroke: ShortcutStroke): boolean {
 }
 
 export function isTextEditingTarget(target: EventTarget | null): boolean {
-  const element = target instanceof Element ? target : null;
+  const element = typeof Element !== "undefined" && target instanceof Element
+    ? target
+    : null;
   return element?.matches(
     "input, textarea, select, [contenteditable='true'], .cm-content, [data-vim-command-sink]",
   ) ?? false;

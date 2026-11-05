@@ -239,6 +239,17 @@ export async function runFolderCreationBrowserChecks(): Promise<void> {
       );
       await click(button("Cancel"));
       check(
+        name().value === "Stormbird" && button("Keep editing"),
+        "cancel asks before discarding an edited folder",
+      );
+      await click(button("Keep editing"));
+      check(
+        name().value === "Stormbird" && Number(fixture.created.length) === 0,
+        "keep editing returns to the unchanged form",
+      );
+      await click(button("Cancel"));
+      await click(button("Discard"));
+      check(
         Number(fixture.created.length) === 0,
         "cancel never commits a folder",
       );

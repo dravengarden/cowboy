@@ -1,4 +1,5 @@
 import { isImeKeyEvent } from "./imeKey";
+import { shortcutKey } from "./desktop/commands/imeShortcut";
 
 /** Shared scoped command table: mobile hardware keyboards use the same verbs
  * without importing Desktop's leader or taking keys from another modal. */
@@ -68,17 +69,19 @@ export function deliveryPickerKey(
   | "close"
   | "consume"
   | null {
-  if (isImeKeyEvent(event)) return null;
+  const key = shortcutKey(event);
+  // A marked Return commits an IME candidate; MenuItem must not take it.
+  if (key === null || key === "Enter" && isImeKeyEvent(event)) return null;
   const mod = event.metaKey || event.ctrlKey;
-  if (event.key === "Escape") return "close";
-  if (mod && event.key === ".") return event.repeat ? "consume" : "stop";
-  if (event.key === "Enter") {
+  if (key === "Escape") return "close";
+  if (mod && key === ".") return event.repeat ? "consume" : "stop";
+  if (key === "Enter") {
     if (event.repeat || event.shiftKey) return "consume";
     if (!event.altKey) return "activate";
     return "consume";
   }
   if (mod || event.altKey || event.shiftKey) return null;
-  if (event.key === "ArrowDown" || event.key === "j") return "next";
-  if (event.key === "ArrowUp" || event.key === "k") return "previous";
+  if (key === "ArrowDown" || key === "j") return "next";
+  if (key === "ArrowUp" || key === "k") return "previous";
   return null;
 }

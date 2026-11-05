@@ -146,7 +146,7 @@ import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { PICK_SESSION_EVENT, pickSessionDetail, requestPickSession } from "./sessionPickRequest";
 import { openSessionSettings, requestNewFrom } from "./sessionSettingsOpen";
-import { useContinuation } from "./SessionContextCue";
+import { SessionNextMessageBadge, useContinuation } from "./SessionContextCue";
 import { isManagedChild } from "./managedCalls";
 import { SessionCallsBadge } from "./SessionCallsBadge";
 import {
@@ -2542,6 +2542,7 @@ function SessionList({
                                         compact
                                     />
                                     <AccountBadge account={sessionAccountIdentity(accounts, s)} />
+                                    <SessionNextMessageBadge sessionId={s.id} />
                                     {handedOff.has(s.id) && (
                                         // The pair shares a title; this marks the one the work left.
                                         <Chip
@@ -3428,7 +3429,18 @@ export function CreateDialog({
     const folderEffective = { ...directoryDefaults.values, ...folderDefaults };
     const folderPresetMismatch = Boolean(folderEffective.preset && !folderEffective.preset.startsWith(`${folderEffective.provider ?? "claude-code"}/`));
     const { catalog: folderCatalog, error: folderCatalogError } = useProviderCatalog(open && variant === "folder");
-    const closeLevel = (): void => { if (editingFolderDefault) setFolderDefaultField(null); else onClose(); };
+    // Cancel, Esc, backdrop and swipe-down ask before throwing away input.
+    // Captured at open, so the generated default titles do not count as edits.
+    const openedDefaults = useRef({ title: "", draftTitle: "" });
+    const [confirmDiscard, setConfirmDiscard] = useState(false);
+    const requestClose = (): void => {
+        if (!formDirty()) { onClose(); return; }
+        // Open after the initiating Escape finishes bubbling, or the new
+        // confirmation's own escape listener would close it at once.
+        globalThis.requestAnimationFrame(() => setConfirmDiscard(true));
+    };
+    const discardAndClose = (): void => { setConfirmDiscard(false); onClose(); };
+    const closeLevel = (): void => { if (editingFolderDefault) setFolderDefaultField(null); else requestClose(); };
     const [workItemId, setWorkItemId] = useState("");
     const [contextSources, setContextSources] = useState<string[]>([]);
     const [creating, setCreating] = useState(false);
@@ -3464,11 +3476,15 @@ export function CreateDialog({
         installNativeCompositionTracker();
         setFocusZone("text");
         setVariant(folderOnly ? "folder" : initialVariant);
-        setDraftTitle(defaultDraftTitle());
+        const initialDraftTitle = defaultDraftTitle();
+        const initialTitle = `New session ${sessionCountRef.current + 1}`;
+        openedDefaults.current = { title: initialTitle, draftTitle: initialDraftTitle };
+        setConfirmDiscard(false);
+        setDraftTitle(initialDraftTitle);
         selectDraftTitleOnFocus.current = true;
         creatingRef.current = false;
         createKeyRef.current = newUuid();
-        setTitle(`New session ${sessionCountRef.current + 1}`);
+        setTitle(initialTitle);
         setDirectory(initialFolder ?? "");
         setPresetOverride(undefined);
         setFolderName("");
@@ -3489,6 +3505,13 @@ export function CreateDialog({
             if (titleFocusTimer.current === t) titleFocusTimer.current = undefined;
         };
     }, [open]);
+    function formDirty(): boolean {
+        return folderName.trim() !== "" || Object.keys(folderDefaults).length > 0 ||
+            title !== openedDefaults.current.title || draftTitle !== openedDefaults.current.draftTitle ||
+            directory !== (initialFolder ?? "") || presetOverride !== undefined ||
+            workItemId !== "" || contextSources.length > 0 ||
+            placement.chosen || subscription.chosen;
+    }
     const navbarAtBottom = useNavbarAtBottom();
     // Field geometry for the touch Create cover, whose sheet a phone has
     // shown stranded part-way down above the keyboard (sheetKeyboardDiagnostics).
@@ -3671,7 +3694,8 @@ export function CreateDialog({
     // available to the Select controls in this form; the title field and
     // focused Create button suppress their own native bare-Enter activation.
     // Mobile retains its established single-Enter form behaviour.
-    useConfirmEnter(open && desktop, create, { suppressBareEnter: false });
+    useConfirmEnter(open && desktop && !confirmDiscard, create, { suppressBareEnter: false });
+    useConfirmEnter(open && confirmDiscard, discardAndClose);
     // The shared modal grammar (modalNavigation) owns Insert/Normal and hjkl.
     // A composing IME keeps every key: its Esc cancels the marked text, never
     // the modal.
@@ -3931,6 +3955,27 @@ export function CreateDialog({
     // The cover sheet is the touch presentation. A Desktop window below the
     // lg breakpoint is still Desktop: it keeps the dialog whose Esc, Mod+Enter
     // and leader layers the keyboard contract relies on.
+    const discardSheet = (
+        <ConfirmSheet
+            open={confirmDiscard}
+            onClose={(): void => setConfirmDiscard(false)}
+            title={variant === "folder" ? "Discard this folder?" : variant === "draft" ? "Discard this draft?" : "Discard this session?"}
+            actions={
+                <>
+                    <Button color="inherit" onClick={(): void => setConfirmDiscard(false)}>
+                        Keep editing
+                        {desktop && <Kbd keys="Esc" />}
+                    </Button>
+                    <Button color="error" variant="contained" onClick={discardAndClose}>
+                        Discard
+                        {desktop && <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />}
+                    </Button>
+                </>
+            }
+        >
+            <Typography variant="body2" color="text.secondary">Your changes will be lost.</Typography>
+        </ConfirmSheet>
+    );
     if (navbarAtBottom && !desktop) {
         return (
             <>
@@ -3947,7 +3992,7 @@ export function CreateDialog({
                         <MobileDecisionActions
                             shelf
                             flat
-                            onCancel={creating ? (): void => {} : onClose}
+                            onCancel={creating ? (): void => {} : requestClose}
                             cancelDisabled={creating}
                             confirmLabel={creating ? "Creating…" : createLabel}
                             onConfirm={create}
@@ -3970,10 +4015,12 @@ export function CreateDialog({
                     {form}
                 </Box>
             </DetentSheet>
+            {discardSheet}
             </>
         );
     }
     return (
+        <>
         <Sheet
             open={open}
             onClose={creating ? (): void => {} : closeLevel}
@@ -3981,7 +4028,7 @@ export function CreateDialog({
             wide={desktop}
             actions={
                 <>
-                    <Button onClick={onClose} color="inherit" disabled={creating}>
+                    <Button onClick={requestClose} color="inherit" disabled={creating}>
                         Cancel
                         {!editingFolderDefault && <Kbd keys="Esc" availability={focusZone === "text" ? "inactive" : "available"} />}
                     </Button>
@@ -4005,6 +4052,8 @@ export function CreateDialog({
         >
             {form}
         </Sheet>
+        {discardSheet}
+        </>
     );
 }
 

@@ -109,6 +109,8 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
   return {
     value, data, error, provider,
     hinted: !choice && Boolean(hinted),
+    /** The user picked a subscription instead of the default. */
+    chosen: Boolean(choice),
     allowed: (subscriptionAllowed(data, provider, value) && !loginReason(value)) || (error && value === "default"),
     loginReason,
     quota,
