@@ -11,3 +11,15 @@ export function shouldShowSessionErrorSnackbar(
   if (notice.sessionId === undefined || !activeSessionId) return true;
   return notice.sessionId === activeSessionId;
 }
+
+/** A Controller `error` frame as a notice. Controllers before 2026-11-05
+ * serialized a global error as `session_id: null`; null and absent both mean
+ * the error belongs to no session. */
+export function errorNoticeFrom(
+  seq: number,
+  frame: { session_id?: string | null; message: string },
+): { seq: number; sessionId?: string; message: string } {
+  return frame.session_id == null
+    ? { seq, message: frame.message }
+    : { seq, sessionId: frame.session_id, message: frame.message };
+}

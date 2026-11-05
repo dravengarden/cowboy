@@ -2,7 +2,7 @@
 // Do not edit. Each literal is Rust-serialized; `satisfies` makes the web
 // typecheck reject a field, tag or nullability the TypeScript types lack.
 
-import type { Event } from "./protocol";
+import type { Event, Outbound } from "./protocol";
 
 // contracts/protocol/event.json
 export const eventFixtures = {
@@ -19,3 +19,27 @@ export const eventFixtures = {
   "lifecycle_interrupted": {"kind":"lifecycle","status":"interrupted","detail":null},
   "lifecycle_crashed_with_detail": {"kind":"lifecycle","status":"crashed","detail":"worker exited"},
 } satisfies Record<string, Event>;
+
+// contracts/protocol/outbound.json
+export const outboundFixtures = {
+  "auth_session": {"type":"auth_session","session":{"authenticated":true}},
+  "client_capacity": {"type":"client_capacity","capacity":{"status":"waiting","position":2,"retry_after_ms":5000,"channel_limit":4}},
+  "sessions": {"type":"sessions","sessions":[{"id":"sess-1","provider":"codex","provider_account_id":"default","provider_version":"","provider_generation_digest":"","machine_id":"local","cwd":"/tmp","title":"owner stamp","status":"starting","origin":"web","agent_session_id":null,"paused":false,"system":false,"context_used":0,"context_size":0},{"id":"sess-1","provider":"codex","provider_account_id":"default","provider_version":"","provider_generation_digest":"","machine_id":"local","cwd":"/tmp","title":"owner stamp","status":"starting","origin":"web","agent_session_id":null,"paused":false,"system":false,"context_used":0,"context_size":0,"owner_user_id":"0123456789abcdef0123456789abcdef","owner_username":"draven"}]},
+  "machines": {"type":"machines","revision":7,"machines":[],"resync":false},
+  "bootstrap_complete": {"type":"bootstrap_complete"},
+  "snapshot": {"type":"snapshot","session_id":"sess-1","events":[{"session_id":"sess-1","seq":1,"kind":"lifecycle","status":"running","detail":null}],"reached_start":true},
+  "event_with_cmid": {"type":"event","envelope":{"session_id":"sess-1","seq":2,"kind":"update","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hi"}},"cmid":"cmid-1"}},
+  "event_without_cmid": {"type":"event","envelope":{"session_id":"sess-1","seq":3,"kind":"turn_end","stop_reason":"end_turn"}},
+  "ping": {"type":"ping"},
+  "connection_probe": {"type":"connection_probe","nonce":42},
+  "config_options": {"type":"config_options","session_id":"sess-1","options":[]},
+  "sync_patch": {"type":"sync_patch","state":"queue:sess-1","version":3,"value":{"queue":[],"drafts":[]},"confirmed":["cmid-1"],"resync":false},
+  "settings": {"type":"settings","settings":{"theme":"dark"}},
+  "usage": {"type":"usage","snapshot":{"refreshed_at_ms":1,"next_refresh_at_ms":2,"refresh_interval_ms":60000,"providers":[]}},
+  "account_usage_changed": {"type":"account_usage_changed","owner_user_id":"0123456789abcdef0123456789abcdef"},
+  "call_approval_pending": {"type":"call_approval","session_id":"sess-1","approval":{"schema":1,"caller":"sess-1","reason":"policy_denied","requests":1,"agents":["codex"],"items":[{"agent":"codex","purpose":"review","summary":"Review the diff"}],"ttl_ms":60000}},
+  "call_approval_cleared": {"type":"call_approval","session_id":"sess-1","approval":null},
+  "error_for_session": {"type":"error","session_id":"sess-1","message":"command failed"},
+  "error_global": {"type":"error","message":"bad inbound command"},
+  "command_result": {"type":"command_result","session_id":"sess-1","cmid":"cmid-1","outcome":"stale","message":"row already left the queue"},
+} satisfies Record<string, Outbound>;

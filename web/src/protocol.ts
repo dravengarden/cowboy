@@ -449,7 +449,8 @@ export type Outbound =
     outcome: "not_found" | "rejected" | "stale";
     message: string;
   }
-  | { type: "error"; session_id?: string; message: string };
+  // Absent for a global error; Controllers before 2026-11-05 sent null.
+  | { type: "error"; session_id?: string | null; message: string };
 
 /** Focused-session hydration returned by the HTTP bootstrap route. Every item
  * uses the normal Outbound reducer so HTTP and live WebSocket overlap dedupes. */

@@ -68,7 +68,7 @@
     "web/src/mobile/review/ReviewChanges.tsx": 808,
     "web/src/mobile/review/ReviewFileTree.tsx": 883,
     "web/src/mobile/review/ReviewRepository.tsx": 1072,
-    "web/src/store.ts": 6107,
+    "web/src/store.ts": 6105,
     "web/src/tools/blocks.tsx": 803
   },
   "function": {
@@ -341,9 +341,9 @@
     "web/src/providerAuthoring.typecheck.ts::checkProviderAuthoringTypes": 254,
     "web/src/sendLatencyBrowserFixture.ts::run": 421,
     "web/src/setup/MachineSetupPage.tsx::MachineSetupPage": 307,
-    "web/src/store.ts::handle": 439,
+    "web/src/store.ts::handle": 436,
     "web/src/store.ts::openBoundSocket": 257,
-    "web/src/store.ts::rowCmid": 160,
+    "web/src/store.ts::rowCmid": 157,
     "web/src/subscriptionLoginController.ts::subscriptionLogin": 232,
     "web/src/theme.ts::useThemeMode": 267,
     "web/src/tools/Collapsible.tsx::Collapsible": 159,

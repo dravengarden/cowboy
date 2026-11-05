@@ -1,0 +1,252 @@
+[
+  {
+    "name": "auth_session",
+    "value": {
+      "type": "auth_session",
+      "session": {
+        "authenticated": true
+      }
+    }
+  },
+  {
+    "name": "client_capacity",
+    "value": {
+      "type": "client_capacity",
+      "capacity": {
+        "status": "waiting",
+        "position": 2,
+        "retry_after_ms": 5000,
+        "channel_limit": 4
+      }
+    }
+  },
+  {
+    "name": "sessions",
+    "value": {
+      "type": "sessions",
+      "sessions": [
+        {
+          "id": "sess-1",
+          "provider": "codex",
+          "provider_account_id": "default",
+          "provider_version": "",
+          "provider_generation_digest": "",
+          "machine_id": "local",
+          "cwd": "/tmp",
+          "title": "owner stamp",
+          "status": "starting",
+          "origin": "web",
+          "agent_session_id": null,
+          "paused": false,
+          "system": false,
+          "context_used": 0,
+          "context_size": 0
+        },
+        {
+          "id": "sess-1",
+          "provider": "codex",
+          "provider_account_id": "default",
+          "provider_version": "",
+          "provider_generation_digest": "",
+          "machine_id": "local",
+          "cwd": "/tmp",
+          "title": "owner stamp",
+          "status": "starting",
+          "origin": "web",
+          "agent_session_id": null,
+          "paused": false,
+          "system": false,
+          "context_used": 0,
+          "context_size": 0,
+          "owner_user_id": "0123456789abcdef0123456789abcdef",
+          "owner_username": "draven"
+        }
+      ]
+    }
+  },
+  {
+    "name": "machines",
+    "value": {
+      "type": "machines",
+      "revision": 7,
+      "machines": [],
+      "resync": false
+    }
+  },
+  {
+    "name": "bootstrap_complete",
+    "value": {
+      "type": "bootstrap_complete"
+    }
+  },
+  {
+    "name": "snapshot",
+    "value": {
+      "type": "snapshot",
+      "session_id": "sess-1",
+      "events": [
+        {
+          "session_id": "sess-1",
+          "seq": 1,
+          "kind": "lifecycle",
+          "status": "running",
+          "detail": null
+        }
+      ],
+      "reached_start": true
+    }
+  },
+  {
+    "name": "event_with_cmid",
+    "value": {
+      "type": "event",
+      "envelope": {
+        "session_id": "sess-1",
+        "seq": 2,
+        "kind": "update",
+        "update": {
+          "sessionUpdate": "user_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "hi"
+          }
+        },
+        "cmid": "cmid-1"
+      }
+    }
+  },
+  {
+    "name": "event_without_cmid",
+    "value": {
+      "type": "event",
+      "envelope": {
+        "session_id": "sess-1",
+        "seq": 3,
+        "kind": "turn_end",
+        "stop_reason": "end_turn"
+      }
+    }
+  },
+  {
+    "name": "ping",
+    "value": {
+      "type": "ping"
+    }
+  },
+  {
+    "name": "connection_probe",
+    "value": {
+      "type": "connection_probe",
+      "nonce": 42
+    }
+  },
+  {
+    "name": "config_options",
+    "value": {
+      "type": "config_options",
+      "session_id": "sess-1",
+      "options": []
+    }
+  },
+  {
+    "name": "sync_patch",
+    "value": {
+      "type": "sync_patch",
+      "state": "queue:sess-1",
+      "version": 3,
+      "value": {
+        "queue": [],
+        "drafts": []
+      },
+      "confirmed": [
+        "cmid-1"
+      ],
+      "resync": false
+    }
+  },
+  {
+    "name": "settings",
+    "value": {
+      "type": "settings",
+      "settings": {
+        "theme": "dark"
+      }
+    }
+  },
+  {
+    "name": "usage",
+    "value": {
+      "type": "usage",
+      "snapshot": {
+        "refreshed_at_ms": 1,
+        "next_refresh_at_ms": 2,
+        "refresh_interval_ms": 60000,
+        "providers": []
+      }
+    }
+  },
+  {
+    "name": "account_usage_changed",
+    "value": {
+      "type": "account_usage_changed",
+      "owner_user_id": "0123456789abcdef0123456789abcdef"
+    }
+  },
+  {
+    "name": "call_approval_pending",
+    "value": {
+      "type": "call_approval",
+      "session_id": "sess-1",
+      "approval": {
+        "schema": 1,
+        "caller": "sess-1",
+        "reason": "policy_denied",
+        "requests": 1,
+        "agents": [
+          "codex"
+        ],
+        "items": [
+          {
+            "agent": "codex",
+            "purpose": "review",
+            "summary": "Review the diff"
+          }
+        ],
+        "ttl_ms": 60000
+      }
+    }
+  },
+  {
+    "name": "call_approval_cleared",
+    "value": {
+      "type": "call_approval",
+      "session_id": "sess-1",
+      "approval": null
+    }
+  },
+  {
+    "name": "error_for_session",
+    "value": {
+      "type": "error",
+      "session_id": "sess-1",
+      "message": "command failed"
+    }
+  },
+  {
+    "name": "error_global",
+    "value": {
+      "type": "error",
+      "message": "bad inbound command"
+    }
+  },
+  {
+    "name": "command_result",
+    "value": {
+      "type": "command_result",
+      "session_id": "sess-1",
+      "cmid": "cmid-1",
+      "outcome": "stale",
+      "message": "row already left the queue"
+    }
+  }
+]

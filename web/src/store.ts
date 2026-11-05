@@ -181,6 +181,7 @@ import {
 } from "./transcriptSessionCache";
 import { createPrefetchRunner, prefetchCandidates } from "./hydrationScheduler";
 import { reuseUnchangedSessions } from "./sessionIdentity";
+import { errorNoticeFrom } from "./sessionErrorNotice";
 import {
   announceProductAuthSession,
   PRODUCT_AUTH_COOKIE_CHANGED_EVENT,
@@ -2023,16 +2024,13 @@ function handle(msg: Outbound): void {
     case "error": {
       errorSeq += 1;
       // exactOptionalPropertyTypes: only include sessionId if non-undefined.
-      const notice: ErrorNotice =
-        msg.session_id !== undefined
-          ? { seq: errorSeq, sessionId: msg.session_id, message: msg.message }
-          : { seq: errorSeq, message: msg.message };
+      const notice: ErrorNotice = errorNoticeFrom(errorSeq, msg);
       console.warn("cowboy error:", msg.message);
       setState({ ...state, lastError: notice });
       // Something went wrong with an agent turn → the error chime (only for
       // session-scoped errors; a bare command rejection isn't a "problem" worth a
       // sound). `fireAlert` still self-gates on the setting + tab visibility.
-      if (msg.session_id !== undefined) {
+      if (notice.sessionId !== undefined) {
         fireAlert("error");
         if (vibrateAlertOn()) notifyHaptic("error");
       }

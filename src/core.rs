@@ -1785,9 +1785,9 @@ pub enum Outbound {
     /// design means any window watching the same session should see why a
     /// command was rejected, not just the originator.
     Error {
-        /// Session the error belongs to, if any. `None` for daemon-level
-        /// errors (malformed inbound frame, unknown session id, ...).
-        #[serde(default)]
+        /// Session the error belongs to; absent (never `null`) for daemon-level
+        /// errors such as a malformed inbound frame or unknown session id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
         message: String,
     },

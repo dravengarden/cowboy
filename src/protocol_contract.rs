@@ -109,9 +109,27 @@ fn event_field_serialization_matches_typescript_fixtures() {
 
 #[test]
 fn session_meta_owner_fields_are_optional_on_the_wire() {
+    let mut meta = sample_session_meta();
+    let absent = serde_json::to_value(&meta).expect("serialize unowned session");
+    assert!(absent.get("owner_user_id").is_none());
+    assert!(absent.get("owner_username").is_none());
+
+    meta.owner_user_id = Some("0123456789abcdef0123456789abcdef".to_owned());
+    meta.owner_username = Some("draven".to_owned());
+    let present = serde_json::to_value(&meta).expect("serialize owned session");
+    assert_eq!(present["owner_user_id"], "0123456789abcdef0123456789abcdef");
+    assert_eq!(present["owner_username"], "draven");
+
+    let source = include_str!("../web/src/protocol.ts");
+    assert!(source.contains("owner_user_id?: string;"));
+    assert!(source.contains("owner_username?: string;"));
+}
+
+/// An unowned session as the Controller lists it.
+fn sample_session_meta() -> crate::core::SessionMeta {
     use crate::core::{SessionMeta, SessionOrigin, Status};
 
-    let mut meta = SessionMeta {
+    SessionMeta {
         continued_from: None,
         forked_from: None,
         id: "sess-1".to_owned(),
@@ -146,20 +164,7 @@ fn session_meta_owner_fields_are_optional_on_the_wire() {
         owner_user_id: None,
         owner_username: None,
         trashed_at_ms: None,
-    };
-    let absent = serde_json::to_value(&meta).expect("serialize unowned session");
-    assert!(absent.get("owner_user_id").is_none());
-    assert!(absent.get("owner_username").is_none());
-
-    meta.owner_user_id = Some("0123456789abcdef0123456789abcdef".to_owned());
-    meta.owner_username = Some("draven".to_owned());
-    let present = serde_json::to_value(&meta).expect("serialize owned session");
-    assert_eq!(present["owner_user_id"], "0123456789abcdef0123456789abcdef");
-    assert_eq!(present["owner_username"], "draven");
-
-    let source = include_str!("../web/src/protocol.ts");
-    assert!(source.contains("owner_user_id?: string;"));
-    assert!(source.contains("owner_username?: string;"));
+    }
 }
 
 /// Rust-serialized wire fixtures for the web's hand-written protocol types.
@@ -252,23 +257,214 @@ fn event_fixtures() -> Vec<(&'static str, crate::core::Event)> {
     fixtures
 }
 
-#[test]
-fn protocol_fixtures_match_the_checked_in_contract() {
-    let fixtures: Vec<serde_json::Value> = event_fixtures()
+/// Every Outbound variant as the Controller serializes it, with optional
+/// fields present and absent.
+fn outbound_fixtures() -> Vec<(&'static str, crate::core::Outbound)> {
+    let mut fixtures = outbound_session_fixtures();
+    fixtures.extend(outbound_control_fixtures());
+    fixtures
+}
+
+/// Session list, bootstrap and transcript frames.
+fn outbound_session_fixtures() -> Vec<(&'static str, crate::core::Outbound)> {
+    use crate::core::{Envelope, Event, Outbound, Status};
+    let envelope = |seq, event, cmid: Option<&str>| Envelope {
+        session_id: "sess-1".to_owned(),
+        seq,
+        event,
+        cmid: cmid.map(str::to_owned),
+    };
+    let mut owned = sample_session_meta();
+    owned.owner_user_id = Some("0123456789abcdef0123456789abcdef".to_owned());
+    owned.owner_username = Some("draven".to_owned());
+    vec![
+        (
+            "auth_session",
+            Outbound::AuthSession {
+                session: serde_json::json!({"authenticated": true}),
+            },
+        ),
+        (
+            "client_capacity",
+            Outbound::ClientCapacity {
+                capacity: serde_json::json!({
+                    "status": "waiting",
+                    "position": 2,
+                    "retry_after_ms": 5000,
+                    "channel_limit": 4
+                }),
+            },
+        ),
+        (
+            "sessions",
+            Outbound::Sessions {
+                sessions: vec![sample_session_meta(), owned],
+            },
+        ),
+        (
+            "machines",
+            Outbound::Machines {
+                revision: 7,
+                machines: Vec::new(),
+                resync: false,
+            },
+        ),
+        ("bootstrap_complete", Outbound::BootstrapComplete),
+        (
+            "snapshot",
+            Outbound::Snapshot {
+                session_id: "sess-1".to_owned(),
+                events: vec![envelope(
+                    1,
+                    Event::Lifecycle {
+                        status: Status::Running,
+                        detail: None,
+                    },
+                    None,
+                )],
+                reached_start: true,
+            },
+        ),
+        (
+            "event_with_cmid",
+            Outbound::Event {
+                envelope: envelope(
+                    2,
+                    Event::Update {
+                        update: serde_json::json!({
+                            "sessionUpdate": "user_message_chunk",
+                            "content": {"type": "text", "text": "hi"}
+                        }),
+                    },
+                    Some("cmid-1"),
+                ),
+            },
+        ),
+        (
+            "event_without_cmid",
+            Outbound::Event {
+                envelope: envelope(
+                    3,
+                    Event::TurnEnd {
+                        stop_reason: "end_turn".to_owned(),
+                        usage: None,
+                    },
+                    None,
+                ),
+            },
+        ),
+    ]
+}
+
+/// Connection, sync, settings, usage and error frames.
+fn outbound_control_fixtures() -> Vec<(&'static str, crate::core::Outbound)> {
+    use crate::core::{CommandOutcome, Outbound};
+    vec![
+        ("ping", Outbound::Ping),
+        ("connection_probe", Outbound::ConnectionProbe { nonce: 42 }),
+        (
+            "config_options",
+            Outbound::ConfigOptions {
+                session_id: "sess-1".to_owned(),
+                options: serde_json::json!([]),
+            },
+        ),
+        (
+            "sync_patch",
+            Outbound::SyncPatch {
+                state: "queue:sess-1".to_owned(),
+                version: 3,
+                value: serde_json::json!({"queue": [], "drafts": []}),
+                confirmed: vec!["cmid-1".to_owned()],
+                resync: false,
+            },
+        ),
+        (
+            "settings",
+            Outbound::Settings {
+                settings: std::collections::HashMap::from([(
+                    "theme".to_owned(),
+                    serde_json::json!("dark"),
+                )]),
+            },
+        ),
+        (
+            "usage",
+            Outbound::Usage {
+                snapshot: serde_json::json!({
+                    "refreshed_at_ms": 1,
+                    "next_refresh_at_ms": 2,
+                    "refresh_interval_ms": 60000,
+                    "providers": []
+                }),
+            },
+        ),
+        (
+            "account_usage_changed",
+            Outbound::AccountUsageChanged {
+                owner_user_id: "0123456789abcdef0123456789abcdef".to_owned(),
+            },
+        ),
+        (
+            "call_approval_pending",
+            Outbound::CallApproval {
+                session_id: "sess-1".to_owned(),
+                approval: Some(serde_json::json!({
+                    "schema": 1,
+                    "caller": "sess-1",
+                    "reason": "policy_denied",
+                    "requests": 1,
+                    "agents": ["codex"],
+                    "items": [{"agent": "codex", "purpose": "review", "summary": "Review the diff"}],
+                    "ttl_ms": 60000
+                })),
+            },
+        ),
+        (
+            "call_approval_cleared",
+            Outbound::CallApproval {
+                session_id: "sess-1".to_owned(),
+                approval: None,
+            },
+        ),
+        (
+            "error_for_session",
+            Outbound::Error {
+                session_id: Some("sess-1".to_owned()),
+                message: "command failed".to_owned(),
+            },
+        ),
+        (
+            "error_global",
+            Outbound::Error {
+                session_id: None,
+                message: "bad inbound command".to_owned(),
+            },
+        ),
+        (
+            "command_result",
+            Outbound::CommandResult {
+                session_id: "sess-1".to_owned(),
+                cmid: "cmid-1".to_owned(),
+                outcome: CommandOutcome::Stale,
+                message: "row already left the queue".to_owned(),
+            },
+        ),
+    ]
+}
+
+fn check_contract(file: &str, fixtures: Vec<(&'static str, serde_json::Value)>) {
+    let fixtures: Vec<serde_json::Value> = fixtures
         .into_iter()
-        .map(|(name, event)| {
-            serde_json::json!({
-                "name": name,
-                "value": serde_json::to_value(event).expect("serialize event"),
-            })
-        })
+        .map(|(name, value)| serde_json::json!({"name": name, "value": value}))
         .collect();
     let rendered = format!(
         "{}\n",
         serde_json::to_string_pretty(&fixtures).expect("render fixtures")
     );
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("contracts/protocol/event.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("contracts/protocol")
+        .join(file);
     if std::env::var_os("COWBOY_UPDATE_CONTRACTS").is_some() {
         std::fs::create_dir_all(path.parent().expect("contract directory"))
             .expect("create contract directory");
@@ -281,4 +477,24 @@ fn protocol_fixtures_match_the_checked_in_contract() {
         "{} is out of date: run COWBOY_UPDATE_CONTRACTS=1 cargo test protocol_fixtures, then bun tools/generate-protocol-fixtures.ts",
         path.display()
     );
+}
+
+fn serialized<T: serde::Serialize>(
+    fixtures: Vec<(&'static str, T)>,
+) -> Vec<(&'static str, serde_json::Value)> {
+    fixtures
+        .into_iter()
+        .map(|(name, value)| {
+            (
+                name,
+                serde_json::to_value(value).expect("serialize fixture"),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn protocol_fixtures_match_the_checked_in_contract() {
+    check_contract("event.json", serialized(event_fixtures()));
+    check_contract("outbound.json", serialized(outbound_fixtures()));
 }

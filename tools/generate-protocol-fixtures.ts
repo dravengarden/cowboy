@@ -19,6 +19,11 @@ export const FAMILIES = [
     name: "eventFixtures",
     type: "Event",
   },
+  {
+    file: "contracts/protocol/outbound.json",
+    name: "outboundFixtures",
+    type: "Outbound",
+  },
 ] as const;
 
 export const OUTPUT = "web/src/protocol.fixtures.generated.ts";
