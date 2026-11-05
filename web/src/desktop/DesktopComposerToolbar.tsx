@@ -20,13 +20,18 @@ import {
 import {
   AlternateEmail,
   AttachFile,
+  CleaningServices,
   EditNoteOutlined,
   MoreHoriz,
+  MoreVert,
   RawOn,
   Schedule,
   Send,
+  Stop,
 } from "@mui/icons-material";
 import type { ComposerEditorHandle } from "../ComposerEditor";
+import { CompactIcon } from "../Composer";
+import type { Status } from "../protocol";
 import {
   COMPOSER_COMMANDS,
   COMPOSER_COMMANDS_BY_ID,
@@ -49,6 +54,7 @@ import {
 } from "./commands/workspaceShortcuts";
 import { useImeStatus } from "./vim/imeStatusStore";
 import { desktopToolbarActionSx } from "./desktopToolbarAction";
+import { useDesktopSessionActions } from "./useDesktopSessionActions";
 
 const QUICK_FORMATS = ["bold", "italic", "code", "link", "bulletList"];
 const FORMAT_COMMANDS = COMPOSER_COMMANDS.filter((command) =>
@@ -56,6 +62,8 @@ const FORMAT_COMMANDS = COMPOSER_COMMANDS.filter((command) =>
 );
 
 export interface DesktopComposerToolbarProps {
+  sessionId: string;
+  status: Status;
   editorRef: RefObject<ComposerEditorHandle | null>;
   sendButtonRef: RefObject<HTMLButtonElement | null>;
   canInsert: boolean;
@@ -87,6 +95,9 @@ export function DesktopComposerToolbar(
   const composing = useImeStatus().phase === "composing";
   const moreRef = useRef<HTMLButtonElement>(null);
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
+  const [sessionAnchor, setSessionAnchor] = useState<HTMLElement | null>(
+    null,
+  );
   const [overlayOwnsKeys, setOverlayOwnsKeys] = useState(false);
   useEffect(() => {
     const update = (): void =>
@@ -105,6 +116,7 @@ export function DesktopComposerToolbar(
   const scoped = workspace.focusedRegion === "prompt.composer" &&
     prefixAvailable;
   const sourceScope = workspace.focusedPane === "prompt" && prefixAvailable;
+  const session = useDesktopSessionActions(props.sessionId, props.status);
   const ready = props.sendable && !props.pending;
   const deliveryReason = props.pending
     ? "Saving this prompt…"
@@ -128,6 +140,8 @@ export function DesktopComposerToolbar(
     onClick,
     formatTier,
     pressed,
+    anywhere = false,
+    tone,
   }: {
     id: string;
     icon: ReactNode;
@@ -140,6 +154,10 @@ export function DesktopComposerToolbar(
     onClick: () => void;
     formatTier?: "primary" | "secondary";
     pressed?: boolean;
+    /** The key runs from any focus (a Prompt-group or global command). */
+    anywhere?: boolean;
+    /** Error marks Stop, and Clear on hover. */
+    tone?: "error" | "error-hover";
   }): ReactNode => (
     <HintTooltip
       key={id}
@@ -161,11 +179,20 @@ export function DesktopComposerToolbar(
             if (event.button === 0) event.preventDefault();
           }}
           onClick={onClick}
-          color={id === "force" ? "warning" : pressed ? "primary" : "inherit"}
+          color={id === "force"
+            ? "warning"
+            : tone === "error"
+            ? "error"
+            : pressed
+            ? "primary"
+            : "inherit"}
           size="small"
           sx={{
             ...desktopToolbarActionSx,
             bgcolor: pressed ? "action.selected" : "transparent",
+            ...(tone === "error-hover" && {
+              "&:hover": { color: "error.main" },
+            }),
           }}
         >
           {icon}
@@ -174,7 +201,11 @@ export function DesktopComposerToolbar(
             ? (
               <LeaderKeycap
                 leaderKey={key}
-                scopeAvailable={(id === "source" ? sourceScope : scoped) &&
+                scopeAvailable={(id === "source"
+                  ? sourceScope
+                  : anywhere
+                  ? prefixAvailable
+                  : scoped) &&
                   !disabled}
               />
             )
@@ -183,7 +214,9 @@ export function DesktopComposerToolbar(
                 shortcut={shortcut}
                 compact
                 quiet
-                availability={shortcutAvailability(scoped && !disabled)}
+                availability={shortcutAvailability(
+                  (anywhere ? !overlayOwnsKeys : scoped) && !disabled,
+                )}
               />
             )}
         </Button>
@@ -214,6 +247,37 @@ export function DesktopComposerToolbar(
         },
         "@container composer-tools (min-width: 56rem)": {
           "& [data-composer-insert] [data-composer-action-label], & [data-composer-action='source'] [data-composer-action-label]":
+            { display: "inline" },
+        },
+        // Compact and Clear fold into one menu where the row cannot hold
+        // them on one line; their keys work either way. Their words come
+        // last, after Draft, Schedule and Stop have theirs.
+        // A narrow pane sheds keycaps before it wraps: first Stop's (the
+        // status line shows Mod+. while a turn runs) and the conversation
+        // menu's (the Prompt header shows the group), then Draft's and
+        // Schedule's. Keys stay in tooltips and keep working; Send keeps its.
+        "& [data-composer-delivery] :is([data-composer-action='stop'], [data-composer-action='conversation']) kbd":
+          { display: "none" },
+        "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='schedule']) kbd":
+          { display: "none" },
+        "@container composer-tools (min-width: 22rem)": {
+          "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='schedule']) kbd":
+            { display: "inline-flex" },
+        },
+        "@container composer-tools (min-width: 28rem)": {
+          "& [data-composer-delivery] :is([data-composer-action='stop'], [data-composer-action='conversation']) kbd":
+            { display: "inline-flex" },
+        },
+        "& [data-session-inline]": { display: "none" },
+        "& [data-session-overflow]": { display: "inline-flex" },
+        "& [data-composer-delivery] [data-session-inline] [data-composer-action-label]":
+          { display: "none" },
+        "@container composer-tools (min-width: 34rem)": {
+          "& [data-session-inline]": { display: "contents" },
+          "& [data-session-overflow]": { display: "none" },
+        },
+        "@container composer-tools (min-width: 60rem)": {
+          "& [data-composer-delivery] [data-session-inline] [data-composer-action-label]":
             { display: "inline" },
         },
       }}
@@ -402,7 +466,91 @@ export function DesktopComposerToolbar(
             reason: deliveryReason,
             onClick: props.onSchedule,
           })}
+          {(session.compact || session.clear) && (
+            <Box data-session-inline>
+              <Divider
+                orientation="vertical"
+                flexItem
+                sx={{ my: 0.75, mx: 0.5 }}
+              />
+              {session.compact && action({
+                id: "compact",
+                icon: (
+                  <CompactIcon
+                    used={session.compact.used}
+                    size={session.compact.size}
+                    active={session.compact.running}
+                  />
+                ),
+                label: "Compact",
+                title: session.compact.title,
+                key: DESKTOP_WORKSPACE_KEYS.promptCompact,
+                anywhere: true,
+                disabled: session.compact.running,
+                reason: "Compacting…",
+                onClick: session.compact.open,
+              })}
+              {session.clear && action({
+                id: "clear",
+                icon: <CleaningServices />,
+                label: "Clear",
+                title: "Clear conversation · start with a fresh context",
+                key: DESKTOP_WORKSPACE_KEYS.promptClear,
+                anywhere: true,
+                tone: "error-hover",
+                onClick: session.clear.open,
+              })}
+            </Box>
+          )}
+          {(session.compact || session.clear) && (
+            <Box data-session-overflow>
+              <HintTooltip
+                title="Compact or clear the conversation"
+                shortcut={desktopWorkspaceSequence(
+                  DESKTOP_WORKSPACE_KEYS.focusPrompt,
+                )}
+              >
+                <Button
+                  aria-label="Conversation actions"
+                  aria-haspopup="menu"
+                  aria-expanded={sessionAnchor ? "true" : undefined}
+                  data-composer-action="conversation"
+                  size="small"
+                  color="inherit"
+                  onPointerDown={(event) => {
+                    if (event.button === 0) event.preventDefault();
+                  }}
+                  onClick={(event) => setSessionAnchor(event.currentTarget)}
+                  sx={desktopToolbarActionSx}
+                >
+                  <MoreVert />
+                  <LeaderKeycap
+                    leaderKey={DESKTOP_WORKSPACE_KEYS.focusPrompt}
+                    scopeAvailable={prefixAvailable}
+                    {...(sessionAnchor
+                      ? { availability: "active" as const }
+                      : {})}
+                  />
+                </Button>
+              </HintTooltip>
+            </Box>
+          )}
         </Box>
+        {
+          /* Stop stays mounted and only disables while idle, so the row does
+            not move as turns start and finish; Send keeps the edge. */
+        }
+        {action({
+          id: "stop",
+          icon: <Stop />,
+          label: "Stop",
+          title: session.stop.busy ? "Stop current turn" : "No turn is running",
+          shortcut: DESKTOP_SHORTCUTS.stop,
+          anywhere: true,
+          tone: "error",
+          disabled: !session.stop.busy,
+          onClick: session.stop.open,
+        })}
         <Tooltip title={ready ? props.sendDescription : deliveryReason}>
           <span>
             <Button
@@ -451,6 +599,52 @@ export function DesktopComposerToolbar(
           </span>
         </Tooltip>
       </Box>
+      {session.dialogs}
+      <Menu
+        anchorEl={sessionAnchor}
+        open={sessionAnchor !== null}
+        onClose={() => setSessionAnchor(null)}
+        anchorOrigin={{ vertical: "top", horizontal: "left" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "left" }}
+      >
+        {session.compact && (
+          <MenuItem
+            disabled={session.compact.running}
+            onClick={() => {
+              setSessionAnchor(null);
+              session.compact?.open();
+            }}
+          >
+            <ListItemText>Compact conversation</ListItemText>
+            <Box sx={{ ml: 2 }} data-shortcut-reference>
+              <DesktopShortcut
+                shortcut={DESKTOP_SHORTCUTS.compact}
+                quiet
+                compact
+                availability="inactive"
+              />
+            </Box>
+          </MenuItem>
+        )}
+        {session.clear && (
+          <MenuItem
+            onClick={() => {
+              setSessionAnchor(null);
+              session.clear?.open();
+            }}
+          >
+            <ListItemText>Clear conversation</ListItemText>
+            <Box sx={{ ml: 2 }} data-shortcut-reference>
+              <DesktopShortcut
+                shortcut={DESKTOP_SHORTCUTS.clear}
+                quiet
+                compact
+                availability="inactive"
+              />
+            </Box>
+          </MenuItem>
+        )}
+      </Menu>
       <Menu
         id="desktop-composer-formatting"
         anchorEl={moreAnchor}

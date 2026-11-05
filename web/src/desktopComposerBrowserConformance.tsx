@@ -1,4 +1,5 @@
 import { checkInputVim } from "./desktop/inputVimBrowserConformance";
+import { checkImeShortcutChrome } from "./desktop/imeShortcutBrowserConformance";
 import { checkDeliveryPicker } from "./deliveryPickerBrowserConformance";
 import { checkNativeMarkdownLinks, checkUnavailableMarkdownImage } from "./nativeMarkdownLinksBrowserConformance";
 import { checkComposerDraftPersistence } from "./composer/composerDraftBrowserConformance";
@@ -114,6 +115,8 @@ export async function runDesktopComposerBrowserConformance(): Promise<
             endInset={0}
           />
           <DesktopComposerToolbar
+            sessionId="composer-fixture"
+            status="running"
             editorRef={editorRef}
             sendButtonRef={sendButtonRef}
             canInsert
@@ -253,6 +256,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
             "attach",
             "draft",
             "schedule",
+            "stop",
             "send",
             "source",
             "more",
@@ -266,6 +270,33 @@ export async function runDesktopComposerBrowserConformance(): Promise<
         check(
           button("send").textContent?.includes("Send"),
           "Send always retains a label",
+        );
+        // Stop stays mounted while idle so the row never moves; Send keeps
+        // the edge beside it.
+        check(
+          button("stop").disabled &&
+            button("stop").getBoundingClientRect().right <=
+              button("send").getBoundingClientRect().left,
+          `Idle Stop is disabled before Send at ${width}/${font}`,
+        );
+        // Delivery is one line: actions fold into menus before they wrap.
+        const delivery = [
+          ...toolbar.querySelectorAll<HTMLElement>(
+            "[data-composer-delivery] button",
+          ),
+        ].filter((item) => item.getClientRects().length > 0);
+        const tops = delivery.map((item) =>
+          Math.round(item.getBoundingClientRect().bottom)
+        );
+        // Below 20rem (a 320px pane at 22px) secondary actions may wrap;
+        // they stay visible and Send keeps the edge.
+        check(
+          width / font < 20 || Math.max(...tops) - Math.min(...tops) <= 6,
+          `Delivery row stays on one line at ${width}/${font}: ${
+            delivery.map((item) =>
+              `${item.dataset.composerAction}@${Math.round(item.getBoundingClientRect().bottom)}`
+            ).join(" ")
+          }`,
         );
         check(
           button("send").getBoundingClientRect().right >= bounds.right - 10,
@@ -620,6 +651,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
     results.push(await checkPendingPreviewTouchDisclosure());
     results.push(await checkNativeMarkdownLinks());
     results.push(await checkUnavailableMarkdownImage());
+    results.push(await checkImeShortcutChrome());
     results.push(await checkDraftDestinationDialog());
     flushSync(() => root.render(null));
     results.push(await checkDeliveryPicker());

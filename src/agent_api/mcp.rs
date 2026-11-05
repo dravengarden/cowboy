@@ -135,12 +135,17 @@ fn action(name: &str, arguments: &Value) -> Result<Action, String> {
     let mut tagged = arguments;
     if name == "cowboy_read" && tagged.get("help").is_some() {
         let topic = help_topic(&tagged).ok_or(HELP_USAGE)?;
+        // Dotted operation names ("review.start") resolve to their topic in
+        // the Controller; the charset still keeps the topic a plain literal.
         if !topic
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
             || topic.len() > 64
         {
-            return Err("invalid help topic".into());
+            return Err(format!(
+                "invalid help topic; topics: index, {}",
+                crate::agent_api::HELP_TOPICS.join(", ")
+            ));
         }
         return Ok(Action::AgentRead {
             code: format!(

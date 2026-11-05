@@ -146,7 +146,7 @@ import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { PICK_SESSION_EVENT, pickSessionDetail, requestPickSession } from "./sessionPickRequest";
 import { openSessionSettings, requestNewFrom } from "./sessionSettingsOpen";
-import { useContinuation } from "./SessionContextCue";
+import { SessionNextMessageBadge, useContinuation } from "./SessionContextCue";
 import { isManagedChild } from "./managedCalls";
 import { SessionCallsBadge } from "./SessionCallsBadge";
 import {
@@ -375,7 +375,7 @@ import {
     setActiveSessionId,
     useActiveSessionId,
 } from "./controlPlane";
-import { resolveActiveSession } from "./sessionSelection";
+import { continuationOf, resolveActiveSession } from "./sessionSelection";
 import { useBootPresentation } from "./useBootPresentation";
 import { newUuid } from "./uuid";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
@@ -2542,6 +2542,7 @@ function SessionList({
                                         compact
                                     />
                                     <AccountBadge account={sessionAccountIdentity(accounts, s)} />
+                                    <SessionNextMessageBadge sessionId={s.id} />
                                     {handedOff.has(s.id) && (
                                         // The pair shares a title; this marks the one the work left.
                                         <Chip
@@ -4753,12 +4754,17 @@ export function App({
 
     // Fault tolerance for a restored focus that vanished: once the first session
     // list has arrived, if the id we persisted no longer names a live session,
-    // warn the user (the view already fell back to sessions[0]). Runs once.
+    // warn the user (the view already fell back to sessions[0]). A session
+    // replaced by a new agent is not lost: the view opened its continuation.
+    // Runs once.
     useEffect(() => {
         if (sessionsSource !== "live" || goneCheckedRef.current) return;
         goneCheckedRef.current = true;
         const restored = restoredFocusRef.current;
-        if (restored && !sessions.some((s) => s.id === restored)) {
+        if (
+            restored && !sessions.some((s) => s.id === restored) &&
+            continuationOf(sessions, restored) === undefined
+        ) {
             notify(
                 "Last session is no longer available — opened another instead.",
                 "warning",

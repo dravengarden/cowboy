@@ -133,6 +133,8 @@ export function mountDesktopKeyboardAcceptance(): void {
               endInset={0}
             />
             <DesktopComposerToolbar
+              sessionId="keyboard-acceptance"
+              status="running"
               editorRef={editorRef}
               sendButtonRef={sendButtonRef}
               canInsert
@@ -502,4 +504,280 @@ export function mountTabsKeyboardAcceptance(): void {
       </SurfaceProvider>
     </StrictMode>,
   );
+}
+
+/**
+ * The Run configuration workbench over the real store, Top Bar controls and
+ * command host, with an isolated socket and API: six presets, the usual
+ * Provider options, linkable sessions and callable agents. Every
+ * `set_config_option` is acknowledged and recorded in `__acceptance.sent`.
+ */
+export async function mountRunConfigKeyboardAcceptance(): Promise<void> {
+  desktopPointer();
+  const { DesktopTopBarControls } = await import("./DesktopTopBarControls");
+  const { openSession } = await import("../store");
+  const { openSessionSettings } = await import("../sessionSettingsOpen");
+  const { managementEntryFixture } = await import(
+    "../providerManagement.fixture"
+  );
+  const { loadProviderCatalog, resetProviderCatalog } = await import(
+    "../providerCatalogRegistry"
+  );
+  const entry = managementEntryFixture("example");
+  entry.publisher = entry.manifest.publisher;
+  entry.manifest.authentication.required = false;
+  entry.manifest.authentication.methods = [];
+  const presetModels = [
+    ["sonnet", "Sonnet"],
+    ["opus", "Opus"],
+    ["fable", "Fable"],
+  ] as const;
+  entry.manifest.configuration.presets = presetModels.flatMap((
+    [model, name],
+  ) =>
+    (["high", "max"] as const).map((effort) => ({
+      id: `${model}-${effort}`,
+      name: `${name} · ${effort === "high" ? "High" : "Max"}`,
+      detail: `${name} 5.5 · ${effort} reasoning`,
+      is_default: model === "opus" && effort === "high",
+      values: { model, reasoning_effort: effort },
+    }))
+  );
+  const session = {
+    id: "run",
+    title: "Run configuration",
+    provider: "example",
+    cwd: "/fixture",
+    status: "running" as const,
+    provider_version: entry.provider_version,
+    provider_generation_digest: entry.artifact_digest!,
+  };
+  const others = ["Mink", "Lynx", "Otter"].map((name, index) => ({
+    ...session,
+    id: `other-${String(index)}`,
+    title: `cowboy improve · ${name}`,
+    status: "exited" as const,
+  }));
+  let options = [{
+    id: "mode",
+    name: "Mode",
+    currentValue: "bypass",
+    options: [
+      ["manual", "Manual"],
+      ["accept", "Accept edits"],
+      ["plan", "Plan"],
+      ["auto", "Auto"],
+      ["bypass", "Bypass permissions"],
+    ].map(([value, name]) => ({ value: value!, name: name! })),
+  }, {
+    id: "model",
+    name: "Model",
+    category: "model",
+    currentValue: "opus",
+    options: presetModels.map(([value, name]) => ({
+      value,
+      name: `${name} 5.5`,
+    })),
+  }, {
+    id: "reasoning_effort",
+    name: "Reasoning effort",
+    currentValue: "high",
+    options: ["low", "medium", "high", "max"].map((value) => ({
+      value,
+      name: value[0]!.toUpperCase() + value.slice(1),
+    })),
+  }, {
+    id: "fast",
+    name: "Fast mode",
+    currentValue: "off",
+    options: [{ value: "on", name: "On" }, { value: "off", name: "Off" }],
+  }];
+  const sent: string[] = [];
+  const requests: string[] = [];
+  class FixtureSocket {
+    static OPEN = 1;
+    static CONNECTING = 0;
+    static CLOSED = 3;
+    readyState = 1;
+    protocol = "cowboy-sync-v1";
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    onclose: (() => void) | null = null;
+    onerror = null;
+    constructor() {
+      setTimeout(() => {
+        this.onopen?.();
+        this.publish({ type: "sessions", sessions: [session, ...others] });
+        this.publish({ type: "bootstrap_complete" });
+        this.publish({
+          type: "config_options",
+          session_id: session.id,
+          options,
+        });
+      }, 20);
+    }
+    publish(message: unknown): void {
+      this.onmessage?.({ data: JSON.stringify(message) });
+    }
+    send(data: string): void {
+      const command = JSON.parse(data) as {
+        type: string;
+        config_id?: string;
+        value?: string;
+      };
+      if (command.type !== "set_config_option") return;
+      sent.push(`${command.config_id!}=${String(command.value)}`);
+      options = options.map((option) =>
+        option.id === command.config_id
+          ? { ...option, currentValue: command.value! }
+          : option
+      );
+      this.publish({
+        type: "config_options",
+        session_id: session.id,
+        options,
+      });
+    }
+    close(): void {
+      this.readyState = 3;
+    }
+  }
+  globalThis.WebSocket = FixtureSocket as unknown as typeof WebSocket;
+  bindProductSyncPrincipal("run-config-fixture");
+  let tools = {
+    schema: 1 as const,
+    memory: { tools: true, recall: true },
+    calls: {
+      enabled: true,
+      targets: [{ agent: "codex" }],
+      default: "auto",
+      max_concurrent: 4,
+      max_per_session: 64,
+      images: true,
+      self_images: false,
+    },
+  };
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (!path.startsWith("/api/")) return nativeFetch(input, init);
+    requests.push(`${init?.method ?? "GET"} ${path}`);
+    if (path === "/api/sync/dataset") {
+      return Response.json({
+        schema: "dravengarden.cowboy.product-sync-dataset/v1",
+        dataset_id: `dataset-${"b".repeat(64)}`,
+        user_id: "run-config-fixture",
+        database_version: 2,
+        outbox_contract: "atomic-delta-v1",
+      });
+    }
+    if (path === "/api/plugins") {
+      return Response.json({
+        providers: [entry],
+        authentications: [],
+        authentication_executors: [],
+      });
+    }
+    if (path.endsWith("/bootstrap")) {
+      return Response.json({
+        messages: [
+          {
+            type: "snapshot",
+            session_id: session.id,
+            events: [],
+            reached_start: true,
+          },
+          { type: "config_options", session_id: session.id, options },
+        ],
+      });
+    }
+    if (path === "/api/sessions/run/tools") {
+      if (init?.method === "PUT") {
+        const override = JSON.parse(String(init.body)) as {
+          memory?: typeof tools.memory;
+          calls?: Partial<typeof tools.calls>;
+        };
+        tools = {
+          ...tools,
+          memory: { ...tools.memory, ...override.memory },
+          calls: { ...tools.calls, ...override.calls },
+        };
+        sent.push(`tools=${JSON.stringify(override)}`);
+      }
+      return Response.json({
+        session_id: session.id,
+        agent: "claude",
+        defaults: tools,
+        defaults_customized: false,
+        override: { schema: 1 },
+        effective: tools,
+        catalog: {
+          call_targets: [{
+            agent: "codex",
+            presets: [{
+              id: "deep",
+              name: "Deep review",
+              detail: "Highest reasoning",
+              is_default: true,
+            }],
+            options: [],
+          }],
+        },
+      });
+    }
+    if (path === "/api/sessions/run/context") {
+      return Response.json({
+        revision: 1,
+        applied_revision: 1,
+        sources: ["other-0"],
+        next_agent: null,
+        source_sessions: [{ id: "other-0", available: true }],
+        pending_links: ["other-0"],
+        delivery: null,
+        max_sources: 8,
+      });
+    }
+    if (path === "/api/usage") {
+      return Response.json({ providers: [], observed_at_ms: Date.now() });
+    }
+    return new Response("Unavailable in isolated fixture", { status: 404 });
+  }) as typeof fetch;
+  resetProviderCatalog();
+  await loadProviderCatalog();
+  const container = document.createElement("div");
+  container.style.cssText = "height:100vh;display:flex;flex-direction:column";
+  document.body.append(container);
+  const probe = globalThis as unknown as Record<string, unknown>;
+  probe.__acceptance = { sent, requests };
+  function Surface(): React.JSX.Element {
+    probe.__workspace = useDesktopWorkspace();
+    return (
+      <>
+        <DesktopCommandHost onNewSession={() => {}} onOpenSettings={() => {}} />
+        <Box data-desktop-region="prompt.composer" tabIndex={-1} sx={{ p: 1 }}>
+          <DesktopTopBarControls sessionId={session.id} status="running" />
+        </Box>
+      </>
+    );
+  }
+  createRoot(container).render(
+    <StrictMode>
+      <SurfaceProvider>
+        <BrowserProductTheme>
+          <CssBaseline />
+          <DesktopWorkspaceProvider>
+            <DesktopCommandProvider>
+              <Surface />
+            </DesktopCommandProvider>
+          </DesktopWorkspaceProvider>
+        </BrowserProductTheme>
+      </SurfaceProvider>
+    </StrictMode>,
+  );
+  openSession(session.id);
+  for (let i = 0; i < 200; i++) {
+    if (document.querySelector("[data-desktop-topbar-action]")) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  openSessionSettings("agent", session.id);
 }

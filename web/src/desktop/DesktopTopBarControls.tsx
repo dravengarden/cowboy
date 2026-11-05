@@ -35,7 +35,6 @@ import {
 } from "@mui/material";
 import {
   ArrowForwardRounded,
-  CleaningServices,
   ExpandMore,
   Refresh,
   Schedule,
@@ -50,13 +49,21 @@ import {
   useRef,
   useState,
 } from "react";
-import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
 import { Kbd, useConfirmEnter } from "../Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
-import { resolveSessionAction } from "../agentCommands";
-import { ConfirmConsequence } from "../ConfirmConsequence";
 import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
+import { regionMotionKey } from "./commands/regionNavigation";
+import {
+  enterModalNormal,
+  isModalTextField,
+} from "./commands/modalNavigation";
+import {
+  focusConfigRow,
+  RUN_CONFIG_STEP_EVENT,
+  runConfigKey,
+  trackRunConfigCursor,
+} from "./runConfigNavigation";
 import type { ConfigOption, Status } from "../protocol";
 import {
   providerConfigOptionDisabled,
@@ -74,12 +81,9 @@ import {
 import {
   loadUsageSnapshot,
   requestUsageRefresh,
-  resetSession,
   send,
-  submitPrompt,
   useStoreSelector,
 } from "../store";
-import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
 import { SessionReloadDialog } from "../SessionReloadDialog";
 import { SessionToolsSection } from "../AgentToolsPanel";
@@ -146,18 +150,12 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "./commands/DesktopCommandProvider";
-import {
-  DESKTOP_SHORTCUTS,
-  DESKTOP_WORKSPACE_PREFIX,
-} from "./commands/workspaceShortcuts";
+import { DESKTOP_WORKSPACE_PREFIX } from "./commands/workspaceShortcuts";
 import { LeaderKeycap } from "./commands/DesktopKeycap";
-import {
-  desktopTopBarTimelineSlice,
-  sameDesktopTopBarTimelineSlice,
-} from "./desktopTopBarTimelineSlice";
 import {
   nextRunConfigChoiceIndex,
   runConfigKeyAction,
+  runConfigMotionAction,
 } from "./runConfigKeyboard";
 import {
   ACTION_ICON_WIDTH_PX,
@@ -918,7 +916,6 @@ function DesktopProviderUsage({
 
 function ConfigOptionControl({
   option,
-  presentation,
   sessionId,
   disabled,
 }: {
@@ -929,6 +926,7 @@ function ConfigOptionControl({
 }): React.JSX.Element {
   const label = optionLabel(option);
   const shortcut = optionShortcut(option);
+  const rowRef = useRef<HTMLDivElement>(null);
   const setValue = (value: string): void => {
     const selected = option.options.find((candidate) =>
       String(candidate.value) === value
@@ -941,20 +939,44 @@ function ConfigOptionControl({
       value: selected.value,
     });
   };
+  // `H/L` on a Select steps its value in place; `Enter` or the field's
+  // letter opens the full list.
+  const stepRef = useRef<(delta: -1 | 1) => void>(() => undefined);
+  stepRef.current = (delta): void => {
+    if (disabled) return;
+    const current = option.options.findIndex((candidate) =>
+      String(candidate.value) === String(option.currentValue)
+    );
+    const next = nextRunConfigChoiceIndex(
+      option.options.length,
+      current,
+      delta,
+      false,
+    );
+    const choice = option.options[next];
+    if (choice && next !== current) setValue(String(choice.value));
+  };
+  useEffect(() => {
+    const row = rowRef.current;
+    if (!row || label !== "Model") return undefined;
+    const step = (event: Event): void => {
+      event.preventDefault();
+      stepRef.current((event as CustomEvent<{ delta: -1 | 1 }>).detail.delta);
+    };
+    row.addEventListener(RUN_CONFIG_STEP_EVENT, step);
+    return (): void => row.removeEventListener(RUN_CONFIG_STEP_EVENT, step);
+  }, [label]);
   return (
     <Box
+      ref={rowRef}
       data-config-row
       data-config-shortcut={shortcut?.toLowerCase()}
       sx={{
         minWidth: 0,
         display: "grid",
-        gridTemplateColumns: "108px minmax(0, 1fr)",
+        gridTemplateColumns: "120px minmax(0, 1fr)",
         alignItems: "center",
         gap: 1.25,
-        gridColumn: label === "Reasoning effort" ||
-            presentation?.layout === "full_width"
-          ? "1 / -1"
-          : undefined,
       }}
     >
       <Tooltip title={option.description ?? ""} placement="right">
@@ -1090,6 +1112,122 @@ function ConfigOptionControl({
   );
 }
 
+/** Agent | Context | Tools side by side on a wide window, so every setting
+ *  is visible at once; two columns, then one, as the window narrows. Each
+ *  pane scrolls on its own and the one holding the cursor is outlined. */
+const runConfigPanelSx = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  display: "grid",
+  gap: 1.5,
+  p: 1.5,
+  overflow: "auto",
+  gridTemplateColumns: "minmax(0, 1fr)",
+  gridTemplateAreas: '"agent" "context" "tools"',
+  "@media (min-width: 980px)": {
+    overflow: "hidden",
+    gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 1fr)",
+    gridTemplateRows: "minmax(0, max-content) minmax(0, 1fr)",
+    gridTemplateAreas: '"agent tools" "context tools"',
+  },
+  "@media (min-width: 1400px)": {
+    gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr)",
+    gridTemplateRows: "minmax(0, 1fr)",
+    gridTemplateAreas: '"agent context tools"',
+  },
+} as const;
+
+function RunConfigPane({
+  pane,
+  title,
+  caption,
+  children,
+}: {
+  pane: "agent" | "context" | "tools";
+  title: string;
+  caption: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <Box
+      data-config-pane={pane}
+      tabIndex={-1}
+      sx={{
+        gridArea: pane,
+        minWidth: 0,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 2,
+        bgcolor: (theme) => alpha(theme.palette.background.default, 0.32),
+        outline: "none",
+        transition: "border-color 120ms, box-shadow 120ms",
+        "&:focus-within": {
+          borderColor: (theme) => alpha(theme.palette.primary.main, 0.7),
+          boxShadow: (theme) =>
+            `0 0 0 1px ${alpha(theme.palette.primary.main, 0.28)}`,
+        },
+        "&:focus-within [data-config-pane-title]": { color: "primary.main" },
+        // The field under the cursor: its whole row, not only the control.
+        "& [data-config-row], & [data-settings-row]": {
+          mx: -1,
+          px: 1,
+          borderRadius: 1.5,
+          transition: "background-color 120ms",
+        },
+        "& [data-config-row]": { py: 0.75 },
+        "& [data-config-row]:has(:focus-visible), & [data-settings-row]:has(:focus-visible)":
+          {
+            bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08),
+            boxShadow: (theme) =>
+              `inset 3px 0 0 ${theme.palette.primary.main}`,
+          },
+      }}
+    >
+      <Stack
+        direction="row"
+        alignItems="baseline"
+        spacing={1}
+        sx={{
+          px: 2,
+          pt: 1.25,
+          pb: 1,
+          borderBottom: 1,
+          borderColor: "divider",
+          minWidth: 0,
+        }}
+      >
+        <Typography
+          data-config-pane-title
+          variant="overline"
+          fontWeight={800}
+          color="text.secondary"
+          sx={{ letterSpacing: 0.9, lineHeight: 1.4 }}
+        >
+          {title}
+        </Typography>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          noWrap
+          sx={{ flex: 1, minWidth: 0 }}
+        >
+          {caption}
+        </Typography>
+      </Stack>
+      <Stack
+        spacing={1}
+        sx={{ flex: 1, minHeight: 0, overflow: "auto", px: 2, py: 1.25 }}
+      >
+        {children}
+      </Stack>
+    </Box>
+  );
+}
+
 function RecommendedPresetControls({
   presets,
   options,
@@ -1101,15 +1239,7 @@ function RecommendedPresetControls({
 }): React.JSX.Element {
   const active = activeRunConfigPreset(presets, options);
   return (
-    <Box
-      sx={{
-        gridColumn: "1 / -1",
-        display: "grid",
-        gridTemplateColumns: "108px minmax(0, 1fr)",
-        alignItems: "center",
-        gap: 1.25,
-      }}
-    >
+    <Stack data-config-row spacing={0.75} sx={{ minWidth: 0 }}>
       <Typography
         variant="caption"
         fontWeight={750}
@@ -1118,13 +1248,20 @@ function RecommendedPresetControls({
       >
         Recommended
       </Typography>
-      <Stack direction="row" spacing={0.75}>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(168px, 1fr))",
+          gap: 0.75,
+        }}
+      >
         {presets.map((preset, index) => {
           const selected = active?.id === preset.id;
           return (
             <ButtonBase
               key={preset.id}
               data-config-preset={index}
+              data-config-choice
               aria-pressed={selected}
               onClick={(): void => {
                 for (const change of runConfigPresetChanges(preset, options)) {
@@ -1137,7 +1274,6 @@ function RecommendedPresetControls({
                 }
               }}
               sx={{
-                flex: 1,
                 minWidth: 0,
                 minHeight: desktopSize(44),
                 px: 1.2,
@@ -1205,8 +1341,8 @@ function RecommendedPresetControls({
             </ButtonBase>
           );
         })}
-      </Stack>
-    </Box>
+      </Box>
+    </Stack>
   );
 }
 
@@ -1223,12 +1359,8 @@ export function DesktopTopBarControls({
   const session = useStoreSelector((snapshot) =>
     snapshot.sessions.find((candidate) => candidate.id === sessionId)
   );
-  const timelineState = useStoreSelector(
-    (snapshot) => desktopTopBarTimelineSlice(snapshot.timelines.get(sessionId)),
-    sameDesktopTopBarTimelineSlice,
-  );
   const [openSurface, setOpenSurface] = useState<
-    "config" | "usage" | "update" | "reload" | "compact" | "clear" | null
+    "config" | "usage" | "update" | "reload" | null
   >(null);
   const configOpen = openSurface === "config";
   useEffect(() => {
@@ -1288,8 +1420,6 @@ export function DesktopTopBarControls({
   const reloadTarget = openSurface === "reload" ? session ?? null : null;
   const providerUpdate = sessionProviderUpdate(session);
   const updateTarget = openSurface === "update" ? session ?? null : null;
-  const compactConfirm = openSurface === "compact";
-  const clearConfirm = openSurface === "clear";
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
   // A session switch closes this session's surfaces, except settings that
@@ -1377,145 +1507,80 @@ export function DesktopTopBarControls({
   }, []);
   useEffect(() => {
     if (!configOpen) return undefined;
-    const focusFirst = requestAnimationFrame(() => {
+    // Open on the first field, the presets when they exist. Provider options
+    // and presets can arrive a moment after the dialog, so keep following
+    // the first field until the user moves.
+    let settled = false;
+    let tries = 0;
+    let focusFirst = 0;
+    const placeCursor = (): void => {
       const firstRow = configPanelRef.current?.querySelector<HTMLElement>(
         "[data-config-row]",
       );
-      const choices = firstRow
-        ? [...firstRow.querySelectorAll<HTMLElement>("[data-config-choice]")]
-          .filter((choice) =>
-            !choice.matches(":disabled, [aria-disabled='true']")
-          )
-        : [];
-      const selected = choices.find((choice) =>
-        choice.classList.contains("Mui-selected") ||
-        choice.getAttribute("aria-selected") === "true" ||
-        choice.getAttribute("aria-pressed") === "true"
-      );
-      (selected ?? choices[0])?.focus();
-    });
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (desktopImeOwnsKey(event)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) {
-        return;
+      if (firstRow && !firstRow.contains(document.activeElement)) {
+        focusConfigRow(firstRow);
       }
-      if (document.querySelector("[role='listbox']") !== null) return;
+      tries += 1;
+      if (!settled && tries < 90) {
+        focusFirst = requestAnimationFrame(placeCursor);
+      }
+    };
+    focusFirst = requestAnimationFrame(placeCursor);
+    const settle = (): void => {
+      settled = true;
+    };
+    globalThis.addEventListener("pointerdown", settle, true);
+    const untrack = trackRunConfigCursor(() => configPanelRef.current);
+    const onKeyDown = (event: KeyboardEvent): void => {
+      settled = true;
+      if (desktopImeOwnsKey(event)) return;
       const panel = configPanelRef.current;
       if (!panel) return;
-      const action = runConfigKeyAction(workspaceCommandKey(event));
-      if (action === null) return;
-      const choicesFor = (row: HTMLElement): HTMLElement[] =>
-        [...row.querySelectorAll<HTMLElement>("[data-config-choice]")]
-          .filter((choice) =>
-            !choice.matches(":disabled, [aria-disabled='true']")
-          );
-      const selectedChoiceIndex = (choices: readonly HTMLElement[]): number =>
-        choices.findIndex((choice) =>
-          choice.classList.contains("Mui-selected") ||
-          choice.getAttribute("aria-selected") === "true" ||
-          choice.getAttribute("aria-pressed") === "true"
-        );
-      const focusChoice = (row: HTMLElement): boolean => {
-        const choices = choicesFor(row);
-        if (choices.length === 0) return false;
-        const selected = selectedChoiceIndex(choices);
-        choices[Math.max(0, selected)]?.focus();
-        return true;
-      };
-      const activateChoice = (choice: HTMLElement): void => {
-        choice.focus();
-        choice.click();
-      };
-      const changeChoice = (
-        row: HTMLElement,
-        delta: -1 | 1,
-        wrap: boolean,
-      ): boolean => {
-        const choices = choicesFor(row);
-        if (choices.length === 0) return false;
-        const select = choices.find((choice) =>
-          choice.hasAttribute("data-config-select")
-        );
-        if (select) {
-          // MUI Select opens from its display's primary mousedown, not click.
-          // Preserve that component contract while exposing it through the
-          // panel's visible keyboard grammar.
-          select.dispatchEvent(
-            new MouseEvent("mousedown", {
-              bubbles: true,
-              cancelable: true,
-              button: 0,
-            }),
-          );
-          return true;
-        }
-        const active = document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null;
-        const focused = active ? choices.indexOf(active) : -1;
-        const current = focused >= 0 ? focused : selectedChoiceIndex(choices);
-        const next = nextRunConfigChoiceIndex(
-          choices.length,
-          current,
-          delta,
-          wrap,
-        );
-        const nextChoice = choices[next];
-        if (!nextChoice) return false;
-        if (next !== current) activateChoice(nextChoice);
-        else nextChoice.focus();
-        return true;
-      };
-      const rows = [...panel.querySelectorAll<HTMLElement>("[data-config-row]")]
-        .filter((row) => choicesFor(row).length > 0);
-      if (action.type === "preset") {
-        const preset = panel.querySelector<HTMLElement>(
-          `[data-config-preset="${String(action.index)}"]`,
-        );
-        if (!preset || preset.matches(":disabled, [aria-disabled='true']")) {
-          return;
-        }
-        preset.focus();
-        preset.click();
+      // A picker, menu or nested dialog above the panel keeps its own keys.
+      if (document.querySelector("[role='listbox']") !== null) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      // The dialog's frame (or the body) holds focus when the control under
+      // the cursor was disabled; the panel still owns the key.
+      if (target && !panel.contains(target) && !target.contains(panel)) {
+        return;
+      }
+      // Insert: a text field owns every key; Esc leaves it for Normal.
+      if (target && isModalTextField(target)) {
+        const escape = (event.key === "Escape" && !event.ctrlKey &&
+          !event.metaKey && !event.altKey && !event.shiftKey) ||
+          (event.ctrlKey && event.code === "BracketLeft");
+        if (!escape) return;
+        enterModalNormal(target);
         event.preventDefault();
         event.stopPropagation();
         return;
       }
-      if (action.type === "direct") {
-        const row = panel.querySelector<HTMLElement>(
-          `[data-config-shortcut="${action.shortcut}"]`,
-        );
-        if (!row || !changeChoice(row, 1, true)) return;
+      if (
+        event.code === "Enter" && !event.metaKey && !event.ctrlKey &&
+        !event.altKey && target instanceof HTMLInputElement &&
+        target.type === "checkbox"
+      ) {
+        target.click();
         event.preventDefault();
         event.stopPropagation();
         return;
       }
-      const active = document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-      const activeRow = active?.closest<HTMLElement>("[data-config-row]");
-      const rowIndex = activeRow ? rows.indexOf(activeRow) : -1;
-      if (action.type === "field") {
-        const nextRow = rowIndex < 0
-          ? (action.delta > 0 ? rows[0] : rows.at(-1))
-          : rows[
-            Math.min(
-              rows.length - 1,
-              Math.max(0, rowIndex + action.delta),
-            )
-          ];
-        if (!nextRow) return;
-        focusChoice(nextRow);
-      } else {
-        const targetRow = activeRow ?? rows[0];
-        if (!targetRow || !changeChoice(targetRow, action.delta, false)) return;
+      const motion = regionMotionKey(event);
+      if (motion === null && (event.metaKey || event.ctrlKey || event.altKey)) {
+        return;
       }
+      const action = motion !== null
+        ? runConfigMotionAction(motion)
+        : runConfigKeyAction(workspaceCommandKey(event));
+      if (action === null || !runConfigKey(panel, action)) return;
       event.preventDefault();
       event.stopPropagation();
     };
     globalThis.addEventListener("keydown", onKeyDown, true);
     return (): void => {
       cancelAnimationFrame(focusFirst);
+      globalThis.removeEventListener("pointerdown", settle, true);
+      untrack();
       globalThis.removeEventListener("keydown", onKeyDown, true);
     };
   }, [configOpen]);
@@ -1589,71 +1654,6 @@ export function DesktopTopBarControls({
     return provider ? [{ account, provider }] : [];
   });
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
-  const availableCommands = timelineState.availableCommands;
-  const compactAction = useMemo(
-    () =>
-      resolveSessionAction(
-        "compact",
-        session?.provider ?? "",
-        availableCommands,
-        session?.provider_version,
-        session?.provider_generation_digest,
-      ),
-    [
-      availableCommands,
-      session?.provider,
-      session?.provider_version,
-      session?.provider_generation_digest,
-    ],
-  );
-  const clearAction = useMemo(
-    () =>
-      resolveSessionAction(
-        "clear",
-        session?.provider ?? "",
-        availableCommands,
-        session?.provider_version,
-        session?.provider_generation_digest,
-      ),
-    [
-      availableCommands,
-      session?.provider,
-      session?.provider_version,
-      session?.provider_generation_digest,
-    ],
-  );
-  const compacting = status === "busy" && timelineState.compactingTail;
-  const serverContextUsed = session?.context_used ?? 0;
-  const serverContextSize = session?.context_size ?? 0;
-  const compactContext = useCompactionContext({
-    sessionId,
-    status,
-    serverUsed: serverContextUsed,
-    serverSize: serverContextSize,
-    completionSeq: timelineState.completionSeq,
-  });
-  const contextUsed = compactContext.used;
-  const contextSize = compactContext.size;
-  const contextRefreshing = compactContext.refreshing;
-  const confirmCompact = useCallback((): void => {
-    setOpenSurface(null);
-    if (compactAction?.command) {
-      compactContext.beginRefresh();
-      submitPrompt(sessionId, compactAction.command, []);
-    }
-  }, [
-    compactAction?.command,
-    compactContext.beginRefresh,
-    sessionId,
-  ]);
-  useConfirmEnter(compactConfirm, confirmCompact);
-  const confirmClear = useCallback(async (): Promise<void> => {
-    setOpenSurface(null);
-    await resetSession(sessionId);
-  }, [sessionId]);
-  useConfirmEnter(clearConfirm, () => {
-    void confirmClear();
-  });
   const topbarCommands = useMemo<DesktopCommand[]>(() => [
     {
       id: "topbar.runConfiguration",
@@ -1744,67 +1744,12 @@ export function DesktopTopBarControls({
           "[data-desktop-topbar-action='reload']",
         )?.click(),
     },
-    {
-      id: "topbar.compact",
-      title: "Compact Conversation",
-      group: "Top Bar",
-      shortcut: "C",
-      // `␣TC` from anywhere; bare `C` while the bar owns focus.
-      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "C"],
-      regions: ["topbar.controls"],
-      leaderAnywhere: true,
-      when: () =>
-        document.querySelector(
-          "[data-desktop-topbar-action='compact']:not(:disabled)",
-        ) !== null,
-      run: () =>
-        document.querySelector<HTMLButtonElement>(
-          "[data-desktop-topbar-action='compact']",
-        )?.click(),
-    },
-    {
-      id: "topbar.clear",
-      title: "Clear Conversation",
-      group: "Top Bar",
-      shortcut: "X",
-      // `␣TX` from anywhere; bare `X` while the bar owns focus.
-      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "X"],
-      regions: ["topbar.controls"],
-      leaderAnywhere: true,
-      when: () =>
-        document.querySelector(
-          "[data-desktop-topbar-action='clear']:not(:disabled)",
-        ) !== null,
-      run: () =>
-        document.querySelector<HTMLButtonElement>(
-          "[data-desktop-topbar-action='clear']",
-        )?.click(),
-    },
-    {
-      id: "topbar.stop",
-      title: "Stop Current Turn",
-      group: "Global",
-      shortcut: DESKTOP_SHORTCUTS.stop,
-      allowInEditor: true,
-      when: () =>
-        document.querySelector(
-          "[data-desktop-topbar-action='stop']:not(:disabled)",
-        ) !== null,
-      consumeWhenDisabled: true,
-      run: () =>
-        document.querySelector<HTMLButtonElement>(
-          "[data-desktop-topbar-action='stop']",
-        )?.click(),
-    },
   ], []);
   useDesktopCommand(topbarCommands[0] as DesktopCommand);
   useDesktopCommand(topbarCommands[1] as DesktopCommand);
   useDesktopCommand(topbarCommands[2] as DesktopCommand);
   useDesktopCommand(topbarCommands[3] as DesktopCommand);
   useDesktopCommand(topbarCommands[4] as DesktopCommand);
-  useDesktopCommand(topbarCommands[5] as DesktopCommand);
-  useDesktopCommand(topbarCommands[6] as DesktopCommand);
-  useDesktopCommand(topbarCommands[7] as DesktopCommand);
   // Lower bound for the complete session-control strip. Provider summaries own
   // their intrinsic compact width, and run configuration / session actions keep
   // their full touch targets. Auto margin restores the spacious, trailing
@@ -1819,10 +1764,9 @@ export function DesktopTopBarControls({
         : usagePercentSegmentWidth(provider.windows?.length ?? 1)),
     0,
   ) + 44;
-  const actionCount = 2 + Number(Boolean(providerUpdate)) +
-    Number(Boolean(compactAction)) + Number(Boolean(clearAction));
+  // Compact, Clear and Stop live in the Prompt's delivery row.
+  const actionCount = 1 + Number(Boolean(providerUpdate));
   const sessionActionsMinWidth = 90 + (providerUpdate ? 104 : 0) +
-    (compactAction ? 96 : 0) + (clearAction ? 80 : 0) + 80 +
     actionCount * DESKTOP_TOPBAR_CONTROL_GAP_PX;
   // Same cluster with the words in tooltips. Both numbers feed the density
   // decision, so the strip knows what it would cost BEFORE it collapses.
@@ -1972,14 +1916,14 @@ export function DesktopTopBarControls({
           ? "Changes are saved for your next message. The session stays asleep."
           : "Changes apply immediately; Back restores them until your next message."}
         icon={<Tune sx={{ color: "primary.main" }} />}
-        width={900}
+        fill
         shortcutGroups={[{
           label: "Navigate",
           slots: [
             { shortcut: "J/K", label: "Field" },
-            { shortcut: "↑/↓", label: "Field" },
             { shortcut: "H/L", label: "Change" },
-            { shortcut: "←/→", label: "Change" },
+            { shortcut: "[/]", label: "Pane" },
+            { shortcut: "gg/G", label: "First · Last" },
             ...(recommendedPresets.length > 0
               ? [{
                 shortcut: presetShortcutLabel,
@@ -1989,23 +1933,23 @@ export function DesktopTopBarControls({
             ...(directConfigShortcuts.length > 0
               ? [{ shortcut: directConfigShortcuts.join("/"), label: "Direct" }]
               : []),
-            { shortcut: `${ENTER_LABEL}/Space`, label: "Open · Select" },
+            { shortcut: ENTER_LABEL, label: "Open · Toggle" },
+            { shortcut: "␣", label: "Labels" },
           ],
         }, { slots: [{ shortcut: "Esc", label: "Close" }] }]}
       >
-        <Box ref={configPanelRef} data-desktop-shortcut-scope="exclusive">
-          <Box sx={{ px: 2.25, pt: 1.25, "&:empty": { display: "none" } }}>
-            <ConfigRevertBack sessionId={sessionId} options={options} />
-          </Box>
-          <Box
-            sx={{
-              px: 2.25,
-              py: 1.75,
-              display: "grid",
-              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-              gap: 1.25,
-            }}
+        <Box
+          ref={configPanelRef}
+          data-desktop-shortcut-scope="exclusive"
+          data-run-config-panel
+          sx={runConfigPanelSx}
+        >
+          <RunConfigPane
+            pane="agent"
+            title="Agent"
+            caption="How this agent runs"
           >
+            <ConfigRevertBack sessionId={sessionId} options={options} />
             {recommendedPresets.length > 0 && (
               <RecommendedPresetControls
                 presets={recommendedPresets}
@@ -2025,11 +1969,21 @@ export function DesktopTopBarControls({
                 )}
               />
             ))}
-          </Box>
-          <Box sx={{ px: 2.25, pb: 1.75 }}>
+          </RunConfigPane>
+          <RunConfigPane
+            pane="context"
+            title="Context"
+            caption="What the next message reads, and where the work goes"
+          >
             {session && <SessionContextSettings session={session} />}
-            <SessionToolsSection sessionId={sessionId} />
-          </Box>
+          </RunConfigPane>
+          <RunConfigPane
+            pane="tools"
+            title="Tools"
+            caption="What this agent may call and remember"
+          >
+            <SessionToolsSection sessionId={sessionId} heading={false} />
+          </RunConfigPane>
         </Box>
       </DesktopModal>
 
@@ -2349,101 +2303,6 @@ export function DesktopTopBarControls({
             </Button>
           </span>
         </Tooltip>
-
-        {compactAction && (
-          <Tooltip
-            title={contextRefreshing
-              ? "Updating context usage…"
-              : compacting
-              ? "Compacting…"
-              : compactTooltip(contextUsed, contextSize)}
-          >
-            <span>
-              <Button
-                data-desktop-item="topbar-compact"
-                data-desktop-topbar-action="compact"
-                data-desktop-compact
-                size="small"
-                color="inherit"
-                variant="outlined"
-                startIcon={
-                  <CompactIcon
-                    used={contextUsed}
-                    size={contextSize}
-                    active={compacting}
-                  />
-                }
-                aria-label={contextRefreshing
-                  ? "Compact conversation, context usage updating"
-                  : compactTooltip(contextUsed, contextSize)}
-                disabled={compacting}
-                onClick={(): void => setOpenSurface("compact")}
-                sx={desktopSessionActionSx({
-                  open: compactConfirm,
-                  minWidth: density === "full" ? 96 : ACTION_ICON_WIDTH_PX,
-                })}
-              >
-                <SessionActionLabel
-                  label="Compact"
-                  keyLabel="C"
-                  accent={compactConfirm}
-                  available={!compacting}
-                  density={density}
-                />
-              </Button>
-            </span>
-          </Tooltip>
-        )}
-
-        {clearAction && (
-          <Tooltip title="Clear conversation · start with a fresh context">
-            <span>
-              <Button
-                data-desktop-item="topbar-clear"
-                data-desktop-topbar-action="clear"
-                data-desktop-clear
-                size="small"
-                color="inherit"
-                variant="outlined"
-                startIcon={
-                  <CleaningServices
-                    sx={{
-                      ...desktopEmbeddedControlIconSx(),
-                      color: "text.secondary",
-                    }}
-                  />
-                }
-                aria-label="Clear conversation"
-                onClick={(): void => setOpenSurface("clear")}
-                sx={{
-                  ...desktopSessionActionSx({
-                    open: clearConfirm,
-                    minWidth: density === "full" ? 80 : ACTION_ICON_WIDTH_PX,
-                  }),
-                  "&:hover": {
-                    borderColor: "error.main",
-                    color: "error.main",
-                  },
-                }}
-              >
-                <SessionActionLabel
-                  label="Clear"
-                  keyLabel="X"
-                  accent={clearConfirm}
-                  available
-                  density={density}
-                />
-              </Button>
-            </span>
-          </Tooltip>
-        )}
-
-        <AutoScrollAndStop
-          sessionId={sessionId}
-          status={status}
-          presentation="desktop-toolbar"
-          collapsed={density !== "full"}
-        />
       </Stack>
 
       <SessionReloadDialog
@@ -2454,93 +2313,6 @@ export function DesktopTopBarControls({
         session={updateTarget}
         onClose={closeSurface}
       />
-
-      <Dialog
-        open={compactConfirm}
-        onClose={(): void => setOpenSurface(null)}
-        maxWidth="xs"
-        fullWidth
-      >
-        <DialogTitle>Compact conversation?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>{compactAction?.detail}</DialogContentText>
-          {compactAction?.command && (
-            <ConfirmConsequence>
-              Sends{" "}
-              <Box
-                component="code"
-                sx={{
-                  px: 0.5,
-                  py: 0.125,
-                  borderRadius: 0.75,
-                  bgcolor: "action.hover",
-                }}
-              >
-                {compactAction.command}
-              </Box>{" "}
-              to {session?.provider ?? "the agent"}
-              {status === "busy" || status === "starting"
-                ? " (queued after the current turn)"
-                : ""}.
-            </ConfirmConsequence>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button
-            color="inherit"
-            onClick={(): void => setOpenSurface(null)}
-            sx={{ textTransform: "none" }}
-          >
-            Cancel
-            <Kbd keys="Esc" />
-          </Button>
-          <Button
-            variant="contained"
-            onClick={confirmCompact}
-            sx={{ textTransform: "none" }}
-          >
-            Compact
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog
-        open={clearConfirm}
-        onClose={(): void => setOpenSurface(null)}
-        maxWidth="xs"
-        fullWidth
-      >
-        <DialogTitle>Clear conversation?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>{clearAction?.detail}</DialogContentText>
-          <ConfirmConsequence tone="error" irreversible>
-            Resets {session?.provider ?? "the agent"} to a fresh context now
-            {status === "busy" || status === "starting"
-              ? " (ends the current turn)"
-              : ""}.
-          </ConfirmConsequence>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            color="inherit"
-            onClick={(): void => setOpenSurface(null)}
-            sx={{ textTransform: "none" }}
-          >
-            Cancel
-            <Kbd keys="Esc" />
-          </Button>
-          <NetworkButton
-            variant="contained"
-            color="error"
-            networkAction={confirmClear}
-            sx={{ textTransform: "none" }}
-          >
-            Clear
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-          </NetworkButton>
-        </DialogActions>
-      </Dialog>
     </Stack>
   );
 }

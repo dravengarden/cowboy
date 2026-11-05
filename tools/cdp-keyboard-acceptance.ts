@@ -7,7 +7,7 @@
  * IME composition uses `Input.imeSetComposition`; it exercises the page's
  * composition path but is not a substitute for a real OS input method.
  *
- * Usage: bun tools/cdp-keyboard-acceptance.ts http://127.0.0.1:9223 <out-dir> [composer|draft|approval]
+ * Usage: bun tools/cdp-keyboard-acceptance.ts http://127.0.0.1:9223 <out-dir> [composer|draft|approval|tabs|run-config]
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { type CdpParams, openFixturePage } from "./cdp-fixture.ts";
@@ -21,7 +21,7 @@ await mkdir(output, { recursive: true });
 const flow = process.argv.slice(2)[2] ?? "composer";
 if (
   flow !== "composer" && flow !== "draft" && flow !== "approval" &&
-  flow !== "tabs"
+  flow !== "tabs" && flow !== "run-config"
 ) {
   throw new Error("unknown flow");
 }
@@ -35,6 +35,11 @@ addEventListener("error", (e) => (globalThis.__errors ??= []).push(String(e.mess
 { const report = console.error; console.error = (...a) => { (globalThis.__errors ??= []).push(a.map(String).join(" ").slice(0, 600)); report(...a); }; }
 addEventListener("unhandledrejection", (e) => (globalThis.__errors ??= []).push(String(e.reason?.stack ?? e.reason)));
 ${flow === "draft" ? 'localStorage.setItem("cowboy:vim", "1");' : ""}
+${
+      flow === "run-config"
+        ? 'globalThis.CowboyDeviceProof = { proof: async () => "fixture", resetChallenge() {}, install() {} };'
+        : ""
+    }
 const fixture = await import("/fixture.js");
 await fixture.${
       flow === "draft"
@@ -43,6 +48,8 @@ await fixture.${
         ? "mountApprovalKeyboardAcceptance"
         : flow === "tabs"
         ? "mountTabsKeyboardAcceptance"
+        : flow === "run-config"
+        ? "mountRunConfigKeyboardAcceptance"
         : "mountDesktopKeyboardAcceptance"
     }();
 </script>`,
@@ -129,6 +136,176 @@ const editorText = () =>
   page.evaluate<string>(
     "globalThis.__acceptance.editor.current?.getValue() ?? ''",
   );
+
+const runConfigFlow = async (): Promise<void> => {
+  const viewport = (width: number, height: number) =>
+    page.send("Emulation.setDeviceMetricsOverride", {
+      width,
+      height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+  const activeIn = (selector: string) =>
+    page.evaluate<boolean>(
+      `Boolean(document.activeElement?.closest(${JSON.stringify(selector)}))`,
+    );
+  const sent = () =>
+    page.evaluate<string[]>("[...globalThis.__acceptance.sent]");
+  const sentSince = async (from: number) => (await sent()).slice(from);
+  await viewport(1600, 1000);
+  await until(
+    "document.querySelector(\"[data-config-pane='tools'] [data-settings-row]\") && " +
+      "document.querySelector(\"[data-config-pane='context'] [data-context-links]\") && " +
+      "document.querySelectorAll('[data-config-preset]').length === 6",
+    "Run configuration opens with every pane",
+    20_000,
+  ).catch(async (error: unknown) => {
+    await shot("run-config-failed-open");
+    const body = await page.evaluate<string>(
+      "document.body.innerText.slice(0, 600) + ' | panes=' + document.querySelectorAll('[data-config-pane]').length + ' presets=' + document.querySelectorAll('[data-config-preset]').length + ' tools=' + document.querySelectorAll('[data-settings-row]').length + ' links=' + document.querySelectorAll('[data-context-links]').length + ' requests=' + JSON.stringify(globalThis.__acceptance?.requests)",
+    );
+    throw new Error(`${String(error)}: ${body}`);
+  });
+  await sleep(500);
+  const layout = await page.evaluate<
+    { panes: number[][]; paper: number[]; view: number[] }
+  >(`(() => {
+    const box = (e) => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(Math.round); };
+    return {
+      panes: [...document.querySelectorAll("[data-config-pane]")].map(box),
+      paper: box(document.querySelector("[data-run-config-panel]").closest(".MuiDialog-paper")),
+      view: [document.documentElement.clientWidth, document.documentElement.clientHeight],
+    };
+  })()`);
+  check(
+    layout.paper[2]! >= layout.view[0]! - 48 - 2 &&
+      layout.paper[3]! >= layout.view[1]! - 48 - 2,
+    `The workbench fills the window: ${JSON.stringify(layout)}`,
+  );
+  check(
+    layout.panes.length === 3 &&
+      new Set(layout.panes.map((pane) => pane[1])).size === 1,
+    `Agent, Context and Tools sit side by side: ${JSON.stringify(layout.panes)}`,
+  );
+  results.push("A 1600×1000 window shows Agent | Context | Tools side by side");
+  check(
+    await page.evaluate<boolean>(
+      "document.activeElement?.getAttribute('data-config-preset') === '2'",
+    ),
+    "The cursor opens on the active preset",
+  );
+  await shot("run-config-wide");
+  let mark = (await sent()).length;
+  await key("6");
+  await until(
+    "globalThis.__acceptance.sent.includes('model=fable') && globalThis.__acceptance.sent.includes('reasoning_effort=max')",
+    "6 applies the sixth preset",
+  );
+  results.push("Digit 6 applies the sixth preset (4–6 were dead before)");
+  await key("j");
+  check(await activeIn("[data-config-shortcut='a']"), "J moves to Agent mode");
+  mark = (await sent()).length;
+  await key("h");
+  await sleep(200);
+  check(
+    (await sentSince(mark)).includes("mode=auto"),
+    "H steps Agent mode left and applies it",
+  );
+  await key("j");
+  check(await activeIn("[data-config-shortcut='m']"), "J moves to Model");
+  mark = (await sent()).length;
+  await key("h");
+  await sleep(200);
+  check(
+    (await sentSince(mark)).includes("model=opus") &&
+      !(await page.evaluate<boolean>("Boolean(document.querySelector(\"[role='listbox']\"))")),
+    "H steps Model in place without opening its list",
+  );
+  results.push("J/K walk fields; H/L apply the neighbouring value, Model too");
+  await key("G", 8);
+  check(await activeIn("[data-config-shortcut='f']"), "G reaches the last field");
+  await key("g");
+  await key("g");
+  check(await activeIn("[data-config-preset]"), "gg returns to the presets");
+  results.push("gg/G jump to the pane's first and last field");
+  await key("]");
+  check(
+    await activeIn("[data-config-pane='context']"),
+    "] moves to the Context pane",
+  );
+  await key("]");
+  check(await activeIn("[data-config-pane='tools']"), "] moves to Tools");
+  await shot("run-config-tools-cursor");
+  for (let i = 0; i < 12; i++) {
+    if (
+      await page.evaluate<boolean>(
+        "document.activeElement?.getAttribute('aria-label') === 'Allow agent calls'",
+      )
+    ) break;
+    await key("j");
+  }
+  check(
+    await page.evaluate<boolean>(
+      "document.activeElement?.getAttribute('aria-label') === 'Allow agent calls'",
+    ),
+    "J reaches the Allow calls switch in Tools",
+  );
+  const allow = "document.querySelector(\"input[aria-label='Allow agent calls']\")";
+  await key("h");
+  await until(`!${allow}.checked`, "H turns a switch off");
+  await until(`!${allow}.disabled`, "The switch settles after its save");
+  const describe = () =>
+    page.evaluate<string>(
+      "(() => { const a = document.activeElement; return a ? a.tagName + ' ' + (a.getAttribute('aria-label') ?? a.textContent.slice(0, 60)) + ' pane=' + a.closest('[data-config-pane]')?.dataset.configPane : 'none'; })()",
+    );
+  const before = await describe();
+  await key("l");
+  await until(`${allow}.checked`, "L turns a switch on").catch(
+    async (error: unknown) => {
+      throw new Error(`${String(error)}; before=${before}; after=${await describe()}`);
+    },
+  );
+  await until(
+    `!${allow}.disabled && document.activeElement === ${allow}`,
+    "The cursor returns to the switch after its save",
+  );
+  results.push("Tools fields are reachable; H/L turn a switch off and on");
+  await key("h", 2);
+  check(
+    await activeIn("[data-config-pane='context']"),
+    "Ctrl+H moves one pane left",
+  );
+  await key("h", 2);
+  check(
+    await activeIn("[data-config-preset]"),
+    "Returning to Agent restores its cursor",
+  );
+  results.push("Ctrl+H/L move between panes and each pane keeps its cursor");
+  await key(" ");
+  await until(
+    "document.querySelector('[data-desktop-leader-menu=\"modal\"]') && document.querySelector('[data-desktop-hint]')",
+    "Space labels every control of the workbench",
+  );
+  await shot("run-config-leader");
+  results.push("Space labels every control across all three panes");
+  await key("Escape");
+  await sleep(150);
+  await viewport(1180, 860);
+  await sleep(400);
+  const medium = await page.evaluate<number[][]>(`
+    [...document.querySelectorAll("[data-config-pane]")].map((e) => {
+      const r = e.getBoundingClientRect(); return [r.left, r.top].map(Math.round);
+    })`);
+  check(
+    new Set(medium.map((pane) => pane[0])).size === 2,
+    `A narrower window keeps two columns: ${JSON.stringify(medium)}`,
+  );
+  await shot("run-config-medium");
+  results.push("A 1180px window folds to Agent+Context | Tools");
+  await page.send("Emulation.clearDeviceMetricsOverride", {});
+  const errors = await page.evaluate<string[]>("globalThis.__errors ?? []");
+  check(errors.length === 0, `No page errors: ${JSON.stringify(errors)}`);
+};
 
 const draftFlow = async (): Promise<void> => {
   const title = "document.querySelector(\"input[aria-label='Draft title']\")";
@@ -614,7 +791,16 @@ const tabsFlow = async (): Promise<void> => {
 };
 
 try {
-  if (flow === "tabs") {
+  if (flow === "run-config") {
+    await runConfigFlow();
+    console.log(
+      JSON.stringify(
+        { ok: true, browser: page.browser, flow, screenshots: output, tests: results },
+        null,
+        2,
+      ),
+    );
+  } else if (flow === "tabs") {
     await tabsFlow();
     console.log(
       JSON.stringify(

@@ -198,7 +198,8 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 // notify:true queues one Cowboy notice into this session when the call ends (idle: new turn;
 // busy: next turn). End your turn instead of polling calls.wait; then read calls.result.
 // task (stable id: letters, digits, -_. up to 128, e.g. "f01-awaiting-merge"; prose goes in focus)
-//   + base (full commit SHA) + root bind review input for automatic reuse.
+//   + base (full SHA from `git rev-parse <ref>`, never padded) + root bind review input for reuse.
+// preset selects a fresh call's model; a child_session_id continuation keeps the child's preset.
 // Only use with all required evidence in the captured files/instruction. fresh:true requests an independent pass.
 // calls.cancel: {call_id:string}; operation MUST equal call_id. Cancellation is idempotent.
 // documents.mutate: {document_id:string,expected_revision:number,change:DraftChange}
@@ -236,6 +237,14 @@ pub const HELP_TOPICS: &[&str] = &[
 
 pub fn help(topic: &str) -> Option<serde_json::Value> {
     use serde_json::json;
+    // Agents ask for the operation they are about to call ("review.start",
+    // "sessions.history"); answer with the topic that documents it.
+    let topic = match topic.split_once('.') {
+        Some((namespace @ ("accounts" | "preferences"), _)) => namespace,
+        Some(_) if INVOKE_OPERATIONS.contains(&topic) => "actions",
+        Some((namespace, _)) => namespace,
+        None => topic,
+    };
     let mut value = match topic {
         "control" => Some(
             json!({"api":API_VERSION,"types":control::SDK,"domains":["sessions","queue","drafts","configuration","tools","folders","usage","machines","projects","plugins","diagnostics","sync"]}),
@@ -558,6 +567,22 @@ mod tests {
         // preference declarations are separate topics.
         let actions = serde_json::to_vec(&help("actions").unwrap()).unwrap().len();
         assert!(actions < 4096, "actions help: {actions} UTF-8 bytes");
+    }
+
+    #[test]
+    fn operation_names_resolve_to_their_help_topic() {
+        for (name, topic) in [
+            ("review.start", "actions"),
+            ("calls.start", "actions"),
+            ("actions.calls.start", "actions"),
+            ("accounts.login_start", "accounts"),
+            ("preferences.update", "preferences"),
+            ("sessions.history", "sessions"),
+            ("calls.result", "calls"),
+        ] {
+            assert_eq!(help(name), help(topic), "{name}");
+        }
+        assert!(help("process").is_none() && help("process.run").is_none());
     }
 
     #[test]

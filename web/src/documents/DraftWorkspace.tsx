@@ -1,4 +1,5 @@
 import { desktopSize } from "../surface/desktopSize";
+import { shortcutKey } from "../desktop/commands/imeShortcut";
 import { defaultDraftTitle } from "./defaultDraftTitle";
 import {
   Alert,
@@ -55,7 +56,6 @@ import { buildSessionTree, displayedSessionOrder } from "../sessionTree";
 import { setActiveSessionId } from "../controlPlane";
 import { useStoreSelector } from "../store";
 import { useBootReady } from "../useBootReady";
-import { isImeKeyEvent } from "../imeKey";
 import { DraftEditor, type DraftFlush } from "./DraftEditor";
 import {
   DRAFT_DRAG_TYPE,
@@ -335,8 +335,9 @@ function DraftWorkspaceBody(
         aria-label={trash ? "Draft trash" : "Draft documents"}
         sx={{ flex: 1, overflowY: "auto", minHeight: 0, py: 0 }}
         onKeyDown={(event) => {
+          const key = shortcutKey(event.nativeEvent);
           if (
-            isImeKeyEvent(event.nativeEvent) || event.ctrlKey ||
+            key === null || event.ctrlKey ||
             event.metaKey || event.altKey
           ) return;
           const items = [
@@ -346,13 +347,13 @@ function DraftWorkspaceBody(
           ];
           const index = items.indexOf(document.activeElement as HTMLElement);
           const next =
-            (event.key === "ArrowDown" || desktop && event.key === "j")
+            (key === "ArrowDown" || desktop && key === "j")
               ? index + 1
-              : (event.key === "ArrowUp" || desktop && event.key === "k")
+              : (key === "ArrowUp" || desktop && key === "k")
               ? index - 1
-              : event.key === "Home"
+              : key === "Home"
               ? 0
-              : (event.key === "End" || desktop && event.key === "G")
+              : (key === "End" || desktop && key === "G")
               ? items.length - 1
               : -1;
           if (next >= 0 && next < items.length) {
@@ -402,18 +403,19 @@ function DraftWorkspaceBody(
                   );}
               }}
               onKeyDown={(event) => {
+                const key = shortcutKey(event.nativeEvent);
                 if (
-                  entry.kind !== "folder" || isImeKeyEvent(event.nativeEvent) ||
+                  entry.kind !== "folder" || key === null ||
                   event.ctrlKey || event.metaKey || event.altKey
                 ) return;
                 if (
                   ["ArrowRight", "ArrowLeft", ...(desktop ? ["h", "l"] : [])]
-                    .includes(event.key)
+                    .includes(key)
                 ) {
                   event.preventDefault();
                   setCollapsed((old) => {
                     const next = new Set(old);
-                    if (event.key === "ArrowLeft" || event.key === "h") {
+                    if (key === "ArrowLeft" || key === "h") {
                       next.add(entry.id);
                     } else next.delete(entry.id);
                     return next;
@@ -531,16 +533,17 @@ function DraftWorkspaceBody(
                 aria-valuenow={navWidth}
                 tabIndex={0}
                 onKeyDown={(e) => {
+                  const key = shortcutKey(e.nativeEvent);
                   if (
-                    isImeKeyEvent(e.nativeEvent) || e.ctrlKey || e.metaKey ||
+                    key === null || e.ctrlKey || e.metaKey ||
                     e.altKey
                   ) return;
-                  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                  if (key === "ArrowLeft" || key === "ArrowRight") {
                     e.preventDefault();
                     setNavWidth((n) =>
                       Math.max(
                         190,
-                        Math.min(500, n + (e.key === "ArrowLeft" ? -20 : 20)),
+                        Math.min(500, n + (key === "ArrowLeft" ? -20 : 20)),
                       )
                     );
                   }

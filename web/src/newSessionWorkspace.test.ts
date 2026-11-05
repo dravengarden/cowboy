@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace.ts";
-import { resolveActiveSession } from "./sessionSelection.ts";
+import { continuationOf, resolveActiveSession } from "./sessionSelection.ts";
 import type { SessionMeta } from "./protocol.ts";
 
 const appSource = await readFile(
@@ -121,6 +121,29 @@ test("new session stays selected before the sessions broadcast arrives", () => {
     resolveActiveSession([pending, existing], pending.id, pending),
     pending,
   );
+});
+
+test("a replaced session reopens its continuation, not the first session", () => {
+  const base: SessionMeta = {
+    id: "first",
+    provider: "codex",
+    cwd: "/workspace",
+    title: "First",
+    status: "running",
+  };
+  const second: SessionMeta = { ...base, id: "second", continued_from: "source" };
+  const third: SessionMeta = { ...base, id: "third", continued_from: "second" };
+
+  // The source was trashed by Replace; only its continuation is listed.
+  assertEquals(resolveActiveSession([base, second], "source", null), second);
+  // A continuation that was itself continued resolves to the newest hop.
+  assertEquals(resolveActiveSession([base, second, third], "source", null), third);
+  assertEquals(continuationOf([base], "source"), undefined);
+  assertEquals(resolveActiveSession([base], "source", null), base);
+  // A cycle never loops.
+  const loopA: SessionMeta = { ...base, id: "a", continued_from: "b" };
+  const loopB: SessionMeta = { ...base, id: "b", continued_from: "a" };
+  assertEquals(continuationOf([loopA, loopB], "a")?.id, "b");
 });
 
 test("new sessions respect Machine workspace ordering", () => {

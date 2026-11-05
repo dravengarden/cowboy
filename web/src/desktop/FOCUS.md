@@ -19,8 +19,12 @@ same controller state.
 The Top Bar is a workspace region, not a fourth pane. Its actions do not need
 focus: `␣T` opens the Top bar group and the next key runs Run Configuration
 (`R`), Usage (`U`), session verification (`A`), Provider update (`N`, only
-while a newer compatible release waits), Reload (`L`), Compact (`C`) or
-Clear (`X`) directly; each control shows its `␣TR`-style slot. Focusing
+while a newer compatible release waits) or Reload (`L`) directly; each
+control shows its `␣TR`-style slot. Compact, Clear and Stop act on the
+conversation the Prompt writes into, so they sit in the Prompt's delivery row
+(Draft, Schedule | Compact, Clear … Stop, Send): `␣PC` and `␣PX` run them
+from any focus, `Mod+.` stops from anywhere, and Stop stays mounted, only
+disabled while no turn runs, so the row never moves. Focusing
 the bar (`␣TT`, or Ctrl-K from a pane) is mutually exclusive with Sessions and
 Prompt: pane-header chrome clears, the bar itself takes the shared focus fill
 plus a primary underline, and only the focused control receives the keyboard
@@ -104,9 +108,10 @@ and in a queued-message editor), and the focused one runs.
 | `␣R` | Rename the current Session (a Draft's name is its title, `␣T`) |
 | `␣N` | Create (Session / Draft / Folder) |
 | `␣K` | Command Palette |
-| `␣P` `␣C` | Focus Prompt, Conversation |
+| `␣P` + `P/C/X` | Prompt group: `P` focuses the Prompt; compact, clear the conversation (each confirms) |
+| `␣C` | Focus Conversation |
 | `␣S` + `S/Z/N/M/P` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project |
-| `␣T` + `R/U/A/N/L/C/X/T` | Top bar group: run config, usage, verify, Provider update (only while one is available), reload, compact, clear; `T` focuses the bar |
+| `␣T` + `R/U/A/N/L/T` | Top bar group: run config, usage, verify, Provider update (only while one is available), reload; `T` focuses the bar |
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
 | `␣G` | Open Background tasks: the subagents and calls this session started (with the previous Calls panel restored: open or close Calls) |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
@@ -383,8 +388,11 @@ New Desktop key handlers classify a keydown through `desktopKeyIntent`
 
 Do not compare `event.key` letters or digits in Desktop handlers or add another
 local `isComposing`/229 check; extend the classifier and its tests instead.
-Older handlers (`desktopImeOwnsKey`, `workspaceCommandKey`) retain their
-established behavior and should move onto it when touched.
+`desktopImeOwnsKey` is this classifier's `ime` answer, and a component-local
+handler reads `shortcutKey(event)` (`null` while an IME owns the key, else the
+physical key) instead of `event.key`. macOS input sources label keys on
+dialog buttons and lists `Process`/229 even with no field focused; those
+labels never disable a shortcut there.
 
 ### Modals
 
@@ -435,6 +443,30 @@ name. `K` reaches the tabs, `J` walks the fields down to Cancel and Create,
 under the tabs names only the current mode's keys, and the tab digits light
 in Normal. Pointer activation still selects and focuses the title in one
 step. The Cancel `Esc` keycap is inactive while a text field owns `Esc`.
+
+### Run configuration
+
+Run configuration (`␣TR`) is a workbench, not a form: it fills the window
+less a 24 px margin (`DesktopModal fill`) and lays Agent, Context and Tools
+side by side, each pane scrolling on its own, so every setting is visible at
+once on a wide window. It folds to Agent+Context | Tools, then one column, as
+the window narrows. Its panel is an exclusive region with its own keymap
+(`runConfigNavigation.ts`), the same Vim grammar specialised for settings:
+
+| Key | Action |
+| --- | --- |
+| `J` / `K` | Next / previous field in the pane (a Provider option or the presets is one field; other controls form rows by geometry) |
+| `H` / `L` | Change the field: step a choice or the Model, a switch off / on, a disclosure closed / open; else move beside |
+| `[` / `]`, `Ctrl-H` / `Ctrl-L` | Previous / next pane (brackets wrap); each pane keeps its cursor |
+| `gg` / `G` | First / last field of the pane |
+| `1`–`9` | Apply that recommended preset |
+| `A` `M` `E` `C` `F` `P` | The option with that letter (Model opens its list) |
+| `Enter` | Open a Select, toggle a switch, press a button |
+| `␣` | Dialog leader: a letter on every control of every pane |
+
+The field under the cursor is shaded with a leading bar and its pane is
+outlined. A switch disabled while its change saves keeps the cursor: focus
+returns to it once it is usable again.
 
 ### Shortcut slots and bars
 

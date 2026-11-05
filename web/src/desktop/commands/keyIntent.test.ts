@@ -107,6 +107,23 @@ test("non-editable chrome and the Vim sink resolve physical keys", () => {
   );
 });
 
+test("chrome resolves IME-labelled structural keys and digits physically", () => {
+  for (const [code, physical] of [
+    ["KeyF", "f"],
+    ["Comma", ","],
+    ["Digit2", "2"],
+    ["Enter", "Enter"],
+    ["Space", " "],
+    ["ArrowDown", "ArrowDown"],
+  ] as const) {
+    assert.deepEqual(
+      desktopKeyIntent(key(code, { key: "Process", keyCode: 229 }), idle),
+      { owner: "command", key: physical, modified: false },
+      code,
+    );
+  }
+});
+
 test("physical keys cover the number row without breaking shifted symbols", () => {
   assert.equal(physicalCommandKey({ code: "Digit3", key: "3", shiftKey: false }), "3");
   assert.equal(physicalCommandKey({ code: "Numpad1", key: "1", shiftKey: false }), "1");

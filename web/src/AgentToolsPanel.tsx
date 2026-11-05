@@ -53,6 +53,7 @@ function Row(
 ): React.JSX.Element {
   return (
     <Stack
+      data-settings-row
       direction="row"
       alignItems="center"
       justifyContent="space-between"
@@ -570,7 +571,12 @@ export function AgentToolsEditor(
 
 /** A session's tools: its agent kind's defaults with this session's changes. */
 export function SessionToolsSection(
-  { sessionId, disabled = false }: { sessionId: string; disabled?: boolean },
+  { sessionId, disabled = false, heading = true }: {
+    sessionId: string;
+    disabled?: boolean;
+    /** False when the surrounding layout already titles this section. */
+    heading?: boolean;
+  },
 ): React.JSX.Element {
   const sharedSaving = useSessionToolsSaving(sessionId);
   const { value, error, saving, save } = useRemoteDocument(
@@ -579,14 +585,14 @@ export function SessionToolsSection(
     (receive) => subscribeSessionTools(sessionId, receive),
   );
   return (
-    <Box data-session-tools sx={{ py: 1.5 }}>
+    <Box data-session-tools sx={{ py: heading ? 1.5 : 0 }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between">
         <Typography
           variant="overline"
           color="text.secondary"
           sx={{ letterSpacing: 0.8 }}
         >
-          Tools
+          {heading ? "Tools" : ""}
         </Typography>
         {value && (
           overridden(value.override)

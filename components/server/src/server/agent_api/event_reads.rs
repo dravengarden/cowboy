@@ -28,7 +28,7 @@ pub(super) async fn search(
         .ok_or("invalid_argument")?;
     let before = arg_u64(args, "before", i64::MAX as u64, i64::MAX as u64)?;
     let limit = page_limit(args, 20, 64)?;
-    let chars = arg_u64(args, "chars", 200, 1000)? as usize;
+    let chars = arg_chars(args, 200, 1000)? as usize;
     if chars < query.chars().count() {
         return Err("invalid_argument".into());
     }

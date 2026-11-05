@@ -102,8 +102,9 @@ const consequence = await readFile(
 const composer = await readFile(
   new URL("./Composer.tsx", import.meta.url), "utf8",
 );
+// Desktop Compact and Clear confirm from the Prompt's delivery row.
 const topBar = await readFile(
-  new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url), "utf8",
+  new URL("./desktop/useDesktopSessionActions.tsx", import.meta.url), "utf8",
 );
 const commands = await readFile(
   new URL("./agentCommands.ts", import.meta.url), "utf8",

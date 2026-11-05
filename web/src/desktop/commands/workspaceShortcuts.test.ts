@@ -119,7 +119,7 @@ test("workspace sequence preempts idle IME markers but not real composition", ()
 test("every prefix continuation has one stable command meaning", () => {
   assertEquals(DESKTOP_WORKSPACE_COMMANDS, {
     s: "group:s",
-    p: "workspace.focusPrompt",
+    p: "group:p",
     t: "group:t",
     c: "workspace.focusConversation",
     v: "conversation.toggleReview",

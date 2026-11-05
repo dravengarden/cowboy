@@ -48,6 +48,7 @@ import {
 } from "./backgroundTaskInspectorState";
 import { setActiveSessionId } from "./controlPlane";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
+import { shortcutKey } from "./desktop/commands/imeShortcut";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { CallConversation, CallDetailView } from "./ManagedCallsDock";
 import { callConversationId } from "./managedCalls";
@@ -515,7 +516,7 @@ export function BackgroundTasksInspector({
     if (event.metaKey || event.ctrlKey || event.altKey || typingTarget(event)) return;
     // A confirmation (Stop) owns its own keys.
     if ((event.target as HTMLElement).closest?.("[role='dialog'] [role='dialog']")) return;
-    switch (event.key) {
+    switch (shortcutKey(event.nativeEvent)) {
       case "j":
       case "]":
         event.preventDefault();

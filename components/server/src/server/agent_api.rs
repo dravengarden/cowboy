@@ -153,6 +153,19 @@ fn arg_u64(args: &Value, key: &str, default: u64, max: u64) -> Result<u64, Strin
     }
 }
 
+// A text window larger than the bound is a request for "as much as fits":
+// clamp it and let range.next continue, instead of a refusal and a retry.
+fn arg_chars(args: &Value, default: u64, max: u64) -> Result<u64, String> {
+    match args.get("chars") {
+        None | Some(Value::Null) => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .filter(|chars| *chars > 0)
+            .map(|chars| chars.min(max))
+            .ok_or_else(|| format!("invalid_argument: chars must be an integer 1..={max}")),
+    }
+}
+
 fn page_limit(args: &Value, default: u64, max: u64) -> Result<usize, String> {
     let limit = arg_u64(args, "limit", default, max)?;
     if limit == 0 {
@@ -582,10 +595,7 @@ fn message_page(messages: &[QueuedMessage], args: &Value) -> Result<Value, Strin
         .transpose()?
         .unwrap_or(0);
     require_page(args, messages.len().saturating_sub(start), limit)?;
-    let chars = arg_u64(args, "chars", 400, 4000)?;
-    if chars == 0 {
-        return Err("invalid_argument".into());
-    }
+    let chars = arg_chars(args, 400, 4000)?;
     messages
         .iter()
         .skip(start)
@@ -660,11 +670,7 @@ fn optional_bool(args: &Value, key: &str) -> Result<bool, String> {
 fn text_window(value: &mut Value, field: &str, args: &Value) -> Result<(), String> {
     let offset = usize::try_from(arg_u64(args, "offset", 0, u64::from(u32::MAX))?)
         .map_err(|_| "invalid_argument")?;
-    let count =
-        usize::try_from(arg_u64(args, "chars", 1000, 4000)?).map_err(|_| "invalid_argument")?;
-    if count == 0 {
-        return Err("invalid_argument".into());
-    }
+    let count = usize::try_from(arg_chars(args, 1000, 4000)?).map_err(|_| "invalid_argument")?;
     if let Some(text) = value[field].as_str() {
         let total = text.chars().count();
         // Older callers may append to an unwindowed document or treat a call
@@ -747,7 +753,7 @@ impl EventQuery {
             after: optional("after")?,
             before: optional("before")?,
             limit: page_limit(args, 20, 100)?,
-            chars: usize::try_from(arg_u64(args, "chars", 400, 4000)?).unwrap_or(4000),
+            chars: usize::try_from(arg_chars(args, 400, 4000)?).unwrap_or(4000),
             kinds,
         })
     }
@@ -1257,7 +1263,7 @@ fn finish(done: bool, mut frame: Value) -> Value {
         if size > MAX_RESULT_BYTES {
             json!({"schema":1,"state":"error","error":{"code":"result_too_large","bytes":size,
                 "limit":MAX_RESULT_BYTES,"largest":largest_fields(&result),
-                "message":"return a projection: map to the needed fields or pass a smaller limit"}})
+                "message":"return a projection: map to the needed fields or pass a smaller limit; long text such as a call result fits one 4000-char window per cowboy_read, so continue from range.next in the next call"}})
         } else {
             json!({"schema":1,"state":"ok","value":result})
         }

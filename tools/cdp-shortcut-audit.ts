@@ -117,7 +117,8 @@ try {
   const regionNow = "document.activeElement?.closest('[data-desktop-region]')?.dataset.desktopRegion";
   await press("k", "KeyK", 75, mac ? 4 : 1);
   await press("p", "KeyP", 80);
-  await waitFor(`${regionNow} === 'prompt.composer'`, "␣P focuses the Prompt");
+  await press("p", "KeyP", 80);
+  await waitFor(`${regionNow} === 'prompt.composer'`, "␣PP focuses the Prompt");
   const hops: [string, string, number, string][] = [
     ["l", "KeyL", 76, "conversation.transcript"],
     ["h", "KeyH", 72, "prompt.composer"],
@@ -197,10 +198,11 @@ try {
     const cases: [string, "normal" | "insert", string, string, number, string][] = [
       ["␣C from Normal", "normal", "c", "KeyC", 67, "conversation.transcript"],
       ["⌘K C from Insert", "insert", "c", "KeyC", 67, "conversation.transcript"],
-      ["⌘K P from Insert", "insert", "p", "KeyP", 80, "prompt.composer"],
+      ["⌘K PP from Insert", "insert", "p", "KeyP", 80, "prompt.composer"],
     ];
     for (const [name, mode, key, code, keyCode, region] of cases) {
       await press("k", "KeyK", 75, mac ? 4 : 1);
+      await press("p", "KeyP", 80);
       await press("p", "KeyP", 80);
       await press("Escape", "Escape", 27);
       await waitFor("document.activeElement?.hasAttribute('data-vim-command-sink')", `${name}: Prompt in Vim Normal`);
@@ -217,8 +219,11 @@ try {
         `${content}.getAttribute('contenteditable') === 'false' && document.activeElement === ${focused === "document.activeElement" ? "document.activeElement" : content}`,
         `${name}: the editor is locked while the leader waits, focus kept`,
       );
-      await page.send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: keyCode, text: key });
-      await page.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: keyCode });
+      // The Prompt is a group: its focus key is doubled (`␣PP`).
+      for (let stroke = 0; stroke < (key === "p" ? 2 : 1); stroke += 1) {
+        await page.send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: keyCode, text: key });
+        await page.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: keyCode });
+      }
       await waitFor(
         `document.activeElement?.closest('[data-desktop-region]')?.dataset.desktopRegion === '${region}'`,
         `${name} reaches ${region}`,
@@ -237,6 +242,7 @@ try {
     const css = await readFile("web/src/mdlive/styles/inline-preview.css", "utf8");
     await page.evaluate(`(() => { const s = document.createElement("style"); s.textContent = ${JSON.stringify(css)}; document.head.append(s); return true; })()`);
     await press("k", "KeyK", 75, mac ? 4 : 1);
+    await press("p", "KeyP", 80);
     await press("p", "KeyP", 80);
     await press("Escape", "Escape", 27);
     await press("i", "KeyI", 73);
@@ -331,7 +337,8 @@ try {
   {
     await press("k", "KeyK", 75, mac ? 4 : 1);
     await press("p", "KeyP", 80);
-    await waitFor(`${regionNow} === 'prompt.composer'`, "␣P focuses the Prompt for the palette probe");
+    await press("p", "KeyP", 80);
+    await waitFor(`${regionNow} === 'prompt.composer'`, "␣PP focuses the Prompt for the palette probe");
     const follow = "document.querySelector('[data-desktop-conversation-follow]')";
     const pressed = `${follow}?.getAttribute('aria-pressed')`;
     const before = await page.evaluate<string | null>(pressed);

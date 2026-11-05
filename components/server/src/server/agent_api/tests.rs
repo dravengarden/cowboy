@@ -52,6 +52,13 @@ fn large_text_pages_preserve_unicode_and_signal_the_exact_continuation() {
     assert_eq!(result["range"]["next"], Value::Null);
     assert_eq!(result["truncated"], true);
     assert!(text_window(&mut result, "text", &json!({"chars":0})).is_err());
+    // An oversized window is "as much as fits", continued from range.next.
+    let mut large = json!({"body": original});
+    text_window(&mut large, "body", &json!({"offset":0,"chars":12_000})).unwrap();
+    assert_eq!(
+        large["range"],
+        json!({"offset":0,"next":4000,"total":400_000})
+    );
     assert!(text_window(&mut result, "text", &json!({"offset":-1})).is_err());
     let mut default_page = json!({"body": original});
     assert_eq!(

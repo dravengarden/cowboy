@@ -17,8 +17,8 @@ const pendingBindings = await readFile(
 const composer = await readFile(
   new URL("../../Composer.tsx", import.meta.url), "utf8",
 );
-const topbar = await readFile(
-  new URL("../DesktopTopBarControls.tsx", import.meta.url), "utf8",
+const sessionActions = await readFile(
+  new URL("../useDesktopSessionActions.tsx", import.meta.url), "utf8",
 );
 const workspaceController = await readFile(
   new URL("../DesktopWorkspaceController.tsx", import.meta.url), "utf8",
@@ -114,8 +114,9 @@ test("low-frequency Option letter bindings are palette-only", () => {
 });
 
 test("Stop is global Mod-period and Escape no longer arms navigation", () => {
-  const start = topbar.indexOf('id: "topbar.stop"');
-  const stop = topbar.slice(start, topbar.indexOf("], []);", start));
+  const start = sessionActions.indexOf('id: "session.stop"');
+  const stop = sessionActions.slice(start, sessionActions.indexOf("}), [busy]);", start));
+  assert(start >= 0);
   assert(stop.includes("shortcut: DESKTOP_SHORTCUTS.stop"));
   assert(stop.includes("allowInEditor: true"));
   assertEquals(stop.includes("regions:"), false);

@@ -4,10 +4,14 @@ import { assertEquals } from "@std/assert";
 import {
   nextRunConfigChoiceIndex,
   runConfigKeyAction,
+  runConfigMotionAction,
 } from "./runConfigKeyboard.ts";
 
 const controlsSource = await readFile(
   new URL("./DesktopTopBarControls.tsx", import.meta.url), "utf8",
+);
+const navigationSource = await readFile(
+  new URL("./runConfigNavigation.ts", import.meta.url), "utf8",
 );
 
 test("run configuration accepts standard arrows and Vim motions", () => {
@@ -20,13 +24,34 @@ test("run configuration accepts standard arrows and Vim motions", () => {
 test("run configuration mnemonic keys are direct field actions", () => {
   assertEquals(runConfigKeyAction("A"), { type: "direct", shortcut: "a" });
   assertEquals(runConfigKeyAction("m"), { type: "direct", shortcut: "m" });
+  assertEquals(runConfigKeyAction("p"), { type: "direct", shortcut: "p" });
   assertEquals(runConfigKeyAction("x"), null);
 });
 
-test("run configuration number keys select recommended presets", () => {
+test("run configuration number keys select every visible preset", () => {
   assertEquals(runConfigKeyAction("1"), { type: "preset", index: 0 });
-  assertEquals(runConfigKeyAction("2"), { type: "preset", index: 1 });
   assertEquals(runConfigKeyAction("3"), { type: "preset", index: 2 });
+  // The bar advertises 1–6 for six presets; 4–6 used to do nothing.
+  assertEquals(runConfigKeyAction("6"), { type: "preset", index: 5 });
+  assertEquals(runConfigKeyAction("9"), { type: "preset", index: 8 });
+  assertEquals(runConfigKeyAction("0"), null);
+});
+
+test("run configuration panes and ends follow Vim", () => {
+  assertEquals(runConfigKeyAction("]"), { type: "pane", delta: 1, wrap: true });
+  assertEquals(runConfigKeyAction("["), {
+    type: "pane",
+    delta: -1,
+    wrap: true,
+  });
+  assertEquals(runConfigMotionAction("l"), {
+    type: "pane",
+    delta: 1,
+    wrap: false,
+  });
+  assertEquals(runConfigMotionAction("j"), { type: "field", delta: 1 });
+  assertEquals(runConfigKeyAction("g"), { type: "go" });
+  assertEquals(runConfigKeyAction("G"), { type: "edge", edge: "last" });
 });
 
 test("choice navigation clamps while direct field actions wrap", () => {
@@ -38,26 +63,29 @@ test("choice navigation clamps while direct field actions wrap", () => {
 });
 
 test("run configuration shortcuts apply choices instead of only moving focus", () => {
-  assertEquals(controlsSource.includes("choice.click();"), true);
+  assertEquals(navigationSource.includes("choice.click();"), true);
   assertEquals(
-    controlsSource.includes('choice.hasAttribute("data-config-select")'),
+    navigationSource.includes('choice.hasAttribute("data-config-select")'),
     true,
   );
+  assertEquals(navigationSource.includes('new MouseEvent("mousedown"'), true);
+  assertEquals(navigationSource.includes('action.type === "direct"'), true);
   assertEquals(
-    controlsSource.includes('new MouseEvent("mousedown"'),
-    true,
-  );
-  assertEquals(controlsSource.includes('action.type === "direct"'), true);
-  assertEquals(
-    controlsSource.includes('{ shortcut: "←/→", label: "Change" }'),
+    controlsSource.includes('{ shortcut: "H/L", label: "Change" }'),
     true,
   );
   assertEquals(
     controlsSource.includes('directConfigShortcuts.join("/")'),
     true,
   );
-  assertEquals(
-    controlsSource.includes("(selected ?? choices[0])?.focus();"),
-    true,
-  );
+  assertEquals(controlsSource.includes("focusConfigRow(firstRow)"), true);
+});
+
+test("run configuration fills the window as side-by-side panes", () => {
+  assertEquals(controlsSource.includes('title="Run configuration"'), true);
+  assertEquals(/title="Run configuration"[\s\S]{0,400}\n\s+fill\n/.test(controlsSource), true);
+  for (const pane of ["agent", "context", "tools"]) {
+    assertEquals(controlsSource.includes(`pane="${pane}"`), true);
+  }
+  assertEquals(controlsSource.includes('"agent context tools"'), true);
 });

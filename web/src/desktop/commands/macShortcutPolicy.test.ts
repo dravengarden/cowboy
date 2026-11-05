@@ -34,7 +34,7 @@ test("macOS destructive and system shortcuts are rejected", () => {
 
 test("common Command shortcuts require matching product semantics", () => {
   assertEquals(macShortcutConflict("composer.saveDraft", "Mod+S"), null);
-  assertEquals(macShortcutConflict("topbar.stop", "Mod+."), null);
+  assertEquals(macShortcutConflict("session.stop", "Mod+."), null);
   assertEquals(macShortcutConflict("workspace.prefix", "Mod+K"), null);
   assertEquals(macShortcutConflict("update.reload", "Mod+R"), null);
   assertThrows(() => assertMacShortcutAllowed("unrelated", "Mod+R"));
