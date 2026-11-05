@@ -378,41 +378,14 @@ async fn checked(
                 error
             }
         })?;
-    let binding = match response {
-        Response::Prepared { binding } if !already_committed => binding,
-        Response::Call {
-            response: crate::execution_protocol::Response::Ready { scope, .. },
-        } if already_committed => {
-            let binding = expected.decode()?;
-            if scope != crate::execution_protocol::Scope::from_binding(&binding) {
-                return Err("Recovered execution scope changed".into());
-            }
-            binding
-        }
-        Response::Refused {
-            reason: crate::machine_protocol::execution::Refusal::EnvironmentLost,
-        } if already_committed => {
-            state
-                .execution_readiness
-                .forget(session, &expected.decode()?);
-            // The next preflight starts a new operation from the installed
-            // binding. Never mutate the old operation after its commit.
-            return Err(if grant.is_none() {
-                target_not_ready()
-            } else {
-                "Committed execution environment was lost; wake the session to recover its current binding".into()
-            });
-        }
-        Response::Refused { reason } if grant.is_none() && transient(reason) => {
-            return Err(target_not_ready());
-        }
-        Response::Refused { reason } => {
-            return Err(format!(
-                "Target recovery refused ({reason:?}); repeat only the saved request to observe it"
-            ));
-        }
-        _ => return Err("Unexpected target recovery response".into()),
-    };
+    let binding = recovered_binding(
+        state,
+        session,
+        grant.is_none(),
+        already_committed,
+        expected,
+        response,
+    )?;
     if !intent.accepts(&binding) {
         return Err("Target recovery returned a different binding".into());
     }
@@ -476,6 +449,49 @@ async fn checked(
         "outcome":"recovered","runtime_readiness":"observe_session","queue":if grant.is_some() {"paused_for_inspection"} else {"pending_delivery"}}),
         reload,
     ))
+}
+
+/// The binding a target recovery response proves: a freshly prepared one, or
+/// the installed one re-observed for an already committed operation.
+fn recovered_binding(
+    state: &Arc<AppState>,
+    session: &str,
+    automatic: bool,
+    already_committed: bool,
+    expected: &ExecutionBinding,
+    response: Response,
+) -> Result<BindingV1, String> {
+    match response {
+        Response::Prepared { binding } if !already_committed => Ok(binding),
+        Response::Call {
+            response: crate::execution_protocol::Response::Ready { scope, .. },
+        } if already_committed => {
+            let binding = expected.decode()?;
+            if scope != crate::execution_protocol::Scope::from_binding(&binding) {
+                return Err("Recovered execution scope changed".into());
+            }
+            Ok(binding)
+        }
+        Response::Refused {
+            reason: crate::machine_protocol::execution::Refusal::EnvironmentLost,
+        } if already_committed => {
+            state
+                .execution_readiness
+                .forget(session, &expected.decode()?);
+            // The next preflight starts a new operation from the installed
+            // binding. Never mutate the old operation after its commit.
+            Err(if automatic {
+                target_not_ready()
+            } else {
+                "Committed execution environment was lost; wake the session to recover its current binding".into()
+            })
+        }
+        Response::Refused { reason } if automatic && transient(reason) => Err(target_not_ready()),
+        Response::Refused { reason } => Err(format!(
+            "Target recovery refused ({reason:?}); repeat only the saved request to observe it"
+        )),
+        _ => Err("Unexpected target recovery response".into()),
+    }
 }
 
 /// Repeating a committed operation only observes the installed lifetime.
