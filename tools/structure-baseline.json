@@ -65,7 +65,8 @@
     "web/src/explore/ExploreSurface.tsx": 2450,
     "web/src/mdlive/inline-preview.ts": 946,
     "web/src/mobile/review/CodeViewer.tsx": 1058,
-    "web/src/mobile/review/ReviewApp.tsx": 4423,
+    "web/src/mobile/review/DocumentView.tsx": 1779,
+    "web/src/mobile/review/ReviewApp.tsx": 2590,
     "web/src/mobile/review/ReviewChanges.tsx": 808,
     "web/src/mobile/review/ReviewFileTree.tsx": 883,
     "web/src/mobile/review/ReviewRepository.tsx": 1072,
@@ -314,10 +315,10 @@
     "web/src/mdlive/inline-preview.ts::buildInlineDecorations": 355,
     "web/src/mobile/MobileSyncPill.tsx::MobileSyncPill": 235,
     "web/src/mobile/review/CodeViewer.tsx::CodeViewer": 708,
+    "web/src/mobile/review/DocumentView.tsx::DocumentView": 1681,
     "web/src/mobile/review/RemotePullPicker.tsx::RemotePullPicker": 474,
     "web/src/mobile/review/RemoteReviewApp.tsx::PullRequest": 314,
     "web/src/mobile/review/RemoteReviewApp.tsx::RemoteReviewApp": 193,
-    "web/src/mobile/review/ReviewApp.tsx::DocumentView": 1681,
     "web/src/mobile/review/ReviewApp.tsx::ReviewApp": 2254,
     "web/src/mobile/review/ReviewChanges.tsx::GitTreeRows": 162,
     "web/src/mobile/review/ReviewChanges.tsx::ReviewChanges": 562,
@@ -358,6 +359,7 @@
     "web/src/SettingsShell.tsx": 44,
     "web/src/Transcript.tsx": 131,
     "web/src/explore/ExploreSurface.tsx": 93,
-    "web/src/mobile/review/ReviewApp.tsx": 162
+    "web/src/mobile/review/DocumentView.tsx": 71,
+    "web/src/mobile/review/ReviewApp.tsx": 91
   }
 }

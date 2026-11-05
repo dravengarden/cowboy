@@ -11,6 +11,10 @@ export const SPLIT_SOURCES = {
   "App.tsx": ["./App.tsx", "./SettingsShell.tsx", "./SessionList.tsx"],
   "Transcript.tsx": ["./Transcript.tsx", "./ToolDetailsBrowser.tsx"],
   "Composer.tsx": ["./Composer.tsx", "./PendingPanel.tsx"],
+  "mobile/review/ReviewApp.tsx": [
+    "./mobile/review/ReviewApp.tsx",
+    "./mobile/review/DocumentView.tsx",
+  ],
 } as const;
 
 export async function readSplitSource(
@@ -50,6 +54,10 @@ export function readComposerSource(): Promise<string> {
   return readSplitSource("Composer.tsx");
 }
 
+export function readReviewAppSource(): Promise<string> {
+  return readSplitSource("mobile/review/ReviewApp.tsx");
+}
+
 test("each combined source includes every module split out of it", async () => {
   const app = await readAppSource();
   assert(app.includes("export function App("));
@@ -62,4 +70,6 @@ test("each combined source includes every module split out of it", async () => {
   assert(transcript.includes("export function ToolDetailsBrowser("));
   const composer = await readComposerSource();
   assert(composer.includes("export function PendingPanel("));
+  const review = await readReviewAppSource();
+  assert(review.includes("export function DocumentView("));
 });

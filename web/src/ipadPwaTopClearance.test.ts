@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
-import { readAppSource } from "./appSource.test.ts";
+import { readAppSource, readReviewAppSource } from "./appSource.test.ts";
 
 const html = await readFile(
   new URL("../index.html", import.meta.url), "utf8",
@@ -10,9 +10,7 @@ const appSource = await readAppSource();
 const themeSource = await readFile(
   new URL("./theme.ts", import.meta.url), "utf8",
 );
-const reviewSource = await readFile(
-  new URL("./mobile/review/ReviewApp.tsx", import.meta.url), "utf8",
-);
+const reviewSource = await readReviewAppSource();
 const repositorySource = await readFile(
   new URL("./mobile/review/ReviewRepository.tsx", import.meta.url), "utf8",
 );

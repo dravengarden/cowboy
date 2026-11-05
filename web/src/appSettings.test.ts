@@ -5,11 +5,9 @@ import {
   appSettingsFromEvent,
   OPEN_APP_SETTINGS_EVENT,
 } from "./appSettings.ts";
-import { readAppSource } from "./appSource.test.ts";
+import { readAppSource, readReviewAppSource } from "./appSource.test.ts";
 
-const reviewAppSource = await readFile(
-  new URL("./mobile/review/ReviewApp.tsx", import.meta.url), "utf8",
-);
+const reviewAppSource = await readReviewAppSource();
 const reviewSettingsSource = await readFile(
   new URL("./mobile/review/ReviewSettings.tsx", import.meta.url), "utf8",
 );

@@ -13,6 +13,7 @@ import {
   directoryTreeCacheKey,
   directoryTreeCacheScope,
 } from "./directoryTreeModel.ts";
+import { readReviewAppSource } from "../../appSource.test.ts";
 
 test("directory cache follows a session workspace retarget", () => {
   const sourceScope = directoryTreeCacheScope(
@@ -83,9 +84,7 @@ test("review tree wires workspace identity and stale-folder recovery", async () 
   const treeSource = await readFile(
     new URL("./ReviewFileTree.tsx", import.meta.url), "utf8",
   );
-  const appSource = await readFile(
-    new URL("./ReviewApp.tsx", import.meta.url), "utf8",
-  );
+  const appSource = await readReviewAppSource();
 
   assertStringIncludes(
     treeSource,

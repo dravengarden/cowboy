@@ -6,6 +6,7 @@ import {
   resolveReviewLink,
   resolveWorkspacePath,
 } from "./reviewLinkTarget.ts";
+import { readReviewAppSource } from "../../appSource.test.ts";
 
 const DOC = "docs/marketplace-service/zh/00-orientation.md";
 
@@ -121,9 +122,7 @@ test("heading slugs survive punctuation and Chinese headings", () => {
   assertEquals(headingSlug("  Spaced  Out  "), "spaced-out");
 });
 
-const reviewApp = await readFile(
-  new URL("./ReviewApp.tsx", import.meta.url), "utf8",
-);
+const reviewApp = await readReviewAppSource();
 const markdown = await readFile(
   new URL("../../Markdown.tsx", import.meta.url), "utf8",
 );

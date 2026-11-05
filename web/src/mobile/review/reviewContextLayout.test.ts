@@ -1,10 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals, assertStringIncludes } from "@std/assert";
+import { readReviewAppSource } from "../../appSource.test.ts";
 
-const source = await readFile(
-  new URL("./ReviewApp.tsx", import.meta.url), "utf8",
-);
+const source = await readReviewAppSource();
 const treeSource = await readFile(
   new URL("./ReviewFileTree.tsx", import.meta.url), "utf8",
 );
