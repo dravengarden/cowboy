@@ -3609,104 +3609,6 @@ struct ProductAuthSessionSnapshot {
     next_due_at_ms: i64,
 }
 
-/// Derive a short session title from the first prompt: the first non-empty
-/// line, whitespace-collapsed and truncated. Prefers the legacy `text` field;
-/// falls back to the first text block in `content` (attachment prompts carry
-/// their text there). Returns None for an attachment-only / empty prompt.
-fn first_prompt_title(text: &str, content: &[serde_json::Value]) -> Option<String> {
-    // Cap length on a char boundary so a long first line stays a label, not a
-    // paragraph.
-    const MAX: usize = 60;
-    let raw = if text.trim().is_empty() {
-        content.iter().find_map(|v| {
-            if v.get("type").and_then(serde_json::Value::as_str) == Some("text") {
-                v.get("text")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            } else {
-                None
-            }
-        })?
-    } else {
-        text.to_owned()
-    };
-    let line = raw.lines().map(str::trim).find(|l| !l.is_empty())?;
-    let collapsed = line.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return None;
-    }
-    // Append an ellipsis when the first line is cut to MAX.
-    if collapsed.chars().count() > MAX {
-        let head: String = collapsed.chars().take(MAX).collect();
-        Some(format!("{head}…"))
-    } else {
-        Some(collapsed)
-    }
-}
-
-#[allow(clippy::too_many_lines)] // one cohesive command-dispatch match
-/// Address a replayed edit or removal whose row already left the queue or
-/// drafts. The session itself still exists, so the outcome is `stale` rather
-/// than `not_found`; a command without a client id has no outbox entry to
-/// retire and stays a silent no-op.
-fn report_stale_row(state: &AppState, session_id: &str, cmid: Option<&str>) {
-    if let Some(cmid) = cmid {
-        state.hub.command_result(
-            session_id,
-            cmid,
-            CommandOutcome::Stale,
-            "this message no longer exists",
-        );
-    }
-}
-
-/// The folder tree a principal organizes: their own while product auth is on,
-/// the shared unowned tree while it is off (mirroring session ownership).
-fn folder_actor(state: &AppState, principal: &ProductPrincipal) -> FolderActor {
-    FolderActor {
-        user_id: state
-            .product_auth_enabled
-            .then(|| principal.user_id.clone()),
-        sees_all: principal.sees_every_session(),
-    }
-}
-
-fn apply_visible_reorder(
-    state: &AppState,
-    principal: &ProductPrincipal,
-    order: &[String],
-) -> Result<(), String> {
-    if !principal.can_reorder() {
-        return Err("viewers cannot reorder sessions".to_owned());
-    }
-    let submitted = order
-        .iter()
-        .map(|id| serde_json::Value::String(id.clone()))
-        .collect::<Vec<_>>();
-    let filtered = filter_submitted_order(state, principal, &submitted);
-    state.hub.reorder_sessions(&filtered);
-    Ok(())
-}
-
-fn filter_submitted_order(
-    state: &AppState,
-    principal: &ProductPrincipal,
-    submitted: &[serde_json::Value],
-) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    submitted
-        .iter()
-        .filter_map(serde_json::Value::as_str)
-        .filter_map(|id| {
-            let info = state.hub.session_info(id)?;
-            principal
-                .can_see(info.meta.owner_user_id.as_deref())
-                .then(|| id.to_owned())
-        })
-        .filter(|id| seen.insert(id.clone()))
-        .collect()
-}
-
 #[cfg(test)]
 mod code_file_policy_tests;
 
@@ -3787,3 +3689,5 @@ use provider_auth_flow::*;
 
 mod code_context;
 use code_context::*;
+mod client_commands;
+use client_commands::*;
