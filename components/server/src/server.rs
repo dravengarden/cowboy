@@ -724,7 +724,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Arc::clone(&state),
         state.shutdown.clone(),
     ));
-    let mut dispatcher_task = spawn_dispatcher(&state, dispatch_rx);
+    let dispatcher_task = spawn_dispatcher(&state, dispatch_rx);
 
     let runtime_router = Arc::clone(&state.runtime_router);
     let result = serve_axum(args.bind, args.data_dir.clone(), state, shutdown_tx).await;
@@ -734,37 +734,20 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     if let Err(error) = catalog_watcher.shutdown().await {
         tracing::error!(%error, "Catalog observer failed during shutdown");
     }
-    scheduler_task.abort();
-    reset_task.abort();
-    runtime_reconciliation_task.abort();
-    web_push_task.abort();
-    match tokio::time::timeout(std::time::Duration::from_secs(5), &mut dispatcher_task).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => tracing::error!(%error, "dispatcher task failed during shutdown"),
-        Err(_) => {
-            tracing::warn!(
-                "dispatcher still returning undelivered prompts; keeping persistence alive"
-            );
-            if let Err(error) = dispatcher_task.await {
-                tracing::error!(%error, "dispatcher failed while finishing shutdown retention");
-            }
-        }
+    ControllerTasks {
+        scheduler_task,
+        reset_task,
+        runtime_reconciliation_task,
+        web_push_task,
+        dispatcher_task,
+        purge_task,
+        machine_presence_task,
+        telemetry_shutdown,
+        store_shutdown_tx,
+        writer_task,
     }
-    if let Some(task) = purge_task {
-        task.abort();
-    }
-    if let Some(task) = machine_presence_task {
-        task.abort();
-    }
-    telemetry_shutdown.drain().await;
-    let _ = store_shutdown_tx.send(true);
-    if let Some(task) = writer_task {
-        match tokio::time::timeout(std::time::Duration::from_secs(10), task).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::error!(%error, "store writer task failed during shutdown"),
-            Err(_) => tracing::error!("store writer did not drain within shutdown deadline"),
-        }
-    }
+    .shutdown()
+    .await;
     log_guard.finish(result)
 }
 
