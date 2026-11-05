@@ -22,7 +22,8 @@ const LOCAL_PROVIDER_REVISION: &[u8] = b"local-v2-project-projection";
 
 pub mod content_search;
 mod git;
-use git::{git_fetch, git_output};
+pub mod structure;
+use git::{git_fetch, git_output, git_path_is_tracked};
 
 #[cfg(test)]
 mod diff_tests;
@@ -1513,10 +1514,6 @@ fn ensure_git_worktree(root: &Path) -> Result<(), String> {
             }
         })
         .map(|_| ())
-}
-
-fn git_path_is_tracked(root: &Path, path: &str) -> bool {
-    git_output(root, &["ls-files", "--error-unmatch", "--", path], 1024).is_ok()
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {

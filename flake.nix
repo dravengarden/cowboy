@@ -225,6 +225,7 @@
           ./src/code_review.rs
           ./src/code_review/git.rs
           ./src/code_review/content_search.rs
+          ./src/code_review/structure.rs
           ./src/code_review/git_parse.rs
           ./src/files.rs
           ./src/workspace_roots.rs
@@ -389,7 +390,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-461v/gPIrlDqg5Ng7V1hfww/p+lureWZEWbAp9sd7QA=";
+        hash = "sha256-fgCDaQouL61uerU8eJDpwN9NwXgc0lClsa9nFBcgEyE=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';

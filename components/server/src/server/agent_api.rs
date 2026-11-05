@@ -232,7 +232,7 @@ impl Host for SessionHost<'_> {
             | "configuration.read"
             | "usage.diagnostics" => observations::read(self.state, self.meta, op, &args).await,
             "api.help" => help(&args),
-            "code.search" => code_reads::read(self.state, self.meta, op, &args).await,
+            op if op.starts_with("code.") => self.code(op, &args).await,
             "session.event" | "sessions.event" => {
                 let value = event_reads::read(
                     &self.state.hub,
@@ -524,6 +524,10 @@ impl Host for SessionHost<'_> {
 
 impl SessionHost<'_> {
     /// Call observations share the gateway's exact contract.
+    async fn code(&self, op: &str, args: &Value) -> Result<Value, String> {
+        code_reads::read(self.state, self.meta, op, args).await
+    }
+
     async fn calls(&self, action: Action) -> Result<Value, String> {
         let mut value =
             super::managed_calls::dispatch_calls(self.state, self.meta, self.ledger, action).await;

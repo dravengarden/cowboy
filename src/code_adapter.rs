@@ -65,6 +65,14 @@ pub enum CodeOperation {
     ContentSearch {
         query: crate::code_review::content_search::ContentQuery,
     },
+    /// Syntax outline of one file; Machines that predate it refuse.
+    Outline {
+        path: String,
+    },
+    WorkspaceSymbols {
+        query: String,
+        limit: usize,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -81,6 +89,8 @@ pub enum CodeAdapterResponse {
     File(crate::code_review::FileDocument),
     FileRaw(crate::code_review::RawFileDocument),
     ContentSearch(crate::code_review::content_search::ContentSearchResult),
+    Outline(Vec<crate::code_review::structure::StructureSymbol>),
+    WorkspaceSymbols(crate::code_review::structure::WorkspaceSymbols),
 }
 
 pub async fn serve(socket: &Path, roots: Vec<PathBuf>) -> Result<()> {
@@ -203,6 +213,13 @@ fn execute(request: CodeAdapterRequest, roots: &[PathBuf]) -> Result<CodeAdapter
         }
         CodeOperation::ContentSearch { query } => CodeAdapterResponse::ContentSearch(
             crate::code_review::content_search::search(&root, &query)
+                .map_err(anyhow::Error::msg)?,
+        ),
+        CodeOperation::Outline { path } => CodeAdapterResponse::Outline(
+            crate::code_review::structure::outline(&root, &path).map_err(anyhow::Error::msg)?,
+        ),
+        CodeOperation::WorkspaceSymbols { query, limit } => CodeAdapterResponse::WorkspaceSymbols(
+            crate::code_review::structure::workspace_symbols(&root, &query, limit)
                 .map_err(anyhow::Error::msg)?,
         ),
     })

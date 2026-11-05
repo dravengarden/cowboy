@@ -239,6 +239,9 @@ const cowboy = strict(Object.freeze({
   code: namespace("code", {
     search: (text, q) =>
       typeof text === "string" ? ({ ...q, query: text }) : (text ?? {}),
+    outline: keyed("path", []),
+    symbols: (text, q) =>
+      typeof text === "string" ? ({ ...q, query: text }) : (text ?? {}),
   }),
 }), "cowboy", "; help is cowboy.api.help(topic)");
 

@@ -58,10 +58,15 @@ pub(in crate::server) async fn read(
             if path.is_empty() {
                 return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
             }
+            let outline = matches!(query, Query::Outline);
+            let requested = path;
             if !state
                 .hub
                 .language_servers_allowed(session.session().session_id())
             {
+                if outline {
+                    return structure_outline(state, &scope, session.session().cwd(), path).await;
+                }
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     "project language servers are off for this session",
@@ -73,6 +78,9 @@ pub(in crate::server) async fn read(
                 session.session().cwd(),
                 path,
             ) else {
+                if outline {
+                    return structure_outline(state, &scope, session.session().cwd(), path).await;
+                }
                 return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable")
                     .into_response();
             };
@@ -92,6 +100,9 @@ pub(in crate::server) async fn read(
             .await
             {
                 Ok(response) => project(query, response),
+                Err(_) if outline => {
+                    structure_outline(state, &scope, session.session().cwd(), requested).await
+                }
                 Err(error) => {
                     tracing::debug!(session = %id, %error, "Zed language query failed");
                     (
@@ -104,6 +115,26 @@ pub(in crate::server) async fn read(
         },
     )
     .await
+}
+
+/// Without a usable language engine the outline comes from syntax. It keeps
+/// the response shape and says `precision: "heuristic"`.
+async fn structure_outline(
+    state: &crate::server::AppState,
+    scope: &CodeReadScope,
+    cwd: &str,
+    path: &str,
+) -> Response {
+    match crate::server::structure_outline(state, scope, cwd.to_owned(), path.to_owned()).await {
+        Ok(symbols) => Json(serde_json::json!({
+            "apiVersion": 1,
+            "path": path,
+            "symbols": symbols,
+            "precision": "heuristic",
+        }))
+        .into_response(),
+        Err((status, message)) => (status, message).into_response(),
+    }
 }
 
 fn project(query: Query, response: ZedAdapterResponse) -> Response {

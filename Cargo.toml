@@ -102,6 +102,16 @@ regex = "1"
 # Helix / Zed use). See src/files.rs.
 ignore = "0.4"
 nucleo-matcher = "0.3"
+# Review structure (outline/symbols) without a language server: static,
+# MIT-licensed grammars and their upstream tag queries. See
+# src/code_review/structure.rs.
+tree-sitter = "0.27"
+tree-sitter-tags = "0.27"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-go = "0.25"
 toml = { version = "1", default-features = false, features = ["parse", "display", "serde", "std"] }
 
 # The long-lived control plane handles bursty restore/transcript allocations.
