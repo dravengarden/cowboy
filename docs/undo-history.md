@@ -48,4 +48,4 @@ when the history opens.
 
 - The history button on an undoable notice.
 - **Undo history** in the Trash actions sheet (Mobile and Desktop).
-- Desktop `␣I` and the command palette ("Undo history…").
+- Desktop `␣SU` and the command palette ("Undo history…").

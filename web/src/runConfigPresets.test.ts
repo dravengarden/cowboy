@@ -163,9 +163,11 @@ test("another model's reasoning limits do not hide signed recommendations", () =
   assertEquals(supportedRunConfigPresets([astra], live.slice(0, 1)), []);
 });
 
-const desktopSource = await readFile(
-  new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url), "utf8",
-);
+// The Desktop Run configuration: its fields and the dialog around them.
+const desktopSource = (await Promise.all([
+  "./desktop/RunConfigControls.tsx",
+  "./desktop/RunConfigurationDialog.tsx",
+].map((path) => readFile(new URL(path, import.meta.url), "utf8")))).join("\n");
 const composerSource = await readFile(
   new URL("./Composer.tsx", import.meta.url), "utf8",
 );
@@ -175,7 +177,7 @@ const storeSource = await readFile(
 
 test("desktop and mobile expose presets with surface-native interactions", () => {
   assertEquals(desktopSource.includes("data-config-preset={index}"), true);
-  assertEquals(desktopSource.includes("presetShortcutLabel"), true);
+  assertEquals(desktopSource.includes('label: "Preset"'), true);
   assertEquals(composerSource.includes("minHeight: 58"), true);
   assertEquals(composerSource.includes("in={showAgentDetails}"), true);
   assertEquals(composerSource.includes("setCustomizeAgent(false)"), true);

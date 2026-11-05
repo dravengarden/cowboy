@@ -21,6 +21,28 @@ import { vimCommandKey } from "./vimCommandKey";
 import { syncVimCursorOwnership } from "./vimCursorOwnership";
 import { getVimConfigSource, subscribeVimConfigSource } from "../../vimSetting";
 import { parseVimConfig } from "./vimConfig";
+import { DESKTOP_EDITOR_INSERT_EVENT } from "../editorInsert";
+
+/** `␣I` (editorInsert.ts): the first Vim editor of the region the leader
+ *  addresses takes focus and Vim's `i` at its caret, unless already in Insert. */
+const editorInsert = ViewPlugin.define((view) => {
+  const onInsert = (event: Event): void => {
+    const target = event.target;
+    if (event.defaultPrevented || !(target instanceof Node)) return;
+    if (!target.contains(view.dom)) return;
+    event.preventDefault();
+    view.focus();
+    const cm = getCM(view);
+    if (!cm || cm.state.vim?.insertMode) return;
+    Vim.handleKey(cm, "<Esc>", "user");
+    Vim.handleKey(cm, "i", "user");
+  };
+  document.addEventListener(DESKTOP_EDITOR_INSERT_EVENT, onInsert);
+  return {
+    destroy: () =>
+      document.removeEventListener(DESKTOP_EDITOR_INSERT_EVENT, onInsert),
+  };
+});
 
 /** Apply the user's Vim configuration to codemirror-vim's global keymap.
  *  `mapclear` removes only user mappings, so re-applying after an edit
@@ -563,5 +585,5 @@ export function createImeAutoInsertVim(): {
     decorations: (plugin) => plugin.decorations,
   });
 
-  return { extension: [autoInsert, vim(), commandSink, visualSelection], getCM };
+  return { extension: [autoInsert, vim(), commandSink, visualSelection, editorInsert], getCM };
 }

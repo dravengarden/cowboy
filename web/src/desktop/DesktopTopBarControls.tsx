@@ -1,5 +1,4 @@
 import { desktopSize } from "../surface/desktopSize";
-import { ConfigRevertBack } from "../ConfigRevertBack";
 import { refreshAllUsage } from "../usageRefresh";
 import { ProviderUsageCredits } from "../ProviderUsageCredits";
 import {
@@ -21,10 +20,7 @@ import {
   DialogContentText,
   DialogTitle,
   Divider,
-  FormControl,
   LinearProgress,
-  MenuItem,
-  Select,
   Skeleton,
   Stack,
   TextField,
@@ -42,7 +38,6 @@ import {
   Upgrade,
 } from "@mui/icons-material";
 import {
-  type HTMLAttributes,
   useCallback,
   useEffect,
   useMemo,
@@ -53,45 +48,19 @@ import { Kbd, useConfirmEnter } from "../Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
 import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
-import { regionMotionKey } from "./commands/regionNavigation";
-import {
-  enterModalNormal,
-  isModalTextField,
-} from "./commands/modalNavigation";
-import {
-  focusConfigRow,
-  RUN_CONFIG_OWN_KEYS,
-  RUN_CONFIG_STEP_EVENT,
-  runConfigKey,
-  trackRunConfigCursor,
-} from "./runConfigNavigation";
 import type { ConfigOption, Status } from "../protocol";
 import {
-  providerConfigOptionDisabled,
   providerConfigOptionOrder,
-  type ProviderConfigOptionPresentation,
   providerConfigOptionPresentations,
   providerConfigOptions,
 } from "../providerConfigOptions";
 import {
-  activeRunConfigPreset,
-  type RunConfigDraft,
-  runConfigDraftChanges,
-  type RunConfigPreset,
-  runConfigPresetChanges,
-  runConfigPresets,
-  withRunConfigDraft,
-} from "../runConfigPresets";
-import {
   loadUsageSnapshot,
   requestUsageRefresh,
-  setSessionConfigOptions,
   useStoreSelector,
 } from "../store";
 import { NetworkButton } from "../NetworkActionFeedback";
 import { SessionReloadDialog } from "../SessionReloadDialog";
-import { SessionToolsSection } from "../AgentToolsPanel";
-import { SessionContextSettings } from "../SessionContextSettings";
 import { ProviderUpdateDialog } from "../ProviderUpdateDialog";
 import {
   providerUpdateScheduleText,
@@ -141,6 +110,8 @@ import { useSubscriptionAccounts } from "../subscriptionAccounts";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
 import { registeredUsageAccounts, type UsageAccountCard } from "../usageAccounts";
 import { DesktopModal } from "./DesktopModal";
+import { RunConfigurationDialog } from "./RunConfigurationDialog";
+import { compactOptionName } from "./runConfigOptions";
 import {
   DESKTOP_INSET_RADIUS,
   DESKTOP_TOPBAR_CONTROL_GAP,
@@ -157,11 +128,6 @@ import {
 import { DESKTOP_WORKSPACE_PREFIX } from "./commands/workspaceShortcuts";
 import { LeaderKeycap } from "./commands/DesktopKeycap";
 import {
-  nextRunConfigChoiceIndex,
-  runConfigKeyAction,
-  runConfigMotionAction,
-} from "./runConfigKeyboard";
-import {
   ACTION_ICON_WIDTH_PX,
   type TopBarDensity,
   topBarDensity,
@@ -172,7 +138,6 @@ import {
   usageRemainingTone,
   type UsageTone,
 } from "./topBarDensity";
-import { HintTooltip } from "../HintTooltip";
 import { lowPriorityInterval } from "../network/bandwidth";
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
@@ -184,46 +149,6 @@ const TOPBAR_TRAILING_WIDTH_PX = 36;
  *  and the most it may claim from slack before truncating. */
 const CONFIG_MIN_WIDTH_PX = 190;
 const CONFIG_MAX_WIDTH_PX = 560;
-
-function optionLabel(option: ConfigOption): string {
-  const name = option.name.toLowerCase();
-  if (option.id === "mode") return "Agent mode";
-  if (option.id === "session_mode") return "Session mode";
-  if (option.id === "permission_mode") return "Permission";
-  if (option.id === "model") return "Model";
-  if (name.includes("reasoning") && name.includes("effort")) {
-    return "Reasoning effort";
-  }
-  if (name.includes("fast")) return "Fast mode";
-  return option.name;
-}
-
-function optionShortcut(option: ConfigOption): string | undefined {
-  const label = optionLabel(option);
-  if (label === "Agent mode") return "A";
-  if (label === "Session mode") return "A";
-  if (label === "Permission") return "P";
-  if (label === "Model") return "M";
-  if (label === "Reasoning effort") return "E";
-  if (label === "Collaboration mode") return "C";
-  if (label === "Fast mode") return "F";
-  return undefined;
-}
-
-function currentOptionName(option: ConfigOption): string {
-  return option.options.find((candidate) =>
-    String(candidate.value) === String(option.currentValue)
-  )?.name ??
-    String(option.currentValue);
-}
-
-function compactOptionName(option: ConfigOption): string {
-  const current = currentOptionName(option);
-  const label = optionLabel(option);
-  if (current === "Agent (full access)") return "Full access";
-  if (label === "Fast mode") return `Fast ${current.toLowerCase()}`;
-  return current;
-}
 
 function textValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -918,527 +843,6 @@ function DesktopProviderUsage({
   );
 }
 
-function ConfigOptionControl({
-  option,
-  disabled,
-  savedName,
-  onChange,
-}: {
-  /** The option as the unsaved draft leaves it. */
-  option: ConfigOption;
-  presentation?: ProviderConfigOptionPresentation | undefined;
-  disabled: boolean;
-  /** The agent's value when the draft changes it. */
-  savedName?: string | undefined;
-  onChange: (id: string, value: string | boolean) => void;
-}): React.JSX.Element {
-  const label = optionLabel(option);
-  const shortcut = optionShortcut(option);
-  const rowRef = useRef<HTMLDivElement>(null);
-  const setValue = (value: string): void => {
-    const selected = option.options.find((candidate) =>
-      String(candidate.value) === value
-    );
-    if (!selected) return;
-    onChange(option.id, selected.value);
-  };
-  // `H/L` on a Select steps its value in place; `Enter` or the field's
-  // letter opens the full list.
-  const stepRef = useRef<(delta: -1 | 1) => void>(() => undefined);
-  stepRef.current = (delta): void => {
-    if (disabled) return;
-    const current = option.options.findIndex((candidate) =>
-      String(candidate.value) === String(option.currentValue)
-    );
-    const next = nextRunConfigChoiceIndex(
-      option.options.length,
-      current,
-      delta,
-      false,
-    );
-    const choice = option.options[next];
-    if (choice && next !== current) setValue(String(choice.value));
-  };
-  useEffect(() => {
-    const row = rowRef.current;
-    if (!row || label !== "Model") return undefined;
-    const step = (event: Event): void => {
-      event.preventDefault();
-      stepRef.current((event as CustomEvent<{ delta: -1 | 1 }>).detail.delta);
-    };
-    row.addEventListener(RUN_CONFIG_STEP_EVENT, step);
-    return (): void => row.removeEventListener(RUN_CONFIG_STEP_EVENT, step);
-  }, [label]);
-  return (
-    <Box
-      ref={rowRef}
-      data-config-row
-      data-config-shortcut={shortcut?.toLowerCase()}
-      data-config-changed={savedName !== undefined || undefined}
-      sx={{
-        minWidth: 0,
-        display: "grid",
-        gridTemplateColumns: "120px minmax(0, 1fr)",
-        alignItems: "center",
-        gap: 1.25,
-      }}
-    >
-      <Box sx={{ minWidth: 0 }}>
-      <Tooltip title={option.description ?? ""} placement="right">
-        <Stack direction="row" alignItems="center" spacing={0.5}>
-          <Typography
-            variant="caption"
-            fontWeight={750}
-            color="text.secondary"
-            sx={{
-              cursor: option.description ? "help" : "default",
-              letterSpacing: "0.02em",
-            }}
-          >
-            {label}
-          </Typography>
-          {shortcut && (
-            <Kbd
-              keys={shortcut}
-              availability={disabled ? "inactive" : "available"}
-            />
-          )}
-        </Stack>
-      </Tooltip>
-      {savedName !== undefined && (
-        <Typography
-          variant="caption"
-          color="warning.main"
-          noWrap
-          title={`Unsaved · the agent runs ${savedName}`}
-          sx={{ display: "block", fontSize: "0.625rem", fontWeight: 650 }}
-        >
-          was {savedName}
-        </Typography>
-      )}
-      </Box>
-      {label === "Model"
-        ? (
-          <FormControl fullWidth size="small">
-            <Select
-              disabled={disabled}
-              value={String(option.currentValue)}
-              SelectDisplayProps={{
-                "data-config-choice": "true",
-                "data-config-select": "true",
-              } as HTMLAttributes<HTMLDivElement>}
-              onChange={(event): void => setValue(String(event.target.value))}
-              aria-label="Model"
-              sx={{
-                height: desktopSize(34),
-                borderRadius: 1.25,
-                fontSize: "0.75rem",
-                fontWeight: 650,
-                "& .MuiSelect-select": { px: 1.2, py: 0.75 },
-                bgcolor: (theme) =>
-                  alpha(theme.palette.background.default, 0.42),
-                "& .MuiOutlinedInput-notchedOutline": {
-                  borderColor: (theme) => alpha(theme.palette.divider, 0.78),
-                },
-                "&:hover .MuiOutlinedInput-notchedOutline": {
-                  borderColor: (theme) =>
-                    alpha(theme.palette.primary.main, 0.42),
-                },
-                "&.Mui-focused .MuiOutlinedInput-notchedOutline": {
-                  borderWidth: 1,
-                  borderColor: "primary.main",
-                },
-              }}
-            >
-              {option.options.map((candidate) => (
-                <MenuItem
-                  key={String(candidate.value)}
-                  value={String(candidate.value)}
-                  dense
-                >
-                  {candidate.name}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        )
-        : (
-          <ToggleButtonGroup
-            disabled={disabled}
-            exclusive
-            size="small"
-            value={String(option.currentValue)}
-            onChange={(_event, value: string | null): void => {
-              if (value !== null) setValue(value);
-            }}
-            sx={{
-              display: "flex",
-              flexWrap: "nowrap",
-              gap: 0.5,
-              p: 0.5,
-              borderRadius: 1.5,
-              bgcolor: (theme) => alpha(theme.palette.background.default, 0.48),
-              border: 1,
-              borderColor: (theme) => alpha(theme.palette.divider, 0.62),
-              "& .MuiToggleButtonGroup-grouped": {
-                borderRadius: 1.1,
-                border: 0,
-                color: "text.secondary",
-                "&.Mui-selected": {
-                  color: "primary.main",
-                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.14),
-                  boxShadow: (theme) =>
-                    `inset 0 0 0 1px ${
-                      alpha(theme.palette.primary.main, 0.28)
-                    }`,
-                },
-                "&.Mui-selected:hover": {
-                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.18),
-                },
-              },
-            }}
-          >
-            {option.options.map((candidate) => (
-              <ToggleButton
-                data-config-choice
-                key={String(candidate.value)}
-                value={String(candidate.value)}
-                // Size each segment from its own label, then share the spare
-                // width. Equal `1 1 0` segments with `nowrap` let a long
-                // Provider label ("Bypass permissions") paint past its pill.
-                // When the row is genuinely too narrow a label wraps at a word
-                // instead; the segment never shrinks below its longest word.
-                sx={{
-                  minHeight: desktopSize(28),
-                  px: 1,
-                  py: 0.2,
-                  flex: "1 1 auto",
-                  fontSize: "0.6875rem",
-                  lineHeight: 1.15,
-                  textTransform: "none",
-                  whiteSpace: "normal",
-                  textAlign: "center",
-                }}
-              >
-                {candidate.name}
-              </ToggleButton>
-            ))}
-          </ToggleButtonGroup>
-        )}
-    </Box>
-  );
-}
-
-/** The short panes (Agent, then Tools) stack in the left column so their
- *  content, not empty pane bottoms, fills its height; Context takes the
- *  right column, where the session tree grows to the window. One column on
- *  a narrow window. Each pane scrolls on its own and the one holding the
- *  cursor is outlined. DOM order (Agent, Tools, Context) is pane order. */
-const runConfigPanelSx = {
-  flex: 1,
-  minWidth: 0,
-  minHeight: 0,
-  display: "grid",
-  gap: 1.25,
-  p: 1.25,
-  overflow: "auto",
-  gridTemplateColumns: "minmax(0, 1fr)",
-  gridTemplateAreas: '"agent" "tools" "context"',
-  "@media (min-width: 980px)": {
-    overflow: "hidden",
-    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-    gridTemplateRows: "max-content minmax(0, 1fr)",
-    gridTemplateAreas: '"agent context" "tools context"',
-  },
-} as const;
-
-function RunConfigPane({
-  pane,
-  title,
-  caption,
-  footer,
-  children,
-}: {
-  pane: "agent" | "context" | "tools";
-  title: string;
-  caption: string;
-  /** Pinned under the pane's scrolling body. */
-  footer?: React.ReactNode;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  return (
-    <Box
-      data-config-pane={pane}
-      tabIndex={-1}
-      sx={{
-        gridArea: pane,
-        minWidth: 0,
-        minHeight: 0,
-        display: "flex",
-        flexDirection: "column",
-        border: 1,
-        borderColor: "divider",
-        borderRadius: 2,
-        bgcolor: (theme) => alpha(theme.palette.background.default, 0.32),
-        outline: "none",
-        transition: "border-color 120ms, box-shadow 120ms",
-        "&:focus-within": {
-          borderColor: (theme) => alpha(theme.palette.primary.main, 0.7),
-          boxShadow: (theme) =>
-            `0 0 0 1px ${alpha(theme.palette.primary.main, 0.28)}`,
-        },
-        "&:focus-within [data-config-pane-title]": { color: "primary.main" },
-        // The field under the cursor: its whole row, not only the control.
-        "& [data-config-row], & [data-settings-row]": {
-          mx: -1,
-          px: 1,
-          borderRadius: 1.5,
-          transition: "background-color 120ms",
-        },
-        "& [data-config-row]": { py: 0.5 },
-        "& [data-config-row][data-config-changed]": {
-          bgcolor: (theme) => alpha(theme.palette.warning.main, 0.07),
-        },
-        "& [data-settings-row]": { py: 0.25, minHeight: 36 },
-        "& [data-config-row]:has(:focus-visible), & [data-settings-row]:has(:focus-visible)":
-          {
-            bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08),
-            boxShadow: (theme) =>
-              `inset 3px 0 0 ${theme.palette.primary.main}`,
-          },
-      }}
-    >
-      <Stack
-        direction="row"
-        alignItems="baseline"
-        spacing={1}
-        sx={{
-          px: 2,
-          pt: 1.25,
-          pb: 1,
-          borderBottom: 1,
-          borderColor: "divider",
-          minWidth: 0,
-        }}
-      >
-        <Typography
-          data-config-pane-title
-          variant="overline"
-          fontWeight={800}
-          color="text.secondary"
-          sx={{ letterSpacing: 0.9, lineHeight: 1.4 }}
-        >
-          {title}
-        </Typography>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          noWrap
-          sx={{ flex: 1, minWidth: 0 }}
-        >
-          {caption}
-        </Typography>
-      </Stack>
-      <Stack
-        spacing={1}
-        sx={{
-          flex: 1,
-          minHeight: 0,
-          overflow: "auto",
-          px: 2,
-          py: 1.25,
-        }}
-      >
-        {children}
-      </Stack>
-      {footer}
-    </Box>
-  );
-}
-
-/** The Agent pane's pending edits: what Apply sends, and the way out. */
-function RunConfigApplyBar({
-  count,
-  applying,
-  discardArmed,
-  error,
-  onApply,
-  onDiscard,
-}: {
-  count: number;
-  applying: boolean;
-  discardArmed: boolean;
-  error: string;
-  onApply: () => void;
-  onDiscard: () => void;
-}): React.JSX.Element {
-  return (
-    <Stack
-      data-config-apply-bar
-      direction="row"
-      alignItems="center"
-      spacing={1}
-      sx={{
-        px: 2,
-        py: 1,
-        borderTop: 1,
-        borderColor: "divider",
-        bgcolor: (theme) => alpha(theme.palette.warning.main, 0.08),
-      }}
-    >
-      <Typography
-        variant="caption"
-        role="status"
-        color={error || discardArmed ? "error.main" : "text.secondary"}
-        sx={{ flex: 1, minWidth: 0, fontWeight: 650 }}
-      >
-        {error ||
-          (discardArmed
-            ? "Unsaved changes · Esc again discards them"
-            : `${count} unsaved ${count === 1 ? "change" : "changes"} · the agent keeps its current settings until you apply`)}
-      </Typography>
-      {count > 0 && (
-        <>
-          <Button
-            size="small"
-            disabled={applying}
-            onClick={onDiscard}
-            sx={{ textTransform: "none" }}
-          >
-            Discard
-          </Button>
-          <Button
-            size="small"
-            variant="contained"
-            disableElevation
-            disabled={applying}
-            onClick={onApply}
-            data-leader-key="s"
-            sx={{ textTransform: "none", gap: 0.75 }}
-          >
-            {applying ? "Applying…" : "Apply"}
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} availability="available" />
-          </Button>
-        </>
-      )}
-    </Stack>
-  );
-}
-
-function RecommendedPresetControls({
-  presets,
-  options,
-  onChange,
-}: {
-  presets: readonly RunConfigPreset[];
-  /** The options as the unsaved draft leaves them. */
-  options: readonly ConfigOption[];
-  onChange: (id: string, value: string | boolean) => void;
-}): React.JSX.Element {
-  const active = activeRunConfigPreset(presets, options);
-  return (
-    <Stack data-config-row spacing={0.75} sx={{ minWidth: 0 }}>
-      <Typography
-        variant="caption"
-        fontWeight={750}
-        color="text.secondary"
-        sx={{ letterSpacing: "0.02em" }}
-      >
-        Recommended
-      </Typography>
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(168px, 1fr))",
-          gap: 0.75,
-        }}
-      >
-        {presets.map((preset, index) => {
-          const selected = active?.id === preset.id;
-          return (
-            <ButtonBase
-              key={preset.id}
-              data-config-preset={index}
-              data-config-choice
-              aria-pressed={selected}
-              onClick={(): void => {
-                for (const change of runConfigPresetChanges(preset, options)) {
-                  onChange(change.configId, change.value);
-                }
-              }}
-              sx={{
-                minWidth: 0,
-                minHeight: desktopSize(44),
-                px: 1.2,
-                py: 0.65,
-                borderRadius: 1.25,
-                border: 1,
-                borderColor: selected ? "primary.main" : "divider",
-                bgcolor: (theme) =>
-                  selected
-                    ? alpha(theme.palette.primary.main, 0.14)
-                    : alpha(theme.palette.background.default, 0.42),
-                justifyContent: "flex-start",
-                textAlign: "left",
-                "&:hover": { bgcolor: "action.hover" },
-                "&.Mui-disabled": { opacity: 0.46 },
-              }}
-            >
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Stack
-                  direction="row"
-                  spacing={0.65}
-                  alignItems="center"
-                  sx={{ minWidth: 0 }}
-                >
-                  <HintTooltip title={preset.name}>
-                    <Typography
-                      variant="caption"
-                      fontWeight={750}
-                      color={selected ? "primary.main" : "text.primary"}
-                      noWrap
-                      sx={{ minWidth: 0 }}
-                    >
-                      {preset.name}
-                    </Typography>
-                  </HintTooltip>
-                  {preset.isDefault && (
-                    <Typography
-                      variant="caption"
-                      color="primary.main"
-                      sx={{
-                        flexShrink: 0,
-                        fontSize: "0.625rem",
-                        fontWeight: 750,
-                      }}
-                    >
-                      Default
-                    </Typography>
-                  )}
-                </Stack>
-                <HintTooltip title={preset.detail}>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    noWrap
-                    sx={{ display: "block", fontSize: "0.625rem" }}
-                  >
-                    {preset.detail}
-                  </Typography>
-                </HintTooltip>
-              </Box>
-              <Kbd
-                keys={String(index + 1)}
-                availability="available"
-              />
-            </ButtonBase>
-          );
-        })}
-      </Box>
-    </Stack>
-  );
-}
-
 export function DesktopTopBarControls({
   sessionId,
   status,
@@ -1475,7 +879,6 @@ export function DesktopTopBarControls({
   }, [sessionId]);
   const usageOpen = openSurface === "usage";
   const [usagePanel, setUsagePanel] = useState<"usage" | "logs">("usage");
-  const configPanelRef = useRef<HTMLDivElement>(null);
   const usagePanelRef = useRef<HTMLDivElement>(null);
   // The Controller owns usage and its refresh progress; every device reads
   // the same pushed snapshot, so a refresh started anywhere shows here.
@@ -1559,87 +962,6 @@ export function DesktopTopBarControls({
   // disable the whole settings entry point.
   const configDisabled = session === undefined;
   const configSummary = options.map(compactOptionName).join(" · ");
-  const directConfigShortcuts = options.map(optionShortcut).filter(
-    (shortcut): shortcut is string => shortcut !== undefined,
-  );
-  const recommendedPresets = runConfigPresets(
-    session?.provider,
-    options,
-    session?.provider_version,
-    session?.provider_generation_digest,
-  );
-  const presetShortcutLabel = recommendedPresets
-    .map((_, index) => String(index + 1))
-    .join("/");
-  // Agent options are edited as a draft and sent together on Apply: stepping
-  // through choices must not switch the live agent (and its context or
-  // cache) once per key. Tools and linked sessions keep their own saves.
-  const [configDraft, setConfigDraft] = useState<RunConfigDraft>({});
-  const [discardArmed, setDiscardArmed] = useState(false);
-  const [applying, setApplying] = useState(false);
-  const [applyError, setApplyError] = useState("");
-  const draftOptions = useMemo(
-    () => withRunConfigDraft(options, configDraft),
-    [options, configDraft],
-  );
-  const draftChanges = useMemo(
-    () => runConfigDraftChanges(options, configDraft),
-    [options, configDraft],
-  );
-  const unsaved = draftChanges.length > 0;
-  useEffect(() => {
-    if (configOpen) return;
-    setConfigDraft({});
-    setDiscardArmed(false);
-    setApplyError("");
-  }, [configOpen, sessionId]);
-  const editConfig = useCallback(
-    (id: string, value: string | boolean): void => {
-      setConfigDraft((draft) => ({ ...draft, [id]: value }));
-      setDiscardArmed(false);
-      setApplyError("");
-    },
-    [],
-  );
-  const discardConfig = useCallback((): void => {
-    setConfigDraft({});
-    setDiscardArmed(false);
-    setApplyError("");
-  }, []);
-  const applyConfig = async (): Promise<void> => {
-    if (applying || !unsaved) return;
-    setApplying(true);
-    setApplyError("");
-    try {
-      await setSessionConfigOptions(sessionId, draftChanges);
-      setConfigDraft({});
-      setDiscardArmed(false);
-    } catch (cause) {
-      setApplyError(
-        cause instanceof Error ? cause.message : "Could not apply changes",
-      );
-    } finally {
-      setApplying(false);
-    }
-  };
-  // Closing never drops edits silently: the first Esc warns, the second
-  // discards them.
-  const closeConfig = (): void => {
-    if (unsaved && !discardArmed) {
-      setDiscardArmed(true);
-      return;
-    }
-    setOpenSurface(null);
-  };
-  useConfirmEnter(configOpen && unsaved, () => void applyConfig(), {
-    suppressBareEnter: false,
-  });
-  const savedNames = new Map(
-    draftChanges.map(({ configId }) => {
-      const saved = options.find((option) => option.id === configId);
-      return [configId, saved ? currentOptionName(saved) : ""] as const;
-    }),
-  );
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     await (manual ? refreshAllUsage() : loadUsageSnapshot());
   }, []);
@@ -1667,106 +989,6 @@ export function DesktopTopBarControls({
     const timer = window.setInterval(() => setClock(Date.now()), 30_000);
     return (): void => window.clearInterval(timer);
   }, []);
-  useEffect(() => {
-    if (!configOpen) return undefined;
-    // Open on the first field, the presets when they exist. Provider options
-    // and presets can arrive a moment after the dialog, so keep following
-    // the first field until the user moves.
-    let settled = false;
-    let tries = 0;
-    let focusFirst = 0;
-    const placeCursor = (): void => {
-      const firstRow = configPanelRef.current?.querySelector<HTMLElement>(
-        "[data-config-row]",
-      );
-      if (firstRow && !firstRow.contains(document.activeElement)) {
-        focusConfigRow(firstRow);
-      }
-      tries += 1;
-      if (!settled && tries < 90) {
-        focusFirst = requestAnimationFrame(placeCursor);
-      }
-    };
-    focusFirst = requestAnimationFrame(placeCursor);
-    const settle = (): void => {
-      settled = true;
-    };
-    globalThis.addEventListener("pointerdown", settle, true);
-    const untrack = trackRunConfigCursor(() => configPanelRef.current);
-    const onKeyDown = (event: KeyboardEvent): void => {
-      settled = true;
-      if (desktopImeOwnsKey(event)) return;
-      const panel = configPanelRef.current;
-      if (!panel) return;
-      // A picker, menu or nested dialog above the panel keeps its own keys.
-      if (document.querySelector("[role='listbox']") !== null) return;
-      const target = event.target instanceof HTMLElement ? event.target : null;
-      // The dialog's frame (or the body) holds focus when the control under
-      // the cursor was disabled; the panel still owns the key.
-      if (target && !panel.contains(target) && !target.contains(panel)) {
-        return;
-      }
-      // A region with its own keymap (the session tree, its search) keeps
-      // every key but the pane motions that leave it.
-      const region = target?.closest<HTMLElement>(RUN_CONFIG_OWN_KEYS);
-      if (
-        target && region && panel.contains(region) &&
-        // The Normal cursor on a text field sits on its box, not inside.
-        !target.hasAttribute("data-desktop-field-cursor")
-      ) {
-        const regionMotion = regionMotionKey(event);
-        const key = workspaceCommandKey(event);
-        const leave = regionMotion !== null
-          ? runConfigMotionAction(regionMotion)
-          : !isModalTextField(target) && !event.metaKey && !event.ctrlKey &&
-              !event.altKey && (key === "[" || key === "]")
-          ? runConfigKeyAction(key)
-          : null;
-        if (leave === null || !runConfigKey(panel, leave)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      // Insert: a text field owns every key; Esc leaves it for Normal.
-      if (target && isModalTextField(target)) {
-        const escape = (event.key === "Escape" && !event.ctrlKey &&
-          !event.metaKey && !event.altKey && !event.shiftKey) ||
-          (event.ctrlKey && event.code === "BracketLeft");
-        if (!escape) return;
-        enterModalNormal(target);
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      if (
-        event.code === "Enter" && !event.metaKey && !event.ctrlKey &&
-        !event.altKey && target instanceof HTMLInputElement &&
-        target.type === "checkbox"
-      ) {
-        target.click();
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      const motion = regionMotionKey(event);
-      if (motion === null && (event.metaKey || event.ctrlKey || event.altKey)) {
-        return;
-      }
-      const action = motion !== null
-        ? runConfigMotionAction(motion)
-        : runConfigKeyAction(workspaceCommandKey(event));
-      if (action === null || !runConfigKey(panel, action)) return;
-      event.preventDefault();
-      event.stopPropagation();
-    };
-    globalThis.addEventListener("keydown", onKeyDown, true);
-    return (): void => {
-      cancelAnimationFrame(focusFirst);
-      globalThis.removeEventListener("pointerdown", settle, true);
-      untrack();
-      globalThis.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [configOpen]);
   useEffect(() => {
     if (!usageOpen) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -2091,113 +1313,17 @@ export function DesktopTopBarControls({
           </Tooltip>
         )}
 
-      <DesktopModal
+
+      <RunConfigurationDialog
         open={configOpen}
-        onClose={closeConfig}
-        title="Run configuration"
-        description={dead
-          ? "Changes are saved for your next message once you apply them; the session stays asleep. Tools and linked sessions save as you change them."
-          : "Agent changes wait for Apply; Back restores them until your next message. Tools and linked sessions save as you change them."}
-        icon={<Tune sx={{ color: "primary.main" }} />}
-        fill
-        shortcutGroups={[{
-          label: "Navigate",
-          slots: [
-            { shortcut: "J/K", label: "Field" },
-            { shortcut: "H/L", label: "Change" },
-            { shortcut: "[/]", label: "Pane" },
-            { shortcut: "gg/G", label: "First · Last" },
-            ...(recommendedPresets.length > 0
-              ? [{
-                shortcut: presetShortcutLabel,
-                label: "Preset",
-              }]
-              : []),
-            ...(directConfigShortcuts.length > 0
-              ? [{ shortcut: directConfigShortcuts.join("/"), label: "Direct" }]
-              : []),
-            { shortcut: ENTER_LABEL, label: "Open · Toggle" },
-            { shortcut: "␣", label: "Labels" },
-          ],
-        }, {
-          slots: [
-            {
-              shortcut: `${MOD_LABEL}${ENTER_LABEL}`,
-              label: "Apply",
-              availability: unsaved ? "available" : "inactive",
-            },
-            {
-              shortcut: "Esc",
-              label: unsaved ? (discardArmed ? "Discard" : "Close…") : "Close",
-            },
-          ],
-        }]}
-      >
-        <Box
-          ref={configPanelRef}
-          data-desktop-shortcut-scope="exclusive"
-          data-run-config-panel
-          sx={runConfigPanelSx}
-        >
-          <RunConfigPane
-            pane="agent"
-            title="Agent"
-            caption="How this agent runs"
-            footer={unsaved || applyError
-              ? (
-                <RunConfigApplyBar
-                  count={draftChanges.length}
-                  applying={applying}
-                  discardArmed={discardArmed}
-                  error={applyError}
-                  onApply={(): void => void applyConfig()}
-                  onDiscard={discardConfig}
-                />
-              )
-              : undefined}
-          >
-            {!unsaved && (
-              <ConfigRevertBack sessionId={sessionId} options={options} />
-            )}
-            {recommendedPresets.length > 0 && (
-              <RecommendedPresetControls
-                presets={recommendedPresets}
-                options={draftOptions}
-                onChange={editConfig}
-              />
-            )}
-            {draftOptions.map((option) => (
-              <ConfigOptionControl
-                key={option.id}
-                option={option}
-                presentation={optionPresentations.get(option.id)}
-                savedName={savedNames.get(option.id)}
-                onChange={editConfig}
-                disabled={applying || providerConfigOptionDisabled(
-                  status,
-                  optionPresentations.get(option.id),
-                )}
-              />
-            ))}
-          </RunConfigPane>
-          <RunConfigPane
-            pane="tools"
-            title="Tools"
-            caption="What this agent may call and remember"
-          >
-            <SessionToolsSection sessionId={sessionId} heading={false} />
-          </RunConfigPane>
-          <RunConfigPane
-            pane="context"
-            title="Context"
-            caption="Where the work goes, and what the next message reads"
-          >
-            {session && (
-              <SessionContextSettings session={session} inlineLinks />
-            )}
-          </RunConfigPane>
-        </Box>
-      </DesktopModal>
+        onClose={closeSurface}
+        sessionId={sessionId}
+        session={session}
+        status={status}
+        dead={dead}
+        options={options}
+        optionPresentations={optionPresentations}
+      />
 
       {(snapshot === null || widgetProviders.length > 0) && (
         <ButtonBase

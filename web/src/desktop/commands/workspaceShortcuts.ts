@@ -41,8 +41,6 @@ export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
   // The Sessions sidebar: focus it (`␣SS`), fold its tree, file folders.
   s: "Sessions",
   t: "Top bar",
-  // The Prompt and the conversation it writes into: `␣PP` focuses it.
-  p: "Prompt",
   // Layout: cycle regions, resize, fold panes.
   w: "Window",
   // Presentation toggles.
@@ -105,7 +103,8 @@ export const DESKTOP_WORKSPACE_KEYS = {
   // Open recent, Vim's jump list (`Ctrl-O`): the last Sessions and Drafts.
   recentSessions: "O",
   // Undo history: every undoable change this device made in the last day.
-  undoHistory: "I",
+  // LazyVim's `<leader>su`; `␣I` is the Prompt in Insert.
+  undoHistory: "SU",
   // Step through the tab strip (Vim's `[b` / `]b`).
   previousTab: "[",
   nextTab: "]",
@@ -119,7 +118,10 @@ export const DESKTOP_WORKSPACE_KEYS = {
   sessionsNewFolder: "SN",
   sessionsOrganize: "SP",
   sessionsMove: "SM",
+  // `␣P` returns to the Prompt as it was; `␣I` enters it ready to type, as
+  // Vim's `i`. Compact and Clear are Prompt chords, not a leader group.
   focusPrompt: "P",
+  insertPrompt: "I",
   focusTopbar: "T",
   focusConversation: "C",
   // `V` for View: `R` renames.
@@ -148,9 +150,6 @@ export const DESKTOP_WORKSPACE_KEYS = {
   composerReference: "F",
   composerAttach: "A",
   composerSchedule: "H",
-  // Conversation actions in the Prompt group, from any focus.
-  promptCompact: "PC",
-  promptClear: "PX",
   composerJumpFront: "J",
   composerMore: "M",
   // Zoom the focused editor into the fullscreen composer.
@@ -208,6 +207,11 @@ export const DESKTOP_SHORTCUTS = {
   shortcuts: "Mod+/",
   commands: "Mod+Shift+P",
   stop: "Mod+.",
+  // Conversation actions beside Stop, while the Prompt owns focus: Shift
+  // marks the heavier sibling of Stop's `.`, and `L` is the terminal's
+  // clear screen (Ctrl-L).
+  compact: "Mod+Shift+.",
+  clear: "Mod+Shift+L",
   saveDraft: "Mod+S",
   newSession: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.newSession),
   settings: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.settings),
@@ -219,12 +223,8 @@ export const DESKTOP_SHORTCUTS = {
   focusSessions: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusSessions),
   sessionsFold: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.sessionsFold),
   reconnect: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.reconnect),
-  focusPrompt: desktopLeaderGroupSequence(
-    DESKTOP_WORKSPACE_KEYS.focusPrompt,
-    DESKTOP_WORKSPACE_KEYS.focusPrompt,
-  ),
-  compact: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.promptCompact),
-  clear: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.promptClear),
+  focusPrompt: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPrompt),
+  insertPrompt: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.insertPrompt),
   focusConversation: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.focusConversation,
   ),
@@ -273,8 +273,9 @@ export const DESKTOP_RESIZE_HINT = DESKTOP_SHORTCUTS.resize;
 export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   // A group: `␣SS` focuses Sessions, `␣SZ` folds its tree.
   s: "group:s",
-  // A group: `␣PP` focuses the Prompt, `␣PC`/`␣PX` compact or clear.
-  p: "group:p",
+  // The Prompt as it was (`␣P`), or ready to type in Insert (`␣I`).
+  p: "workspace.focusPrompt",
+  i: "workspace.insertPrompt",
   // A group, not a command: `␣T` opens the Top bar layer (`␣TT` focuses it).
   t: "group:t",
   c: "workspace.focusConversation",
@@ -301,7 +302,6 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   ".": "sync.retry",
   r: "item.rename",
   o: "session.recent",
-  i: "undo.history",
   " ": "session.switch",
   tab: "session.alternate",
   k: "commandPalette.open",
