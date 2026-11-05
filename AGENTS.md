@@ -82,6 +82,15 @@ require the exact successful build receipt and published SideStore version.
   credential copying, live database edits or installation-pointer writes.
 
 ## Architecture gotchas
+- **Structure ratchet** (`just structure-check`, part of `just check`): no
+  production file, function or TSX hook count over its limit (Rust file 1,500
+  lines, TS/TSX file 800, function 150, hooks 40) may appear or grow beyond
+  `tools/structure-baseline.json`. When a change needs room in an offender,
+  first extract something from it in the same change; do not raise the
+  baseline. After moving an offender unchanged into a new file, record the move
+  with `bun tools/check-structure.ts --update`, which only admits it while the
+  crate/package total does not grow. The refactor sequence this guards is
+  `docs/structural-refactor-plan-2026-11.md`.
 - **Reboot convergence is a core requirement**: after any Machine (Hawk, OVH,
   Falcon) reboots successfully, Cowboy must return to service with no human
   step. Units start at boot, always restart (exit 75 included) and never stay

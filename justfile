@@ -692,6 +692,14 @@ feature-check:
     cargo check --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install
     cargo check --locked --no-default-features --features code-adapter --bin cowboy-code-adapter
 
+# Size ratchet: no production file, function or TSX hook count over its limit
+# may appear or grow (tools/structure-baseline.json). After moving an offender
+# unchanged, record the move with: bun tools/check-structure.ts --update
+structure-check:
+    dprint check tools/check-structure.ts tools/check-structure_test.ts
+    bun test ./tools/check-structure_test.ts
+    bun tools/check-structure.ts
+
 # The Machine and code-adapter packages compile hand-listed source closures
 # (machine-src, code-adapter-src in flake.nix), which a full-checkout cargo run
 # never sees. Type-check inside the exact filtered trees with the package
@@ -756,7 +764,7 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
       --default-reader-release "{{DEFAULT_READER}}" --receipt "{{RECEIPT}}" \
       --host-mount-ns "$host_mount" --host-net-ns "$host_net"
 
-check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check release-sources-check test test-postgres logs-conformance build
+check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check release-sources-check structure-check test test-postgres logs-conformance build
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.
