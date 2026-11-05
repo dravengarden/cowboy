@@ -115,6 +115,74 @@ pub(in crate::server) async fn declared(
     Ok(checks::parse_config(document.text.as_bytes())?.checks)
 }
 
+pub(in crate::server) fn routes() -> Router<Arc<AppState>> {
+    Router::new().route("/api/code/sessions/{id}/checks", get(api_checks))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeclaredCheck {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    format: checks::Format,
+    timeout_seconds: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecksResponse {
+    api_version: u8,
+    allowed: bool,
+    declared: Vec<DeclaredCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    declaration_error: Option<String>,
+    runs: Vec<Run>,
+}
+
+/// Declared checks and the latest run of each, for Review annotations. Runs
+/// only exist for sessions; a browse-only context reports none.
+async fn api_checks(
+    State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
+    Path(session_id): Path<String>,
+) -> Response {
+    let context_id = session_id.clone();
+    code_reads::scoped(authority, &context_id, |context| async move {
+        let session = matches!(context.scope, CodeReadScope::Session(_));
+        let declared = if session {
+            declared(&state, &context.scope, context.cwd).await
+        } else {
+            Ok(Vec::new())
+        };
+        let (declared, declaration_error) = match declared {
+            Ok(declared) => (declared, None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        Json(ChecksResponse {
+            api_version: 1,
+            allowed: session && state.hub.language_servers_allowed(&session_id),
+            declared: declared
+                .into_iter()
+                .map(|check| DeclaredCheck {
+                    timeout_seconds: check.timeout().as_secs(),
+                    id: check.id,
+                    title: check.title,
+                    format: check.format,
+                })
+                .collect(),
+            declaration_error,
+            runs: if session {
+                runs(&session_id)
+            } else {
+                Vec::new()
+            },
+        })
+        .into_response()
+    })
+    .await
+}
+
 pub(in crate::server) enum Started {
     New(Run),
     Existing(Run),

@@ -427,6 +427,7 @@ pub(super) fn code_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/code/sessions/{id}/tree", get(api_file_tree))
         .merge(code_api::search_routes())
+        .merge(code_api::check_routes())
         .route("/api/code/sessions/{id}/manifest", get(api_code_manifest))
         .route("/api/code/sessions/{id}/changes", get(api_code_changes))
         .route(

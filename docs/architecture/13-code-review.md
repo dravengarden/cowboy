@@ -108,6 +108,11 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
   files and never following symlinks. `stopped` names the bound (`limit`,
   `files`, `bytes`, `deadline`) that ended an incomplete scan. It runs no
   project code. A Machine whose adapter predates it answers `503`.
+- `GET /checks` returns the session's declared project checks (`check@1`) and
+  the latest run of each with its anchored diagnostics; it never starts one.
+  Review polls it while a source file is open, annotates that file's findings
+  beside the language engine's diagnostics and states, per run, when it ran:
+  findings are evidence for the files as the check saw them.
 - `GET /changes` returns normalized working-tree change records, with line
   counts where Git has them, and the revision of that exact status snapshot. Each record may carry a
   `fingerprint` that changes whenever that entry's diff can: its Git status,
