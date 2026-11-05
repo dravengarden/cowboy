@@ -1,19 +1,20 @@
-# Agent Code Intelligence from the Zed Provider
+# Agent Code Intelligence from the Code Review Engine
 
-**Status: design proposal (2026-11-05), not implemented.** It extends the
-[isolated Zed Code Provider](14-zed-code-provider.md) from a Code-pane backend
-into a shared, warm code-intelligence service for every agent Cowboy runs.
+**Status: design proposal (2026-11-05), not implemented.** Agents become consumers of the
+[Code Review Engine](19-code-review-engine.md) capabilities. "Language engine"
+means the Engine's LSP-backed implementation, which is the
+[isolated Zed component](14-zed-code-provider.md) today; agents never see it.
 
 ## Problem
 
-Cowboy keeps one warm, trust-gated Zed headless project per Machine worktree:
+The language engine keeps one warm, trust-gated project per Machine worktree:
 language servers, per-buffer diagnostics, hover, definition / declaration /
 type definition / implementation / references and document outline already
 answer the Web Code pane (`/api/code/sessions/{id}/intelligence/*`,
 `plugins/zed/adapter`). Agents cannot use any of it:
 
 1. **Agents are blind to the warm backend.** Claude, Codex, DeepSeek Harness
-   and Grok sessions re-run compilers or grep to learn what the Zed provider
+   and Grok sessions re-run compilers or grep to learn what the language engine
    already knows. The cowboy MCP read SDK has no `code` namespace.
 2. **The provider learns about agent edits late.** It observes only
    filesystem deltas, although Cowboy itself executes every remote write:
@@ -59,11 +60,11 @@ answer the Web Code pane (`/api/code/sessions/{id}/intelligence/*`,
 
 ## Principles
 
-1. **One warm backend, many consumers.** The Zed provider remains the only
+1. **One warm backend, many consumers.** The language engine remains the only
    language-server owner per worktree. Agents never start their own LSP for a
-   Cowboy worktree and never connect to Zed directly.
+   Cowboy worktree and never see which implementation answers.
 2. **Disk stays the single write channel.** Agents keep writing through their
-   native tools to the target. Zed buffers held by Cowboy remain read-only
+   native tools to the target. Language-engine buffers held by Cowboy remain read-only
    leases; the private native buffer-sync primitive stays a Code-pane effect,
    never an agent write path. This keeps the existing reload/ownership
    guarantees in [native buffer sync](../plugin-native-buffer-sync.md) intact.
@@ -88,7 +89,7 @@ answer the Web Code pane (`/api/code/sessions/{id}/intelligence/*`,
         │ ACP tool_call            └─► CodeChange{session, paths, write_id}
         ▼                                     │
    Controller ─────────────────────────────── ▼
-   code intelligence service ◄──────── Machine Zed adapter (warm LSP)
+   code intelligence service ◄──────── Machine language engine (warm LSP)
      • baseline per (session, path)            • read-only buffer leases
      • diagnostics delta / summary             • version-matched diagnostics
      • navigation with inline lines            • outline, hover, workspace symbols
@@ -101,8 +102,8 @@ answer the Web Code pane (`/api/code/sessions/{id}/intelligence/*`,
 ### Change signal
 
 The executor that applies a write on the target emits a Machine-local
-`CodeChange{session_id, worktree, paths, write_id}` to the co-located Zed
-adapter after the bytes are durable. ACP `locations`/`diff` from providers
+`CodeChange{session_id, worktree, paths, write_id}` to the co-located language
+engine after the bytes are durable. ACP `locations`/`diff` from providers
 whose writes Cowboy does not execute (local sessions, DeepSeek Harness) feed
 the same message from the worker. The adapter refreshes or opens a
 read-only lease for each path, so the next diagnostics answer is
@@ -150,7 +151,7 @@ outside it):
 | `code.outline({path})`, `code.symbols({query})` | symbol lists |
 | `code.hover({path, line, symbol})` | signature/type text |
 
-Symbols use Zed's `{path, line, symbol}` locator rather than columns. Programs
+Symbols use a `{path, line, symbol}` locator, as Zed's own agent does, rather than columns. Programs
 compose and filter results in one call, so the agent pays for schemas once
 (the read SDK is already loaded) and only for projected results.
 
@@ -194,7 +195,7 @@ compose and filter results in one call, so the agent pays for schemas once
 
 ## Security and isolation
 
-- The GPL Zed process boundary is unchanged; new operations are versioned
+- The GPL process boundary of the Zed component is unchanged; new operations are versioned
   messages on the existing private socket.
 - Scope is the caller session's worktree on its execution Machine. Restricted
   (untrusted) worktrees return `restricted`; no project language server runs
@@ -217,7 +218,7 @@ Telemetry counts calls, states and latencies only, never diagnostic text.
 
 ## Ownership and deletion triggers
 
-The Zed provider, Machine executor and Controller own the service; provider
+The language engine, Machine executor and Controller own the service; provider
 Plugins own only their delivery adapters. Delete the Codex hook adapter if
 Codex ships native post-edit diagnostics that can target a remote LSP; delete
 the Claude Mod push if Claude Code can consume a remote language server
