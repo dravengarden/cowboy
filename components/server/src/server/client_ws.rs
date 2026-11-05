@@ -933,6 +933,54 @@ pub(super) fn handle_command(
             ControlFlow::Continue(result) => result,
         },
 
+        // Server-authoritative queue and draft mutations.
+        cmd @ (Inbound::Submit { .. }
+        | Inbound::RemoveQueued { .. }
+        | Inbound::EditQueued { .. }
+        | Inbound::ClearQueue { .. }
+        | Inbound::RequestSendQueued { .. }
+        | Inbound::ForcePushQueued { .. }
+        | Inbound::QueuedToDraft { .. }
+        | Inbound::SetQueueEditing { .. }
+        | Inbound::AddDraft { .. }
+        | Inbound::EditDraft { .. }
+        | Inbound::RemoveDraft { .. }
+        | Inbound::ClearDrafts { .. }
+        | Inbound::ActivateDraft { .. }
+        | Inbound::ActivateAllDrafts { .. }
+        | Inbound::MoveDraft { .. }
+        | Inbound::ScheduleDraft { .. }
+        | Inbound::UnscheduleDraft { .. }
+        | Inbound::ReorderQueue { .. }
+        | Inbound::ReorderDrafts { .. }) => {
+            match queue_command(state, principal, command_trace, held, cmd) {
+                ControlFlow::Break(done) => return done,
+                ControlFlow::Continue(result) => result,
+            }
+        }
+        Inbound::ReorderSessions { order } => apply_visible_reorder(state, principal, &order),
+    };
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "command failed");
+        state
+            .hub
+            .broadcast_error(session_id_for_err, format!("command failed: {e}"));
+        return false;
+    }
+    true
+}
+
+/// The server-authoritative queue and draft commands. These mutate Hub
+/// state, which broadcasts the new queue/drafts to every terminal. They never
+/// fail in a way worth a toast, so all but forced sends return Ok.
+pub(super) fn queue_command(
+    state: &Arc<AppState>,
+    principal: &ProductPrincipal,
+    command_trace: Option<&crate::runtime_trace::SpanTimer>,
+    held: &mut HashMap<String, (String, u64)>,
+    cmd: Inbound,
+) -> ControlFlow<bool, Result<(), String>> {
+    let result = match cmd {
         // --- Server-authoritative queue + drafts ------------------------------
         // These mutate Hub state, which broadcasts the new queue/drafts to every
         // terminal. They never fail in a way worth a toast, so all return Ok.
@@ -943,10 +991,19 @@ pub(super) fn handle_command(
             cmid,
             force,
             front,
-        } => match submit_command(state, principal, command_trace, session_id, text, content, cmid, force, front) {
-            ControlFlow::Break(done) => return done,
-            ControlFlow::Continue(result) => result,
-        },
+        } => {
+            return submit_command(
+                state,
+                principal,
+                command_trace,
+                session_id,
+                text,
+                content,
+                cmid,
+                force,
+                front,
+            );
+        }
         Inbound::RemoveQueued {
             session_id,
             id,
@@ -994,7 +1051,9 @@ pub(super) fn handle_command(
             state.hub.queued_to_draft(&session_id, &id);
             Ok(())
         }
-        Inbound::SetQueueEditing { session_id, id } => set_queue_editing_command(state, held, session_id, id),
+        Inbound::SetQueueEditing { session_id, id } => {
+            set_queue_editing_command(state, held, session_id, id)
+        }
         Inbound::AddDraft {
             session_id,
             text,
@@ -1030,7 +1089,11 @@ pub(super) fn handle_command(
             state.hub.clear_drafts(&session_id);
             Ok(())
         }
-        Inbound::ActivateDraft { session_id, id, cmid } => {
+        Inbound::ActivateDraft {
+            session_id,
+            id,
+            cmid,
+        } => {
             state.hub.activate_draft(&session_id, &id, cmid);
             Ok(())
         }
@@ -1064,7 +1127,6 @@ pub(super) fn handle_command(
             state.hub.unschedule_draft(&session_id, &id);
             Ok(())
         }
-        Inbound::ReorderSessions { order } => apply_visible_reorder(state, principal, &order),
         Inbound::ReorderQueue { session_id, order } => {
             state.hub.reorder_queue(&session_id, &order);
             Ok(())
@@ -1073,15 +1135,9 @@ pub(super) fn handle_command(
             state.hub.reorder_drafts(&session_id, &order);
             Ok(())
         }
+        _ => unreachable!("handle_command routes only queue and draft commands here"),
     };
-    if let Err(e) = result {
-        tracing::warn!(error = %e, "command failed");
-        state
-            .hub
-            .broadcast_error(session_id_for_err, format!("command failed: {e}"));
-        return false;
-    }
-    true
+    ControlFlow::Continue(result)
 }
 
 pub(super) fn apply_inbound_sync(
