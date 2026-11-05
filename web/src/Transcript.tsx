@@ -1147,10 +1147,35 @@ function toolStatusLabel(status: string): string {
 
 // A one-word state badge needs less than MUI's 8px small-chip label inset;
 // the tighter inset keeps the title room in a narrow phone row.
-const TOOL_STATUS_CHIP_SX = {
-  flexShrink: 0,
-  "& .MuiChip-label": { px: 0.75 },
-} as const;
+//
+// The theme's rem small-chip height shrinks with the app font scale (1.5rem is
+// about 15px at the 65% default), which left the label no vertical inset. The
+// badge keeps MUI's original 24px floor, but its slot reserves only the rem
+// height, so the taller badge sits in the row's existing padding instead of
+// making every tool card taller.
+function ToolStatusChip({ status }: { status: string }): React.JSX.Element {
+  return (
+    <Box
+      sx={{
+        height: "1.5rem",
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+      }}
+    >
+      <Chip
+        size="small"
+        color={toolColor(status)}
+        label={toolStatusLabel(status)}
+        variant="outlined"
+        sx={{
+          height: "max(24px, 1.5rem)",
+          "& .MuiChip-label": { px: 0.75 },
+        }}
+      />
+    </Box>
+  );
+}
 
 function toolColor(
   status: string,
@@ -1664,7 +1689,7 @@ const LIFECYCLE_ROW_SX = {
 // 1.5em equals the 1.5 line height, so the glyph spans the first line exactly.
 const LIFECYCLE_ICON_SX = { fontSize: "1.5em", flexShrink: 0 } as const;
 
-function ToolCard({
+export function ToolCard({
   item,
   desktop,
   selected,
@@ -1821,13 +1846,7 @@ function ToolCard({
           </Typography>
         )}
         </Box>
-        <Chip
-          size="small"
-          color={toolColor(item.status)}
-          label={toolStatusLabel(item.status)}
-          variant="outlined"
-          sx={TOOL_STATUS_CHIP_SX}
-        />
+        <ToolStatusChip status={item.status} />
         {hasDetail && (
           <ExpandMore
             fontSize="medium"
@@ -2470,13 +2489,7 @@ export function ToolDetailsBrowser({
           >
             {heading}
           </Typography>
-          <Chip
-            size="small"
-            color={toolColor(item.status)}
-            label={toolStatusLabel(item.status)}
-            variant="outlined"
-            sx={TOOL_STATUS_CHIP_SX}
-          />
+          <ToolStatusChip status={item.status} />
         </Stack>
         <Box sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
           {!rawOnly && (
