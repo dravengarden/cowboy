@@ -507,6 +507,7 @@ export async function runToolInspectorBrowserConformance(
         const paper = chip.closest<HTMLElement>(".MuiPaper-root")!.getBoundingClientRect();
         const box = chip.getBoundingClientRect();
         check(box.top >= paper.top && box.bottom <= paper.bottom, "tool status badge escapes its card");
+        check(Number.parseFloat(getComputedStyle(chip).borderTopLeftRadius) >= box.height / 2 - 0.5, "tool status badge is not a pill");
       }
     } finally {
       flushSync(() => cardsRoot.unmount());
@@ -527,7 +528,7 @@ export async function runToolInspectorBrowserConformance(
       "other MCP servers retain their own search and document semantics",
       "phone, tablet and desktop MCP frames stay within their pane",
       "highlighted and large code controls stay separate, sticky and independently operable",
-      "scaled tool status badges keep their inset without growing the card",
+      "scaled tool status badges keep their pill inset without growing the card",
     ];
   } finally {
     if (!keepFixture) {

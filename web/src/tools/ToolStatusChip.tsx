@@ -37,6 +37,9 @@ export function ToolStatusChip(
         variant="outlined"
         sx={{
           height: "max(24px, 1.5rem)",
+          // The theme's rem radius is under half of the 24px floor, which
+          // squares the badge; keep MUI's original pill at every scale.
+          borderRadius: "999px",
           "& .MuiChip-label": { px: 0.75 },
         }}
       />
