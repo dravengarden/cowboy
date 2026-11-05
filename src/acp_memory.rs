@@ -654,18 +654,24 @@ mod tests {
         queued(&root.join("outbox")).unwrap().len()
     }
 
-    /// Delivery runs in the background; wait for the outbox to drain.
-    async fn settle(root: &Path) {
-        for _ in 0..400 {
-            let empty = outbox(root) == 0;
-            let quiet =
-                tokio::time::timeout(Duration::from_millis(5), std::future::pending::<()>());
-            let _ = quiet.await;
-            if empty && outbox(root) == 0 {
-                return;
-            }
+    /// Poll until `done` holds. The deadline is generous because the gate runs
+    /// this suite beside compilation and the other test binaries, where a
+    /// background delivery (real TCP plus blocking file removals) can take
+    /// seconds; the happy path returns on the first observation.
+    async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        while !done() {
+            assert!(tokio::time::Instant::now() < deadline, "{what}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!("the outbox did not drain");
+    }
+
+    /// Delivery runs in the background; wait for the outbox to drain and stay
+    /// drained across one more poll.
+    async fn settle(root: &Path) {
+        eventually("the outbox did not drain", || outbox(root) == 0).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(outbox(root), 0, "the outbox refilled after draining");
     }
 
     #[test]
@@ -744,12 +750,7 @@ mod tests {
                     .is_some_and(|events| events.len() == 3)
             })
         };
-        for _ in 0..400 {
-            if delivered() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        eventually("the finished turn was not delivered", delivered).await;
         settle(root.path()).await;
         let requests = service.requests.lock();
         let last = &requests.last().unwrap().1["payload"];
@@ -786,25 +787,23 @@ mod tests {
         let asked = service.requests.lock().len();
         memory.prepare(vec![ContentBlock::from("two")]).await;
         assert_eq!(service.requests.lock().len(), asked);
-        for _ in 0..200 {
-            if outbox(root.path()) >= 2 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        assert!(outbox(root.path()) >= 2);
+        eventually("both turns reached the outbox", || outbox(root.path()) >= 2).await;
         // Delivery probes, closes the breaker and drains the queue.
         service.status.store(200, Ordering::SeqCst);
         // A background delivery may still hold the lock, and then this one
         // yields to it, so wait for the outcome and not for one attempt.
-        for _ in 0..200 {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
             memory.deliver().await;
             if !memory.known_down() {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the breaker did not close"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(!memory.known_down());
         settle(root.path()).await;
     }
 
