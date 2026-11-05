@@ -20,7 +20,7 @@
 // Do not edit the number: it is the frozen development value. The Nix web
 // build (cowboy-web in flake.nix) replaces it with the source commit time,
 // which grows along main, so cache generations stay numerically ordered.
-const VERSION = "cowboy-v2108";
+const VERSION = "cowboy-v2109";
 importScripts("/device-proof.js");
 self.CowboyDeviceProof.install();
 const ASSET_CACHE = `${VERSION}-assets`;
