@@ -692,6 +692,34 @@ feature-check:
     cargo check --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install
     cargo check --locked --no-default-features --features code-adapter --bin cowboy-code-adapter
 
+# The Machine and code-adapter packages compile hand-listed source closures
+# (machine-src, code-adapter-src in flake.nix), which a full-checkout cargo run
+# never sees. Type-check inside the exact filtered trees with the package
+# features, so a module missing from a closure fails here rather than in a
+# release build. One shared target directory keeps reruns incremental.
+release-sources-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target="$PWD/target/release-sources"
+    # A stable tree path keeps Cargo fingerprints valid between runs.
+    scratch="$target/trees"
+    check() {
+      local output="$1"; shift
+      local source tree
+      source="$(readlink -f "$(nix build --no-link --print-out-paths ".#$output")")"
+      tree="$scratch/$output"
+      rm -rf "$tree"
+      mkdir -p "$scratch"
+      cp -r --no-preserve=mode "$source" "$tree"
+      echo "== $output"
+      (cd "$tree" && CARGO_TARGET_DIR="$target" cargo check --locked "$@")
+    }
+    check cowboy-machine-src --no-default-features --features machine-host \
+      -p cowboy --bin cowboy -p cowboy-machine \
+      --bin cowboy-machine --bin cowboy-machine-install --bin cowboy-execution-host
+    check cowboy-code-adapter-src --no-default-features --features code-adapter \
+      --bin cowboy-code-adapter
+
 test:
     # The invoking Codex Plugin exports its own signed package path. Cowboy's
     # unit tests exercise embedded fixtures and must not inherit that runtime.
@@ -728,7 +756,7 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
       --default-reader-release "{{DEFAULT_READER}}" --receipt "{{RECEIPT}}" \
       --host-mount-ns "$host_mount" --host-net-ns "$host_net"
 
-check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check test test-postgres logs-conformance build
+check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check release-sources-check test test-postgres logs-conformance build
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.

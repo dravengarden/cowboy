@@ -906,6 +906,11 @@
         default = cowboy;
         cowboy = cowboy;
         cowboy-machine = cowboy-machine;
+        # The exact filtered source trees the Machine and code-adapter packages
+        # compile. `just release-sources-check` type-checks inside them so a
+        # module declared outside its closure fails the gate, not a release.
+        cowboy-machine-src = pkgs.runCommandLocal "cowboy-machine-src" { } "ln -s ${machine-src} $out";
+        cowboy-code-adapter-src = pkgs.runCommandLocal "cowboy-code-adapter-src" { } "ln -s ${code-adapter-src} $out";
         cowboy-deletion-conformance = cowboy-deletion-conformance;
         cowboy-code-adapter = cowboy-code-adapter;
         cowboy-plugin-pack = cowboy-plugin-pack;
