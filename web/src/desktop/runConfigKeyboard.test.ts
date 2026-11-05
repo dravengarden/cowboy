@@ -87,5 +87,8 @@ test("run configuration fills the window as side-by-side panes", () => {
   for (const pane of ["agent", "context", "tools"]) {
     assertEquals(controlsSource.includes(`pane="${pane}"`), true);
   }
-  assertEquals(controlsSource.includes('"agent context tools"'), true);
+  assertEquals(
+    controlsSource.includes(`gridTemplateAreas: '"agent context" "tools context"'`),
+    true,
+  );
 });

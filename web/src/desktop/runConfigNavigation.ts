@@ -23,6 +23,15 @@ import {
 export const RUN_CONFIG_STEP_EVENT = "cowboy:run-config-step";
 
 const PANE = "[data-config-pane]";
+
+/** Regions inside the panel that keep their own keys once focused. */
+export const RUN_CONFIG_OWN_KEYS = [
+  "[role='tree']",
+  "[role='listbox']",
+  "[role='menu']",
+  ".cm-editor",
+  "[data-desktop-keys='own']",
+].join(", ");
 const ROW = "[data-config-row]";
 
 interface Field {
@@ -78,6 +87,15 @@ export function paneFields(pane: HTMLElement): Field[] {
     ...modalStops(pane)
       .filter((stop) => stop.closest(ROW) === null)
       .map((element) => ({ element, config: false })),
+    // A tree's rows are not buttons; the tree is one stop at its roving row.
+    ...[...pane.querySelectorAll<HTMLElement>("[role='tree']")]
+      .map((tree) =>
+        tree.querySelector<HTMLElement>("[role='treeitem'][tabindex='0']") ??
+          tree.querySelector<HTMLElement>("[role='treeitem']")
+      )
+      .filter((row): row is HTMLElement => row !== null && shown(row))
+      .filter((row) => !modalStops(pane).includes(row))
+      .map((element) => ({ element, config: false })),
   ];
   const box = ({ element }: Item): DOMRect =>
     (isModalTextField(element)
@@ -102,8 +120,10 @@ export function paneFields(pane: HTMLElement): Field[] {
 function fieldHolds(field: Field, active: Element | null): boolean {
   if (!active) return false;
   if (field.config) return field.element.contains(active);
+  const region = active.closest(RUN_CONFIG_OWN_KEYS);
   return field.stops.some((stop) =>
-    stop === active || stop.contains(active) || active.contains(stop)
+    stop === active || stop.contains(active) || active.contains(stop) ||
+    (region !== null && region.contains(stop))
   );
 }
 

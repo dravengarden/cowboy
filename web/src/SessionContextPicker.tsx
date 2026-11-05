@@ -41,11 +41,13 @@ const CONTEXT_LIMIT = 32;
 /** One selectable row per real session. Names are presentation, ids are the
  * references; the Service rechecks ownership on save, send and history reads. */
 export function SessionContextPicker(
-  { value, onChange, disabled = false, exclude }: {
+  { value, onChange, disabled = false, exclude, inline = false }: {
     value: string[];
     onChange: (value: string[]) => void;
     disabled?: boolean;
     exclude?: string | undefined;
+    /** Desktop workbench: the tree sits in the page instead of a modal. */
+    inline?: boolean;
   },
 ): React.JSX.Element {
   const sessions = useStoreSelector((state) => state.sessions);
@@ -148,6 +150,7 @@ export function SessionContextPicker(
       disabled={disabled}
       choices={choices}
       identityLabel={identityLabel}
+      inline={inline}
     />
   );
 }
@@ -251,12 +254,13 @@ function SelectionField(
  * multi-select modal. The form shows the choices as removable chips; closing
  * keeps them in the form, which alone saves them. */
 function DesktopContextPicker(
-  { value, onChange, disabled, choices, identityLabel }: {
+  { value, onChange, disabled, choices, identityLabel, inline }: {
     value: string[];
     onChange: (value: string[]) => void;
     disabled: boolean;
     choices: readonly SessionMeta[];
     identityLabel: (id: string) => string;
+    inline: boolean;
   },
 ): React.JSX.Element {
   const sessions = useStoreSelector((state) => state.sessions);
@@ -284,6 +288,82 @@ function DesktopContextPicker(
   const tree = state.searchFocused || state.prefixArmed
     ? "inactive"
     : "available";
+  const pick = (session: SessionMeta): void =>
+    onChange(
+      selected.has(session.id)
+        ? value.filter((id) => id !== session.id)
+        : [...value, session.id],
+    );
+  if (inline) {
+    // The workbench has the room: browse, search and toggle in place, with
+    // the chosen sessions as removable chips above the tree.
+    return (
+      <Stack spacing={1} data-context-picker data-context-picker-inline>
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={0.75}
+          sx={{ flexWrap: "wrap", rowGap: 0.75, minHeight: 28 }}
+        >
+          <Typography variant="caption" color="text.secondary" role="status">
+            {value.length
+              ? `${value.length} of ${CONTEXT_LIMIT}`
+              : "None linked"}
+          </Typography>
+          {value.map((id) => (
+            <Chip
+              key={id}
+              size="small"
+              label={identityLabel(id)}
+              disabled={disabled}
+              onDelete={() => onChange(value.filter((other) => other !== id))}
+              sx={{ maxWidth: "100%" }}
+            />
+          ))}
+          {value.length > 1 && (
+            <Button
+              size="small"
+              disabled={disabled}
+              onClick={() => onChange([])}
+              sx={{ textTransform: "none", minWidth: 0 }}
+            >
+              Clear
+            </Button>
+          )}
+        </Stack>
+        <Box
+          data-context-choices
+          sx={{
+            display: "flex",
+            flexDirection: "column",
+            height: "max(280px, calc(100vh - 430px))",
+          }}
+        >
+          <SessionDestinationTree
+            sessions={sessions}
+            folders={folders}
+            order={order}
+            initialFolder={null}
+            selected={selected}
+            include={include}
+            isDisabled={() => full || disabled}
+            searchLabel="Search context sessions"
+            treeLabel="Context sessions"
+            onPick={pick}
+            onStateChange={onStateChange}
+            listSx={{
+              overflowY: "auto",
+              pb: 1,
+              border: 1,
+              borderColor: "divider",
+              borderRadius: 1.5,
+              ...desktopScrollbarSx,
+            }}
+          />
+        </Box>
+      </Stack>
+    );
+  }
   return (
     <Stack spacing={1} data-context-picker>
       <SelectionField
@@ -381,12 +461,7 @@ function DesktopContextPicker(
               isDisabled={() => full}
               searchLabel="Search context sessions"
               treeLabel="Context sessions"
-              onPick={(session) =>
-                onChange(
-                  selected.has(session.id)
-                    ? value.filter((id) => id !== session.id)
-                    : [...value, session.id],
-                )}
+              onPick={pick}
               onStateChange={onStateChange}
               listSx={{ overflowY: "auto", pb: 1, ...desktopScrollbarSx }}
             />

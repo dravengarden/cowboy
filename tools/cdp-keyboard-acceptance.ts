@@ -182,14 +182,20 @@ const runConfigFlow = async (): Promise<void> => {
       layout.paper[3]! >= layout.view[1]! - 48 - 2,
     `The workbench fills the window: ${JSON.stringify(layout)}`,
   );
+  const [agentBox, toolsBox, contextBox] = layout.panes as [
+    number[],
+    number[],
+    number[],
+  ];
   check(
-    layout.panes.length === 3 &&
-      new Set(layout.panes.map((pane) => pane[1])).size === 1,
-    `Agent, Context and Tools sit side by side: ${
+    layout.panes.length === 3 && agentBox[0] === toolsBox[0] &&
+      toolsBox[1]! > agentBox[1]! && contextBox[0]! > agentBox[0]! &&
+      contextBox[3]! >= layout.view[1]! - 220,
+    `Agent over Tools on the left, a full-height Context on the right: ${
       JSON.stringify(layout.panes)
     }`,
   );
-  results.push("A 1600×1000 window shows Agent | Context | Tools side by side");
+  results.push("Agent stacks over Tools; Context fills the right column");
   check(
     await page.evaluate<boolean>(
       "document.activeElement?.getAttribute('data-config-preset') === '2'",
@@ -236,11 +242,6 @@ const runConfigFlow = async (): Promise<void> => {
   check(await activeIn("[data-config-preset]"), "gg returns to the presets");
   results.push("gg/G jump to the pane's first and last field");
   await key("]");
-  check(
-    await activeIn("[data-config-pane='context']"),
-    "] moves to the Context pane",
-  );
-  await key("]");
   check(await activeIn("[data-config-pane='tools']"), "] moves to Tools");
   await shot("run-config-tools-cursor");
   for (let i = 0; i < 12; i++) {
@@ -280,17 +281,46 @@ const runConfigFlow = async (): Promise<void> => {
     "The cursor returns to the switch after its save",
   );
   results.push("Tools fields are reachable; H/L turn a switch off and on");
-  await key("h", 2);
+  await key("l", 2);
   check(
     await activeIn("[data-config-pane='context']"),
-    "Ctrl+H moves one pane left",
+    "Ctrl+L moves to the Context pane",
+  );
+  // The session tree is inline: reach it with J, toggle a row in place.
+  for (let i = 0; i < 6 && !(await activeIn("[role='tree']")); i++) {
+    await key("j");
+  }
+  if (!(await activeIn("[role='tree']"))) {
+    await shot("run-config-tree-miss");
+    throw new Error(
+      `J reaches the inline session tree: ${await page.evaluate<string>(
+        "(() => { const a = document.activeElement; return a?.tagName + ' ' + (a?.getAttribute('aria-label') ?? a?.textContent?.slice(0, 80)) + ' trees=' + document.querySelectorAll(\"[role='tree']\").length + ' rows=' + document.querySelectorAll(\"[role='treeitem']\").length + ' fields=' + JSON.stringify(globalThis.__runConfigFields('context')); })()",
+      )}`,
+    );
+  }
+  const linkedBefore = await page.evaluate<number>(
+    "document.querySelectorAll(\"[role='tree'] [aria-selected='true']\").length",
+  );
+  await key("j");
+  await key("Enter");
+  await until(
+    `document.querySelectorAll("[role='tree'] [aria-selected='true']").length !== ${linkedBefore}`,
+    "Enter toggles a session in the tree",
+  );
+  check(await activeIn("[role='tree']"), "The tree keeps its own J/K/Enter");
+  await shot("run-config-context-tree");
+  results.push("Link sessions is an inline tree: J reaches it, Enter toggles");
+  await key("[");
+  check(
+    await activeIn("[data-config-pane='tools']"),
+    "[ leaves the tree for the previous pane",
   );
   await key("h", 2);
   check(
     await activeIn("[data-config-preset]"),
     "Returning to Agent restores its cursor",
   );
-  results.push("Ctrl+H/L move between panes and each pane keeps its cursor");
+  results.push("Ctrl+H/L and [/] move between panes; each keeps its cursor");
   await key(" ");
   await until(
     "document.querySelector('[data-desktop-leader-menu=\"modal\"]') && document.querySelector('[data-desktop-hint]')",
@@ -311,7 +341,7 @@ const runConfigFlow = async (): Promise<void> => {
     `A narrower window keeps two columns: ${JSON.stringify(medium)}`,
   );
   await shot("run-config-medium");
-  results.push("A 1180px window folds to Agent+Context | Tools");
+  results.push("A 1180px window keeps the two columns");
   await page.send("Emulation.clearDeviceMetricsOverride", {});
   const errors = await page.evaluate<string[]>("globalThis.__errors ?? []");
   check(errors.length === 0, `No page errors: ${JSON.stringify(errors)}`);

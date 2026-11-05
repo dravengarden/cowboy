@@ -60,6 +60,7 @@ import {
 } from "./commands/modalNavigation";
 import {
   focusConfigRow,
+  RUN_CONFIG_OWN_KEYS,
   RUN_CONFIG_STEP_EVENT,
   runConfigKey,
   trackRunConfigCursor,
@@ -1112,29 +1113,26 @@ function ConfigOptionControl({
   );
 }
 
-/** Agent | Context | Tools side by side on a wide window, so every setting
- *  is visible at once; two columns, then one, as the window narrows. Each
- *  pane scrolls on its own and the one holding the cursor is outlined. */
+/** The short panes (Agent, then Tools) stack in the left column so their
+ *  content, not empty pane bottoms, fills its height; Context takes the
+ *  right column, where the session tree grows to the window. One column on
+ *  a narrow window. Each pane scrolls on its own and the one holding the
+ *  cursor is outlined. DOM order (Agent, Tools, Context) is pane order. */
 const runConfigPanelSx = {
   flex: 1,
   minWidth: 0,
   minHeight: 0,
   display: "grid",
-  gap: 1.5,
-  p: 1.5,
+  gap: 1.25,
+  p: 1.25,
   overflow: "auto",
   gridTemplateColumns: "minmax(0, 1fr)",
-  gridTemplateAreas: '"agent" "context" "tools"',
+  gridTemplateAreas: '"agent" "tools" "context"',
   "@media (min-width: 980px)": {
     overflow: "hidden",
-    gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 1fr)",
-    gridTemplateRows: "minmax(0, max-content) minmax(0, 1fr)",
-    gridTemplateAreas: '"agent tools" "context tools"',
-  },
-  "@media (min-width: 1400px)": {
-    gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr)",
-    gridTemplateRows: "minmax(0, 1fr)",
-    gridTemplateAreas: '"agent context tools"',
+    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+    gridTemplateRows: "max-content minmax(0, 1fr)",
+    gridTemplateAreas: '"agent context" "tools context"',
   },
 } as const;
 
@@ -1178,7 +1176,8 @@ function RunConfigPane({
           borderRadius: 1.5,
           transition: "background-color 120ms",
         },
-        "& [data-config-row]": { py: 0.75 },
+        "& [data-config-row]": { py: 0.5 },
+        "& [data-settings-row]": { py: 0.25, minHeight: 36 },
         "& [data-config-row]:has(:focus-visible), & [data-settings-row]:has(:focus-visible)":
           {
             bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08),
@@ -1220,7 +1219,13 @@ function RunConfigPane({
       </Stack>
       <Stack
         spacing={1}
-        sx={{ flex: 1, minHeight: 0, overflow: "auto", px: 2, py: 1.25 }}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflow: "auto",
+          px: 2,
+          py: 1.25,
+        }}
       >
         {children}
       </Stack>
@@ -1542,6 +1547,27 @@ export function DesktopTopBarControls({
       // The dialog's frame (or the body) holds focus when the control under
       // the cursor was disabled; the panel still owns the key.
       if (target && !panel.contains(target) && !target.contains(panel)) {
+        return;
+      }
+      // A region with its own keymap (the session tree, its search) keeps
+      // every key but the pane motions that leave it.
+      const region = target?.closest<HTMLElement>(RUN_CONFIG_OWN_KEYS);
+      if (
+        target && region && panel.contains(region) &&
+        // The Normal cursor on a text field sits on its box, not inside.
+        !target.hasAttribute("data-desktop-field-cursor")
+      ) {
+        const regionMotion = regionMotionKey(event);
+        const key = workspaceCommandKey(event);
+        const leave = regionMotion !== null
+          ? runConfigMotionAction(regionMotion)
+          : !isModalTextField(target) && !event.metaKey && !event.ctrlKey &&
+              !event.altKey && (key === "[" || key === "]")
+          ? runConfigKeyAction(key)
+          : null;
+        if (leave === null || !runConfigKey(panel, leave)) return;
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
       // Insert: a text field owns every key; Esc leaves it for Normal.
@@ -1971,18 +1997,20 @@ export function DesktopTopBarControls({
             ))}
           </RunConfigPane>
           <RunConfigPane
-            pane="context"
-            title="Context"
-            caption="What the next message reads, and where the work goes"
-          >
-            {session && <SessionContextSettings session={session} />}
-          </RunConfigPane>
-          <RunConfigPane
             pane="tools"
             title="Tools"
             caption="What this agent may call and remember"
           >
             <SessionToolsSection sessionId={sessionId} heading={false} />
+          </RunConfigPane>
+          <RunConfigPane
+            pane="context"
+            title="Context"
+            caption="Where the work goes, and what the next message reads"
+          >
+            {session && (
+              <SessionContextSettings session={session} inlineLinks />
+            )}
           </RunConfigPane>
         </Box>
       </DesktopModal>

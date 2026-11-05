@@ -55,11 +55,14 @@ import { newUuid } from "./uuid";
  *  block above. Here: what the next message can read (Link sessions), and
  *  where the work goes (Replace or fork). */
 export function SessionContextSettings(
-  { session, provenance = true, allowFork = true }: {
+  { session, provenance = true, allowFork = true, inlineLinks = false }: {
     session: SessionMeta;
     provenance?: boolean;
     /** An empty session has no conversation to branch. */
     allowFork?: boolean;
+    /** Desktop workbench: Replace or fork first, then the session tree in
+     *  place, filling the rest of the pane. */
+    inlineLinks?: boolean;
   },
 ): React.JSX.Element {
   const [open, setOpen] = useState(false);
@@ -130,13 +133,15 @@ export function SessionContextSettings(
                 context={data}
                 onResolved={onSaved}
               />
-              <LinkedSessions
-                session={session}
-                context={data}
-                draft={draft}
-                onDraft={setDraft}
-                onSettled={reload}
-              />
+              {!inlineLinks && (
+                <LinkedSessions
+                  session={session}
+                  context={data}
+                  draft={draft}
+                  onDraft={setDraft}
+                  onSettled={reload}
+                />
+              )}
             </>
           )}
           <Box ref={actions} data-session-new-from-section>
@@ -176,6 +181,16 @@ export function SessionContextSettings(
               onRestart={() => setFormGeneration((value) => value + 1)}
             />
           )}
+          {data && inlineLinks && (
+            <LinkedSessions
+              session={session}
+              context={data}
+              draft={draft}
+              onDraft={setDraft}
+              onSettled={reload}
+              inline
+            />
+          )}
         </Stack>
       )}
     </Box>
@@ -186,12 +201,13 @@ export function SessionContextSettings(
  *  attachment: each change applies at once and nothing runs until that prompt
  *  is sent, so there is nothing to save. A fork leaves this selection here. */
 function LinkedSessions(
-  { session, context, draft, onDraft, onSettled }: {
+  { session, context, draft, onDraft, onSettled, inline = false }: {
     session: SessionMeta;
     context: SessionContext;
     draft: string[] | null;
     onDraft: (draft: string[] | null) => void;
     onSettled: () => Promise<unknown>;
+    inline?: boolean;
   },
 ): React.JSX.Element {
   const [error, setError] = useState("");
@@ -246,6 +262,7 @@ function LinkedSessions(
         disabled={unresolved || recovering}
         // Continuing makes this session a source of the new agent's context.
         exclude={context.next_agent ? undefined : session.id}
+        inline={inline}
       />
       {error && <Alert severity="error">{error}</Alert>}
     </Stack>
