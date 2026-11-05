@@ -233,7 +233,8 @@ then the live app cross-fading in over it. Rules worth keeping:
    to the source commit time, so every deployed commit gets a new, larger cache
    generation and the foreground update-check (which fires when the string
    changes) reloads clients onto the fresh bundle.
-2. `bun run typecheck` + `bun run lint`, commit on the branch.
+2. `bun run typecheck` + `bun run lint` (which also runs the repository
+   structure ratchet, see the root AGENTS.md), commit on the branch.
 3. Build picks up new npm deps via a deps-FOD; if you ADDED deps, capture the new
    `depsHash` with `nix build .#cowboy-web --option sandbox false` (DNS fails
    under the nix sandbox on hawk — see the columbus memory on the Vite FOD DNS sandbox,
