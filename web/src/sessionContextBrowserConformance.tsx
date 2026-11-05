@@ -847,6 +847,67 @@ export async function runSessionContextBrowserConformance(
         context.revision === context.applied_revision,
         `${mode}: links left after Back wait without holding anything`,
       );
+      // Another surface stages an agent while this form is open.
+      const stageElsewhere = (next: SessionContext["next_agent"]) => {
+        context = {
+          ...context,
+          next_agent: next,
+          revision: context.revision + 1,
+        };
+        announceContext(sessions[0]!.id);
+      };
+      const subscriptionShown = () =>
+        container.querySelector(
+          '[data-new-session-editor] [data-session-subscription] [role="combobox"]',
+        )?.textContent ?? "";
+      button("Replace or fork").click();
+      await until(() => Boolean(continueRun()) && !continueRun().disabled);
+      stageElsewhere({
+        provider: "claude-code",
+        provider_account_id: "mink",
+        machine_id: "hawk",
+        runtime_machine_id: null,
+        cwd: "project",
+        preset: null,
+        inherit_settings: true,
+      });
+      await until(() =>
+        subscriptionShown().includes("Mink") && !continueRun().disabled
+      );
+      check(
+        !container.querySelector("[data-new-session-stale]"),
+        `${mode}: an untouched form follows a change made elsewhere`,
+      );
+      button("More options").click();
+      stageElsewhere(null);
+      await until(() =>
+        Boolean(container.querySelector("[data-new-session-stale]"))
+      );
+      check(
+        continueRun().disabled && subscriptionShown().includes("Mink"),
+        `${mode}: a used form keeps its choices and holds Replace on a change elsewhere`,
+      );
+      const scaledIcon = (selector: string) =>
+        container.querySelector(selector)!.getBoundingClientRect().width;
+      const iconSelectors = [
+        "[data-new-session-stale] .MuiAlert-icon svg",
+        "[data-session-new-from-section] .MuiButton-startIcon svg",
+        "[data-context-links] .MuiChip-deleteIcon",
+      ];
+      const base = iconSelectors.map(scaledIcon);
+      document.documentElement.style.fontSize = "24px";
+      const large = iconSelectors.map(scaledIcon);
+      document.documentElement.style.fontSize = "";
+      check(
+        base.every((size, index) => size > 0 && Math.abs(large[index]! / size - 1.5) < 0.05),
+        `${mode}: alert, button and chip glyphs follow the global font size (${base.join("/")} → ${large.join("/")})`,
+      );
+      exactButton("Reload").click();
+      await until(() =>
+        !container.querySelector("[data-new-session-stale]") &&
+        !subscriptionShown().includes("Mink") && !continueRun().disabled
+      );
+      check(true, `${mode}: Reload starts the form over from the latest context`);
       flushSync(() => root.render(null));
       const workspace = sessions[0]!.workspace_id;
       delete sessions[0]!.workspace_id;
