@@ -47,7 +47,8 @@ and the legacy `bufferLanguage` reply reports that server `document_current`.
 Both native gates must run with `CARGO_BUILD_BUILD_DIR` unset and a short
 `TMPDIR` (for example `/tmp`): the private server's Unix socket paths live under
 the test's temporary root, and a long `TMPDIR` makes the server exit at startup.
-The 1.21.0 pair fails the same way under the long session `TMPDIR`.
+The 1.21.0 pair fails the same way under the long session `TMPDIR`. Both recipes
+now set `TMPDIR=/tmp` inside their namespace.
 
 ## Publication and installation
 
