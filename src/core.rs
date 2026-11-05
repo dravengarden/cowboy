@@ -364,42 +364,49 @@ pub struct ManagedTurn {
     pub status: Status,
 }
 
-/// Extract `(user_prompt, assistant_partial)` for the LAST turn in a session's
-/// log — the turn cut off by a restart. Walks to the last `user_message_chunk`
-/// group (the prompt) and concatenates the `agent_message_chunk` text after it
-/// (the partial output, since a cut-off turn has no `TurnEnd`). Text blocks only;
-/// degrades to empty strings.
-fn last_turn_texts(log: &[Envelope]) -> (String, String) {
-    let chunk = |env: &Envelope| -> Option<(String, String)> {
-        if let Event::Update { update } = &env.event {
-            let kind = update
-                .get("sessionUpdate")
-                .and_then(serde_json::Value::as_str)?;
-            let text = update
+/// Rebuild the LAST user prompt in a session's log — the turn cut off by a
+/// crash or restart — from its `user_message_chunk` group. The ACP worker echoes
+/// one chunk per content block, so the group is the maximal run of consecutive
+/// user chunks ending at the last one. Returns the concatenated text and, when
+/// the prompt carried anything other than text (images, resources), the complete
+/// block list so a retry resubmits the same prompt. A text-only prompt keeps an
+/// empty block list, exactly like a plain text send. Degrades to empty values.
+fn last_user_prompt(log: &[Envelope]) -> (String, Vec<serde_json::Value>) {
+    let user_block = |env: &Envelope| -> Option<serde_json::Value> {
+        let Event::Update { update } = &env.event else {
+            return None;
+        };
+        (update
+            .get("sessionUpdate")
+            .and_then(serde_json::Value::as_str)
+            == Some("user_message_chunk"))
+        .then(|| {
+            update
                 .get("content")
-                .and_then(|c| c.get("text"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            return Some((kind.to_owned(), text.to_owned()));
-        }
-        None
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)
+        })
     };
-    let last_user = log
+    let Some(last) = log.iter().rposition(|env| user_block(env).is_some()) else {
+        return (String::new(), Vec::new());
+    };
+    let start = log[..last]
         .iter()
-        .rposition(|env| matches!(chunk(env), Some((ref k, _)) if k == "user_message_chunk"));
-    let Some(start) = last_user else {
-        return (String::new(), String::new());
-    };
-    let mut prompt = String::new();
-    let mut partial = String::new();
-    for env in &log[start..] {
-        match chunk(env) {
-            Some((k, t)) if k == "user_message_chunk" => prompt.push_str(&t),
-            Some((k, t)) if k == "agent_message_chunk" => partial.push_str(&t),
-            _ => {}
-        }
-    }
-    (prompt, partial)
+        .rposition(|env| user_block(env).is_none())
+        .map_or(0, |index| index + 1);
+    let blocks: Vec<serde_json::Value> = log[start..=last].iter().filter_map(user_block).collect();
+    let text: String = blocks
+        .iter()
+        .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
+        .collect();
+    let text_only = blocks.iter().all(|block| {
+        block
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|kind| kind == "text")
+    });
+    let content = if text_only { Vec::new() } else { blocks };
+    (text, content)
 }
 
 /// An in-progress switch to another installed Provider release.
@@ -7205,7 +7212,7 @@ impl Hub {
         if self.is_managed_child(session_id) {
             return;
         }
-        let (prompt, status, retry_cmid, already_queued) = {
+        let (prompt, content, status, retry_cmid, already_queued) = {
             let sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get(session_id) else {
                 tracing::warn!(session = %session_id, "retry_turn: unknown session — no-op");
@@ -7230,7 +7237,7 @@ impl Hub {
                 return;
             };
             let retry_cmid = format!("cowboy-retry:{session_id}:{last_user_seq}");
-            let prompt = last_turn_texts(&s.log).0;
+            let (prompt, content) = last_user_prompt(&s.log);
             if s.in_flight
                 || s.queue
                     .iter()
@@ -7240,9 +7247,9 @@ impl Hub {
                 return;
             }
             let already_queued = s.queue.iter().any(|message| message.text == prompt);
-            (prompt, s.meta.status, retry_cmid, already_queued)
+            (prompt, content, s.meta.status, retry_cmid, already_queued)
         };
-        if prompt.trim().is_empty() {
+        if prompt.trim().is_empty() && content.is_empty() {
             // The "no response" report points here first: a crashed turn whose
             // user prompt never made it into the log leaves nothing to re-run.
             tracing::warn!(session = %session_id, ?status, "retry_turn: no prior prompt to retry — no-op");
@@ -7253,8 +7260,8 @@ impl Hub {
             self.drain_head(session_id, true, true);
             return;
         }
-        tracing::info!(session = %session_id, ?status, prompt_len = prompt.len(), "retry_turn: re-submitting last prompt");
-        let _ = self.force_submit(session_id, prompt, Vec::new(), Some(retry_cmid), true);
+        tracing::info!(session = %session_id, ?status, prompt_len = prompt.len(), blocks = content.len(), "retry_turn: re-submitting last prompt");
+        let _ = self.force_submit(session_id, prompt, content, Some(retry_cmid), true);
         // force_submit DISPATCHES only when the queue is empty AND the session is
         // ready; with messages already queued — or a crashed/exited session — it
         // just parks the prompt at the queue FRONT and emits pending. That left
@@ -10693,6 +10700,73 @@ mod core_tests {
                 .is_some_and(|id| id.starts_with("cowboy-retry:"))
         );
         assert!(rx.try_recv().is_err(), "duplicate retry was dispatched");
+    }
+
+    #[tokio::test]
+    async fn retry_resubmits_every_block_of_the_last_prompt() {
+        let hub = hub_with_session("retry-blocks");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        let image =
+            serde_json::json!({"type": "image", "data": "fixture", "mimeType": "image/png"});
+        let text = serde_json::json!({"type": "text", "text": "describe this"});
+        for update in [
+            serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": "an earlier prompt"}
+            }),
+            serde_json::json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "an earlier reply"}
+            }),
+            serde_json::json!({"sessionUpdate": "user_message_chunk", "content": image}),
+            serde_json::json!({"sessionUpdate": "user_message_chunk", "content": text}),
+        ] {
+            hub.push("retry-blocks", Event::Update { update });
+        }
+        hub.set_status("retry-blocks", Status::Crashed, Some("boom".to_owned()));
+
+        hub.retry_turn("retry-blocks");
+
+        let dispatched = rx.try_recv().expect("retry dispatches the last prompt");
+        assert_eq!(dispatched.text, "describe this");
+        assert_eq!(dispatched.content, vec![image, text]);
+        assert!(
+            rx.try_recv().is_err(),
+            "retry dispatched more than one prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_of_a_prompt_ending_with_an_image_is_not_a_no_op() {
+        let hub = hub_with_session("retry-trailing-image");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        for update in [
+            serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": "look"}
+            }),
+            serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "image", "data": "fixture", "mimeType": "image/png"}
+            }),
+        ] {
+            hub.push("retry-trailing-image", Event::Update { update });
+        }
+        hub.set_status(
+            "retry-trailing-image",
+            Status::Crashed,
+            Some("boom".to_owned()),
+        );
+
+        hub.retry_turn("retry-trailing-image");
+
+        let dispatched = rx
+            .try_recv()
+            .expect("a prompt that ends with an image is still retried");
+        assert_eq!(dispatched.text, "look");
+        assert_eq!(dispatched.content.len(), 2);
     }
 
     #[tokio::test]
