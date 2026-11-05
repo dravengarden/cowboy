@@ -83,6 +83,10 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Scoped release 3.80.0 records app-shell 1.1.35 for the already-committed
+sheet change `3f6fd69f` (no grab pills); no Plugin depends on that component,
+so the worker registry input stays at 3.79.0. Native pins are unchanged.
+
 Scoped release 3.78.0 records DeepSeek Harness 1.0.10, whose Recommended preset
 uses dsh's advertised model option value. Native pins and its component release
 3.77.0 are unchanged.
