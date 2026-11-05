@@ -103,6 +103,7 @@ primary phone/desktop product path.
 - [`../examples/authentication/README.md`](../examples/authentication/README.md) — Google, Apple, and Cloudflare Email Authentication Provider examples
 - [`../examples/editor-plugins/README.md`](../examples/editor-plugins/README.md) — Installable editor plugin example and packing command
 - [`architecture/runtime-incident-ledger.md`](architecture/runtime-incident-ledger.md) — Runtime failure evidence and resolved invariants
+- [`structural-refactor-plan-2026-11.md`](structural-refactor-plan-2026-11.md) — Measured structural baseline after five months of iteration, ranked decay risks, behaviour-preserving refactor slices with their guards, rejected options and quarterly health metrics
 
 ### Core documents
 

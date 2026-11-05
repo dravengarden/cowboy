@@ -60,10 +60,10 @@ does not change the current Hub/Machine/worker topology.
 
 | Layer | Modules | Role |
 |---|---|---|
-| CLI / controller | `src/main.rs`, `src/cli.rs`, `src/server.rs` | Commands, authenticated REST/WebSocket, and runtime-served SPA |
+| CLI / controller | `src/main.rs`, `src/cli.rs`, `components/server/src/server.rs` | Commands, authenticated REST/WebSocket, and runtime-served SPA |
 | Hub | `src/core.rs`, `src/persistence.rs` | Session state, `seq`, fan-out, queueing, and write-behind intents |
 | Runtime routing | `src/supervisor.rs`, `src/remote_runtime.rs`, `src/runtime_router.rs` | Machine selection, fencing, replay, and idempotent commands |
-| Machine host | `src/machine_*.rs`, `src/bin/cowboy-machine.rs` | Enrollment, workspace preparation, component lifecycle, and detached-worker supervision |
+| Machine host | `src/machine_*.rs`, `components/machine/src/*`, `components/machine/src/bin/cowboy-machine.rs` | Enrollment, workspace preparation, component lifecycle, and detached-worker supervision |
 | ACP worker | `src/acp.rs`, `src/worker.rs`, `src/bin/cowboy-acp-worker.rs` | Provider handshake, prompts, permissions, streaming updates, and resume |
 | Plugins and components | `src/plugin.rs`, `plugins/*`, `components/*` | Versioned integration manifests, shared contracts, and coordinated release validation |
 | Agent Providers | `src/provider/*`, `plugins/*/provider.json` | Signed package contracts, launch generations, Service auth, and usage adapters |

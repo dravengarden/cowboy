@@ -1,6 +1,6 @@
 # Server & wire API
 
-`src/server.rs` stands up one **axum** server that exposes REST, hosts the
+`components/server/src/server.rs` stands up one **axum** server that exposes REST, hosts the
 real-time WebSocket, accepts authenticated Machine connections, and serves the
 SPA files under `--web-root`. One process and one port (`:3333`) form the
 control plane, while the web files remain an independently replaceable release.
