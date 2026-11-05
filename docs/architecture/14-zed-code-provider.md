@@ -72,9 +72,12 @@ live through the session's directory like the Review directory; unset means on,
 an explicit `off` restricts. The Controller sends that value as `trusted` and,
 when it is off, reports `restricted` and refuses language reads and new
 buffers even if the adapter still holds the worktree trusted from before.
-Turning it off does not yet stop servers already running for that worktree;
-they end with its last lease or adapter generation (a native revocation
-operation is planned, see [19](19-code-review-engine.md)). Restricted worktrees still provide files, Git state, and
+Since Zed Plugin `1.21.0` turning it off also revokes native trust: the adapter
+restricts the worktree at once and refuses every language query on it
+(including owned-buffer reads), and once no lease or buffer remains it removes
+the native worktree, which drops the language servers rooted only there, and
+adds it back restricted. `RestrictWorktrees` alone would not stop them at the
+pinned revision. Older adapters keep trust until their last lease ends. Restricted worktrees still provide files, Git state, and
 client-side syntax highlighting. The stable API reports restricted capability
 instead of silently treating absent LSP results as success.
 
