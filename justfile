@@ -692,6 +692,13 @@ feature-check:
     cargo check --locked --no-default-features --features machine-host -p cowboy-machine --bin cowboy-machine --bin cowboy-machine-install
     cargo check --locked --no-default-features --features code-adapter --bin cowboy-code-adapter
 
+# Rust-serialized wire fixtures (contracts/protocol, owned by
+# src/protocol_contract.rs) must be current in their generated TypeScript
+# module, whose literals the web typecheck holds to web/src/protocol.ts.
+protocol-contract-check:
+    dprint check tools/generate-protocol-fixtures.ts
+    bun tools/generate-protocol-fixtures.ts --check
+
 # docs/INDEX.md links every docs/ Markdown page and no local link is broken.
 docs-index-check:
     bash tools/check-docs-index.sh
@@ -771,7 +778,7 @@ session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
       --default-reader-release "{{DEFAULT_READER}}" --receipt "{{RECEIPT}}" \
       --host-mount-ns "$host_mount" --host-net-ns "$host_net"
 
-check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check release-sources-check structure-check docs-index-check test test-postgres logs-conformance build
+check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check release-sources-check structure-check docs-index-check protocol-contract-check test test-postgres logs-conformance build
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
 # An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.

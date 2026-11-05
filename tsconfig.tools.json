@@ -44,6 +44,7 @@
     "tools/composition-link-conformance.ts",
     "tools/execution_environment_lifetime_probe.ts",
     "tools/generate-composition-contract.ts",
+    "tools/generate-protocol-fixtures.ts",
     "tools/idb-browser-conformance.ts",
     "tools/native-shell-probe_test.ts",
     "tools/plugin-publication-receipt.ts",

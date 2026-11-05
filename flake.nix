@@ -125,6 +125,8 @@
           ./contracts/code-buffer-sync-budget.fixture.json
           ./contracts/code-buffer-navigation.fixture.json
           ./contracts/code-buffer-destination.fixture.json
+          # src/protocol_contract.rs compares its serialization with these.
+          ./contracts/protocol
           ./plugins/zed/adapter/fixtures/content.json
           ./plugins/zed/adapter/fixtures/text.json
           ./tests/fixtures/otel-client.json

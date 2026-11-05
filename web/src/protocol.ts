@@ -299,7 +299,21 @@ export type Event =
     option_id: string | null;
   }
   | { kind: "lifecycle"; status: Status; detail: string | null }
-  | { kind: "turn_end"; stop_reason: string };
+  | { kind: "turn_end"; stop_reason: string; usage?: TurnUsage };
+
+/** Native usage for exactly one prompt, retained with its turn-end event.
+ *  Mirrors components/wire/src/runtime_wire.rs `TurnUsage`: input includes
+ *  cache reads, reasoning is already in output, and unknown cache evidence is
+ *  null rather than zero. */
+export interface TurnUsage {
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number | null;
+  uncached_input_tokens: number | null;
+  cache_write_tokens: number | null;
+  reasoning_tokens: number | null;
+}
 
 export type Envelope =
   & { session_id: string; seq: number; cmid?: string }

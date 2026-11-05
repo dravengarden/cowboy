@@ -161,3 +161,124 @@ fn session_meta_owner_fields_are_optional_on_the_wire() {
     assert!(source.contains("owner_user_id?: string;"));
     assert!(source.contains("owner_username?: string;"));
 }
+
+/// Rust-serialized wire fixtures for the web's hand-written protocol types.
+/// `tools/generate-protocol-fixtures.ts` turns the checked-in JSON into a
+/// module whose literals must satisfy `web/src/protocol.ts`, so the web
+/// typecheck rejects a field, tag or nullability the TypeScript mirror lacks.
+/// Every variant appears with each optional field present, absent and null.
+/// Regenerate with `COWBOY_UPDATE_CONTRACTS=1 cargo test protocol_fixtures`.
+fn event_fixtures() -> Vec<(&'static str, crate::core::Event)> {
+    use crate::core::{Event, Status};
+    let mut fixtures = vec![
+        (
+            "update",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "hello"}
+                }),
+            },
+        ),
+        (
+            "permission_request",
+            Event::PermissionRequest {
+                request_id: "p1".to_owned(),
+                tool_call: serde_json::json!({"title": "Shell"}),
+                options: serde_json::json!([
+                    {"optionId": "allow", "name": "Allow", "kind": "allow_once"}
+                ]),
+            },
+        ),
+        (
+            "permission_resolved_selected",
+            Event::PermissionResolved {
+                request_id: "p1".to_owned(),
+                option_id: Some("allow".to_owned()),
+            },
+        ),
+        (
+            "permission_resolved_cancelled",
+            Event::PermissionResolved {
+                request_id: "p1".to_owned(),
+                option_id: None,
+            },
+        ),
+        (
+            "turn_end_without_usage",
+            Event::TurnEnd {
+                stop_reason: "end_turn".to_owned(),
+                usage: None,
+            },
+        ),
+        (
+            "turn_end_with_usage",
+            Event::TurnEnd {
+                stop_reason: "end_turn".to_owned(),
+                usage: Some(crate::agent_model::TurnUsage {
+                    total_tokens: 1200,
+                    input_tokens: 1000,
+                    output_tokens: 200,
+                    cached_input_tokens: Some(900),
+                    uncached_input_tokens: Some(100),
+                    cache_write_tokens: None,
+                    reasoning_tokens: Some(50),
+                }),
+            },
+        ),
+    ];
+    for (name, status) in [
+        ("lifecycle_starting", Status::Starting),
+        ("lifecycle_running", Status::Running),
+        ("lifecycle_busy", Status::Busy),
+        ("lifecycle_exited", Status::Exited),
+        ("lifecycle_interrupted", Status::Interrupted),
+    ] {
+        fixtures.push((
+            name,
+            Event::Lifecycle {
+                status,
+                detail: None,
+            },
+        ));
+    }
+    fixtures.push((
+        "lifecycle_crashed_with_detail",
+        Event::Lifecycle {
+            status: Status::Crashed,
+            detail: Some("worker exited".to_owned()),
+        },
+    ));
+    fixtures
+}
+
+#[test]
+fn protocol_fixtures_match_the_checked_in_contract() {
+    let fixtures: Vec<serde_json::Value> = event_fixtures()
+        .into_iter()
+        .map(|(name, event)| {
+            serde_json::json!({
+                "name": name,
+                "value": serde_json::to_value(event).expect("serialize event"),
+            })
+        })
+        .collect();
+    let rendered = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&fixtures).expect("render fixtures")
+    );
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("contracts/protocol/event.json");
+    if std::env::var_os("COWBOY_UPDATE_CONTRACTS").is_some() {
+        std::fs::create_dir_all(path.parent().expect("contract directory"))
+            .expect("create contract directory");
+        std::fs::write(&path, &rendered).expect("write contract");
+        return;
+    }
+    let checked_in = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(
+        checked_in == rendered,
+        "{} is out of date: run COWBOY_UPDATE_CONTRACTS=1 cargo test protocol_fixtures, then bun tools/generate-protocol-fixtures.ts",
+        path.display()
+    );
+}
