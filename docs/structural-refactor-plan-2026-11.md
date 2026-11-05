@@ -445,6 +445,14 @@ session-settings open request a mounted surface had already handled stayed
 pending and reopened settings on a remount. Fixed in `sessionSettingsOpen.ts`.
 App's own splitter and drawer bindings have no dedicated browser fixture.
 
+### Phase 4 status (2026-11-05)
+
+| Slice | Outcome |
+|---|---|
+| 4.1 | Not started. The queue, transport and socket code in `store.ts` form one call cycle (queue → send → socket → handle → queue), and `setState` publishes connection status, so a module split needs the injected transport and clock the slice names first; moving code across that cycle would only add an import cycle |
+| 4.2 | The `impl Hub` file layout is split by concern without changing ownership or lock order: `core/hub_queue.rs` (send queue, drafts, dispatch), `core/hub_sync.rs`, `core/hub_provider_pins.rs` and `core/hub_config.rs`; core.rs's inline tests moved to files. `core.rs` falls from 8,037 to 5,150 measured lines. Separating queue policy from its effects is still open |
+| 4.3 | Not started (Machine code: a Machine maintenance boundary) |
+
 ### Phase 7 status (2026-11-05)
 
 7.1 landed as [`compatibility-exits.md`](compatibility-exits.md): about 45
