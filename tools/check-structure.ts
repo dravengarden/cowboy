@@ -660,14 +660,19 @@ export function report(measures: Measure[]): string[] {
 // CLI.
 
 async function repositorySources(): Promise<string[]> {
-  const output = await new Command("git", {
-    args: ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-    stdout: "piped",
-    stderr: "null",
-  }).output().catch(() => null);
-  if (output?.success) {
-    return new TextDecoder().decode(output.stdout).split("\0").filter(measured)
-      .sort();
+  let listed: Uint8Array | null = null;
+  try {
+    const output = await new Command("git", {
+      args: ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      stdout: "piped",
+      stderr: "null",
+    }).output();
+    if (output.success) listed = output.stdout;
+  } catch {
+    // No git executable (a Nix build): fall through to the tree walk.
+  }
+  if (listed !== null) {
+    return new TextDecoder().decode(listed).split("\0").filter(measured).sort();
   }
   // A Nix build source has no .git and holds exactly the tracked files, plus
   // the dependency trees the build installed; walk it instead.
