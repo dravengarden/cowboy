@@ -70,6 +70,7 @@ pub const READ_OPERATIONS: &[&str] = &[
     "code.search",
     "code.outline",
     "code.symbols",
+    "code.diagnostics",
     "accounts.list",
     "accounts.usage",
     "accounts.login_options",
@@ -525,7 +526,7 @@ export interface Cowboy {
 // page_required: pass {limit:50}; an unpaged list above 50 fails instead of truncating.
 "#,
 CODE_SDK: r#"
-export interface Cowboy { code: { search(query:string, q?:object): Promise<unknown>; outline(path:string): Promise<unknown>; symbols(query:string, q?:object): Promise<unknown> } } // help("code")
+export interface Cowboy{code: {search(query:string,q?:object):Promise<unknown>;outline(path:string):Promise<unknown>;symbols(query:string,q?:object):Promise<unknown>;diagnostics(paths:string[]):Promise<unknown>}} // help("code")
 "#,
 PREFERENCES_READ_SDK: r#"
 export interface Cowboy {
@@ -558,6 +559,15 @@ export interface Cowboy {
       result:{symbols:{path:string;name:string;kind:number;selectionStart:Pos;text:string}[];stopped:null|"limit"|"files"|"bytes"|"deadline";filesParsed:number}}>;
   };
 }
+export type CodeDiagnostic = {severity:"error"|"warning"|"information"|"hint";line:number;column:number;endLine:number;source:string|null;message:string};
+export interface Cowboy {
+  code: { // language engine's last observation of files a Code pane already has open; opens nothing
+    diagnostics(paths:string[]): Promise<{freshness:"last_observed";coverage:"open_buffers";files:({path:string;
+      state:"last_observed";counts:Record<"error"|"warning"|"information"|"hint",number>;diagnostics:CodeDiagnostic[];truncated:boolean}
+      | {path:string;state:"not_open"|"restricted"|"refused"|"unavailable"})[]}>; // 1..20 paths, <=50 per file, 1-based
+  };
+}
+// not_open/unavailable is never "clean"; last_observed may lag your newest edit. Compile to confirm.
 // symbols: case-insensitive name substring across the worktree, default50/max200.
 // Gitignore-aware; hidden files, binaries, >2MiB files and symlinks are skipped. Smart case unless case_sensitive.
 // limit default100/max200, <=20 per file; line/column are 1-based (UTF-16 column). partial: a bound stopped the scan.

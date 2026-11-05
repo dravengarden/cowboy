@@ -168,7 +168,7 @@ immediately.
 | --- | --- |
 | `code.search(query, {regex?, case_sensitive?, path?, limit?})` | bounded content matches with lines (core; implemented) |
 | `code.outline(path)`, `code.symbols(query, {limit?})` | syntax structure (tree-sitter tags; implemented, `heuristic`); language-engine refinement later |
-| `code.diagnostics({paths?, compare?})` | per path: state, coverage, problems with source lines, counts |
+| `code.diagnostics(paths)` | implemented for files a Code pane already holds: `last_observed` diagnostics and counts, or `not_open`/`restricted`/`refused`/`unavailable`; acquires nothing. Baseline comparison and analysis-frontier freshness come with P0/P2 |
 | `code.summary()` | observed-scope counts with coverage |
 | `code.definition/references/implementations(locator)`, `code.hover(locator)` | after owned-navigation acceptance only |
 

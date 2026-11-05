@@ -117,6 +117,38 @@ pub(in crate::server) async fn read(
     .await
 }
 
+/// The language engine's last observation of an already open buffer, for an
+/// agent's own Session. It opens nothing: a path no Code pane holds is refused
+/// by the engine. Projected checkouts outside the worktree are refused too.
+pub(in crate::server) async fn observe_open_buffer(
+    state: &crate::server::AppState,
+    session: &crate::machine_control::SessionReadScope,
+    path: &str,
+) -> anyhow::Result<ZedAdapterResponse> {
+    let observed = session.session();
+    let (worktree, path) = zed_language_target(observed.machine_id(), observed.cwd(), path)
+        .filter(|(worktree, _)| {
+            std::path::Path::new(worktree) == std::path::Path::new(observed.cwd())
+                || std::path::Path::new(observed.cwd())
+                    .canonicalize()
+                    .is_ok_and(|cwd| cwd == std::path::Path::new(worktree))
+        })
+        .ok_or_else(|| anyhow::anyhow!("path is outside this session's worktree"))?;
+    let request = serde_json::to_value(Request {
+        worktree: &worktree,
+        path: &path,
+        query: Query::Language,
+    })?;
+    super::session::adapter_request(
+        &state.hub,
+        &state.machine_control,
+        state.zed_adapter_socket.as_deref(),
+        session,
+        request,
+    )
+    .await
+}
+
 /// Without a usable language engine the outline comes from syntax. It keeps
 /// the response shape and says `precision: "heuristic"`.
 async fn structure_outline(
