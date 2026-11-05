@@ -727,7 +727,9 @@ async fn execute(
                 Ok(success(value))
             }
         }
-        "code.check" => super::code_reads::check(state, meta, &args, operation).await,
+        "code.check" => Ok(success(
+            super::code_reads::check(state, meta, &args, operation).await?,
+        )),
         "preferences.update" => {
             let _guard = PREFERENCE_WRITES.lock().await;
             if crate::review_directory::scope_arg(&args["scope"]).is_some() {
