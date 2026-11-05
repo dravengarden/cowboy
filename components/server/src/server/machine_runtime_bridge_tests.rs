@@ -1,4 +1,3 @@
-
 use super::{
     MACHINE_HEARTBEAT_TIMEOUT, MachineHeartbeatWatchdog, forward_machine_runtime_frames,
     queue_machine_json, write_machine_messages, write_machine_runtime_frames,

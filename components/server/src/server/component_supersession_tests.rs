@@ -1,4 +1,3 @@
-
 use super::superseding_plugin;
 use crate::machine_protocol::{
     ComponentId, ComponentKind, PluginInstallationState, PluginInventory,

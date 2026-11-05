@@ -1,4 +1,3 @@
-
 use super::colocated_execution_permitted;
 
 #[test]

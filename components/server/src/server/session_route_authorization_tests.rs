@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::product_auth::ProductPrincipal;
 use tower::ServiceExt as _;

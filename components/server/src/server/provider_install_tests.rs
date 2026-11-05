@@ -1,4 +1,3 @@
-
 use super::provider_auth_sync_required_before_install;
 use crate::machine_protocol::{
     PluginInstallationState, PluginInventory, ProviderMaterializationState, ProviderReplicaState,

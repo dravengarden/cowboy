@@ -1,4 +1,3 @@
-
 use super::provider_usage_source_is_authorized;
 use crate::machine_protocol::{
     PluginInstallationState, PluginInventory, ProviderMaterializationState, ProviderReplicaState,

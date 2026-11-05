@@ -1,4 +1,3 @@
-
 use super::provider_session_has_active_turn;
 use crate::agent_model::Status;
 

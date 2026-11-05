@@ -1,4 +1,3 @@
-
 use super::{
     DiagnosticLogsQuery, decode_log_cursor, encode_log_cursor, now_ms, parse_diagnostic_log_filter,
 };

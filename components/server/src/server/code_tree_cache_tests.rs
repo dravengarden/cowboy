@@ -1,4 +1,3 @@
-
 use super::{FileTreeEntry, file_tree_revision};
 
 #[test]

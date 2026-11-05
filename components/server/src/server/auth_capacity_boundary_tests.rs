@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn principal(user_id: &str) -> ProductPrincipal {

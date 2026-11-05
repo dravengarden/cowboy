@@ -1,4 +1,3 @@
-
 use super::refresh_identity_evidence;
 use crate::provider_account::{NativeIdentity, ProviderAccountId};
 use cowboy_provider_sdk::NativeIdentityRecipe;

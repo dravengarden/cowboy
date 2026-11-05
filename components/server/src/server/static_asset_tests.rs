@@ -1,4 +1,3 @@
-
 use super::{
     is_admin_console_path, plugin_release_artifact_response, resolve_static_document,
     static_content_type,

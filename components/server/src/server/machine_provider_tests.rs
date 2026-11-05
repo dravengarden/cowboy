@@ -1,4 +1,3 @@
-
 use super::{
     ProviderAuthExecutor, apply_workspace_inventory, failed_provider_auth_projection_ids,
     provider_auth_recovery_generations, provider_inventory_contract_matches,
@@ -290,8 +289,10 @@ fn session_scheduling_requires_the_exact_ready_service_auth_generation() {
 #[test]
 fn native_scheduling_uses_its_own_exact_generation_and_identity() {
     use super::provider_accounts::native_generation::resolve;
-    let source: cowboy_provider_sdk::StandardProviderSource =
-        serde_json::from_str(include_str!("../../../../plugins/claude-code/provider.json")).unwrap();
+    let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(include_str!(
+        "../../../../plugins/claude-code/provider.json"
+    ))
+    .unwrap();
     let manifest = source.compile().unwrap();
     let mut installed = installed_auth(99);
     installed.plugin_id = manifest.id.clone();

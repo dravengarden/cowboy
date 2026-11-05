@@ -1,4 +1,3 @@
-
 use super::{UsageActivityQuery, parse_usage_activity_filter};
 
 const MODELS: &[&str] = &["flash", "pro"];
