@@ -27,6 +27,7 @@ mod navigation_native;
 mod sync_native;
 mod sync_owners;
 mod text_reads;
+mod trust;
 
 const ADAPTER_VERSION: u8 = 1;
 const ZED_VERSION: &str = "1.13.0";
@@ -271,6 +272,8 @@ struct WorktreeLease {
     leases: usize,
     remote_id: u64,
     incarnation: Arc<()>,
+    /// Once trusted, Zed may run this worktree's servers until it is removed.
+    trusted_once: bool,
 }
 
 type Worktrees = Arc<RwLock<HashMap<PathBuf, WorktreeLease>>>;
@@ -1375,10 +1378,10 @@ async fn respond(
             buffer_navigation::respond(request, buffers, zed).await?
         }
         Request::EnsureWorktree { path, trusted } => {
-            ensure_worktree(path, trusted, false, worktrees, zed).await?
+            trust::ensure_worktree(path, trusted, false, worktrees, buffers, zed).await?
         }
         Request::OpenWorktree { path, trusted } => {
-            ensure_worktree(path, trusted, true, worktrees, zed).await?
+            trust::ensure_worktree(path, trusted, true, worktrees, buffers, zed).await?
         }
         Request::CloseWorktree { path } => close_worktree(path, worktrees, buffers, zed).await?,
         Request::OpenBuffer {
@@ -1400,6 +1403,7 @@ async fn respond(
             buffer_leases::respond(request, worktrees, buffers, zed).await?
         }
         Request::BufferLanguage { worktree, path } => {
+            trust::ensure_language(&worktree, worktrees).await?;
             buffer_language(worktree, path, buffers, zed).await?
         }
         Request::BufferHover {
@@ -1407,15 +1411,22 @@ async fn respond(
             path,
             row,
             column,
-        } => buffer_hover(worktree, path, row, column, buffers, zed).await?,
+        } => {
+            trust::ensure_language(&worktree, worktrees).await?;
+            buffer_hover(worktree, path, row, column, buffers, zed).await?
+        }
         Request::BufferNavigate {
             worktree,
             path,
             row,
             column,
             kind,
-        } => buffer_navigate(worktree, path, row, column, kind, buffers, zed).await?,
+        } => {
+            trust::ensure_language(&worktree, worktrees).await?;
+            buffer_navigate(worktree, path, row, column, kind, buffers, zed).await?
+        }
         Request::BufferSymbols { worktree, path } => {
+            trust::ensure_language(&worktree, worktrees).await?;
             buffer_symbols(worktree, path, buffers, zed).await?
         }
     })
@@ -1581,60 +1592,6 @@ async fn buffer_symbols(
         worktree,
         path,
         symbols,
-    })
-}
-
-async fn ensure_worktree(
-    path: PathBuf,
-    trusted: bool,
-    acquire_lease: bool,
-    worktrees: &Worktrees,
-    zed: Option<&Zed>,
-) -> Result<Response> {
-    let path = tokio::fs::canonicalize(path).await?;
-    if !path.is_dir() {
-        bail!("worktree is not a directory");
-    }
-    let mut all = worktrees.write().await;
-    if !all.contains_key(&path) {
-        let (remote_id, state) = if let Some(zed) = zed {
-            zed.open_worktree(&path, trusted).await?
-        } else {
-            (
-                u64::try_from(all.len() + 1)?,
-                if trusted {
-                    WorktreeState::Warming
-                } else {
-                    WorktreeState::Restricted
-                },
-            )
-        };
-        all.insert(
-            path.clone(),
-            WorktreeLease {
-                state,
-                leases: 0,
-                remote_id,
-                incarnation: Arc::default(),
-            },
-        );
-    }
-    let lease = all.get_mut(&path).expect("worktree was just inserted");
-    if acquire_lease {
-        lease.leases += 1;
-    }
-    if trusted && matches!(lease.state, WorktreeState::Restricted) {
-        lease.state = if let Some(zed) = zed {
-            zed.set_trust(lease.remote_id, true).await?
-        } else {
-            WorktreeState::Warming
-        };
-    }
-    Ok(Response::Worktree {
-        api_version: ADAPTER_VERSION,
-        path,
-        state: lease.state,
-        leases: lease.leases,
     })
 }
 
@@ -1926,7 +1883,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn worktree_leases_are_reference_counted_and_trust_is_monotonic() {
+    async fn worktree_leases_are_reference_counted_and_trust_can_be_granted() {
         let root = std::env::current_dir().unwrap();
         let canonical = tokio::fs::canonicalize(&root).await.unwrap();
         let worktrees: Worktrees = Arc::default();

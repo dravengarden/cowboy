@@ -32,9 +32,16 @@ impl Fixture {
         std::fs::write(root.join("file"), "old\n").unwrap();
         let worktrees: Worktrees = Arc::default();
         let buffers: Buffers = Arc::default();
-        crate::ensure_worktree(root.clone(), true, false, &worktrees, None)
-            .await
-            .unwrap();
+        crate::trust::ensure_worktree(
+            root.clone(),
+            true,
+            false,
+            &worktrees,
+            &crate::Buffers::default(),
+            None,
+        )
+        .await
+        .unwrap();
         worktrees.write().await.get_mut(&root).unwrap().state = crate::WorktreeState::Ready;
         let Response::BufferLease { lease, .. } = respond(
             Request::PrepareBuffer {

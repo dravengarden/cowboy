@@ -38,7 +38,7 @@ pub(super) async fn respond(
         Request::ReleaseBufferLease { lease } => registry.release(lease, buffers, zed).await,
         Request::QueryBufferLease { lease } => registry.query(lease),
         Request::ReadBufferLease { lease, request } => {
-            registry.read(lease, request, buffers, zed).await
+            registry.read(lease, request, worktrees, buffers, zed).await
         }
         _ => anyhow::bail!("not an owned buffer request"),
     }
@@ -351,6 +351,7 @@ impl Registry {
         &mut self,
         lease: LeaseRef,
         request: ReadRequest,
+        worktrees: &Worktrees,
         buffers: &Buffers,
         zed: Option<&Zed>,
     ) -> Result<Response> {
@@ -366,6 +367,7 @@ impl Registry {
             .get(&id)
             .context("buffer lease has been released")?;
         ensure!(slot.state == Phase::Open, "buffer lease is not open");
+        crate::trust::ensure_language(&slot.worktree, worktrees).await?;
         // No canonicalize, file read, worktree re-resolution or fallback. Both
         // owner locks survive the query so a legacy close cannot race it either.
         let active = buffers.active.read().await;

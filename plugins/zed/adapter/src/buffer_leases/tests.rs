@@ -1,5 +1,6 @@
 use super::*;
-use crate::{BufferState, Request, ensure_worktree, respond};
+use crate::trust::ensure_worktree;
+use crate::{BufferState, Request, respond};
 
 mod native_close;
 mod native_open;
@@ -200,9 +201,16 @@ impl Fixture {
     }
 
     async fn ready(&self) {
-        ensure_worktree(self.root.clone(), true, false, &self.worktrees, None)
-            .await
-            .unwrap();
+        ensure_worktree(
+            self.root.clone(),
+            true,
+            false,
+            &self.worktrees,
+            &crate::Buffers::default(),
+            None,
+        )
+        .await
+        .unwrap();
         self.worktrees
             .write()
             .await
