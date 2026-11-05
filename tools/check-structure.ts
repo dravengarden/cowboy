@@ -580,7 +580,7 @@ export function check(measures: Measure[], baseline: Baseline): Verdict {
 }
 
 /** Lower recorded sizes and admit new over-limit entities while each area's
- * recorded total per kind does not grow. */
+ * recorded total per kind does not grow beyond a formatting slack. */
 export function update(
   measures: Measure[],
   baseline: Baseline,
@@ -616,7 +616,12 @@ export function update(
   for (const measure of fresh.sort((a, b) => a.size - b.size)) {
     const slot = `${measure.kind} ${area(measure.path)}`;
     const total = (used.get(slot) ?? 0) + measure.size;
-    if (total <= (budget.get(slot) ?? 0)) {
+    // A pure move adds a module header and rustfmt re-wraps signatures that
+    // gained a visibility. Allow 1% of the recorded total for that, always
+    // below one limit, so the slack alone can never admit a new offender.
+    const recorded = budget.get(slot) ?? 0;
+    const slack = Math.min(Math.floor(recorded / 100), measure.limit - 1);
+    if (total <= recorded + slack) {
       next[measure.kind][measure.key] = measure.size;
       used.set(slot, total);
     } else {
@@ -654,9 +659,9 @@ export function report(measures: Measure[]): string[] {
 // ---------------------------------------------------------------------------
 // CLI.
 
-async function trackedSources(): Promise<string[]> {
+async function repositorySources(): Promise<string[]> {
   const output = await new Command("git", {
-    args: ["ls-files", "-z"],
+    args: ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
     stdout: "piped",
   }).output();
   if (!output.success) throw new Error("git ls-files failed");
@@ -686,7 +691,7 @@ export function serialize(baseline: Baseline): string {
 
 async function main(argv: string[]): Promise<number> {
   const measures: Measure[] = [];
-  for (const path of await trackedSources()) {
+  for (const path of await repositorySources()) {
     measures.push(...measureFile(path, await readFile(path, "utf8")));
   }
   if (argv.includes("--report")) {

@@ -228,6 +228,24 @@ test("update lowers sizes, drops entities under the limit and admits pure moves 
     m("file", "web/src/Other.tsx", 900),
   ], baseline);
   expect(grown.refused[0]).toContain("no freed allowance");
+  // Formatting slack absorbs a re-wrapped signature but never a new offender.
+  const big = emptyBaseline();
+  big.function["src/a.rs::f"] = 1000;
+  big.function["src/a.rs::g"] = 1000;
+  expect(
+    update([
+      m("function", "src/a.rs::f", 1000),
+      m("function", "src/b.rs::g", 1003),
+    ], big).refused,
+  ).toEqual([]);
+  expect(
+    update([
+      m("function", "src/a.rs::f", 1000),
+      m("function", "src/a.rs::g", 1000),
+      m("function", "src/c.rs::h", 151),
+    ], big).refused[0],
+  )
+    .toContain("no freed allowance");
   // Allowance never crosses areas.
   const crossed = update([
     m("file", "web/src/App.tsx", 100),
