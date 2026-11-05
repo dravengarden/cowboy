@@ -33,6 +33,15 @@ export function workspaceCommandKey(event: {
     Escape: "Escape",
     Backspace: "Backspace",
     Tab: "Tab",
+    Space: " ",
+    ArrowUp: "ArrowUp",
+    ArrowDown: "ArrowDown",
+    ArrowLeft: "ArrowLeft",
+    ArrowRight: "ArrowRight",
+    Home: "Home",
+    End: "End",
+    PageUp: "PageUp",
+    PageDown: "PageDown",
   } as Readonly<Record<string, string>>)[event.code];
   return physical ?? event.key;
 }

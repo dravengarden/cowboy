@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
-import { desktopImeKeyIsReserved } from "./imeShortcutPolicy.ts";
+import { desktopImeOwnsKey, shortcutKey } from "./imeShortcut.ts";
 
 const appSource = await readFile(
   new URL("../../App.tsx", import.meta.url), "utf8",
@@ -22,43 +22,76 @@ const exploreSource = await readFile(
   new URL("../../explore/ExploreSurface.tsx", import.meta.url), "utf8",
 );
 
-function key(
-  overrides: Partial<KeyboardEvent> = {},
-): Pick<KeyboardEvent, "isComposing" | "key" | "keyCode"> {
-  return {
-    isComposing: false,
-    key: "j",
-    keyCode: 74,
-    ...overrides,
-  };
+class FakeElement {
+  constructor(private readonly selectors: readonly string[]) {}
+  matches(selector: string): boolean {
+    return this.selectors.some((own) => selector.includes(own));
+  }
+  getAttribute(): string | null {
+    return null;
+  }
 }
 
-test("Desktop reserves every native IME key outside the Vim Normal sink", () => {
-  assertEquals(
-    desktopImeKeyIsReserved(key({ isComposing: true }), false, false),
-    true,
-  );
-  assertEquals(
-    desktopImeKeyIsReserved(key({ key: "Process" }), false, false),
-    true,
-  );
-  assertEquals(
-    desktopImeKeyIsReserved(key({ keyCode: 229 }), false, false),
-    true,
-  );
-  assertEquals(
-    desktopImeKeyIsReserved(key({ key: "Dead" }), false, false),
-    true,
-  );
-  assertEquals(desktopImeKeyIsReserved(key(), false, false), false);
+// Bun has no DOM; the classifier only needs `instanceof Element` + matches().
+(globalThis as { Element?: unknown }).Element = FakeElement;
+
+const BUTTON = new FakeElement(["button"]) as unknown as EventTarget;
+const INPUT = new FakeElement(["input"]) as unknown as EventTarget;
+const VIM_SINK = new FakeElement(["[data-vim-command-sink]"]) as unknown as EventTarget;
+
+function key(
+  overrides: Partial<KeyboardEvent> = {},
+): KeyboardEvent {
+  return {
+    isComposing: false,
+    key: "f",
+    code: "KeyF",
+    keyCode: 70,
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    target: BUTTON,
+    ...overrides,
+  } as KeyboardEvent;
+}
+
+const IDLE_CJK = { key: "Process", keyCode: 229 } as const;
+
+test("an idle CJK source cannot disable a shortcut on dialog chrome", () => {
+  // The Session dialog's `F` (Replace or fork) under macOS Pinyin.
+  assertEquals(desktopImeOwnsKey(key(IDLE_CJK)), false);
+  assertEquals(shortcutKey(key(IDLE_CJK)), "f");
+  assertEquals(shortcutKey(key({ ...IDLE_CJK, code: "KeyG", shiftKey: true })), "G");
+  assertEquals(shortcutKey(key({ ...IDLE_CJK, code: "Comma" })), ",");
+  for (const code of ["Enter", "ArrowDown", "Escape", "Home"]) {
+    assertEquals(shortcutKey(key({ ...IDLE_CJK, code })), code);
+  }
+  assertEquals(shortcutKey(key({ ...IDLE_CJK, code: "Space" })), " ");
+  assertEquals(shortcutKey(key({ ...IDLE_CJK, code: "Digit2" })), "2");
+  assertEquals(shortcutKey(key({ key: "Dead", code: "KeyJ" })), "j");
 });
 
-test("a real composition suspends even the Vim Normal command sink", () => {
-  assertEquals(
-    desktopImeKeyIsReserved(key({ key: "Process" }), true, false),
-    false,
-  );
-  assertEquals(desktopImeKeyIsReserved(key(), true, true), true);
+test("the Vim Normal sink resolves IME-labelled keys physically", () => {
+  assertEquals(desktopImeOwnsKey(key({ ...IDLE_CJK, target: VIM_SINK })), false);
+});
+
+test("text fields and real compositions keep IME keys", () => {
+  for (const event of [
+    key({ ...IDLE_CJK, target: INPUT }),
+    key({ key: "Dead", target: INPUT }),
+    key({ isComposing: true }),
+    key({ isComposing: true, target: VIM_SINK }),
+  ]) {
+    assertEquals(desktopImeOwnsKey(event), true);
+    assertEquals(shortcutKey(event), null);
+  }
+  // Plain typing in a field is text, not an IME key.
+  assertEquals(desktopImeOwnsKey(key({ target: INPUT })), false);
+});
+
+test("an idle CJK source keeps modified chords", () => {
+  assertEquals(desktopImeOwnsKey(key({ ...IDLE_CJK, code: "KeyK", metaKey: true, target: INPUT })), false);
 });
 
 test("every Desktop shortcut owner checks the shared IME boundary", () => {

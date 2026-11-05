@@ -1,4 +1,5 @@
 import { desktopSize } from "../surface/desktopSize";
+import { shortcutKey } from "./commands/imeShortcut";
 import {
   alpha,
   Box,
@@ -417,7 +418,9 @@ function RailGroupMenu({
   // type-ahead, which would otherwise treat j/k/h/l as item searches.
   const onListKeyDown = (event: React.KeyboardEvent<HTMLElement>): void => {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
-    const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+    const physical = shortcutKey(event.nativeEvent);
+    if (physical === null) return;
+    const key = physical.length === 1 ? physical.toLowerCase() : physical;
     if (!["j", "k", "h", "l"].includes(key)) return;
     event.preventDefault();
     event.stopPropagation();

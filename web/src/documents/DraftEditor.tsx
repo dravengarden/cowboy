@@ -1,3 +1,4 @@
+import { desktopImeOwnsKey } from "../desktop/commands/imeShortcut";
 import {
   Alert,
   Box,
@@ -1318,7 +1319,7 @@ function DraftEditingSession(
             onKeyDownCapture={(e) => {
               // ↑ in Insert, or a plain Vim Normal `k`, on the first line moves
               // into the title. A pending Vim command (`dk`, `ck`) keeps its key.
-              if (!desktop || isImeKeyEvent(e.nativeEvent)) return;
+              if (!desktop || desktopImeOwnsKey(e.nativeEvent)) return;
               if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
               const sink = e.target instanceof Element &&
                 e.target.matches("[data-vim-command-sink]");

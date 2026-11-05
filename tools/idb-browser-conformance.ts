@@ -278,7 +278,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
       (suite === "session-context"
-        ? 88
+        ? 98
         : suite === "sign-in"
         ? 5
         : suite === "session-move" || suite === "editor-plugin-sandbox"
@@ -312,7 +312,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "draft-documents"
         ? 12
         : suite === "desktop-composer"
-        ? 17
+        ? 18
         : suite === "code-buffer-cleanup"
         ? 7
         : suite === "code-buffers"

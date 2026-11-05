@@ -6,7 +6,7 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
-import { SessionContextCue, SessionContinuedFrom, SessionHandedOffDock, SessionProvenance } from "./SessionContextCue";
+import { SessionContextCue, SessionContinuedFrom, SessionHandedOffDock, SessionNextMessageBadge, SessionProvenance } from "./SessionContextCue";
 import {
   CLOSE_SESSION_SETTINGS_EVENT,
   COMPOSER_FOCUS_EVENT,
@@ -320,6 +320,7 @@ export async function runSessionContextBrowserConformance(
           <SessionHandedOffDock sessionId={sessions[1]!.id} desktop={desktop} />
           <SessionHandedOffDock sessionId={sessions[2]!.id} desktop={desktop} />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} />
+          <SessionNextMessageBadge sessionId={sessions[0]!.id} />
           <SessionContextCue sessionId={sessions[0]!.id} desktop={desktop} placement="end" />
           {desktop ? (
             <SessionContextSettings session={sessions[0]!} />
@@ -571,10 +572,10 @@ export async function runSessionContextBrowserConformance(
       );
       await closeChoices(desktop);
       await until(() =>
-        container.querySelectorAll(".MuiChip-root").length === 2
+        container.querySelectorAll(".MuiChip-root:not([data-session-next-message])").length === 2
       );
       check(
-        container.querySelectorAll(".MuiChip-root").length === 2,
+        container.querySelectorAll(".MuiChip-root:not([data-session-next-message])").length === 2,
         `${mode}: independent sources can be selected together`,
       );
       check(
@@ -592,6 +593,11 @@ export async function runSessionContextBrowserConformance(
         Boolean(document.querySelector('[data-session-context-cue="pending_links"]'))
       );
       check(true, `${mode}: the composer says the next prompt reads them`);
+      await until(() =>
+        document.querySelector('[data-session-next-message="pending_links"]')
+          ?.textContent === "Next · +2 context"
+      );
+      check(true, `${mode}: the Sessions row repeats the pending links`);
       const beforeAgent = writes.length;
       button("Replace or fork").click();
       await until(() => Boolean(continueRun()) && !continueRun().disabled);
@@ -664,6 +670,11 @@ export async function runSessionContextBrowserConformance(
         `${mode}: the composer cue names the pending agent's subscription`,
       );
       await until(() =>
+        document.querySelector('[data-session-next-message="pending_agent"]')
+          ?.textContent === "Next · Mink"
+      );
+      check(true, `${mode}: the Sessions row names the pending agent's subscription`);
+      await until(() =>
         Boolean(container.querySelector("[data-session-switch-back]"))
       );
       check(
@@ -716,6 +727,10 @@ export async function runSessionContextBrowserConformance(
             '[data-composer-stack-slot="context"][data-session-context-cue^="continued"]',
           ),
         `${mode}: the original session links to where it continued from Settings, not the Composer`,
+      );
+      check(
+        !document.querySelector("[data-session-next-message]"),
+        `${mode}: the Sessions row drops the cue once the message is sent`,
       );
       // An idle original agent can be hibernated straight from the cue.
       const idle = { ...sessions[0]!, status: "running" as const };

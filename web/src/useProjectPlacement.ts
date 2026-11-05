@@ -179,6 +179,8 @@ export function useProjectPlacement(
       project: !projectKey && Boolean(hintedProject),
       installation: !installationKey && Boolean(hintedInstallation),
     },
+    /** The user picked a project or installation instead of the default. */
+    chosen: Boolean(projectKey || installationKey),
     configuredDefaultProject: preferredProject,
     setDefaultProject: (value: string): void =>
       newSessionProjectPreference.set(value),

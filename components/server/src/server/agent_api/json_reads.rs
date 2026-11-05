@@ -33,10 +33,7 @@ pub(super) fn select(value: &Value, args: &Value) -> Result<Value, String> {
     if let Some(text) = selected.as_str().filter(|_| !describe) {
         let offset =
             usize::try_from(arg_u64(args, "offset", 0, u64::MAX)?).map_err(|_| "invalid_cursor")?;
-        let chars = arg_u64(args, "chars", 1000, 4000)? as usize;
-        if chars == 0 {
-            return Err("invalid_argument".into());
-        }
+        let chars = arg_chars(args, 1000, 4000)? as usize;
         let total = text.chars().count();
         if offset > total {
             return Err("invalid_cursor".into());
