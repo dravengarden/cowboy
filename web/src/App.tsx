@@ -146,7 +146,7 @@ import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { PICK_SESSION_EVENT, pickSessionDetail, requestPickSession } from "./sessionPickRequest";
 import { openSessionSettings, requestNewFrom } from "./sessionSettingsOpen";
-import { useContinuation } from "./SessionContextCue";
+import { SessionNextMessageBadge, useContinuation } from "./SessionContextCue";
 import { isManagedChild } from "./managedCalls";
 import { SessionCallsBadge } from "./SessionCallsBadge";
 import {
@@ -2542,6 +2542,7 @@ function SessionList({
                                         compact
                                     />
                                     <AccountBadge account={sessionAccountIdentity(accounts, s)} />
+                                    <SessionNextMessageBadge sessionId={s.id} />
                                     {handedOff.has(s.id) && (
                                         // The pair shares a title; this marks the one the work left.
                                         <Chip
