@@ -166,6 +166,7 @@ impl PluginCliAuthKind {
         Self(value.into())
     }
 
+    #[allow(dead_code)]
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -261,6 +262,7 @@ macro_rules! plugin_string_kind {
                 Self(value.into())
             }
 
+            #[allow(dead_code)]
             #[must_use]
             pub fn as_str(&self) -> &str {
                 &self.0
