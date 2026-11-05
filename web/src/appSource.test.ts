@@ -9,7 +9,12 @@ import { assert } from "@std/assert";
 // (slice 3.1). Add a file here when it is split out of one of these modules.
 export const SPLIT_SOURCES = {
   "App.tsx": ["./App.tsx", "./SettingsShell.tsx", "./SessionList.tsx"],
-  "Transcript.tsx": ["./Transcript.tsx", "./ToolDetailsBrowser.tsx"],
+  "Transcript.tsx": [
+    "./Transcript.tsx",
+    "./ToolDetailsBrowser.tsx",
+    "./TranscriptItems.tsx",
+    "./TranscriptPlaceholders.tsx",
+  ],
   "Composer.tsx": ["./Composer.tsx", "./PendingPanel.tsx", "./ComposerSheet.tsx"],
   "mobile/review/ReviewApp.tsx": [
     "./mobile/review/ReviewApp.tsx",
