@@ -104,7 +104,7 @@
     "components/server/src/server/agent_api.rs::Sandbox::run": 172,
     "components/server/src/server/agent_api.rs::SessionHost::call": 302,
     "components/server/src/server/agent_api/actions.rs::call_action": 151,
-    "components/server/src/server/agent_api/actions.rs::execute": 367,
+    "components/server/src/server/agent_api/actions.rs::execute": 369,
     "components/server/src/server/agent_api/control.rs::dispatch": 371,
     "components/server/src/server/agent_api/control.rs::route": 286,
     "components/server/src/server/background_jobs.rs::run_component_convergence": 164,
