@@ -7,6 +7,12 @@ import {
 } from "react";
 
 const GEOMETRY_SETTLE_DELAYS_MS = [120, 300, 550] as const;
+const FLOATING_STACK_CLEARANCE = "--floating-stack-clearance";
+
+/** Mobile notice `bottom`: above the measured floating Composer stack (and the
+ *  keyboard), never lower than the fixed lift used before it was measured. */
+export const MOBILE_NOTICE_BOTTOM =
+  `max(calc(env(safe-area-inset-bottom, 0px) + 96px), calc(var(--kb-inset, 0px) + var(${FLOATING_STACK_CLEARANCE}, 0px) + 8px))`;
 
 function borderBoxHeight(element: HTMLElement | null): number {
   // offsetHeight is the untransformed border box. The Mobile Sessions drawer
@@ -66,6 +72,11 @@ export function useFloatingComposerGeometry({
 
     surface.style.setProperty("--navbar-h", px(navbarHeight));
     surface.style.setProperty("--floating-stack-h", px(floatingStackHeight));
+    // Notices render outside the surface; give them the same clearance.
+    globalThis.document?.documentElement.style.setProperty(
+      FLOATING_STACK_CLEARANCE,
+      px(floatingStackHeight),
+    );
     pendingTranscriptInsetRef.current = px(floatingStackHeight);
     if (activeDisclosureTransitionsRef.current.size === 0) {
       publishTranscriptInset();
@@ -201,6 +212,7 @@ export function useFloatingComposerGeometry({
       document.removeEventListener("focusin", onViewportChange);
       document.removeEventListener("focusout", onViewportChange);
       clearSettledMeasurements();
+      globalThis.document?.documentElement.style.removeProperty(FLOATING_STACK_CLEARANCE);
       if (measurementFrameRef.current !== 0) {
         globalThis.cancelAnimationFrame(measurementFrameRef.current);
         measurementFrameRef.current = 0;

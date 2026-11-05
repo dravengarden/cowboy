@@ -2,6 +2,7 @@ import { Close, History } from "@mui/icons-material";
 import { Alert, Button, IconButton, Snackbar, Tooltip } from "@mui/material";
 import { useState, useSyncExternalStore } from "react";
 import { UNDO_NOTICE_MS } from "../undoHistory";
+import { MOBILE_NOTICE_BOTTOM } from "../floatingComposerGeometry";
 import { undoEntry } from "../undoActions";
 import { openUndoHistory } from "../UndoHistorySheet";
 
@@ -63,7 +64,7 @@ export function DocumentNotifications(
       // actions) on the bottom edge. Lift the notice above it like the
       // app-level error toast instead of covering the controls.
       sx={mobile
-        ? { bottom: "calc(env(safe-area-inset-bottom, 0px) + 96px)" }
+        ? { bottom: MOBILE_NOTICE_BOTTOM }
         : undefined}
     >
       <Alert

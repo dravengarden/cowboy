@@ -294,7 +294,7 @@ import {
 } from "./readingSettings";
 import { useNavbarAtBottom } from "./navbarSettings";
 import { mobileComposerFocusMotion } from "./mobileComposerPrimitives";
-import { useFloatingComposerGeometry } from "./floatingComposerGeometry";
+import { MOBILE_NOTICE_BOTTOM, useFloatingComposerGeometry } from "./floatingComposerGeometry";
 import { releaseMobileComposerFocus } from "./composer/mobileComposerFocus";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
@@ -4228,6 +4228,7 @@ export function App({
     const clientUpdateSettings = useClientUpdateSettings();
     const desktopWorkspace = useOptionalDesktopWorkspace();
     const sessions = useStoreSelector((snapshot) => snapshot.sessions);
+    const trashedSessions = useStoreSelector((snapshot) => snapshot.trashedSessions);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
     const sessionsLoaded = useStoreSelector((snapshot) => snapshot.sessionsLoaded);
     // `replica` paints the last known list before the socket answers; only a
@@ -4628,7 +4629,7 @@ export function App({
             groups: sessionsRailGroups(rows, draftRoute.id ? `draft:${draftRoute.id}` : activeId),
         };
     }, [activeId, railFolders, railTrashFolders, sessionsCollapsed, sessionsForView, draftLibrary.entries, draftRoute.id, workspaceOrder]);
-    const active = draftRoute.active ? null : resolveActiveSession(sessions, activeId, pendingCreatedSession);
+    const active = draftRoute.active ? null : resolveActiveSession(sessions, activeId, pendingCreatedSession, trashedSessions);
     // Desktop jump list (`␣⇥` previous, `␣O` Recent): every opened Session or
     // Draft, newest first, kept per device.
     const workspaceItemKey = draftRoute.id ? `draft:${draftRoute.id}` : active?.id ?? null;
@@ -4763,14 +4764,14 @@ export function App({
         const restored = restoredFocusRef.current;
         if (
             restored && !sessions.some((s) => s.id === restored) &&
-            continuationOf(sessions, restored) === undefined
+            continuationOf(sessions, restored, trashedSessions) === undefined
         ) {
             notify(
                 "Last session is no longer available — opened another instead.",
                 "warning",
             );
         }
-    }, [sessionsSource, sessions]);
+    }, [sessionsSource, sessions, trashedSessions]);
 
     // Self-heal the "stuck on the loading skeleton" case (a fresh load that raced
     // a daemon restart — the deploy window: SW reloads the tab while cowboy is
@@ -6555,11 +6556,11 @@ export function App({
                     vertical: "bottom",
                     horizontal: mobile ? "center" : "right",
                 }}
-                // Lift above the composer's safe-area inset on mobile so the toast
-                // doesn't sit underneath the action row.
+                // Lift above the measured Composer stack on mobile so the toast
+                // never covers the input or its action row.
                 sx={{
                     bottom: {
-                        xs: "calc(env(safe-area-inset-bottom) + 96px)",
+                        xs: MOBILE_NOTICE_BOTTOM,
                         sm: 24,
                     },
                 }}
