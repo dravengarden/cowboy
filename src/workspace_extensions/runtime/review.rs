@@ -207,7 +207,6 @@ mod tests {
 
     #[tokio::test]
     async fn cli_pages_reject_force_push_and_never_cross_repository_identity() {
-        use std::os::unix::fs::PermissionsExt as _;
         let root = tempfile::tempdir().unwrap();
         let program = root.path().join("gh-fixture");
         let metadata_path = root.path().join("meta.json");
@@ -216,7 +215,10 @@ mod tests {
         let requested = root.path().join("requested");
         std::fs::write(&metadata_path, pr().to_string()).unwrap();
         std::fs::write(&files_path, json!([{"filename":"a.rs","status":"modified","additions":1,"deletions":0,"patch":"@@ -0,0 +1 @@\n+hi"}]).to_string()).unwrap();
-        std::fs::write(&program, format!(r#"#!/bin/sh
+        crate::workspace_extensions::runtime::install_fake_cli(
+            &program,
+            &format!(
+                r#"#!/bin/sh
 test -z "$GH_TOKEN$GITHUB_TOKEN$GH_DEBUG" || exit 41
 if [ "$1" = auth ]; then exit 0; fi
 test "$1:$2:$3:$4:$5:$6:$7" = 'api:--method:GET:--hostname:github.com:--header:Accept: application/vnd.github+json' || exit 42
@@ -228,8 +230,15 @@ case "$8" in
     if [ -f '{}' ]; then cp '{}' '{}'; fi ;;
   *) exit 43 ;;
 esac
-"#, metadata_path.display(), requested.display(), files_path.display(), replacement.display(), replacement.display(), metadata_path.display())).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+"#,
+                metadata_path.display(),
+                requested.display(),
+                files_path.display(),
+                replacement.display(),
+                replacement.display(),
+                metadata_path.display()
+            ),
+        );
         let remote =
             super::super::normalize_remote("origin", "git@github.com:owner/repo.git").unwrap();
         let read = ReviewRead {

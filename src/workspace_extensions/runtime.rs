@@ -107,6 +107,29 @@ fn environment() -> BTreeMap<String, String> {
     values
 }
 
+/// Write an executable test double without ever holding it open for writing
+/// in this process. Writing it here would let a fork from a concurrently
+/// running test inherit the write descriptor, and exec of the double would
+/// then fail with ETXTBSY until that child execs; a short-lived shell writes
+/// and marks it executable instead.
+#[cfg(test)]
+pub(super) fn install_fake_cli(path: &Path, script: &str) {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "cat > \"$1\" && chmod 700 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the fake CLI writer");
+    child
+        .stdin
+        .take()
+        .expect("fake CLI writer stdin")
+        .write_all(script.as_bytes())
+        .expect("write the fake CLI");
+    assert!(child.wait().expect("fake CLI writer").success());
+}
+
 async fn command(program: &str, args: &[String]) -> Result<Vec<u8>, Failure> {
     let output = crate::plugin_process::run_plugin_command_with_environment(
         program,

@@ -264,14 +264,16 @@ mod tests {
     }
     #[tokio::test]
     async fn discovery_cli_paginates_and_fences_account_switches() {
-        use std::os::unix::fs::PermissionsExt as _;
         let root = tempfile::tempdir().unwrap();
         let program = root.path().join("gh-fixture");
         let user = root.path().join("user");
         let replacement = root.path().join("replacement");
         let calls = root.path().join("searched");
         std::fs::write(&user, r#"{"login":"alice"}"#).unwrap();
-        std::fs::write(&program, format!(r#"#!/bin/sh
+        crate::workspace_extensions::runtime::install_fake_cli(
+            &program,
+            &format!(
+                r#"#!/bin/sh
 test -z "$GH_TOKEN$GITHUB_TOKEN$GH_DEBUG" || exit 41
 test "$1:$2:$3:$4:$5:$6:$7" = 'api:--method:GET:--hostname:github.com:--header:Accept: application/vnd.github+json' || exit 42
 case "$8" in
@@ -282,8 +284,14 @@ case "$8" in
     if [ -f '{}' ]; then cp '{}' '{}'; fi ;;
   *) exit 43 ;;
 esac
-"#,user.display(),calls.display(),replacement.display(),replacement.display(),user.display())).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+"#,
+                user.display(),
+                calls.display(),
+                replacement.display(),
+                replacement.display(),
+                user.display()
+            ),
+        );
         let filters = PullDiscovery {
             relation: "author".into(),
             state: "open".into(),
@@ -327,7 +335,6 @@ esac
 
     #[tokio::test]
     async fn branches_relation_lists_open_pulls_with_their_branches() {
-        use std::os::unix::fs::PermissionsExt as _;
         let root = tempfile::tempdir().unwrap();
         let program = root.path().join("gh-fixture");
         let row = |number: u32, head: &str, fork: bool| {
@@ -357,14 +364,12 @@ esac
         );
         let second = serde_json::json!([row(11, "from-a-deleted-fork", true)]);
         let pulls = "repos/workspace/repo/pulls?state=open&sort=updated&direction=desc&per_page=10";
-        std::fs::write(
+        crate::workspace_extensions::runtime::install_fake_cli(
             &program,
-            format!(
+            &format!(
                 "#!/bin/sh\ncase \"$8\" in\n  user) echo '{{\"login\":\"alice\"}}' ;;\n  '{pulls}&page=1') cat <<'JSON'\n{first}\nJSON\n ;;\n  '{pulls}&page=2') cat <<'JSON'\n{second}\nJSON\n ;;\n  *) exit 43 ;;\nesac\n"
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        );
         let filters = PullDiscovery {
             relation: "branches".into(),
             state: "open".into(),
