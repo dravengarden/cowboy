@@ -23,8 +23,6 @@ const TOP_BAR_HINT_LABELS: Readonly<Record<string, string>> = {
   "topbar.reauthenticate": "Verify",
   "topbar.providerUpdate": "Update",
   "topbar.reload": "Reload",
-  "topbar.compact": "Compact",
-  "topbar.clear": "Clear",
 };
 
 /** Bare-key Top bar commands that can run now, in registration order. */

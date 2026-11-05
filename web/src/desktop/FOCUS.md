@@ -19,8 +19,12 @@ same controller state.
 The Top Bar is a workspace region, not a fourth pane. Its actions do not need
 focus: `␣T` opens the Top bar group and the next key runs Run Configuration
 (`R`), Usage (`U`), session verification (`A`), Provider update (`N`, only
-while a newer compatible release waits), Reload (`L`), Compact (`C`) or
-Clear (`X`) directly; each control shows its `␣TR`-style slot. Focusing
+while a newer compatible release waits) or Reload (`L`) directly; each
+control shows its `␣TR`-style slot. Compact, Clear and Stop act on the
+conversation the Prompt writes into, so they sit in the Prompt's delivery row
+(Draft, Schedule | Compact, Clear … Stop, Send): `␣PC` and `␣PX` run them
+from any focus, `Mod+.` stops from anywhere, and Stop stays mounted, only
+disabled while no turn runs, so the row never moves. Focusing
 the bar (`␣TT`, or Ctrl-K from a pane) is mutually exclusive with Sessions and
 Prompt: pane-header chrome clears, the bar itself takes the shared focus fill
 plus a primary underline, and only the focused control receives the keyboard
@@ -104,9 +108,10 @@ and in a queued-message editor), and the focused one runs.
 | `␣R` | Rename the current Session (a Draft's name is its title, `␣T`) |
 | `␣N` | Create (Session / Draft / Folder) |
 | `␣K` | Command Palette |
-| `␣P` `␣C` | Focus Prompt, Conversation |
+| `␣P` + `P/C/X` | Prompt group: `P` focuses the Prompt; compact, clear the conversation (each confirms) |
+| `␣C` | Focus Conversation |
 | `␣S` + `S/Z/N/M/P` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project |
-| `␣T` + `R/U/A/N/L/C/X/T` | Top bar group: run config, usage, verify, Provider update (only while one is available), reload, compact, clear; `T` focuses the bar |
+| `␣T` + `R/U/A/N/L/T` | Top bar group: run config, usage, verify, Provider update (only while one is available), reload; `T` focuses the bar |
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
 | `␣G` | Open Background tasks: the subagents and calls this session started (with the previous Calls panel restored: open or close Calls) |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |

@@ -8,6 +8,12 @@ const topBarSource = await readFile(
 const composerSource = await readFile(
   new URL("../Composer.tsx", import.meta.url), "utf8",
 );
+const toolbarSource = await readFile(
+  new URL("./DesktopComposerToolbar.tsx", import.meta.url), "utf8",
+);
+const sessionActionsSource = await readFile(
+  new URL("./useDesktopSessionActions.tsx", import.meta.url), "utf8",
+);
 const embeddedControlSource = await readFile(
   new URL("./DesktopEmbeddedControl.ts", import.meta.url), "utf8",
 );
@@ -45,24 +51,33 @@ test("desktop session verification lives in Top Bar with a ␣TA slot", () => {
   assert(focusContract.includes("top-bar `R`/`U`/`A`/`L`/`C`/`X`"));
 });
 
-test("desktop session actions form one reload-to-stop cluster", () => {
-  const reload = topBarSource.indexOf('data-desktop-item="topbar-reload"');
-  const compact = topBarSource.indexOf('data-desktop-item="topbar-compact"');
-  const clear = topBarSource.indexOf('data-desktop-item="topbar-clear"');
-  const stop = topBarSource.indexOf("<AutoScrollAndStop");
-
-  assert(reload >= 0);
-  assert(compact > reload);
-  assert(clear > compact);
-  assert(stop > clear);
+test("Compact, Clear and Stop leave the Top bar for the Prompt", () => {
+  for (const item of ["topbar-compact", "topbar-clear", "topbar-stop"]) {
+    assertEquals(topBarSource.includes(item), false);
+  }
+  assertEquals(topBarSource.includes("<AutoScrollAndStop"), false);
+  assertEquals(topBarSource.includes('id: "topbar.compact"'), false);
+  assertEquals(topBarSource.includes('id: "topbar.clear"'), false);
+  assertEquals(topBarSource.includes('id: "topbar.stop"'), false);
+  assert(topBarSource.includes('data-desktop-item="topbar-reload"'));
   assert(topBarSource.includes("<SessionReloadDialog"));
   assert(topBarSource.includes('keyLabel="L"'));
   assert(topBarSource.includes('shortcut: "L"'));
-  assert(topBarSource.includes("data-desktop-clear"));
-  assert(topBarSource.includes("<CleaningServices"));
-  assert(topBarSource.includes('keyLabel="X"'));
-  assert(topBarSource.includes('shortcut: "X"'));
-  assert(topBarSource.includes("await resetSession(sessionId)"));
+  // The delivery row: conversation actions after Schedule, Stop before Send.
+  const schedule = toolbarSource.indexOf('id: "schedule"');
+  const compact = toolbarSource.indexOf('id: "compact"');
+  const clear = toolbarSource.indexOf('id: "clear"');
+  const stop = toolbarSource.indexOf('id: "stop"');
+  const send = toolbarSource.indexOf('data-composer-action="send"');
+  assert(schedule >= 0 && compact > schedule && clear > compact);
+  assert(stop > clear && send > stop);
+  assert(toolbarSource.includes("key: DESKTOP_WORKSPACE_KEYS.promptCompact"));
+  assert(toolbarSource.includes("key: DESKTOP_WORKSPACE_KEYS.promptClear"));
+  assert(toolbarSource.includes("shortcut: DESKTOP_SHORTCUTS.stop"));
+  assert(sessionActionsSource.includes("await resetSession(sessionId)"));
+  assert(sessionActionsSource.includes('id: "prompt.compact"'));
+  assert(sessionActionsSource.includes('id: "prompt.clear"'));
+  assert(sessionActionsSource.includes("leaderAnywhere: true"));
 });
 
 test("desktop session actions share compact geometry without duplicate context text", () => {
@@ -78,15 +93,10 @@ test("desktop session actions share compact geometry without duplicate context t
   // the ONLY thing that may change them — a control must never be sized by
   // whether it happens to fit.
   assert(actions.includes('minWidth: density === "full" ? 90'));
-  assert(actions.includes('minWidth: density === "full" ? 96'));
-  assert(actions.includes('minWidth: density === "full" ? 80'));
   assert(actions.includes("ACTION_ICON_WIDTH_PX"));
   // Collapsing the word may not cost the action its name or its letter.
   assert(actions.includes('aria-label="Reload session runtime"'));
-  assert(actions.includes('aria-label="Clear conversation"'));
   assert(actions.includes('keyLabel="L"'));
-  assert(actions.includes('keyLabel="C"'));
-  assert(actions.includes('keyLabel="X"'));
   assertEquals(actions.includes("contextPercent"), false);
   assert(
     embeddedControlSource.includes("export function desktopSessionActionSx"),
@@ -118,13 +128,11 @@ test("desktop top-bar controls share height and spacing vocabulary", () => {
 test("desktop top-bar surfaces have one mutually exclusive owner", () => {
   assert(
     topBarSource.includes(
-      '"config" | "usage" | "update" | "reload" | "compact" | "clear" | null',
+      '"config" | "usage" | "update" | "reload" | null',
     ),
   );
   assert(topBarSource.includes("const configOpen = openSurface === \"config\""));
   assert(topBarSource.includes("const usageOpen = openSurface === \"usage\""));
-  assert(topBarSource.includes("const compactConfirm = openSurface === \"compact\""));
-  assert(topBarSource.includes("const clearConfirm = openSurface === \"clear\""));
   assert(
     topBarSource.includes(
       'const updateTarget = openSurface === "update" ? session ?? null : null',
@@ -142,26 +150,13 @@ test("top-bar shortcut availability does not select every control", () => {
 });
 
 test("desktop Stop remains mounted and becomes disabled while idle", () => {
-  const start = composerSource.indexOf(
-    'if (presentation === "desktop-toolbar")',
-  );
-  const end = composerSource.indexOf("\n  return (", start);
-  const desktopStop = composerSource.slice(start, end);
-
+  const start = toolbarSource.indexOf('id: "stop"');
+  const stop = toolbarSource.slice(start, toolbarSource.indexOf("})}", start));
   assert(start >= 0);
-  assert(end > start);
-  assert(desktopStop.includes('data-desktop-topbar-action="stop"'));
-  assert(desktopStop.includes("disabled={!busy}"));
-  assert(
-    /title=\{busy\s*\?\s*"Stop current turn"\s*:\s*"No turn is running"\}/
-      .test(desktopStop),
-  );
-  assert(desktopStop.includes("desktopSessionActionSx"));
-  // Stop follows the cluster density instead of always spending its word.
-  assert(desktopStop.includes("collapsed ? ACTION_ICON_WIDTH_PX : 80"));
-  assert(desktopStop.includes('aria-label="Stop current turn"'));
-  assert(topBarSource.includes('collapsed={density !== "full"}'));
-  assertEquals(desktopStop.includes("const stopButton = busy"), false);
+  assert(stop.includes("disabled: !session.stop.busy"));
+  assert(stop.includes('"Stop current turn" : "No turn is running"'));
+  assert(stop.includes('tone: "error"'));
+  assertEquals(toolbarSource.includes("session.stop.busy && action("), false);
 });
 
 test("desktop composer no longer owns the icon-only Clear action", () => {

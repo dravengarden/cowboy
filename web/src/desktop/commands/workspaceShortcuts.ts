@@ -41,6 +41,8 @@ export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
   // The Sessions sidebar: focus it (`␣SS`), fold its tree, file folders.
   s: "Sessions",
   t: "Top bar",
+  // The Prompt and the conversation it writes into: `␣PP` focuses it.
+  p: "Prompt",
   // Layout: cycle regions, resize, fold panes.
   w: "Window",
   // Presentation toggles.
@@ -146,6 +148,9 @@ export const DESKTOP_WORKSPACE_KEYS = {
   composerReference: "F",
   composerAttach: "A",
   composerSchedule: "H",
+  // Conversation actions in the Prompt group, from any focus.
+  promptCompact: "PC",
+  promptClear: "PX",
   composerJumpFront: "J",
   composerMore: "M",
   // Zoom the focused editor into the fullscreen composer.
@@ -214,7 +219,12 @@ export const DESKTOP_SHORTCUTS = {
   focusSessions: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusSessions),
   sessionsFold: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.sessionsFold),
   reconnect: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.reconnect),
-  focusPrompt: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPrompt),
+  focusPrompt: desktopLeaderGroupSequence(
+    DESKTOP_WORKSPACE_KEYS.focusPrompt,
+    DESKTOP_WORKSPACE_KEYS.focusPrompt,
+  ),
+  compact: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.promptCompact),
+  clear: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.promptClear),
   focusConversation: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.focusConversation,
   ),
@@ -263,7 +273,8 @@ export const DESKTOP_RESIZE_HINT = DESKTOP_SHORTCUTS.resize;
 export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   // A group: `␣SS` focuses Sessions, `␣SZ` folds its tree.
   s: "group:s",
-  p: "workspace.focusPrompt",
+  // A group: `␣PP` focuses the Prompt, `␣PC`/`␣PX` compact or clear.
+  p: "group:p",
   // A group, not a command: `␣T` opens the Top bar layer (`␣TT` focuses it).
   t: "group:t",
   c: "workspace.focusConversation",

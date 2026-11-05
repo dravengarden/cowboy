@@ -26,6 +26,9 @@ const providerSource = await readFile(
 const desktopTopBarSource = await readFile(
   new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
+const desktopSessionActionsSource = await readFile(
+  new URL("./desktop/useDesktopSessionActions.tsx", import.meta.url), "utf8",
+);
 
 test("ConfirmSheet forces the compact Obsidian card on mobile and tablet", () => {
   assert(sheetSource.includes("export function ConfirmSheet("));
@@ -69,14 +72,15 @@ test("phone-facing confirmation prompts use ConfirmSheet, not a raw Dialog", () 
 
 test("desktop-owned session confirms stay centered dialogs", () => {
   assert(
-    desktopTopBarSource.includes(
+    desktopSessionActionsSource.includes(
       "<DialogTitle>Clear conversation?</DialogTitle>",
     ),
   );
   assert(
-    desktopTopBarSource.includes(
+    desktopSessionActionsSource.includes(
       "<DialogTitle>Compact conversation?</DialogTitle>",
     ),
   );
+  assertEquals(desktopSessionActionsSource.includes("<ConfirmSheet"), false);
   assertEquals(desktopTopBarSource.includes("<ConfirmSheet"), false);
 });

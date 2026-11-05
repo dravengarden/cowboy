@@ -133,6 +133,8 @@ export function mountDesktopKeyboardAcceptance(): void {
               endInset={0}
             />
             <DesktopComposerToolbar
+              sessionId="keyboard-acceptance"
+              status="running"
               editorRef={editorRef}
               sendButtonRef={sendButtonRef}
               canInsert

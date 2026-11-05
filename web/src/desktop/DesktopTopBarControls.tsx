@@ -35,7 +35,6 @@ import {
 } from "@mui/material";
 import {
   ArrowForwardRounded,
-  CleaningServices,
   ExpandMore,
   Refresh,
   Schedule,
@@ -50,11 +49,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
 import { Kbd, useConfirmEnter } from "../Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
-import { resolveSessionAction } from "../agentCommands";
-import { ConfirmConsequence } from "../ConfirmConsequence";
 import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Status } from "../protocol";
@@ -74,12 +70,9 @@ import {
 import {
   loadUsageSnapshot,
   requestUsageRefresh,
-  resetSession,
   send,
-  submitPrompt,
   useStoreSelector,
 } from "../store";
-import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
 import { SessionReloadDialog } from "../SessionReloadDialog";
 import { SessionToolsSection } from "../AgentToolsPanel";
@@ -146,15 +139,8 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "./commands/DesktopCommandProvider";
-import {
-  DESKTOP_SHORTCUTS,
-  DESKTOP_WORKSPACE_PREFIX,
-} from "./commands/workspaceShortcuts";
+import { DESKTOP_WORKSPACE_PREFIX } from "./commands/workspaceShortcuts";
 import { LeaderKeycap } from "./commands/DesktopKeycap";
-import {
-  desktopTopBarTimelineSlice,
-  sameDesktopTopBarTimelineSlice,
-} from "./desktopTopBarTimelineSlice";
 import {
   nextRunConfigChoiceIndex,
   runConfigKeyAction,
@@ -1223,12 +1209,8 @@ export function DesktopTopBarControls({
   const session = useStoreSelector((snapshot) =>
     snapshot.sessions.find((candidate) => candidate.id === sessionId)
   );
-  const timelineState = useStoreSelector(
-    (snapshot) => desktopTopBarTimelineSlice(snapshot.timelines.get(sessionId)),
-    sameDesktopTopBarTimelineSlice,
-  );
   const [openSurface, setOpenSurface] = useState<
-    "config" | "usage" | "update" | "reload" | "compact" | "clear" | null
+    "config" | "usage" | "update" | "reload" | null
   >(null);
   const configOpen = openSurface === "config";
   useEffect(() => {
@@ -1288,8 +1270,6 @@ export function DesktopTopBarControls({
   const reloadTarget = openSurface === "reload" ? session ?? null : null;
   const providerUpdate = sessionProviderUpdate(session);
   const updateTarget = openSurface === "update" ? session ?? null : null;
-  const compactConfirm = openSurface === "compact";
-  const clearConfirm = openSurface === "clear";
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
   // A session switch closes this session's surfaces, except settings that
@@ -1589,71 +1569,6 @@ export function DesktopTopBarControls({
     return provider ? [{ account, provider }] : [];
   });
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
-  const availableCommands = timelineState.availableCommands;
-  const compactAction = useMemo(
-    () =>
-      resolveSessionAction(
-        "compact",
-        session?.provider ?? "",
-        availableCommands,
-        session?.provider_version,
-        session?.provider_generation_digest,
-      ),
-    [
-      availableCommands,
-      session?.provider,
-      session?.provider_version,
-      session?.provider_generation_digest,
-    ],
-  );
-  const clearAction = useMemo(
-    () =>
-      resolveSessionAction(
-        "clear",
-        session?.provider ?? "",
-        availableCommands,
-        session?.provider_version,
-        session?.provider_generation_digest,
-      ),
-    [
-      availableCommands,
-      session?.provider,
-      session?.provider_version,
-      session?.provider_generation_digest,
-    ],
-  );
-  const compacting = status === "busy" && timelineState.compactingTail;
-  const serverContextUsed = session?.context_used ?? 0;
-  const serverContextSize = session?.context_size ?? 0;
-  const compactContext = useCompactionContext({
-    sessionId,
-    status,
-    serverUsed: serverContextUsed,
-    serverSize: serverContextSize,
-    completionSeq: timelineState.completionSeq,
-  });
-  const contextUsed = compactContext.used;
-  const contextSize = compactContext.size;
-  const contextRefreshing = compactContext.refreshing;
-  const confirmCompact = useCallback((): void => {
-    setOpenSurface(null);
-    if (compactAction?.command) {
-      compactContext.beginRefresh();
-      submitPrompt(sessionId, compactAction.command, []);
-    }
-  }, [
-    compactAction?.command,
-    compactContext.beginRefresh,
-    sessionId,
-  ]);
-  useConfirmEnter(compactConfirm, confirmCompact);
-  const confirmClear = useCallback(async (): Promise<void> => {
-    setOpenSurface(null);
-    await resetSession(sessionId);
-  }, [sessionId]);
-  useConfirmEnter(clearConfirm, () => {
-    void confirmClear();
-  });
   const topbarCommands = useMemo<DesktopCommand[]>(() => [
     {
       id: "topbar.runConfiguration",
@@ -1744,67 +1659,12 @@ export function DesktopTopBarControls({
           "[data-desktop-topbar-action='reload']",
         )?.click(),
     },
-    {
-      id: "topbar.compact",
-      title: "Compact Conversation",
-      group: "Top Bar",
-      shortcut: "C",
-      // `␣TC` from anywhere; bare `C` while the bar owns focus.
-      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "C"],
-      regions: ["topbar.controls"],
-      leaderAnywhere: true,
-      when: () =>
-        document.querySelector(
-          "[data-desktop-topbar-action='compact']:not(:disabled)",
-        ) !== null,
-      run: () =>
-        document.querySelector<HTMLButtonElement>(
-          "[data-desktop-topbar-action='compact']",
-        )?.click(),
-    },
-    {
-      id: "topbar.clear",
-      title: "Clear Conversation",
-      group: "Top Bar",
-      shortcut: "X",
-      // `␣TX` from anywhere; bare `X` while the bar owns focus.
-      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "X"],
-      regions: ["topbar.controls"],
-      leaderAnywhere: true,
-      when: () =>
-        document.querySelector(
-          "[data-desktop-topbar-action='clear']:not(:disabled)",
-        ) !== null,
-      run: () =>
-        document.querySelector<HTMLButtonElement>(
-          "[data-desktop-topbar-action='clear']",
-        )?.click(),
-    },
-    {
-      id: "topbar.stop",
-      title: "Stop Current Turn",
-      group: "Global",
-      shortcut: DESKTOP_SHORTCUTS.stop,
-      allowInEditor: true,
-      when: () =>
-        document.querySelector(
-          "[data-desktop-topbar-action='stop']:not(:disabled)",
-        ) !== null,
-      consumeWhenDisabled: true,
-      run: () =>
-        document.querySelector<HTMLButtonElement>(
-          "[data-desktop-topbar-action='stop']",
-        )?.click(),
-    },
   ], []);
   useDesktopCommand(topbarCommands[0] as DesktopCommand);
   useDesktopCommand(topbarCommands[1] as DesktopCommand);
   useDesktopCommand(topbarCommands[2] as DesktopCommand);
   useDesktopCommand(topbarCommands[3] as DesktopCommand);
   useDesktopCommand(topbarCommands[4] as DesktopCommand);
-  useDesktopCommand(topbarCommands[5] as DesktopCommand);
-  useDesktopCommand(topbarCommands[6] as DesktopCommand);
-  useDesktopCommand(topbarCommands[7] as DesktopCommand);
   // Lower bound for the complete session-control strip. Provider summaries own
   // their intrinsic compact width, and run configuration / session actions keep
   // their full touch targets. Auto margin restores the spacious, trailing
@@ -1819,10 +1679,9 @@ export function DesktopTopBarControls({
         : usagePercentSegmentWidth(provider.windows?.length ?? 1)),
     0,
   ) + 44;
-  const actionCount = 2 + Number(Boolean(providerUpdate)) +
-    Number(Boolean(compactAction)) + Number(Boolean(clearAction));
+  // Compact, Clear and Stop live in the Prompt's delivery row.
+  const actionCount = 1 + Number(Boolean(providerUpdate));
   const sessionActionsMinWidth = 90 + (providerUpdate ? 104 : 0) +
-    (compactAction ? 96 : 0) + (clearAction ? 80 : 0) + 80 +
     actionCount * DESKTOP_TOPBAR_CONTROL_GAP_PX;
   // Same cluster with the words in tooltips. Both numbers feed the density
   // decision, so the strip knows what it would cost BEFORE it collapses.
@@ -2349,101 +2208,6 @@ export function DesktopTopBarControls({
             </Button>
           </span>
         </Tooltip>
-
-        {compactAction && (
-          <Tooltip
-            title={contextRefreshing
-              ? "Updating context usage…"
-              : compacting
-              ? "Compacting…"
-              : compactTooltip(contextUsed, contextSize)}
-          >
-            <span>
-              <Button
-                data-desktop-item="topbar-compact"
-                data-desktop-topbar-action="compact"
-                data-desktop-compact
-                size="small"
-                color="inherit"
-                variant="outlined"
-                startIcon={
-                  <CompactIcon
-                    used={contextUsed}
-                    size={contextSize}
-                    active={compacting}
-                  />
-                }
-                aria-label={contextRefreshing
-                  ? "Compact conversation, context usage updating"
-                  : compactTooltip(contextUsed, contextSize)}
-                disabled={compacting}
-                onClick={(): void => setOpenSurface("compact")}
-                sx={desktopSessionActionSx({
-                  open: compactConfirm,
-                  minWidth: density === "full" ? 96 : ACTION_ICON_WIDTH_PX,
-                })}
-              >
-                <SessionActionLabel
-                  label="Compact"
-                  keyLabel="C"
-                  accent={compactConfirm}
-                  available={!compacting}
-                  density={density}
-                />
-              </Button>
-            </span>
-          </Tooltip>
-        )}
-
-        {clearAction && (
-          <Tooltip title="Clear conversation · start with a fresh context">
-            <span>
-              <Button
-                data-desktop-item="topbar-clear"
-                data-desktop-topbar-action="clear"
-                data-desktop-clear
-                size="small"
-                color="inherit"
-                variant="outlined"
-                startIcon={
-                  <CleaningServices
-                    sx={{
-                      ...desktopEmbeddedControlIconSx(),
-                      color: "text.secondary",
-                    }}
-                  />
-                }
-                aria-label="Clear conversation"
-                onClick={(): void => setOpenSurface("clear")}
-                sx={{
-                  ...desktopSessionActionSx({
-                    open: clearConfirm,
-                    minWidth: density === "full" ? 80 : ACTION_ICON_WIDTH_PX,
-                  }),
-                  "&:hover": {
-                    borderColor: "error.main",
-                    color: "error.main",
-                  },
-                }}
-              >
-                <SessionActionLabel
-                  label="Clear"
-                  keyLabel="X"
-                  accent={clearConfirm}
-                  available
-                  density={density}
-                />
-              </Button>
-            </span>
-          </Tooltip>
-        )}
-
-        <AutoScrollAndStop
-          sessionId={sessionId}
-          status={status}
-          presentation="desktop-toolbar"
-          collapsed={density !== "full"}
-        />
       </Stack>
 
       <SessionReloadDialog
@@ -2454,93 +2218,6 @@ export function DesktopTopBarControls({
         session={updateTarget}
         onClose={closeSurface}
       />
-
-      <Dialog
-        open={compactConfirm}
-        onClose={(): void => setOpenSurface(null)}
-        maxWidth="xs"
-        fullWidth
-      >
-        <DialogTitle>Compact conversation?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>{compactAction?.detail}</DialogContentText>
-          {compactAction?.command && (
-            <ConfirmConsequence>
-              Sends{" "}
-              <Box
-                component="code"
-                sx={{
-                  px: 0.5,
-                  py: 0.125,
-                  borderRadius: 0.75,
-                  bgcolor: "action.hover",
-                }}
-              >
-                {compactAction.command}
-              </Box>{" "}
-              to {session?.provider ?? "the agent"}
-              {status === "busy" || status === "starting"
-                ? " (queued after the current turn)"
-                : ""}.
-            </ConfirmConsequence>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button
-            color="inherit"
-            onClick={(): void => setOpenSurface(null)}
-            sx={{ textTransform: "none" }}
-          >
-            Cancel
-            <Kbd keys="Esc" />
-          </Button>
-          <Button
-            variant="contained"
-            onClick={confirmCompact}
-            sx={{ textTransform: "none" }}
-          >
-            Compact
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog
-        open={clearConfirm}
-        onClose={(): void => setOpenSurface(null)}
-        maxWidth="xs"
-        fullWidth
-      >
-        <DialogTitle>Clear conversation?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>{clearAction?.detail}</DialogContentText>
-          <ConfirmConsequence tone="error" irreversible>
-            Resets {session?.provider ?? "the agent"} to a fresh context now
-            {status === "busy" || status === "starting"
-              ? " (ends the current turn)"
-              : ""}.
-          </ConfirmConsequence>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            color="inherit"
-            onClick={(): void => setOpenSurface(null)}
-            sx={{ textTransform: "none" }}
-          >
-            Cancel
-            <Kbd keys="Esc" />
-          </Button>
-          <NetworkButton
-            variant="contained"
-            color="error"
-            networkAction={confirmClear}
-            sx={{ textTransform: "none" }}
-          >
-            Clear
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-          </NetworkButton>
-        </DialogActions>
-      </Dialog>
     </Stack>
   );
 }

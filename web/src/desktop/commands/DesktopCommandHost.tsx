@@ -348,7 +348,11 @@ export function DesktopCommandHost({
       title: draftOpen ? "Focus Draft" : "Focus Message the Agent",
       description: "Return to the editor without changing its Vim mode or caret",
       group: "Workspace",
-      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusPrompt),
+      sequence: [
+        DESKTOP_WORKSPACE_PREFIX,
+        DESKTOP_WORKSPACE_KEYS.focusPrompt,
+        DESKTOP_WORKSPACE_KEYS.focusPrompt,
+      ],
       run: () => workspace.focusRegion("prompt.composer"),
     },
     {

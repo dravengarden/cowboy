@@ -49,6 +49,12 @@ const NAVIGATION: ShortcutRow[] = [
     description: "Move pick darkens the page and letters every folder; press one to file the focused row (else the current item) there, Esc to leave. M on a row starts it too",
   },
   { keys: [DESKTOP_FOCUS_PROMPT_SHORTCUT], title: "Focus Message the Agent" },
+  {
+    keys: [DESKTOP_SHORTCUTS.compact, DESKTOP_SHORTCUTS.clear],
+    title: "Compact / Clear the conversation",
+    description:
+      "The Prompt group runs from any focus; both buttons sit in the Prompt's delivery row and confirm first",
+  },
   { keys: [DESKTOP_FOCUS_PLAN_SHORTCUT], title: "Focus Plan" },
   { keys: [DESKTOP_FOCUS_CALLS_SHORTCUT], title: "Open the running call, or open or close Calls" },
   { keys: [DESKTOP_SHORTCUTS.focusConversation], title: "Focus Conversation Log" },
@@ -74,8 +80,6 @@ const NAVIGATION: ShortcutRow[] = [
     ["A", "Verify Product Session (while it is requested)"],
     ["N", "Update Provider (while a newer release waits)"],
     ["L", "Reload Session Runtime"],
-    ["C", "Compact Conversation"],
-    ["X", "Clear Conversation"],
   ] as const).map(([key, title], index): ShortcutRow => ({
     keys: [desktopLeaderGroupSequence(DESKTOP_WORKSPACE_KEYS.focusTopbar, key), key],
     title: `${title} in Top Bar`,

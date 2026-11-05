@@ -240,8 +240,6 @@ import {
   type TranscriptProjection,
   useExploreAtTail,
 } from "./explore/exploreStore";
-import { desktopSessionActionSx } from "./desktop/DesktopEmbeddedControl";
-import { ACTION_ICON_WIDTH_PX } from "./desktop/topBarDensity";
 import {
   DESKTOP_FOCUS_CALLS_SHORTCUT,
   DESKTOP_FOCUS_PLAN_SHORTCUT,
@@ -250,7 +248,6 @@ import {
   DESKTOP_WORKSPACE_KEYS,
   desktopWorkspaceSequence,
 } from "./desktop/commands/workspaceShortcuts";
-import { shortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import {
   type Attachment,
   filesToAttachments,
@@ -2788,6 +2785,8 @@ export function ComposerWorkspace({
           ? (
             <Suspense fallback={<Box sx={{ minHeight: 80 }} />}>
               <DesktopComposerToolbar
+                sessionId={sessionId}
+                status={status}
                 editorRef={editorRef}
                 sendButtonRef={queueBtnRef}
                 canInsert={!dead}
@@ -6335,7 +6334,7 @@ function PendingRow({
 // click/Esc must not trigger it. Shared by the navbar's Stop button (SessionControls)
 // and the composer editor's Esc-to-stop; each owns its own `open` state, the markup
 // is one component. Command/Ctrl+Enter confirms; Esc dismisses (Dialog default).
-function StopConfirmDialog({
+export function StopConfirmDialog({
   open,
   onClose,
   onConfirm,
@@ -6381,25 +6380,17 @@ function StopConfirmDialog({
 }
 
 // Mobile keeps the combined auto-scroll + Stop controls. Desktop moves Following
-// into the Conversation header, where the state belongs; this branch retains only
-// Stop so a destructive turn action stays globally visible in the top toolbar.
-// It remains mounted while idle and changes only to a disabled state, keeping
-// the action cluster stable as turns start and finish.
+// into the Conversation header and Stop into the Prompt's delivery row.
 export function AutoScrollAndStop({
   sessionId,
   status,
   projection = "history",
   dense = false,
-  presentation = "icons",
-  collapsed = false,
 }: {
   sessionId: string;
   status: Status;
   projection?: TranscriptProjection | undefined;
   dense?: boolean;
-  presentation?: "icons" | "desktop-toolbar";
-  /** Desktop toolbar at compact density: icon and keycap, word in the tooltip. */
-  collapsed?: boolean;
 }): React.JSX.Element {
   const sticky = useSticky(sessionId);
   const exploreAtTail = useExploreAtTail(sessionId);
@@ -6409,56 +6400,6 @@ export function AutoScrollAndStop({
     ? sticky
     : sticky && exploreAtTail && busy;
   const size = dense ? "small" : "medium";
-  if (presentation === "desktop-toolbar") {
-    return (
-      <>
-        <Tooltip title={busy ? "Stop current turn" : "No turn is running"}>
-          <span>
-            <Button
-              data-desktop-item="topbar-stop"
-              data-desktop-topbar-action="stop"
-              size="small"
-              color="error"
-              variant="text"
-              startIcon={<Stop fontSize="small" />}
-              disabled={!busy}
-              onClick={(): void => setCancelOpen(true)}
-              aria-label="Stop current turn"
-              sx={desktopSessionActionSx({
-                open: cancelOpen,
-                minWidth: collapsed ? ACTION_ICON_WIDTH_PX : 80,
-              })}
-            >
-              {!collapsed && (
-                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>
-                  Stop
-                </Box>
-              )}
-              <ShortcutKeycap
-                keyLabel={`${MOD_LABEL}.`}
-                variant="global"
-                accent={cancelOpen}
-                availability={shortcutAvailability(
-                  busy,
-                  cancelOpen,
-                )}
-                sx={{ flexShrink: 0, ml: 0.5 }}
-              />
-            </Button>
-          </span>
-        </Tooltip>
-        <StopConfirmDialog
-          open={cancelOpen}
-          onClose={(): void => setCancelOpen(false)}
-          onConfirm={(): void => {
-            importantHaptic();
-            cancelTurn(sessionId);
-            setCancelOpen(false);
-          }}
-        />
-      </>
-    );
-  }
   return (
     <>
       {
