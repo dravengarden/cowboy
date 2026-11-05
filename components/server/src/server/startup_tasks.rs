@@ -213,3 +213,70 @@ pub(super) fn spawn_dispatcher(
         }
     })
 }
+
+/// The background tasks `serve` drains after Axum stops and the Catalog
+/// observer has shut down. Persistence closes last: the dispatcher returns
+/// undelivered prompts first, telemetry drains, then the write-behind store
+/// flushes.
+pub(super) struct ControllerTasks {
+    pub(super) scheduler_task: tokio::task::JoinHandle<()>,
+    pub(super) reset_task: tokio::task::JoinHandle<()>,
+    pub(super) runtime_reconciliation_task: tokio::task::JoinHandle<()>,
+    pub(super) web_push_task: tokio::task::JoinHandle<()>,
+    pub(super) dispatcher_task: tokio::task::JoinHandle<()>,
+    pub(super) purge_task: Option<tokio::task::JoinHandle<()>>,
+    pub(super) machine_presence_task: Option<tokio::task::JoinHandle<()>>,
+    pub(super) telemetry_shutdown: Observability,
+    pub(super) store_shutdown_tx: watch::Sender<bool>,
+    pub(super) writer_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl ControllerTasks {
+    pub(super) async fn shutdown(self) {
+        let Self {
+            scheduler_task,
+            reset_task,
+            runtime_reconciliation_task,
+            web_push_task,
+            mut dispatcher_task,
+            purge_task,
+            machine_presence_task,
+            telemetry_shutdown,
+            store_shutdown_tx,
+            writer_task,
+        } = self;
+        scheduler_task.abort();
+        reset_task.abort();
+        runtime_reconciliation_task.abort();
+        web_push_task.abort();
+        match tokio::time::timeout(std::time::Duration::from_secs(5), &mut dispatcher_task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(%error, "dispatcher task failed during shutdown"),
+            Err(_) => {
+                tracing::warn!(
+                    "dispatcher still returning undelivered prompts; keeping persistence alive"
+                );
+                if let Err(error) = dispatcher_task.await {
+                    tracing::error!(%error, "dispatcher failed while finishing shutdown retention");
+                }
+            }
+        }
+        if let Some(task) = purge_task {
+            task.abort();
+        }
+        if let Some(task) = machine_presence_task {
+            task.abort();
+        }
+        telemetry_shutdown.drain().await;
+        let _ = store_shutdown_tx.send(true);
+        if let Some(task) = writer_task {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), task).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::error!(%error, "store writer task failed during shutdown")
+                }
+                Err(_) => tracing::error!("store writer did not drain within shutdown deadline"),
+            }
+        }
+    }
+}
