@@ -1,5 +1,7 @@
 use super::*;
 
+mod test_support;
+
 pub(super) fn session(id: &str) -> SessionMeta {
     SessionMeta {
         continued_from: None,
@@ -2209,7 +2211,7 @@ async fn oidc_logout_is_provider_scoped_fenced_and_replay_safe_contract(store: &
 #[tokio::test]
 async fn sqlite_oidc_logout_is_provider_scoped_fenced_and_replay_safe() {
     oidc_logout_is_provider_scoped_fenced_and_replay_safe_contract(
-        &super::test_support::sqlite().await.store,
+        &test_support::sqlite().await.store,
     )
     .await;
 }
@@ -2218,7 +2220,7 @@ async fn sqlite_oidc_logout_is_provider_scoped_fenced_and_replay_safe() {
 #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
 async fn postgres_oidc_logout_is_provider_scoped_fenced_and_replay_safe() {
     oidc_logout_is_provider_scoped_fenced_and_replay_safe_contract(
-        &super::test_support::postgres().await.store,
+        &test_support::postgres().await.store,
     )
     .await;
 }
@@ -2354,7 +2356,7 @@ async fn session_replacement_fences_lease_and_removes_waiter_contract(store: &St
 #[tokio::test]
 async fn sqlite_session_replacement_fences_lease_and_removes_waiter() {
     session_replacement_fences_lease_and_removes_waiter_contract(
-        &super::test_support::sqlite().await.store,
+        &test_support::sqlite().await.store,
     )
     .await;
 }
@@ -2363,7 +2365,7 @@ async fn sqlite_session_replacement_fences_lease_and_removes_waiter() {
 #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
 async fn postgres_session_replacement_fences_lease_and_removes_waiter() {
     session_replacement_fences_lease_and_removes_waiter_contract(
-        &super::test_support::postgres().await.store,
+        &test_support::postgres().await.store,
     )
     .await;
 }
@@ -2422,15 +2424,13 @@ async fn capacity_queue_skips_per_user_full_lane_contract(store: &Store) {
 
 #[tokio::test]
 async fn sqlite_capacity_queue_skips_per_user_full_lane() {
-    capacity_queue_skips_per_user_full_lane_contract(&super::test_support::sqlite().await.store)
-        .await;
+    capacity_queue_skips_per_user_full_lane_contract(&test_support::sqlite().await.store).await;
 }
 
 #[tokio::test]
 #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
 async fn postgres_capacity_queue_skips_per_user_full_lane() {
-    capacity_queue_skips_per_user_full_lane_contract(&super::test_support::postgres().await.store)
-        .await;
+    capacity_queue_skips_per_user_full_lane_contract(&test_support::postgres().await.store).await;
 }
 
 async fn do_shaped_restore_keeps_compact_working_set_contract(store: &Store) {
@@ -2476,19 +2476,14 @@ async fn do_shaped_restore_keeps_compact_working_set_contract(store: &Store) {
 
 #[tokio::test]
 async fn sqlite_do_shaped_restore_keeps_compact_working_set() {
-    do_shaped_restore_keeps_compact_working_set_contract(
-        &super::test_support::sqlite().await.store,
-    )
-    .await;
+    do_shaped_restore_keeps_compact_working_set_contract(&test_support::sqlite().await.store).await;
 }
 
 #[tokio::test]
 #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
 async fn postgres_do_shaped_restore_keeps_compact_working_set() {
-    do_shaped_restore_keeps_compact_working_set_contract(
-        &super::test_support::postgres().await.store,
-    )
-    .await;
+    do_shaped_restore_keeps_compact_working_set_contract(&test_support::postgres().await.store)
+        .await;
 }
 
 #[tokio::test]

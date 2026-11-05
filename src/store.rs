@@ -8858,5 +8858,3 @@ struct EventRow {
 
 #[cfg(test)]
 mod storage_contract_tests;
-#[cfg(test)]
-pub(crate) mod test_support;

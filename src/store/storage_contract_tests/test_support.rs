@@ -3,23 +3,23 @@
 //! fixture and runs it, and the PostgreSQL twin is named `postgres_*` so
 //! `just test-postgres` runs it in an isolated empty database.
 
-use super::Store;
+use crate::store::Store;
 
 /// A migrated store plus the directory that owns its artifacts. Dropping it
 /// closes the pool before the directory is removed.
-pub(crate) struct TestStore {
-    pub(crate) store: Store,
+pub(super) struct TestStore {
+    pub(super) store: Store,
     _root: tempfile::TempDir,
 }
 
 /// An in-memory SQLite store.
-pub(crate) async fn sqlite() -> TestStore {
+pub(super) async fn sqlite() -> TestStore {
     open("sqlite::memory:").await
 }
 
 /// The isolated PostgreSQL database `just test-postgres` provisions for this
 /// test. Panics instead of passing when the fixture is absent.
-pub(crate) async fn postgres() -> TestStore {
+pub(super) async fn postgres() -> TestStore {
     let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
         .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");
     open(&url).await
