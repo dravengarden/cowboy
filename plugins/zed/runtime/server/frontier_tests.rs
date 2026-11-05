@@ -59,6 +59,7 @@ async fn fixture(
     Entity<crate::Project>,
     Entity<Buffer>,
     lsp::FakeLanguageServer,
+    OpenLspBufferHandle,
 ) {
     cx.update(|cx| {
         if cx.try_global::<settings::SettingsStore>().is_none() {
@@ -87,9 +88,8 @@ async fn fixture(
     let handle = project.update(cx, |project, cx| {
         project.register_buffer_with_language_servers(&buffer, cx)
     });
-    std::mem::forget(handle);
     let server = servers.next().await.unwrap();
-    (project, buffer, server)
+    (project, buffer, server, handle)
 }
 
 fn publish(server: &lsp::FakeLanguageServer, version: Option<i32>, source: &str) {
@@ -133,7 +133,7 @@ fn observed(
 
 #[gpui::test]
 async fn cowboy_frontier_records_the_analyzed_version_of_each_publication(cx: &mut TestAppContext) {
-    let (project, buffer, mut server) = fixture(cx).await;
+    let (project, buffer, mut server, handle) = fixture(cx).await;
     let opened = server
         .receive_notification::<lsp::notification::DidOpenTextDocument>()
         .await
@@ -176,4 +176,6 @@ async fn cowboy_frontier_records_the_analyzed_version_of_each_publication(cx: &m
     cx.executor().run_until_parked();
     let (evidence, _) = observed(&project, &buffer, cx);
     assert!(evidence.disk_based);
+    drop(handle);
+    cx.executor().run_until_parked();
 }
