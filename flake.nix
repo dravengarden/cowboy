@@ -331,6 +331,13 @@
         ];
         depsHash = "sha256-YW82drFh+3plT/fOezH6OokDZfvwEfA83ILB7HePufs=";
       }).overrideAttrs (previous: {
+        # A Web release cannot be built from a commit that grows a structure
+        # offender or breaks a web unit test (both also run in just check,
+        # which web-only changes have skipped). The build starts in web/.
+        postBuild = (previous.postBuild or "") + ''
+          (cd .. && bun tools/check-structure.ts)
+          bun test src
+        '';
         installPhase = previous.installPhase + ''
           test "${service-worker-generation}" -gt 2108
           sed -i -E 's/^const VERSION = "cowboy-v[0-9]+";$/const VERSION = "cowboy-v${service-worker-generation}";/' "$out/sw.js"

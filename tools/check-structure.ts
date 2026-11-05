@@ -20,7 +20,7 @@
 //   bun tools/check-structure.ts --update   lower and re-admit the baseline
 //   bun tools/check-structure.ts --report   print the health metrics
 
-import { readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { Command } from "./lib/command.ts";
 
 export const LIMITS = {
@@ -663,10 +663,28 @@ async function repositorySources(): Promise<string[]> {
   const output = await new Command("git", {
     args: ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
     stdout: "piped",
-  }).output();
-  if (!output.success) throw new Error("git ls-files failed");
-  return new TextDecoder().decode(output.stdout).split("\0").filter(measured)
-    .sort();
+    stderr: "null",
+  }).output().catch(() => null);
+  if (output?.success) {
+    return new TextDecoder().decode(output.stdout).split("\0").filter(measured)
+      .sort();
+  }
+  // A Nix build source has no .git and holds exactly the tracked files, plus
+  // the dependency trees the build installed; walk it instead.
+  const found: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (
+        entry.name === "node_modules" || entry.name === "dist" ||
+        entry.name === "target"
+      ) continue;
+      const path = dir === "." ? entry.name : `${dir}/${entry.name}`;
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.isFile()) found.push(path);
+    }
+  };
+  await walk(".");
+  return found.filter(measured).sort();
 }
 
 export function serialize(baseline: Baseline): string {
