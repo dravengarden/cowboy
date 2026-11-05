@@ -429,6 +429,22 @@ lifecycle or connection-level test that 1.5/1.6 name first.
 | 2.1 | `store.rs` test modules moved to files. Instead of a proc macro (a new crate is a Cargo maintenance boundary), a contract is an `async fn(&Store)` with a SQLite test and an ignored `postgres_` twin over shared fixtures (`store/storage_contract_tests/test_support.rs`). OIDC logout scoping, session replacement fencing, capacity fairness and compact restore now run on PostgreSQL; the gate runs 59 PostgreSQL tests, all passing, with no divergence found. Remaining SQLite-only coverage: the 29 HTTP-level product-auth tests in `cowboy-server`, which need the same fixture exported to that crate |
 | 2.2–2.3 | Not started; 2.1 found no backend divergence, which per the slice text lowers the value of 2.3 |
 
+### Phase 3 status (2026-11-05)
+
+| Slice | Outcome |
+|---|---|
+| 3.2 | `SettingsShell.tsx` and `ToolDetailsBrowser.tsx` extracted (Phase 0 batch) |
+| 3.3 | `SessionList.tsx` extracted; `App` 2,406 → 2,191 lines through `useSessionFocusLifecycle`, `useDesktopSplitters` and `useMobileDrawerSurface`, each called where its effects ran so hook order is unchanged |
+| 3.4 | `PendingPanel.tsx` and `ComposerSheet.tsx` extracted; `Composer.tsx` 4,911 → 3,292 lines. `ComposerWorkspace` itself (2,524 lines) is not yet split, and physical iOS composer acceptance was not run |
+| 3.5 | `TranscriptItems.tsx` and `TranscriptPlaceholders.tsx` extracted; `Transcript.tsx` 5,042 → 3,117 lines with the scroll contract kept in place. `DocumentView` left `ReviewApp` |
+
+Every slice ran the browser suites named for it in Firefox and Chromium, in
+both themes; a flaky `sheet-keyboard` timeout passed on rerun. The
+`dormant-session` suite had failed on main since 50b6dd1b4 (bisected): a
+session-settings open request a mounted surface had already handled stayed
+pending and reopened settings on a remount. Fixed in `sessionSettingsOpen.ts`.
+App's own splitter and drawer bindings have no dedicated browser fixture.
+
 ### Phase 7 status (2026-11-05)
 
 7.1 landed as [`compatibility-exits.md`](compatibility-exits.md): about 45
