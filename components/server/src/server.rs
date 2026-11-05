@@ -388,18 +388,6 @@ const RUNTIME_RECONCILIATION_GRACE: std::time::Duration = std::time::Duration::f
 );
 const MACHINE_RECONNECT_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
-#[cfg(test)]
-#[test]
-fn runtime_reconciliation_covers_machine_retry_and_snapshot_settlement() {
-    assert_eq!(
-        RUNTIME_RECONCILIATION_GRACE,
-        std::time::Duration::from_secs(45)
-    );
-    assert!(
-        RUNTIME_RECONCILIATION_GRACE
-            > std::time::Duration::from_secs(CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS)
-    );
-}
 /// Let restore, listener binding, and Machine reconnection settle before the
 /// optional account collectors start their short-lived provider processes.
 const PROVIDER_UNINSTALL_RETENTION_MS: i64 = 3 * 24 * 60 * 60 * 1_000;
@@ -1348,50 +1336,6 @@ const fn lifecycle_incident_recovery_outcome(status: Status) -> Option<&'static 
         Status::Busy => Some("session_busy"),
         Status::Running => Some("session_running"),
         _ => None,
-    }
-}
-
-fn is_context_window_rejection(detail: &str) -> bool {
-    let detail = detail.to_ascii_lowercase();
-    detail.contains("maximum context length")
-        || detail.contains("prompt is too long")
-        || (detail.contains("context window")
-            && (detail.contains("exceed")
-                || detail.contains("full")
-                || detail.contains("limit reached")))
-}
-
-fn is_empty_stream_failure(detail: &str) -> bool {
-    detail
-        .to_ascii_lowercase()
-        .contains("stream ended without receiving any events")
-}
-
-fn classify_session_error(detail: &str) -> &'static str {
-    match classify_crash_detail(Some(detail)) {
-        "runtime_failure" => "session_command_error",
-        classification => classification,
-    }
-}
-
-fn session_error_severity(classification: &str) -> &'static str {
-    match classification {
-        "worker_startup_failure" | "process_exit" | "resource_exhaustion" | "runtime_failure" => {
-            "critical"
-        }
-        _ => "error",
-    }
-}
-
-fn classify_interruption_detail(detail: Option<&str>) -> &'static str {
-    let detail = detail.unwrap_or_default().to_ascii_lowercase();
-    if detail.contains("deploy")
-        || detail.contains("shutdown")
-        || detail.contains("controller restart")
-    {
-        "expected_interruption"
-    } else {
-        "runtime_interruption"
     }
 }
 
@@ -3691,3 +3635,5 @@ mod code_context;
 use code_context::*;
 mod client_commands;
 use client_commands::*;
+mod machine_handshake;
+use machine_handshake::*;

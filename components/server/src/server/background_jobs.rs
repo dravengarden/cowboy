@@ -1335,3 +1335,47 @@ pub(super) fn recover_failed_provider_sessions(
     }
     recovered
 }
+
+pub(super) fn is_context_window_rejection(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    detail.contains("maximum context length")
+        || detail.contains("prompt is too long")
+        || (detail.contains("context window")
+            && (detail.contains("exceed")
+                || detail.contains("full")
+                || detail.contains("limit reached")))
+}
+
+pub(super) fn is_empty_stream_failure(detail: &str) -> bool {
+    detail
+        .to_ascii_lowercase()
+        .contains("stream ended without receiving any events")
+}
+
+pub(super) fn classify_session_error(detail: &str) -> &'static str {
+    match classify_crash_detail(Some(detail)) {
+        "runtime_failure" => "session_command_error",
+        classification => classification,
+    }
+}
+
+pub(super) fn session_error_severity(classification: &str) -> &'static str {
+    match classification {
+        "worker_startup_failure" | "process_exit" | "resource_exhaustion" | "runtime_failure" => {
+            "critical"
+        }
+        _ => "error",
+    }
+}
+
+pub(super) fn classify_interruption_detail(detail: Option<&str>) -> &'static str {
+    let detail = detail.unwrap_or_default().to_ascii_lowercase();
+    if detail.contains("deploy")
+        || detail.contains("shutdown")
+        || detail.contains("controller restart")
+    {
+        "expected_interruption"
+    } else {
+        "runtime_interruption"
+    }
+}
