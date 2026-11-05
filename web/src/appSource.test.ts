@@ -26,6 +26,7 @@ export const SPLIT_SOURCES = {
   "mobile/review/ReviewApp.tsx": [
     "./mobile/review/ReviewApp.tsx",
     "./mobile/review/DocumentView.tsx",
+    "./mobile/review/reviewMarkdownPreview.ts",
   ],
 } as const;
 
@@ -50,7 +51,9 @@ export function declarationSource(source: string, name: string): string {
   const start = source.indexOf(`function ${name}(`);
   if (start === -1) return "";
   const rest = source.slice(start + 1);
-  const next = rest.search(/\n(?:export )?(?:async )?(?:function|const|let|class|type|interface) /);
+  const next = rest.search(
+    /\n(?:export )?(?:async )?(?:function|const|let|class|type|interface) /,
+  );
   return source.slice(start, next === -1 ? source.length : start + 1 + next);
 }
 

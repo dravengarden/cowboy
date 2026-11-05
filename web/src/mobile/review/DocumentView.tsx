@@ -16,6 +16,8 @@ import { ReviewNavigation } from "./ReviewNavigation";
 import { type ReviewBufferMode } from "./ownedReviewBuffer";
 import { reviewDisplayText, useOwnedReviewBuffer } from "./useOwnedReviewBuffer";
 import { ReviewCodeStatus } from "./ReviewCodeStatus";
+import { ReviewCheckStatus } from "./ReviewCheckStatus";
+import { markdownPreviewSx } from "./reviewMarkdownPreview";
 import { ReviewDiffCodeStatus } from "./ReviewDiffCodeStatus";
 import { useOwnedReviewDiff } from "./useOwnedReviewDiff";
 import { captureTextScrollAnchor, DOCUMENT_REFRESH_RESUME_GRACE_MS, documentRefreshDecision, restoreTextScrollAnchor, type TextScrollAnchor } from "./documentRefreshModel";
@@ -51,7 +53,7 @@ export function checkingSymbolNavigation(): SymbolNavigationAvailability {
   ) as SymbolNavigationAvailability;
 }
 
-export const CodeViewer = lazy(() => import("./CodeViewer"));
+export const CodeViewer = lazy(() => import("./CheckedCodeViewer"));
 
 export type ReviewTarget =
   | { kind: "changes" }
@@ -1497,6 +1499,9 @@ export function DocumentView({
           : target.kind === "source" && (
             <ReviewCodeStatus intelligence={owned} />
           ))}
+      {target.kind === "source" && !markdownPreview && (
+        <ReviewCheckStatus sessionId={sessionId} path={target.path} />
+      )}
       {target.kind === "source" && (
         <ReviewOutline
           open={outlineOpen}
@@ -1568,43 +1573,7 @@ export function DocumentView({
             <Box
               component="article"
               data-markdown-review-preview
-              sx={{
-                width: "100%",
-                maxWidth: 880,
-                mx: "auto",
-                px: { xs: 2.25, sm: 4 },
-                py: 2.5,
-                lineHeight: 1.6,
-                overflowWrap: "anywhere",
-                "& h1": {
-                  fontSize: "1.75rem !important",
-                  pb: 0.5,
-                  borderBottom: 1,
-                  borderColor: "divider",
-                },
-                "& h2": {
-                  fontSize: "1.4rem !important",
-                  pb: 0.35,
-                  borderBottom: 1,
-                  borderColor: "divider",
-                },
-                "& h3": { fontSize: "1.18rem !important" },
-                "& hr": {
-                  border: 0,
-                  borderTop: 1,
-                  borderColor: "divider",
-                  my: 2,
-                },
-                // A sideways-scrolling block is its own scroll container, so
-                // WebKit restarts touch-action there and a vertical flick that
-                // starts on code or a table would wait for the recognizers
-                // again. Declare both native axes on those blocks.
-                ...(!settings.markdownSoftWrap && {
-                  "& pre, & [data-markdown-table-scroll], & .katex-display": {
-                    touchAction: "pan-x pan-y pinch-zoom",
-                  },
-                }),
-              }}
+              sx={markdownPreviewSx(settings.markdownSoftWrap)}
             >
               {
                 /* Off by default: code blocks and tables scroll natively.
@@ -1628,6 +1597,7 @@ export function DocumentView({
               }
             >
               <CodeViewer
+                sessionId={sessionId}
                 text={displayText}
                 kind={target.kind}
                 path={target.path}

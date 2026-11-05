@@ -206,6 +206,7 @@
   },
   "merged_routers": {
     "cardea_authorization::routes": "exception:identity — human authorization ceremonies stay with Cardea; agents cannot grant themselves authority.",
+    "code_api::check_routes": "code.checks",
     "code_api::search_routes": "code.search",
     "code_buffers::routes": "exception:native — browser-owned unsaved buffers, navigation and file synchronization stay with native code tools and the Code UI.",
     "product_auth_router": "exception:identity — login, credentials, passkeys, grants and account administration remain with the identity owner.",

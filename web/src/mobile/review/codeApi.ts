@@ -512,6 +512,62 @@ export function fetchCodeContentSearch(
   );
 }
 
+export type CodeCheckRunState =
+  | "running"
+  | "passed"
+  | "failed"
+  | "timed_out"
+  | "error";
+
+/** One finding of a project check (`check@1`); line and column are 1-based. */
+export interface CodeCheckDiagnostic {
+  path: string;
+  line: number;
+  /** 0 when the tool reported no column. */
+  column: number;
+  severity: "error" | "warning" | "note";
+  code?: string;
+  message: string;
+}
+
+export interface CodeCheckRun {
+  runId: string;
+  check: string;
+  state: CodeCheckRunState;
+  startedAtMs: number;
+  finishedAtMs?: number;
+  exitCode?: number;
+  error?: string;
+  outputTruncated: boolean;
+  diagnostics: CodeCheckDiagnostic[];
+  truncated: boolean;
+}
+
+export interface CodeChecks {
+  apiVersion: 1;
+  allowed: boolean;
+  declared: {
+    id: string;
+    title?: string;
+    format: string;
+    timeoutSeconds: number;
+  }[];
+  declarationError?: string;
+  /** The latest run of each declared check. */
+  runs: CodeCheckRun[];
+}
+
+export function fetchCodeChecks(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<CodeChecks> {
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/checks`,
+    signal,
+    "no-store",
+  );
+}
+
 export function fetchCodeDiff(
   sessionId: string,
   path: string,
