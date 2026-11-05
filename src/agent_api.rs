@@ -206,7 +206,8 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 // task (stable id: letters, digits, -_. up to 128, e.g. "f01-awaiting-merge"; prose goes in focus)
 //   + base (full SHA from `git rev-parse <ref>`, never padded) + root bind review input for reuse.
 // preset selects a fresh call's model; a child_session_id continuation keeps the child's preset.
-// Only use with all required evidence in the captured files/instruction. fresh:true requests an independent pass.
+// Put all evidence in instruction or files (<=32 regular files under root, never a directory).
+// fresh:true skips a bound task's reuse.
 // calls.cancel: {call_id:string}; operation MUST equal call_id. Cancellation is idempotent.
 // documents.mutate: {document_id:string,expected_revision:number,change:DraftChange}
 // control.apply: {name:string,input:object}; discover via cowboy.control.list(domain)/describe(name).

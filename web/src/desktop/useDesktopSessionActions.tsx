@@ -29,8 +29,6 @@ import {
 } from "./commands/DesktopCommandProvider";
 import {
   DESKTOP_SHORTCUTS,
-  DESKTOP_WORKSPACE_KEYS,
-  desktopLeaderSequence,
 } from "./commands/workspaceShortcuts";
 import {
   desktopTopBarTimelineSlice,
@@ -55,9 +53,16 @@ export interface DesktopSessionActions {
 
 /**
  * Compact, Clear and Stop act on the conversation the Prompt writes into, so
- * they live in its delivery row. Keys: `␣PC` and `␣PX` from any focus (the
- * Prompt group, beside `␣PP`), `Mod+.` from anywhere including editors.
+ * they live in its delivery row. Keys: `Mod+Shift+.` and `Mod+Shift+L` while
+ * the Prompt owns focus (its editor included), so they never fire from
+ * another pane; Stop's `Mod+.` runs from anywhere, an emergency key.
  */
+/** Compact and Clear run only while the Prompt (its editor too) owns focus. */
+const PROMPT_SCOPE: Pick<
+  DesktopCommand,
+  "allowInEditor" | "contexts" | "regions"
+> = { allowInEditor: true, contexts: ["prompt"], regions: ["prompt.composer"] };
+
 export function useDesktopSessionActions(
   sessionId: string,
   status: Status,
@@ -124,8 +129,8 @@ export function useDesktopSessionActions(
     id: "prompt.compact",
     title: "Compact Conversation",
     group: "Prompt",
-    sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.promptCompact),
-    leaderAnywhere: true,
+    shortcut: DESKTOP_SHORTCUTS.compact,
+    ...PROMPT_SCOPE,
     when: () => hasCompact && !compacting,
     disabledReason: compacting
       ? "Compacting…"
@@ -137,8 +142,8 @@ export function useDesktopSessionActions(
     id: "prompt.clear",
     title: "Clear Conversation",
     group: "Prompt",
-    sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.promptClear),
-    leaderAnywhere: true,
+    shortcut: DESKTOP_SHORTCUTS.clear,
+    ...PROMPT_SCOPE,
     when: () => hasClear,
     disabledReason: "This agent has no clear command",
     run: () => setOpen("clear"),

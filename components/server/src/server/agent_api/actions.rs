@@ -78,7 +78,7 @@ fn input_refusal(error: &crate::managed_calls::InputError) -> CallRefusal {
         InputError::RequestTooLarge => "request exceeds the size limit",
         InputError::InvalidInstruction => "instruction must be non-empty text up to 128 KiB",
         InputError::InvalidContext => {
-            "root must be an absolute directory other than /; files must be up to 32 distinct relative paths (images: up to 4, and image.edit needs files or child_session_id)"
+            "image calls take up to 4 files, and image.edit needs files or child_session_id; a base-bound review needs root"
         }
         InputError::InvalidConversation => "child_session_id is not a valid session id",
         InputError::InvalidLabels => "title and reason must be short single-line text",
@@ -107,6 +107,31 @@ fn display_label(text: &str) -> String {
     format!("{}…", line[..end].trim_end())
 }
 
+const TASK_NEEDS_BASE: &str = "task binds reuse to a commit and needs base (full SHA from `git rev-parse <ref>`); omit both for an unbound review such as a design document";
+
+/// The request contract reports these context faults as one; name each.
+fn context_fault(files: &[String], root: Option<&str>) -> Option<&'static str> {
+    if files.len() > 32 {
+        return Some(
+            "files takes at most 32 paths; attach the most relevant files or a captured summary",
+        );
+    }
+    if files
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        != files.len()
+    {
+        return Some("files lists the same path twice");
+    }
+    if root.is_some_and(|root| root == "/" || !crate::managed_calls::absolute_root(root)) {
+        return Some(
+            "root must be an absolute normalized directory other than /, without a trailing /, '.', '..' or '//'",
+        );
+    }
+    None
+}
+
 fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, CallRefusal> {
     let input: CallInput = serde_json::from_value(args)
         .map_err(|_| refuse("unknown or mistyped argument; see cowboy_read({help:\"actions\"})"))?;
@@ -133,10 +158,7 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
         ));
     }
     if input.task.is_some() != input.base.is_some() {
-        return Err(refuse("task and base must be given together"));
-    }
-    if input.fresh && input.task.is_none() {
-        return Err(refuse("fresh requires task and base"));
+        return Err(refuse(TASK_NEEDS_BASE));
     }
     if input.capability.is_some() && input.purpose.is_some() {
         return Err(refuse("pass capability or purpose, not both"));
@@ -165,6 +187,9 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
         return Err(refuse(
             "files must be paths relative to root, without a leading /, '.' or '..' segments; capture files outside root into the worktree first",
         ));
+    }
+    if let Some(message) = context_fault(&input.files, input.root.as_deref()) {
+        return Err(refuse(message));
     }
     if review && input.task.is_some() && input.root.is_none() {
         return Err(refuse("a base-bound review needs root"));
@@ -1011,7 +1036,14 @@ mod tests {
             json!({"root":root,"base":"a".repeat(40),"task":"Review commits a..HEAD in apps/x"}),
         );
         assert!(task.contains("task must be a short id"), "{task}");
-        assert!(message("review.start", json!({"root":root,"task":"t"})).contains("together"));
+        assert!(message("review.start", json!({"root":root,"task":"t"})).contains("needs base"));
+        let many: Vec<String> = (0..33).map(|n| format!("f{n}.md")).collect();
+        assert!(message("review.start", json!({"root":root,"files":many})).contains("at most 32"));
+        assert!(
+            message("review.start", json!({"root":root,"files":["a.md","a.md"]}))
+                .contains("same path twice")
+        );
+        assert!(message("review.start", json!({"root":"/srv/x/"})).contains("trailing /"));
         let absolute = message(
             "review.start",
             json!({"root":root,"files":["/srv/private/source/design.md"]}),
@@ -1037,7 +1069,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(context.code, "invalid_argument");
-        assert!(context.message.contains("absolute directory"));
+        assert!(context.message.contains("absolute normalized directory"));
         for value in [short, task, absolute, unknown, context.message] {
             assert!(!value.contains(root) && !value.contains("secret"));
         }
@@ -1086,10 +1118,20 @@ mod tests {
             json!({"base":"a".repeat(40)}),
             json!({"task":"task","base":"main","root":"/tasks/project"}),
             json!({"task":"task","base":"a".repeat(40)}),
-            json!({"fresh":true}),
         ] {
             assert!(call_action("review.start", args, "op").is_err());
         }
+        // An unbound review never reuses a conversation, so fresh is already true.
+        let Action::Start { request, .. } =
+            call_action("review.start", json!({"fresh":true,"design":true}), "op").unwrap()
+        else {
+            panic!("expected start");
+        };
+        assert!(
+            !request
+                .labels
+                .contains_key(crate::managed_calls::review::REUSE)
+        );
         let args = json!({"task":"task","base":"a".repeat(40),"root":"/tasks/project"});
         assert!(call_action("calls.start", args.clone(), "op").is_err());
         let Action::Start { request, .. } = call_action("review.start", args, "op").unwrap() else {

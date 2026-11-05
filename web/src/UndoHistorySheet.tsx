@@ -1,6 +1,6 @@
 // Undo history: the changes this device can still (or could) undo, newest
 // first. Opened from a notice's history button, the Trash menu, the Desktop
-// command palette and `␣I`. See docs/undo-history.md.
+// command palette and `␣SU`. See docs/undo-history.md.
 import {
   ChatBubbleOutline,
   DescriptionOutlined,

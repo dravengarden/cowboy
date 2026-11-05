@@ -1162,10 +1162,17 @@ fn call_notice(record: &Record) -> String {
         .as_ref()
         .map(|error| format!(", error {}", error.code))
         .unwrap_or_default();
+    let hint = record
+        .error
+        .as_ref()
+        .and_then(|error| error.detail.as_deref())
+        .and_then(super::coordinator::input_hint)
+        .map(|hint| format!(" No agent ran: {hint}, then start a new call."))
+        .unwrap_or_default();
     format!(
         "[Cowboy] Managed call {}{title} finished: {}{error}. Read it with cowboy_read: \
          cowboy.calls.result(\"{}\",{{offset:0,chars:4000}}). A running, failed or partial \
-         review is never evidence of a clean review.",
+         review is never evidence of a clean review.{hint}",
         record.call_id,
         record.state.code(),
         record.call_id
@@ -1307,6 +1314,33 @@ mod tests {
                 && notice.contains("finished: failed, error launch_timeout")
                 && notice.contains(&format!("cowboy.calls.result(\"{}\"", failed.call_id)),
             "{notice}"
+        );
+        assert!(!notice.contains("No agent ran"), "{notice}");
+        // A refused snapshot says how to fix the input; the web line still parses.
+        let mut refused = failed.clone();
+        refused.error = Some(CallError::new(
+            "unsupported_input",
+            Some("context_unsupported".into()),
+        ));
+        let notice = call_notice(&refused);
+        assert!(
+            notice.contains("finished: failed, error unsupported_input. ")
+                && notice.contains("not a directory")
+                && !notice.contains("/srv"),
+            "{notice}"
+        );
+        let view = super::super::coordinator::envelope(&refused);
+        assert!(
+            view["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("not a directory")
+        );
+        assert_eq!(view["error"]["detail"], "context_unsupported");
+        assert!(
+            super::super::coordinator::envelope(&failed)["error"]
+                .get("hint")
+                .is_none()
         );
         failed.state = State::Cancelled;
         failed.error = None;

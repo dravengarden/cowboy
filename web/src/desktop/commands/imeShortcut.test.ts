@@ -11,9 +11,11 @@ const hostSource = await readFile(
 const providerSource = await readFile(
   new URL("./DesktopCommandProvider.tsx", import.meta.url), "utf8",
 );
-const topBarSource = await readFile(
-  new URL("../DesktopTopBarControls.tsx", import.meta.url), "utf8",
-);
+// The Run configuration keymap moved beside its dialog.
+const topBarSource = (await Promise.all([
+  "../DesktopTopBarControls.tsx",
+  "../runConfigNavigation.ts",
+].map((path) => readFile(new URL(path, import.meta.url), "utf8")))).join("\n");
 const transcriptSource = await readTranscriptSource();
 const exploreSource = await readFile(
   new URL("../../explore/ExploreSurface.tsx", import.meta.url), "utf8",

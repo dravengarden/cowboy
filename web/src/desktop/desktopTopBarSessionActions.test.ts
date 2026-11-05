@@ -70,13 +70,16 @@ test("Compact, Clear and Stop leave the Top bar for the Prompt", () => {
   const send = toolbarSource.indexOf('data-composer-action="send"');
   assert(schedule >= 0 && compact > schedule && clear > compact);
   assert(stop > clear && send > stop);
-  assert(toolbarSource.includes("key: DESKTOP_WORKSPACE_KEYS.promptCompact"));
-  assert(toolbarSource.includes("key: DESKTOP_WORKSPACE_KEYS.promptClear"));
+  // Compact and Clear are Prompt-scoped chords, not a leader group.
+  assert(toolbarSource.includes("shortcut: DESKTOP_SHORTCUTS.compact"));
+  assert(toolbarSource.includes("shortcut: DESKTOP_SHORTCUTS.clear"));
   assert(toolbarSource.includes("shortcut: DESKTOP_SHORTCUTS.stop"));
   assert(sessionActionsSource.includes("await resetSession(sessionId)"));
   assert(sessionActionsSource.includes('id: "prompt.compact"'));
   assert(sessionActionsSource.includes('id: "prompt.clear"'));
-  assert(sessionActionsSource.includes("leaderAnywhere: true"));
+  assert(!sessionActionsSource.includes("leaderAnywhere: true"));
+  assert(sessionActionsSource.includes('regions: ["prompt.composer"]'));
+  assert(sessionActionsSource.includes("...PROMPT_SCOPE"));
 });
 
 test("desktop session actions share compact geometry without duplicate context text", () => {

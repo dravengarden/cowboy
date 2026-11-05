@@ -119,7 +119,8 @@ test("workspace sequence preempts idle IME markers but not real composition", ()
 test("every prefix continuation has one stable command meaning", () => {
   assertEquals(DESKTOP_WORKSPACE_COMMANDS, {
     s: "group:s",
-    p: "group:p",
+    p: "workspace.focusPrompt",
+    i: "workspace.insertPrompt",
     t: "group:t",
     c: "workspace.focusConversation",
     v: "conversation.toggleReview",
@@ -144,7 +145,6 @@ test("every prefix continuation has one stable command meaning", () => {
     ".": "sync.retry",
     r: "item.rename",
     o: "session.recent",
-    i: "undo.history",
     " ": "session.switch",
     tab: "session.alternate",
     k: "commandPalette.open",

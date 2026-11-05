@@ -7,15 +7,22 @@
 // grammar, where `H/L` set the value of what the cursor is on (a switch off
 // or on, a disclosure closed or open) before moving beside it.
 
+import { type RefObject, useEffect } from "react";
 import {
+  enterModalNormal,
   focusModalStop,
   isModalTextField,
   modalRows,
   modalStops,
 } from "./commands/modalNavigation";
+import { desktopImeOwnsKey } from "./commands/imeShortcut";
+import { regionMotionKey } from "./commands/regionNavigation";
+import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import {
   nextRunConfigChoiceIndex,
   type RunConfigKeyAction,
+  runConfigKeyAction,
+  runConfigMotionAction,
 } from "./runConfigKeyboard";
 
 /** Dispatched on a `[data-config-row]` whose control is a Select: the row
@@ -99,11 +106,15 @@ export function paneFields(pane: HTMLElement): Field[] {
   ];
   const box = ({ element }: Item): DOMRect =>
     (isModalTextField(element)
-      ? element.closest<HTMLElement>(".MuiFormControl-root, .MuiInputBase-root") ??
+      ? element.closest<HTMLElement>(
+        ".MuiFormControl-root, .MuiInputBase-root",
+      ) ??
         element
       : element).getBoundingClientRect();
   return modalRows(items, box).flatMap((row): Field[] => {
-    const loose = row.filter((item) => !item.config).map((item) => item.element);
+    const loose = row.filter((item) => !item.config).map((item) =>
+      item.element
+    );
     return [
       ...row.filter((item) => item.config).map((item) => ({
         element: item.element,
@@ -138,9 +149,11 @@ function focusField(field: Field, from: HTMLElement | null): void {
     return;
   }
   const x = from ? centreX(from) : null;
-  const stop = x === null ? field.stops[0]! : field.stops.reduce((best, next) =>
-    Math.abs(centreX(next) - x) < Math.abs(centreX(best) - x) ? next : best
-  );
+  const stop = x === null
+    ? field.stops[0]!
+    : field.stops.reduce((best, next) =>
+      Math.abs(centreX(next) - x) < Math.abs(centreX(best) - x) ? next : best
+    );
   focusModalStop(stop);
 }
 
@@ -177,9 +190,10 @@ function changeLoose(
   active: HTMLElement | null,
   delta: -1 | 1,
 ): void {
-  const current = field.stops.find((stop) =>
-    active !== null && (stop === active || stop.contains(active))
-  ) ?? field.stops[0]!;
+  const current =
+    field.stops.find((stop) =>
+      active !== null && (stop === active || stop.contains(active))
+    ) ?? field.stops[0]!;
   const want = delta > 0;
   const checked = switchState(current);
   if (checked !== null && checked !== want) {
@@ -390,4 +404,112 @@ export function runConfigKey(
   if (field.config) return changeConfig(field.element, action.delta, false);
   changeLoose(field, index < 0 ? null : active, action.delta);
   return true;
+}
+
+/** The panel's keymap while the dialog is open: the cursor starts on the
+ *  first field and keys resolve through `runConfigKey`. */
+export function useRunConfigKeyboard(
+  open: boolean,
+  panelRef: RefObject<HTMLDivElement | null>,
+): void {
+  useEffect(() => {
+    if (!open) return undefined;
+    // Open on the first field, the presets when they exist. Provider options
+    // and presets can arrive a moment after the dialog, so keep following
+    // the first field until the user moves.
+    let settled = false;
+    let tries = 0;
+    let focusFirst = 0;
+    const placeCursor = (): void => {
+      const firstRow = panelRef.current?.querySelector<HTMLElement>(
+        "[data-config-row]",
+      );
+      if (firstRow && !firstRow.contains(document.activeElement)) {
+        focusConfigRow(firstRow);
+      }
+      tries += 1;
+      if (!settled && tries < 90) {
+        focusFirst = requestAnimationFrame(placeCursor);
+      }
+    };
+    focusFirst = requestAnimationFrame(placeCursor);
+    const settle = (): void => {
+      settled = true;
+    };
+    globalThis.addEventListener("pointerdown", settle, true);
+    const untrack = trackRunConfigCursor(() => panelRef.current);
+    const onKeyDown = (event: KeyboardEvent): void => {
+      settled = true;
+      if (desktopImeOwnsKey(event)) return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      // A picker, menu or nested dialog above the panel keeps its own keys.
+      if (document.querySelector("[role='listbox']") !== null) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      // The dialog's frame (or the body) holds focus when the control under
+      // the cursor was disabled; the panel still owns the key.
+      if (target && !panel.contains(target) && !target.contains(panel)) {
+        return;
+      }
+      // A region with its own keymap (the session tree, its search) keeps
+      // every key but the pane motions that leave it.
+      const region = target?.closest<HTMLElement>(RUN_CONFIG_OWN_KEYS);
+      if (
+        target && region && panel.contains(region) &&
+        // The Normal cursor on a text field sits on its box, not inside.
+        !target.hasAttribute("data-desktop-field-cursor")
+      ) {
+        const regionMotion = regionMotionKey(event);
+        const key = workspaceCommandKey(event);
+        const leave = regionMotion !== null
+          ? runConfigMotionAction(regionMotion)
+          : !isModalTextField(target) && !event.metaKey && !event.ctrlKey &&
+              !event.altKey && (key === "[" || key === "]")
+          ? runConfigKeyAction(key)
+          : null;
+        if (leave === null || !runConfigKey(panel, leave)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      // Insert: a text field owns every key; Esc leaves it for Normal.
+      if (target && isModalTextField(target)) {
+        const escape = (event.key === "Escape" && !event.ctrlKey &&
+          !event.metaKey && !event.altKey && !event.shiftKey) ||
+          (event.ctrlKey && event.code === "BracketLeft");
+        if (!escape) return;
+        enterModalNormal(target);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (
+        event.code === "Enter" && !event.metaKey && !event.ctrlKey &&
+        !event.altKey && target instanceof HTMLInputElement &&
+        target.type === "checkbox"
+      ) {
+        target.click();
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      const motion = regionMotionKey(event);
+      if (motion === null && (event.metaKey || event.ctrlKey || event.altKey)) {
+        return;
+      }
+      const action = motion !== null
+        ? runConfigMotionAction(motion)
+        : runConfigKeyAction(workspaceCommandKey(event));
+      if (action === null || !runConfigKey(panel, action)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    globalThis.addEventListener("keydown", onKeyDown, true);
+    return (): void => {
+      cancelAnimationFrame(focusFirst);
+      globalThis.removeEventListener("pointerdown", settle, true);
+      untrack();
+      globalThis.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [open, panelRef]);
 }

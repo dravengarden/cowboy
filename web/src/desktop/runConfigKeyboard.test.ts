@@ -8,7 +8,7 @@ import {
 } from "./runConfigKeyboard.ts";
 
 const controlsSource = await readFile(
-  new URL("./DesktopTopBarControls.tsx", import.meta.url), "utf8",
+  new URL("./RunConfigurationDialog.tsx", import.meta.url), "utf8",
 );
 const navigationSource = await readFile(
   new URL("./runConfigNavigation.ts", import.meta.url), "utf8",
@@ -75,10 +75,10 @@ test("run configuration shortcuts apply choices instead of only moving focus", (
     true,
   );
   assertEquals(
-    controlsSource.includes('directConfigShortcuts.join("/")'),
+    controlsSource.includes('direct.join("/")'),
     true,
   );
-  assertEquals(controlsSource.includes("focusConfigRow(firstRow)"), true);
+  assertEquals(navigationSource.includes("focusConfigRow(firstRow)"), true);
 });
 
 test("run configuration fills the window as side-by-side panes", () => {

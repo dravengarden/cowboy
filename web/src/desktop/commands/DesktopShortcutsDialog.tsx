@@ -48,12 +48,20 @@ const NAVIGATION: ShortcutRow[] = [
     title: "New folder / Move pick / Organize by project",
     description: "Move pick darkens the page and letters every folder; press one to file the focused row (else the current item) there, Esc to leave. M on a row starts it too",
   },
-  { keys: [DESKTOP_FOCUS_PROMPT_SHORTCUT], title: "Focus Message the Agent" },
+  {
+    keys: [DESKTOP_FOCUS_PROMPT_SHORTCUT],
+    title: "Focus Message the Agent",
+    description: "Keeps its Vim mode and caret",
+  },
+  {
+    keys: [DESKTOP_SHORTCUTS.insertPrompt],
+    title: "Write to the agent: the Prompt in Insert at its caret",
+  },
   {
     keys: [DESKTOP_SHORTCUTS.compact, DESKTOP_SHORTCUTS.clear],
     title: "Compact / Clear the conversation",
     description:
-      "The Prompt group runs from any focus; both buttons sit in the Prompt's delivery row and confirm first",
+      "While the Prompt owns focus, its editor included; both confirm first",
   },
   { keys: [DESKTOP_FOCUS_PLAN_SHORTCUT], title: "Focus Plan" },
   { keys: [DESKTOP_FOCUS_CALLS_SHORTCUT], title: "Open the running call, or open or close Calls" },

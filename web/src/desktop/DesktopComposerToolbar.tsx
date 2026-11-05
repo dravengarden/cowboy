@@ -1,3 +1,4 @@
+import { desktopComposerToolbarSx } from "./composerToolbarLayout";
 import {
   type ReactNode,
   type RefObject,
@@ -264,68 +265,7 @@ export function DesktopComposerToolbarView(
   return (
     <Box
       data-desktop-composer-toolbar
-      sx={{
-        containerType: "inline-size",
-        containerName: "composer-tools",
-        flexShrink: 0,
-        minWidth: 0,
-        borderTop: 1,
-        borderColor: "divider",
-        color: "text.secondary",
-        "& [data-composer-action-label]": { display: "none" },
-        "& [data-format-tier]": { display: "none" },
-        "@container composer-tools (min-width: 32rem)": {
-          "& [data-format-tier='primary']": { display: "inline-flex" },
-        },
-        "@container composer-tools (min-width: 42rem)": {
-          "& [data-format-tier='secondary']": { display: "inline-flex" },
-          "& [data-composer-delivery] [data-composer-action-label]": {
-            display: "inline",
-          },
-        },
-        "@container composer-tools (min-width: 56rem)": {
-          "& [data-composer-insert] [data-composer-action-label], & [data-composer-action='source'] [data-composer-action-label]":
-            { display: "inline" },
-        },
-        // Compact and Clear fold into one menu where the row cannot hold
-        // them on one line; their keys work either way. Their words come
-        // last, after Draft, Schedule and Stop have theirs.
-        // A narrow pane sheds keycaps before it wraps: first Stop's (the
-        // status line shows Mod+. while a turn runs) and the conversation
-        // menu's (the Prompt header shows the group), then Draft's and
-        // Schedule's. Keys stay in tooltips and keep working; Send keeps its.
-        "& [data-composer-delivery] :is([data-composer-action='stop'], [data-composer-action='conversation']) kbd":
-          { display: "none" },
-        "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='schedule']) kbd":
-          { display: "none" },
-        // The narrowest row keeps the gauge and drops its number.
-        "& [data-session-overflow] [data-context-reading]": { display: "none" },
-        "@container composer-tools (min-width: 22rem)": {
-          "& [data-session-overflow] [data-context-reading]": {
-            display: "inline",
-          },
-        },
-        "@container composer-tools (min-width: 26rem)": {
-          "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='schedule']) kbd":
-            { display: "inline-flex" },
-        },
-        "@container composer-tools (min-width: 28rem)": {
-          "& [data-composer-delivery] :is([data-composer-action='stop'], [data-composer-action='conversation']) kbd":
-            { display: "inline-flex" },
-        },
-        "& [data-session-inline]": { display: "none" },
-        "& [data-session-overflow]": { display: "inline-flex" },
-        "& [data-composer-delivery] [data-session-inline] [data-composer-action-label]":
-          { display: "none" },
-        "@container composer-tools (min-width: 34rem)": {
-          "& [data-session-inline]": { display: "contents" },
-          "& [data-session-overflow]": { display: "none" },
-        },
-        "@container composer-tools (min-width: 60rem)": {
-          "& [data-composer-delivery] [data-session-inline] [data-composer-action-label]":
-            { display: "inline" },
-        },
-      }}
+      sx={desktopComposerToolbarSx}
     >
       <DesktopComposerCommandBindings
         sendable={ready}
@@ -532,8 +472,7 @@ export function DesktopComposerToolbarView(
                 }),
                 label: "Compact",
                 title: session.compact.title,
-                key: DESKTOP_WORKSPACE_KEYS.promptCompact,
-                anywhere: true,
+                shortcut: DESKTOP_SHORTCUTS.compact,
                 disabled: session.compact.running,
                 reason: "Compacting…",
                 onClick: session.compact.open,
@@ -543,8 +482,7 @@ export function DesktopComposerToolbarView(
                 icon: <CleaningServicesOutlined />,
                 label: "Clear",
                 title: "Clear conversation · start with a fresh context",
-                key: DESKTOP_WORKSPACE_KEYS.promptClear,
-                anywhere: true,
+                shortcut: DESKTOP_SHORTCUTS.clear,
                 tone: "error-hover",
                 onClick: session.clear.open,
               })}
@@ -552,12 +490,7 @@ export function DesktopComposerToolbarView(
           )}
           {(session.compact || session.clear) && (
             <Box data-session-overflow>
-              <HintTooltip
-                title="Compact or clear the conversation"
-                shortcut={desktopWorkspaceSequence(
-                  DESKTOP_WORKSPACE_KEYS.focusPrompt,
-                )}
-              >
+              <HintTooltip title="Compact or clear the conversation">
                 <Button
                   aria-label="Conversation actions"
                   aria-haspopup="menu"
@@ -595,13 +528,6 @@ export function DesktopComposerToolbarView(
                       </>
                     )
                     : <MoreVert />}
-                  <LeaderKeycap
-                    leaderKey={DESKTOP_WORKSPACE_KEYS.focusPrompt}
-                    scopeAvailable={prefixAvailable}
-                    {...(sessionAnchor
-                      ? { availability: "active" as const }
-                      : {})}
-                  />
                 </Button>
               </HintTooltip>
             </Box>

@@ -22,8 +22,9 @@ focus: `␣T` opens the Top bar group and the next key runs Run Configuration
 while a newer compatible release waits) or Reload (`L`) directly; each
 control shows its `␣TR`-style slot. Compact, Clear and Stop act on the
 conversation the Prompt writes into, so they sit in the Prompt's delivery row
-(Draft, Schedule | Compact, Clear … Stop, Send): `␣PC` and `␣PX` run them
-from any focus, `Mod+.` stops from anywhere, and Stop stays mounted, only
+(Draft, Schedule | Compact, Clear … Stop, Send): `Mod+Shift+.` and
+`Mod+Shift+L` run them only while the Prompt owns focus (its editor
+included; their keycaps light only then), `Mod+.` stops from anywhere, and Stop stays mounted, only
 disabled while no turn runs, so the row never moves. Focusing
 the bar (`␣TT`, or Ctrl-K from a pane) is mutually exclusive with Sessions and
 Prompt: pane-header chrome clears, the bar itself takes the shared focus fill
@@ -101,16 +102,16 @@ and in a queued-message editor), and the focused one runs.
 | `␣␣` | Switch session: rows get letter labels (home row first, flat displayed order); press one to open it and land in Prompt |
 | `␣⇥` | Previous Session or Draft (Alt-Tab) |
 | `␣O` | Recent: the jump list of opened Sessions and Drafts (see "Recent") |
-| `␣I` | Undo history: this device's undoable changes from the last 24 hours |
 | `␣[` `␣]` | Previous, next tab (see "Tabs") |
 | `␣1`…`␣9` | Open the nth tab (a pending approval takes the digits; see "Tabs") |
 | `␣B` + `D/O/R/L/A` `P/K/U` `<` `>` | Tabs group: close this, others, right, left, all; pin, keep, reopen; move |
 | `␣R` | Rename the current Session (a Draft's name is its title, `␣T`) |
 | `␣N` | Create (Session / Draft / Folder) |
 | `␣K` | Command Palette |
-| `␣P` + `P/C/X` | Prompt group: `P` focuses the Prompt; compact, clear the conversation (each confirms) |
+| `␣P` | Focus the Prompt as it was (Vim mode and caret kept) |
+| `␣I` | The Prompt in Insert at its caret, ready to type (Vim's `i`; without Vim, focus) |
 | `␣C` | Focus Conversation |
-| `␣S` + `S/Z/N/M/P` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project |
+| `␣S` + `S/Z/N/M/P/U` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project; `U` is Undo history, this device's undoable changes from the last 24 hours (LazyVim's `<leader>su`) |
 | `␣T` + `R/U/A/N/L/T` | Top bar group: run config, usage, verify, Provider update (only while one is available), reload; `T` focuses the bar |
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
 | `␣G` | Open Background tasks: the subagents and calls this session started (with the previous Calls panel restored: open or close Calls) |

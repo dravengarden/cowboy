@@ -1,3 +1,4 @@
+import { useDesktopInsertCommand } from "../editorInsert";
 import { OPEN_BACKGROUND_TASKS_EVENT } from "../../backgroundTaskInspectorState";
 import { desktopSize } from "../../surface/desktopSize";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -104,6 +105,7 @@ export function DesktopCommandHost({
 }): React.JSX.Element {
   const registry = useDesktopCommands();
   const workspace = useDesktopWorkspace();
+  useDesktopInsertCommand(draftOpen, workspace.focusRegion);
   const leader = useDesktopLeaderOptional();
   const leaderRef = useRef(leader);
   leaderRef.current = leader;
@@ -348,11 +350,7 @@ export function DesktopCommandHost({
       title: draftOpen ? "Focus Draft" : "Focus Message the Agent",
       description: "Return to the editor without changing its Vim mode or caret",
       group: "Workspace",
-      sequence: [
-        DESKTOP_WORKSPACE_PREFIX,
-        DESKTOP_WORKSPACE_KEYS.focusPrompt,
-        DESKTOP_WORKSPACE_KEYS.focusPrompt,
-      ],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusPrompt),
       run: () => workspace.focusRegion("prompt.composer"),
     },
     {
