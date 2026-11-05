@@ -1,0 +1,419 @@
+[
+  {
+    "name": "auth_activity",
+    "value": {
+      "type": "auth_activity"
+    }
+  },
+  {
+    "name": "connection_probe",
+    "value": {
+      "type": "connection_probe",
+      "nonce": 7
+    }
+  },
+  {
+    "name": "new_session",
+    "value": {
+      "type": "new_session",
+      "provider": "codex",
+      "cwd": "/work"
+    }
+  },
+  {
+    "name": "prompt",
+    "value": {
+      "type": "prompt",
+      "session_id": "s",
+      "text": "hi",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ]
+    }
+  },
+  {
+    "name": "cancel",
+    "value": {
+      "type": "cancel",
+      "session_id": "s"
+    }
+  },
+  {
+    "name": "cancel_subagent",
+    "value": {
+      "type": "cancel_subagent",
+      "session_id": "s",
+      "subagent_session_id": "sub"
+    }
+  },
+  {
+    "name": "cancel_submitted",
+    "value": {
+      "type": "cancel_submitted",
+      "session_id": "s",
+      "cmid": "c"
+    }
+  },
+  {
+    "name": "permission",
+    "value": {
+      "type": "permission",
+      "session_id": "s",
+      "request_id": "r",
+      "option_id": "allow"
+    }
+  },
+  {
+    "name": "delete_session",
+    "value": {
+      "type": "delete_session",
+      "session_id": "s"
+    }
+  },
+  {
+    "name": "trash_items",
+    "value": {
+      "type": "trash_items",
+      "session_ids": [
+        "s"
+      ],
+      "folder_ids": [
+        "f"
+      ]
+    }
+  },
+  {
+    "name": "restore_items",
+    "value": {
+      "type": "restore_items",
+      "session_ids": [
+        "s"
+      ],
+      "folder_ids": [
+        "f"
+      ]
+    }
+  },
+  {
+    "name": "purge_items",
+    "value": {
+      "type": "purge_items",
+      "session_ids": [
+        "s"
+      ],
+      "folder_ids": [
+        "f"
+      ]
+    }
+  },
+  {
+    "name": "rename_session",
+    "value": {
+      "type": "rename_session",
+      "session_id": "s",
+      "title": "T"
+    }
+  },
+  {
+    "name": "sync",
+    "value": {
+      "type": "sync",
+      "state": "queue:s",
+      "id": "op",
+      "name": "open",
+      "args": {
+        "path": "README.md"
+      }
+    }
+  },
+  {
+    "name": "set_config_option_text",
+    "value": {
+      "type": "set_config_option",
+      "session_id": "s",
+      "config_id": "model",
+      "value": "large"
+    }
+  },
+  {
+    "name": "set_config_option_boolean",
+    "value": {
+      "type": "set_config_option",
+      "session_id": "s",
+      "config_id": "fast",
+      "value": true
+    }
+  },
+  {
+    "name": "open_session",
+    "value": {
+      "type": "open_session",
+      "session_id": "s"
+    }
+  },
+  {
+    "name": "reset_session",
+    "value": {
+      "type": "reset_session",
+      "session_id": "s"
+    }
+  },
+  {
+    "name": "submit",
+    "value": {
+      "type": "submit",
+      "session_id": "s",
+      "text": "hi",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ],
+      "cmid": "c",
+      "force": true,
+      "front": true
+    }
+  },
+  {
+    "name": "remove_queued",
+    "value": {
+      "type": "remove_queued",
+      "session_id": "s",
+      "id": "q",
+      "cmid": "c"
+    }
+  },
+  {
+    "name": "edit_queued",
+    "value": {
+      "type": "edit_queued",
+      "session_id": "s",
+      "id": "q",
+      "text": "hi",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ],
+      "cmid": "c"
+    }
+  },
+  {
+    "name": "clear_queue",
+    "value": {
+      "type": "clear_queue",
+      "session_id": "s"
+    }
+  },
+  {
+    "name": "request_send_queued",
+    "value": {
+      "type": "request_send_queued",
+      "session_id": "s",
+      "id": "q"
+    }
+  },
+  {
+    "name": "force_push_queued",
+    "value": {
+      "type": "force_push_queued",
+      "session_id": "s",
+      "id": "q"
+    }
+  },
+  {
+    "name": "queued_to_draft",
+    "value": {
+      "type": "queued_to_draft",
+      "session_id": "s",
+      "id": "q"
+    }
+  },
+  {
+    "name": "set_queue_editing",
+    "value": {
+      "type": "set_queue_editing",
+      "session_id": "s",
+      "id": "q"
+    }
+  },
+  {
+    "name": "set_queue_editing_cleared",
+    "value": {
+      "type": "set_queue_editing",
+      "session_id": "s",
+      "id": null
+    }
+  },
+  {
+    "name": "add_draft",
+    "value": {
+      "type": "add_draft",
+      "session_id": "s",
+      "text": "hi",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ],
+      "cmid": "c"
+    }
+  },
+  {
+    "name": "edit_draft",
+    "value": {
+      "type": "edit_draft",
+      "session_id": "s",
+      "id": "d",
+      "text": "hi",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ],
+      "cmid": "c"
+    }
+  },
+  {
+    "name": "remove_draft",
+    "value": {
+      "type": "remove_draft",
+      "session_id": "s",
+      "id": "d",
+      "cmid": "c"
+    }
+  },
+  {
+    "name": "clear_drafts",
+    "value": {
+      "type": "clear_drafts",
+      "session_id": "s"
+    }
+  },
+  {
+    "name": "activate_draft",
+    "value": {
+      "type": "activate_draft",
+      "session_id": "s",
+      "id": "d",
+      "cmid": "c"
+    }
+  },
+  {
+    "name": "activate_all_drafts",
+    "value": {
+      "type": "activate_all_drafts",
+      "session_id": "s"
+    }
+  },
+  {
+    "name": "schedule_draft",
+    "value": {
+      "type": "schedule_draft",
+      "session_id": "s",
+      "id": "d",
+      "cmid": "c",
+      "text": "hi",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ],
+      "fire_at_ms": 1900000000000,
+      "delivery": "front"
+    }
+  },
+  {
+    "name": "unschedule_draft",
+    "value": {
+      "type": "unschedule_draft",
+      "session_id": "s",
+      "id": "d"
+    }
+  },
+  {
+    "name": "move_draft",
+    "value": {
+      "type": "move_draft",
+      "session_id": "s",
+      "id": "d",
+      "to_session": "t"
+    }
+  },
+  {
+    "name": "reorder_sessions",
+    "value": {
+      "type": "reorder_sessions",
+      "order": [
+        "s",
+        "t"
+      ]
+    }
+  },
+  {
+    "name": "reorder_queue",
+    "value": {
+      "type": "reorder_queue",
+      "session_id": "s",
+      "order": [
+        "q"
+      ]
+    }
+  },
+  {
+    "name": "reorder_drafts",
+    "value": {
+      "type": "reorder_drafts",
+      "session_id": "s",
+      "order": [
+        "d"
+      ]
+    }
+  },
+  {
+    "name": "set_paused",
+    "value": {
+      "type": "set_paused",
+      "session_id": "s",
+      "paused": true
+    }
+  },
+  {
+    "name": "retry_turn",
+    "value": {
+      "type": "retry_turn",
+      "session_id": "s"
+    }
+  },
+  {
+    "name": "set_session_auto_resume",
+    "value": {
+      "type": "set_session_auto_resume",
+      "session_id": "s",
+      "value": true
+    }
+  },
+  {
+    "name": "resume_turn",
+    "value": {
+      "type": "resume_turn",
+      "session_id": "s"
+    }
+  },
+  {
+    "name": "set_setting",
+    "value": {
+      "type": "set_setting",
+      "key": "theme",
+      "value": "dark"
+    }
+  }
+]

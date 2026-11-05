@@ -498,3 +498,40 @@ fn protocol_fixtures_match_the_checked_in_contract() {
     check_contract("event.json", serialized(event_fixtures()));
     check_contract("outbound.json", serialized(outbound_fixtures()));
 }
+
+/// Every web-authored Inbound frame (`web/src/protocol.inbound.fixtures.ts`,
+/// rendered to `contracts/protocol/inbound.json`) must parse, and must not
+/// lose a field the web sets: serde ignores unknown keys, so a renamed field
+/// would otherwise be dropped silently.
+#[test]
+fn web_inbound_fixtures_parse_without_dropping_fields() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("contracts/protocol/inbound.json");
+    let fixtures: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read inbound fixtures"))
+            .expect("inbound fixtures are JSON");
+    let mut tags = std::collections::BTreeSet::new();
+    for fixture in &fixtures {
+        let name = fixture["name"].as_str().expect("fixture name");
+        let value = &fixture["value"];
+        let parsed: crate::core::Inbound = serde_json::from_value(value.clone())
+            .unwrap_or_else(|error| panic!("{name}: Controller rejects the web frame: {error}"));
+        let round_trip = serde_json::to_value(&parsed).expect("serialize inbound");
+        for (key, field) in value.as_object().expect("frame object") {
+            if field.is_null() {
+                continue;
+            }
+            assert_eq!(
+                round_trip.get(key),
+                Some(field),
+                "{name}: the Controller drops or changes field {key}"
+            );
+        }
+        tags.insert(value["type"].as_str().expect("frame tag").to_owned());
+    }
+    assert_eq!(
+        tags,
+        rust_tags("Inbound"),
+        "every Inbound variant needs a web fixture"
+    );
+}

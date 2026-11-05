@@ -59,7 +59,33 @@ export function render(
   return lines.join("\n");
 }
 
+/** Web-authored Inbound frames, rendered for the Controller's parse test. */
+export const INBOUND_OUTPUT = "contracts/protocol/inbound.json";
+
+export async function renderInbound(): Promise<string> {
+  const { inboundFixtures } = await import(
+    "../web/src/protocol.inbound.fixtures.ts"
+  );
+  const fixtures = Object.entries(inboundFixtures).map(([name, value]) => ({
+    name,
+    value,
+  }));
+  return `${JSON.stringify(fixtures, null, 2)}\n`;
+}
+
 async function main(argv: string[]): Promise<number> {
+  const inbound = await renderInbound();
+  if (argv.includes("--check")) {
+    const current = await readFile(INBOUND_OUTPUT, "utf8").catch(() => "");
+    if (current !== inbound) {
+      console.error(
+        `${INBOUND_OUTPUT} is out of date; run bun tools/generate-protocol-fixtures.ts`,
+      );
+      return 1;
+    }
+  } else {
+    await writeFile(INBOUND_OUTPUT, inbound);
+  }
   const families = [];
   for (const family of FAMILIES) {
     const fixtures = JSON.parse(
