@@ -236,7 +236,12 @@ pub mod migration_compat;
 pub mod migration_policy;
 #[cfg(all(test, feature = "full"))]
 pub mod protocol_contract;
+// Controller-only: the filtered Machine and code-adapter source closures in
+// flake.nix do not carry these files, so an unconditional declaration breaks
+// their release builds while the full checkout still compiles.
+#[cfg(feature = "full")]
 pub mod task_notifications;
+#[cfg(feature = "full")]
 pub mod web_push;
 
 #[cfg(any(feature = "full", feature = "machine-host"))]
