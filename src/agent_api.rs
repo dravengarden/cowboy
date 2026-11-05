@@ -71,6 +71,7 @@ pub const READ_OPERATIONS: &[&str] = &[
     "code.outline",
     "code.symbols",
     "code.diagnostics",
+    "code.checks",
     "accounts.list",
     "accounts.usage",
     "accounts.login_options",
@@ -86,6 +87,7 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "calls.start",
     "calls.cancel",
     "review.start",
+    "code.check",
     "documents.mutate",
     "preferences.update",
     "accounts.update",
@@ -526,7 +528,7 @@ export interface Cowboy {
 // page_required: pass {limit:50}; an unpaged list above 50 fails instead of truncating.
 "#,
 CODE_SDK: r#"
-export interface Cowboy{code: {search(query:string,q?:object):Promise<unknown>;outline(path:string):Promise<unknown>;symbols(query:string,q?:object):Promise<unknown>;diagnostics(paths:string[]):Promise<unknown>}} // help("code")
+type CodeP=Promise<unknown>;export interface Cowboy{code: {search(q:string,o?:object):CodeP;outline(path:string):CodeP;symbols(q:string,o?:object):CodeP;diagnostics(paths:string[]):CodeP;checks():CodeP}} // help("code")
 "#,
 PREFERENCES_READ_SDK: r#"
 export interface Cowboy {
@@ -568,6 +570,18 @@ export interface Cowboy {
   };
 }
 // not_open/unavailable is never "clean"; last_observed may lag your newest edit. Compile to confirm.
+export type CheckRun = {runId:string;check:string;state:"running"|"passed"|"failed"|"timed_out"|"error";startedAtMs:number;
+  finishedAtMs?:number;exitCode?:number;error?:string;outputTruncated:boolean;truncated:boolean;
+  diagnostics:{path:string;line:number;column:number;severity:"error"|"warning"|"note";code?:string;message:string}[]};
+export interface Cowboy {
+  code: { // declared project checks (.cowboy/checks.json); latest run each, process-local
+    checks(): Promise<{allowed:boolean;declared:{id:string;title:string|null;format:string;timeoutSeconds:number}[];
+      declaration_error:string|null;runs:CheckRun[]}>;
+  };
+}
+// Run one explicitly (runs project code in your execution environment; needs Project language servers on):
+// cowboy_execute({action:"code.check",operation,arguments:{check:"<id>"}}) -> {status:"accepted"|"existing",run}.
+// Then poll code.checks(). A result is evidence for the inputs the command saw, not proof of correctness.
 // symbols: case-insensitive name substring across the worktree, default50/max200.
 // Gitignore-aware; hidden files, binaries, >2MiB files and symlinks are skipped. Smart case unless case_sensitive.
 // limit default100/max200, <=20 per file; line/column are 1-based (UTF-16 column). partial: a bound stopped the scan.

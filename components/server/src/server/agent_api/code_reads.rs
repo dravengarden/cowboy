@@ -10,7 +10,8 @@
 use serde_json::{Value, json};
 
 use super::super::code_api::{
-    ContentSearchParams, content_search, structure_outline, workspace_symbols,
+    CheckStarted, ContentSearchParams, check_runs, content_search, declared_checks, start_check,
+    structure_outline, workspace_symbols,
 };
 use super::super::code_reads::session;
 use super::super::{AppState, CodeReadScope};
@@ -33,6 +34,10 @@ pub(super) async fn read(
         "code.outline" => {
             only_keys(args, &["path"])?;
             Request::Outline(text(args, "path")?)
+        }
+        "code.checks" => {
+            only_keys(args, &[])?;
+            return checks(state, meta).await;
         }
         "code.diagnostics" => {
             only_keys(args, &["paths"])?;
@@ -148,6 +153,56 @@ fn limit(args: &Value) -> Result<Option<usize>, &'static str> {
                 .map_err(|_| "invalid_argument")?
                 .clamp(1, MAX_AGENT_LIMIT),
         )),
+    }
+}
+
+/// Declared checks and the latest run of each. Declarations are read through
+/// the same Session observation as every other code read.
+async fn checks(state: &AppState, meta: &SessionMeta) -> Result<Value, String> {
+    let scope = session::resolve(
+        &state.hub,
+        &state.machine_control,
+        &state.service_id,
+        &meta.id,
+    )
+    .ok_or("unavailable")?;
+    let CodeReadScope::Session(observed) = &scope else {
+        return Err("unavailable".into());
+    };
+    let declared = declared_checks(state, &scope, observed.session().cwd().to_owned()).await;
+    if !session::current(&state.hub, &state.machine_control, observed) {
+        return Err("code_context_changed".into());
+    }
+    Ok(json!({
+        "allowed": state.hub.language_servers_allowed(&meta.id),
+        "declared": declared.as_ref().map(|checks| checks.iter().map(|check| json!({
+            "id": check.id, "title": check.title, "format": check.format,
+            "timeoutSeconds": check.timeout().as_secs(),
+        })).collect::<Vec<_>>()).unwrap_or_default(),
+        "declaration_error": declared.err(),
+        "runs": check_runs(&meta.id),
+    }))
+}
+
+/// Explicitly run one declared check (`cowboy_execute` action `code.check`).
+/// The same operation observes its run instead of starting another.
+pub(super) async fn check(
+    state: &std::sync::Arc<AppState>,
+    meta: &SessionMeta,
+    args: &Value,
+    operation: &str,
+) -> Result<Value, &'static str> {
+    only_keys(args, &["check"]).map_err(|_| "invalid_argument")?;
+    let check = args
+        .get("check")
+        .and_then(Value::as_str)
+        .ok_or("invalid_argument")?;
+    match start_check(state, &meta.id, check, operation).await {
+        Ok(CheckStarted::New(run)) => Ok(json!({"status":"accepted","run":run})),
+        Ok(CheckStarted::Existing(run)) => Ok(json!({"status":"existing","run":run})),
+        Err(error) if error.starts_with("restricted") => Err("restricted"),
+        Err(error) if error.starts_with("no declared check") => Err("not_found"),
+        Err(_) => Err("unavailable"),
     }
 }
 
