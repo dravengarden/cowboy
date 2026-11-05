@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import {
@@ -7,13 +6,10 @@ import {
   sessionSettingsFocusFromEvent,
   sessionSettingsEventMatches,
 } from "./sessionSettingsOpen.ts";
+import { readComposerSource, readTranscriptSource } from "./appSource.test.ts";
 
-const transcriptSource = await readFile(
-  new URL("Transcript.tsx", import.meta.url), "utf8",
-);
-const composerSource = await readFile(
-  new URL("Composer.tsx", import.meta.url), "utf8",
-);
+const transcriptSource = await readTranscriptSource();
+const composerSource = await readComposerSource();
 
 test("empty-state chips open the session settings switcher", () => {
   assertEquals(
