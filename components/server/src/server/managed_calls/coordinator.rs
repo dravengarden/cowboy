@@ -346,9 +346,49 @@ pub(super) fn envelope(record: &Record) -> Value {
         "usage": record.summary().usage,
         "reused_from": record.summary().reused_from,
         "cancel_requested": record.cancel_requested_at_ms.is_some(),
-        "error": record.error,
+        "error": error_view(record.error.as_ref()),
         "next": next,
     })
+}
+
+/// How to correct a call the target refused before any agent ran. Fixed
+/// text keyed by refusal detail: it never echoes the caller's paths, but an
+/// agent can fix its input in one retry instead of guessing.
+pub(in crate::server) fn input_hint(detail: &str) -> Option<&'static str> {
+    Some(match detail {
+        "context_unsupported" => {
+            "every files entry must be a regular file inside root, not a directory or a symlink; list a directory's files one by one"
+        }
+        "context_unreadable" => {
+            "a files entry does not exist under root on the target machine; pass existing paths relative to root"
+        }
+        "source_unavailable" => {
+            "root must be an existing Git worktree inside a workspace this session may read"
+        }
+        "subdirectory_unsupported" => {
+            "root must be the top of a Git worktree (git rev-parse --show-toplevel), not a subdirectory"
+        }
+        "not_a_repository" => "root must be a Git worktree",
+        "unborn_head" => "root needs at least one commit",
+        "submodule_unsupported" => {
+            "the worktree contains a submodule, which a snapshot cannot carry"
+        }
+        "symlink_unsupported" => {
+            "the worktree contains a symlink pointing outside root, which a snapshot cannot carry"
+        }
+        _ => return None,
+    })
+}
+
+fn error_view(error: Option<&crate::managed_calls::lifecycle::CallError>) -> Value {
+    let Some(error) = error else {
+        return Value::Null;
+    };
+    let mut value = json!(error);
+    if let Some(hint) = error.detail.as_deref().and_then(input_hint) {
+        value["hint"] = json!(hint);
+    }
+    value
 }
 
 /// Handle one forwarded gateway action.
