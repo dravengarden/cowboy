@@ -7,6 +7,7 @@ import {
 } from "react";
 import { EditorPluginToolbar } from "../editorPlugins/EditorPluginToolbar";
 import {
+  alpha,
   Box,
   Button,
   CircularProgress,
@@ -20,17 +21,18 @@ import {
 import {
   AlternateEmail,
   AttachFile,
-  CleaningServices,
+  CleaningServicesOutlined,
+  Compress,
   EditNoteOutlined,
   MoreHoriz,
   MoreVert,
+  KeyboardArrowUp,
   RawOn,
   Schedule,
   Send,
   Stop,
 } from "@mui/icons-material";
 import type { ComposerEditorHandle } from "../ComposerEditor";
-import { CompactIcon } from "../Composer";
 import type { Status } from "../protocol";
 import {
   COMPOSER_COMMANDS,
@@ -54,7 +56,10 @@ import {
 } from "./commands/workspaceShortcuts";
 import { useImeStatus } from "./vim/imeStatusStore";
 import { desktopToolbarActionSx } from "./desktopToolbarAction";
-import { useDesktopSessionActions } from "./useDesktopSessionActions";
+import {
+  type DesktopSessionActions,
+  useDesktopSessionActions,
+} from "./useDesktopSessionActions";
 
 const QUICK_FORMATS = ["bold", "italic", "code", "link", "bulletList"];
 const FORMAT_COMMANDS = COMPOSER_COMMANDS.filter((command) =>
@@ -90,6 +95,18 @@ export interface DesktopComposerToolbarProps {
 export function DesktopComposerToolbar(
   props: DesktopComposerToolbarProps,
 ): React.JSX.Element {
+  const session = useDesktopSessionActions(props.sessionId, props.status);
+  return <DesktopComposerToolbarView {...props} session={session} />;
+}
+
+/** The toolbar for already resolved conversation actions (fixtures render it
+ *  directly, with a Compact reading the catalog would otherwise supply). */
+export function DesktopComposerToolbarView(
+  props: Omit<DesktopComposerToolbarProps, "sessionId" | "status"> & {
+    session: DesktopSessionActions;
+  },
+): React.JSX.Element {
+  const { session } = props;
   const workspace = useDesktopWorkspace();
   const sourceMode = useComposerSourceMode();
   const composing = useImeStatus().phase === "composing";
@@ -116,7 +133,6 @@ export function DesktopComposerToolbar(
   const scoped = workspace.focusedRegion === "prompt.composer" &&
     prefixAvailable;
   const sourceScope = workspace.focusedPane === "prompt" && prefixAvailable;
-  const session = useDesktopSessionActions(props.sessionId, props.status);
   const ready = props.sendable && !props.pending;
   const deliveryReason = props.pending
     ? "Saving this prompt…"
@@ -142,6 +158,8 @@ export function DesktopComposerToolbar(
     pressed,
     anywhere = false,
     tone,
+    reading,
+    held = false,
   }: {
     id: string;
     icon: ReactNode;
@@ -158,6 +176,11 @@ export function DesktopComposerToolbar(
     anywhere?: boolean;
     /** Error marks Stop, and Clear on hover. */
     tone?: "error" | "error-hover";
+    /** A short value that stays visible at every width (Compact's 51%). */
+    reading?: string;
+    /** Keep the slot's width but show nothing: idle Stop, so the row does
+     *  not move when a turn starts. */
+    held?: boolean;
   }): ReactNode => (
     <HintTooltip
       key={id}
@@ -168,13 +191,19 @@ export function DesktopComposerToolbar(
       <Box
         component="span"
         data-format-tier={formatTier}
-        sx={{ display: "inline-flex", flexShrink: 0 }}
+        aria-hidden={held || undefined}
+        sx={{
+          display: "inline-flex",
+          flexShrink: 0,
+          ...(held && { visibility: "hidden" }),
+        }}
       >
         <Button
           data-composer-action={id}
           aria-label={title}
           aria-pressed={pressed}
-          disabled={disabled}
+          disabled={disabled || held}
+          tabIndex={held ? -1 : undefined}
           onPointerDown={(event) => {
             if (event.button === 0) event.preventDefault();
           }}
@@ -196,6 +225,15 @@ export function DesktopComposerToolbar(
           }}
         >
           {icon}
+          {reading && (
+            <Box
+              component="span"
+              data-composer-action-reading
+              sx={{ fontVariantNumeric: "tabular-nums" }}
+            >
+              {reading}
+            </Box>
+          )}
           <Box component="span" data-composer-action-label>{label}</Box>
           {key
             ? (
@@ -260,7 +298,14 @@ export function DesktopComposerToolbar(
           { display: "none" },
         "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='schedule']) kbd":
           { display: "none" },
+        // The narrowest row keeps the gauge and drops its number.
+        "& [data-session-overflow] [data-context-reading]": { display: "none" },
         "@container composer-tools (min-width: 22rem)": {
+          "& [data-session-overflow] [data-context-reading]": {
+            display: "inline",
+          },
+        },
+        "@container composer-tools (min-width: 26rem)": {
           "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='schedule']) kbd":
             { display: "inline-flex" },
         },
@@ -476,12 +521,15 @@ export function DesktopComposerToolbar(
               {session.compact && action({
                 id: "compact",
                 icon: (
-                  <CompactIcon
+                  <ContextGauge
                     used={session.compact.used}
                     size={session.compact.size}
-                    active={session.compact.running}
+                    running={session.compact.running}
                   />
                 ),
+                ...(contextPercent(session.compact) !== null && {
+                  reading: `${String(contextPercent(session.compact))}%`,
+                }),
                 label: "Compact",
                 title: session.compact.title,
                 key: DESKTOP_WORKSPACE_KEYS.promptCompact,
@@ -492,7 +540,7 @@ export function DesktopComposerToolbar(
               })}
               {session.clear && action({
                 id: "clear",
-                icon: <CleaningServices />,
+                icon: <CleaningServicesOutlined />,
                 label: "Clear",
                 title: "Clear conversation · start with a fresh context",
                 key: DESKTOP_WORKSPACE_KEYS.promptClear,
@@ -523,7 +571,30 @@ export function DesktopComposerToolbar(
                   onClick={(event) => setSessionAnchor(event.currentTarget)}
                   sx={desktopToolbarActionSx}
                 >
-                  <MoreVert />
+                  {
+                    /* The context reading travels with the folded actions. */
+                  }
+                  {session.compact
+                    ? (
+                      <>
+                        <ContextGauge
+                          used={session.compact.used}
+                          size={session.compact.size}
+                          running={session.compact.running}
+                        />
+                        {contextPercent(session.compact) !== null && (
+                          <Box
+                            component="span"
+                            data-context-reading
+                            sx={{ fontVariantNumeric: "tabular-nums" }}
+                          >
+                            {contextPercent(session.compact)}%
+                          </Box>
+                        )}
+                        <KeyboardArrowUp sx={{ ml: "-0.125rem" }} />
+                      </>
+                    )
+                    : <MoreVert />}
                   <LeaderKeycap
                     leaderKey={DESKTOP_WORKSPACE_KEYS.focusPrompt}
                     scopeAvailable={prefixAvailable}
@@ -544,11 +615,11 @@ export function DesktopComposerToolbar(
           id: "stop",
           icon: <Stop />,
           label: "Stop",
-          title: session.stop.busy ? "Stop current turn" : "No turn is running",
+          title: "Stop current turn",
           shortcut: DESKTOP_SHORTCUTS.stop,
           anywhere: true,
           tone: "error",
-          disabled: !session.stop.busy,
+          held: !session.stop.busy,
           onClick: session.stop.open,
         })}
         <Tooltip title={ready ? props.sendDescription : deliveryReason}>
@@ -677,6 +748,70 @@ export function DesktopComposerToolbar(
           </MenuItem>
         ))}
       </Menu>
+    </Box>
+  );
+}
+
+function contextPercent(
+  { used, size }: { used: number; size: number },
+): number | null {
+  if (!(size > 0)) return null;
+  return used > 0 ? Math.max(1, Math.round(Math.min(100, used / size * 100))) : 0;
+}
+
+/** Context fullness at the toolbar's icon size and weight: a thin neutral
+ *  ring that turns amber at 70% and red at 90% (the auto-compaction zone).
+ *  The number sits beside it as text, not inside it. */
+function ContextGauge(
+  { used, size, running }: { used: number; size: number; running: boolean },
+): React.JSX.Element {
+  const pct = contextPercent({ used, size });
+  if (running) {
+    return <CircularProgress size="0.875rem" thickness={5} color="inherit" />;
+  }
+  if (pct === null) return <Compress />;
+  const color = pct >= 90
+    ? "error.main"
+    : pct >= 70
+    ? "warning.main"
+    : "text.secondary";
+  return (
+    <Box
+      component="svg"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      sx={(theme) => ({
+        width: "0.875rem",
+        height: "0.875rem",
+        flexShrink: 0,
+        color,
+        "& .context-gauge-track": {
+          stroke: alpha(theme.palette.text.secondary, 0.42),
+        },
+      })}
+    >
+      <circle
+        className="context-gauge-track"
+        cx="8"
+        cy="8"
+        r="6.25"
+        fill="none"
+        strokeWidth="1.75"
+      />
+      {pct > 0 && (
+        <circle
+          cx="8"
+          cy="8"
+          r="6.25"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap={pct < 100 ? "round" : undefined}
+          pathLength="100"
+          strokeDasharray={pct < 100 ? `${pct} ${100 - pct}` : undefined}
+          transform="rotate(-90 8 8)"
+        />
+      )}
     </Box>
   );
 }
