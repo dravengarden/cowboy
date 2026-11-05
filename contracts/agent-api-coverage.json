@@ -41,7 +41,6 @@
     "api_machine_plugin_uninstall": "plugins.uninstall",
     "api_machine_plugin_uninstall_plan": "plugins.uninstall_plan",
     "api_machine_plugins": "plugins.installations",
-    "api_machine_provider_inventory_compat": "plugins.installations",
     "api_machine_reconcile": "exception:host — enrollment, revocation, component maintenance and host identity require the owning Machine/Operator CLI.",
     "api_machine_reconcile_one": "exception:host — enrollment, revocation, component maintenance and host identity require the owning Machine/Operator CLI.",
     "api_machine_refresh": "machines.refresh",

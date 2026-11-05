@@ -30,8 +30,7 @@ Controller release, **W** ordinary Web release.
 
 | Path | Site | Keeps working | Exit condition | Proof | Boundary |
 |---|---|---|---|---|---|
-| Protocol-v4 provider inventory route | `server/routes.rs` `/api/machines/{id}/providers`; `machine_api.rs` | v4 inventory clients | Stated: "every supported client consumes protocol-v5 Plugin inventory from `/plugins`" | No caller in `web/src`, `plugins`, `tools` (none today) and no requests in access logs over a retention window | C |
-| Legacy artifact URL | `server/routes.rs` `/provider-artifacts/{digest}/{name}`; `http_policy.rs` | Published pre-Catalog URLs | Stated: "after those immutable URLs age out" | No Catalog or registry `artifact_url` under `/provider-artifacts/`; no access-log hits | C |
+| Legacy artifact URL | `server/routes.rs` `/provider-artifacts/{digest}/{name}`; `http_policy.rs` | Published pre-Catalog URLs | Stated: "after those immutable URLs age out" | No `release.json` of an installed Machine generation names `/provider-artifacts/`. Not met on 2026-11-05: Falcon's installed `claude-code` generations still do. The Controller does not log request paths, so absence of callers cannot come from logs | C |
 | Handshake proof v2 | `machine_protocol.rs` (signs v2 when an older Controller asks) | Older Controllers | Every Controller requests v3 | Controller rollback window past the v3 release | M |
 | `SetDesiredGeneration.worker_command` optional | `runtime_wire.rs` | Older cores in a rolling update | Runtime floor | Raised `MIN_PROTOCOL_VERSION` | M |
 | Launch without `execution_binding` | `runtime_wire.rs` | Unbound workers | Runtime floor ≥ 2 and no unbound session | Floor plus a store query for sessions without a binding | M |
@@ -52,7 +51,7 @@ Controller release, **W** ordinary Web release.
 | Inbound Hub tombstones | `src/core.rs` `SetSessionAutoResume`, `ResumeTurn`, `SetSetting`; `web/src/protocol.ts` | Stale installed PWAs | Stated: accepted and ignored "before it updates" | No such inbound type in client telemetry over a window; service-worker `VERSION` past the retiring release | C+W |
 | Outbound `Settings` tombstone | `src/core.rs`, `server.rs`, `web/src/protocol.ts`, `web/src/store.ts` | Cached clients read an empty snapshot as auto-resume off | As above | As above | C+W |
 | Retired synthetic continuation purge | `src/core.rs`, `src/agent_model.rs` | Rows from older Controllers | No such rows | Store query returns zero | C |
-| `COWBOY_POSTGRES_URL` flag | `src/cli.rs` | Deployed callers | Stated: "while the backend-neutral flag becomes canonical" | No NixOS module or tool sets it | C |
+| `COWBOY_POSTGRES_URL` flag | `src/cli.rs` | Deployed callers | Stated: "while the backend-neutral flag becomes canonical" | No NixOS module or tool sets it (true for Columbus on 2026-11-05). Removal must refuse startup when the variable is set: silently ignoring it would start an external deployment in memory | C |
 | Passkey storage bridge | `src/core_passkeys.rs` | One-time import | Import done everywhere | Reader floor in `core-security-storage-bridge.md` | C |
 | Hostless OIDC | `src/auth_plugins.rs` | Bootstrap migration | Stated: "only during bootstrap migration" | Every host policy is Catalog-only | C |
 | Telemetry legacy admission | `src/telemetry_binding.rs`, `telemetry_binding/background.rs` | Schema-one byte compatibility | Stated: "until the first explicit resolution" | Every deployment's journal has its first row | C |
@@ -100,11 +99,16 @@ retained-worker interface pin and the retired `--compat-socket` guard in
 `themeDefault.ts`, `composerToolbarModel.ts`) protect durable data or
 boundaries and stay.
 
+## Retired
+
+- 2026-11-05: the protocol-v4 `GET /api/machines/{id}/providers` inventory
+  adapter. Every client in the repository reads `/plugins`.
+
 ## Next step
 
 Most rows wait on one decision: a Machine maintenance that raises
 `MIN_MACHINE_PROTOCOL_VERSION` and `MIN_PROTOCOL_VERSION` to what every
 enrolled Machine and the retained worker already speak. The Controller and Web
-rows with stated conditions (the two routes, the `COWBOY_POSTGRES_URL` flag,
+rows with stated conditions (the artifact route, the `COWBOY_POSTGRES_URL` flag,
 the Calls dock rollback after 2026-11-14) can retire independently once their
 proofs are recorded.

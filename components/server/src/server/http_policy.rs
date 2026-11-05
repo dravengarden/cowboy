@@ -314,7 +314,7 @@ pub(super) fn classify_route(method: &Method, path: &str) -> RouteAuth {
         return RouteAuth::ProductOperator;
     }
     if path.starts_with("/api/machines/")
-        && (path.ends_with("/events") || path.ends_with("/plugins") || path.ends_with("/providers"))
+        && (path.ends_with("/events") || path.ends_with("/plugins"))
         && method == Method::GET
     {
         return RouteAuth::Product;

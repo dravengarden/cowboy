@@ -435,59 +435,6 @@ pub(super) async fn api_machine_plugins(
     }
 }
 
-pub(super) async fn api_machine_provider_inventory_compat(
-    State(state): State<Arc<AppState>>,
-    Path(machine_id): Path<String>,
-) -> Response {
-    let Some(store) = state.store.as_ref() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "machine registry unavailable",
-        )
-            .into_response();
-    };
-    match store.list_machines().await {
-        Ok(machines) => {
-            let Some(machine) = machines
-                .into_iter()
-                .find(|machine| machine.id == machine_id && !machine.revoked)
-            else {
-                return (StatusCode::NOT_FOUND, "unknown or revoked Machine").into_response();
-            };
-            let plugins = machine
-                .inventory
-                .get("plugins")
-                .or_else(|| machine.inventory.get("providers"))
-                .and_then(serde_json::Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let providers = plugins
-                .into_iter()
-                .filter_map(|mut plugin| {
-                    let object = plugin.as_object_mut()?;
-                    if object
-                        .get("plugin_kind")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|kind| kind != "agent_provider")
-                    {
-                        return None;
-                    }
-                    if let Some(id) = object.remove("plugin_id") {
-                        object.insert("provider_id".to_owned(), id);
-                    }
-                    if let Some(version) = object.remove("plugin_version") {
-                        object.insert("provider_version".to_owned(), version);
-                    }
-                    object.remove("plugin_kind");
-                    Some(plugin)
-                })
-                .collect::<Vec<_>>();
-            Json(providers).into_response()
-        }
-        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
-    }
-}
-
 pub(super) async fn api_machine_plugin_uninstall_plan(
     State(state): State<Arc<AppState>>,
     Path((machine_id, provider_id)): Path<(String, String)>,

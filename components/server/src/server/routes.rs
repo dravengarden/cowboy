@@ -183,12 +183,6 @@ pub(super) fn machine_routes() -> Router<Arc<AppState>> {
         "/api/machines/{id}/durable-state",
         get(api_machine_durable_state),
     )
-    // Protocol-v4/web compatibility adapter. Delete after every supported
-    // client consumes protocol-v5 Plugin inventory from `/plugins`.
-    .route(
-        "/api/machines/{id}/providers",
-        get(api_machine_provider_inventory_compat),
-    )
     .route("/api/machines/{id}/plugins", get(api_machine_plugins))
     .route(
         "/api/machines/{id}/providers/{provider_id}",
