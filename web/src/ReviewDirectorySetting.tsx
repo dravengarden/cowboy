@@ -99,7 +99,7 @@ export function ReviewDirectorySetting(
             >
               <FolderOpenOutlined fontSize="small" color="primary" />
               <ListItemText
-                primary="Zed default directory"
+                primary="Review directory"
                 secondary={`${
                   effective.value == null
                     ? "Automatic"

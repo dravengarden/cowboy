@@ -242,7 +242,7 @@ export function FolderDefaultsEditor(
               {draft ? "Back to folder" : `${folder.name} defaults`}
             </Button>
             <Typography variant="body2" color="text.secondary">
-              Choose the code directory Zed opens. Sessions inherit this setting
+              Choose the code directory Review opens. Sessions inherit this setting
               unless they override it.
             </Typography>
             <ReviewDirectoryPicker
@@ -443,7 +443,7 @@ export function FolderDefaultsEditor(
             <Typography variant="body2" color="text.secondary">
               {draft
                 ? "New sessions and subfolders inherit these settings."
-                : "Subdirectories inherit these defaults. Agent defaults apply when creating sessions; Zed defaults also follow the directory in existing sessions."}
+                : "Subdirectories inherit these defaults. Agent defaults apply when creating sessions; Review defaults also follow the directory in existing sessions."}
             </Typography>
             {error && <Alert severity="error">{error}</Alert>}
             {presetMismatch && !draft && (

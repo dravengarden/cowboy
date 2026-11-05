@@ -49,7 +49,7 @@ const machines: MachineSummary[] = [{
   }],
 }];
 
-test("Zed defaults inherit live, distinguish Automatic, and follow directory moves", () => {
+test("Review defaults inherit live, distinguish Automatic, and follow directory moves", () => {
   let tree = m.create(EMPTY_SESSION_FOLDERS, {
     id: "root",
     name: "Root",

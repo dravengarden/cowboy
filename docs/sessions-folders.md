@@ -368,7 +368,7 @@ creation does not require a live worker or silently change an unavailable bindin
 
 The existing authenticated CLI is the AI fallback for directory controls:
 `cowboy dir new --defaults`, `dir defaults`, and `dir set` use the same scoped
-writers. Zed browsing defaults additionally expose the typed `zed` preference
+writers. Review directory defaults additionally expose the typed `zed` preference
 scope through MCP; see [Agent API](agent-api.md). This uses an explicit
 acceptance receipt for the existing write-behind queue, not a durable commit
 receipt. Other directory mutations retain their CLI fallback until typed

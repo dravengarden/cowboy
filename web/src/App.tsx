@@ -7079,8 +7079,8 @@ function DesktopAccountTabContent(): React.JSX.Element {
 }
 
 function machineComponentName(component: MachineChoice["components"][number]): string {
-    if (component.id.kind === "zed_server") return "Zed";
-    if (component.id.kind === "zed_adapter") return "Zed adapter";
+    if (component.id.kind === "zed_server") return "Language engine";
+    if (component.id.kind === "zed_adapter") return "Language engine adapter";
     if (component.id.kind === "code_adapter") return "Code adapter";
     if (component.id.kind === "machine_host") return "Machine host";
     if (component.id.kind === "managed_node") return "Managed Node";
@@ -7386,7 +7386,7 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                                             size="small"
                                             variant="outlined"
                                             color={zedComponent?.state === "active" ? "success" : zedComponent?.state === "failed" ? "error" : "default"}
-                                            label={`Zed · ${zedComponent?.state === "active" ? "ready" : zedComponent?.state === "failed" ? "error" : "unavailable"}`}
+                                            label={`Code intelligence · ${zedComponent?.state === "active" ? "ready" : zedComponent?.state === "failed" ? "error" : "unavailable"}`}
                                         />
                                     </Stack>
                             </Stack>

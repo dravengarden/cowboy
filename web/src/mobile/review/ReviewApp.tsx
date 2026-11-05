@@ -4038,7 +4038,7 @@ export function ReviewApp({
           onClose={() => {
             setSessionSwitcherOpen(false);
           }}
-          title={directoryEditing ? "Zed defaults" : selectedContextProject?.label ?? "Context"}
+          title={directoryEditing ? "Review defaults" : selectedContextProject?.label ?? "Context"}
           forceSheet
           cover
           portal

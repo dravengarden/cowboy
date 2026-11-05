@@ -8,19 +8,20 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
 const MAX_CHANGES: usize = 1_000;
-const GIT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const MAX_HISTORY_COMMITS: usize = 128;
 const MAX_COMMIT_FILES: usize = 1_000;
 const MAX_DIFF_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 pub const FILE_PAGE_BYTES: usize = 256 * 1024;
 pub const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
 const LOCAL_PROVIDER_REVISION: &[u8] = b"local-v2-project-projection";
+
+mod git;
+use git::{git_fetch, git_output};
 
 #[cfg(test)]
 mod diff_tests;
@@ -1566,42 +1567,6 @@ fn review_reference(reference: &str) -> Option<String> {
         .map(|tracked| format!("refs/cowboy/review/{tracked}"))
 }
 
-/// A bounded, non-interactive fetch over the repository's configured transport.
-/// Repository config is agent-writable, so `ext::` helpers stay refused.
-fn git_fetch(root: &Path, remote: &str, refspec: &str) -> Result<(), String> {
-    let mut child = Command::new("git")
-        .args(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head"])
-        // Without an empty refmap, Git also moves the remote-tracking ref.
-        .args([
-            "--refmap=",
-            "--no-recurse-submodules",
-            "--",
-            remote,
-            refspec,
-        ])
-        .current_dir(root)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ALLOW_PROTOCOL", "https:ssh:git:file")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("starting git: {error}"))?;
-    let deadline = std::time::Instant::now() + GIT_FETCH_TIMEOUT;
-    loop {
-        match child.try_wait().map_err(|error| error.to_string())? {
-            Some(status) if status.success() => return Ok(()),
-            Some(_) => return Err(format!("could not fetch from {remote}")),
-            None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("fetching from {remote} timed out"));
-            }
-            None => std::thread::sleep(std::time::Duration::from_millis(100)),
-        }
-    }
-}
-
 type LineCounts = std::collections::HashMap<String, (u32, u32)>;
 
 /// `committed:<reference>` stops at `HEAD`; a bare reference runs to the
@@ -1726,37 +1691,6 @@ fn ensure_git_worktree(root: &Path) -> Result<(), String> {
 
 fn git_path_is_tracked(root: &Path, path: &str) -> bool {
     git_output(root, &["ls-files", "--error-unmatch", "--", path], 1024).is_ok()
-}
-
-fn git_output(root: &Path, args: &[&str], limit: usize) -> Result<Vec<u8>, String> {
-    let mut child = Command::new("git")
-        // Review paths identify exact files, including names such as [id].tsx
-        // or :(glob)*.txt. They are never Git pathspec patterns or magic.
-        .arg("--literal-pathspecs")
-        .args(args)
-        .current_dir(root)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("starting git: {error}"))?;
-    let mut stdout = child.stdout.take().ok_or("missing git stdout")?;
-    let mut bytes = Vec::new();
-    stdout
-        .by_ref()
-        .take(limit as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("reading git output: {error}"))?;
-    drop(stdout);
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("waiting for git: {error}"))?;
-    if output.status.success() || bytes.len() == limit {
-        Ok(bytes)
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
-    }
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {

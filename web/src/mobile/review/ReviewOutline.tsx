@@ -294,7 +294,7 @@ export function ReviewOutline({
           : error
           ? (
             <Alert severity="info">
-              Zed could not produce an outline for this file yet.
+              No outline is available for this file yet.
             </Alert>
           )
           : visible.length === 0

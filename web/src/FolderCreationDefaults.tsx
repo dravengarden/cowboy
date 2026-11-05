@@ -89,7 +89,7 @@ export function FolderCreationDefaults({
       ? `Agent on ${machineName(effective.runtime_machine)}`
       : null,
     effective.review_directory !== undefined
-      ? `Zed: ${
+      ? `Review: ${
         reviewDirectoryLabel(effective.review_directory, machines, sessions)
       }`
       : null,

@@ -3424,7 +3424,7 @@ const EMPTY_MOBILE_REVIEW_STATE: MobileReviewState = {
 
 const mobileReviewMutators = {
   setDirectory: (value: MobileReviewState, args: { directory?: string | null; inherit?: boolean }): MobileReviewState => {
-    if ((args.inherit && args.directory !== undefined) || (!args.inherit && args.directory !== null && !validReviewDirectory(args.directory))) throw new Error("Invalid Zed default directory");
+    if ((args.inherit && args.directory !== undefined) || (!args.inherit && args.directory !== null && !validReviewDirectory(args.directory))) throw new Error("Invalid Review directory");
     const next = { ...value };
     if (args.inherit) delete next.directory;
     else if (args.directory !== undefined) return { ...value, directory: args.directory };

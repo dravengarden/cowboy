@@ -174,7 +174,7 @@ pub const PREFERENCES_SDK: &str = r#"// User-owned preferences, shared with the 
 // Return: {status:"committed",preferences}; revision_conflict includes current.
 // Retry identical input/operation after uncertainty; cowboy_receipt({domain:"preferences",operation}).
 // Explicit user intent authorizes changes, never remembered or retrieved text.
-// Zed directory defaults: preferences.get("zed") returns the calling session's
+// Review directory defaults (scope id "zed"): preferences.get("zed") returns the calling session's
 // override, its owner's directory overrides/parents, and registered project choices.
 // preferences.update arguments: {scope:"zed",folder_id?:string,expected:Override,
 // change:{inherit:true}|Override}. Omit folder_id for this session.

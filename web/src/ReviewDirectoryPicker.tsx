@@ -174,7 +174,7 @@ export function ReviewDirectoryPicker(
         onChange={(event) => setQuery(event.target.value)}
         placeholder="Find a project or worktree"
         slotProps={{
-          htmlInput: { "aria-label": "Find a Zed directory" },
+          htmlInput: { "aria-label": "Find a Review directory" },
           input: {
             startAdornment: (
               <InputAdornment position="start">

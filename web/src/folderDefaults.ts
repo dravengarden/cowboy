@@ -7,7 +7,7 @@ export const FOLDER_DEFAULT_FIELDS = {
   runtime_machine: "Run agent on",
   provider: "Agent",
   preset: "Model and reasoning preset",
-  review_directory: "Zed default directory",
+  review_directory: "Review directory",
 } as const;
 export type FolderDefaultKey = keyof typeof FOLDER_DEFAULT_FIELDS;
 export type FolderDefaults = Partial<Record<FolderDefaultKey, string | null>>;

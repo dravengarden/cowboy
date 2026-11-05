@@ -223,6 +223,7 @@
           ./src/logs.rs
           ./src/logs
           ./src/code_review.rs
+          ./src/code_review/git.rs
           ./src/files.rs
           ./src/workspace_roots.rs
           ./src/bin/cowboy-code-adapter.rs

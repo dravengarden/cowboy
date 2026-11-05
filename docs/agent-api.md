@@ -51,7 +51,7 @@ would then remain. Claude and Codex share the same stdio MCP server.
 
 ## Transport and authority
 
-Zed browsing defaults use `cowboy.preferences.schema()` and
+Review directory defaults use `cowboy.preferences.schema()` and
 `cowboy.preferences.get("zed")`. The existing `preferences.update` action
 accepts `{scope:"zed", folder_id?, expected, change}`: omit `folder_id` for the
 calling session, otherwise select an owned directory. Copy its exact `override`
@@ -428,7 +428,7 @@ Writes use one stable identity:
 The adapter invokes existing product handlers/typed command writers. It accepts
 no arbitrary URL, headers, cookies, SQL, shell command or host delegation.
 
-To prepare a session's worktree document in Cowboy Zed, discover
+To prepare a session's worktree document in Review, discover
 `sessions.review_open` and submit a worktree-relative path:
 
 ```json
