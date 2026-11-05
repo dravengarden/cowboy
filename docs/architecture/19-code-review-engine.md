@@ -89,7 +89,12 @@ Today the Controller sends `"trusted": true` for every Session worktree
   switchable off. Browse-only contexts (`workspace::`, `worktree::`, linked
   sessions read without executing) default to **restricted**.
 - **Revocation** (planned native operation; today the Controller only stops
-  using the backend) fences new work, restricts the original backend, and observes
+  using the backend). At the pinned Zed revision `RestrictWorktrees` only
+  records the restriction: `TrustedWorktrees::restrict` emits `Restricted`,
+  and `LspStore` reacts to `Trusted` alone, so running servers keep running.
+  The adapter must therefore remove the worktree (which shuts down servers
+  rooted only there) once its last lease ends, refusing reads meanwhile. It
+  fences new work, restricts the original backend, and observes
   quiescence of its project-code processes. The adapter today only promotes
   Restricted → trusted (`plugins/zed/adapter/src/main.rs`, `ensure_worktree`);
   revocation needs a new private operation.
