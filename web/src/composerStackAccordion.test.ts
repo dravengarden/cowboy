@@ -2,10 +2,9 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import { nextComposerStackExpanded } from "./composerStackAccordion.ts";
+import { readComposerSource } from "./appSource.test.ts";
 
-const composerSource = await readFile(
-  new URL("./Composer.tsx", import.meta.url), "utf8",
-);
+const composerSource = await readComposerSource();
 const planSource = await readFile(
   new URL("./PlanDock.tsx", import.meta.url), "utf8",
 );

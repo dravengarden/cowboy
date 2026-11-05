@@ -5,10 +5,9 @@ import {
   pendingRowMatchesArrival,
   pendingRowRevealDelta,
 } from "./pendingPanelState.ts";
+import { readComposerSource } from "./appSource.test.ts";
 
-const composerSource = await readFile(
-  new URL("./Composer.tsx", import.meta.url), "utf8",
-);
+const composerSource = await readComposerSource();
 const storeSource = await readFile(
   new URL("./store.ts", import.meta.url), "utf8",
 );

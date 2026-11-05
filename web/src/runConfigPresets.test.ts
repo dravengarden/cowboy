@@ -18,6 +18,7 @@ import {
   supportedRunConfigPresets,
   withRunConfigDraft,
 } from "./runConfigPresets";
+import { readComposerSource } from "./appSource.test.ts";
 
 type DeclaredPreset = ProviderUiManifest["configuration"]["presets"][number];
 
@@ -166,9 +167,7 @@ test("another model's reasoning limits do not hide signed recommendations", () =
 const desktopSource = await readFile(
   new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
-const composerSource = await readFile(
-  new URL("./Composer.tsx", import.meta.url), "utf8",
-);
+const composerSource = await readComposerSource();
 const storeSource = await readFile(
   new URL("./store.ts", import.meta.url), "utf8",
 );

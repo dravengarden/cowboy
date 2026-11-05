@@ -9,11 +9,9 @@ import {
   shouldPresentMobileKeyboardSurface,
 } from "./mobileComposerFocus.ts";
 import { mobileComposerStackGap } from "../mobileComposerPrimitives.ts";
-import { readAppSource } from "../appSource.test.ts";
+import { readAppSource, readComposerSource } from "../appSource.test.ts";
 
-const composerSource = await readFile(
-  new URL("../Composer.tsx", import.meta.url), "utf8",
-);
+const composerSource = await readComposerSource();
 const textareaSource = await readFile(
   new URL("../ComposerTextarea.tsx", import.meta.url), "utf8",
 );

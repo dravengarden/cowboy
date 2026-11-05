@@ -1,13 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
+import { readComposerSource } from "../appSource.test.ts";
 
 const topBarSource = await readFile(
   new URL("./DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
-const composerSource = await readFile(
-  new URL("../Composer.tsx", import.meta.url), "utf8",
-);
+const composerSource = await readComposerSource();
 const toolbarSource = await readFile(
   new URL("./DesktopComposerToolbar.tsx", import.meta.url), "utf8",
 );

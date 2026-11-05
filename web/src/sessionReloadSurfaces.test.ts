@@ -1,12 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
-import { readAppSource } from "./appSource.test.ts";
+import { readAppSource, readComposerSource } from "./appSource.test.ts";
 
 const appSource = await readAppSource();
-const composerSource = await readFile(
-  new URL("./Composer.tsx", import.meta.url), "utf8",
-);
+const composerSource = await readComposerSource();
 const dialogSource = await readFile(
   new URL("./SessionReloadDialog.tsx", import.meta.url), "utf8",
 );

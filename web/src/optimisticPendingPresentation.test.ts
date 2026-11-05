@@ -1,11 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
-import { readTranscriptSource } from "./appSource.test.ts";
+import { declarationSource, readComposerSource, readTranscriptSource } from "./appSource.test.ts";
 
-const composer = await readFile(
-  new URL("./Composer.tsx", import.meta.url), "utf8",
-);
+const composer = await readComposerSource();
 const transcript = await readTranscriptSource();
 const previewSource = await readFile(
   new URL("./MessagePreview.tsx", import.meta.url), "utf8",
@@ -48,10 +46,8 @@ test("pending rows show every delivery phase and failed rows offer return-to-hom
 });
 
 test("mobile pending delivery arrows survive a dropped iOS compatibility click", () => {
-  const start = composer.indexOf("function PendingRow(");
-  const end = composer.indexOf("function StopConfirmDialog", start);
-  assert(start >= 0 && end > start);
-  const body = composer.slice(start, end);
+  const body = declarationSource(composer, "PendingRow");
+  assert(body.length > 0);
   assertEquals(body.match(/reliableTouch=\{!desktop\}/g)?.length, 2);
   assert(
     body.includes("networkAction={() => activateDraft(sessionId, message.id)}"),

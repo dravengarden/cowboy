@@ -1,13 +1,16 @@
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import { readFile } from "node:fs/promises";
+import { readComposerSource } from "./appSource.test.ts";
 import {
   COMPOSER_STACK_DISCLOSURE_TIMEOUT,
   swallowStrayDisclosureClick,
 } from "./composerStackDisclosure.ts";
 
 const source = (name: string): Promise<string> =>
-  readFile(new URL(`./${name}`, import.meta.url), "utf8");
+  name === "Composer.tsx"
+    ? readComposerSource()
+    : readFile(new URL(`./${name}`, import.meta.url), "utf8");
 
 test("composer-stack disclosures change height in one step", async () => {
   // A height transition relaid the Transcript on every frame of the 300ms

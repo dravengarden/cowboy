@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
+import { readComposerSource } from "./appSource.test.ts";
 
 /** Comment-free, whitespace-collapsed view: these are assertions about the
  *  STYLE, and the formatter is free to rewrap any of these template literals. */
@@ -99,9 +100,7 @@ test("decision surfaces share their default material with an explicit flat form 
 const consequence = await readFile(
   new URL("./ConfirmConsequence.tsx", import.meta.url), "utf8",
 );
-const composer = await readFile(
-  new URL("./Composer.tsx", import.meta.url), "utf8",
-);
+const composer = await readComposerSource();
 // Desktop Compact and Clear confirm from the Prompt's delivery row.
 const topBar = await readFile(
   new URL("./desktop/useDesktopSessionActions.tsx", import.meta.url), "utf8",

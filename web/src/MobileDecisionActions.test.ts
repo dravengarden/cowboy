@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
-import { declarationSource, readAppSource } from "./appSource.test.ts";
+import { declarationSource, readAppSource, readComposerSource } from "./appSource.test.ts";
 
 const source = await readFile(
   new URL("./MobileDecisionActions.tsx", import.meta.url), "utf8",
@@ -55,9 +55,7 @@ test("mobile new session uses labeled Cancel and Create actions", () => {
 });
 
 test("session title editing uses labeled Cancel and Save actions", async () => {
-  const composerSource = await readFile(
-    new URL("./Composer.tsx", import.meta.url), "utf8",
-  );
+  const composerSource = await readComposerSource();
   const settings = composerSource.slice(
     composerSource.indexOf("function ComposerSheet("),
     composerSource.indexOf("function SessionInfoSection("),

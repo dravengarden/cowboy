@@ -1,16 +1,13 @@
-import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace.ts";
 import { continuationOf, resolveActiveSession } from "./sessionSelection.ts";
 import type { SessionMeta } from "./protocol.ts";
-import { declarationSource, readAppSource, readTranscriptSource } from "./appSource.test.ts";
+import { declarationSource, readAppSource, readComposerSource, readTranscriptSource } from "./appSource.test.ts";
 
 const appSource = await readAppSource();
 const transcriptSource = await readTranscriptSource();
-const composerSource = await readFile(
-  new URL("./Composer.tsx", import.meta.url), "utf8",
-);
+const composerSource = await readComposerSource();
 
 test("a session with its first message on the way drops the setup form", () => {
   assertEquals(transcriptSource.includes("{!committed && <SessionStartSettings"), true);

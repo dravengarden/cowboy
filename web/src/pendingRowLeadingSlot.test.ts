@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 import {
@@ -6,12 +5,14 @@ import {
   mobileComposerPanelHeaderMinHeight,
   mobilePendingRowMinHeight,
 } from "./mobileComposerPrimitives.ts";
+import { readComposerSource } from "./appSource.test.ts";
 
-const source = await readFile(
-  new URL("./Composer.tsx", import.meta.url), "utf8",
-);
+const source = await readComposerSource();
 const start = source.indexOf("{sortable.order.map((id) => {");
-const end = source.indexOf("<Box sx={{ flex: 1, minWidth: 0 }}>", start);
+// The pending rows now end their module; before the split the next marker sat
+// in a later Composer component.
+const marker = source.indexOf("<Box sx={{ flex: 1, minWidth: 0 }}>", start);
+const end = marker === -1 ? source.length : marker;
 const leading = source.slice(start, end);
 
 test("pending rows keep only the reorder grip in their leading slot", () => {

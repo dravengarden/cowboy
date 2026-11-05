@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
+import { readComposerSource } from "./appSource.test.ts";
 
 const composerSurfaceSource = await readFile(
   new URL("./mobileComposerSurface.ts", import.meta.url), "utf8",
@@ -8,9 +9,7 @@ const composerSurfaceSource = await readFile(
 const accessoryDockSource = await readFile(
   new URL("./MobileComposerAccessoryDock.tsx", import.meta.url), "utf8",
 );
-const composerSource = await readFile(
-  new URL("./Composer.tsx", import.meta.url), "utf8",
-);
+const composerSource = await readComposerSource();
 
 test("focused mobile composer chrome shares one themed hairline family", () => {
   assertEquals(

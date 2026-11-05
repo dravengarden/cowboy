@@ -10,6 +10,7 @@ import { assert } from "@std/assert";
 export const SPLIT_SOURCES = {
   "App.tsx": ["./App.tsx", "./SettingsShell.tsx", "./SessionList.tsx"],
   "Transcript.tsx": ["./Transcript.tsx", "./ToolDetailsBrowser.tsx"],
+  "Composer.tsx": ["./Composer.tsx", "./PendingPanel.tsx"],
 } as const;
 
 export async function readSplitSource(
@@ -20,7 +21,11 @@ export async function readSplitSource(
       readFile(new URL(path, import.meta.url), "utf8")
     ),
   );
-  return parts.join("\n");
+  // A split-out module repeats imports the original had once; keep only the
+  // original module's imports so counts over the combined source still hold.
+  return parts.map((part, index) =>
+    index === 0 ? part : part.replace(/^import\b[\s\S]*?;\n/gm, "")
+  ).join("\n");
 }
 
 /** One top-level declaration of a combined source: from `function name(` to
@@ -41,6 +46,10 @@ export function readTranscriptSource(): Promise<string> {
   return readSplitSource("Transcript.tsx");
 }
 
+export function readComposerSource(): Promise<string> {
+  return readSplitSource("Composer.tsx");
+}
+
 test("each combined source includes every module split out of it", async () => {
   const app = await readAppSource();
   assert(app.includes("export function App("));
@@ -51,4 +60,6 @@ test("each combined source includes every module split out of it", async () => {
   const transcript = await readTranscriptSource();
   assert(transcript.includes("export function Transcript("));
   assert(transcript.includes("export function ToolDetailsBrowser("));
+  const composer = await readComposerSource();
+  assert(composer.includes("export function PendingPanel("));
 });

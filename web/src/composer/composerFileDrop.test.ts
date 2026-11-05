@@ -2,10 +2,9 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 import { dataTransferCarriesFiles } from "./composerFileDrop.ts";
+import { readComposerSource } from "../appSource.test.ts";
 
-const composer = await readFile(
-  new URL("../Composer.tsx", import.meta.url), "utf8",
-);
+const composer = await readComposerSource();
 const editor = await readFile(
   new URL("../ComposerEditor.tsx", import.meta.url), "utf8",
 );

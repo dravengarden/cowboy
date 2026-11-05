@@ -1,10 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertStringIncludes } from "@std/assert";
+import { readComposerSource } from "./appSource.test.ts";
 
-const composerSource = await readFile(
-  new URL("./Composer.tsx", import.meta.url), "utf8",
-);
+const composerSource = await readComposerSource();
 const composerSurfaceSource = await readFile(
   new URL("./mobileComposerSurface.ts", import.meta.url), "utf8",
 );

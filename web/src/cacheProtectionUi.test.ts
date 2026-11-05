@@ -1,10 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
+import { readComposerSource } from "./appSource.test.ts";
 
-const composerSource = await readFile(
-  new URL("./Composer.tsx", import.meta.url), "utf8",
-);
+const composerSource = await readComposerSource();
 const providerConfigSource = await readFile(
   new URL("./providerConfigOptions.ts", import.meta.url), "utf8",
 );

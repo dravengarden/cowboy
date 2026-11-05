@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
+import { readComposerSource } from "../../appSource.test.ts";
 
 const provider = await readFile(
   new URL("./DesktopCommandProvider.tsx", import.meta.url), "utf8",
@@ -14,9 +15,7 @@ const composerBindings = await readFile(
 const pendingBindings = await readFile(
   new URL("./DesktopPendingEditShortcuts.tsx", import.meta.url), "utf8",
 );
-const composer = await readFile(
-  new URL("../../Composer.tsx", import.meta.url), "utf8",
-);
+const composer = await readComposerSource();
 const sessionActions = await readFile(
   new URL("../useDesktopSessionActions.tsx", import.meta.url), "utf8",
 );

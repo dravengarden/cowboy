@@ -1,13 +1,12 @@
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 import { desktopToolbarActionSx } from "./desktopToolbarAction";
+import { readComposerSource } from "../appSource.test.ts";
 
 const rowEdit = await Bun.file(
   new URL("./DesktopRowEditToolbar.tsx", import.meta.url),
 ).text();
-const composer = await Bun.file(
-  new URL("../Composer.tsx", import.meta.url),
-).text();
+const composer = await readComposerSource();
 
 test("Desktop toolbar actions size every dimension from the root font", () => {
   const icon = desktopToolbarActionSx["& .MuiSvgIcon-root"];

@@ -3,10 +3,9 @@ import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import type { Attachment } from "../attachments.ts";
 import { attachmentTrayForSurface } from "./attachmentPresentation.ts";
+import { readComposerSource } from "../appSource.test.ts";
 
-const composerSource = await readFile(
-  new URL("../Composer.tsx", import.meta.url), "utf8",
-);
+const composerSource = await readComposerSource();
 const inlineImagesSource = await readFile(
   new URL("../inlineImages.ts", import.meta.url), "utf8",
 );
