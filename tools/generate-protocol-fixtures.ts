@@ -63,9 +63,12 @@ export function render(
 export const INBOUND_OUTPUT = "contracts/protocol/inbound.json";
 
 export async function renderInbound(): Promise<string> {
-  const { inboundFixtures } = await import(
-    "../web/src/protocol.inbound.fixtures.ts"
-  );
+  // A computed specifier keeps the tools typecheck out of the Web tree, which
+  // has its own compiler settings; the fixtures are plain data.
+  const fixturesModule = "../web/src/protocol.inbound.fixtures.ts";
+  const { inboundFixtures } = (await import(fixturesModule)) as {
+    inboundFixtures: Record<string, unknown>;
+  };
   const fixtures = Object.entries(inboundFixtures).map(([name, value]) => ({
     name,
     value,
