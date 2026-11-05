@@ -58,7 +58,7 @@ before the baseline.
 | Area | Measurement |
 |---|---|
 | Size | `src/` 185k lines, `components/` 213k, `web/src/` 263k, `plugins/` 19k (Rust + TS/TSX) |
-| Base crate `src/` | 107 top-level modules, 135k production lines; one strongly connected component of **42 modules / 96k lines** (`acp`, `acp_bridge`, `admin`, `agent_api`, `cli`, `core`, `machine_control`, `managed_calls`, `oidc`, `plugin_catalog`, `provider`, `remote_runtime`, `store`, `supervisor`, `usage`, …); the dependency closure of `core`, `store`, `acp` or `supervisor` is 84 modules / 123k lines |
+| Base crate `src/` | 107 top-level modules, 135k production lines; one strongly connected component of **37 modules** in production code (`acp_bridge`, `admin`, `agent_api`, `cli`, `core`, `machine_control`, `managed_calls`, `oidc`, `plugin_catalog`, `store`, `usage`, …; the first textual scan reported 42 because it also counted rustdoc links); the dependency closure of `core`, `store`, `acp` or `supervisor` is 84 modules / 123k lines |
 | Feature gates in the base crate | `cfg(feature = "full")` at 161 sites in 20 modules plus 59 in `lib.rs`; `plugin_runtime_args.rs` alone has 62, `cli.rs` 41 |
 | Crate API discipline | `components/server/src/lib.rs:6` and `components/machine/src/lib.rs:6` re-export the whole base crate (`pub use cowboy::*`); `src/controller_hooks.rs` installs process-global reverse callbacks so base code can call back into the server |
 | `components/server/src/server.rs` | 28,342 lines: 21,369 production and 6,973 test lines in **30 inline test modules interleaved with production code**; `handle_machine_ws` 1,111 lines (10 nesting levels), `serve` 837, `handle_command` 682 (44 `Inbound` arms), `handle_ws` 508, `serve_axum` 480, `api_new_session` 397. 258 distinct co-change partners, the most of any file |
@@ -340,7 +340,7 @@ Moving `worker` itself changes the hashed worker inputs as well.
 
 | Slice | Change | Proof |
 |---|---|---|
-| 5.1 Edge inventory and behaviour ports | Export the 42-module cycle's edge list from the Phase 0.5 tool; classify each back-edge as type-only, constant-only or behavioural. The behavioural ones known today — `store` → `core_passkeys`/`auth_plugins`/`product_auth`, `supervisor` → ACP and provider behaviour, `code_adapter` → `code_review`, Machine launch → `managed_calls::host` — each get a port (trait or shared contract module) specified before 5.4–5.6, so no slice recreates a cycle or breaks a standalone package. | report committed under `docs/history/`; ports reviewed |
+| 5.1 Edge inventory and behaviour ports | Export the 37-module cycle's edge list from the Phase 0.5 tool; classify each back-edge as type-only, constant-only or behavioural. The behavioural ones known today — `store` → `core_passkeys`/`auth_plugins`/`product_auth`, `supervisor` → ACP and provider behaviour, `code_adapter` → `code_review`, Machine launch → `managed_calls::host` — each get a port (trait or shared contract module) specified before 5.4–5.6, so no slice recreates a cycle or breaks a standalone package. | report committed under `docs/history/`; ports reviewed |
 | 5.2 Replace wildcard re-exports | `pub use cowboy::*` in the server and Machine crates becomes explicit `pub use cowboy::{…}` lists, one module family per commit; `controller_hooks` shrinks to the entry points that genuinely need late binding. | `just check`; the layering tool reports the explicit surface |
 | 5.3 `cowboy-model` | New crate for plain types and constants shared by `core` and `store`: `SessionMeta`, `SessionOrigin`, `Inbound`/`Outbound`/`Envelope`, `settings_keys`, hot-tail limits, store row/record types. No `tokio`, no `sqlx`. `store` → `core` drops from 53 references to the write-behind contract (`Hub`, `StoreWrite`, `StoreSink`), which becomes a sink trait in `model` implemented by the Hub, so the store depends on the trait and never on `Hub`. | `just check`; the layering tool shows `store` no longer references `core` |
 | 5.4 `cowboy-store` | `store`, `store/*`, `persistence`, `migrations/` and `migration_compat` become a crate depending on `model` and the 5.1 ports only. | `just check`, `just test-postgres`; migrations unchanged byte-for-byte |
@@ -374,6 +374,20 @@ old/new Controller–Web positive fixtures, and is filed separately.
 | 7.1 Exit table | A table in `docs/compatibility-exits.md` listing every legacy path (`LegacyProviderRelease`, `migration_compat`, `legacyRecordsNotice`, Hub tombstones, identity-based provider fallback, schema-one writer outputs, bootstrap outputs, each lint allowance group) with its removal condition and the check that proves the condition. Nothing is removed merely for being old. | reviewed table; historical fixtures keep passing |
 | 7.2 Release matrix | Describe the eight outputs in one checked table (writer capability × retained runtime × bootstrap input) that `flake.nix` reads instead of three booleans, so the matrix is reviewable and `nix flake check` proves every cell builds. The variants themselves stay: passing the fleet reader floors does not make them equivalent — ordinary and bootstrap artifacts must remain read-only and active-writer targets must keep their writer (`AGENTS.md`). Retiring a variant is a separately accepted migration with recovery and startup-admission conformance, recorded in 7.1. | `nix flake check`; release-manifest comparison before and after |
 | 7.3 Registry ledger | `components/registry.json` keeps **schema 3** (normative in `docs/requirements.md`; `src/plugin.rs` accepts 2 and 3) and the active release plus every release still referenced by a `plugins/*/plugin.json` or the retained worker pin; older releases move to `components/registry-archive/<version>.json` in the same schema. `src/plugin.rs` validation and `tools/check-plugin-components.ts`, `worker-registry-input.ts`, `plugin-component-closure.ts` read both, preserving ordered historical validation and immutable identity checks across the archive. Because `worker-generation` hashes the registry digest, this is a Machine maintenance boundary. | tool tests over existing component-release references; a Machine release with the worker pin unchanged |
+
+### Phase 0 status (2026-11-05)
+
+Phase 0 is landed except where noted; every guard runs in `just check`.
+
+| Slice | Outcome |
+|---|---|
+| 0.1 | `tools/check-structure.ts` + `tools/structure-baseline.json` (`structure-check`); seeded with 58 files, 276 functions and 7 TSX files over their limits |
+| 0.2 | `release-sources-check` type-checks the exact `machine-src` and `code-adapter-src` trees; reintroducing the October module gap fails with E0583 |
+| 0.3 | Simplified: instead of a content hash and a new generation index, the Nix web build sets `VERSION` to `cowboy-v<flake lastModified>`. Numeric order, two-generation retention and rollback stay untouched; the source value is frozen and a test rejects hand bumps. Residual risk: a descendant commit whose committer time is older than the deployed one would get a lower generation |
+| 0.4 | Event family: `contracts/protocol/event.json` from `src/protocol_contract.rs`, generated `web/src/protocol.fixtures.generated.ts` held by the ordinary web typecheck (`protocol-contract-check`); found the undeclared `turn_end.usage`. Outbound and Inbound families remain |
+| 0.5 | `tools/check-module-layers.ts` + `tools/module-edges-baseline.json`: cycles may not grow or merge and no new edge may join two members of one cycle; ordinary new edges stay allowed. Per-module import allowlists wait until modules are extracted |
+| 0.6 | 57 stale `dead_code` allowances and three dead functions removed; the two in `components/plugin-sdk` stay because changing that signed component needs a component release |
+| 0.7 | `docs/INDEX.md` covers all 403 pages (`docs-index-check`); finished ledgers moved to `docs/history/` |
 
 ## 6. Not worth doing
 
@@ -409,7 +423,7 @@ the time and conflict metrics come from CI timing and `git log`.
 
 | Metric | Baseline (2026-11-05) | Target (end of Q1 2027) |
 |---|---|---|
-| Largest module cycle in the base crate | 42 modules / 96k lines | ≤ 6 modules |
+| Largest module cycle in the base crate | 37 modules (`tools/module-edges-baseline.json`) | ≤ 6 modules |
 | `cfg(feature = "full")` sites in `src/` | 220 | 0 |
 | Filtered release closures compile in the gate | no (`.#cowboy-machine` broken on baseline) | yes, every commit |
 | Files over 3,000 lines | 21 | 0 |
