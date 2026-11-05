@@ -445,18 +445,13 @@ async fn invalid_receipts_fail_closed_without_rewriting_any_progress() {
     }
 }
 
-#[tokio::test]
-async fn concurrent_receipt_writers_cannot_change_the_first_terminal_observation() {
-    let root = tempfile::tempdir().unwrap();
-    let store = Store::connect(
-        &format!("sqlite://{}", root.path().join("race.sqlite").display()),
-        root.path().join("artifacts"),
-    )
-    .await
-    .unwrap();
+/// Two receipt writers race; only the first terminal observation is kept.
+async fn concurrent_receipt_writers_cannot_change_the_first_terminal_observation_contract(
+    store: &Store,
+) {
     store.migrate().await.unwrap();
     let intent = machine_fixture("concurrent-receipt");
-    installing(&store, &intent).await;
+    installing(store, &intent).await;
     let left = receipt(&intent, applied());
     let right = receipt(
         &intent,
@@ -478,6 +473,86 @@ async fn concurrent_receipt_writers_cannot_change_the_first_terminal_observation
 }
 
 #[tokio::test]
+async fn concurrent_receipt_writers_cannot_change_the_first_terminal_observation() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect(
+        &format!("sqlite://{}", root.path().join("race.sqlite").display()),
+        root.path().join("artifacts"),
+    )
+    .await
+    .unwrap();
+    concurrent_receipt_writers_cannot_change_the_first_terminal_observation_contract(&store).await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL fixture: just test-postgres"]
+async fn postgres_concurrent_receipt_writers_cannot_change_the_first_terminal_observation() {
+    let root = tempfile::tempdir().unwrap();
+    let url = std::env::var("COWBOY_TEST_POSTGRES_URL").expect("isolated PostgreSQL fixture");
+    let store = Store::connect(&url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    concurrent_receipt_writers_cannot_change_the_first_terminal_observation_contract(&store).await;
+}
+
+/// Recovering a fenced attempt accepts only its exact terminal receipt, once.
+async fn terminal_receipt_reconciliation_is_exact_and_releases_only_a_fenced_attempt_contract(
+    store: &Store,
+    outcome: InstallOutcome,
+) {
+    store.migrate().await.unwrap();
+    let intent = machine_fixture(match outcome {
+        InstallOutcome::Applied { .. } => "recover-applied",
+        _ => "recover-rejected",
+    });
+    installing(store, &intent).await;
+    store
+        .advance_plugin_install(
+            &intent,
+            InstallPhase::Installing,
+            InstallPhase::NeedsAttention,
+            Some(InstallProblem::UnknownMachineOutcome),
+        )
+        .await
+        .unwrap();
+    let before = store
+        .plugin_install_operation(&intent.operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let exact = receipt(&intent, outcome.clone());
+    let mut changed = exact.clone();
+    changed.step.plan_digest = format!("sha256:{}", "f".repeat(64));
+    assert!(
+        store
+            .reconcile_plugin_install_receipt(&before, &changed)
+            .await
+            .is_err()
+    );
+    let saved = store
+        .reconcile_plugin_install_receipt(&before, &exact)
+        .await
+        .unwrap();
+    assert_eq!(saved.machine_receipt.as_ref(), Some(&exact));
+    assert_eq!(saved.attention_from, None);
+    assert_eq!(
+        saved.phase,
+        if matches!(outcome, InstallOutcome::Applied { .. }) {
+            InstallPhase::MachineAcknowledged
+        } else {
+            InstallPhase::Aborted
+        }
+    );
+    assert!(
+        store
+            .reconcile_plugin_install_receipt(&before, &exact)
+            .await
+            .is_err(),
+        "the complete recovery snapshot is a one-shot compare-and-swap"
+    );
+}
+
+#[tokio::test]
 async fn terminal_receipt_reconciliation_is_exact_and_releases_only_a_fenced_attempt() {
     for outcome in [
         applied(),
@@ -489,68 +564,54 @@ async fn terminal_receipt_reconciliation_is_exact_and_releases_only_a_fenced_att
         let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
             .await
             .unwrap();
-        store.migrate().await.unwrap();
-        let intent = machine_fixture(match outcome {
-            InstallOutcome::Applied { .. } => "recover-applied",
-            _ => "recover-rejected",
-        });
-        installing(&store, &intent).await;
-        store
-            .advance_plugin_install(
-                &intent,
-                InstallPhase::Installing,
-                InstallPhase::NeedsAttention,
-                Some(InstallProblem::UnknownMachineOutcome),
-            )
-            .await
-            .unwrap();
-        let before = store
-            .plugin_install_operation(&intent.operation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let exact = receipt(&intent, outcome.clone());
-        let mut changed = exact.clone();
-        changed.step.plan_digest = format!("sha256:{}", "f".repeat(64));
-        assert!(
-            store
-                .reconcile_plugin_install_receipt(&before, &changed)
-                .await
-                .is_err()
-        );
-        let saved = store
-            .reconcile_plugin_install_receipt(&before, &exact)
-            .await
-            .unwrap();
-        assert_eq!(saved.machine_receipt.as_ref(), Some(&exact));
-        assert_eq!(saved.attention_from, None);
-        assert_eq!(
-            saved.phase,
-            if matches!(outcome, InstallOutcome::Applied { .. }) {
-                InstallPhase::MachineAcknowledged
-            } else {
-                InstallPhase::Aborted
-            }
-        );
-        assert!(
-            store
-                .reconcile_plugin_install_receipt(&before, &exact)
-                .await
-                .is_err(),
-            "the complete recovery snapshot is a one-shot compare-and-swap"
-        );
+        terminal_receipt_reconciliation_is_exact_and_releases_only_a_fenced_attempt_contract(
+            &store, outcome,
+        )
+        .await;
     }
 }
 
 #[tokio::test]
-async fn acknowledged_install_can_resume_finalization_without_replacing_its_receipt() {
+#[ignore = "requires isolated PostgreSQL fixture: just test-postgres"]
+async fn postgres_terminal_receipt_reconciliation_is_exact_and_releases_only_a_fenced_attempt_applied()
+ {
     let root = tempfile::tempdir().unwrap();
-    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+    let url = std::env::var("COWBOY_TEST_POSTGRES_URL").expect("isolated PostgreSQL fixture");
+    let store = Store::connect(&url, root.path().join("artifacts"))
         .await
         .unwrap();
+    terminal_receipt_reconciliation_is_exact_and_releases_only_a_fenced_attempt_contract(
+        &store,
+        applied(),
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL fixture: just test-postgres"]
+async fn postgres_terminal_receipt_reconciliation_is_exact_and_releases_only_a_fenced_attempt_rejected()
+ {
+    let root = tempfile::tempdir().unwrap();
+    let url = std::env::var("COWBOY_TEST_POSTGRES_URL").expect("isolated PostgreSQL fixture");
+    let store = Store::connect(&url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    terminal_receipt_reconciliation_is_exact_and_releases_only_a_fenced_attempt_contract(
+        &store,
+        InstallOutcome::Rejected {
+            reason: InstallRejection::TargetChanged,
+        },
+    )
+    .await;
+}
+
+/// Finalization recovery keeps an acknowledged install's applied receipt.
+async fn acknowledged_install_can_resume_finalization_without_replacing_its_receipt_contract(
+    store: &Store,
+) {
     store.migrate().await.unwrap();
     let intent = machine_fixture("resume-finalization");
-    installing(&store, &intent).await;
+    installing(store, &intent).await;
     let exact = receipt(&intent, applied());
     store
         .record_plugin_install_receipt(&intent, &exact)
@@ -582,14 +643,32 @@ async fn acknowledged_install_can_resume_finalization_without_replacing_its_rece
 }
 
 #[tokio::test]
-async fn unknown_machine_outcome_cannot_later_be_promoted_to_applied() {
+async fn acknowledged_install_can_resume_finalization_without_replacing_its_receipt() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
         .await
         .unwrap();
+    acknowledged_install_can_resume_finalization_without_replacing_its_receipt_contract(&store)
+        .await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL fixture: just test-postgres"]
+async fn postgres_acknowledged_install_can_resume_finalization_without_replacing_its_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    let url = std::env::var("COWBOY_TEST_POSTGRES_URL").expect("isolated PostgreSQL fixture");
+    let store = Store::connect(&url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    acknowledged_install_can_resume_finalization_without_replacing_its_receipt_contract(&store)
+        .await;
+}
+
+/// A durable Unknown Machine outcome stays fenced.
+async fn unknown_machine_outcome_cannot_later_be_promoted_to_applied_contract(store: &Store) {
     store.migrate().await.unwrap();
     let intent = machine_fixture("unknown-is-terminal");
-    installing(&store, &intent).await;
+    installing(store, &intent).await;
     let uncertain = receipt(
         &intent,
         InstallOutcome::Unknown {
@@ -609,6 +688,26 @@ async fn unknown_machine_outcome_cannot_later_be_promoted_to_applied() {
             .is_err(),
         "a durable Unknown receipt remains fenced"
     );
+}
+
+#[tokio::test]
+async fn unknown_machine_outcome_cannot_later_be_promoted_to_applied() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    unknown_machine_outcome_cannot_later_be_promoted_to_applied_contract(&store).await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL fixture: just test-postgres"]
+async fn postgres_unknown_machine_outcome_cannot_later_be_promoted_to_applied() {
+    let root = tempfile::tempdir().unwrap();
+    let url = std::env::var("COWBOY_TEST_POSTGRES_URL").expect("isolated PostgreSQL fixture");
+    let store = Store::connect(&url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    unknown_machine_outcome_cannot_later_be_promoted_to_applied_contract(&store).await;
 }
 
 #[test]
