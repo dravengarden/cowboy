@@ -160,6 +160,7 @@ import {
   MobileComposerFixedActionSlot,
 } from "./MobileComposerAccessoryDock";
 import { MessagePreview } from "./MessagePreview";
+import { CallNoticeLine, pendingCallNotice } from "./CallNoticeLine";
 import { QueuedAttachmentChips } from "./QueuedAttachmentChips";
 import { dismissPromptSuggestion, usePromptSuggestion } from "./promptSuggestions";
 import { useTouchComposer } from "./ComposerTextarea";
@@ -5058,6 +5059,7 @@ function PendingRow({
   const seedText = pendingRowVisibleText(message.text, committedText);
   const seedAttachments = committedAttachments ?? message.attachments;
   const seedTray = attachmentTrayForSurface(seedAttachments, seedText);
+  const callNotice = pendingCallNotice(message);
   // Per-row kebab (⋮) position. Click coordinates, not the button node: the
   // peek/footer keep a translate3d layer, and hiding the kebab via container
   // query can detach the element so MUI's anchorEl lands at (0, 0).
@@ -6070,8 +6072,8 @@ function PendingRow({
           bgcolor: "transparent",
         }),
         display: "flex",
-        alignItems: "flex-start",
-        minHeight: mobilePendingRowMinHeight,
+        alignItems: callNotice ? "center" : "flex-start",
+        minHeight: callNotice ? 0 : mobilePendingRowMinHeight,
         gap: 0.5,
         userSelect: "none",
         WebkitUserSelect: "none",
@@ -6092,23 +6094,21 @@ function PendingRow({
         }}
         sx={{
           flex: 1,
-          alignSelf: "stretch",
+          alignSelf: callNotice ? "center" : "stretch",
           minWidth: 0,
-          minHeight: mobileComposerIdleEditorMinHeight,
+          minHeight: callNotice ? 0 : mobileComposerIdleEditorMinHeight,
           cursor: touchInput ? "pointer" : "text",
         }}
       >
-        {seedText.trim() !== "" && (
-          <MessagePreview text={seedText} attachments={seedAttachments} />
-        )}
+        {callNotice
+          ? <CallNoticeLine notice={callNotice} sessionId={sessionId} />
+          : seedText.trim() !== "" && (
+            <MessagePreview text={seedText} attachments={seedAttachments} />
+          )}
         {seedTray.length > 0 && (
           <QueuedAttachmentChips attachments={seedTray} />
         )}
-        {
-          /* Scheduled-draft badge: a calm info chip showing when it auto-fires;
-            tap to reschedule/cancel. Info (blue), never accent/red — a pending
-            schedule is a notice, not a failure (conventions/ui.md §4). */
-        }
+        {/* Scheduled-draft badge: info chip for when it fires; tap to reschedule. Info, never red: a schedule is a notice, not a failure (conventions/ui.md §4). */}
         {message.schedule && (
           <Chip
             data-pending-content-action="schedule"
