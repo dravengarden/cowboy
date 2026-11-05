@@ -22,7 +22,12 @@ export const SPLIT_SOURCES = {
     "./TranscriptItems.tsx",
     "./TranscriptPlaceholders.tsx",
   ],
-  "Composer.tsx": ["./Composer.tsx", "./PendingPanel.tsx", "./ComposerSheet.tsx"],
+  "Composer.tsx": [
+    "./Composer.tsx",
+    "./PendingPanel.tsx",
+    "./ComposerSheet.tsx",
+    "./composerImageSelection.tsx",
+  ],
   "mobile/review/ReviewApp.tsx": [
     "./mobile/review/ReviewApp.tsx",
     "./mobile/review/DocumentView.tsx",
