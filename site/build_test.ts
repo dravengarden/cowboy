@@ -203,7 +203,7 @@ test("linked Victoria guide uses the real generic installation route", async () 
     "utf8",
   );
   const server = await readFile(
-    `${ROOT}/components/server/src/server.rs`,
+    `${ROOT}/components/server/src/server/routes.rs`,
     "utf8",
   );
   assert(
@@ -215,9 +215,8 @@ test("linked Victoria guide uses the real generic installation route", async () 
     "do not send an installation request to the SPA fallback",
   );
   assert(
-    server.includes(
-      '"/api/machines/{id}/plugins/{provider_id}",\n            post(api_machine_plugin_install)',
-    ),
+    /"\/api\/machines\/\{id\}\/plugins\/\{provider_id\}",\s*post\(api_machine_plugin_install\)/u
+      .test(server),
     "documentation must follow the actual Product API",
   );
   assert(
