@@ -434,6 +434,41 @@ pub(in crate::server) async fn invoke(
     }
 }
 
+/// Review directory defaults reuse folder/mobile-review sync; see `review_defaults`.
+async fn review_directory_update(
+    state: &Arc<AppState>,
+    meta: &SessionMeta,
+    args: Value,
+    operation: &str,
+) -> Result<Value, &'static str> {
+    let input: crate::review_directory::Change =
+        serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+    let owner = document_owner(&state.hub, state.store.as_ref(), meta).await?;
+    let review_operation = review_operation(&owner, &meta.id, operation);
+    let operation = document_operation(&meta.id, operation);
+    // Prevent reusing an About operation for this distinct domain.
+    if state
+        .store
+        .as_ref()
+        .ok_or("unavailable")?
+        .preference_receipt(&owner, &operation)
+        .await
+        .map_err(|_| "unavailable")?
+        .is_some()
+    {
+        return Err("operation_conflict");
+    }
+    state.hub.review_directory_update(
+        &review_defaults::actor(&owner),
+        &meta.id,
+        &review_operation,
+        &input,
+    )?;
+    Ok(success(
+        json!({"status":"accepted","scope":input.scope,"durable_receipt":false}),
+    ))
+}
+
 async fn execute(
     state: &Arc<AppState>,
     meta: &SessionMeta,
@@ -692,35 +727,11 @@ async fn execute(
                 Ok(success(value))
             }
         }
+        "code.check" => super::code_reads::check(state, meta, &args, operation).await,
         "preferences.update" => {
             let _guard = PREFERENCE_WRITES.lock().await;
             if crate::review_directory::scope_arg(&args["scope"]).is_some() {
-                let input: crate::review_directory::Change =
-                    serde_json::from_value(args).map_err(|_| "invalid_argument")?;
-                let owner = document_owner(&state.hub, state.store.as_ref(), meta).await?;
-                let review_operation = review_operation(&owner, &meta.id, operation);
-                let operation = document_operation(&meta.id, operation);
-                // Prevent reusing an About operation for this distinct domain.
-                if state
-                    .store
-                    .as_ref()
-                    .ok_or("unavailable")?
-                    .preference_receipt(&owner, &operation)
-                    .await
-                    .map_err(|_| "unavailable")?
-                    .is_some()
-                {
-                    return Err("operation_conflict");
-                }
-                state.hub.review_directory_update(
-                    &review_defaults::actor(&owner),
-                    &meta.id,
-                    &review_operation,
-                    &input,
-                )?;
-                return Ok(success(
-                    json!({"status":"accepted","scope":input.scope,"durable_receipt":false}),
-                ));
+                return review_directory_update(state, meta, args, operation).await;
             }
             let input: crate::store::preferences::PreferenceChange =
                 serde_json::from_value(args).map_err(|_| "invalid_argument")?;

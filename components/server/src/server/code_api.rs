@@ -3,7 +3,11 @@
 
 use super::*;
 
+mod checks;
 mod search;
+pub(super) use checks::{
+    Started as CheckStarted, declared as declared_checks, runs as check_runs, start as start_check,
+};
 mod structure;
 pub(super) use search::{ContentSearchParams, content_search, routes as search_routes};
 pub(super) use structure::{outline as structure_outline, workspace_symbols};
