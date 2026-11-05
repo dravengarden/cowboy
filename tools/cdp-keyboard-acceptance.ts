@@ -185,7 +185,9 @@ const runConfigFlow = async (): Promise<void> => {
   check(
     layout.panes.length === 3 &&
       new Set(layout.panes.map((pane) => pane[1])).size === 1,
-    `Agent, Context and Tools sit side by side: ${JSON.stringify(layout.panes)}`,
+    `Agent, Context and Tools sit side by side: ${
+      JSON.stringify(layout.panes)
+    }`,
   );
   results.push("A 1600×1000 window shows Agent | Context | Tools side by side");
   check(
@@ -218,12 +220,17 @@ const runConfigFlow = async (): Promise<void> => {
   await sleep(200);
   check(
     (await sentSince(mark)).includes("model=opus") &&
-      !(await page.evaluate<boolean>("Boolean(document.querySelector(\"[role='listbox']\"))")),
+      !(await page.evaluate<boolean>(
+        "Boolean(document.querySelector(\"[role='listbox']\"))",
+      )),
     "H steps Model in place without opening its list",
   );
   results.push("J/K walk fields; H/L apply the neighbouring value, Model too");
   await key("G", 8);
-  check(await activeIn("[data-config-shortcut='f']"), "G reaches the last field");
+  check(
+    await activeIn("[data-config-shortcut='f']"),
+    "G reaches the last field",
+  );
   await key("g");
   await key("g");
   check(await activeIn("[data-config-preset]"), "gg returns to the presets");
@@ -250,7 +257,8 @@ const runConfigFlow = async (): Promise<void> => {
     ),
     "J reaches the Allow calls switch in Tools",
   );
-  const allow = "document.querySelector(\"input[aria-label='Allow agent calls']\")";
+  const allow =
+    "document.querySelector(\"input[aria-label='Allow agent calls']\")";
   await key("h");
   await until(`!${allow}.checked`, "H turns a switch off");
   await until(`!${allow}.disabled`, "The switch settles after its save");
@@ -262,7 +270,9 @@ const runConfigFlow = async (): Promise<void> => {
   await key("l");
   await until(`${allow}.checked`, "L turns a switch on").catch(
     async (error: unknown) => {
-      throw new Error(`${String(error)}; before=${before}; after=${await describe()}`);
+      throw new Error(
+        `${String(error)}; before=${before}; after=${await describe()}`,
+      );
     },
   );
   await until(
@@ -795,7 +805,13 @@ try {
     await runConfigFlow();
     console.log(
       JSON.stringify(
-        { ok: true, browser: page.browser, flow, screenshots: output, tests: results },
+        {
+          ok: true,
+          browser: page.browser,
+          flow,
+          screenshots: output,
+          tests: results,
+        },
         null,
         2,
       ),
