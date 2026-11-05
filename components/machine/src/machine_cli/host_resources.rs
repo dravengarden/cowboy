@@ -169,33 +169,82 @@ fn full_pressure(text: &str) -> Option<f64> {
     value.is_finite().then_some(value)
 }
 
+/// Whether a scope sits at its own finite `memory.high`, where the kernel
+/// throttles that scope alone. `memory.current` hovers just below the limit
+/// while it is reclaimed, so within 2% counts.
+fn at_own_high(high: &str, current: &str) -> bool {
+    match (high.trim().parse::<u64>(), current.trim().parse::<u64>()) {
+        (Ok(high), Ok(current)) => current.saturating_mul(50) >= high.saturating_mul(49),
+        _ => false,
+    }
+}
+
+/// One execution unit below the Agent worker slice.
+#[derive(Debug, Clone, Copy)]
+struct UnitPressure {
+    stalled: bool,
+    at_own_high: bool,
+}
+
+/// Whether an observed stall means the Device is short of memory. Host and
+/// ancestor PSI include every descendant, so one runaway unit throttled at
+/// its own `memory.high` stalls them too: on Hawk on 2026-11-05 a 25 GiB
+/// script held at its unit's 24 GiB limit kept host PSI "full" near 70 % and
+/// refused every worker launch while other sessions had ample memory. Such a
+/// unit cannot take memory from its neighbours, so its stall is local unless
+/// a shared ancestor is at its own limit or another unit stalls as well.
+fn stall_is_scarcity(stalled: bool, ancestor_at_high: bool, units: &[UnitPressure]) -> bool {
+    if !stalled || ancestor_at_high {
+        return stalled;
+    }
+    let throttled = units.iter().any(|unit| unit.stalled && unit.at_own_high);
+    let shared = units.iter().any(|unit| unit.stalled && !unit.at_own_high);
+    !throttled || shared
+}
+
 /// Pause cold allocations while memory stalls consume at least 1% of the
 /// last ten seconds. Existing work continues; the launch queue stays bounded.
 pub fn memory_stalled() -> bool {
-    let stalled = |path: &Path| {
-        full_pressure(&std::fs::read_to_string(path).unwrap_or_default())
-            .is_some_and(|full| full >= 1.0)
+    let read = |path: &Path| std::fs::read_to_string(path).unwrap_or_default();
+    let stalled = |directory: &Path| {
+        full_pressure(&read(&directory.join("memory.pressure"))).is_some_and(|full| full >= 1.0)
     };
-    if stalled(Path::new("/proc/pressure/memory")) {
-        return true;
-    }
-    let cgroup = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let mut any =
+        full_pressure(&read(Path::new("/proc/pressure/memory"))).is_some_and(|full| full >= 1.0);
+    let cgroup = read(Path::new("/proc/self/cgroup"));
     let Some(manager) = user_manager_root(&cgroup) else {
-        return false;
+        return any;
     };
     let root = Path::new("/sys/fs/cgroup");
     let manager = root.join(manager.trim_start_matches('/'));
     let agents = manager.join("cowboy.slice/cowboy-agents.slice");
+    let units: Vec<UnitPressure> = std::fs::read_dir(&agents)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .map(|unit| UnitPressure {
+            stalled: stalled(&unit),
+            at_own_high: at_own_high(
+                &read(&unit.join("memory.high")),
+                &read(&unit.join("memory.current")),
+            ),
+        })
+        .collect();
+    let mut ancestor_at_high = false;
     let mut directory = if agents.is_dir() { agents } else { manager };
     while directory.starts_with(root) && directory != root {
-        if stalled(&directory.join("memory.pressure")) {
-            return true;
-        }
+        any |= stalled(&directory);
+        ancestor_at_high |= at_own_high(
+            &read(&directory.join("memory.high")),
+            &read(&directory.join("memory.current")),
+        );
         if !directory.pop() {
             break;
         }
     }
-    false
+    stall_is_scarcity(any, ancestor_at_high, &units)
 }
 
 /// Observe this host. `None` on platforms or hosts without the Linux sources.
@@ -337,6 +386,34 @@ mod tests {
             0,
             "the tighter scope decides"
         );
+    }
+
+    #[test]
+    fn a_unit_throttled_at_its_own_high_does_not_starve_the_device() {
+        let runaway = UnitPressure {
+            stalled: true,
+            at_own_high: true,
+        };
+        let idle = UnitPressure {
+            stalled: false,
+            at_own_high: false,
+        };
+        let starved = UnitPressure {
+            stalled: true,
+            at_own_high: false,
+        };
+        // Hawk on 2026-11-05: host PSI came only from the runaway unit.
+        assert!(!stall_is_scarcity(true, false, &[runaway, idle]));
+        // Another stalled unit or a shared ancestor at its limit is scarcity.
+        assert!(stall_is_scarcity(true, false, &[runaway, starved]));
+        assert!(stall_is_scarcity(true, true, &[runaway, idle]));
+        // A stall no unit explains keeps the previous behaviour.
+        assert!(stall_is_scarcity(true, false, &[idle]));
+        assert!(stall_is_scarcity(true, false, &[]));
+        assert!(!stall_is_scarcity(false, true, &[starved]));
+        assert!(at_own_high("25769803776\n", "25700000000\n"));
+        assert!(!at_own_high("25769803776\n", "20000000000\n"));
+        assert!(!at_own_high("max\n", "25700000000\n"));
     }
 
     #[test]
