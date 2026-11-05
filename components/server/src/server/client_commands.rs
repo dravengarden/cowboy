@@ -564,3 +564,83 @@ pub(super) fn filter_submitted_order(
         .filter(|id| seen.insert(id.clone()))
         .collect()
 }
+
+pub(super) fn force_cancel_grace(state: &AppState, session_id: &str) -> std::time::Duration {
+    if state
+        .hub
+        .session_info(session_id)
+        .is_some_and(|info| info.meta.execution_binding.is_some())
+    {
+        EXECUTION_FORCE_CANCEL_GRACE
+    } else {
+        FORCE_CANCEL_GRACE
+    }
+}
+
+pub(super) fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), String> {
+    let Some(cancelled_revision @ (Status::Busy | Status::Starting, _)) =
+        state.hub.status_revision(session_id)
+    else {
+        return Ok(());
+    };
+    let grace = force_cancel_grace(state, session_id);
+    state.supervisor.request_cancel_for_recycle(session_id)?;
+    let hub = state.hub.clone();
+    let supervisor = Arc::clone(&state.supervisor);
+    let session_id = session_id.to_owned();
+    tokio::spawn(async move {
+        tokio::time::sleep(grace).await;
+        if !hub.set_status_if_revision(
+            &session_id,
+            Some(cancelled_revision),
+            Status::Interrupted,
+            Some("force cancel timed out; recycling session worker".to_owned()),
+        ) {
+            return;
+        }
+        tracing::error!(
+            session = %session_id,
+            grace_seconds = grace.as_secs(),
+            "force cancel did not end turn; recycling only this session worker"
+        );
+        // The interrupted edge frees Hub's in-flight guard, but its automatic
+        // drain waits for the replacement worker to become Running.
+        if let Err(error) = supervisor.recycle_session(&session_id) {
+            tracing::error!(session = %session_id, %error, "force-cancel recycle failed");
+            hub.set_status(&session_id, Status::Crashed, Some(error));
+        }
+    });
+    Ok(())
+}
+
+/// Build the ACP prompt blocks for a queued message: parse the stored content
+/// blocks, or fall back to a single text block. Mirrors the `Inbound::Prompt`
+/// handler's logic. Returns `None` for a genuinely empty prompt.
+pub(super) fn build_prompt_blocks(
+    text: &str,
+    content: &[serde_json::Value],
+) -> Option<Vec<ContentBlock>> {
+    if content.is_empty() {
+        if text.is_empty() {
+            return None;
+        }
+        return Some(vec![ContentBlock::from(text.to_owned())]);
+    }
+    let blocks: Vec<ContentBlock> = content
+        .iter()
+        .filter_map(
+            |v| match serde_json::from_value::<ContentBlock>(v.clone()) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    tracing::warn!(error = %e, "skipping unparseable queued content block");
+                    None
+                }
+            },
+        )
+        .collect();
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(blocks)
+    }
+}

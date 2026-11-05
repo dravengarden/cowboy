@@ -1388,54 +1388,6 @@ const GENERATION_RETENTION_DELAY: std::time::Duration = std::time::Duration::fro
 /// declared `disk.low_watermark` between scheduled passes.
 const URGENT_RETENTION_POLL: std::time::Duration = std::time::Duration::from_secs(60);
 
-fn force_cancel_grace(state: &AppState, session_id: &str) -> std::time::Duration {
-    if state
-        .hub
-        .session_info(session_id)
-        .is_some_and(|info| info.meta.execution_binding.is_some())
-    {
-        EXECUTION_FORCE_CANCEL_GRACE
-    } else {
-        FORCE_CANCEL_GRACE
-    }
-}
-
-fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), String> {
-    let Some(cancelled_revision @ (Status::Busy | Status::Starting, _)) =
-        state.hub.status_revision(session_id)
-    else {
-        return Ok(());
-    };
-    let grace = force_cancel_grace(state, session_id);
-    state.supervisor.request_cancel_for_recycle(session_id)?;
-    let hub = state.hub.clone();
-    let supervisor = Arc::clone(&state.supervisor);
-    let session_id = session_id.to_owned();
-    tokio::spawn(async move {
-        tokio::time::sleep(grace).await;
-        if !hub.set_status_if_revision(
-            &session_id,
-            Some(cancelled_revision),
-            Status::Interrupted,
-            Some("force cancel timed out; recycling session worker".to_owned()),
-        ) {
-            return;
-        }
-        tracing::error!(
-            session = %session_id,
-            grace_seconds = grace.as_secs(),
-            "force cancel did not end turn; recycling only this session worker"
-        );
-        // The interrupted edge frees Hub's in-flight guard, but its automatic
-        // drain waits for the replacement worker to become Running.
-        if let Err(error) = supervisor.recycle_session(&session_id) {
-            tracing::error!(session = %session_id, %error, "force-cancel recycle failed");
-            hub.set_status(&session_id, Status::Crashed, Some(error));
-        }
-    });
-    Ok(())
-}
-
 /// Reboot convergence: an explicit send returned only because a Machine or
 /// resource was not ready yet must be delivered once it is, even when the
 /// queue is paused or the session crashed while its host rebooted.
@@ -1477,35 +1429,6 @@ const fn provider_fence_refusal(fence: PluginFenceState) -> Option<&'static str>
 
 #[cfg(test)]
 mod provider_fence_refusal_tests;
-
-/// Build the ACP prompt blocks for a queued message: parse the stored content
-/// blocks, or fall back to a single text block. Mirrors the `Inbound::Prompt`
-/// handler's logic. Returns `None` for a genuinely empty prompt.
-fn build_prompt_blocks(text: &str, content: &[serde_json::Value]) -> Option<Vec<ContentBlock>> {
-    if content.is_empty() {
-        if text.is_empty() {
-            return None;
-        }
-        return Some(vec![ContentBlock::from(text.to_owned())]);
-    }
-    let blocks: Vec<ContentBlock> = content
-        .iter()
-        .filter_map(
-            |v| match serde_json::from_value::<ContentBlock>(v.clone()) {
-                Ok(b) => Some(b),
-                Err(e) => {
-                    tracing::warn!(error = %e, "skipping unparseable queued content block");
-                    None
-                }
-            },
-        )
-        .collect();
-    if blocks.is_empty() {
-        None
-    } else {
-        Some(blocks)
-    }
-}
 
 #[derive(Clone)]
 struct ProductAuthState {
@@ -3637,3 +3560,6 @@ mod client_commands;
 use client_commands::*;
 mod machine_handshake;
 use machine_handshake::*;
+
+mod machine_events;
+use machine_events::*;
