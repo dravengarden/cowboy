@@ -1143,25 +1143,25 @@ try {
     );
     await key("Enter");
     await until(
-      "document.activeElement?.getAttribute('aria-label') === 'Find a Zed directory'",
-      "Zed defaults focus search",
+      "document.activeElement?.getAttribute('aria-label') === 'Find a Review directory'",
+      "Review directory defaults focus search",
     );
     check(
       await page.evaluate<boolean>(
         "document.querySelectorAll('[role=dialog]').length === 1",
       ),
-      "Zed defaults stay in the create dialog",
+      "Review directory defaults stay in the create dialog",
     );
     await shot("3d-zed-defaults");
     await key("Escape");
     await until(
       "document.activeElement?.hasAttribute('data-desktop-field-cursor')",
-      "Zed search leaves Insert",
+      "Review directory search leaves Insert",
     );
     await key("Escape");
     await until(
       "document.activeElement?.getAttribute('data-default-field') === 'review_directory'",
-      "Zed picker restores field focus",
+      "Review directory picker restores field focus",
     );
     results.push(
       "Folder defaults: Enter expands and opens a field; Escape leaves search, returns to the field, then closes",
