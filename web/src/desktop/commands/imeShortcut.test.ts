@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 import { desktopImeOwnsKey, shortcutKey } from "./imeShortcut.ts";
-import { readAppSource } from "../../appSource.test.ts";
+import { readAppSource, readTranscriptSource } from "../../appSource.test.ts";
 
 const appSource = await readAppSource();
 const hostSource = await readFile(
@@ -14,9 +14,7 @@ const providerSource = await readFile(
 const topBarSource = await readFile(
   new URL("../DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
-const transcriptSource = await readFile(
-  new URL("../../Transcript.tsx", import.meta.url), "utf8",
-);
+const transcriptSource = await readTranscriptSource();
 const exploreSource = await readFile(
   new URL("../../explore/ExploreSurface.tsx", import.meta.url), "utf8",
 );

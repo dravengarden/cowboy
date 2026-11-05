@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 import {
@@ -6,10 +5,9 @@ import {
   TURN_CONTINUATION_PROMPT,
   turnFailureTelemetry,
 } from "./turnRecovery.ts";
+import { readTranscriptSource } from "./appSource.test.ts";
 
-const transcript = await readFile(
-  new URL("./Transcript.tsx", import.meta.url), "utf8",
-);
+const transcript = await readTranscriptSource();
 
 test("continuing is offered only where a worker survived the turn", () => {
   // The plugin's `keep_worker_alive` decision reaches the client as "this

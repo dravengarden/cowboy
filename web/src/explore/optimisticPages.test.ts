@@ -14,6 +14,7 @@ import {
   indexedQuestionPagePosition,
   mergeQuestionPageDirectory,
 } from "./questionPages";
+import { readTranscriptSource } from "../appSource.test.ts";
 
 const pending = { id: "opt-local-1", cmid: "local-1", text: "Next question" };
 const localId = optimisticQuestionKey(pending);
@@ -239,9 +240,7 @@ test("attachment-only sends create a page and compaction commands do not", () =>
 });
 
 test("page roots and delivery bubbles use one shared optimistic key", async () => {
-  const transcript = await readFile(
-    new URL("../Transcript.tsx", import.meta.url), "utf8",
-  );
+  const transcript = await readTranscriptSource();
   const store = await readFile(
     new URL("../store.ts", import.meta.url), "utf8",
   );

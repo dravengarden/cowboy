@@ -7,6 +7,7 @@ import {
   markdownTableFitSx,
   markdownTableOverflows,
 } from "./markdownTableFit.ts";
+import { readTranscriptSource } from "./appSource.test.ts";
 
 const markdownImpl = await readFile(
   new URL("./MarkdownImpl.tsx", import.meta.url), "utf8",
@@ -94,9 +95,7 @@ test("only touch-wrapped Markdown on a coarse pointer fits its tables", () => {
 });
 
 test("transcript prose scrolls wide code and tables instead of fitting them", async () => {
-  const transcript = await readFile(
-    new URL("./Transcript.tsx", import.meta.url), "utf8",
-  );
+  const transcript = await readTranscriptSource();
   assert(
     transcript.includes(
       "return <Markdown text={chunk.text} invert={invert} streaming={streaming} />;",

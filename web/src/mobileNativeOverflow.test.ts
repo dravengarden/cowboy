@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 import { mobileNativeYScrollSx } from "./mobileNativeOverflow.ts";
+import { readTranscriptSource } from "./appSource.test.ts";
 
 const reviewFileTree = await readFile(
   new URL("./mobile/review/ReviewFileTree.tsx", import.meta.url), "utf8",
@@ -15,9 +16,7 @@ const codeViewer = await readFile(
 const reviewApp = await readFile(
   new URL("./mobile/review/ReviewApp.tsx", import.meta.url), "utf8",
 );
-const transcript = await readFile(
-  new URL("./Transcript.tsx", import.meta.url), "utf8",
-);
+const transcript = await readTranscriptSource();
 
 test("Agent and Code scrollports keep native vertical momentum", () => {
   assert(mobileNativeYScrollSx.touchAction === "pan-y pinch-zoom");

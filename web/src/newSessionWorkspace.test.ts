@@ -4,12 +4,10 @@ import { assertEquals } from "@std/assert";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace.ts";
 import { continuationOf, resolveActiveSession } from "./sessionSelection.ts";
 import type { SessionMeta } from "./protocol.ts";
-import { readAppSource } from "./appSource.test.ts";
+import { readAppSource, readTranscriptSource } from "./appSource.test.ts";
 
 const appSource = await readAppSource();
-const transcriptSource = await readFile(
-  new URL("./Transcript.tsx", import.meta.url), "utf8",
-);
+const transcriptSource = await readTranscriptSource();
 const composerSource = await readFile(
   new URL("./Composer.tsx", import.meta.url), "utf8",
 );

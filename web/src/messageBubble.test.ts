@@ -5,6 +5,7 @@ import {
   messageBubbleBorderRadius,
   messageBubbleLayoutSx,
 } from "./messageBubble.ts";
+import { readTranscriptSource } from "./appSource.test.ts";
 
 test("only the speaker-side bottom corner is the small radius", () => {
   assertEquals(
@@ -28,9 +29,7 @@ test("long replies use the column; short sends stay compact", () => {
 });
 
 test("confirmed and optimistic bubbles share the chat radius", async () => {
-  const transcript = await readFile(
-    new URL("./Transcript.tsx", import.meta.url), "utf8",
-  );
+  const transcript = await readTranscriptSource();
   const bubbleStart = transcript.indexOf("function OptimisticUserBubble(");
   const messageStart = transcript.indexOf("function MessageBubble(");
   const messageEnd = transcript.indexOf("function ToolCard(", messageStart);
@@ -47,9 +46,7 @@ test("confirmed and optimistic bubbles share the chat radius", async () => {
 });
 
 test("a sent screenshot or file does not stretch the user bubble", async () => {
-  const transcript = await readFile(
-    new URL("./Transcript.tsx", import.meta.url), "utf8",
-  );
+  const transcript = await readTranscriptSource();
   const chip = await readFile(
     new URL("./TranscriptFileChip.tsx", import.meta.url), "utf8",
   );

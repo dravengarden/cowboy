@@ -1,13 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
+import { readTranscriptSource } from "./appSource.test.ts";
 
 const composer = await readFile(
   new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const transcript = await readFile(
-  new URL("./Transcript.tsx", import.meta.url), "utf8",
-);
+const transcript = await readTranscriptSource();
 const previewSource = await readFile(
   new URL("./MessagePreview.tsx", import.meta.url), "utf8",
 );

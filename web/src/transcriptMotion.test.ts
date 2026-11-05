@@ -2,10 +2,9 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 import { transcriptRowContainment } from "./transcriptMotion.ts";
+import { readTranscriptSource } from "./appSource.test.ts";
 
-const transcriptSource = await readFile(
-  new URL("./Transcript.tsx", import.meta.url), "utf8",
-);
+const transcriptSource = await readTranscriptSource();
 const providerTranscriptSource = await readFile(
   new URL("./ProviderTranscript.tsx", import.meta.url), "utf8",
 );

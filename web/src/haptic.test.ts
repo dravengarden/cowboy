@@ -1,13 +1,10 @@
-import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import { hapticStyleForIntent } from "./hapticIntent.ts";
-import { readAppSource } from "./appSource.test.ts";
+import { readAppSource, readTranscriptSource } from "./appSource.test.ts";
 
 const appSource = await readAppSource();
-const transcriptSource = await readFile(
-  new URL("./Transcript.tsx", import.meta.url), "utf8",
-);
+const transcriptSource = await readTranscriptSource();
 
 test("Cowboy haptic intents preserve the product strength hierarchy", () => {
   assertEquals(hapticStyleForIntent("navigation"), "selection");

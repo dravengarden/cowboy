@@ -7,7 +7,7 @@ import {
   hideLiveCrashDuplicate,
   prettifyCrashDetail,
 } from "./crashDetail.ts";
-import { readAppSource } from "./appSource.test.ts";
+import { readAppSource, readTranscriptSource } from "./appSource.test.ts";
 
 const jsonDump =
   'Internal error: { "message": "You\'ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 11:45 AM.", "codexErrorInfo": "usageLimitExceeded" }';
@@ -86,9 +86,7 @@ test("a recurrent crash does not hide its earlier recovery record", () => {
 const overlaySource = await readFile(
   new URL("./TurnStatusOverlay.tsx", import.meta.url), "utf8",
 );
-const transcriptSource = await readFile(
-  new URL("./Transcript.tsx", import.meta.url), "utf8",
-);
+const transcriptSource = await readTranscriptSource();
 const appSource = await readAppSource();
 const storeSource = await readFile(
   new URL("./store.ts", import.meta.url), "utf8",

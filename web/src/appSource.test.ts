@@ -2,24 +2,40 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert } from "@std/assert";
 
-// Source-text assertions about the app shell predate its split into modules
-// (docs/structural-refactor-plan-2026-11.md, Phase 3). They read this
-// combined source so a component moved unchanged out of App.tsx keeps its
-// assertions; behavioural tests replace them over time (slice 3.1). Add a
-// module here when it is split out of App.tsx.
-export const APP_SOURCE_MODULES = ["./App.tsx", "./SettingsShell.tsx"] as const;
+// Source-text assertions about the large shell modules predate their split
+// (docs/structural-refactor-plan-2026-11.md, Phase 3). They read the
+// combined source of a module and everything split out of it, so code moved
+// unchanged keeps its assertions; behavioural tests replace them over time
+// (slice 3.1). Add a file here when it is split out of one of these modules.
+export const SPLIT_SOURCES = {
+  "App.tsx": ["./App.tsx", "./SettingsShell.tsx"],
+  "Transcript.tsx": ["./Transcript.tsx", "./ToolDetailsBrowser.tsx"],
+} as const;
 
-export async function readAppSource(): Promise<string> {
+export async function readSplitSource(
+  module: keyof typeof SPLIT_SOURCES,
+): Promise<string> {
   const parts = await Promise.all(
-    APP_SOURCE_MODULES.map((path) =>
+    SPLIT_SOURCES[module].map((path) =>
       readFile(new URL(path, import.meta.url), "utf8")
     ),
   );
   return parts.join("\n");
 }
 
-test("the combined app source includes every module split out of App.tsx", async () => {
-  const source = await readAppSource();
-  assert(source.includes("export function App("));
-  assert(source.includes("export function SettingsShell("));
+export function readAppSource(): Promise<string> {
+  return readSplitSource("App.tsx");
+}
+
+export function readTranscriptSource(): Promise<string> {
+  return readSplitSource("Transcript.tsx");
+}
+
+test("each combined source includes every module split out of it", async () => {
+  const app = await readAppSource();
+  assert(app.includes("export function App("));
+  assert(app.includes("export function SettingsShell("));
+  const transcript = await readTranscriptSource();
+  assert(transcript.includes("export function Transcript("));
+  assert(transcript.includes("export function ToolDetailsBrowser("));
 });

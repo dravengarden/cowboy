@@ -8,6 +8,7 @@ import {
   shouldInterruptTranscriptViewportRestore,
   shouldShowBlockingTranscriptRestore,
 } from "./transcriptRestorePolicy.ts";
+import { readTranscriptSource } from "./appSource.test.ts";
 
 test("history restore blocks only when there is nothing useful to show", () => {
   assertEquals(shouldShowBlockingTranscriptRestore(true, 0, 0), true);
@@ -17,9 +18,7 @@ test("history restore blocks only when there is nothing useful to show", () => {
 });
 
 test("a just-sent prompt keeps the restore skeleton from covering it", async () => {
-  const transcript = await readFile(
-    new URL("./Transcript.tsx", import.meta.url), "utf8",
-  );
+  const transcript = await readTranscriptSource();
   const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
   assertEquals(
     transcript.includes("optimisticMsgs.length,"),

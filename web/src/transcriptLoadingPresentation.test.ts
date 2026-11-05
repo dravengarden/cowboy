@@ -7,6 +7,7 @@ import {
   transcriptLifecycleLabel,
   transcriptRestoreCaption,
 } from "./transcriptLoadingPresentation.ts";
+import { readTranscriptSource } from "./appSource.test.ts";
 
 test("restore captions describe the load, never raw session status", () => {
   assertEquals(transcriptRestoreCaption("hydrate"), "Restoring conversation");
@@ -43,9 +44,7 @@ test("conversation skeletons mix assistant lines and user bubbles", () => {
 });
 
 test("transcript restore chrome uses the shared captions and wave skeletons", async () => {
-  const transcript = await readFile(
-    new URL("./Transcript.tsx", import.meta.url), "utf8",
-  );
+  const transcript = await readTranscriptSource();
   const derive = await readFile(new URL("./derive.ts", import.meta.url), "utf8");
   assert(transcript.includes("transcriptRestoreCaption("));
   assert(transcript.includes("CONVERSATION_SKELETON_TURNS"));

@@ -1,11 +1,9 @@
-import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 import { attachmentKindLabel } from "./TranscriptFileChip.tsx";
+import { readTranscriptSource } from "./appSource.test.ts";
 
-const transcript = await readFile(
-  new URL("./Transcript.tsx", import.meta.url), "utf8",
-);
+const transcript = await readTranscriptSource();
 
 test("a sent file is labelled by its extension, then its MIME type", () => {
   assertEquals(attachmentKindLabel("2026 Product Release Slides.pdf"), "PDF");

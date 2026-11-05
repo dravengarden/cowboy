@@ -7,13 +7,12 @@ import {
   conversationClearExitMs,
   subscribeConversationClear,
 } from "./conversationClearance.ts";
+import { readTranscriptSource } from "./appSource.test.ts";
 
 const storeSource = await readFile(
   new URL("./store.ts", import.meta.url), "utf8",
 );
-const transcriptSource = await readFile(
-  new URL("./Transcript.tsx", import.meta.url), "utf8",
-);
+const transcriptSource = await readTranscriptSource();
 
 test("Clear starts a page transition before the transcript is replaced", () => {
   const seen: string[] = [];

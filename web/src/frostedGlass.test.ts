@@ -6,7 +6,7 @@ import {
   TURN_STATUS_PILL_MIN_HEIGHT,
 } from "./floatingOverlayPolicy";
 import { mobileTranscriptTailGap } from "./mobileComposerPrimitives";
-import { readAppSource } from "./appSource.test.ts";
+import { readAppSource, readTranscriptSource } from "./appSource.test.ts";
 
 const composerSource = await readFile(
   new URL("./Composer.tsx", import.meta.url), "utf8",
@@ -14,9 +14,7 @@ const composerSource = await readFile(
 const composerSurfaceSource = await readFile(
   new URL("./mobileComposerSurface.ts", import.meta.url), "utf8",
 );
-const transcriptSource = await readFile(
-  new URL("./Transcript.tsx", import.meta.url), "utf8",
-);
+const transcriptSource = await readTranscriptSource();
 const providerTranscriptSource = await readFile(
   new URL("./ProviderTranscript.tsx", import.meta.url), "utf8",
 );

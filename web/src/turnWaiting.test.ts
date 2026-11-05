@@ -14,6 +14,7 @@ import {
 } from "./turnWaiting.ts";
 import { derive } from "./derive.ts";
 import type { Envelope } from "./protocol.ts";
+import { readTranscriptSource } from "./appSource.test.ts";
 
 test("Sending never revives a completed assistant bubble before the user echo", () => {
   const completed: Envelope[] = [
@@ -175,9 +176,7 @@ test("live store treats dropped Codex terminal deltas as turn activity", async (
   const storeSource = await readFile(
     new URL("./store.ts", import.meta.url), "utf8",
   );
-  const transcriptSource = await readFile(
-    new URL("./Transcript.tsx", import.meta.url), "utf8",
-  );
+  const transcriptSource = await readTranscriptSource();
   assertEquals(storeSource.includes("isTurnActivityUpdate"), true);
   assertEquals(storeSource.includes("markSessionTurnActivity"), true);
   assertEquals(storeSource.includes("sessionTurnActivityAt"), true);
