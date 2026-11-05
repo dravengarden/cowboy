@@ -91,6 +91,12 @@ require the exact successful build receipt and published SideStore version.
   with `bun tools/check-structure.ts --update`, which only admits it while the
   crate/package total does not grow. The refactor sequence this guards is
   `docs/structural-refactor-plan-2026-11.md`.
+- **Module layering ratchet** (same recipe): no Rust module may join or enlarge
+  a dependency cycle, and no new edge may be added between two modules of the
+  same cycle (`tools/module-edges-baseline.json`; the base crate's 37-module
+  cycle is being taken apart). Depend on a narrower module or move the shared
+  type into a contract module instead. Run `bun tools/check-module-layers.ts
+  --update` after a change that removes edges.
 - **Reboot convergence is a core requirement**: after any Machine (Hawk, OVH,
   Falcon) reboots successfully, Cowboy must return to service with no human
   step. Units start at boot, always restart (exit 75 included) and never stay

@@ -35,6 +35,8 @@
     "tools/check-plugin-components.ts",
     "tools/check-provider-release-coverage.ts",
     "tools/check-provider-release-coverage_test.ts",
+    "tools/check-module-layers.ts",
+    "tools/check-module-layers_test.ts",
     "tools/check-structure.ts",
     "tools/check-structure_test.ts",
     "tools/check-worktree-dependencies.ts",

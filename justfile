@@ -703,6 +703,9 @@ structure-check:
     dprint check tools/check-structure.ts tools/check-structure_test.ts
     bun test ./tools/check-structure_test.ts
     bun tools/check-structure.ts
+    dprint check tools/check-module-layers.ts tools/check-module-layers_test.ts
+    bun test ./tools/check-module-layers_test.ts
+    bun tools/check-module-layers.ts
 
 # The Machine and code-adapter packages compile hand-listed source closures
 # (machine-src, code-adapter-src in flake.nix), which a full-checkout cargo run
