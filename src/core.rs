@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
@@ -364,14 +365,25 @@ pub struct ManagedTurn {
     pub status: Status,
 }
 
+/// The LAST user prompt in a session's log, rebuilt for a retry.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LastUserPrompt {
+    /// Concatenated text of the prompt's text blocks.
+    text: String,
+    /// The complete block list when the prompt carried anything other than
+    /// text (images, resources); empty for a text-only prompt, exactly like a
+    /// plain text send.
+    content: Vec<serde_json::Value>,
+    /// The originating client's cmid when the echo still carries it (live
+    /// envelopes only; the tag is not persisted).
+    cmid: Option<String>,
+}
+
 /// Rebuild the LAST user prompt in a session's log — the turn cut off by a
 /// crash or restart — from its `user_message_chunk` group. The ACP worker echoes
 /// one chunk per content block, so the group is the maximal run of consecutive
-/// user chunks ending at the last one. Returns the concatenated text and, when
-/// the prompt carried anything other than text (images, resources), the complete
-/// block list so a retry resubmits the same prompt. A text-only prompt keeps an
-/// empty block list, exactly like a plain text send. Degrades to empty values.
-fn last_user_prompt(log: &[Envelope]) -> (String, Vec<serde_json::Value>) {
+/// user chunks ending at the last one. Degrades to empty values.
+fn last_user_prompt(log: &[Envelope]) -> LastUserPrompt {
     let user_block = |env: &Envelope| -> Option<serde_json::Value> {
         let Event::Update { update } = &env.event else {
             return None;
@@ -388,7 +400,7 @@ fn last_user_prompt(log: &[Envelope]) -> (String, Vec<serde_json::Value>) {
         })
     };
     let Some(last) = log.iter().rposition(|env| user_block(env).is_some()) else {
-        return (String::new(), Vec::new());
+        return LastUserPrompt::default();
     };
     let start = log[..last]
         .iter()
@@ -405,8 +417,36 @@ fn last_user_prompt(log: &[Envelope]) -> (String, Vec<serde_json::Value>) {
             .and_then(serde_json::Value::as_str)
             .is_none_or(|kind| kind == "text")
     });
-    let content = if text_only { Vec::new() } else { blocks };
-    (text, content)
+    LastUserPrompt {
+        text,
+        content: if text_only { Vec::new() } else { blocks },
+        cmid: log[start..=last].iter().find_map(|env| env.cmid.clone()),
+    }
+}
+
+/// `(type, mimeType)` of every block that is not text: the identity of an
+/// attachment-only prompt, whose text is empty and whose image bytes may live
+/// inline in one copy and behind an artifact URL in another.
+fn attachment_signature(content: &[serde_json::Value]) -> Vec<(String, String)> {
+    content
+        .iter()
+        .filter(|block| {
+            block
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind != "text")
+        })
+        .map(|block| {
+            let field = |name: &str| {
+                block
+                    .get(name)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            (field("type"), field("mimeType"))
+        })
+        .collect()
 }
 
 /// An in-progress switch to another installed Provider release.
@@ -2367,6 +2407,47 @@ impl Hub {
 
     pub fn set_artifacts(&self, artifacts: crate::artifacts::ArtifactStore) {
         *self.inner.artifacts.lock() = Some(artifacts);
+    }
+
+    /// Put the bytes back into image blocks whose history copy only holds an
+    /// `/api/artifacts/…` URL ([`Self::push_tagged`] externalizes large images
+    /// before the log keeps them). A retry resubmits history, and the worker
+    /// needs inline `data`. Fails with the missing reference when an artifact
+    /// is gone or no store is configured; blocks are left untouched then.
+    fn restore_externalized_images(
+        &self,
+        content: &mut [serde_json::Value],
+    ) -> std::result::Result<(), String> {
+        let store = self.inner.artifacts.lock().clone();
+        for block in content.iter_mut() {
+            let Some(object) = block.as_object_mut() else {
+                continue;
+            };
+            if object.get("type").and_then(serde_json::Value::as_str) != Some("image")
+                || object.contains_key("data")
+            {
+                continue;
+            }
+            let Some(url) = object
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let Some(name) = url.strip_prefix("/api/artifacts/") else {
+                continue;
+            };
+            let path = store
+                .as_ref()
+                .and_then(|store| store.path(name))
+                .ok_or_else(|| url.clone())?;
+            let bytes = std::fs::read(&path).map_err(|_| url.clone())?;
+            let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+            object.remove("url");
+            object.insert("data".to_owned(), serde_json::Value::String(data));
+        }
+        Ok(())
     }
 
     /// Store a prompt's large images ahead of dispatch. `true` lets a remote
@@ -7212,7 +7293,7 @@ impl Hub {
         if self.is_managed_child(session_id) {
             return;
         }
-        let (prompt, content, status, retry_cmid, already_queued) = {
+        let (prompt, mut content, status, retry_cmid, already_queued) = {
             let sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get(session_id) else {
                 tracing::warn!(session = %session_id, "retry_turn: unknown session — no-op");
@@ -7237,7 +7318,11 @@ impl Hub {
                 return;
             };
             let retry_cmid = format!("cowboy-retry:{session_id}:{last_user_seq}");
-            let (prompt, content) = last_user_prompt(&s.log);
+            let LastUserPrompt {
+                text: prompt,
+                content,
+                cmid: echoed_cmid,
+            } = last_user_prompt(&s.log);
             if s.in_flight
                 || s.queue
                     .iter()
@@ -7246,7 +7331,25 @@ impl Hub {
                 tracing::info!(session = %session_id, "retry_turn: identical retry already pending — no-op");
                 return;
             }
-            let already_queued = s.queue.iter().any(|message| message.text == prompt);
+            // A rejected prompt may already sit in the queue (requeued after a
+            // failed dispatch). Identify it by its cmid when the echo still
+            // carries one; otherwise by text, or — for an attachment-only
+            // prompt whose text is empty — by the attachment shape, so one
+            // image-only prompt never passes for another.
+            let already_queued = s
+                .queue
+                .iter()
+                .find(|message| {
+                    if echoed_cmid.is_some() && message.cmid == echoed_cmid {
+                        return true;
+                    }
+                    if prompt.trim().is_empty() {
+                        attachment_signature(&message.content) == attachment_signature(&content)
+                    } else {
+                        message.text == prompt
+                    }
+                })
+                .map(|message| message.id.clone());
             (prompt, content, s.meta.status, retry_cmid, already_queued)
         };
         if prompt.trim().is_empty() && content.is_empty() {
@@ -7255,9 +7358,29 @@ impl Hub {
             tracing::warn!(session = %session_id, ?status, "retry_turn: no prior prompt to retry — no-op");
             return;
         }
-        if already_queued {
-            tracing::info!(session = %session_id, "retry_turn: rejected prompt already queued — draining without duplication");
-            self.drain_head(session_id, true, true);
+        if let Some(id) = already_queued {
+            tracing::info!(session = %session_id, "retry_turn: rejected prompt already queued — sending it without duplication");
+            self.request_send_queued(session_id, &id);
+            return;
+        }
+        if let Err(reference) = self.restore_externalized_images(&mut content) {
+            // History only keeps a URL for a large image; without the stored
+            // bytes the retry would silently drop the attachment (an ACP image
+            // block needs inline data). Refuse, and say so on the failure card.
+            tracing::warn!(session = %session_id, ?status, %reference, "retry_turn: attachment no longer stored — not retrying");
+            if matches!(
+                status,
+                Status::Crashed | Status::Exited | Status::Interrupted
+            ) {
+                self.set_status(
+                    session_id,
+                    status,
+                    Some(
+                        "Retry needs an attachment that is no longer stored; send the prompt again with the file."
+                            .to_owned(),
+                    ),
+                );
+            }
             return;
         }
         tracing::info!(session = %session_id, ?status, prompt_len = prompt.len(), blocks = content.len(), "retry_turn: re-submitting last prompt");
@@ -9065,7 +9188,6 @@ mod runtime_reconciliation_tests {
 #[cfg(test)]
 mod core_tests {
     use super::*;
-    use base64::Engine as _;
 
     #[test]
     fn publishing_preparation_retains_target_verified_source_and_identity_fences() {
@@ -10767,6 +10889,158 @@ mod core_tests {
             .expect("a prompt that ends with an image is still retried");
         assert_eq!(dispatched.text, "look");
         assert_eq!(dispatched.content.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn retry_restores_image_bytes_externalized_into_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-retry-artifacts-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let hub = hub_with_session("retry-artifact");
+        hub.set_artifacts(crate::artifacts::ArtifactStore::new(root.clone()).unwrap());
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        let data = base64::engine::general_purpose::STANDARD.encode(vec![7_u8; 40_000]);
+        hub.push(
+            "retry-artifact",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "image", "mimeType": "image/png", "data": data}
+                }),
+            },
+        );
+        hub.push(
+            "retry-artifact",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": "what is this"}
+                }),
+            },
+        );
+        let externalized = hub
+            .snapshot("retry-artifact")
+            .expect("snapshot")
+            .0
+            .iter()
+            .any(|envelope| match &envelope.event {
+                Event::Update { update } => update.pointer("/content/url").is_some(),
+                _ => false,
+            });
+        assert!(
+            externalized,
+            "history should hold the image as an artifact URL"
+        );
+        hub.set_status("retry-artifact", Status::Crashed, Some("boom".to_owned()));
+
+        hub.retry_turn("retry-artifact");
+
+        let dispatched = rx.try_recv().expect("retry dispatches the prompt");
+        assert_eq!(dispatched.text, "what is this");
+        assert_eq!(dispatched.content.len(), 2);
+        assert_eq!(
+            dispatched.content[0]
+                .get("data")
+                .and_then(serde_json::Value::as_str),
+            Some(data.as_str()),
+            "the image bytes come back inline"
+        );
+        assert!(dispatched.content[0].get("url").is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn retry_refuses_visibly_when_the_stored_attachment_is_gone() {
+        let hub = hub_with_session("retry-lost-artifact");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.push(
+            "retry-lost-artifact",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {
+                        "type": "image",
+                        "mimeType": "image/png",
+                        "url": "/api/artifacts/0000000000000000000000000000000000000000000000000000000000000000.png"
+                    }
+                }),
+            },
+        );
+        hub.set_status(
+            "retry-lost-artifact",
+            Status::Crashed,
+            Some("boom".to_owned()),
+        );
+
+        hub.retry_turn("retry-lost-artifact");
+
+        assert!(
+            rx.try_recv().is_err(),
+            "retry dispatched a prompt without its image"
+        );
+        let detail = hub
+            .snapshot("retry-lost-artifact")
+            .expect("snapshot")
+            .0
+            .iter()
+            .rev()
+            .find_map(|envelope| match &envelope.event {
+                Event::Lifecycle {
+                    status: Status::Crashed,
+                    detail: Some(detail),
+                } => Some(detail.clone()),
+                _ => None,
+            })
+            .expect("failure card detail");
+        assert!(detail.contains("attachment"), "{detail}");
+    }
+
+    #[tokio::test]
+    async fn retry_of_an_attachment_only_prompt_keeps_a_different_queued_attachment() {
+        let hub = hub_with_session("retry-attachment-only");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        let failed =
+            serde_json::json!({"type": "image", "mimeType": "image/png", "data": "ZmFpbGVk"});
+        hub.push(
+            "retry-attachment-only",
+            Event::Update {
+                update: serde_json::json!({"sessionUpdate": "user_message_chunk", "content": failed}),
+            },
+        );
+        hub.set_status(
+            "retry-attachment-only",
+            Status::Crashed,
+            Some("boom".to_owned()),
+        );
+        hub.requeue_prompt(
+            "retry-attachment-only",
+            String::new(),
+            vec![serde_json::json!({
+                "type": "resource_link",
+                "mimeType": "text/plain",
+                "uri": "file:///notes.txt",
+                "name": "notes.txt"
+            })],
+            Some("other-cmid".to_owned()),
+        );
+
+        hub.retry_turn("retry-attachment-only");
+
+        let dispatched = rx.try_recv().expect("the failed image prompt is retried");
+        assert_eq!(dispatched.content, vec![failed]);
+        assert_eq!(
+            hub.session_info("retry-attachment-only")
+                .expect("session")
+                .queue_count,
+            1,
+            "the unrelated queued attachment was consumed"
+        );
     }
 
     #[tokio::test]
