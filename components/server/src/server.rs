@@ -2150,7 +2150,7 @@ async fn serve_axum(
         )
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/code/sessions/{id}/tree", get(api_file_tree))
-        .route("/api/code/sessions/{id}/search", get(api_code_search))
+        .merge(code_api::search_routes())
         .route("/api/code/sessions/{id}/manifest", get(api_code_manifest))
         .route("/api/code/sessions/{id}/changes", get(api_code_changes))
         .route("/api/code/sessions/{id}/extensions", get(workspace_extensions::inventory))
@@ -2863,13 +2863,6 @@ struct FileSearchQuery {
 
 #[derive(Debug, Serialize)]
 struct FileSearchResponse {
-    files: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeSearchResponse {
-    api_version: u8,
     files: Vec<String>,
 }
 

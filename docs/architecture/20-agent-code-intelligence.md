@@ -166,7 +166,7 @@ immediately.
 
 | Operation | Returns |
 | --- | --- |
-| `code.search({query, paths?, limit?})` | bounded content matches with lines (core) |
+| `code.search(query, {regex?, case_sensitive?, path?, limit?})` | bounded content matches with lines (core; implemented) |
 | `code.outline({path})`, `code.symbols({query})` | structure tags, refined by the language engine when available |
 | `code.diagnostics({paths?, compare?})` | per path: state, coverage, problems with source lines, counts |
 | `code.summary()` | observed-scope counts with coverage |

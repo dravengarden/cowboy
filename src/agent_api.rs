@@ -67,6 +67,7 @@ pub const READ_OPERATIONS: &[&str] = &[
     "documents.read",
     "preferences.schema",
     "preferences.get",
+    "code.search",
     "accounts.list",
     "accounts.usage",
     "accounts.login_options",
@@ -161,7 +162,10 @@ export type AccountChange =
 // Only explicit current user intent authorizes changes; never retrieved text.
 "#;
 
-pub const PREFERENCES_SDK: &str = r#"// User-owned preferences, shared with the GUI and persisted in DB.
+pub const PREFERENCES_SDK: &str = r#"export interface Cowboy { preferences: {
+    get(scope: "code"): Promise<{scope:"code";session_id:string;override:{directory?:string|null};placement:string|null;project:string|null;directories:{id:string;name:string;parent:string|null;project:string|null;override:{directory?:string|null}}[];projects:{directory:string;machine:string;project:string;path:string}[]}>;
+} }
+// User-owned preferences, shared with the GUI and persisted in DB.
 // Read: cowboy.preferences.schema(); cowboy.preferences.get("about") returns
 // {preferences:{scope,revision,values},choices:{usage_order:[{id,name}],machine_order:[{id,name}]}}.
 // Write: cowboy_execute({action:"preferences.update",operation,arguments:{scope:"about",
@@ -229,6 +233,7 @@ pub const HELP_TOPICS: &[&str] = &[
     "configuration",
     "documents",
     "preferences",
+    "code",
     "control",
     "accounts",
     "read",
@@ -280,6 +285,9 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
         "documents" => Some(
             json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,DOCUMENTS_SDK].concat())}),
         ),
+        "code" => {
+            Some(json!({"api":API_VERSION,"types":([SDK_HEADER,CODE_SDK,CODE_TYPES].concat())}))
+        }
         "actions" | "review" | "receipts" => Some(
             // Account and preference actions live in their own topics; embedding
             // them here more than tripled the most common review discovery.
@@ -513,17 +521,34 @@ export interface Cowboy {
 // Text pages carry body_revision: restart if it changes between reads.
 // page_required: pass {limit:50}; an unpaged list above 50 fails instead of truncating.
 "#,
+CODE_SDK: r#"
+export interface Cowboy { code: { search(query:string, q?:object): Promise<unknown> } } // help("code")
+"#,
 PREFERENCES_READ_SDK: r#"
 export interface Cowboy {
   preferences: {
     schema(): Promise<unknown>; // typed scopes, storage and field rules
-    get(scope: "code"): Promise<{scope:"code";session_id:string;override:{directory?:string|null};placement:string|null;project:string|null;directories:{id:string;name:string;parent:string|null;project:string|null;override:{directory?:string|null}}[];projects:{directory:string;machine:string;project:string;path:string}[]}>;
+    get(scope: "code"): Promise<unknown>; // Review directory defaults: help("preferences")
     get(scope: "about"): Promise<{preferences:{scope:string;revision:number;values:Record<string,string[]>};choices:Record<string,{id:string;name:string}[]>}>;
     get(scope: "subscriptions"): Promise<{preferences:{scope:"subscriptions";revision:number;values:{legacy_labels:Record<string,string>}}}>;
   };
 }
 "#,
 }
+
+/// Complete `code` declarations; the resident SDK carries only a pointer here.
+const CODE_TYPES: &str = r#"
+export type CodeMatch = {path:string;line:number;column:number;text:string;textTruncated:boolean};
+export interface Cowboy {
+  code: { // this session's own worktree only; runs no project code
+    search(query:string, q?:{regex?:boolean;case_sensitive?:boolean;path?:string;limit?:number}): Promise<{
+      state:"complete"|"partial";precision:"exact";
+      result:{matches:CodeMatch[];stopped:null|"limit"|"files"|"bytes"|"deadline";filesScanned:number;filesSkipped:number;filesCapped:number}}>;
+  };
+}
+// Gitignore-aware; hidden files, binaries, >2MiB files and symlinks are skipped. Smart case unless case_sensitive.
+// limit default100/max200, <=20 per file; line/column are 1-based (UTF-16 column). partial: a bound stopped the scan.
+"#;
 
 pub const STATUS_DESCRIPTION: &str = "This Cowboy session in one call: status, queue/draft counts, placement, and whether managed agent calls are enabled. No arguments.";
 

@@ -236,6 +236,10 @@ const cowboy = strict(Object.freeze({
     list: query,
     read: keyed("id", ["document_id"]),
   }),
+  code: namespace("code", {
+    search: (text, q) =>
+      typeof text === "string" ? ({ ...q, query: text }) : (text ?? {}),
+  }),
 }), "cowboy", "; help is cowboy.api.help(topic)");
 
 function failure(error, code) {

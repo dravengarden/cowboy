@@ -3,44 +3,8 @@
 
 use super::*;
 
-pub(super) async fn api_code_search(
-    State(state): State<Arc<AppState>>,
-    authority: code_reads::Authority,
-    Path(session_id): Path<String>,
-    Query(query): Query<FileSearchQuery>,
-) -> Response {
-    let context_id = session_id.clone();
-    code_reads::scoped(authority, &context_id, |context| async move {
-        let cwd = context.cwd;
-        let limit = query.limit.clamp(1, 100);
-        let files = match remote_code_request(
-            &state,
-            &context.scope,
-            CodeOperation::Search {
-                query: query.q.clone(),
-                limit,
-            },
-        )
-        .await
-        {
-            Ok(Some(crate::code_adapter::CodeAdapterResponse::Search(files))) => files,
-            Ok(Some(_)) | Err(_) => {
-                return (StatusCode::BAD_GATEWAY, "remote code search unavailable").into_response();
-            }
-            Ok(None) => tokio::task::spawn_blocking(move || {
-                crate::code_review::LocalCodeProvider::new(cwd).search(&query.q, limit)
-            })
-            .await
-            .unwrap_or_default(),
-        };
-        Json(CodeSearchResponse {
-            api_version: 1,
-            files,
-        })
-        .into_response()
-    })
-    .await
-}
+mod search;
+pub(super) use search::{ContentSearchParams, content_search, routes as search_routes};
 
 /// Return one filesystem directory page for the mobile review tree.
 ///

@@ -424,7 +424,7 @@ impl Host for FakeHost {
             }
             "session.usage" | "session.history" | "sessions.history" | "sessions.usage"
             | "sessions.events" | "sessions.message" | "sessions.queue" | "sessions.drafts"
-            | "usage.list" | "usage.read" => Ok(json!({"op":op,"args":args})),
+            | "usage.list" | "usage.read" | "code.search" => Ok(json!({"op":op,"args":args})),
             _ => Err("unknown_operation".into()),
         }
     }
@@ -597,6 +597,29 @@ async fn scoped_runner_methods_preserve_explicit_ids_over_query_fields() {
     );
     assert_eq!(rows[8]["args"], json!({"session_id":"mine","before":50}));
     assert_eq!(rows[9]["args"], json!({"before":30}));
+}
+
+#[tokio::test]
+async fn code_search_takes_the_query_positionally_or_in_one_object() {
+    let Some(value) = run(
+        r#"
+        return [
+          (await cowboy.code.search("alpha", {query:"ignored", path:"src", limit:3})).args,
+          (await cowboy.code.search({query:"beta", regex:true})).args,
+        ];
+        "#,
+        false,
+        10_000,
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(value["state"], "ok", "{value}");
+    assert_eq!(
+        value["value"],
+        json!([{"query":"alpha","path":"src","limit":3},{"query":"beta","regex":true}])
+    );
 }
 
 #[tokio::test]

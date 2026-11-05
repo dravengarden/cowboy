@@ -435,9 +435,7 @@ export function fetchCodeChanges(
   signal?: AbortSignal,
   comparison?: string,
 ): Promise<CodeChanges> {
-  const query = comparison
-    ? `?${new URLSearchParams({ comparison })}`
-    : "";
+  const query = comparison ? `?${new URLSearchParams({ comparison })}` : "";
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/changes${query}`,
     signal,
@@ -478,6 +476,38 @@ export function fetchCodeSearch(
   const params = new URLSearchParams({ q: query, limit: "50" });
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/search?${params}`,
+    signal,
+  );
+}
+
+export interface CodeContentMatch {
+  path: string;
+  line: number;
+  column: number;
+  text: string;
+  textTruncated: boolean;
+}
+
+export interface CodeContentSearchResults {
+  apiVersion: 1;
+  matches: CodeContentMatch[];
+  /** Set when a bound stopped the scan; the list is then incomplete. */
+  stopped: "limit" | "files" | "bytes" | "deadline" | null;
+  filesScanned: number;
+  filesSkipped: number;
+  filesCapped: number;
+}
+
+export function fetchCodeContentSearch(
+  sessionId: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<CodeContentSearchResults> {
+  const params = new URLSearchParams({ q: query, limit: "100" });
+  return codeFetch(
+    `/api/code/sessions/${
+      encodeURIComponent(sessionId)
+    }/content-search?${params}`,
     signal,
   );
 }

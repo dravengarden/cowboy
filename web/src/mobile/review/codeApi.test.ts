@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import {
   closeCodeBuffer,
+  fetchCodeContentSearch,
   fetchCodeFilePage,
   fetchCodeLanguage,
   fetchCodeManifest,
@@ -207,6 +208,43 @@ test("search stays inside the stable Code data plane", async () => {
       requested,
       "/api/code/sessions/session%2Fid/search?q=main+rs&limit=50",
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("content search uses the bounded content-search route", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          matches: [{
+            path: "src/a.rs",
+            line: 3,
+            column: 5,
+            text: "fn a()",
+            textTruncated: false,
+          }],
+          stopped: null,
+          filesScanned: 1,
+          filesSkipped: 0,
+          filesCapped: 0,
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    const result = await fetchCodeContentSearch("session/id", "fn a");
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/content-search?q=fn+a&limit=100",
+    );
+    assertEquals(result.matches[0]?.line, 3);
   } finally {
     globalThis.fetch = originalFetch;
   }

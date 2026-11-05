@@ -29,6 +29,7 @@ use crate::managed_calls::service::Ledger;
 
 const RUNNER: &str = include_str!("agent_api/runner.js");
 mod actions;
+mod code_reads;
 mod control;
 mod event_reads;
 mod json_reads;
@@ -193,6 +194,11 @@ fn after_id(args: &Value) -> Result<Option<&str>, String> {
 
 // Name the rejected key and the accepted ones; a bare code was the most
 // common reason agents retried a read with another guessed option.
+fn help(args: &Value) -> Result<Value, String> {
+    only_keys(args, &["topic"])?;
+    crate::agent_api::help(arg_str(args, "topic")?).ok_or("invalid_help".into())
+}
+
 fn only_keys(args: &Value, allowed: &[&str]) -> Result<(), String> {
     let Value::Object(map) = args else {
         return Err("invalid_argument: options must be an object".to_owned());
@@ -225,10 +231,8 @@ impl Host for SessionHost<'_> {
             | "configuration.schema"
             | "configuration.read"
             | "usage.diagnostics" => observations::read(self.state, self.meta, op, &args).await,
-            "api.help" => {
-                only_keys(&args, &["topic"])?;
-                crate::agent_api::help(arg_str(&args, "topic")?).ok_or("invalid_help".into())
-            }
+            "api.help" => help(&args),
+            "code.search" => code_reads::read(self.state, self.meta, op, &args).await,
             "session.event" | "sessions.event" => {
                 let value = event_reads::read(
                     &self.state.hub,

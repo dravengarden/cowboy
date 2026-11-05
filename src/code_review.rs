@@ -20,6 +20,7 @@ pub const FILE_PAGE_BYTES: usize = 256 * 1024;
 pub const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
 const LOCAL_PROVIDER_REVISION: &[u8] = b"local-v2-project-projection";
 
+pub mod content_search;
 mod git;
 use git::{git_fetch, git_output};
 

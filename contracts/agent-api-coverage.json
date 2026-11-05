@@ -24,7 +24,6 @@
     "api_code_navigation": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_code_outline": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_code_repository": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
-    "api_code_search": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_diagnostic_log_detail": "diagnostics.log",
     "api_diagnostic_logs": "diagnostics.logs",
     "api_file_tree": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
@@ -207,6 +206,7 @@
   },
   "merged_routers": {
     "cardea_authorization::routes": "exception:identity — human authorization ceremonies stay with Cardea; agents cannot grant themselves authority.",
+    "code_api::search_routes": "code.search",
     "code_buffers::routes": "exception:native — browser-owned unsaved buffers, navigation and file synchronization stay with native code tools and the Code UI.",
     "product_auth_router": "exception:identity — login, credentials, passkeys, grants and account administration remain with the identity owner.",
     "telemetry_binding::recovery::surface::routes": "exception:host — exact telemetry recovery and writer promotion require maintenance authority; use the Operator CLI.",
