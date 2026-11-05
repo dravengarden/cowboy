@@ -355,82 +355,11 @@ pub(super) async fn api_new_session(
     if !principal.role.at_least(crate::admin::AdminRole::Operator) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if let Err(error) = session_context::validate_sources(&state, &principal, &req.context_sources)
-    {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-    use crate::session_folders::defaults::DefaultKey;
-    let defaults = match folder_defaults::resolve(&state, &principal, req.folder_id.as_deref()) {
-        Ok(value) => value,
-        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
-    };
-    if req.provider.is_empty() {
-        req.provider = folder_defaults::value(&defaults, DefaultKey::Provider)
-            .unwrap_or_else(|| "claude-code".into());
-    }
-    let provider_account_id = match provider_accounts::resolve_for_create(
-        &state,
-        &principal.user_id,
-        &req.provider,
-        req.provider_account_id.as_ref(),
-    )
-    .await
-    {
-        Ok(id) => id,
-        Err(code) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error":{"code":code}})),
-            )
-                .into_response();
-        }
-    };
-    if req.machine_id == "local" {
-        req.machine_id =
-            folder_defaults::value(&defaults, DefaultKey::Machine).unwrap_or(req.machine_id);
-    }
-    if req.cwd.is_none() {
-        req.cwd = folder_defaults::value(&defaults, DefaultKey::Project);
-    }
-    if req.folder_id.is_some() && (req.machine_id == "local" || req.cwd.is_none()) {
-        if req.cwd.is_none() && defaults.values.get(&DefaultKey::Project) == Some(&None) {
-            return (
-                StatusCode::BAD_REQUEST,
-                "This directory has no project binding; select a project explicitly",
-            )
-                .into_response();
-        }
-        match folder_defaults::default_workspace(
-            &state,
-            (req.machine_id != "local").then_some(req.machine_id.as_str()),
-            req.cwd.as_deref(),
-        )
-        .await
-        {
-            Ok((machine, project)) => {
-                req.machine_id = machine;
-                req.cwd = Some(project);
-            }
-            Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
-        }
-    }
-    if req.preset.is_none() {
-        req.preset = folder_defaults::value(&defaults, DefaultKey::Preset);
-    }
-    let runtime = req
-        .runtime_machine_id
-        .as_deref()
-        .map(str::to_owned)
-        .or_else(|| folder_defaults::value(&defaults, DefaultKey::RuntimeMachine))
-        .or_else(|| {
-            req.folder_id.as_ref().and_then(|_| {
-                state
-                    .project_placement
-                    .snapshot()
-                    .default_runtime_machine_id
-                    .clone()
-            })
-        });
+    let (provider_account_id, runtime) =
+        match resolve_new_session_defaults(&state, &principal, &mut req).await {
+            Ok(resolved) => resolved,
+            Err(response) => return response,
+        };
     if let Some(runtime) = runtime.filter(|runtime| runtime != &req.machine_id) {
         if req.system {
             return (
@@ -468,9 +397,10 @@ pub(super) async fn api_new_session(
         )
             .into_response();
     }
-    let mut cwd = req.cwd;
+    let cwd = req.cwd.take();
     let session_id = req
         .reserved_id
+        .take()
         .unwrap_or_else(|| state.supervisor.reserve_session_id());
     if web_session_is_missing_machine(&req.machine_id, &req.origin) {
         return (
@@ -491,190 +421,319 @@ pub(super) async fn api_new_session(
             .into_response();
     }
     if req.machine_id != "local" {
-        if !state
-            .project_placement
-            .snapshot()
-            .allows(&req.machine_id, &req.machine_id)
-        {
-            return (
+        return create_machine_session(
+            &state,
+            &principal,
+            req,
+            session_id,
+            cwd,
+            provider_account_id,
+        )
+        .await;
+    }
+    create_local_session(
+        &state,
+        &principal,
+        req,
+        session_id,
+        cwd,
+        provider_account_id,
+    )
+    .await
+}
+
+/// Applies the request's directory defaults and resolves its Provider
+/// account and the runtime Machine a directory session should execute on.
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejection is an owned Axum response returned directly by its handler"
+)]
+async fn resolve_new_session_defaults(
+    state: &Arc<AppState>,
+    principal: &ProductPrincipal,
+    req: &mut NewSessionRequest,
+) -> Result<(crate::provider_account::ProviderAccountId, Option<String>), Response> {
+    if let Err(error) = session_context::validate_sources(state, principal, &req.context_sources) {
+        return Err((StatusCode::BAD_REQUEST, error).into_response());
+    }
+    use crate::session_folders::defaults::DefaultKey;
+    let defaults = match folder_defaults::resolve(state, principal, req.folder_id.as_deref()) {
+        Ok(value) => value,
+        Err(error) => return Err((StatusCode::BAD_REQUEST, error).into_response()),
+    };
+    if req.provider.is_empty() {
+        req.provider = folder_defaults::value(&defaults, DefaultKey::Provider)
+            .unwrap_or_else(|| "claude-code".into());
+    }
+    let provider_account_id = match provider_accounts::resolve_for_create(
+        state,
+        &principal.user_id,
+        &req.provider,
+        req.provider_account_id.as_ref(),
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(code) => {
+            return Err((
                 StatusCode::CONFLICT,
-                "Machine policy does not permit a local AI session on this project Machine",
+                Json(serde_json::json!({"error":{"code":code}})),
             )
-                .into_response();
+                .into_response());
         }
-        let Some(store) = state.store.as_ref() else {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "machine registry unavailable",
-            )
-                .into_response();
-        };
-        let machine = store.list_machines().await.ok().and_then(|machines| {
-            machines
-                .into_iter()
-                .find(|machine| machine.id == req.machine_id && !machine.revoked)
-        });
-        let Some(machine) = machine else {
-            return (StatusCode::NOT_FOUND, "unknown or revoked machine").into_response();
-        };
-        let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
-            .inventory
-            .get("workspaces")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default();
-        let workspace = if req.folder_id.is_some() {
-            folder_defaults::workspace(&workspaces, cwd.as_deref())
-        } else {
-            resolve_machine_workspace(&workspaces, cwd.as_deref())
-        };
-        let selected_workspace = match workspace {
-            Ok(workspace) => workspace.clone(),
-            Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
-        };
-        cwd = Some(selected_workspace.canonical_path.clone());
-        let capacity: crate::machine_protocol::MachineCapacity = machine
-            .inventory
-            .get("capacity")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default();
-        if capacity.draining {
-            return (StatusCode::CONFLICT, "Machine is draining").into_response();
-        }
-        let providers = machine
-            .inventory
-            .get("plugins")
-            .or_else(|| machine.inventory.get("providers"))
-            .cloned()
-            .and_then(|value| {
-                serde_json::from_value::<Vec<crate::machine_protocol::PluginInventory>>(value).ok()
-            })
-            .unwrap_or_default();
-        let mut provider_generation = match provider_accounts::registration::generation(
-            &state,
-            &providers,
-            &req.provider,
-            &principal.user_id,
-            &provider_account_id,
-            &req.machine_id,
-        )
-        .await
-        {
-            Ok(generation) => generation,
-            Err(error) => return (StatusCode::CONFLICT, error).into_response(),
-        };
-        let scheduling_generation = provider_generation.auth_generation;
-        if let Some(retained) = req.retained_auth_generation
-            && let Err(error) = provider_accounts::registration::retain_auth_generation(
-                &mut provider_generation,
-                &provider_account_id,
-                retained,
-            )
-        {
-            return (StatusCode::CONFLICT, error).into_response();
-        }
-
-        let Some(source_path) = cwd.as_deref() else {
-            return (
+    };
+    if req.machine_id == "local" {
+        req.machine_id = folder_defaults::value(&defaults, DefaultKey::Machine)
+            .unwrap_or(std::mem::take(&mut req.machine_id));
+    }
+    if req.cwd.is_none() {
+        req.cwd = folder_defaults::value(&defaults, DefaultKey::Project);
+    }
+    if req.folder_id.is_some() && (req.machine_id == "local" || req.cwd.is_none()) {
+        if req.cwd.is_none() && defaults.values.get(&DefaultKey::Project) == Some(&None) {
+            return Err((
                 StatusCode::BAD_REQUEST,
-                "remote session requires a trusted workspace",
+                "This directory has no project binding; select a project explicitly",
             )
-                .into_response();
-        };
-        let configuration = match folder_defaults::preset_values(
-            &state,
-            &req.provider,
-            &provider_generation,
-            req.preset.as_deref(),
-        ) {
-            Ok(values) => values,
-            Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
-        };
-        let registration = state.supervisor.prepare_session_on_with_id(
-            &session_id,
-            &req.provider,
-            Some(source_path.to_owned()),
-            req.origin,
-            req.system,
-            crate::supervisor::SessionPlacement {
-                machine_id: &req.machine_id,
-                workspace: Some(&selected_workspace),
-                execution_binding: None,
-            },
-            crate::supervisor::ProviderGeneration {
-                account_id: Some(&provider_account_id),
-                version: &provider_generation.version,
-                digest: &provider_generation.digest,
-                auth_generation: provider_generation.auth_generation,
-                behavior: Some(&provider_generation.behavior),
-            },
-            product_session_owner(state.product_auth_enabled, &principal),
-        );
-        let registration = match registration {
-            Ok(registration) => registration,
-            Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
-        };
-        if let Err(error) = session_context::initialize(
-            &state,
-            &principal,
-            &session_id,
-            req.context_sources,
-            req.initial_prompt
-                .as_ref()
-                .filter(|text| !text.trim().is_empty())
-                .map(|_| format!("initial:{session_id}")),
+                .into_response());
+        }
+        match folder_defaults::default_workspace(
+            state,
+            (req.machine_id != "local").then_some(req.machine_id.as_str()),
+            req.cwd.as_deref(),
         )
         .await
         {
-            return (StatusCode::CONFLICT, error).into_response();
+            Ok((machine, project)) => {
+                req.machine_id = machine;
+                req.cwd = Some(project);
+            }
+            Err(error) => return Err((StatusCode::BAD_REQUEST, error).into_response()),
         }
-        if let Err(error) =
-            provider_accounts::registration::register(&state, registration, scheduling_generation)
-                .await
-        {
-            return (StatusCode::CONFLICT, error).into_response();
-        }
+    }
+    if req.preset.is_none() {
+        req.preset = folder_defaults::value(&defaults, DefaultKey::Preset);
+    }
+    let runtime = req
+        .runtime_machine_id
+        .as_deref()
+        .map(str::to_owned)
+        .or_else(|| folder_defaults::value(&defaults, DefaultKey::RuntimeMachine))
+        .or_else(|| {
+            req.folder_id.as_ref().and_then(|_| {
+                state
+                    .project_placement
+                    .snapshot()
+                    .default_runtime_machine_id
+                    .clone()
+            })
+        });
+    Ok((provider_account_id, runtime))
+}
 
-        if let Err(error) = folder_defaults::apply_created(
-            &state,
-            &principal,
-            &session_id,
-            req.folder_id.as_deref(),
-            configuration,
-        ) {
-            return (StatusCode::BAD_REQUEST, error).into_response();
-        }
-        let initial_prompt = req.initial_prompt;
-        let eager = req.system;
-        if let Some(prompt) = initial_prompt.filter(|p| !p.trim().is_empty()) {
-            state.hub.requeue_prompt(
-                &session_id,
-                prompt,
-                vec![],
-                Some(format!("initial:{session_id}")),
-            );
-            session_maintenance::wait(&state.hub, &session_id, "preparing the workspace");
-        }
-        if let Err(error) = session_context::initialized(&state, &session_id).await {
-            return (StatusCode::CONFLICT, error).into_response();
-        }
-        workspace_preparation::schedule(&state, &session_id, &req.machine_id, source_path, eager);
+/// Registers a session whose Provider runs on an enrolled Machine and
+/// schedules its workspace preparation.
+async fn create_machine_session(
+    state: &Arc<AppState>,
+    principal: &ProductPrincipal,
+    req: NewSessionRequest,
+    session_id: String,
+    mut cwd: Option<String>,
+    provider_account_id: crate::provider_account::ProviderAccountId,
+) -> Response {
+    if !state
+        .project_placement
+        .snapshot()
+        .allows(&req.machine_id, &req.machine_id)
+    {
         return (
-            StatusCode::CREATED,
-            Json(NewSessionResponse {
-                session_id,
-                provider_account_id: provider_account_id.clone(),
-                provider_version: provider_generation.version,
-                provider_generation_digest: provider_generation.digest,
-                provider_auth_generation: provider_generation.auth_generation,
-            }),
+            StatusCode::CONFLICT,
+            "Machine policy does not permit a local AI session on this project Machine",
         )
             .into_response();
     }
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "machine registry unavailable",
+        )
+            .into_response();
+    };
+    let machine = store.list_machines().await.ok().and_then(|machines| {
+        machines
+            .into_iter()
+            .find(|machine| machine.id == req.machine_id && !machine.revoked)
+    });
+    let Some(machine) = machine else {
+        return (StatusCode::NOT_FOUND, "unknown or revoked machine").into_response();
+    };
+    let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
+        .inventory
+        .get("workspaces")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    let workspace = if req.folder_id.is_some() {
+        folder_defaults::workspace(&workspaces, cwd.as_deref())
+    } else {
+        resolve_machine_workspace(&workspaces, cwd.as_deref())
+    };
+    let selected_workspace = match workspace {
+        Ok(workspace) => workspace.clone(),
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    cwd = Some(selected_workspace.canonical_path.clone());
+    let capacity: crate::machine_protocol::MachineCapacity = machine
+        .inventory
+        .get("capacity")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    if capacity.draining {
+        return (StatusCode::CONFLICT, "Machine is draining").into_response();
+    }
+    let providers = machine
+        .inventory
+        .get("plugins")
+        .or_else(|| machine.inventory.get("providers"))
+        .cloned()
+        .and_then(|value| {
+            serde_json::from_value::<Vec<crate::machine_protocol::PluginInventory>>(value).ok()
+        })
+        .unwrap_or_default();
+    let mut provider_generation = match provider_accounts::registration::generation(
+        state,
+        &providers,
+        &req.provider,
+        &principal.user_id,
+        &provider_account_id,
+        &req.machine_id,
+    )
+    .await
+    {
+        Ok(generation) => generation,
+        Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+    };
+    let scheduling_generation = provider_generation.auth_generation;
+    if let Some(retained) = req.retained_auth_generation
+        && let Err(error) = provider_accounts::registration::retain_auth_generation(
+            &mut provider_generation,
+            &provider_account_id,
+            retained,
+        )
+    {
+        return (StatusCode::CONFLICT, error).into_response();
+    }
+
+    let Some(source_path) = cwd.as_deref() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "remote session requires a trusted workspace",
+        )
+            .into_response();
+    };
+    let configuration = match folder_defaults::preset_values(
+        state,
+        &req.provider,
+        &provider_generation,
+        req.preset.as_deref(),
+    ) {
+        Ok(values) => values,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    let registration = state.supervisor.prepare_session_on_with_id(
+        &session_id,
+        &req.provider,
+        Some(source_path.to_owned()),
+        req.origin,
+        req.system,
+        crate::supervisor::SessionPlacement {
+            machine_id: &req.machine_id,
+            workspace: Some(&selected_workspace),
+            execution_binding: None,
+        },
+        crate::supervisor::ProviderGeneration {
+            account_id: Some(&provider_account_id),
+            version: &provider_generation.version,
+            digest: &provider_generation.digest,
+            auth_generation: provider_generation.auth_generation,
+            behavior: Some(&provider_generation.behavior),
+        },
+        product_session_owner(state.product_auth_enabled, principal),
+    );
+    let registration = match registration {
+        Ok(registration) => registration,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
     if let Err(error) = session_context::initialize(
-        &state,
-        &principal,
+        state,
+        principal,
+        &session_id,
+        req.context_sources,
+        req.initial_prompt
+            .as_ref()
+            .filter(|text| !text.trim().is_empty())
+            .map(|_| format!("initial:{session_id}")),
+    )
+    .await
+    {
+        return (StatusCode::CONFLICT, error).into_response();
+    }
+    if let Err(error) =
+        provider_accounts::registration::register(state, registration, scheduling_generation).await
+    {
+        return (StatusCode::CONFLICT, error).into_response();
+    }
+
+    if let Err(error) = folder_defaults::apply_created(
+        state,
+        principal,
+        &session_id,
+        req.folder_id.as_deref(),
+        configuration,
+    ) {
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+    let initial_prompt = req.initial_prompt;
+    let eager = req.system;
+    if let Some(prompt) = initial_prompt.filter(|p| !p.trim().is_empty()) {
+        state.hub.requeue_prompt(
+            &session_id,
+            prompt,
+            vec![],
+            Some(format!("initial:{session_id}")),
+        );
+        session_maintenance::wait(&state.hub, &session_id, "preparing the workspace");
+    }
+    if let Err(error) = session_context::initialized(state, &session_id).await {
+        return (StatusCode::CONFLICT, error).into_response();
+    }
+    workspace_preparation::schedule(state, &session_id, &req.machine_id, source_path, eager);
+    (
+        StatusCode::CREATED,
+        Json(NewSessionResponse {
+            session_id,
+            provider_account_id: provider_account_id.clone(),
+            provider_version: provider_generation.version,
+            provider_generation_digest: provider_generation.digest,
+            provider_auth_generation: provider_generation.auth_generation,
+        }),
+    )
+        .into_response()
+}
+
+/// Starts a session on the Controller host runtime.
+async fn create_local_session(
+    state: &Arc<AppState>,
+    principal: &ProductPrincipal,
+    req: NewSessionRequest,
+    session_id: String,
+    cwd: Option<String>,
+    provider_account_id: crate::provider_account::ProviderAccountId,
+) -> Response {
+    if let Err(error) = session_context::initialize(
+        state,
+        principal,
         &session_id,
         req.context_sources,
         req.initial_prompt
@@ -700,7 +759,7 @@ pub(super) async fn api_new_session(
             auth_generation: None,
             behavior: None,
         },
-        product_session_owner(state.product_auth_enabled, &principal),
+        product_session_owner(state.product_auth_enabled, principal),
     ) {
         Ok(session_id) => {
             if let Some(prompt) = req
@@ -726,7 +785,7 @@ pub(super) async fn api_new_session(
                 )
                     .into_response();
             }
-            if let Err(error) = session_context::initialized(&state, &session_id).await {
+            if let Err(error) = session_context::initialized(state, &session_id).await {
                 return (StatusCode::CONFLICT, error).into_response();
             }
             (

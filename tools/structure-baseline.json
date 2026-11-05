@@ -132,7 +132,7 @@
     "components/server/src/server/provider_api.rs::api_provider_auth_start": 189,
     "components/server/src/server/provider_reset_timer.rs::spawn_provider_reset_timer": 203,
     "components/server/src/server/secure_transport.rs::enforce": 186,
-    "components/server/src/server/session_api.rs::api_new_session": 398,
+    "components/server/src/server/session_api.rs::create_machine_session": 188,
     "components/server/src/server/session_context.rs::deliver": 153,
     "components/server/src/server/session_context/fork.rs::fork_session": 164,
     "components/server/src/server/session_maintenance.rs::start": 153,
