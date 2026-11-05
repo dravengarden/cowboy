@@ -11,10 +11,12 @@ import type { ConfigOption } from "./protocol";
 import {
   activeRunConfigPreset,
   runConfigCurrentTitle,
+  runConfigDraftChanges,
   runConfigPresetChanges,
   runConfigPresets,
   runConfigSummary,
   supportedRunConfigPresets,
+  withRunConfigDraft,
 } from "./runConfigPresets";
 
 type DeclaredPreset = ProviderUiManifest["configuration"]["presets"][number];
@@ -290,4 +292,38 @@ test("a session adopts presets published after its installed generation", async 
     globalThis.fetch = previous;
     resetProviderCatalog();
   }
+});
+
+test("a Run configuration draft saves only real changes, model first", () => {
+  const options: ConfigOption[] = [{
+    id: "reasoning_effort",
+    name: "Effort",
+    currentValue: "high",
+    options: [{ value: "high", name: "High" }, { value: "max", name: "Max" }],
+  }, {
+    id: "model",
+    name: "Model",
+    category: "model",
+    currentValue: "opus",
+    options: [{ value: "opus", name: "Opus" }, { value: "fable", name: "Fable" }],
+  }, {
+    id: "fast",
+    name: "Fast mode",
+    currentValue: false,
+    options: [{ value: true, name: "On" }, { value: false, name: "Off" }],
+  }];
+  const draft = { reasoning_effort: "max", model: "fable", fast: "false" };
+  assertEquals(runConfigDraftChanges(options, draft), [
+    { configId: "model", value: "fable" },
+    { configId: "reasoning_effort", value: "max" },
+  ]);
+  assertEquals(
+    withRunConfigDraft(options, { fast: true }).find((option) =>
+      option.id === "fast"
+    )?.currentValue,
+    true,
+  );
+  assertEquals(runConfigDraftChanges(options, { fast: "true" }), [
+    { configId: "fast", value: true },
+  ]);
 });

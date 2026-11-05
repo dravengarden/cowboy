@@ -103,3 +103,38 @@ export function runConfigPresetChanges(
     Number(optionById.get(left.configId)?.category === "model")
   );
 }
+
+/** Unsaved Run configuration edits, by option id. */
+export type RunConfigDraft = Readonly<Record<string, string | boolean>>;
+
+/** The options as the draft would leave them. */
+export function withRunConfigDraft(
+  options: readonly ConfigOption[],
+  draft: RunConfigDraft,
+): ConfigOption[] {
+  return options.map((option) =>
+    Object.hasOwn(draft, option.id)
+      ? { ...option, currentValue: draft[option.id]! }
+      : option
+  );
+}
+
+/** What saving the draft sends: only values that differ from the agent's,
+ *  the model first because effort choices depend on it. */
+export function runConfigDraftChanges(
+  options: readonly ConfigOption[],
+  draft: RunConfigDraft,
+): { configId: string; value: string | boolean }[] {
+  const changes = options.flatMap((option) => {
+    if (!Object.hasOwn(draft, option.id)) return [];
+    const value = draft[option.id]!;
+    if (String(value) === String(option.currentValue)) return [];
+    const typed = option.options.find((candidate) =>
+      String(candidate.value) === String(value)
+    )?.value ?? value;
+    return [{ configId: option.id, value: typed, model: option.category === "model" || option.id === "model" }];
+  });
+  return changes
+    .sort((left, right) => Number(right.model) - Number(left.model))
+    .map(({ configId, value }) => ({ configId, value }));
+}

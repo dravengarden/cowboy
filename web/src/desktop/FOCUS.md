@@ -464,7 +464,16 @@ Context. Its panel is an exclusive region with its own keymap
 | `1`–`9` | Apply that recommended preset |
 | `A` `M` `E` `C` `F` `P` | The option with that letter (Model opens its list) |
 | `Enter` | Open a Select, toggle a switch, press a button |
+| `Mod+Enter` | Apply the Agent draft |
 | `␣` | Dialog leader: a letter on every control of every pane |
+
+Agent options are a draft: presets, `H/L` and the letters change what the
+pane shows, not the running agent, so stepping through choices never
+switches its model (and context) once per key. Each changed field is tinted
+and names the agent's value (`was Opus 5.5`); `Mod+Enter` or Apply sends the
+changes together, the model first, and waits for the agent to acknowledge
+them. With unsaved edits the first `Esc` only warns; a second discards them
+and closes. Tools and linked sessions still save as they change.
 
 The field under the cursor is shaded with a leading bar and its pane is
 outlined. A switch disabled while its change saves keeps the cursor: focus
