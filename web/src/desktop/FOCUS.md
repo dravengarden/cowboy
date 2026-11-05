@@ -444,6 +444,30 @@ under the tabs names only the current mode's keys, and the tab digits light
 in Normal. Pointer activation still selects and focuses the title in one
 step. The Cancel `Esc` keycap is inactive while a text field owns `Esc`.
 
+### Run configuration
+
+Run configuration (`␣TR`) is a workbench, not a form: it fills the window
+less a 24 px margin (`DesktopModal fill`) and lays Agent, Context and Tools
+side by side, each pane scrolling on its own, so every setting is visible at
+once on a wide window. It folds to Agent+Context | Tools, then one column, as
+the window narrows. Its panel is an exclusive region with its own keymap
+(`runConfigNavigation.ts`), the same Vim grammar specialised for settings:
+
+| Key | Action |
+| --- | --- |
+| `J` / `K` | Next / previous field in the pane (a Provider option or the presets is one field; other controls form rows by geometry) |
+| `H` / `L` | Change the field: step a choice or the Model, a switch off / on, a disclosure closed / open; else move beside |
+| `[` / `]`, `Ctrl-H` / `Ctrl-L` | Previous / next pane (brackets wrap); each pane keeps its cursor |
+| `gg` / `G` | First / last field of the pane |
+| `1`–`9` | Apply that recommended preset |
+| `A` `M` `E` `C` `F` `P` | The option with that letter (Model opens its list) |
+| `Enter` | Open a Select, toggle a switch, press a button |
+| `␣` | Dialog leader: a letter on every control of every pane |
+
+The field under the cursor is shaded with a leading bar and its pane is
+outlined. A switch disabled while its change saves keeps the cursor: focus
+returns to it once it is usable again.
+
 ### Shortcut slots and bars
 
 Every keyboard-capable action has one discoverable slot. Fixed controls embed

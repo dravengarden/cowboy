@@ -34,6 +34,7 @@ export function DesktopModal({
   shortcutGroups,
   onShortcutKeyDown,
   width = 920,
+  fill = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -45,6 +46,9 @@ export function DesktopModal({
   shortcutGroups?: readonly DesktopShortcutGroup[];
   onShortcutKeyDown?: KeyboardEventHandler<HTMLDivElement>;
   width?: number;
+  /** A workbench rather than a form: take the whole viewport less a margin
+   *  and let the content lay out its own scrolling regions. */
+  fill?: boolean;
 }): React.JSX.Element {
   return (
     <Dialog
@@ -67,9 +71,19 @@ export function DesktopModal({
         paper: {
           sx: {
             ...desktopModalPaperSx(),
-            width: `min(${width}px, calc(100vw - 64px))`,
-            maxHeight: "min(860px, calc(100vh - 64px))",
-            m: 4,
+            ...(fill
+              ? {
+                width: "min(1760px, calc(100vw - 48px))",
+                height: "calc(100vh - 48px)",
+                maxWidth: "none",
+                maxHeight: "none",
+                m: 3,
+              }
+              : {
+                width: `min(${width}px, calc(100vw - 64px))`,
+                maxHeight: "min(860px, calc(100vh - 64px))",
+                m: 4,
+              }),
           },
         },
         backdrop: { sx: desktopModalBackdropSx() },
@@ -89,7 +103,13 @@ export function DesktopModal({
         </HintTooltip>
       </Stack>
       <Divider />
-      <Box sx={{ minHeight: 0, overflow: "auto" }}>{children}</Box>
+      <Box
+        sx={fill
+          ? { flex: 1, minHeight: 0, display: "flex", overflow: "hidden" }
+          : { minHeight: 0, overflow: "auto" }}
+      >
+        {children}
+      </Box>
       {footer && <><Divider />{footer}</>}
       {shortcutGroups
         ? <DesktopShortcutBar groups={shortcutGroups} />
