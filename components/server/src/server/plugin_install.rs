@@ -3,7 +3,9 @@
 //! Retained protocol-seven ACKs remain readable. Fresh execution requires the
 //! exact protocol-nineteen target and durable Machine receipt.
 
-use super::operator_approval::{InstallationAuthority, OperatorApproval};
+use super::operator_approval::{
+    InstallationAuthority, InstallationReconciliationAuthority, OperatorApproval,
+};
 use super::*;
 use crate::machine_control::{CommandFailure, CommandRequestError, ConnectionToken};
 use crate::machine_protocol::DesiredPlugin;
@@ -724,12 +726,7 @@ pub(super) async fn confirmed_reconcile_install(
     }
     match store.plugin_install_staging_resolution(&operation_id).await {
         Ok(Some(resolution)) => {
-            let previous = matches!(
-                before.intent.machine_target,
-                Some(crate::machine_protocol::plugin_install::InstallTarget::Removed { .. })
-            )
-            .then_some(PluginFenceState::Uninstalled);
-            fence.finish(previous);
+            fence.finish(reconciled_fence_state(&before));
             return staging_resolution_response(&before, &resolution);
         }
         Ok(None) => {}
@@ -789,98 +786,18 @@ pub(super) async fn confirmed_reconcile_install(
                 result: InstallLookup::Found { receipt },
                 ..
             }) if receipt.outcome.retryable_staging_failure() => {
-                if before.machine_receipt.as_ref() != Some(receipt.as_ref()) {
-                    // The original response may have timed out before this
-                    // terminal Staging receipt existed. Persist exact evidence
-                    // under the existing snapshot CAS, but keep the fence.
-                    // A new request must authorize the changed snapshot; never
-                    // silently renew or retarget this reconciliation grant.
-                    let recorded = match commit_reconciled_receipt(store, &before, &receipt).await {
-                        Ok(recorded) => recorded,
-                        Err(_) => return StatusCode::CONFLICT.into_response(),
-                    };
-                    return (
-                        StatusCode::ACCEPTED,
-                        Json(serde_json::json!({
-                            "operation_id": recorded.intent.operation_id,
-                            "receipt_recorded": true,
-                            "requires_reconciliation": true,
-                            "installation_replayed": false
-                        })),
-                    )
-                        .into_response();
-                }
-                let query = step.target_query();
-                let target = match state
-                    .machine_control
-                    .plugin_installation_target(&connection, &query)
-                    .await
-                {
-                    Ok(InstallTargetObservation::Observed {
-                        admission_enabled: true,
-                        target,
-                        ..
-                    }) if before.intent.machine_target.as_ref() == Some(&target) => target,
-                    _ => {
-                        return (
-                            StatusCode::CONFLICT,
-                            "Machine installation target changed or remains fenced; staging failure was not resolved",
-                        )
-                            .into_response();
-                    }
-                };
-                if !state.machine_control.is_current(&connection)
-                    || !authority
-                        .check(
-                            ProductRequestAuth::from(state.as_ref()),
-                            &state.service_id,
-                            &before,
-                        )
-                        .await
-                {
-                    return (
-                        StatusCode::CONFLICT,
-                        "Machine connection or Operator authority changed; installation remains fenced",
-                    )
-                        .into_response();
-                }
-                let permit = match authority
-                    .authorize_staging_resolution(
-                        ProductRequestAuth::from(state.as_ref()),
-                        &state.service_id,
-                        &before,
-                        target,
-                    )
-                    .await
-                {
-                    Ok(permit) => permit,
-                    Err(_) => return StatusCode::FORBIDDEN.into_response(),
-                };
-                let expected_intent = permit.intent().clone();
-                let resolution = match store.resolve_plugin_install_staging(&permit, &before).await
-                {
-                    Ok(resolution) => resolution,
-                    Err(error) => {
-                        match store.plugin_install_staging_resolution(&operation_id).await {
-                            Ok(Some(saved)) if saved.intent == expected_intent => saved,
-                            _ => {
-                                tracing::warn!(
-                                    %operation_id,
-                                    error = %error,
-                                    "install staging resolution commit was not observed"
-                                );
-                                return StatusCode::SERVICE_UNAVAILABLE.into_response();
-                            }
-                        }
-                    }
-                };
-                let previous = matches!(
-                    before.intent.machine_target,
-                    Some(crate::machine_protocol::plugin_install::InstallTarget::Removed { .. })
+                return resolve_retryable_staging(
+                    &state,
+                    store,
+                    &before,
+                    &receipt,
+                    &step,
+                    &connection,
+                    authority,
+                    &mut fence,
+                    &operation_id,
                 )
-                .then_some(PluginFenceState::Uninstalled);
-                fence.finish(previous);
-                return staging_resolution_response(&before, &resolution);
+                .await;
             }
             Ok(InstallObservation {
                 result: InstallLookup::Found { .. },
@@ -916,51 +833,14 @@ pub(super) async fn confirmed_reconcile_install(
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if acknowledged.phase == InstallPhase::Aborted {
-        let previous = matches!(
-            before.intent.machine_target,
-            Some(crate::machine_protocol::plugin_install::InstallTarget::Removed { .. })
-        )
-        .then_some(PluginFenceState::Uninstalled);
-        fence.finish(previous);
+        fence.finish(reconciled_fence_state(&before));
         return reconciliation_response(&acknowledged);
     }
 
     let needs_auth = before.intent.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
         && state.provider_auth.status(&plugin).is_some();
     let auth_current = if needs_auth {
-        match state.machine_control.operation_connection(&machine) {
-            Ok(connection)
-                if authority
-                    .check(
-                        ProductRequestAuth::from(state.as_ref()),
-                        &state.service_id,
-                        &before,
-                    )
-                    .await
-                    && state.machine_control.is_current(&connection) =>
-            {
-                match provider_auth_envelope_for_machine(&state, &machine, &plugin).await {
-                    Ok(envelope)
-                        if authority
-                            .check(
-                                ProductRequestAuth::from(state.as_ref()),
-                                &state.service_id,
-                                &before,
-                            )
-                            .await
-                            && state.machine_control.is_current(&connection) =>
-                    {
-                        state
-                            .provider_auth_sync
-                            .apply(&state.machine_control, &connection, envelope)
-                            .await
-                            .is_ok()
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
+        sync_reconciled_provider_auth(&state, &machine, &plugin, &authority, &before).await
     } else {
         true
     };
@@ -991,6 +871,161 @@ pub(super) async fn confirmed_reconcile_install(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     reconciliation_response(&completed)
+}
+
+/// Re-applies the Provider authentication envelope to the Machine after a
+/// reconciled AgentProvider installation, while the Operator authority and
+/// the Machine connection both stay current.
+async fn sync_reconciled_provider_auth(
+    state: &Arc<AppState>,
+    machine: &str,
+    plugin: &str,
+    authority: &InstallationReconciliationAuthority,
+    before: &InstallOperation,
+) -> bool {
+    match state.machine_control.operation_connection(machine) {
+        Ok(connection)
+            if authority
+                .check(
+                    ProductRequestAuth::from(state.as_ref()),
+                    &state.service_id,
+                    before,
+                )
+                .await
+                && state.machine_control.is_current(&connection) =>
+        {
+            match provider_auth_envelope_for_machine(state, machine, plugin).await {
+                Ok(envelope)
+                    if authority
+                        .check(
+                            ProductRequestAuth::from(state.as_ref()),
+                            &state.service_id,
+                            before,
+                        )
+                        .await
+                        && state.machine_control.is_current(&connection) =>
+                {
+                    state
+                        .provider_auth_sync
+                        .apply(&state.machine_control, &connection, envelope)
+                        .await
+                        .is_ok()
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// A retryable terminal Staging failure: record its receipt when it is new,
+/// otherwise resolve the failure against the exact observed Machine target.
+#[allow(clippy::too_many_arguments)]
+async fn resolve_retryable_staging(
+    state: &Arc<AppState>,
+    store: &Store,
+    before: &InstallOperation,
+    receipt: &crate::machine_protocol::plugin_install::InstallReceipt,
+    step: &InstallStep,
+    connection: &ConnectionToken,
+    authority: InstallationReconciliationAuthority,
+    fence: &mut InstallationReconciliationFence,
+    operation_id: &str,
+) -> Response {
+    if before.machine_receipt.as_ref() != Some(receipt) {
+        // The original response may have timed out before this
+        // terminal Staging receipt existed. Persist exact evidence
+        // under the existing snapshot CAS, but keep the fence.
+        // A new request must authorize the changed snapshot; never
+        // silently renew or retarget this reconciliation grant.
+        let recorded = match commit_reconciled_receipt(store, before, receipt).await {
+            Ok(recorded) => recorded,
+            Err(_) => return StatusCode::CONFLICT.into_response(),
+        };
+        return (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "operation_id": recorded.intent.operation_id,
+                "receipt_recorded": true,
+                "requires_reconciliation": true,
+                "installation_replayed": false
+            })),
+        )
+            .into_response();
+    }
+    let query = step.target_query();
+    let target = match state
+        .machine_control
+        .plugin_installation_target(connection, &query)
+        .await
+    {
+        Ok(InstallTargetObservation::Observed {
+            admission_enabled: true,
+            target,
+            ..
+        }) if before.intent.machine_target.as_ref() == Some(&target) => target,
+        _ => {
+            return (
+                StatusCode::CONFLICT,
+                "Machine installation target changed or remains fenced; staging failure was not resolved",
+            )
+                .into_response();
+        }
+    };
+    if !state.machine_control.is_current(connection)
+        || !authority
+            .check(
+                ProductRequestAuth::from(state.as_ref()),
+                &state.service_id,
+                before,
+            )
+            .await
+    {
+        return (
+            StatusCode::CONFLICT,
+            "Machine connection or Operator authority changed; installation remains fenced",
+        )
+            .into_response();
+    }
+    let permit = match authority
+        .authorize_staging_resolution(
+            ProductRequestAuth::from(state.as_ref()),
+            &state.service_id,
+            before,
+            target,
+        )
+        .await
+    {
+        Ok(permit) => permit,
+        Err(_) => return StatusCode::FORBIDDEN.into_response(),
+    };
+    let expected_intent = permit.intent().clone();
+    let resolution = match store.resolve_plugin_install_staging(&permit, before).await {
+        Ok(resolution) => resolution,
+        Err(error) => match store.plugin_install_staging_resolution(operation_id).await {
+            Ok(Some(saved)) if saved.intent == expected_intent => saved,
+            _ => {
+                tracing::warn!(
+                    %operation_id,
+                    error = %error,
+                    "install staging resolution commit was not observed"
+                );
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+        },
+    };
+    fence.finish(reconciled_fence_state(before));
+    staging_resolution_response(before, &resolution)
+}
+
+/// The fence state a finished reconciliation leaves: uninstalled when the
+/// reconciled installation removed the Plugin.
+fn reconciled_fence_state(before: &InstallOperation) -> Option<PluginFenceState> {
+    matches!(
+        before.intent.machine_target,
+        Some(crate::machine_protocol::plugin_install::InstallTarget::Removed { .. })
+    )
+    .then_some(PluginFenceState::Uninstalled)
 }
 
 pub(super) async fn api_machine_plugin_install(

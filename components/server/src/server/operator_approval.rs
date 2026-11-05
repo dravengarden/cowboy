@@ -338,7 +338,7 @@ impl OperatorApproval {
 }
 
 mod installation;
-pub(super) use installation::InstallationAuthority;
+pub(super) use installation::{InstallationAuthority, InstallationReconciliationAuthority};
 mod telemetry_export;
 pub(super) use telemetry_export::TelemetryExportAuthority;
 mod telemetry_resolution;

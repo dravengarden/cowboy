@@ -123,7 +123,7 @@
     "components/server/src/server/managed_calls/coordinator.rs::start": 208,
     "components/server/src/server/managed_calls/runner.rs::launch": 152,
     "components/server/src/server/managed_calls/runner.rs::observe": 188,
-    "components/server/src/server/plugin_install.rs::confirmed_reconcile_install": 328,
+    "components/server/src/server/plugin_install.rs::confirmed_reconcile_install": 206,
     "components/server/src/server/product_auth_api.rs::api_auth_logout": 156,
     "components/server/src/server/product_auth_api.rs::issue_product_session": 210,
     "components/server/src/server/product_auth_api.rs::product_auth_router": 223,
