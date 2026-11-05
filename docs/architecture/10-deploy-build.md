@@ -194,6 +194,7 @@ Use `cowboy-controller-activate` for the controller output and
 release. The detached unit is under `system.slice`, so a controller restart
 cannot kill it. The target serializes activation, rejects divergent lane
 history, rolls back failed health checks, and writes a component receipt. Verify
-the receipt and unit journal; never blindly repeat an activation. Web changes
-still require a `sw.js` VERSION bump so installed PWAs reload, but they restart
-neither Cowboy nor the detached runtime.
+the receipt and unit journal; never blindly repeat an activation. Web releases
+reload installed PWAs through the service worker VERSION, which the Nix web
+build sets from the source commit time; never edit it in `web/public/sw.js`.
+They restart neither Cowboy nor the detached runtime.
