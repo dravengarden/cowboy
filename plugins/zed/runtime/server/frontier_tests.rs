@@ -28,7 +28,11 @@ fn cowboy_frontier_state_is_bounded_and_forgets_the_oldest_publication() {
     assert_eq!(state.len(), MAX_ENTRIES);
     assert!(state.get(BufferId::new(1).unwrap(), server).is_none());
     assert_eq!(
-        state.get(BufferId::new(2).unwrap(), server).unwrap().stamp.value,
+        state
+            .get(BufferId::new(2).unwrap(), server)
+            .unwrap()
+            .stamp
+            .value,
         2
     );
     // Replacing a retained key never evicts another.
@@ -51,7 +55,11 @@ fn cowboy_frontier_server_projection_bounds_names_and_marks_absent_evidence() {
 
 async fn fixture(
     cx: &mut TestAppContext,
-) -> (Entity<crate::Project>, Entity<Buffer>, lsp::FakeLanguageServer) {
+) -> (
+    Entity<crate::Project>,
+    Entity<Buffer>,
+    lsp::FakeLanguageServer,
+) {
     cx.update(|cx| {
         if cx.try_global::<settings::SettingsStore>().is_none() {
             let settings = settings::SettingsStore::test(cx);
@@ -106,7 +114,9 @@ fn observed(
     let id = buffer.read_with(cx, |buffer, _| buffer.remote_id());
     let store = project.read_with(cx, |project, _| project.lsp_store());
     let server = store.update(cx, |store, cx| {
-        buffer.update(cx, |buffer, cx| store.language_servers_for_local_buffer(buffer, cx))
+        buffer.update(cx, |buffer, cx| {
+            store.language_servers_for_local_buffer(buffer, cx)
+        })
     });
     assert_eq!(server.len(), 1);
     let evidence = store.read_with(cx, |store, _| {
@@ -122,9 +132,7 @@ fn observed(
 }
 
 #[gpui::test]
-async fn cowboy_frontier_records_the_analyzed_version_of_each_publication(
-    cx: &mut TestAppContext,
-) {
+async fn cowboy_frontier_records_the_analyzed_version_of_each_publication(cx: &mut TestAppContext) {
     let (project, buffer, mut server) = fixture(cx).await;
     let opened = server
         .receive_notification::<lsp::notification::DidOpenTextDocument>()

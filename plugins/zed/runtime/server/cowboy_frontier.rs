@@ -39,7 +39,12 @@ pub(super) struct State {
 }
 
 impl State {
-    pub(super) fn record(&mut self, buffer: BufferId, server: LanguageServerId, evidence: Evidence) {
+    pub(super) fn record(
+        &mut self,
+        buffer: BufferId,
+        server: LanguageServerId,
+        evidence: Evidence,
+    ) {
         self.sequence += 1;
         let key = (buffer, server);
         if self.entries.len() >= MAX_ENTRIES && !self.entries.contains_key(&key) {
@@ -56,7 +61,9 @@ impl State {
     }
 
     pub(super) fn get(&self, buffer: BufferId, server: LanguageServerId) -> Option<&Evidence> {
-        self.entries.get(&(buffer, server)).map(|(_, evidence)| evidence)
+        self.entries
+            .get(&(buffer, server))
+            .map(|(_, evidence)| evidence)
     }
 
     #[cfg(test)]
@@ -135,7 +142,9 @@ impl LspStore {
                 this.language_servers_for_local_buffer(buffer, cx)
             });
             anyhow::ensure!(servers.len() <= MAX_SERVERS, "too many language servers");
-            let local = this.as_local().context("analysis frontier requires local store")?;
+            let local = this
+                .as_local()
+                .context("analysis frontier requires local store")?;
             Ok(proto::CowboyAnalysisFrontierResponse {
                 protocol: 1,
                 servers: servers
