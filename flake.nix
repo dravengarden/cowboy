@@ -659,8 +659,24 @@
       # embedding these store paths in every system generation. Web is its own
       # zero-restart lane; controller and resident Machine maintenance remain
       # explicit, independently recoverable transactions.
+      # The structure and module-layering ratchets over the exact release
+      # source. A Controller release depends on it, so a commit that grows a
+      # Rust offender or a cycle cannot be built even when just check was
+      # skipped (the Web release runs the structure ratchet the same way).
+      cowboy-structure-check =
+        pkgs.runCommand "cowboy-structure-check" {
+          src = pkgs.lib.cleanSource ./.;
+          nativeBuildInputs = [ bun ];
+        } ''
+          cd "$src"
+          bun tools/check-structure.ts
+          bun tools/check-module-layers.ts
+          touch "$out"
+        '';
+
       cowboy-controller-release =
         pkgs.runCommand "cowboy-controller-release" { } ''
+          test -e ${cowboy-structure-check}
           mkdir -p "$out/bin" "$out/etc/cowboy-release"
           ln -s ${cowboy}/bin/cowboy "$out/bin/cowboy"
           ln -s ${bun}/bin/bun "$out/bin/cowboy-plugin-js"
