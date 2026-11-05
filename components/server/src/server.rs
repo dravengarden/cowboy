@@ -502,85 +502,28 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // requeue against the writer closing its receiver.
     let (store_shutdown_tx, store_shutdown_rx) = watch::channel(false);
     let runtime_health = Arc::new(RuntimeHealth::default());
-    // Phase 2: when --database-url is supplied, hook in the persistent store.
-    // Migrations run on every start (sqlx tracks applied versions, so it's
-    // idempotent); the in-memory Hub is then warmed from the DB before WS
-    // clients can connect. Without a database URL the daemon falls back to
-    // pure in-memory mode — same behaviour as before, useful for dev or for
-    // running on a host without durable storage configured.
-    let plugin_lifecycle_fences;
-    let telemetry_binding_fence;
-    let managed_export_activation;
-    let (hub, mut store, persistence_health, writer_task, purge_task, session_id_floor) =
-        if let Some(url) = args.database_url() {
-            let store = Store::connect(url, args.data_dir.join("artifacts"))
-                .await
-                .context("connecting database")?;
-            store.migrate().await.context("running migrations")?;
-            store
-                .initialize_core_security(core_security.as_ref(), &plugin_dir)
-                .await
-                .context("initializing core security authority")?;
-            // Restore durable admission fences before any background writer,
-            // sweeper, Plugin host or runtime can race the startup scan.
-            plugin_lifecycle_fences = plugin_uninstall::recover_fences(Some(&store), &service_id)
-                .await
-                .context("restoring Plugin lifecycle fences")?;
-            telemetry_binding_fence =
-                crate::telemetry_binding::LegacyFence::recover(Some(&store), &service_id)
-                    .await
-                    .context("restoring Service telemetry binding fence")?;
-            managed_export_activation = match managed_export_policy {
-                Some(policy) => Some(policy.activate(&store).await),
-                None => None,
-            };
-            let session_id_floor = store
-                .next_session_number()
-                .await
-                .context("seeding session id counter")?;
-            let health = Arc::new(PersistenceHealth::default());
-            let (sink, rx) = StoreSink::channel(STORE_QUEUE_CAPACITY, Arc::clone(&health));
-            let hub = Hub::with_store(Some(sink));
-            restore_hub_from_store(&store, &hub).await?;
-            // Background DB writer: dequeues StoreWrite intents and applies them.
-            // Errors are logged but don't bring the daemon down — the in-memory
-            // state remains authoritative for the current process.
-            runtime_health.set_store_writer(true);
-            let writer_health = Arc::clone(&runtime_health);
-            let writer_store = store.clone();
-            let writer_persistence_health = Arc::clone(&health);
-            let writer_shutdown = store_shutdown_rx.clone();
-            let writer_task = tokio::spawn(async move {
-                run_store_writer(writer_store, rx, writer_persistence_health, writer_shutdown)
-                    .await;
-                writer_health.set_store_writer(false);
-            });
-            // Background sweeper: hard-delete sessions soft-deleted past the
-            // retention window, reclaiming their event storage.
-            runtime_health.set_purge_sweeper(true);
-            let purge_health = Arc::clone(&runtime_health);
-            let purge_store = store.clone();
-            let purge_task = tokio::spawn(async move {
-                run_purge_sweeper(purge_store).await;
-                purge_health.set_purge_sweeper(false);
-                tracing::error!("purge sweeper exited unexpectedly");
-            });
-            (
-                hub,
-                Some(store),
-                Some(health),
-                Some(writer_task),
-                Some(purge_task),
-                session_id_floor,
-            )
-        } else {
-            tracing::info!("no --database-url: running in-memory only");
-            plugin_lifecycle_fences = plugin_uninstall::recover_fences(None, &service_id).await?;
-            telemetry_binding_fence =
-                crate::telemetry_binding::LegacyFence::recover(None, &service_id).await?;
-            managed_export_activation = None;
-            (Hub::new(), None, None, None, None, 1)
-        };
+    // Durable admission fences are restored before any writer, sweeper,
+    // Plugin host or runtime starts (see open_persistence).
+    let Persistence {
+        hub,
+        mut store,
+        health: persistence_health,
+        writer_task,
+        purge_task,
+        session_id_floor,
+        plugin_lifecycle_fences,
+        telemetry_binding_fence,
+        managed_export_activation,
+    } = open_persistence(
+        &args,
+        core_security.as_ref(),
+        &plugin_dir,
+        &service_id,
+        managed_export_policy,
+        &runtime_health,
+        &store_shutdown_rx,
+    )
+    .await?;
     let plugin_storage = match store.as_ref() {
         Some(store) => store.plugin_storage(plugin_dir.clone()),
         None => crate::plugin_storage::PluginStorage::sqlite_files(plugin_dir.clone()),
