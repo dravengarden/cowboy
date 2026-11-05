@@ -89,7 +89,9 @@ require the exact successful build receipt and published SideStore version.
   first extract something from it in the same change; do not raise the
   baseline. After moving an offender unchanged into a new file, record the move
   with `bun tools/check-structure.ts --update`, which only admits it while the
-  crate/package total does not grow. The refactor sequence this guards is
+  crate/package total does not grow. The Nix web build runs this ratchet and
+  the web unit tests too, so a Web release cannot be built from a commit that
+  fails them. The refactor sequence this guards is
   `docs/structural-refactor-plan-2026-11.md`.
 - **Module layering ratchet** (same recipe): no Rust module may join or enlarge
   a dependency cycle, and no new edge may be added between two modules of the
