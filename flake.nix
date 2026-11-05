@@ -334,7 +334,7 @@
         # A Web release cannot be built from a commit that grows a structure
         # offender or breaks a web unit test (both also run in just check,
         # which web-only changes have skipped). The build starts in web/.
-        postBuild = (previous.postBuild or "") + ''
+        buildPhase = previous.buildPhase + ''
           (cd .. && bun tools/check-structure.ts)
           bun test src
         '';
