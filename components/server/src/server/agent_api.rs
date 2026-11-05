@@ -464,8 +464,7 @@ impl Host for SessionHost<'_> {
                 only_keys(&args, &["call_id", "offset", "chars"])?;
                 let call_id = arg_str(&args, "call_id")?.to_owned();
                 let mut value = self.calls(Action::Result { call_id }).await?;
-                text_window(&mut value["result"], "text", &args)?;
-                partial_structured(&mut value["result"]);
+                result_window(&mut value["result"], &args)?;
                 Ok(value)
             }
             "calls.wait" => {
@@ -693,6 +692,12 @@ fn text_window(value: &mut Value, field: &str, args: &Value) -> Result<(), Strin
 /// it alone can exceed the response budget on every page. Scalars such as
 /// `verdict` stay; the omitted keys are listed for a caller that pages the
 /// text and parses it inside its program.
+fn result_window(result: &mut Value, args: &Value) -> Result<(), String> {
+    text_window(result, "text", args)?;
+    partial_structured(result);
+    Ok(())
+}
+
 fn partial_structured(result: &mut Value) {
     let complete = result["range"]["offset"] == 0 && result["range"]["next"].is_null();
     if complete || result.get("range").is_none() {

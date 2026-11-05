@@ -90,8 +90,7 @@ fn partial_result_pages_do_not_repeat_the_structured_parse() {
     let text = structured.to_string();
     let page = |args: Value| {
         let mut result = json!({"text":text,"structured":structured,"truncated":false});
-        text_window(&mut result, "text", &args).unwrap();
-        partial_structured(&mut result);
+        result_window(&mut result, &args).unwrap();
         result
     };
     for args in [
@@ -109,8 +108,7 @@ fn partial_result_pages_do_not_repeat_the_structured_parse() {
     // A page holding the whole text keeps the whole parse.
     let small = json!({"verdict":"approve","findings":[{"title":"one"}]});
     let mut complete = json!({"text":small.to_string(),"structured":small});
-    text_window(&mut complete, "text", &json!({"offset":0,"chars":4000})).unwrap();
-    partial_structured(&mut complete);
+    result_window(&mut complete, &json!({"offset":0,"chars":4000})).unwrap();
     assert_eq!(complete["structured"], small);
     assert!(complete.get("structured_omitted").is_none());
 }
