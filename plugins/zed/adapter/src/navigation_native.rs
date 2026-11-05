@@ -111,6 +111,59 @@ pub(super) async fn query(
     .await
 }
 
+/// The upstream `LspQuery` for one navigation kind at an anchor.
+pub(crate) fn navigation_request(
+    buffer_id: u64,
+    version: &[BufferVersionEntry],
+    anchor: proto::Anchor,
+    kind: NavigationKind,
+) -> proto::lsp_query::Request {
+    let position = Some(anchor);
+    let version = proto_version(version);
+    match kind {
+        NavigationKind::Definition => {
+            proto::lsp_query::Request::GetDefinition(proto::GetDefinition {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                position,
+                version,
+            })
+        }
+        NavigationKind::Declaration => {
+            proto::lsp_query::Request::GetDeclaration(proto::GetDeclaration {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                position,
+                version,
+            })
+        }
+        NavigationKind::TypeDefinition => {
+            proto::lsp_query::Request::GetTypeDefinition(proto::GetTypeDefinition {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                position,
+                version,
+            })
+        }
+        NavigationKind::Implementation => {
+            proto::lsp_query::Request::GetImplementation(proto::GetImplementation {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                position,
+                version,
+            })
+        }
+        NavigationKind::References => {
+            proto::lsp_query::Request::GetReferences(proto::GetReferences {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                position,
+                version,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

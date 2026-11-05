@@ -138,6 +138,7 @@ async fn language_transport_failure_is_not_an_empty_success() {
         diagnostics: Arc::default(),
         next_message_id: AtomicU32::new(1),
         next_lsp_request_id: AtomicU64::new(1),
+        frontier: crate::analysis::Frontier::default(),
     };
     zed.diagnostics
         .lock()

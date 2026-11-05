@@ -140,13 +140,16 @@ pub(super) async fn finish(
     // stale reads, then expose only the exact synchronized content.
     loop {
         let read = store.code_request("zed", &json!({"type":"readBufferLease","lease":lease,"request":{"kind":"content","content":content,"query":{"kind":"language"}}}), None).await;
-        if let Ok(read) = read {
-            assert_eq!(read["result"]["result"]["kind"], "observed");
-            break;
-        }
+        let error = match read {
+            Ok(read) => {
+                assert_eq!(read["result"]["result"]["kind"], "observed");
+                break;
+            }
+            Err(error) => error,
+        };
         assert!(
             Instant::now() < deadline,
-            "native mirror did not observe synchronization"
+            "native mirror did not observe synchronization: {error:#}"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }

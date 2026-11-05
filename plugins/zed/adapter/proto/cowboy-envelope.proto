@@ -14,5 +14,7 @@ message CowboyBufferSyncEnvelope {
     CowboyNavigationResponse navigation_response = 1003;
     CowboyCloseBuffers close_request = 1004;
     CowboyCloseBuffersResponse close_response = 1005;
+    CowboyAnalysisFrontier analysis_request = 1006;
+    CowboyAnalysisFrontierResponse analysis_response = 1007;
   }
 }

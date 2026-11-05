@@ -14,6 +14,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
 
+mod analysis;
 mod buffer_leases;
 mod buffer_navigation;
 mod content_reads;
@@ -24,6 +25,7 @@ mod diagnostics;
 mod native_close;
 mod native_open;
 mod navigation_native;
+pub(crate) use navigation_native::navigation_request;
 mod sync_native;
 mod sync_owners;
 mod text_reads;
@@ -233,6 +235,8 @@ enum Response {
         diagnostics: Vec<LanguageDiagnostic>,
         inlay_hints: Vec<LanguageInlayHint>,
         semantic_tokens: Vec<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        analysis: Option<Vec<analysis::ServerAnalysis>>,
     },
     BufferHover {
         api_version: u8,
@@ -388,6 +392,9 @@ struct LanguageObservation {
     diagnostics: Vec<LanguageDiagnostic>,
     inlay_hints: Vec<LanguageInlayHint>,
     semantic_tokens: Vec<u32>,
+    /// Per-server evidence; only `bufferLanguage` carries it (owned reads are strict).
+    #[serde(skip)]
+    analysis: Option<Vec<analysis::ServerAnalysis>>,
 }
 
 struct ZedRuntime {
@@ -401,6 +408,7 @@ struct ZedRuntime {
     diagnostics: DiagnosticCache,
     next_message_id: AtomicU32,
     next_lsp_request_id: AtomicU64,
+    frontier: analysis::Frontier,
 }
 
 struct ExtensionManifest {
@@ -554,6 +562,7 @@ impl ZedRuntime {
             diagnostics,
             next_message_id: AtomicU32::new(2),
             next_lsp_request_id: AtomicU64::new(1),
+            frontier: analysis::Frontier::default(),
         })
     }
 
@@ -797,8 +806,20 @@ impl ZedRuntime {
         let (diagnostics_ack, inlay_hints, semantic_tokens) =
             tokio::join!(diagnostics_request, inlay_request, semantic_request);
         diagnostics_ack?;
+        let frontier = self.frontier.request(self, buffer_id).await?;
         let cache = self.diagnostics.lock().expect("diagnostic cache poisoned");
         let (diagnostics_state, diagnostics) = cache.read(buffer_id, revision)?;
+        let analysis = match frontier {
+            Some(servers) => {
+                let held = cache.held(buffer_id, revision)?;
+                Some(analysis::project(
+                    &servers,
+                    |server| held.get(&server).copied(),
+                    &version,
+                ))
+            }
+            None => None,
+        };
         let mut hints = Vec::new();
         for mut hint in inlay_hints?
             .into_iter()
@@ -834,6 +855,7 @@ impl ZedRuntime {
             diagnostics,
             inlay_hints: hints,
             semantic_tokens,
+            analysis,
         })
     }
 
@@ -1021,58 +1043,6 @@ impl ZedRuntime {
             bail!("Zed returned the wrong LspQuery acknowledgement");
         }
         Ok(lsp_request_id)
-    }
-}
-
-fn navigation_request(
-    buffer_id: u64,
-    version: &[BufferVersionEntry],
-    anchor: proto::Anchor,
-    kind: NavigationKind,
-) -> proto::lsp_query::Request {
-    let position = Some(anchor);
-    let version = proto_version(version);
-    match kind {
-        NavigationKind::Definition => {
-            proto::lsp_query::Request::GetDefinition(proto::GetDefinition {
-                project_id: proto::REMOTE_SERVER_PROJECT_ID,
-                buffer_id,
-                position,
-                version,
-            })
-        }
-        NavigationKind::Declaration => {
-            proto::lsp_query::Request::GetDeclaration(proto::GetDeclaration {
-                project_id: proto::REMOTE_SERVER_PROJECT_ID,
-                buffer_id,
-                position,
-                version,
-            })
-        }
-        NavigationKind::TypeDefinition => {
-            proto::lsp_query::Request::GetTypeDefinition(proto::GetTypeDefinition {
-                project_id: proto::REMOTE_SERVER_PROJECT_ID,
-                buffer_id,
-                position,
-                version,
-            })
-        }
-        NavigationKind::Implementation => {
-            proto::lsp_query::Request::GetImplementation(proto::GetImplementation {
-                project_id: proto::REMOTE_SERVER_PROJECT_ID,
-                buffer_id,
-                position,
-                version,
-            })
-        }
-        NavigationKind::References => {
-            proto::lsp_query::Request::GetReferences(proto::GetReferences {
-                project_id: proto::REMOTE_SERVER_PROJECT_ID,
-                buffer_id,
-                position,
-                version,
-            })
-        }
     }
 }
 
@@ -1491,6 +1461,7 @@ async fn buffer_language(
         diagnostics: observation.diagnostics,
         inlay_hints: observation.inlay_hints,
         semantic_tokens: observation.semantic_tokens,
+        analysis: observation.analysis,
     })
 }
 
@@ -2110,8 +2081,18 @@ mod tests {
             diagnostics: Vec::new(),
             inlay_hints: Vec::new(),
             semantic_tokens: Vec::new(),
+            analysis: Some(vec![analysis::ServerAnalysis {
+                server_id: 3,
+                name: "rust-analyzer".into(),
+                state: analysis::State::Stale,
+                reason: None,
+            }]),
         })
         .unwrap();
+        assert_eq!(
+            value["analysis"],
+            serde_json::json!([{"serverId":3,"name":"rust-analyzer","state":"stale"}])
+        );
         assert_eq!(value["version"][0]["replicaId"], 7);
         assert_eq!(value["version"][0]["timestamp"], 11);
         assert!(value["version"][0].get("replica_id").is_none());
