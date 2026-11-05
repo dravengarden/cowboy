@@ -2043,18 +2043,7 @@ async fn sqlite_memory_implements_storage_contract() {
 }
 
 #[allow(clippy::too_many_lines)] // end-to-end provider scoping, fencing, and replay contract
-#[tokio::test]
-async fn sqlite_oidc_logout_is_provider_scoped_fenced_and_replay_safe() {
-    let root = std::env::temp_dir().join(format!(
-        "cowboy-sqlite-oidc-logout-{}-{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let store = Store::connect("sqlite::memory:", root.join("artifacts"))
-        .await
-        .unwrap();
-    store.migrate().await.unwrap();
+async fn oidc_logout_is_provider_scoped_fenced_and_replay_safe_contract(store: &Store) {
     let now = 1_900_000_000_000_i64;
     let user = ProductUser {
         id: "0123456789abcdef0123456789abcdef".to_owned(),
@@ -2215,23 +2204,27 @@ async fn sqlite_oidc_logout_is_provider_scoped_fenced_and_replay_safe() {
             .unwrap()
             .is_some()
     );
-    drop(store);
-    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_oidc_logout_is_provider_scoped_fenced_and_replay_safe() {
+    oidc_logout_is_provider_scoped_fenced_and_replay_safe_contract(
+        &super::test_support::sqlite().await.store,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_oidc_logout_is_provider_scoped_fenced_and_replay_safe() {
+    oidc_logout_is_provider_scoped_fenced_and_replay_safe_contract(
+        &super::test_support::postgres().await.store,
+    )
+    .await;
 }
 
 #[allow(clippy::too_many_lines)] // end-to-end replacement fencing and waiter cleanup contract
-#[tokio::test]
-async fn sqlite_session_replacement_fences_lease_and_removes_waiter() {
-    let root = std::env::temp_dir().join(format!(
-        "cowboy-sqlite-session-replacement-{}-{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let store = Store::connect("sqlite::memory:", root.join("artifacts"))
-        .await
-        .unwrap();
-    store.migrate().await.unwrap();
+async fn session_replacement_fences_lease_and_removes_waiter_contract(store: &Store) {
     let now = 1_900_000_000_000_i64;
     let user = ProductUser {
         id: "11111111111111111111111111111111".to_owned(),
@@ -2356,23 +2349,26 @@ async fn sqlite_session_replacement_fences_lease_and_removes_waiter() {
             .unwrap(),
         ActiveClientAdmission::Granted { .. }
     ));
-
-    drop(store);
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
-async fn sqlite_capacity_queue_skips_per_user_full_lane() {
-    let root = std::env::temp_dir().join(format!(
-        "cowboy-sqlite-capacity-fairness-{}-{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let store = Store::connect("sqlite::memory:", root.join("artifacts"))
-        .await
-        .unwrap();
-    store.migrate().await.unwrap();
+async fn sqlite_session_replacement_fences_lease_and_removes_waiter() {
+    session_replacement_fences_lease_and_removes_waiter_contract(
+        &super::test_support::sqlite().await.store,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_session_replacement_fences_lease_and_removes_waiter() {
+    session_replacement_fences_lease_and_removes_waiter_contract(
+        &super::test_support::postgres().await.store,
+    )
+    .await;
+}
+
+async fn capacity_queue_skips_per_user_full_lane_contract(store: &Store) {
     let now = 1_900_000_000_000_i64;
     let user = |id: &str, username: &str| ProductUser {
         id: id.to_owned(),
@@ -2422,23 +2418,22 @@ async fn sqlite_capacity_queue_skips_per_user_full_lane() {
             .unwrap(),
         ActiveClientAdmission::Granted { .. }
     ));
-
-    drop(store);
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
-async fn sqlite_do_shaped_restore_keeps_compact_working_set() {
-    let root = std::env::temp_dir().join(format!(
-        "cowboy-sqlite-do-mock-{}-{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let store = Store::connect("sqlite::memory:", root.join("artifacts"))
-        .await
-        .unwrap();
-    store.migrate().await.unwrap();
+async fn sqlite_capacity_queue_skips_per_user_full_lane() {
+    capacity_queue_skips_per_user_full_lane_contract(&super::test_support::sqlite().await.store)
+        .await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_capacity_queue_skips_per_user_full_lane() {
+    capacity_queue_skips_per_user_full_lane_contract(&super::test_support::postgres().await.store)
+        .await;
+}
+
+async fn do_shaped_restore_keeps_compact_working_set_contract(store: &Store) {
     let mut highwaters = HashMap::new();
     let mut events = Vec::new();
     for index in 0..17 {
@@ -2477,8 +2472,23 @@ async fn sqlite_do_shaped_restore_keeps_compact_working_set() {
         restored_bytes < 64 * 1024,
         "compact DO-shaped restore was {restored_bytes} bytes"
     );
-    drop(store);
-    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_do_shaped_restore_keeps_compact_working_set() {
+    do_shaped_restore_keeps_compact_working_set_contract(
+        &super::test_support::sqlite().await.store,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_do_shaped_restore_keeps_compact_working_set() {
+    do_shaped_restore_keeps_compact_working_set_contract(
+        &super::test_support::postgres().await.store,
+    )
+    .await;
 }
 
 #[tokio::test]
