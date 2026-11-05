@@ -594,6 +594,8 @@ export async function mountRunConfigKeyboardAcceptance(): Promise<void> {
   }];
   const sent: string[] = [];
   const requests: string[] = [];
+  let sources = ["other-0"];
+  let revision = 1;
   class FixtureSocket {
     static OPEN = 1;
     static CONNECTING = 0;
@@ -726,13 +728,19 @@ export async function mountRunConfigKeyboardAcceptance(): Promise<void> {
       });
     }
     if (path === "/api/sessions/run/context") {
+      if (init?.method === "PUT") {
+        sources = (JSON.parse(String(init.body)) as { sources: string[] })
+          .sources;
+        revision += 1;
+        sent.push(`context=${sources.join(",")}`);
+      }
       return Response.json({
-        revision: 1,
-        applied_revision: 1,
-        sources: ["other-0"],
+        revision,
+        applied_revision: revision,
+        sources,
         next_agent: null,
-        source_sessions: [{ id: "other-0", available: true }],
-        pending_links: ["other-0"],
+        source_sessions: sources.map((id) => ({ id, available: true })),
+        pending_links: sources,
         delivery: null,
         max_sources: 8,
       });
@@ -749,6 +757,19 @@ export async function mountRunConfigKeyboardAcceptance(): Promise<void> {
   document.body.append(container);
   const probe = globalThis as unknown as Record<string, unknown>;
   probe.__acceptance = { sent, requests };
+  const navigation = await import("./runConfigNavigation");
+  probe.__runConfigFields = (pane: string) => {
+    const element = document.querySelector<HTMLElement>(
+      `[data-config-pane='${pane}']`,
+    );
+    return element
+      ? navigation.paneFields(element).map((field) =>
+        field.stops.map((stop) =>
+          `${stop.tagName}:${stop.getAttribute("aria-label") ?? stop.textContent?.slice(0, 20)}`
+        ).join("|")
+      )
+      : [];
+  };
   function Surface(): React.JSX.Element {
     probe.__workspace = useDesktopWorkspace();
     return (

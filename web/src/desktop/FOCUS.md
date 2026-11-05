@@ -447,17 +447,19 @@ step. The Cancel `Esc` keycap is inactive while a text field owns `Esc`.
 ### Run configuration
 
 Run configuration (`␣TR`) is a workbench, not a form: it fills the window
-less a 24 px margin (`DesktopModal fill`) and lays Agent, Context and Tools
-side by side, each pane scrolling on its own, so every setting is visible at
-once on a wide window. It folds to Agent+Context | Tools, then one column, as
-the window narrows. Its panel is an exclusive region with its own keymap
+less a 24 px margin (`DesktopModal fill`). The short panes stack in the left
+column, Agent over Tools, and Context takes the full-height right column,
+where Link sessions is the inline session tree (search, fold, toggle in
+place) rather than a field that opens another dialog. One column on a
+narrow window. Each pane scrolls on its own; pane order is Agent, Tools,
+Context. Its panel is an exclusive region with its own keymap
 (`runConfigNavigation.ts`), the same Vim grammar specialised for settings:
 
 | Key | Action |
 | --- | --- |
 | `J` / `K` | Next / previous field in the pane (a Provider option or the presets is one field; other controls form rows by geometry) |
 | `H` / `L` | Change the field: step a choice or the Model, a switch off / on, a disclosure closed / open; else move beside |
-| `[` / `]`, `Ctrl-H` / `Ctrl-L` | Previous / next pane (brackets wrap); each pane keeps its cursor |
+| `[` / `]`, `Ctrl-H` / `Ctrl-L` | Previous / next pane (brackets wrap); each pane keeps its cursor. They also leave the session tree, which otherwise keeps its own `J/K/H/L/Enter//` |
 | `gg` / `G` | First / last field of the pane |
 | `1`–`9` | Apply that recommended preset |
 | `A` `M` `E` `C` `F` `P` | The option with that letter (Model opens its list) |
