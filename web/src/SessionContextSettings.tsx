@@ -65,6 +65,8 @@ export function SessionContextSettings(
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string[] | null>(null);
   const [reveal, setReveal] = useState(false);
+  // Remounting the form takes a fresh snapshot of the context it replaces.
+  const [formGeneration, setFormGeneration] = useState(0);
   const actions = useRef<HTMLDivElement>(null);
   const { data, error, reload } = useSessionContext(session.id);
   const handedOff = useContinuation(session.id) !== undefined;
@@ -159,7 +161,7 @@ export function SessionContextSettings(
           </Box>
           {data && open && (
             <NewSessionForm
-              key={session.id}
+              key={`${session.id}:${formGeneration}`}
               session={session}
               observed={data}
               sources={draft ?? pendingSources(data)}
@@ -171,6 +173,7 @@ export function SessionContextSettings(
                 requestComposerFocus(session.id);
               }}
               onForked={() => setOpen(false)}
+              onRestart={() => setFormGeneration((value) => value + 1)}
             />
           )}
         </Stack>
@@ -252,20 +255,27 @@ function LinkedSessions(
 /** Where the work goes: one target, then either move the work there or keep
  *  both lines live. How history travels follows from the target. */
 function NewSessionForm(
-  { session, observed, sources, allowFork, onContinued, onForked }: {
+  { session, observed, sources, allowFork, onContinued, onForked, onRestart }: {
     session: SessionMeta;
     observed: SessionContext;
     sources: string[];
     allowFork: boolean;
     onContinued: () => void;
     onForked: () => void;
+    /** Start over from the latest context. */
+    onRestart: () => void;
   },
 ): React.JSX.Element {
   const [snapshot] = useState(observed);
   // Links are edited beside this form; only what it replaces is a conflict.
+  // Another device, or another settings surface on this one (the Composer
+  // panel and an empty session's start panel each mount this form).
   const changedElsewhere =
     JSON.stringify(observed.next_agent) !== JSON.stringify(snapshot.next_agent) ||
     observed.delivery?.operation !== snapshot.delivery?.operation;
+  // Nothing chosen here yet: follow the change instead of asking for a
+  // reopen. Once the form was used, its choices wait for an explicit Reload.
+  const [touched, setTouched] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const [inheritSettings, setInheritSettings] = useState(
     snapshot.next_agent?.inherit_settings ?? true,
@@ -347,6 +357,9 @@ function NewSessionForm(
   const full = continueSources.length > observed.max_sources;
   const ready = placement.ready && subscription.allowed && validPreset;
   const locked = busy || changedElsewhere || unresolved;
+  useEffect(() => {
+    if (changedElsewhere && !touched && !busy) onRestart();
+  }, [changedElsewhere, touched, busy]);
   // A refusal describes the moment it was made.
   useEffect(() => setError(""), [queued, session.status]);
   const run = async (action: () => Promise<void>, failure: string) => {
@@ -384,11 +397,27 @@ function NewSessionForm(
       requestPickSession(receipt.session_id, receipt.session ?? undefined);
     }, "Fork failed");
   return (
-    <Stack spacing={1.5} data-new-session-editor>
+    <Stack
+      spacing={1.5}
+      data-new-session-editor
+      // React events bubble from the pickers' menu portals too.
+      onClickCapture={() => setTouched(true)}
+      onKeyDownCapture={(event) => {
+        if (event.key === "Enter" || event.key === " ") setTouched(true);
+      }}
+    >
       {changedElsewhere && (
-        <Alert severity="warning">
-          Context changed on another device. Close and reopen this section to
-          review it; your choices have not been applied.
+        <Alert
+          severity="warning"
+          data-new-session-stale
+          action={
+            <Button color="inherit" size="small" onClick={onRestart}>
+              Reload
+            </Button>
+          }
+        >
+          This session's context changed elsewhere. Reload to review it;
+          your choices here have not been applied.
         </Alert>
       )}
       <AiInstallationPicker

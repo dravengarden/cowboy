@@ -400,28 +400,11 @@ export function ObsidianSheet({
             touchAction: "none",
             cursor: "grab",
             userSelect: "none",
-            pt: 0.5,
-            pb: title == null ? 0 : 0,
+            // No visible pill: the whole strip drags. Keep its clearance.
+            height: title == null ? HANDLE_HEIGHT : undefined,
+            pt: title == null ? 0 : 1.5,
           }}
         >
-          <Box
-            sx={{
-              display: "flex",
-              justifyContent: "center",
-              alignItems: "center",
-              height: HANDLE_HEIGHT,
-            }}
-          >
-            <Box
-              sx={{
-                width: 36,
-                height: 4,
-                borderRadius: 2,
-                bgcolor: "text.disabled",
-                opacity: 0.55,
-              }}
-            />
-          </Box>
           {title == null ? null : (
             <Typography
               variant="subtitle1"

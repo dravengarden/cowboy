@@ -1819,7 +1819,9 @@ function ToolCard({
         {hasDetail && (
           <ExpandMore
             fontSize="medium"
-            sx={{ transform: "rotate(-90deg)", color: "text.secondary" }}
+            // The rotated 24px glyph keeps ~8px of transparent box past its
+            // tip, so without the pull the right inset read twice the left.
+            sx={{ transform: "rotate(-90deg)", color: "text.secondary", mr: -1 }}
           />
         )}
       </Stack>

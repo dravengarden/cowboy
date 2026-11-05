@@ -321,6 +321,30 @@ export function useThemeMode(): ThemeControls {
               },
             },
           },
+          // Alert and Chip glyphs are fixed px in MUI too (Alert 22px, Chip
+          // 32/24px with 22/16px delete icons), so a warning or a linked-session
+          // chip stayed one size while its text followed the global font size.
+          // Same geometry at 100%, rem-scaled with the root.
+          MuiAlert: {
+            styleOverrides: {
+              icon: { fontSize: "1.375rem" },
+            },
+          },
+          MuiChip: {
+            styleOverrides: {
+              root: {
+                height: "2rem",
+                borderRadius: "1rem",
+                "& .MuiChip-icon": { fontSize: "1.5rem" },
+                "& .MuiChip-deleteIcon": { fontSize: "1.375rem" },
+              },
+              sizeSmall: {
+                height: "1.5rem",
+                "& .MuiChip-icon": { fontSize: "1.125rem" },
+                "& .MuiChip-deleteIcon": { fontSize: "1rem" },
+              },
+            },
+          },
           MuiToggleButton: {
             styleOverrides: {
               sizeSmall: {
