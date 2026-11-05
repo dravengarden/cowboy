@@ -429,6 +429,14 @@ lifecycle or connection-level test that 1.5/1.6 name first.
 | 2.1 | `store.rs` test modules moved to files. Instead of a proc macro (a new crate is a Cargo maintenance boundary), a contract is an `async fn(&Store)` with a SQLite test and an ignored `postgres_` twin over shared fixtures (`store/storage_contract_tests/test_support.rs`). OIDC logout scoping, session replacement fencing, capacity fairness and compact restore now run on PostgreSQL; the gate runs 59 PostgreSQL tests, all passing, with no divergence found. Remaining SQLite-only coverage: the 29 HTTP-level product-auth tests in `cowboy-server`, which need the same fixture exported to that crate |
 | 2.2–2.3 | Not started; 2.1 found no backend divergence, which per the slice text lowers the value of 2.3 |
 
+### Phase 7 status (2026-11-05)
+
+7.1 landed as [`compatibility-exits.md`](compatibility-exits.md): about 45
+paths, of which only nine state their own exit condition. Both protocol
+floors are still 1 (current runtime 5, Machine 41), so every older-Machine
+branch waits on one Machine maintenance that raises them. 7.2 and 7.3 are
+Machine maintenance boundaries and wait for that explicit window.
+
 ## 6. Not worth doing
 
 - A rewrite, a second controller, a microservices split or a wholesale state
