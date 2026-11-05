@@ -100,6 +100,7 @@ primary phone/desktop product path.
 - [`architecture/16-product-auth.md`](architecture/16-product-auth.md) — Mandatory product login/device proof, self-host identity, and session-deadline enforcement
 - [`architecture/17-authentication-plugins.md`](architecture/17-authentication-plugins.md) — Signed authentication packages, configurable login UI, and server-owned session policy
 - [`architecture/18-auth-capacity-sso.md`](architecture/18-auth-capacity-sso.md) — Configurable client/session capacity, fair admission, SSO logout, and isolated automation
+- [`architecture/19-agent-code-intelligence.md`](architecture/19-agent-code-intelligence.md) — Proposal: Zed provider diagnostics and navigation for every agent through cowboy MCP, Mods and hooks
 - [`../examples/authentication/README.md`](../examples/authentication/README.md) — Google, Apple, and Cloudflare Email Authentication Provider examples
 - [`../examples/editor-plugins/README.md`](../examples/editor-plugins/README.md) — Installable editor plugin example and packing command
 - [`architecture/runtime-incident-ledger.md`](architecture/runtime-incident-ledger.md) — Runtime failure evidence and resolved invariants
