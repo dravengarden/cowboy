@@ -92,6 +92,62 @@ pub(super) fn project_machine_health(
     }
 }
 
+/// Annotates reported components with their live lease counts, any Plugin
+/// that supersedes them, and the update the signed manifest offers.
+fn annotate_components(
+    components: &mut [crate::machine_protocol::ComponentInventory],
+    open_sessions: u32,
+    provider_sessions: Option<&HashMap<String, u64>>,
+    plugins: &[crate::machine_protocol::PluginInventory],
+    desired: &crate::machine_convergence::DesiredComponents,
+    checked_at_ms: i64,
+) {
+    for component in components {
+        if matches!(
+            component.id.kind,
+            crate::machine_protocol::ComponentKind::AcpRuntime
+                | crate::machine_protocol::ComponentKind::ProviderAdapter
+                | crate::machine_protocol::ComponentKind::ProviderCli
+        ) {
+            component.active_leases = match component.id.kind {
+                crate::machine_protocol::ComponentKind::ProviderAdapter
+                | crate::machine_protocol::ComponentKind::ProviderCli => {
+                    let slot = component.id.slot.as_str();
+                    let occupants = crate::plugin_runtime_args::occupancy_provider_ids(slot);
+                    if occupants.is_empty() {
+                        provider_sessions
+                            .and_then(|providers| providers.get(slot))
+                            .copied()
+                            .unwrap_or(0)
+                    } else {
+                        occupants.iter().fold(0, |total, provider| {
+                            total.saturating_add(
+                                provider_sessions
+                                    .and_then(|providers| providers.get(*provider))
+                                    .copied()
+                                    .unwrap_or(0),
+                            )
+                        })
+                    }
+                }
+                _ => u64::from(open_sessions),
+            };
+        }
+        component.superseded_by = superseding_plugin(&component.id, plugins);
+        if let Some(desired) = desired.find(&component.id) {
+            let available = component.state != crate::machine_protocol::ComponentState::Active
+                || !component.digest.eq_ignore_ascii_case(&desired.digest);
+            component.update = Some(crate::machine_protocol::ComponentUpdate {
+                latest_version: desired.version.clone(),
+                available,
+                source: "signed Cowboy manifest".to_owned(),
+                checked_at_ms,
+                installable: available,
+            });
+        }
+    }
+}
+
 impl MachineSnapshots {
     pub(super) async fn load(
         &self,
@@ -175,52 +231,14 @@ impl MachineSnapshots {
                         (*open, *live, Some(providers))
                     });
                 let local = machine.connection_mode == "local";
-                for component in &mut components {
-                    if matches!(
-                        component.id.kind,
-                        crate::machine_protocol::ComponentKind::AcpRuntime
-                            | crate::machine_protocol::ComponentKind::ProviderAdapter
-                            | crate::machine_protocol::ComponentKind::ProviderCli
-                    ) {
-                        component.active_leases = match component.id.kind {
-                            crate::machine_protocol::ComponentKind::ProviderAdapter
-                            | crate::machine_protocol::ComponentKind::ProviderCli => {
-                                let slot = component.id.slot.as_str();
-                                let occupants =
-                                    crate::plugin_runtime_args::occupancy_provider_ids(slot);
-                                if occupants.is_empty() {
-                                    provider_sessions
-                                        .and_then(|providers| providers.get(slot))
-                                        .copied()
-                                        .unwrap_or(0)
-                                } else {
-                                    occupants.iter().fold(0, |total, provider| {
-                                        total.saturating_add(
-                                            provider_sessions
-                                                .and_then(|providers| providers.get(*provider))
-                                                .copied()
-                                                .unwrap_or(0),
-                                        )
-                                    })
-                                }
-                            }
-                            _ => u64::from(open_sessions),
-                        };
-                    }
-                    component.superseded_by = superseding_plugin(&component.id, &plugins);
-                    if let Some(desired) = desired.find(&component.id) {
-                        let available = component.state
-                            != crate::machine_protocol::ComponentState::Active
-                            || !component.digest.eq_ignore_ascii_case(&desired.digest);
-                        component.update = Some(crate::machine_protocol::ComponentUpdate {
-                            latest_version: desired.version.clone(),
-                            available,
-                            source: "signed Cowboy manifest".to_owned(),
-                            checked_at_ms,
-                            installable: available,
-                        });
-                    }
-                }
+                annotate_components(
+                    &mut components,
+                    open_sessions,
+                    provider_sessions,
+                    &plugins,
+                    &desired,
+                    checked_at_ms,
+                );
                 let pending_updates: Vec<crate::machine_protocol::ComponentId> = desired
                     .iter()
                     .filter(|desired| {

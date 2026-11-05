@@ -116,7 +116,7 @@
     "components/server/src/server/execution/recovery.rs::checked": 216,
     "components/server/src/server/execution/sessions.rs::create_checked": 242,
     "components/server/src/server/http_policy.rs::classify_route": 294,
-    "components/server/src/server/machine_connection.rs::MachineSnapshots::load": 230,
+    "components/server/src/server/machine_connection.rs::MachineSnapshots::load": 192,
     "components/server/src/server/machine_connection.rs::accept_service_auth_candidate": 182,
     "components/server/src/server/machine_connection.rs::handle_machine_ws": 353,
     "components/server/src/server/machine_connection/frames.rs::MachineLink::handle_frame": 221,
