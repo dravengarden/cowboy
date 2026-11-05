@@ -32,7 +32,7 @@
     "src/store/sqlite.rs": 6261,
     "src/usage.rs": 1739,
     "tools/cdp-keyboard-acceptance.ts": 1004,
-    "web/src/App.tsx": 2874,
+    "web/src/App.tsx": 2801,
     "web/src/BackgroundTasksInspector.tsx": 813,
     "web/src/Composer.tsx": 3292,
     "web/src/ComposerEditor.tsx": 1298,
@@ -186,7 +186,7 @@
     "tools/plugin-component-closure.ts::validateReleaseHistory": 191,
     "web/src/AgentToolsPanel.tsx::AgentToolsEditor": 204,
     "web/src/AgentToolsPanel.tsx::CallTargetCard": 152,
-    "web/src/App.tsx::App": 2264,
+    "web/src/App.tsx::App": 2191,
     "web/src/AppIconSettings.tsx::AppIconSettings": 259,
     "web/src/BackgroundTasksInspector.tsx::BackgroundTasksInspector": 444,
     "web/src/CallApprovalOverlay.tsx::CallApprovalOverlay": 234,
@@ -354,7 +354,7 @@
     "web/src/useSortable.ts::useSortable": 471
   },
   "hooks": {
-    "web/src/App.tsx": 114,
+    "web/src/App.tsx": 113,
     "web/src/Composer.tsx": 93,
     "web/src/PendingPanel.tsx": 77,
     "web/src/SessionContextCue.tsx": 41,

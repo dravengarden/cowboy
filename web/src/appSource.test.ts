@@ -8,7 +8,14 @@ import { assert } from "@std/assert";
 // unchanged keeps its assertions; behavioural tests replace them over time
 // (slice 3.1). Add a file here when it is split out of one of these modules.
 export const SPLIT_SOURCES = {
-  "App.tsx": ["./App.tsx", "./SettingsShell.tsx", "./SessionList.tsx"],
+  "App.tsx": [
+    "./App.tsx",
+    "./SettingsShell.tsx",
+    "./SessionList.tsx",
+    "./sessionFocusLifecycle.ts",
+    "./desktopSplitters.tsx",
+    "./mobileDrawerSurface.ts",
+  ],
   "Transcript.tsx": [
     "./Transcript.tsx",
     "./ToolDetailsBrowser.tsx",
