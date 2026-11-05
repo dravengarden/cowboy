@@ -22,12 +22,14 @@ use tokio::sync::{mpsc, oneshot};
 use crate::core::{Event, Hub, Status, config_option_accepts};
 
 pub mod account_stop;
+mod broker_protocol;
 mod native_admission;
 mod startup_watch;
 use crate::runtime_wire::{
     CoreCommand, Frame, FrameReader, PROTOCOL_VERSION, PeerRole, RuntimeEvent, StartSession,
     WorkerSnapshot, WorkerState, read_frame, write_frame,
 };
+use broker_protocol::{BROKER_PROTOCOL_FLOOR, validate_protocol};
 
 const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
@@ -1460,21 +1462,6 @@ async fn connect_once_stream(
         Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
         None => anyhow::bail!("Machine broker closed during handshake"),
     }
-}
-
-/// The oldest runtime protocol the Controller core accepts from a Machine
-/// broker. The wire crate's `MIN_PROTOCOL_VERSION` stays 1 because it is
-/// pinned to the retained worker. Measured 2026-11-05: every retained worker
-/// pin since 2026-10-19 and every Machine release speaks 5
-/// (docs/compatibility-exits.md).
-const BROKER_PROTOCOL_FLOOR: u16 = 5;
-
-fn validate_protocol(protocol: u16) -> Result<()> {
-    anyhow::ensure!(
-        (BROKER_PROTOCOL_FLOOR..=PROTOCOL_VERSION).contains(&protocol),
-        "Machine broker selected an unsupported runtime protocol"
-    );
-    Ok(())
 }
 
 /// Let surviving workers converge around every new broker connection, not only
