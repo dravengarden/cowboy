@@ -19,6 +19,7 @@ import {
   sessionTreeRowKey,
   syncedKeyList,
 } from "./sessionTree";
+import { readAppSource } from "./appSource.test.ts";
 
 function session(
   id: string,
@@ -206,9 +207,7 @@ test("Desktop and the Mobile drawer render one session direction", () => {
 });
 
 test("the list component takes its direction from one shared helper", async () => {
-  const source = await readFile(
-    new URL("./App.tsx", import.meta.url), "utf8",
-  );
+  const source = await readAppSource();
   // A per-surface direction is what put the same session at opposite ends of
   // Desktop and Mobile; both call sites must stay on `displayedSessionOrder`.
   assertEquals(

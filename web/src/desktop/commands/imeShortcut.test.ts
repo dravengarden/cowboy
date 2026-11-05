@@ -2,10 +2,9 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 import { desktopImeOwnsKey, shortcutKey } from "./imeShortcut.ts";
+import { readAppSource } from "../../appSource.test.ts";
 
-const appSource = await readFile(
-  new URL("../../App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 const hostSource = await readFile(
   new URL("./DesktopCommandHost.tsx", import.meta.url), "utf8",
 );

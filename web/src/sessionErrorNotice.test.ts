@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice.ts";
+import { readAppSource } from "./appSource.test.ts";
 
 const notice = {
   seq: 4,
@@ -43,9 +44,7 @@ test("already-dismissed seqs stay closed", () => {
   );
 });
 
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 
 test("App gates the composer snackbar on the focused session", () => {
   assertEquals(appSource.includes("shouldShowSessionErrorSnackbar("), true);

@@ -6,6 +6,7 @@ import {
   machineSupersessionPresentation,
   machineVersionPresentation,
 } from "./machineVersions.ts";
+import { readAppSource } from "./appSource.test.ts";
 
 test("Machine version rows distinguish health from release freshness", () => {
   assertEquals(
@@ -87,7 +88,7 @@ test("automatic convergence says what the Controller is doing", () => {
 });
 
 test("a converging component offers no action that would race the Controller", async () => {
-  const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
+  const app = await readAppSource();
   // Draining and blocked keep the per-component action: both are exactly where
   // a person still decides.
   const guard = app.indexOf("const converging = convergence !== undefined &&");
@@ -102,7 +103,7 @@ test("a Plugin-served slot offers no legacy update to press", async () => {
   assertEquals(presentation.status, "Served by claude-code");
   assertEquals(presentation.tone, "default");
 
-  const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
+  const app = await readAppSource();
   // The npm action is the unpinned `@latest` path; it must not be offered for a
   // slot an installed Plugin already serves from its pinned generation.
   assertEquals(

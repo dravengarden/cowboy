@@ -8,6 +8,7 @@ import {
   sessionOverviewSections,
   sessionOverviewStatus,
 } from "./sessionOverview.ts";
+import { readAppSource } from "./appSource.test.ts";
 
 function info(overrides: Partial<SessionInfoPayload> = {}): SessionInfoPayload {
   return {
@@ -158,9 +159,7 @@ test("merge keeps HTTP counts and takes live status context", () => {
   assertEquals(merged.context_used, 80);
 });
 
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 
 test("session info surfaces render the shared overview sections", () => {
   assertEquals(appSource.includes("sessionOverviewSections("), true);

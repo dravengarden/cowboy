@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
+import { readAppSource } from "../appSource.test.ts";
 
 const desktopAppSource = await readFile(
   new URL("./DesktopApp.tsx", import.meta.url), "utf8",
@@ -8,9 +9,7 @@ const desktopAppSource = await readFile(
 const workspaceControllerSource = await readFile(
   new URL("./DesktopWorkspaceController.tsx", import.meta.url), "utf8",
 );
-const appSource = await readFile(
-  new URL("../App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 
 test("desktop never mounts a page-wide keyboard target overlay", () => {
   assertEquals(desktopAppSource.includes("DesktopHintOverlay"), false);

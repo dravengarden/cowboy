@@ -6,10 +6,9 @@ import {
   CONTROL_CENTER_TABS,
   controlCenterTabForShortcut,
 } from "./controlCenterTabs.ts";
+import { readAppSource } from "../appSource.test.ts";
 
-const appSource = await readFile(
-  new URL("../App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 
 test("control center numeric shortcuts select one stable tab", () => {
   assertEquals(

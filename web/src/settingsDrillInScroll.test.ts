@@ -6,10 +6,9 @@ import {
   nextSavedSettingsScroll,
   settingsFocusRevealDelta,
 } from "./settingsDrillInScroll.ts";
+import { readAppSource } from "./appSource.test.ts";
 
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 
 test("leaving Settings captures the list offset and other pages keep it", () => {
   assertEquals(nextSavedSettingsScroll("settings", 420, 0), 420);

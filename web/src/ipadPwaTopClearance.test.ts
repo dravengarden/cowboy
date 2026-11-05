@@ -1,13 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
+import { readAppSource } from "./appSource.test.ts";
 
 const html = await readFile(
   new URL("../index.html", import.meta.url), "utf8",
 );
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 const themeSource = await readFile(
   new URL("./theme.ts", import.meta.url), "utf8",
 );

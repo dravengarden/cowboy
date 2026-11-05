@@ -16,6 +16,7 @@ import {
   shouldLearnKeyboardFreeBaseline,
   visualViewportBox,
 } from "./keyboardGeometry.ts";
+import { readAppSource } from "./appSource.test.ts";
 
 test("keyboard geometry detects visual viewport overlap", () => {
   assertEquals(inferKeyboardOpen({
@@ -180,7 +181,7 @@ test("keyboard inset measures the painted page instead of innerHeight", async ()
 });
 
 test("New session is a cover sheet on the mobile navbar so Title clears the PWA accessory", async () => {
-  const appSource = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
+  const appSource = await readAppSource();
   const dialog = appSource.slice(
     appSource.indexOf("function CreateDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),

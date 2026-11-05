@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
+import { readAppSource } from "./appSource.test.ts";
 
 const sheetSource = await readFile(
   new URL("./Sheet.tsx", import.meta.url), "utf8",
@@ -14,9 +15,7 @@ const reloadSource = await readFile(
 const fullscreenSource = await readFile(
   new URL("./FullscreenComposer.tsx", import.meta.url), "utf8",
 );
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 const infoSource = await readFile(
   new URL("./InfoSheet.tsx", import.meta.url), "utf8",
 );

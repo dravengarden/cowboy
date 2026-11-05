@@ -1,10 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
+import { readAppSource } from "./appSource.test.ts";
 
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 const rowSource = await readFile(new URL("./ReliableListItemButton.tsx", import.meta.url), "utf8");
 
 test("session rows show compact project context", () => {

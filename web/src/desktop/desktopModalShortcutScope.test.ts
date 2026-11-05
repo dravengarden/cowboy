@@ -1,13 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert } from "@std/assert";
+import { readAppSource } from "../appSource.test.ts";
 
 const modalSource = await readFile(
   new URL("./DesktopModal.tsx", import.meta.url), "utf8",
 );
-const appSource = await readFile(
-  new URL("../App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 const mainSource = await readFile(
   new URL("../main.tsx", import.meta.url), "utf8",
 );

@@ -6,6 +6,7 @@ import {
   TURN_STATUS_PILL_MIN_HEIGHT,
 } from "./floatingOverlayPolicy";
 import { mobileTranscriptTailGap } from "./mobileComposerPrimitives";
+import { readAppSource } from "./appSource.test.ts";
 
 const composerSource = await readFile(
   new URL("./Composer.tsx", import.meta.url), "utf8",
@@ -22,9 +23,7 @@ const providerTranscriptSource = await readFile(
 const exploreSurfaceSource = await readFile(
   new URL("./explore/ExploreSurface.tsx", import.meta.url), "utf8",
 );
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 const frostedGlassSource = await readFile(
   new URL("./frostedGlass.ts", import.meta.url), "utf8",
 );

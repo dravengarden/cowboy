@@ -12,6 +12,7 @@ import {
   usagePercentSegmentWidth,
   usageRemainingTone,
 } from "./topBarDensity.ts";
+import { readAppSource } from "../appSource.test.ts";
 
 const WIDTHS = {
   config: 190,
@@ -83,7 +84,7 @@ test("a second account window costs a column, not a segment", () => {
 const topBar = await readFile(
   new URL("./DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
-const app = await readFile(new URL("../App.tsx", import.meta.url), "utf8");
+const app = await readAppSource();
 
 test("the quota strip spends its width on the countdown, not a stamp", () => {
   assert(topBar.includes("usageCountdown(window.resetsAt, now)"));

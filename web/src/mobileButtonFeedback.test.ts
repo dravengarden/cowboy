@@ -6,13 +6,12 @@ import {
   prefersCoarsePointer,
   syncCoarsePointerRootClass,
 } from "./platform.ts";
+import { readAppSource } from "./appSource.test.ts";
 
 const themeSource = await readFile(
   new URL("./theme.ts", import.meta.url), "utf8",
 );
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 const composerSource = await readFile(
   new URL("./Composer.tsx", import.meta.url), "utf8",
 );

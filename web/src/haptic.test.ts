@@ -2,8 +2,9 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import { hapticStyleForIntent } from "./hapticIntent.ts";
+import { readAppSource } from "./appSource.test.ts";
 
-const appSource = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
+const appSource = await readAppSource();
 const transcriptSource = await readFile(
   new URL("./Transcript.tsx", import.meta.url), "utf8",
 );

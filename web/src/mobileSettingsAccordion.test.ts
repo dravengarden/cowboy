@@ -1,10 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
+import { readAppSource } from "./appSource.test.ts";
 
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 test("mobile Settings uses an index and one lightweight detail route", () => {
   assert(appSource.includes("function MobileSettingsRoute"));
   assert(appSource.includes("initialMobileSettingsSection"));

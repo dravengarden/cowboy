@@ -5,6 +5,7 @@ import {
   appSettingsFromEvent,
   OPEN_APP_SETTINGS_EVENT,
 } from "./appSettings.ts";
+import { readAppSource } from "./appSource.test.ts";
 
 const reviewAppSource = await readFile(
   new URL("./mobile/review/ReviewApp.tsx", import.meta.url), "utf8",
@@ -18,9 +19,7 @@ const fileTreeSource = await readFile(
 const reviewActionsSource = await readFile(
   new URL("./mobile/review/ReviewNavigationActions.tsx", import.meta.url), "utf8",
 );
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 
 test("Code settings open on the Code section and Agent settings stay on Agent", () => {
   const event = new CustomEvent(OPEN_APP_SETTINGS_EVENT, {

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import { desktopEmbeddedControlIconSx } from "./DesktopEmbeddedIcon.ts";
+import { readAppSource } from "../appSource.test.ts";
 
 const conversationControlsSource = await readFile(
   new URL("./DesktopConversationControls.tsx", import.meta.url), "utf8",
@@ -15,9 +16,7 @@ const embeddedControlSource = await readFile(
 const shortcutKeycapSource = await readFile(
   new URL("../ShortcutKeycap.tsx", import.meta.url), "utf8",
 );
-const appSource = await readFile(
-  new URL("../App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 
 test("desktop embedded control icons follow the global root font size", () => {
   assertEquals(desktopEmbeddedControlIconSx(), {

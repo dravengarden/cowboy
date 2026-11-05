@@ -13,6 +13,7 @@ import {
   presentQuestionPageDirectory,
   questionTitle,
 } from "./questionPages";
+import { readAppSource } from "../appSource.test.ts";
 
 const exploreSurfaceSource = await readFile(
   new URL("./ExploreSurface.tsx", import.meta.url), "utf8",
@@ -20,9 +21,7 @@ const exploreSurfaceSource = await readFile(
 const composerSource = await readFile(
   new URL("../Composer.tsx", import.meta.url), "utf8",
 );
-const appSource = await readFile(
-  new URL("../App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 const desktopWorkspaceSource = await readFile(
   new URL("../desktop/DesktopWorkspace.tsx", import.meta.url), "utf8",
 );

@@ -9,6 +9,7 @@ import {
   shouldSampleComposerInputDebug,
   textareaLineMetrics,
 } from "./composerInputDebugPolicy";
+import { readAppSource } from "../appSource.test.ts";
 
 const source = await readFile(
   new URL("./composerInputDebug.ts", import.meta.url), "utf8",
@@ -64,7 +65,7 @@ test("debug mode labels software-keyboard Return separately from HID Enter", () 
 });
 
 test("desktop and mobile settings expose the same debug mode toggle", async () => {
-  const app = await readFile(new URL("../App.tsx", import.meta.url), "utf8");
+  const app = await readAppSource();
   assertEquals(app.includes('label="Debug mode"'), true);
   assertEquals(app.includes('ariaLabel="Toggle composer debug mode"'), true);
   assertEquals(app.includes('"aria-label": "Composer debug mode"'), true);

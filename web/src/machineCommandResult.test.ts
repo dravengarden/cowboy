@@ -2,10 +2,9 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import { machineCommandResultPresentation } from "./machineCommandResult.ts";
+import { readAppSource } from "./appSource.test.ts";
 
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 
 test("Machine command results never expose peer diagnostics", () => {
   assertEquals(machineCommandResultPresentation(true), {

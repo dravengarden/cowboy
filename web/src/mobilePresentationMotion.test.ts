@@ -2,13 +2,12 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 import { drawerProgressAttribute } from "./mobileDrawerMotion.ts";
+import { readAppSource } from "./appSource.test.ts";
 
 const drawerSource = await readFile(
   new URL("./mobileSpatialDrawer.ts", import.meta.url), "utf8",
 );
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 const productShellSource = await readFile(
   new URL("./mobile/shell/MobileProductShell.tsx", import.meta.url), "utf8",
 );

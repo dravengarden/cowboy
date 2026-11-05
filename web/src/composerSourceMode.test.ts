@@ -18,6 +18,7 @@ import {
 } from "./desktop/commands/workspaceShortcuts.ts";
 import { chromeShortcutConflict } from "./desktop/commands/chromeShortcutPolicy.ts";
 import { macShortcutConflict } from "./desktop/commands/macShortcutPolicy.ts";
+import { readAppSource } from "./appSource.test.ts";
 
 const extensions = await readFile(
   new URL("./composerExtensions.ts", import.meta.url), "utf8",
@@ -37,7 +38,7 @@ const statusLine = await readFile(
 const shortcutsDialog = await readFile(
   new URL("./desktop/commands/DesktopShortcutsDialog.tsx", import.meta.url), "utf8",
 );
-const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
+const app = await readAppSource();
 const preview = await readFile(
   new URL("./MessagePreview.tsx", import.meta.url), "utf8",
 );

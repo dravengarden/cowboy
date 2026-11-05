@@ -9,6 +9,7 @@ import {
   shouldPresentMobileKeyboardSurface,
 } from "./mobileComposerFocus.ts";
 import { mobileComposerStackGap } from "../mobileComposerPrimitives.ts";
+import { readAppSource } from "../appSource.test.ts";
 
 const composerSource = await readFile(
   new URL("../Composer.tsx", import.meta.url), "utf8",
@@ -16,9 +17,7 @@ const composerSource = await readFile(
 const textareaSource = await readFile(
   new URL("../ComposerTextarea.tsx", import.meta.url), "utf8",
 );
-const appSource = await readFile(
-  new URL("../App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 const fullscreenComposerSource = await readFile(
   new URL("../FullscreenComposer.tsx", import.meta.url), "utf8",
 );

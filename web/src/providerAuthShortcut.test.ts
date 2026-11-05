@@ -4,10 +4,9 @@ import { assertEquals } from "@std/assert";
 import type { ProviderCatalogResponse } from "@cowboy/provider-ui";
 import type { SessionMeta } from "./protocol.ts";
 import { sessionProviderAuthShortcut } from "./providerAuthShortcut.ts";
+import { readAppSource } from "./appSource.test.ts";
 
-const appSource = await readFile(
-  new URL("./App.tsx", import.meta.url), "utf8",
-);
+const appSource = await readAppSource();
 
 const session: SessionMeta = {
   id: "sess-auth",
