@@ -19,7 +19,7 @@ import { SurfaceProvider } from "./surface/SurfaceProfile";
 import type { ComposerEditorHandle } from "./ComposerEditor";
 import { PlatformComposerEditor } from "./composer/PlatformComposerEditor";
 import {
-  DesktopComposerToolbar,
+  DesktopComposerToolbarView,
   type DesktopComposerToolbarProps,
 } from "./desktop/DesktopComposerToolbar";
 import {
@@ -114,9 +114,20 @@ export async function runDesktopComposerBrowserConformance(): Promise<
             borderless
             endInset={0}
           />
-          <DesktopComposerToolbar
-            sessionId="composer-fixture"
-            status="running"
+          <DesktopComposerToolbarView
+            session={{
+              // A Provider with a compact command at 51% context.
+              compact: {
+                used: 51_000,
+                size: 100_000,
+                running: false,
+                title: "Compact conversation · context 51%",
+                open: () => calls.push("compact"),
+              },
+              clear: { open: () => calls.push("clear") },
+              stop: { busy: false, open: () => calls.push("stop") },
+              dialogs: <></>,
+            }}
             editorRef={editorRef}
             sendButtonRef={sendButtonRef}
             canInsert
@@ -228,7 +239,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
     const selection = editorRef.current.getSelection();
     for (const font of [16, 22]) {
       document.documentElement.style.fontSize = `${font}px`;
-      for (const width of [320, 420, 540, 600, 960, 1560]) {
+      for (const width of [320, 400, 420, 480, 540, 600, 760, 960, 1560]) {
         container.style.width = `${width}px`;
         await tick();
         const toolbar = container.querySelector<HTMLElement>(
@@ -271,13 +282,18 @@ export async function runDesktopComposerBrowserConformance(): Promise<
           button("send").textContent?.includes("Send"),
           "Send always retains a label",
         );
-        // Stop stays mounted while idle so the row never moves; Send keeps
-        // the edge beside it.
+        // Idle Stop holds its slot invisibly so the row never moves; Send
+        // keeps the edge beside it.
         check(
           button("stop").disabled &&
+            getComputedStyle(button("stop")).visibility === "hidden" &&
             button("stop").getBoundingClientRect().right <=
               button("send").getBoundingClientRect().left,
-          `Idle Stop is disabled before Send at ${width}/${font}`,
+          `Idle Stop holds its slot before Send at ${width}/${font}`,
+        );
+        check(
+          button("compact").textContent?.includes("51%"),
+          `Compact keeps its reading at ${width}/${font}`,
         );
         // Delivery is one line: actions fold into menus before they wrap.
         const delivery = [
