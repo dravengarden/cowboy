@@ -392,9 +392,7 @@ struct LanguageObservation {
     diagnostics: Vec<LanguageDiagnostic>,
     inlay_hints: Vec<LanguageInlayHint>,
     semantic_tokens: Vec<u32>,
-    /// Per-server evidence for `diagnostics`; absent when the server has no
-    /// analysis-frontier extension. Only the legacy `bufferLanguage` reply
-    /// carries it: owned reads are parsed strictly by installed Machines.
+    /// Per-server evidence; only `bufferLanguage` carries it (owned reads are strict).
     #[serde(skip)]
     analysis: Option<Vec<analysis::ServerAnalysis>>,
 }
