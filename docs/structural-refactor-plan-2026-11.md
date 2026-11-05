@@ -389,6 +389,39 @@ Phase 0 is landed except where noted; every guard runs in `just check`.
 | 0.6 | 57 stale `dead_code` allowances and three dead functions removed; the two in `components/plugin-sdk` stay because changing that signed component needs a component release |
 | 0.7 | `docs/INDEX.md` covers all 403 pages (`docs-index-check`); finished ledgers moved to `docs/history/` |
 
+### Phase 1 status (2026-11-05)
+
+Landed as behavior-preserving moves; every slice kept the server's 767 lib
+tests, clippy and both ratchets green and was released to the Controller.
+
+| Slice | Outcome |
+|---|---|
+| 1.1 | 30 inline test modules moved to `server/<name>_tests.rs` |
+| 1.2 | Writer, notifications, provider reset timer, warm restore and startup steps left `server.rs` (`server/provider_reset_timer.rs`, `startup_restore.rs`, `startup_tasks.rs`) |
+| 1.3 | `handle_command` 317 → 203: per-command functions in `client_commands.rs`; queue and draft arms in `queue_command`. The outer match stays exhaustive over `Inbound` |
+| 1.4 | `serve_axum` 481 → <150: the route table is grouped by domain in `server/routes.rs`; the agent-API coverage and site tests read it there |
+| 1.5 | `handle_machine_ws` 796 → 353: handshake in `machine_handshake.rs`, event ingestion in `machine_events.rs`, per-frame dispatch in `machine_connection/frames.rs` (`MachineLink`, `MachineInventory`) |
+| 1.6 | `serve` 572 → 410: the remaining body is the ordered startup sequence and AppState assembly. The `Startup` builder waits for the Controller lifecycle test the slice names as its proof |
+| 1.7 | `api_new_session` 398 → <150 (`resolve_new_session_defaults`, `create_machine_session`, `create_local_session`); `create_checked` mirrors it |
+
+Also split: `handle_ws` 509 → 229 (`client_ws/fanout.rs`, `admit_active_client`),
+`product_auth_api.rs` 4,587 → 1,323 lines (`product_auth_api/{login,oidc,
+passkeys,devices,credentials}.rs`), `confirmed_reconcile_install` 328 → 206,
+`MachineSnapshots::load` 230 → 192, `recovery::checked` 216 → 189.
+
+Exit criterion status: `server.rs` is 2,775 lines and no inline test module
+remains. Functions over 200 lines remain in two groups. Flat dispatch and
+route tables (`agent_api::actions::execute`, `control::dispatch`,
+`control::route`, `SessionHost::call`, `classify_route`,
+`product_auth_router`, `handle_command`, `MachineLink::handle_frame`) are one
+arm per operation; splitting them would only scatter the table, so they are
+exempt from the 200-line target. The remaining sequential bodies (`serve`,
+`handle_machine_ws`, `handle_ws`, `issue_product_session`,
+`managed_calls::Coordinator::start`, `run_client_fanout`,
+`spawn_provider_reset_timer`, `confirmed_reconcile_install`) are single
+`select!` loops or ordered security sequences; each further cut needs the
+lifecycle or connection-level test that 1.5/1.6 name first.
+
 ## 6. Not worth doing
 
 - A rewrite, a second controller, a microservices split or a wholesale state
