@@ -1,3 +1,4 @@
+import { shortcutKey } from "./desktop/commands/imeShortcut";
 import {
   COMPOSER_STACK_DISCLOSURE_TIMEOUT,
   composerStackDisclosureSx,
@@ -1333,15 +1334,16 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
       !event.currentTarget.contains(target) ||
       target.closest("input, textarea, [contenteditable='true']")
     ) return;
-    if (event.key === "i") {
+    const key = shortcutKey(event.nativeEvent);
+    if (key === "i") {
       event.preventDefault();
       setDesktopDetails((open) => !open);
-    } else if (event.key === "o" && routed) {
+    } else if (key === "o" && routed) {
       event.preventDefault();
       openChild(callConversationId(routed));
-    } else if (event.key === "[" || event.key === "]") {
+    } else if (key === "[" || key === "]") {
       event.preventDefault();
-      stepCall(event.key === "[" ? -1 : 1);
+      stepCall(key === "[" ? -1 : 1);
     }
   };
   const stale = error !== null && observedAt !== null;

@@ -65,7 +65,9 @@ export function desktopKeyIntent(
   const key = physicalCommandKey(event);
   const modified = event.metaKey || event.ctrlKey || event.altKey;
   if (modified) return { owner: "command", key, modified };
-  const element = event.target instanceof Element ? event.target : null;
+  const element = typeof Element !== "undefined" && event.target instanceof Element
+    ? event.target
+    : null;
   // The CodeMirror Normal sink and a native field in Vim Normal (inputVim)
   // are read-only command surfaces: their keys resolve physically.
   const vimSink = (element?.matches("[data-vim-command-sink]") ?? false) ||
