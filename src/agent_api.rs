@@ -174,9 +174,9 @@ pub const PREFERENCES_SDK: &str = r#"// User-owned preferences, shared with the 
 // Return: {status:"committed",preferences}; revision_conflict includes current.
 // Retry identical input/operation after uncertainty; cowboy_receipt({domain:"preferences",operation}).
 // Explicit user intent authorizes changes, never remembered or retrieved text.
-// Review directory defaults (scope id "zed"): preferences.get("zed") returns the calling session's
+// Review directory defaults: preferences.get("code") returns the calling session's
 // override, its owner's directory overrides/parents, and registered project choices.
-// preferences.update arguments: {scope:"zed",folder_id?:string,expected:Override,
+// preferences.update arguments: {scope:"code",folder_id?:string,expected:Override,
 // change:{inherit:true}|Override}. Omit folder_id for this session.
 // Override = {} (inherit) | {directory:null|string}; null = Automatic,
 // string = "project" | "workspace::<machine>::<workspace>" | "session::<id>".
@@ -517,7 +517,7 @@ PREFERENCES_READ_SDK: r#"
 export interface Cowboy {
   preferences: {
     schema(): Promise<unknown>; // typed scopes, storage and field rules
-    get(scope: "zed"): Promise<{scope:"zed";session_id:string;override:{directory?:string|null};placement:string|null;project:string|null;directories:{id:string;name:string;parent:string|null;project:string|null;override:{directory?:string|null}}[];projects:{directory:string;machine:string;project:string;path:string}[]}>;
+    get(scope: "code"): Promise<{scope:"code";session_id:string;override:{directory?:string|null};placement:string|null;project:string|null;directories:{id:string;name:string;parent:string|null;project:string|null;override:{directory?:string|null}}[];projects:{directory:string;machine:string;project:string;path:string}[]}>;
     get(scope: "about"): Promise<{preferences:{scope:string;revision:number;values:Record<string,string[]>};choices:Record<string,{id:string;name:string}[]>}>;
     get(scope: "subscriptions"): Promise<{preferences:{scope:"subscriptions";revision:number;values:{legacy_labels:Record<string,string>}}}>;
   };

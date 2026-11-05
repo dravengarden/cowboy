@@ -415,8 +415,8 @@ impl Host for SessionHost<'_> {
                     .owner_user_id
                     .as_deref()
                     .ok_or("permission_denied")?;
-                if args["scope"] == "zed" {
-                    return review_defaults::read(self.state, self.meta, owner)
+                if let Some(scope) = crate::review_directory::scope_arg(&args["scope"]) {
+                    return review_defaults::read(self.state, self.meta, owner, scope)
                         .await
                         .map_err(str::to_owned);
                 }

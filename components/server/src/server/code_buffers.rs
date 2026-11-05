@@ -229,6 +229,10 @@ async fn check_open(
     if !principal.can_mutate(scope.owner_user_id()) {
         return Err(StatusCode::FORBIDDEN);
     }
+    // A restricted worktree acquires no language buffer.
+    if !state.hub.language_servers_allowed(scope.session_id()) {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
     Ok(())
 }
 

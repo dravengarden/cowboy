@@ -58,6 +58,16 @@ pub(in crate::server) async fn read(
             if path.is_empty() {
                 return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
             }
+            if !state
+                .hub
+                .language_servers_allowed(session.session().session_id())
+            {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "project language servers are off for this session",
+                )
+                    .into_response();
+            }
             let Some((worktree, path)) = zed_language_target(
                 session.session().machine_id(),
                 session.session().cwd(),

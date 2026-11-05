@@ -25,6 +25,7 @@ import {
 import {
   FOLDER_DEFAULT_FIELDS,
   type FolderDefaultKey,
+  type ResolvedFolderDefaults,
   resolveFolderDefaults,
 } from "./folderDefaults";
 import { sessionFolderById, type SessionFoldersValue } from "./sessionFolders";
@@ -44,7 +45,42 @@ const automatic: Record<FolderDefaultKey, string> = {
   provider: "Claude",
   preset: "Agent recommended preset",
   review_directory: "Automatic · session worktree, then project",
+  language_servers: "On",
 };
+
+const LANGUAGE_SERVER_CHOICES = [
+  {
+    value: "on",
+    label: "On",
+    detail: "Review runs the worktree's configured language servers",
+  },
+  {
+    value: "off",
+    label: "Off",
+    detail: "Files and Git only; no project code runs",
+  },
+];
+
+function defaultSource(
+  tree: SessionFoldersValue,
+  id: string,
+  folder: ReturnType<typeof sessionFolderById>,
+  effective: ResolvedFolderDefaults,
+  key: FolderDefaultKey,
+): string {
+  const owner = effective.sources[key];
+  if (
+    owner === id && key === "project" && folder?.project &&
+    folder.defaults?.project === undefined
+  ) return "Auto-file project binding";
+  return owner === id
+    ? "This directory"
+    : owner
+    ? `Inherited from ${
+      sessionFolderById(tree, owner)?.name ?? "parent directory"
+    }`
+    : "Global default";
+}
 
 export function FolderDefaultsEditor(
   {
@@ -129,6 +165,7 @@ export function FolderDefaultsEditor(
     { value: string; label: string; detail?: string }[]
   > = {
     review_directory: [],
+    language_servers: LANGUAGE_SERVER_CHOICES,
     project: projects,
     machine: machines.map((machine) => ({
       value: machine.id,
@@ -169,20 +206,8 @@ export function FolderDefaultsEditor(
       : value
       ? choices[key].find((option) => option.value === value)?.label ?? value
       : automatic[key];
-  const source = (key: FolderDefaultKey) => {
-    const owner = effective.sources[key];
-    if (
-      owner === id && key === "project" && folder?.project &&
-      folder.defaults?.project === undefined
-    ) return "Auto-file project binding";
-    return owner === id
-      ? "This directory"
-      : owner
-      ? `Inherited from ${
-        sessionFolderById(tree, owner)?.name ?? "parent directory"
-      }`
-      : "Global default";
-  };
+  const source = (key: FolderDefaultKey) =>
+    defaultSource(tree, id, folder, effective, key);
   const openField = (key: FolderDefaultKey) => {
     setSearch("");
     const opened = new Set<string>();
@@ -242,8 +267,8 @@ export function FolderDefaultsEditor(
               {draft ? "Back to folder" : `${folder.name} defaults`}
             </Button>
             <Typography variant="body2" color="text.secondary">
-              Choose the code directory Review opens. Sessions inherit this setting
-              unless they override it.
+              Choose the code directory Review opens. Sessions inherit this
+              setting unless they override it.
             </Typography>
             <ReviewDirectoryPicker
               value={own}
@@ -486,7 +511,7 @@ export function FolderDefaultsEditor(
                 keys: ["provider", "preset", "runtime_machine"],
               }, {
                 title: "Code browsing",
-                keys: ["review_directory"],
+                keys: ["review_directory", "language_servers"],
               }] as const).map((group) => (
                 <Box key={group.title}>
                   <Typography variant="overline" color="text.secondary">

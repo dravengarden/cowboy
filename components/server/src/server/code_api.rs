@@ -239,8 +239,16 @@ pub(super) async fn api_code_manifest(
                 manifest
             }
         };
+        let restricted = match &context.scope {
+            CodeReadScope::Session(scope) => !state
+                .hub
+                .language_servers_allowed(scope.session().session_id()),
+            _ => false,
+        };
         let language_state = if language_ready {
             "ready"
+        } else if restricted {
+            "restricted"
         } else {
             "unavailable"
         };
@@ -278,7 +286,7 @@ pub(super) async fn api_code_manifest(
             change_count: manifest.change_count,
             buffer_mode,
             language: CodeLanguageCapabilities {
-                provider: if language_ready { "zed" } else { "none" },
+                provider: if language_ready { "language" } else { "none" },
                 state: language_state,
                 diagnostics: language_ready,
                 inlay_hints: language_ready,

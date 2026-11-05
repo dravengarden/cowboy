@@ -13,6 +13,9 @@ pub enum DefaultKey {
     /// Provider-qualified preset identity: `provider/preset`.
     Preset,
     ReviewDirectory,
+    /// `on` or `off`: whether Review may run the worktree's configured
+    /// language servers. Unset inherits; the top level means on.
+    LanguageServers,
 }
 
 pub type FolderDefaults = BTreeMap<DefaultKey, Option<String>>;
@@ -68,7 +71,13 @@ pub fn parse(value: &serde_json::Value) -> Result<FolderDefaults, String> {
         if let Some(value) = value {
             if *key == DefaultKey::ReviewDirectory {
                 if !crate::review_directory::valid(value) {
-                    return Err("invalid Zed default directory identity".into());
+                    return Err("invalid Review directory identity".into());
+                }
+                continue;
+            }
+            if *key == DefaultKey::LanguageServers {
+                if !matches!(value.as_str(), "on" | "off") {
+                    return Err("project language servers must be on or off".into());
                 }
                 continue;
             }

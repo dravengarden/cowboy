@@ -474,7 +474,7 @@ async fn execute(
                         &input.operation,
                     )) =>
                     {
-                        json!({"status":"accepted","scope":"zed","durable_receipt":false})
+                        json!({"status":"accepted","scope":crate::review_directory::SCOPE,"durable_receipt":false})
                     }
                     None => json!({"status":"unknown"}),
                 }))
@@ -669,7 +669,7 @@ async fn execute(
         }
         "preferences.update" => {
             let _guard = PREFERENCE_WRITES.lock().await;
-            if args["scope"] == "zed" {
+            if crate::review_directory::scope_arg(&args["scope"]).is_some() {
                 let input: crate::review_directory::Change =
                     serde_json::from_value(args).map_err(|_| "invalid_argument")?;
                 let owner = document_owner(&state.hub, state.store.as_ref(), meta).await?;
@@ -694,7 +694,7 @@ async fn execute(
                     &input,
                 )?;
                 return Ok(success(
-                    json!({"status":"accepted","scope":"zed","durable_receipt":false}),
+                    json!({"status":"accepted","scope":input.scope,"durable_receipt":false}),
                 ));
             }
             let input: crate::store::preferences::PreferenceChange =

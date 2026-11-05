@@ -29,11 +29,16 @@ pub(in crate::server) async fn worktree_ready(
     local_socket: Option<&std::path::Path>,
     scope: &SessionReadScope,
 ) -> anyhow::Result<bool> {
+    // A worktree the owner restricted stays restricted here even when the
+    // adapter still holds it trusted from before; see `language_servers_allowed`.
+    let trusted = hub.language_servers_allowed(scope.session().session_id());
     let request = serde_json::json!({
-        "type": "ensureWorktree", "path": scope.session().cwd(), "trusted": true,
+        "type": "ensureWorktree", "path": scope.session().cwd(), "trusted": trusted,
     });
     match adapter_request(hub, control, local_socket, scope, request).await? {
-        crate::server::ZedAdapterResponse::Worktree { state, .. } => Ok(state == "ready"),
+        crate::server::ZedAdapterResponse::Worktree { state, .. } => {
+            Ok(trusted && state == "ready")
+        }
         _ => anyhow::bail!("unexpected Zed adapter response"),
     }
 }

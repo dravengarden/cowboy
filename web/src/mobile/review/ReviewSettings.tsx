@@ -76,7 +76,12 @@ export function ReviewSettingsContent({
         <Typography variant="overline" color="text.secondary">
           Code display
         </Typography>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+          spacing={2}
+        >
           <Box>
             <Typography variant="body2" fontWeight={650}>
               Code font size
@@ -89,7 +94,9 @@ export function ReviewSettingsContent({
             size="small"
             value={settings.codeFontSize}
             onChange={(event): void =>
-              updateReviewSettings({ codeFontSize: Number(event.target.value) })}
+              updateReviewSettings({
+                codeFontSize: Number(event.target.value),
+              })}
             sx={{ minWidth: 92 }}
           >
             {REVIEW_CODE_FONT_SIZES.map((value) => (
@@ -119,7 +126,12 @@ export function ReviewSettingsContent({
         <Typography variant="overline" color="text.secondary">
           Diff
         </Typography>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+          spacing={2}
+        >
           <Box>
             <Typography variant="body2" fontWeight={650}>Context</Typography>
             <Typography variant="caption" color="text.secondary">
@@ -130,7 +142,9 @@ export function ReviewSettingsContent({
             size="small"
             value={settings.contextLines}
             onChange={(event): void =>
-              updateReviewSettings({ contextLines: Number(event.target.value) })}
+              updateReviewSettings({
+                contextLines: Number(event.target.value),
+              })}
             sx={{ minWidth: 92 }}
           >
             {REVIEW_CONTEXT_LINES.map((value) => (
@@ -158,7 +172,8 @@ export function ReviewSettingsContent({
           label="Diagnostics"
           description="Show LSP errors and warnings"
           checked={settings.diagnostics}
-          onChange={(diagnostics): void => updateReviewSettings({ diagnostics })}
+          onChange={(diagnostics): void =>
+            updateReviewSettings({ diagnostics })}
           disabled={!capabilities?.diagnostics}
         />
         <SettingToggle
@@ -178,8 +193,12 @@ export function ReviewSettingsContent({
         />
         {capabilities?.state !== "ready" && (
           <Typography variant="caption" color="text.secondary">
-            Language intelligence is {capabilities?.state ?? "unavailable"} for this
-            worktree. Syntax highlighting remains available locally.
+            {capabilities?.state === "restricted"
+              ? "Project language servers are off for this session's directory. Turn them on in its directory defaults. "
+              : `Language intelligence is ${
+                capabilities?.state ?? "unavailable"
+              } for this worktree. `}
+            Syntax highlighting remains available locally.
           </Typography>
         )}
       </Stack>

@@ -1,5 +1,23 @@
 //! A browsing preference refers to an existing code context; it grants no file
 //! access and never moves the Agent's execution workspace.
+
+/// The preference scope agents use for Review directory defaults.
+pub const SCOPE: &str = "code";
+/// The earlier spelling, still accepted. Replay identity (fingerprints and
+/// sync dedupe keys) keeps using it, so one decision submitted under either
+/// spelling stays the same operation.
+pub const LEGACY_SCOPE: &str = "zed";
+
+#[must_use]
+pub fn is_scope(scope: &str) -> bool {
+    scope == SCOPE || scope == LEGACY_SCOPE
+}
+
+/// The requested spelling when an argument names this scope.
+#[must_use]
+pub fn scope_arg(value: &serde_json::Value) -> Option<&str> {
+    value.as_str().filter(|scope| is_scope(scope))
+}
 pub fn valid(value: &str) -> bool {
     if value.is_empty() || value.len() > 1024 || value.chars().any(char::is_control) {
         return false;

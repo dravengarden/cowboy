@@ -168,6 +168,11 @@ pub(super) async fn buffer_request(
             }
         })?;
     if request.open {
+        if !hub.language_servers_allowed(scope.session_id()) {
+            return Err(BufferError::Unavailable(anyhow::anyhow!(
+                "project language servers are off for this session"
+            )));
+        }
         let response = operation.request(
             serde_json::json!({"type":"ensureWorktree", "path":request.worktree, "trusted":true}),
         )

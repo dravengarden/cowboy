@@ -8,6 +8,7 @@ export const FOLDER_DEFAULT_FIELDS = {
   provider: "Agent",
   preset: "Model and reasoning preset",
   review_directory: "Review directory",
+  language_servers: "Project language servers",
 } as const;
 export type FolderDefaultKey = keyof typeof FOLDER_DEFAULT_FIELDS;
 export type FolderDefaults = Partial<Record<FolderDefaultKey, string | null>>;
@@ -20,6 +21,7 @@ export function validFolderDefaults(values: unknown): values is FolderDefaults {
     if (!Object.hasOwn(FOLDER_DEFAULT_FIELDS, key)) return false;
     if (value === null) return true;
     if (key === "review_directory") return validReviewDirectory(value);
+    if (key === "language_servers") return value === "on" || value === "off";
     if ((key === "machine" || key === "runtime_machine") && value === "local") {
       return false;
     }
