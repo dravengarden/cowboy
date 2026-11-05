@@ -8,8 +8,8 @@ import type { DeliveryTarget } from "./currentTurnDelivery";
 import { DraftDestinationPicker } from "./DraftDestinationPicker";
 
 import { lazy, type PointerEvent as ReactPointerEvent, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { alpha, Badge, Box, Button, Chip, CircularProgress, ClickAwayListener, DialogContentText, Divider, IconButton, Paper, Popper, Snackbar, Stack, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
-import { AlternateEmail, AttachFile, CleaningServices, CloseFullscreen, Compress, DeleteOutline, EditNoteOutlined, KeyboardHide, OpenInFull, Schedule, Stop, Tune, VerticalAlignBottom, Visibility } from "@mui/icons-material";
+import { alpha, Badge, Box, Button, Chip, CircularProgress, ClickAwayListener, DialogContentText, IconButton, Paper, Popper, Snackbar, Stack, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
+import { AlternateEmail, AttachFile, CleaningServices, CloseFullscreen, Compress, DeleteOutline, EditNoteOutlined, KeyboardHide, OpenInFull, Schedule, Stop, Tune, VerticalAlignBottom } from "@mui/icons-material";
 import {
   type ComposerEditorHandle,
   type ComposerEditorSelection,
@@ -122,7 +122,7 @@ import {
 
 import { PendingPanel, DesktopRegionShortcut, TOOLBAR_ICON_BTN, AttachmentPreviews } from "./PendingPanel";
 import { ComposerSheet, SessionActionConfirmDialog } from "./ComposerSheet";
-import { useInlineImageSelection } from "./composerImageSelection";
+import { InlineImageActions, useInlineImageSelection } from "./composerImageSelection";
 export { SessionProviderSection } from "./ComposerSheet";
 export { PendingPanel } from "./PendingPanel";
 
@@ -182,16 +182,6 @@ const TOOLBAR_MIN_H = {
 // MUI's Button start-icon selector assigns a fixed px size with more
 // specificity than an SvgIcon's own sx prop. Own the glyph size at the button
 // primitive so both image actions follow the root rem scale truthfully.
-const INLINE_IMAGE_ACTION_BUTTON_SX = {
-  textTransform: "none",
-  fontWeight: 600,
-  gap: 0.5,
-  px: 1.75,
-  py: 1,
-  borderRadius: 0,
-  "& .MuiButton-startIcon > *": { fontSize: "1.125rem" },
-} as const;
-
 // Compact "K/M" token count for the context tooltip (48436 → "48K", 1_000_000 → "1M").
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) {
@@ -2560,76 +2550,12 @@ export function ComposerWorkspace({
           soon as the image is tapped. Popper keeps the active editor and native
           selection alive while still positioning this toolbar by the image. */
       }
-      <Popper
-        open={imgSel !== null}
-        anchorEl={imgSel?.el ?? null}
-        placement="top"
-        modifiers={[
-          { name: "offset", options: { offset: [0, 8] } },
-          {
-            name: "flip",
-            options: { fallbackPlacements: ["bottom", "right", "left"] },
-          },
-          { name: "preventOverflow", options: { padding: 8 } },
-        ]}
-        sx={{ zIndex: (t) => t.zIndex.tooltip }}
-      >
-        <ClickAwayListener onClickAway={closeImgSel}>
-          <Paper
-            role="toolbar"
-            aria-label="Image actions"
-            sx={{
-              borderRadius: 999,
-              overflow: "hidden",
-              border: 1,
-              borderColor: "divider",
-              boxShadow: 8,
-              backgroundImage: "none",
-              bgcolor: (t) => alpha(
-                t.palette.background.paper,
-                t.palette.mode === "dark" ? 0.74 : 0.82,
-              ),
-              backdropFilter: "blur(16px) saturate(180%)",
-              WebkitBackdropFilter: "blur(16px) saturate(180%)",
-            }}
-          >
-            <Stack
-              direction="row"
-              alignItems="stretch"
-              divider={
-                <Divider orientation="vertical" flexItem sx={{ my: 0.875 }} />
-              }
-            >
-              <Button
-                color="inherit"
-                startIcon={<Visibility />}
-                onPointerDown={imagePreviewTap.onPointerDown}
-                onPointerMove={imagePreviewTap.onPointerMove}
-                onPointerUp={imagePreviewTap.onPointerUp}
-                onPointerCancel={imagePreviewTap.onPointerCancel}
-                onMouseDown={(event): void => event.preventDefault()}
-                onClick={imagePreviewTap.onClick}
-                sx={INLINE_IMAGE_ACTION_BUTTON_SX}
-              >
-                Preview
-              </Button>
-              <Button
-                color="error"
-                startIcon={<DeleteOutline />}
-                onPointerDown={imageDeleteTap.onPointerDown}
-                onPointerMove={imageDeleteTap.onPointerMove}
-                onPointerUp={imageDeleteTap.onPointerUp}
-                onPointerCancel={imageDeleteTap.onPointerCancel}
-                onMouseDown={(event): void => event.preventDefault()}
-                onClick={imageDeleteTap.onClick}
-                sx={INLINE_IMAGE_ACTION_BUTTON_SX}
-              >
-                Delete
-              </Button>
-            </Stack>
-          </Paper>
-        </ClickAwayListener>
-      </Popper>
+      <InlineImageActions
+        imgSel={imgSel}
+        closeImgSel={closeImgSel}
+        imagePreviewTap={imagePreviewTap}
+        imageDeleteTap={imageDeleteTap}
+      />
       {
         /* Confirm for the session-lifecycle actions. Compact sends the agent's
           slash-command; Clear is a cowboy session RESET (fresh agent context).

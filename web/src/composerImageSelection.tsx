@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { alpha, Button, ClickAwayListener, Divider, Paper, Popper, Stack } from "@mui/material";
+import { DeleteOutline, Visibility } from "@mui/icons-material";
 import { type ComposerEditorHandle } from "./composer/PlatformComposerEditor";
 import { dismissMobileSoftwareKeyboard, releaseMobileComposerFocus, noteMobileKeyboardDismissed } from "./composer/mobileComposerFocus";
 import { isImeKeyEvent } from "./imeKey";
@@ -90,4 +92,100 @@ export function useInlineImageSelection({
       globalThis.removeEventListener("keydown", closeOnEscape, true);
   }, [closeImgSel, imgSel]);
   return { imgSel, setImgSel, closeImgSel, imagePreviewTap, imageDeleteTap };
+}
+
+const INLINE_IMAGE_ACTION_BUTTON_SX = {
+  textTransform: "none",
+  fontWeight: 600,
+  gap: 0.5,
+  px: 1.75,
+  py: 1,
+  borderRadius: 0,
+  "& .MuiButton-startIcon > *": { fontSize: "1.125rem" },
+} as const;
+
+/** The Preview / Delete toolbar for the selected inline image. Popper keeps
+ *  the active editor and native selection alive while positioning it by the
+ *  image. */
+export function InlineImageActions({
+  imgSel,
+  closeImgSel,
+  imagePreviewTap,
+  imageDeleteTap,
+}: Pick<
+  ReturnType<typeof useInlineImageSelection>,
+  "imgSel" | "closeImgSel" | "imagePreviewTap" | "imageDeleteTap"
+>): React.JSX.Element {
+  return (
+  <Popper
+    open={imgSel !== null}
+    anchorEl={imgSel?.el ?? null}
+    placement="top"
+    modifiers={[
+      { name: "offset", options: { offset: [0, 8] } },
+      {
+        name: "flip",
+        options: { fallbackPlacements: ["bottom", "right", "left"] },
+      },
+      { name: "preventOverflow", options: { padding: 8 } },
+    ]}
+    sx={{ zIndex: (t) => t.zIndex.tooltip }}
+  >
+    <ClickAwayListener onClickAway={closeImgSel}>
+      <Paper
+        role="toolbar"
+        aria-label="Image actions"
+        sx={{
+          borderRadius: 999,
+          overflow: "hidden",
+          border: 1,
+          borderColor: "divider",
+          boxShadow: 8,
+          backgroundImage: "none",
+          bgcolor: (t) => alpha(
+            t.palette.background.paper,
+            t.palette.mode === "dark" ? 0.74 : 0.82,
+          ),
+          backdropFilter: "blur(16px) saturate(180%)",
+          WebkitBackdropFilter: "blur(16px) saturate(180%)",
+        }}
+      >
+        <Stack
+          direction="row"
+          alignItems="stretch"
+          divider={
+            <Divider orientation="vertical" flexItem sx={{ my: 0.875 }} />
+          }
+        >
+          <Button
+            color="inherit"
+            startIcon={<Visibility />}
+            onPointerDown={imagePreviewTap.onPointerDown}
+            onPointerMove={imagePreviewTap.onPointerMove}
+            onPointerUp={imagePreviewTap.onPointerUp}
+            onPointerCancel={imagePreviewTap.onPointerCancel}
+            onMouseDown={(event): void => event.preventDefault()}
+            onClick={imagePreviewTap.onClick}
+            sx={INLINE_IMAGE_ACTION_BUTTON_SX}
+          >
+            Preview
+          </Button>
+          <Button
+            color="error"
+            startIcon={<DeleteOutline />}
+            onPointerDown={imageDeleteTap.onPointerDown}
+            onPointerMove={imageDeleteTap.onPointerMove}
+            onPointerUp={imageDeleteTap.onPointerUp}
+            onPointerCancel={imageDeleteTap.onPointerCancel}
+            onMouseDown={(event): void => event.preventDefault()}
+            onClick={imageDeleteTap.onClick}
+            sx={INLINE_IMAGE_ACTION_BUTTON_SX}
+          >
+            Delete
+          </Button>
+        </Stack>
+      </Paper>
+    </ClickAwayListener>
+  </Popper>
+  );
 }
