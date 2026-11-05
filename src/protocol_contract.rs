@@ -500,7 +500,7 @@ fn protocol_fixtures_match_the_checked_in_contract() {
 }
 
 /// Every web-authored Inbound frame (`web/src/protocol.inbound.fixtures.ts`,
-/// rendered to `contracts/protocol/inbound.json`) must parse, and must not
+/// kept in `contracts/protocol/inbound.json` by its web test) must parse, and must not
 /// lose a field the web sets: serde ignores unknown keys, so a renamed field
 /// would otherwise be dropped silently.
 #[test]

@@ -1,6 +1,6 @@
 // Web-authored Inbound frames, one per variant with its optional fields set.
-// `satisfies` holds them to web/src/protocol.ts; tools/generate-protocol-fixtures.ts
-// writes them to contracts/protocol/inbound.json, and src/protocol_contract.rs
+// `satisfies` holds them to web/src/protocol.ts; protocol.inbound.fixtures.test.ts
+// keeps contracts/protocol/inbound.json in step, and src/protocol_contract.rs
 // proves the Controller parses each one without dropping a field.
 
 import type { ContentBlock, Inbound } from "./protocol";
