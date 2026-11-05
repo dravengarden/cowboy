@@ -426,7 +426,7 @@ lifecycle or connection-level test that 1.5/1.6 name first.
 
 | Slice | Outcome |
 |---|---|
-| 2.1 | `store.rs` test modules moved to files. Instead of a proc macro (a new crate is a Cargo maintenance boundary), a contract is an `async fn(&Store)` with a SQLite test and an ignored `postgres_` twin over shared fixtures (`store/storage_contract_tests/test_support.rs`). OIDC logout scoping, session replacement fencing, capacity fairness and compact restore now run on PostgreSQL; the gate runs 59 PostgreSQL tests, all passing, with no divergence found. Remaining SQLite-only coverage: the 29 HTTP-level product-auth tests in `cowboy-server`, which need the same fixture exported to that crate |
+| 2.1 | `store.rs` test modules moved to files. Instead of a proc macro (a new crate is a Cargo maintenance boundary), a contract is an `async fn(&Store)` with a SQLite test and an ignored `postgres_` twin over shared fixtures (`store/storage_contract_tests/test_support.rs`). OIDC logout scoping, session replacement fencing, capacity fairness and compact restore now run on PostgreSQL; the gate runs 59 PostgreSQL tests, all passing, with no divergence found. The product-auth HTTP tests in `cowboy-server` followed (task-local backend choice in `test_store()`): 27 twins, so the gate runs 86 PostgreSQL tests, all passing |
 | 2.2–2.3 | Not started; 2.1 found no backend divergence, which per the slice text lowers the value of 2.3 |
 
 ### Phase 3 status (2026-11-05)

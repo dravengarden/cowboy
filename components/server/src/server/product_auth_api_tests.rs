@@ -91,6 +91,17 @@ fn auth_off_does_not_read_oidc_secret_files() {
     assert!(crate::plugin_activation::load_legacy_oidc_provider(true, Some(&missing)).is_err());
 }
 
+tokio::task_local! {
+    /// Set by a `postgres_*` twin: test_store() opens the isolated PostgreSQL
+    /// database `just test-postgres` provisions instead of a SQLite file.
+    static POSTGRES_BACKEND: ();
+}
+
+/// Runs a product-auth test body against the PostgreSQL fixture.
+async fn on_postgres(body: impl std::future::Future<Output = ()>) {
+    POSTGRES_BACKEND.scope((), body).await;
+}
+
 async fn test_store() -> (Store, std::path::PathBuf) {
     let root = std::env::temp_dir().join(format!(
         "cowboy-product-auth-{}-{}",
@@ -98,7 +109,12 @@ async fn test_store() -> (Store, std::path::PathBuf) {
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ));
     std::fs::create_dir_all(&root).unwrap();
-    let url = format!("sqlite://{}", root.join("cowboy.sqlite3").display());
+    let url = if POSTGRES_BACKEND.try_with(|()| ()).is_ok() {
+        std::env::var("COWBOY_TEST_POSTGRES_URL")
+            .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database")
+    } else {
+        format!("sqlite://{}", root.join("cowboy.sqlite3").display())
+    };
     let store = Store::connect(&url, root.join("artifacts")).await.unwrap();
     store.migrate().await.unwrap();
     (store, root)
@@ -187,8 +203,7 @@ fn origin_for(base: &str) -> String {
     base.trim_end_matches('/').to_owned()
 }
 
-#[tokio::test]
-async fn mandatory_transport_binds_real_password_sessions_and_honors_logout() {
+async fn mandatory_transport_binds_real_password_sessions_and_honors_logout_body() {
     install_rustls();
     let (store, root) = test_store().await;
     let now = auth_now_ms();
@@ -308,6 +323,20 @@ async fn mandatory_transport_binds_real_password_sessions_and_honors_logout() {
     assert!(!refresh.headers().contains_key("x-cowboy-device-proof"));
     server.abort();
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn mandatory_transport_binds_real_password_sessions_and_honors_logout() {
+    Box::pin(mandatory_transport_binds_real_password_sessions_and_honors_logout_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_mandatory_transport_binds_real_password_sessions_and_honors_logout() {
+    on_postgres(Box::pin(
+        mandatory_transport_binds_real_password_sessions_and_honors_logout_body(),
+    ))
+    .await;
 }
 
 async fn post_json(
@@ -457,8 +486,7 @@ async fn me_test_user(store: &Store, disabled: bool) -> crate::store::ProductUse
     user
 }
 
-#[tokio::test]
-async fn auth_me_accepts_device_proofs_once_and_reuses_middleware_identity() {
+async fn auth_me_accepts_device_proofs_once_and_reuses_middleware_identity_body() {
     let (store, root) = test_store().await;
     let user = me_test_user(&store, false).await;
     let state = auth_state(Hub::new(), Some(store.clone()));
@@ -573,7 +601,20 @@ async fn auth_me_accepts_device_proofs_once_and_reuses_middleware_identity() {
 }
 
 #[tokio::test]
-async fn auth_me_keeps_automation_policy_scopes_and_expiry() {
+async fn auth_me_accepts_device_proofs_once_and_reuses_middleware_identity() {
+    Box::pin(auth_me_accepts_device_proofs_once_and_reuses_middleware_identity_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_auth_me_accepts_device_proofs_once_and_reuses_middleware_identity() {
+    on_postgres(Box::pin(
+        auth_me_accepts_device_proofs_once_and_reuses_middleware_identity_body(),
+    ))
+    .await;
+}
+
+async fn auth_me_keeps_automation_policy_scopes_and_expiry_body() {
     let (store, root) = test_store().await;
     let user = me_test_user(&store, false).await;
     let key = crate::client_auth::new_signing_key().unwrap();
@@ -621,7 +662,20 @@ async fn auth_me_keeps_automation_policy_scopes_and_expiry() {
 }
 
 #[tokio::test]
-async fn auth_me_rejects_disabled_device_users() {
+async fn auth_me_keeps_automation_policy_scopes_and_expiry() {
+    Box::pin(auth_me_keeps_automation_policy_scopes_and_expiry_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_auth_me_keeps_automation_policy_scopes_and_expiry() {
+    on_postgres(Box::pin(
+        auth_me_keeps_automation_policy_scopes_and_expiry_body(),
+    ))
+    .await;
+}
+
+async fn auth_me_rejects_disabled_device_users_body() {
     let (store, root) = test_store().await;
     let user = me_test_user(&store, true).await;
     let state = auth_state(Hub::new(), Some(store));
@@ -656,7 +710,17 @@ async fn auth_me_rejects_disabled_device_users() {
 }
 
 #[tokio::test]
-async fn cardea_device_exchange_reuses_capacity_and_cannot_revive_local_revocation() {
+async fn auth_me_rejects_disabled_device_users() {
+    Box::pin(auth_me_rejects_disabled_device_users_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_auth_me_rejects_disabled_device_users() {
+    on_postgres(Box::pin(auth_me_rejects_disabled_device_users_body())).await;
+}
+
+async fn cardea_device_exchange_reuses_capacity_and_cannot_revive_local_revocation_body() {
     install_rustls();
     let key = crate::client_auth::new_signing_key().unwrap();
     let public = crate::client_auth::public_key_to_base64(&key);
@@ -798,7 +862,21 @@ async fn cardea_device_exchange_reuses_capacity_and_cannot_revive_local_revocati
 }
 
 #[tokio::test]
-async fn browser_approved_device_rotates_sender_constrained_credentials() {
+async fn cardea_device_exchange_reuses_capacity_and_cannot_revive_local_revocation() {
+    Box::pin(cardea_device_exchange_reuses_capacity_and_cannot_revive_local_revocation_body())
+        .await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_cardea_device_exchange_reuses_capacity_and_cannot_revive_local_revocation() {
+    on_postgres(Box::pin(
+        cardea_device_exchange_reuses_capacity_and_cannot_revive_local_revocation_body(),
+    ))
+    .await;
+}
+
+async fn browser_approved_device_rotates_sender_constrained_credentials_body() {
     let (store, root) = test_store().await;
     let now = auth_now_ms();
     let user = crate::store::ProductUser {
@@ -1093,6 +1171,20 @@ async fn browser_approved_device_rotates_sender_constrained_credentials() {
 
     server.abort();
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn browser_approved_device_rotates_sender_constrained_credentials() {
+    Box::pin(browser_approved_device_rotates_sender_constrained_credentials_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_browser_approved_device_rotates_sender_constrained_credentials() {
+    on_postgres(Box::pin(
+        browser_approved_device_rotates_sender_constrained_credentials_body(),
+    ))
+    .await;
 }
 
 async fn test_ws_upgrade(
@@ -1458,8 +1550,7 @@ fn device_authorization_prefers_the_configured_public_browser_origin() {
     );
 }
 
-#[tokio::test]
-async fn legacy_browser_session_binds_once_to_its_next_primary_method() {
+async fn legacy_browser_session_binds_once_to_its_next_primary_method_body() {
     let (store, root) = test_store().await;
     let now = auth_now_ms();
     let user = crate::store::ProductUser {
@@ -1558,7 +1649,20 @@ async fn legacy_browser_session_binds_once_to_its_next_primary_method() {
 }
 
 #[tokio::test]
-async fn native_oidc_handoff_requires_origin_pkce_and_sets_both_account_cookies() {
+async fn legacy_browser_session_binds_once_to_its_next_primary_method() {
+    Box::pin(legacy_browser_session_binds_once_to_its_next_primary_method_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_legacy_browser_session_binds_once_to_its_next_primary_method() {
+    on_postgres(Box::pin(
+        legacy_browser_session_binds_once_to_its_next_primary_method_body(),
+    ))
+    .await;
+}
+
+async fn native_oidc_handoff_requires_origin_pkce_and_sets_both_account_cookies_body() {
     install_rustls();
     let (store, root) = test_store().await;
     let now = auth_now_ms();
@@ -1707,7 +1811,20 @@ async fn native_oidc_handoff_requires_origin_pkce_and_sets_both_account_cookies(
 }
 
 #[tokio::test]
-async fn browser_shell_oidc_poll_is_origin_bound_pending_and_single_use() {
+async fn native_oidc_handoff_requires_origin_pkce_and_sets_both_account_cookies() {
+    Box::pin(native_oidc_handoff_requires_origin_pkce_and_sets_both_account_cookies_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_native_oidc_handoff_requires_origin_pkce_and_sets_both_account_cookies() {
+    on_postgres(Box::pin(
+        native_oidc_handoff_requires_origin_pkce_and_sets_both_account_cookies_body(),
+    ))
+    .await;
+}
+
+async fn browser_shell_oidc_poll_is_origin_bound_pending_and_single_use_body() {
     install_rustls();
     let (store, root) = test_store().await;
     let now = auth_now_ms();
@@ -1951,7 +2068,20 @@ async fn browser_shell_oidc_poll_is_origin_bound_pending_and_single_use() {
 }
 
 #[tokio::test]
-async fn browser_shell_oidc_events_are_origin_bound_and_do_not_consume_the_handoff() {
+async fn browser_shell_oidc_poll_is_origin_bound_pending_and_single_use() {
+    Box::pin(browser_shell_oidc_poll_is_origin_bound_pending_and_single_use_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_browser_shell_oidc_poll_is_origin_bound_pending_and_single_use() {
+    on_postgres(Box::pin(
+        browser_shell_oidc_poll_is_origin_bound_pending_and_single_use_body(),
+    ))
+    .await;
+}
+
+async fn browser_shell_oidc_events_are_origin_bound_and_do_not_consume_the_handoff_body() {
     install_rustls();
     let (store, root) = test_store().await;
     let mut state = auth_state(Hub::new(), Some(store));
@@ -2033,6 +2163,21 @@ async fn browser_shell_oidc_events_are_origin_bound_and_do_not_consume_the_hando
     let _ = socket.close(None).await;
     handle.abort();
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn browser_shell_oidc_events_are_origin_bound_and_do_not_consume_the_handoff() {
+    Box::pin(browser_shell_oidc_events_are_origin_bound_and_do_not_consume_the_handoff_body())
+        .await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_browser_shell_oidc_events_are_origin_bound_and_do_not_consume_the_handoff() {
+    on_postgres(Box::pin(
+        browser_shell_oidc_events_are_origin_bound_and_do_not_consume_the_handoff_body(),
+    ))
+    .await;
 }
 
 #[test]
@@ -2124,8 +2269,7 @@ fn enabled_product_auth_stamps_the_durable_user_as_session_owner() {
     assert_eq!(owner.username, Some(principal.username.as_str()));
 }
 
-#[tokio::test]
-async fn unauthenticated_ws_is_rejected_before_upgrade() {
+async fn unauthenticated_ws_is_rejected_before_upgrade_body() {
     let (store, root) = test_store().await;
     let (base, server) = spawn_enforcement(auth_state(Hub::new(), Some(store))).await;
     let response = reqwest::Client::new()
@@ -2143,7 +2287,20 @@ async fn unauthenticated_ws_is_rejected_before_upgrade() {
 }
 
 #[tokio::test]
-async fn metrics_with_forwarded_for_is_rejected() {
+async fn unauthenticated_ws_is_rejected_before_upgrade() {
+    Box::pin(unauthenticated_ws_is_rejected_before_upgrade_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_unauthenticated_ws_is_rejected_before_upgrade() {
+    on_postgres(Box::pin(
+        unauthenticated_ws_is_rejected_before_upgrade_body(),
+    ))
+    .await;
+}
+
+async fn metrics_with_forwarded_for_is_rejected_body() {
     let (store, root) = test_store().await;
     let (base, server) = spawn_enforcement(auth_state(Hub::new(), Some(store))).await;
     let rejected = reqwest::Client::new()
@@ -2164,7 +2321,17 @@ async fn metrics_with_forwarded_for_is_rejected() {
 }
 
 #[tokio::test]
-async fn core_security_without_auth_plugins_supports_setup_login_and_session_reopen() {
+async fn metrics_with_forwarded_for_is_rejected() {
+    Box::pin(metrics_with_forwarded_for_is_rejected_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_metrics_with_forwarded_for_is_rejected() {
+    on_postgres(Box::pin(metrics_with_forwarded_for_is_rejected_body())).await;
+}
+
+async fn core_security_without_auth_plugins_supports_setup_login_and_session_reopen_body() {
     use std::os::unix::fs::PermissionsExt as _;
     let (store, root) = test_store().await;
     let core_path = root.join("core-security.json");
@@ -2303,7 +2470,12 @@ async fn core_security_without_auth_plugins_supports_setup_login_and_session_reo
 }
 
 #[tokio::test]
-async fn default_policy_rejects_register() {
+async fn core_security_without_auth_plugins_supports_setup_login_and_session_reopen() {
+    Box::pin(core_security_without_auth_plugins_supports_setup_login_and_session_reopen_body())
+        .await;
+}
+
+async fn default_policy_rejects_register_body() {
     let (store, root) = test_store().await;
     let (base, server) = spawn_auth(auth_state(Hub::new(), Some(store))).await;
     let origin = origin_for(&base);
@@ -2321,6 +2493,17 @@ async fn default_policy_rejects_register() {
     assert_eq!(response.text().await.unwrap(), "setup token required");
     server.abort();
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn default_policy_rejects_register() {
+    Box::pin(default_policy_rejects_register_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_default_policy_rejects_register() {
+    on_postgres(Box::pin(default_policy_rejects_register_body())).await;
 }
 
 #[tokio::test]
@@ -2352,8 +2535,7 @@ async fn in_memory_store_returns_503() {
     server.abort();
 }
 
-#[tokio::test]
-async fn open_mode_ignores_token_and_login_sets_cookie() {
+async fn open_mode_ignores_token_and_login_sets_cookie_body() {
     let (store, root) = test_store().await;
     let hub = Hub::new();
     let state = auth_state(hub, Some(store));
@@ -2414,7 +2596,20 @@ async fn open_mode_ignores_token_and_login_sets_cookie() {
 }
 
 #[tokio::test]
-async fn operator_can_create_list_and_revoke_own_api_tokens() {
+async fn open_mode_ignores_token_and_login_sets_cookie() {
+    Box::pin(open_mode_ignores_token_and_login_sets_cookie_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_open_mode_ignores_token_and_login_sets_cookie() {
+    on_postgres(Box::pin(
+        open_mode_ignores_token_and_login_sets_cookie_body(),
+    ))
+    .await;
+}
+
+async fn operator_can_create_list_and_revoke_own_api_tokens_body() {
     let (store, root) = test_store().await;
     let state = auth_state(Hub::new(), Some(store));
     let token = setup_token_from(&state);
@@ -2513,7 +2708,20 @@ async fn operator_can_create_list_and_revoke_own_api_tokens() {
 }
 
 #[tokio::test]
-async fn admin_created_user_is_operator() {
+async fn operator_can_create_list_and_revoke_own_api_tokens() {
+    Box::pin(operator_can_create_list_and_revoke_own_api_tokens_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_operator_can_create_list_and_revoke_own_api_tokens() {
+    on_postgres(Box::pin(
+        operator_can_create_list_and_revoke_own_api_tokens_body(),
+    ))
+    .await;
+}
+
+async fn admin_created_user_is_operator_body() {
     let (store, root) = test_store().await;
     let hub = Hub::new();
     let admin = seed_admin(&hub);
@@ -2535,7 +2743,17 @@ async fn admin_created_user_is_operator() {
 }
 
 #[tokio::test]
-async fn concurrent_single_use_token_keeps_one_user() {
+async fn admin_created_user_is_operator() {
+    Box::pin(admin_created_user_is_operator_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_admin_created_user_is_operator() {
+    on_postgres(Box::pin(admin_created_user_is_operator_body())).await;
+}
+
+async fn concurrent_single_use_token_keeps_one_user_body() {
     let (store, root) = test_store().await;
     let state = auth_state(Hub::new(), Some(store.clone()));
     let token = setup_token_from(&state);
@@ -2572,7 +2790,17 @@ async fn concurrent_single_use_token_keeps_one_user() {
 }
 
 #[tokio::test]
-async fn admin_bootstrap_creates_owner_then_product_user_can_login() {
+async fn concurrent_single_use_token_keeps_one_user() {
+    Box::pin(concurrent_single_use_token_keeps_one_user_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_concurrent_single_use_token_keeps_one_user() {
+    on_postgres(Box::pin(concurrent_single_use_token_keeps_one_user_body())).await;
+}
+
+async fn admin_bootstrap_creates_owner_then_product_user_can_login_body() {
     let (store, root) = test_store().await;
     let state = auth_state(Hub::new(), Some(store));
     let setup_token = std::fs::read_to_string(state.setup.token_path())
@@ -2706,7 +2934,20 @@ async fn admin_bootstrap_creates_owner_then_product_user_can_login() {
 }
 
 #[tokio::test]
-async fn disabled_product_auth_reports_a_local_owner_without_setup() {
+async fn admin_bootstrap_creates_owner_then_product_user_can_login() {
+    Box::pin(admin_bootstrap_creates_owner_then_product_user_can_login_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_admin_bootstrap_creates_owner_then_product_user_can_login() {
+    on_postgres(Box::pin(
+        admin_bootstrap_creates_owner_then_product_user_can_login_body(),
+    ))
+    .await;
+}
+
+async fn disabled_product_auth_reports_a_local_owner_without_setup_body() {
     let (store, root) = test_store().await;
     let mut state = auth_state(Hub::new(), Some(store));
     state.product_auth_enabled = false;
@@ -2731,7 +2972,20 @@ async fn disabled_product_auth_reports_a_local_owner_without_setup() {
 }
 
 #[tokio::test]
-async fn admin_login_rejects_forwarded_cleartext() {
+async fn disabled_product_auth_reports_a_local_owner_without_setup() {
+    Box::pin(disabled_product_auth_reports_a_local_owner_without_setup_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_disabled_product_auth_reports_a_local_owner_without_setup() {
+    on_postgres(Box::pin(
+        disabled_product_auth_reports_a_local_owner_without_setup_body(),
+    ))
+    .await;
+}
+
+async fn admin_login_rejects_forwarded_cleartext_body() {
     let (store, root) = test_store().await;
     let hub = Hub::new();
     let _admin = seed_admin(&hub);
@@ -2756,7 +3010,17 @@ async fn admin_login_rejects_forwarded_cleartext() {
 }
 
 #[tokio::test]
-async fn admin_passkey_lock_is_off_until_a_credential_exists() {
+async fn admin_login_rejects_forwarded_cleartext() {
+    Box::pin(admin_login_rejects_forwarded_cleartext_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_admin_login_rejects_forwarded_cleartext() {
+    on_postgres(Box::pin(admin_login_rejects_forwarded_cleartext_body())).await;
+}
+
+async fn admin_passkey_lock_is_off_until_a_credential_exists_body() {
     let (store, root) = test_store().await;
     let hub = Hub::new();
     let admin = seed_admin(&hub);
@@ -2789,7 +3053,20 @@ async fn admin_passkey_lock_is_off_until_a_credential_exists() {
 }
 
 #[tokio::test]
-async fn admin_overview_requires_cookie() {
+async fn admin_passkey_lock_is_off_until_a_credential_exists() {
+    Box::pin(admin_passkey_lock_is_off_until_a_credential_exists_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_admin_passkey_lock_is_off_until_a_credential_exists() {
+    on_postgres(Box::pin(
+        admin_passkey_lock_is_off_until_a_credential_exists_body(),
+    ))
+    .await;
+}
+
+async fn admin_overview_requires_cookie_body() {
     let (store, root) = test_store().await;
     let hub = Hub::new();
     let admin = seed_admin(&hub);
@@ -2819,7 +3096,17 @@ async fn admin_overview_requires_cookie() {
 }
 
 #[tokio::test]
-async fn extra_users_and_admin_first_run_fail_closed() {
+async fn admin_overview_requires_cookie() {
+    Box::pin(admin_overview_requires_cookie_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_admin_overview_requires_cookie() {
+    on_postgres(Box::pin(admin_overview_requires_cookie_body())).await;
+}
+
+async fn extra_users_and_admin_first_run_fail_closed_body() {
     let (store, root) = test_store().await;
     let hub = Hub::new();
     let admin = seed_admin(&hub);
@@ -2878,7 +3165,17 @@ async fn extra_users_and_admin_first_run_fail_closed() {
 }
 
 #[tokio::test]
-async fn passkey_viewing_lock_is_off_until_a_credential_exists() {
+async fn extra_users_and_admin_first_run_fail_closed() {
+    Box::pin(extra_users_and_admin_first_run_fail_closed_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_extra_users_and_admin_first_run_fail_closed() {
+    on_postgres(Box::pin(extra_users_and_admin_first_run_fail_closed_body())).await;
+}
+
+async fn passkey_viewing_lock_is_off_until_a_credential_exists_body() {
     let (store, root) = test_store().await;
     let state = auth_state(Hub::new(), Some(store));
     let token = setup_token_from(&state);
@@ -2949,7 +3246,20 @@ async fn passkey_viewing_lock_is_off_until_a_credential_exists() {
 }
 
 #[tokio::test]
-async fn external_passkey_handoff_is_public_only_in_safari_and_bound_to_one_session() {
+async fn passkey_viewing_lock_is_off_until_a_credential_exists() {
+    Box::pin(passkey_viewing_lock_is_off_until_a_credential_exists_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_passkey_viewing_lock_is_off_until_a_credential_exists() {
+    on_postgres(Box::pin(
+        passkey_viewing_lock_is_off_until_a_credential_exists_body(),
+    ))
+    .await;
+}
+
+async fn external_passkey_handoff_is_public_only_in_safari_and_bound_to_one_session_body() {
     use sha2::Digest as _;
 
     let (store, root) = test_store().await;
@@ -3143,7 +3453,21 @@ async fn external_passkey_handoff_is_public_only_in_safari_and_bound_to_one_sess
 }
 
 #[tokio::test]
-async fn overdue_extended_session_is_rejected_server_side_but_base_login_can_recover() {
+async fn external_passkey_handoff_is_public_only_in_safari_and_bound_to_one_session() {
+    Box::pin(external_passkey_handoff_is_public_only_in_safari_and_bound_to_one_session_body())
+        .await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_external_passkey_handoff_is_public_only_in_safari_and_bound_to_one_session() {
+    on_postgres(Box::pin(
+        external_passkey_handoff_is_public_only_in_safari_and_bound_to_one_session_body(),
+    ))
+    .await;
+}
+
+async fn overdue_extended_session_is_rejected_server_side_but_base_login_can_recover_body() {
     let (store, root) = test_store().await;
     let now = auth_now_ms();
     let user = crate::store::ProductUser {
@@ -3245,7 +3569,21 @@ async fn overdue_extended_session_is_rejected_server_side_but_base_login_can_rec
 }
 
 #[tokio::test]
-async fn all_session_logout_requires_recent_proof_before_revoking_anything() {
+async fn overdue_extended_session_is_rejected_server_side_but_base_login_can_recover() {
+    Box::pin(overdue_extended_session_is_rejected_server_side_but_base_login_can_recover_body())
+        .await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_overdue_extended_session_is_rejected_server_side_but_base_login_can_recover() {
+    on_postgres(Box::pin(
+        overdue_extended_session_is_rejected_server_side_but_base_login_can_recover_body(),
+    ))
+    .await;
+}
+
+async fn all_session_logout_requires_recent_proof_before_revoking_anything_body() {
     let (store, root) = test_store().await;
     let now = auth_now_ms();
     let user = crate::store::ProductUser {
@@ -3347,6 +3685,20 @@ async fn all_session_logout_requires_recent_proof_before_revoking_anything() {
 
     server.abort();
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn all_session_logout_requires_recent_proof_before_revoking_anything() {
+    Box::pin(all_session_logout_requires_recent_proof_before_revoking_anything_body()).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_all_session_logout_requires_recent_proof_before_revoking_anything() {
+    on_postgres(Box::pin(
+        all_session_logout_requires_recent_proof_before_revoking_anything_body(),
+    ))
+    .await;
 }
 
 #[test]
