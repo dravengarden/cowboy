@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import {
   OPEN_SESSION_SETTINGS_EVENT,
+  pendingSessionSettings,
   openSessionSettings,
   sessionSettingsFocusFromEvent,
   sessionSettingsEventMatches,
@@ -50,4 +51,25 @@ test("a settings action targets its session in a split workspace", () => {
   const event = new CustomEvent(OPEN_SESSION_SETTINGS_EVENT, { detail: { focus: "agent", sessionId: "one" } });
   assertEquals(sessionSettingsEventMatches(event, "one"), true);
   assertEquals(sessionSettingsEventMatches(event, "two"), false);
+});
+
+test("a request a mounted surface took does not replay on remount", () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "document");
+  const events = new EventTarget();
+  Object.defineProperty(globalThis, "document", { value: events, configurable: true });
+  const take = (event: Event): void => {
+    sessionSettingsEventMatches(event, "one");
+  };
+  events.addEventListener(OPEN_SESSION_SETTINGS_EVENT, take);
+  try {
+    openSessionSettings("agent", "one");
+    assertEquals(pendingSessionSettings("one"), null);
+    // No mounted surface for "two": its mount still honors the request.
+    openSessionSettings("agent", "two");
+    assertEquals(pendingSessionSettings("two"), "agent");
+  } finally {
+    events.removeEventListener(OPEN_SESSION_SETTINGS_EVENT, take);
+    if (original) Object.defineProperty(globalThis, "document", original);
+    else delete (globalThis as { document?: unknown }).document;
+  }
 });

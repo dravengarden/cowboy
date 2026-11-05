@@ -18,9 +18,15 @@ export function openSessionSettings(
   sessionId?: string,
 ): void {
   pendingOpen = sessionId ? { sessionId, focus, at: Date.now() } : undefined;
-  document.dispatchEvent(
-    new CustomEvent(OPEN_SESSION_SETTINGS_EVENT, { detail: { focus, sessionId } }),
+  const untaken = document.dispatchEvent(
+    new CustomEvent(OPEN_SESSION_SETTINGS_EVENT, {
+      cancelable: true,
+      detail: { focus, sessionId },
+    }),
   );
+  // A mounted surface took it; replaying it on a later remount within the
+  // pending window would reopen settings the user had already closed.
+  if (!untaken) pendingOpen = undefined;
 }
 
 export function pendingSessionSettings(
@@ -60,9 +66,13 @@ export function requestComposerFocus(sessionId: string): void {
   );
 }
 
+/** Whether a settings event targets this session's surfaces. A matching
+ *  surface takes an open request (cancelable), so it is not kept pending. */
 export function sessionSettingsEventMatches(event: Event, sessionId: string): boolean {
-  return !(event instanceof CustomEvent) || !event.detail?.sessionId ||
+  const matches = !(event instanceof CustomEvent) || !event.detail?.sessionId ||
     event.detail.sessionId === sessionId;
+  if (matches && event.cancelable) event.preventDefault();
+  return matches;
 }
 
 export function sessionSettingsFocusFromEvent(
