@@ -1,5 +1,5 @@
 import { Close, Refresh, SettingsOutlined } from "@mui/icons-material";
-import { Box, CircularProgress, IconButton } from "@mui/material";
+import { Box, Button, CircularProgress } from "@mui/material";
 import {
   type MobileSheetAction,
   MobileSheetActionGroup,
@@ -60,21 +60,22 @@ export function ReviewNavigationActions({
         aria-label={label}
         data-review-navigation-actions="inline"
         onClick={(event) => event.stopPropagation()}
-        sx={{ display: "flex", alignItems: "center", gap: 0.5 }}
+        sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.5 }}
       >
-        {items.filter((action) => action.visible !== false).map((action) => (
+        {items.filter((action) => action.visible !== false && action.key !== "settings").map((action) => (
           <HintTooltip key={action.key} title={action.label}>
             <span>
-              <IconButton
+              <Button
                 aria-label={action.label}
                 aria-busy={action.key === "refresh" && refresh.pending ||
                   undefined}
                 disabled={action.disabled}
                 onClick={action.onPress}
-                sx={{ width: 44, height: 44, color: "text.secondary" }}
+                startIcon={action.icon}
+                sx={{ minHeight: 44, color: "text.secondary", textTransform: "none" }}
               >
-                {action.icon}
-              </IconButton>
+                {action.label}
+              </Button>
             </span>
           </HintTooltip>
         ))}
@@ -88,11 +89,8 @@ export function ReviewNavigationActions({
       aria-label={label}
       data-review-navigation-actions="sidebar"
       sx={{
-        position: "absolute",
-        zIndex: 3,
-        left: 0,
-        right: 0,
-        bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+        flexShrink: 0,
+        pb: "max(env(safe-area-inset-bottom, 0px), 12px)",
         display: "flex",
         justifyContent: "flex-start",
         px: 0.75,

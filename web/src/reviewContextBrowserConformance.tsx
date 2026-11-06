@@ -3,7 +3,7 @@ import { CssBaseline } from "@mui/material";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { BrowserProductTheme } from "./browserProductTheme";
-import { SurfaceProvider } from "./surface/SurfaceProfile";
+import { SurfaceContext, SurfaceProvider } from "./surface/SurfaceProfile";
 import { ReviewApp } from "./mobile/review/ReviewApp";
 import { ReviewChanges } from "./mobile/review/ReviewChanges";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
@@ -31,7 +31,7 @@ async function until(predicate: () => boolean, message: string) {
   throw new Error(`${message}: ${document.body.textContent?.slice(0, 1500)}`);
 }
 
-export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false) {
+export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false) {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
   const sessions: SessionMeta[] = [
@@ -346,6 +346,8 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
           apiVersion: 1,
           path,
           revision: context,
+          added: 1,
+          removed: 1,
           text:
             "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n",
           truncated: false,
@@ -365,7 +367,9 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       <BrowserProductTheme>
         <CssBaseline />
         <SurfaceProvider>
-          <ReviewApp active onDrawerOpenChange={() => {}} />
+          {desktop ? <SurfaceContext.Provider value={{ kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true }}>
+            <DesktopWorkspaceProvider><DesktopCommandProvider><ReviewApp active onDrawerOpenChange={() => {}} /></DesktopCommandProvider></DesktopWorkspaceProvider>
+          </SurfaceContext.Provider> : <ReviewApp active onDrawerOpenChange={() => {}} />}
         </SurfaceProvider>
       </BrowserProductTheme>,
     )
@@ -484,7 +488,7 @@ async function checkReviewCompareAndSelection(
     fixture.refresh();
     const compare = () => fixture.container.querySelector("[data-review-compare]");
     await until(
-      () => compare()?.textContent?.includes("Ready to merge · origin/main") === true,
+      () => compare()?.getAttribute("aria-label")?.includes("Ready to merge · origin/main") === true,
       "The default comparison should be named by its scenario",
     );
     await until(
@@ -502,7 +506,7 @@ async function checkReviewCompareAndSelection(
     await until(() => !!row("Other branches") || !!row("origin/topic"), "Comparison picker did not open");
     await press(row("origin/topic"), "branch row");
     await until(
-      () => compare()?.textContent?.includes("Branch · origin/topic") === true,
+      () => compare()?.getAttribute("aria-label")?.includes("Branch · origin/topic") === true,
       "A chosen branch should become the comparison",
     );
     await until(
@@ -557,7 +561,9 @@ async function checkReviewCompareAndSelection(
 
 export async function runReviewContextBrowserConformance(): Promise<string[]> {
   const loadingResult = await checkReviewLoading();
-  const fixture = renderReviewContextPreview(true, true);
+  // Desktop keeps secondary actions directly visible. The trusted phone
+  // acceptance runner separately exercises their bottom actions sheet.
+  const fixture = renderReviewContextPreview(true, true, false, false, true);
   const tests: string[] = [loadingResult];
   const overview = () =>
     fixture.container.querySelector<HTMLElement>(
@@ -628,10 +634,10 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
       fixture.container.textContent?.includes("Worktree · Cowboy"),
       "Header lost registered project identity to a generated worktree name",
     );
-    check(
-      overview()?.textContent?.includes("/tasks/cowboy/feature"),
-      "Review should show the real worktree path",
-    );
+    await click(labelled("Repository details"));
+    await until(() => !!document.querySelector("[data-repository-project-path]"), "Repository details should open from the bottom");
+    check(document.querySelector("[data-repository-project-path]")?.textContent === "/tasks/cowboy/feature", "Review should show the real worktree path");
+    await click(document.querySelector('[aria-label="Close repository details"]'));
     check(
       !fixture.requests.some((request) => request.includes("workspace::")),
       "Opening a session redirected to the stable project checkout",

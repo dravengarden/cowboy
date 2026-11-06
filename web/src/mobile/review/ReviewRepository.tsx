@@ -1,23 +1,21 @@
 import {
   AccountTreeOutlined,
-  CommitOutlined,
   DescriptionOutlined,
   ExpandLess,
   ExpandMore,
   History,
+  InfoOutlined,
   Refresh,
 } from "@mui/icons-material";
 import {
   Alert,
   Box,
   Button,
-  ButtonBase,
   Chip,
-  Collapse,
+  IconButton,
   List,
   ListItemButton,
   ListItemText,
-  Skeleton,
   Stack,
   Typography,
 } from "@mui/material";
@@ -31,7 +29,7 @@ import {
   type GitCommitSummary,
   type GitRepositorySnapshot,
 } from "./codeApi";
-import { buildGitGraph, type GitGraphRow } from "./gitGraphModel";
+import { buildGitGraph } from "./gitGraphModel";
 import {
   HISTORY_PAGE_SIZE,
   historyPageCursor,
@@ -40,320 +38,23 @@ import {
 import { ReviewChanges } from "./ReviewChanges";
 import { useReviewRecovery } from "./useReviewRecovery";
 import { ReviewNavigationActions } from "./ReviewNavigationActions";
-import { HintTooltip } from "../../HintTooltip";
 import type { SessionMeta } from "../../protocol";
 import type { PullSummary } from "../../extensions/api";
 import { loadRepositoryPulls, type RepositoryPulls } from "./repositoryPulls";
 import {
   changeTargetFacts,
+  type RepositoryWorktreeRow,
   groupRepositoryWorktrees,
-  pullLabel,
   pullsByBranch,
   pullsWithoutWorktree,
   remoteRepositories,
-  type RepositoryWorktreeRow,
-  worktreeTitle,
 } from "./repositoryTargetModel";
 import type { Choice } from "./remoteReviewSources";
 
 type RepositorySection = "changes" | "history" | "worktrees";
 
-const graphColors = ["#7c5ce0", "#36a56a", "#d98624", "#3489c9"];
-
-function shortOid(oid: string): string {
-  return oid.slice(0, 8);
-}
-
-function relativeDate(value: string): string {
-  const date = new Date(value);
-  const delta = Date.now() - date.getTime();
-  const days = Math.floor(delta / 86_400_000);
-  if (days === 0) return "Today";
-  if (days === 1) return "Yesterday";
-  if (days < 14) return `${days}d ago`;
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    year: date.getFullYear() === new Date().getFullYear()
-      ? undefined
-      : "numeric",
-  }).format(date);
-}
-
-function GraphCell(
-  { row, width }: { row: GitGraphRow; width: number },
-): React.JSX.Element {
-  const spacing = 9;
-  const laneCount = Math.max(row.topLanes, row.bottomLanes, 1);
-  const visibleLanes = Math.min(laneCount, 5);
-  const x = (lane: number): number => 7 + Math.min(lane, 4) * spacing;
-  return (
-    <Box sx={{ width, minWidth: width, height: 58, alignSelf: "stretch" }}>
-      <svg width={width} height="58" aria-hidden="true">
-        {row.incoming && (
-          <path
-            d={`M ${x(row.nodeLane)} 0 L ${x(row.nodeLane)} 29`}
-            fill="none"
-            stroke={graphColors[row.nodeLane % graphColors.length]}
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            opacity="0.72"
-          />
-        )}
-        {row.edges.map((edge, index) => (
-          <path
-            key={`${edge.kind}:${edge.from}:${edge.to}:${index}`}
-            d={edge.kind === "through"
-              ? `M ${x(edge.from)} 0 C ${x(edge.from)} 29, ${x(edge.to)} 29, ${
-                x(edge.to)
-              } 58`
-              : `M ${x(edge.from)} 29 C ${x(edge.from)} 43, ${x(edge.to)} 43, ${
-                x(edge.to)
-              } 58`}
-            fill="none"
-            stroke={graphColors[edge.to % graphColors.length]}
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity={edge.kind === "parent" ? 0.95 : 0.56}
-          />
-        ))}
-        <circle
-          cx={x(row.nodeLane)}
-          cy="29"
-          r="4.2"
-          fill={graphColors[row.nodeLane % graphColors.length]}
-          stroke="currentColor"
-          strokeWidth="1.4"
-        />
-        {laneCount > visibleLanes && (
-          <text x={width - 9} y="33" fill="currentColor" fontSize="9">+</text>
-        )}
-      </svg>
-    </Box>
-  );
-}
-
-function HistoryCommitSkeleton(
-  { count, loading }: { count: number; loading: boolean },
-): React.JSX.Element {
-  const widths = ["72%", "58%", "64%", "51%", "69%", "46%"];
-  return (
-    <Stack
-      role="status"
-      aria-live="polite"
-      aria-label={loading ? "Loading older commits" : "Loading commit history"}
-      spacing={0}
-      sx={{ pointerEvents: "none", userSelect: "none" }}
-    >
-      {widths.slice(0, count).map((width, index) => (
-        <Stack
-          key={width}
-          direction="row"
-          alignItems="center"
-          spacing={1}
-          sx={{ height: 58, px: 0.5 }}
-        >
-          <Skeleton
-            variant="circular"
-            animation={loading ? "wave" : false}
-            width={10}
-            height={10}
-            sx={{ ml: 0.75, flexShrink: 0 }}
-          />
-          <Stack spacing={0.6} sx={{ flex: 1, minWidth: 0 }}>
-            <Skeleton
-              variant="text"
-              animation={loading && index >= count - 2 ? "wave" : false}
-              width={width}
-              height={14}
-              sx={{ transform: "none" }}
-            />
-            <Skeleton
-              variant="text"
-              animation={loading && index >= count - 2 ? "wave" : false}
-              width="42%"
-              height={10}
-              sx={{ transform: "none", opacity: 0.7 }}
-            />
-          </Stack>
-        </Stack>
-      ))}
-    </Stack>
-  );
-}
-
-function sessionStatusColor(status: SessionMeta["status"]): string {
-  switch (status) {
-    case "running":
-    case "busy":
-      return "success.main";
-    case "starting":
-      return "warning.main";
-    case "crashed":
-      return "error.main";
-    default:
-      return "text.disabled";
-  }
-}
-
-function WorktreeGroupLabel(
-  { children }: { children: React.ReactNode },
-): React.JSX.Element {
-  return (
-    <Typography
-      variant="overline"
-      color="text.secondary"
-      sx={{ display: "block", px: 1, pt: 1.5, pb: 0.25, lineHeight: 1.6 }}
-    >
-      {children}
-    </Typography>
-  );
-}
-
-/** One line of views: the list below them is what the screen is for. */
-const compactTabsSx = {
-  "& [data-segmented-tab]": { minHeight: 32, py: 0, fontSize: "0.8125rem" },
-  "& [data-segmented-tab] svg": { fontSize: "1rem" },
-};
-
-const factChipSx = {
-  height: 22,
-  borderRadius: "11px",
-  fontSize: "0.6875rem",
-  fontWeight: 600,
-  "& .MuiChip-label": { px: 0.9 },
-};
-
-function PullChip({
-  pull,
-  onOpen,
-}: {
-  pull: PullSummary;
-  onOpen?: (() => void) | undefined;
-}): React.JSX.Element {
-  return (
-    <Chip
-      data-repository-pull={pull.number}
-      size="small"
-      variant="outlined"
-      color={pull.draft ? "default" : "primary"}
-      label={pullLabel(pull)}
-      {...(onOpen ? { onClick: onOpen } : {})}
-      sx={{ ...factChipSx, flex: "0 0 auto" }}
-    />
-  );
-}
-
-function WorktreeRow({
-  row,
-  currentSessionId,
-  onOpenSession,
-  pull,
-  onOpenPull,
-  onOpenWorktree,
-}: {
-  row: RepositoryWorktreeRow;
-  currentSessionId?: string | undefined;
-  onOpenWorktree?: ((path: string) => void) | undefined;
-  onOpenSession?: ((session: SessionMeta) => void) | undefined;
-  pull?: PullSummary | undefined;
-  onOpenPull?: ((pull: PullSummary) => void) | undefined;
-}): React.JSX.Element {
-  const { worktree } = row;
-  // The session being read is the drawer itself; list only its neighbours.
-  const sessions = row.sessions.filter((session) =>
-    session.id !== currentSessionId
-  );
-  return (
-    <Box
-      data-repository-worktree={worktree.current ? "current" : "other"}
-      sx={{ py: 1, px: 1, borderBottom: 1, borderColor: "divider" }}
-    >
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <CommitOutlined
-          fontSize="small"
-          color={worktree.current ? "primary" : "disabled"}
-        />
-        <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Typography
-            variant="body2"
-            fontWeight={worktree.current ? 700 : 500}
-            noWrap
-          >
-            {worktreeTitle(worktree)}
-          </Typography>
-          <HintTooltip title={worktree.path}>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              noWrap
-              sx={{ display: "block" }}
-            >
-              {worktree.head ? `${shortOid(worktree.head)} · ` : ""}
-              {row.location}
-            </Typography>
-          </HintTooltip>
-        </Box>
-        {pull && (
-          <PullChip
-            pull={pull}
-            onOpen={onOpenPull ? () => onOpenPull(pull) : undefined}
-          />
-        )}
-        {onOpenWorktree && (
-          <Button
-            data-repository-open-worktree
-            size="small"
-            onClick={() => onOpenWorktree(worktree.path)}
-          >
-            Review
-          </Button>
-        )}
-      </Stack>
-      {sessions.map((session) => (
-        <ListItemButton
-          key={session.id}
-          disabled={!onOpenSession}
-          onClick={() => onOpenSession?.(session)}
-          sx={{
-            minHeight: 44,
-            mt: 0.5,
-            ml: 3.5,
-            px: 1,
-            py: 0.25,
-            borderRadius: 1.5,
-            gap: 1,
-            "&.Mui-disabled": { opacity: 1 },
-          }}
-        >
-          <Box
-            aria-label={`${session.status} session`}
-            sx={{
-              width: 8,
-              height: 8,
-              flex: "0 0 auto",
-              borderRadius: "50%",
-              bgcolor: sessionStatusColor(session.status),
-            }}
-          />
-          <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1 }}>
-            {session.title || "Untitled session"}
-          </Typography>
-        </ListItemButton>
-      ))}
-      {(worktree.locked || worktree.prunable) && (
-        <Alert
-          severity={worktree.prunable ? "warning" : "info"}
-          sx={{ mt: 1 }}
-        >
-          {worktree.prunable ??
-            `Locked${worktree.locked ? `: ${worktree.locked}` : ""}`}
-        </Alert>
-      )}
-    </Box>
-  );
-}
+import { shortOid, relativeDate, GraphCell, HistoryCommitSkeleton, WorktreeGroupLabel, PullChip, WorktreeRow, factChipSx } from "./ReviewRepositoryRows";
+import { Sheet } from "../../Sheet";
 
 export function ReviewRepository({
   sessionId,
@@ -606,6 +307,7 @@ export function ReviewRepository({
       color="primary"
       variant="outlined"
       sx={{
+        alignSelf: "flex-start",
         height: 22,
         borderRadius: "11px",
         fontSize: "0.6875rem",
@@ -629,6 +331,7 @@ export function ReviewRepository({
               onComparisonChange(fact.comparison);
             } else if (comparison) onComparisonChange(null);
             setSection("changes");
+            setDetailsOpen(false);
           },
         }
         : {})}
@@ -637,158 +340,16 @@ export function ReviewRepository({
   ));
 
   return (
-    <Stack sx={{ position: "relative", height: 1, minHeight: 0 }}>
-      <Box
-        sx={{
-          pt: embedded ? 0.5 : "calc(var(--cowboy-system-top-clearance) + 14px)",
-          px: 1.5,
-          pb: embedded ? 0.5 : 1,
-        }}
-      >
-        <Stack spacing={0.35} sx={{ px: 0.5, mb: embedded ? 0.5 : 1 }}>
-          {embedded
-            ? (
-              <Box data-repository-change-target>
-                <ButtonBase
-                  data-repository-details-toggle
-                  aria-expanded={detailsOpen}
-                  aria-label="Repository details"
-                  onClick={() => setDetailsOpen((open) => !open)}
-                  sx={{
-                    display: "flex",
-                    width: 1,
-                    minHeight: 38,
-                    justifyContent: "flex-start",
-                    textAlign: "left",
-                    gap: 0.5,
-                    borderRadius: 1,
-                  }}
-                >
-                  <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography variant="body2" fontWeight={700} noWrap>
-                      {targetBranch}
-                    </Typography>
-                    {targetFacts.length > 0 && (
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        noWrap
-                        component="div"
-                        sx={{ lineHeight: 1.3 }}
-                      >
-                        {targetFacts.map((fact) => fact.label).join(" · ")}
-                      </Typography>
-                    )}
-                  </Box>
-                  <ExpandMore
-                    fontSize="small"
-                    sx={{
-                      color: "text.secondary",
-                      transform: detailsOpen ? "rotate(180deg)" : undefined,
-                    }}
-                  />
-                </ButtonBase>
-                {targetPull && (
-                  <PullChip
-                    pull={targetPull}
-                    onOpen={openPull ? () => openPull(targetPull) : undefined}
-                  />
-                )}
-                <Collapse in={detailsOpen}>
-                  <Stack spacing={0.5} sx={{ pt: 0.5 }}>
-                    <Stack direction="row" alignItems="center" spacing={0.75}>
-                      {machineChip}
-                      <Typography
-                        data-repository-project-path
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ minWidth: 0, overflowWrap: "anywhere" }}
-                      >
-                        {projectPath}
-                      </Typography>
-                    </Stack>
-                    <Stack direction="row" flexWrap="wrap" sx={{ gap: 0.5 }}>
-                      {factChips}
-                    </Stack>
-                  </Stack>
-                </Collapse>
-              </Box>
-            )
-            : (
-              <>
-                <Stack direction="row" alignItems="center" spacing={0.75}>
-                  <Typography variant="subtitle1" fontWeight={700}>
-                    Repository
-                  </Typography>
-                  {machineChip}
-                </Stack>
-                {projectPath && (
-                  <HintTooltip title={projectPath}>
-                    <Typography
-                      data-repository-project-path
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{
-                        display: "-webkit-box",
-                        overflow: "hidden",
-                        overflowWrap: "anywhere",
-                        WebkitBoxOrient: "vertical",
-                        WebkitLineClamp: 2,
-                        lineHeight: 1.35,
-                      }}
-                    >
-                      {projectPath}
-                    </Typography>
-                  </HintTooltip>
-                )}
-                {target && (
-                  <Stack
-                    data-repository-change-target
-                    direction="row"
-                    alignItems="center"
-                    flexWrap="wrap"
-                    sx={{ gap: 0.5, pt: 0.5 }}
-                  >
-                    <Typography
-                      variant="body2"
-                      fontWeight={700}
-                      noWrap
-                      sx={{ minWidth: 0, maxWidth: 1, mr: 0.25 }}
-                    >
-                      {targetBranch}
-                    </Typography>
-                    {factChips}
-                    {targetPull && (
-                      <PullChip
-                        pull={targetPull}
-                        onOpen={openPull ? () => openPull(targetPull) : undefined}
-                      />
-                    )}
-                  </Stack>
-                )}
-              </>
-            )}
-        </Stack>
-        <SegmentedTabs
-          rootProps={{ "data-mobile-repository-tabs": "" }}
-          aria-label="Repository views"
-          {...(embedded ? { sx: compactTabsSx } : {})}
-          value={section}
-          onChange={setSection}
-          options={[
-            {
-              value: "changes",
-              label: "Changes",
-              icon: <DescriptionOutlined />,
-            },
-            { value: "history", label: "History", icon: <History /> },
-            {
-              value: "worktrees",
-              label: "Worktrees",
-              icon: <AccountTreeOutlined />,
-            },
-          ]}
-        />
+    <Stack sx={{ position: "relative", height: 1, minHeight: 0,
+      pt: embedded ? 0 : "var(--cowboy-system-top-clearance)",
+      pl: "env(safe-area-inset-left, 0px)",
+      pr: "env(safe-area-inset-right, 0px)",
+    }}>
+      <Box data-repository-change-target sx={{ px: 1.5, py: 0.75, flexShrink: 0 }}>
+        <Typography variant="caption" fontWeight={600} noWrap>{targetBranch}{targetPull ? ` · #${targetPull.number}` : ""}</Typography>
+        <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+          {targetFacts.map((fact) => fact.label).join(" · ")}
+        </Typography>
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
         {section === "changes"
@@ -804,7 +365,7 @@ export function ReviewRepository({
               onComparisonChange={onComparisonChange}
               onComparisonResolved={onComparisonResolved}
               onChanges={onChanges}
-              compact={embedded}
+              compact
               {...(onBrowseFiles ? { onBrowseFiles } : {})}
               linkedSession={linkedSession}
               refreshToken={(refreshToken ?? 0) + changesRefresh}
@@ -839,9 +400,7 @@ export function ReviewRepository({
               sx={{
                 height: 1,
                 px: 0.75,
-                pb: embedded
-                  ? 2
-                  : "calc(80px + env(safe-area-inset-bottom, 0px))",
+                pb: 2,
                 ...mobileNativeYScrollSx,
               }}
             >
@@ -938,9 +497,7 @@ export function ReviewRepository({
               sx={{
                 height: 1,
                 px: 1.25,
-                pb: embedded
-                  ? 2
-                  : "calc(80px + env(safe-area-inset-bottom, 0px))",
+                pb: 2,
                 ...mobileNativeYScrollSx,
               }}
             >
@@ -1054,6 +611,33 @@ export function ReviewRepository({
             </Box>
           )}
       </Box>
+      <Stack data-review-repository-controls direction="row" alignItems="center"
+        sx={{ flexShrink: 0, px: 0.75, py: 0.5, borderTop: 1, borderColor: "divider" }}>
+        <SegmentedTabs
+          rootProps={{ "data-mobile-repository-tabs": "" }}
+          aria-label="Repository views"
+          sx={{ flex: 1, minWidth: 0, gridAutoColumns: "minmax(0, 1fr)", "&& [data-segmented-tab]": { minHeight: 44, px: 0.5, fontSize: "0.75rem" }, "&& .segmented-tab-icon": { display: "none" } }}
+          value={section}
+          onChange={setSection}
+          options={[
+            { value: "changes", label: "Changes", icon: <DescriptionOutlined /> },
+            { value: "history", label: "History", icon: <History /> },
+            { value: "worktrees", label: "Worktrees", icon: <AccountTreeOutlined /> },
+          ]}
+        />
+        <IconButton data-repository-details-toggle aria-label="Repository details" aria-expanded={detailsOpen}
+          onClick={() => setDetailsOpen(true)} sx={{ width: 44, height: 44 }}><InfoOutlined /></IconButton>
+      </Stack>
+      <Sheet open={detailsOpen} onClose={() => setDetailsOpen(false)} title="Repository details" forceSheet portal
+        actions={<Button aria-label="Close repository details" onClick={() => setDetailsOpen(false)} sx={{ minHeight: 44 }}>Done</Button>}>
+        <Stack spacing={1} sx={{ p: 1 }}>
+          <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>{targetBranch}</Typography>
+          {machineChip}
+          <Typography data-repository-project-path variant="caption" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>{projectPath}</Typography>
+          <Stack direction="row" flexWrap="wrap" sx={{ gap: 1, "& .MuiChip-clickable": { minHeight: 44 } }}>{factChips}</Stack>
+          {targetPull && <PullChip pull={targetPull} onOpen={openPull ? () => { setDetailsOpen(false); openPull(targetPull); } : undefined} />}
+        </Stack>
+      </Sheet>
       <ReviewNavigationActions
         embedded={embedded}
         container={actionsContainer}

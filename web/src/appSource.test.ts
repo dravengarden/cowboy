@@ -32,6 +32,9 @@ export const SPLIT_SOURCES = {
   ],
   "mobile/review/ReviewApp.tsx": [
     "./mobile/review/ReviewApp.tsx",
+    "./mobile/review/ReviewModeSwitcher.tsx",
+    "./mobile/review/ReviewMoreActions.tsx",
+    "./mobile/review/ReviewContextButton.tsx",
     "./mobile/review/DocumentView.tsx",
     "./mobile/review/reviewMarkdownPreview.ts",
   ],

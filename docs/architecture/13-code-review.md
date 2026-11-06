@@ -35,6 +35,23 @@ The process, licensing, trust, and version-pinning contract is defined in
 Desktop shows the same Review in the Conversation pane (`␣V`), so the Prompt
 stays beside the code. Its layout is still the phone's single column.
 
+## Reading and control layout
+
+Follow the [core UX principles](../ux-principles.md). The upper surface is the
+reader: a short passive branch/file label and the scrolling files, history or
+code. The bottom workbench owns context and Git/files selection. Changes puts
+comparison, fetch and unread filtering directly above the bottom
+Changes/History/Worktrees tabs; repository details open from that row. The
+file tree keeps search and Text/Changed filters at the bottom. When a file is
+open, hunk navigation, the file strip and previous/next, review mark, wrap, preview, outline and
+sidebar controls occupy the same bottom region. Secondary actions live in
+More on Mobile and remain visible on Desktop. Footer rows reserve their own
+height so the final content row can always scroll above them.
+
+The navigator remains a single mounted owner when it moves between overview
+and sidebar; its refresh and tree actions are portalled to their current
+control host. Layout does not change the Agent session or review identity.
+
 ## Latency model
 
 The useful first screen is Git changes, followed by the worktree root and the

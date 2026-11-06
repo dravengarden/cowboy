@@ -98,7 +98,7 @@ test("only the iPad PWA floor paints a synthetic status strip", () => {
   assert(reviewSource.includes('pt: "var(--cowboy-system-top-clearance)"'));
   assert(
     repositorySource.includes(
-      "calc(var(--cowboy-system-top-clearance) + 14px)",
+      'pt: embedded ? 0 : "var(--cowboy-system-top-clearance)"',
     ),
   );
   assert(
