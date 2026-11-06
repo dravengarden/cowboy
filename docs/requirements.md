@@ -101,10 +101,19 @@ for the bounded evidence and outstanding acceptance scope.
 ## Reboot convergence
 
 Any Machine may reboot at any time: Hawk (Controller, local runtime and
-execution target), OVH (remote runtime) and Falcon (runtime and execution
-target), together or independently. Once the host itself boots successfully,
+execution target), OVH (remote runtime), Falcon and MacBook Air (runtime and
+execution targets), together or independently. Once the host itself boots successfully,
 Cowboy MUST return to service without a human step. This is a core product
 requirement, not an operational preference.
+
+Current macOS implementation gaps must not be reported as acceptance of this
+requirement: the per-user LaunchAgent starts after login, not before it.
+Execution keepers created by the boot-identity-aware Machine record
+`kern.bootsessionuuid`; Linux uses `/proc/sys/kernel/random/boot_id`. An old
+keeper contract without a boot marker cannot gain evidence of a past boot
+retroactively. Missing boot evidence remains uncertainty, not permission to
+replace a possibly live executor. A boot UUID fix alone does not provide a
+pre-login macOS service or prove recovery of those legacy contracts.
 
 - Every Cowboy host process starts at boot without a login session (system
   units, or user units with linger) and is restarted by its service manager

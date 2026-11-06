@@ -2,10 +2,10 @@
 use super::*;
 
 fn current_boot() -> Option<String> {
-    let value = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
-    let value = value.trim();
-    uuid::Uuid::parse_str(value).ok()?;
-    Some(value.to_owned())
+    crate::boot_identity::current()
+        .ok()
+        .flatten()
+        .map(|boot| boot.to_string())
 }
 
 pub(super) fn record_boot(directory: &Path) -> Result<()> {
@@ -124,6 +124,11 @@ mod tests {
 
     #[test]
     fn boot_marker_is_private_persistent_and_never_reused() {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        assert!(
+            current_boot().is_some(),
+            "supported hosts must expose a boot identity"
+        );
         if current_boot().is_none() {
             return;
         }

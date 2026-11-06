@@ -1,4 +1,5 @@
 import { desktopSize } from "./surface/desktopSize";
+import { DeleteSessionShell } from "./DeleteSessionShell";
 
 import { draftRepository } from "./documents/store";
 import { openDrafts } from "./documents/navigation";
@@ -582,10 +583,9 @@ export function App({
     const [pendingDelete, setPendingDelete] = useState<SessionMeta | null>(
         null,
     );
-    // Delete moves an idle session to Trash at once, with Undo: it is
-    // reversible, so it needs no confirmation. A working one asks first.
+    // Desktop deletion always asks first; Mobile retains immediate idle Trash.
     const requestDelete = (session: SessionMeta): void => {
-        if (sessionIsWorking(session)) {
+        if (surface === "desktop" || sessionIsWorking(session)) {
             setPendingDelete(session);
             return;
         }
@@ -2449,7 +2449,7 @@ export function App({
                 session={pendingDelete}
                 onClose={(): void => setPendingDelete(null)}
                 onStopAndTrash={(): void => {
-                    if (pendingDelete) movedToTrash(pendingDelete, stopAndTrashSession(pendingDelete.id));
+                    if (pendingDelete) movedToTrash(pendingDelete, pendingDelete.status === "busy" ? stopAndTrashSession(pendingDelete.id) : trashItems({ sessions: [pendingDelete.id] }));
                     setPendingDelete(null);
                 }}
                 onDeletePermanently={(): void => {
@@ -2613,62 +2613,6 @@ function movedToTrash(session: SessionMeta, move: Promise<void>): void {
     });
 }
 
-/** Only a working session asks before Delete: a running turn must stop
- *  first, and background work cannot sleep in Trash, so it can only be
- *  deleted permanently. */
-function DeleteSessionShell({
-    session,
-    onClose,
-    onStopAndTrash,
-    onDeletePermanently,
-}: {
-    session: SessionMeta | null;
-    onClose: () => void;
-    onStopAndTrash: () => void;
-    onDeletePermanently: () => void;
-}): React.JSX.Element | null {
-    // Hooks before the early return (rules of hooks).
-    const navbarAtBottom = useNavbarAtBottom();
-    const turnRunning = session?.status === "busy";
-    useConfirmEnter(session !== null, turnRunning ? onStopAndTrash : onDeletePermanently);
-    if (!session) return null;
-    return (
-        <Sheet
-            forceSheet={navbarAtBottom}
-            open
-            onClose={onClose}
-            title={turnRunning ? "Stop this session and move it to Trash?" : "Delete this session permanently?"}
-            mobileDismiss="none"
-            actions={
-                <>
-                    <Button onClick={onClose} color="inherit">
-                        Cancel
-                        <Kbd keys="Esc" />
-                    </Button>
-                    {turnRunning
-                        ? (
-                            <Button onClick={onStopAndTrash} color="error" variant="contained">
-                                Stop and move to Trash
-                                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-                            </Button>
-                        )
-                        : (
-                            <Button onClick={onDeletePermanently} color="error" variant="contained">
-                                Delete permanently
-                                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-                            </Button>
-                        )}
-                </>
-            }
-        >
-            <Typography variant="body2" color="text.secondary">
-                {turnRunning
-                    ? "Its current turn is cancelled. The session then moves to Trash, where it can be restored with its transcript and worktree."
-                    : "It is still running background work, which cannot wait in Trash. Deleting it now stops that work and removes the transcript. This cannot be undone."}
-            </Typography>
-        </Sheet>
-    );
-}
 
 function RenameSessionShell({
     session,
