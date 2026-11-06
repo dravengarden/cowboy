@@ -20,6 +20,7 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
   let holdAccount: string | undefined;
   let cancellationFails = false;
   let codeRejection = 0;
+  let loginAllowed = true;
   const tests: string[] = [];
   const check = (value: boolean, message: string) => { if (!value) throw new Error(message); tests.push(message); };
   const until = async (predicate: () => boolean) => {
@@ -40,7 +41,7 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
   const render = (...accounts: string[]) => flushSync(() => root.render(<BrowserProductTheme>
     <SurfaceContext.Provider value={profile}>{accounts.map((account, index) => <div key={index} data-test-account={account}>
       <SubscriptionLoginForm scope={{ owner: "subscription-fixture", dataset: "fixture", provider: "claude-code", account: `${account}-fixture` }}
-        label={`Claude · ${account === "lynx" ? "Lynx" : "Otter"}`} request={`${account}-request`} onClose={() => {}} />
+        label={`Claude · ${account === "lynx" ? "Lynx" : "Otter"}`} loginAllowed={loginAllowed} request={`${account}-request`} onClose={() => {}} />
     </div>)}</SurfaceContext.Provider>
   </BrowserProductTheme>));
   globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -78,6 +79,14 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
   try {
     render("lynx");
     await until(() => Boolean(input("lynx") && !button("lynx", "Check status")?.disabled));
+    loginAllowed = false;
+    render("lynx");
+    check(!input("lynx") && !container.querySelector("a") && !button("lynx", "Check status")!.disabled &&
+      !button("lynx", "Cancel sign-in")!.disabled && writes.length === 0,
+      "disabling a live account removes authorization while preserving status and cancellation without writes");
+    loginAllowed = true;
+    render("lynx");
+    await until(() => Boolean(input("lynx")));
     typeCode("lynx", "lynx-code");
     await until(() => !button("lynx", "Continue")!.disabled);
     holdAccount = "lynx";
@@ -171,6 +180,27 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
     await until(() => container.textContent!.includes("Code delivery is unconfirmed") && !button("otter", "Check status")!.disabled);
     check(!input("otter") && !button("otter", "Done") && container.textContent!.includes("choose Cancel sign-in, then Start again"),
       "unknown delivery retains the original attempt and explains explicit cancellation recovery");
+    render();
+    for (const key of keys) sessionStorage.removeItem(key);
+    let readinessReads = 0;
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) !== "/api/provider-accounts/lynx-fixture/login?machine_id=ovh") return new Response(null, { status: 503 });
+      check(!init?.method || init.method === "GET", "readiness retry sends no login mutation");
+      if (++readinessReads === 1) return new Response(null, { status: 503 });
+      return Response.json({ account_id: "lynx-fixture", provider_id: "claude-code", machine_id: "ovh",
+        available: true, reason: null, release: { provider_version: "1", generation_digest: "digest" },
+        methods: [{ id: "native", available: true, reason: null }] });
+    }) as typeof fetch;
+    flushSync(() => root.render(<BrowserProductTheme><SurfaceContext.Provider value={profile}>
+      <div data-test-account="lynx"><SubscriptionLoginForm
+        scope={{ owner: "subscription-fixture", dataset: "fixture", provider: "claude-code", account: "lynx-fixture" }}
+        label="Claude · Lynx" machine="ovh" onClose={() => {}} /></div>
+    </SurfaceContext.Provider></BrowserProductTheme>));
+    await until(() => Boolean(button("lynx", "Check readiness again")));
+    click("lynx", "Check readiness again");
+    await until(() => Boolean(button("lynx", "Start sign-in") && !button("lynx", "Start sign-in")!.disabled));
+    check(readinessReads === 2 && !button("lynx", "Check readiness again"),
+      "failed readiness retries the selected Machine without switching selections or starting sign-in");
     return tests;
   } finally {
     held?.(); root.unmount(); container.remove(); globalThis.fetch = originalFetch;

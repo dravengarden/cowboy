@@ -8,18 +8,26 @@ import { SubscriptionAuthorization } from "./SubscriptionAuthorization";
 import { loginReasonText } from "./loginReasons";
 import { canReplaceLogin, loginCompleted, loginFailure, loginLink, loginOptions, subscriptionLogin, type LoginOptions, type LoginScope, type LoginView } from "./subscriptionLoginController";
 
-export function SubscriptionLogin({ scope, label, disabled, request, status, startLabel = "Sign in…", machine, onChange }: { scope: LoginScope; label: string; disabled: boolean; request?: string; status?: string; startLabel?: string; machine?: string; onChange?: () => void }): React.JSX.Element {
+const stateLabel: Record<string, string> = {
+  active: "Waiting for authorization", completed: "Signed in on this Machine",
+  binding_pending: "Verifying account identity", binding_unavailable: "Account binding is unavailable",
+  unknown: "Status is unknown. Check the original sign-in before starting another.", inactive: "This sign-in expired or disconnected. Start again for a new authorization link.",
+  cancelling: "Cancellation pending", cancellation_requested: "Cancellation requested. The Machine has not confirmed cleanup yet.",
+  cancelled: "Cancelled; cleanup is not confirmed", not_started: "Sign-in did not start",
+};
+
+export function SubscriptionLogin({ scope, label, disabled, loginAllowed = true, request, status, startLabel = "Sign in…", machine, onChange }: { scope: LoginScope; label: string; disabled: boolean; loginAllowed?: boolean; request?: string; status?: string; startLabel?: string; machine?: string; onChange?: () => void }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const close = () => { setOpen(false); onChange?.(); };
   return <>
     <Button disabled={disabled} onClick={() => setOpen(true)}>{request ? status === "completed" ? "Details" : "Continue sign-in" : startLabel}</Button>
     <ConfirmSheet open={open} onClose={close} title={label} wide>
-      {open && <SubscriptionLoginForm scope={scope} label={label} onClose={close} {...(request ? { request } : {})} {...(machine ? { machine } : {})} />}
+      {open && <SubscriptionLoginForm scope={scope} label={label} loginAllowed={loginAllowed} onClose={close} {...(request ? { request } : {})} {...(machine ? { machine } : {})} />}
     </ConfirmSheet>
   </>;
 }
 
-interface LoginFormProps { scope: LoginScope; label: string; onClose: () => void; request?: string; machine?: string; onStarted?: (request: string) => void }
+interface LoginFormProps { scope: LoginScope; label: string; onClose: () => void; request?: string; machine?: string; loginAllowed?: boolean; onStarted?: (request: string) => void }
 export function SubscriptionLoginForm(props: LoginFormProps): React.JSX.Element {
   const { scope, request } = props;
   // A changed account/request is a different form, including its async owner,
@@ -27,7 +35,7 @@ export function SubscriptionLoginForm(props: LoginFormProps): React.JSX.Element 
   return <ScopedSubscriptionLoginForm key={JSON.stringify([scope.owner, scope.dataset, scope.provider, scope.account, request])} {...props} />;
 }
 
-function ScopedSubscriptionLoginForm({ scope, label, onClose, request, machine: initialMachine, onStarted }: LoginFormProps): React.JSX.Element {
+function ScopedSubscriptionLoginForm({ scope, label, onClose, request, machine: initialMachine, loginAllowed = true, onStarted }: LoginFormProps): React.JSX.Element {
   const machines = useStoreSelector((state) => state.machines);
   // "Sign in again" names the Machine whose login is outdated.
   const [machine, setMachine] = useState(initialMachine ?? "");
@@ -71,7 +79,7 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, machine: 
         const next = loginOptions(await response.json(), scope, machine);
         if (abort.signal.aborted || !alive.current || productSyncPrincipal() !== scope.owner) return;
         setOptions(next); setMethod(next.methods.find((entry) => entry.available)?.id ?? "");
-      } catch { if (!abort.signal.aborted && alive.current) setError("Could not load login readiness. Select the Machine again to retry."); }
+      } catch { if (!abort.signal.aborted && alive.current) setError("Could not load login readiness. Check again to retry on this Machine."); }
     })();
     return () => abort.abort();
   }, [machine, reference, readinessRevision, scope.account, scope.owner, scope.provider]);
@@ -134,14 +142,8 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, machine: 
   const verifying = !cancelling && !failure && !view.error &&
     (view.observation?.status === "binding_pending" || (view.observation?.status === "active" && Boolean(codeState)));
   const machineName = machines.find((entry) => entry.id === view.pending?.machine)?.display_name || view.pending?.machine;
-  const stateLabel: Record<string, string> = {
-    active: "Waiting for authorization", completed: "Signed in on this Machine",
-    binding_pending: "Verifying account identity", binding_unavailable: "Account binding is unavailable",
-    unknown: "Status is unknown. Check the original sign-in before starting another.", inactive: "This sign-in expired or disconnected. Start again for a new authorization link.",
-    cancelling: "Cancellation pending", cancellation_requested: "Cancellation requested. The Machine has not confirmed cleanup yet.",
-    cancelled: "Cancelled; cleanup is not confirmed", not_started: "Sign-in did not start",
-  };
   return <Stack spacing={1.5}>
+    {!loginAllowed && <Alert severity="info">Sign-in changes are unavailable for this account. You can still check or cancel the existing sign-in.</Alert>}
     {view.pending
       ? <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>{label} · {machineName}</Typography>
       : <Typography variant="body2">Choose a Machine to view or set up this account’s sign-in.</Typography>}
@@ -153,6 +155,7 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, machine: 
       {machines.map((entry) => <MenuItem key={entry.id} value={entry.id} disabled={!entry.connected}>{entry.display_name || entry.id}{entry.connected ? "" : " · offline"}</MenuItem>)}
     </TextField>}
     {(error || view.error) && <Alert severity="warning">{error || view.error}</Alert>}
+    {error && !reference && !view.pending && <Button disabled={view.busy} onClick={() => setReadinessRevision((value) => value + 1)}>Check readiness again</Button>}
     {view.submissionError && !done && !cancelling && !failure && <Alert severity="warning">{view.submissionError}</Alert>}
     {failure && <Alert severity="error">{failure}</Alert>}
     {alreadySignedIn && <Alert severity="success" role="status">Signed in on this Machine. No further action is needed.</Alert>}
@@ -181,21 +184,21 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, machine: 
     </Typography>}
     {!failure && !cancelling && !codeState && challenge && challenge.expires_at_ms <= Math.max(clock, Date.now()) && view.observation?.status === "active" &&
       <Alert severity="info">The authorization link has expired. Choose Start again to request a new one.</Alert>}
-    {link && challenge && <SubscriptionAuthorization
+    {loginAllowed && link && challenge && <SubscriptionAuthorization
       key={JSON.stringify([challenge.request_id, link, challenge.expires_at_ms])}
       label={label} link={link} challenge={challenge} busy={view.busy} checking={view.checking === true} submit={(code) => owner.submit(code)} />}
     <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
       {alreadySignedIn && !renewing && <>
         <Button variant="contained" onClick={onClose}>Close</Button>
-        <Button disabled={view.busy || !options?.available} onClick={() => setRenewing(true)}>Sign in again…</Button>
+        <Button disabled={!loginAllowed || view.busy || !options?.available} onClick={() => setRenewing(true)}>Sign in again…</Button>
       </>}
-      {!reference && !view.pending && showLoginSetup && <Button variant="contained" disabled={view.busy || !options?.available || !method}
+      {!reference && !view.pending && showLoginSetup && <Button variant="contained" disabled={!loginAllowed || view.busy || !options?.available || !method}
         onClick={() => { if (options) void (async () => {
           resetChecks();
           await owner.start(options, method);
         })(); }}>{options?.native_profile ? "Sign in again" : "Start sign-in"}</Button>}
       {alreadySignedIn && renewing && <Button onClick={() => setRenewing(false)}>Back</Button>}
-      {canReplaceLogin(view) && <Button variant="contained" disabled={view.busy} onClick={() => void (async () => {
+      {canReplaceLogin(view) && <Button variant="contained" disabled={!loginAllowed || view.busy} onClick={() => void (async () => {
         const previousMachine = owner.snapshot.pending?.machine;
         await owner.prepareNew();
         if (!owner.snapshot.pending) {
@@ -205,11 +208,11 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, machine: 
         }
       })()}>Start again</Button>}
       {view.pending && !done && <Button disabled={view.busy} onClick={checkStatus}>Check status</Button>}
-      {view.pending && !view.pending.request && !view.pending.cancelling && !codeState && view.error && <Button disabled={view.busy} onClick={() => void owner.retry()}>Retry same sign-in</Button>}
+      {view.pending && !view.pending.request && !view.pending.cancelling && !codeState && view.error && <Button disabled={!loginAllowed || view.busy} onClick={() => void owner.retry()}>Retry same sign-in</Button>}
       {reference && !view.pending && <Button disabled={view.busy} onClick={() => void owner.resume(reference)}>Check status</Button>}
       {view.pending && !done && !cancellationAcknowledged && <Button disabled={view.busy} onClick={() => void owner.cancel()}>{view.pending.cancelling ? "Retry cancellation" : "Cancel sign-in"}</Button>}
       {done && <Button variant="contained" disabled={view.busy} onClick={() => { owner.finish(); if (!owner.snapshot.pending) onClose(); }}>Done</Button>}
-      {done && <Button disabled={view.busy} onClick={() => {
+      {done && <Button disabled={!loginAllowed || view.busy} onClick={() => {
         owner.finish();
         if (!owner.snapshot.pending) {
           setOptions(undefined); setMethod(""); setMachine(""); setNewSignIn(true); resetChecks();
