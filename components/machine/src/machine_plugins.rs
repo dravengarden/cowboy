@@ -1340,14 +1340,12 @@ impl MachinePluginStore {
         legacy_socket: Option<&Path>,
     ) -> Result<serde_json::Value> {
         validate_plugin_id(plugin_id)?;
-        let active = read_link_name(&self.plugin_root(plugin_id).join("active"))
-            .map(|generation| format!("sha256:{generation}"));
+        let root = self.plugin_root(plugin_id);
+        let active = read_link_name(&root.join("active")).map(|g| format!("sha256:{g}"));
         self.code_runtimes
-            .request_active(plugin_id, payload, active, || {
+            .request_active(plugin_id, payload, active.clone(), || {
                 self.operations.ensure_unfenced(plugin_id)?;
-                let root = self.plugin_root(plugin_id);
-                if let Some(generation) = read_link_name(&root.join("active")) {
-                    let digest = format!("sha256:{generation}");
+                if let Some(digest) = active {
                     let (package, _, content) =
                         self.verified_plugin_generation(plugin_id, &digest)?;
                     if let Some(plan) = self.code_launch_plan(&package, &digest, &content)? {
