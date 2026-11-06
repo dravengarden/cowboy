@@ -1,5 +1,6 @@
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { DeliveryPicker } from "./DeliveryPicker";
+import { deliverySourceMatches, guardDeliveryChoice } from "./deliverySource.ts";
 import { prefetchDeliveryOptions } from "./deliveryPolicy";
 import { SendDeliveryIcon } from "./SendDeliveryIcon";
 
@@ -468,12 +469,18 @@ export function ComposerWorkspace({
     if (source.selection) editorRef.current?.focusSelection(source.selection);
     else editorRef.current?.focus();
   };
-  const deliverySourceCurrent = (): boolean => {
-    const source = deliverySource.current;
-    return source?.session === sessionId &&
-      source.attachments === attachments &&
-      source.text === (editorRef.current?.getValue() ?? text);
-  };
+  const deliverySourceCurrent = (): boolean =>
+    deliverySourceMatches(deliverySource.current, {
+      session: sessionId,
+      attachments,
+      text: editorRef.current?.getValue() ?? text,
+    });
+  const deliveryChoice = <A extends unknown[]>(run: (...args: A) => void) =>
+    guardDeliveryChoice({
+      isCurrent: deliverySourceCurrent,
+      closeStale: closeDeliveryPicker,
+      dismiss: () => setDeliveryAnchor(null),
+    }, run);
   useEffect(() => {
     setDeliveryAnchor(null);
     deliverySource.current = null;
@@ -2493,36 +2500,10 @@ export function ComposerWorkspace({
         paused={paused}
         queueCount={queue.length}
         onClose={closeDeliveryPicker}
-        onNextTurn={(): void => {
-          if (!deliverySourceCurrent()) {
-            closeDeliveryPicker();
-            return;
-          }
-          setDeliveryAnchor(null);
-          submitWithFeedback(() => setComposeFs(false));
-        }}
-        onQueueFront={(): void => {
-          if (!deliverySourceCurrent()) {
-            closeDeliveryPicker();
-            return;
-          }
-          setDeliveryAnchor(null);
-          jumpToFront();
-        }}
-        onSteer={(target, nextCheckpoint): void => {
-          if (!deliverySourceCurrent()) {
-            closeDeliveryPicker();
-            return;
-          }
-          setDeliveryAnchor(null);
-          addToCurrentTurn(target, nextCheckpoint);
-        }}
-        onSendAndPause={(): void => {
-          if (!deliverySourceCurrent()) {
-            closeDeliveryPicker();
-            return;
-          }
-          setDeliveryAnchor(null);
+        onNextTurn={deliveryChoice(() => submitWithFeedback(() => setComposeFs(false)))}
+        onQueueFront={deliveryChoice(jumpToFront)}
+        onSteer={deliveryChoice(addToCurrentTurn)}
+        onSendAndPause={deliveryChoice(() => {
           void submitFeedback.run(async () => {
             await pauseQueueConfirmed(sessionId);
             // The editor may change while the pause is acknowledged.
@@ -2534,7 +2515,7 @@ export function ComposerWorkspace({
             setComposeFs(false);
             onSubmitted?.();
           });
-        }}
+        })}
         onStop={(): void => {
           setDeliveryAnchor(null);
           setCancelOpen(true);
