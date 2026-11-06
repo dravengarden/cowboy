@@ -588,7 +588,7 @@ impl AdminIdentities {
                 .any(|existing| existing.account == account),
             "admin account already exists"
         );
-        let password_hash = crate::product_auth::hash_password(&request.password)
+        let password_hash = crate::credentials::hash_password(&request.password)
             .context("hashing admin password")?;
         self.accounts.push(AdminAccount {
             account,
@@ -604,7 +604,7 @@ impl AdminIdentities {
 
     pub fn login(&mut self, request: &AdminCredentials, now_ms: i64) -> Result<String> {
         let Ok(account) = normalize_admin_account(&request.account) else {
-            let _ = crate::product_auth::verify_unknown_user_password(&request.password);
+            let _ = crate::credentials::verify_unknown_user_password(&request.password);
             anyhow::bail!("invalid admin credentials");
         };
         let Some(index) = self
@@ -612,14 +612,14 @@ impl AdminIdentities {
             .iter()
             .position(|existing| existing.account == account)
         else {
-            let _ = crate::product_auth::verify_unknown_user_password(&request.password);
+            let _ = crate::credentials::verify_unknown_user_password(&request.password);
             anyhow::bail!("invalid admin credentials");
         };
         if !verify_stored_admin_password(&self.accounts[index], &request.password) {
             anyhow::bail!("invalid admin credentials");
         }
         if !is_argon2id_phc(&self.accounts[index].password_hash)
-            && let Ok(hash) = crate::product_auth::hash_password(&request.password)
+            && let Ok(hash) = crate::credentials::hash_password(&request.password)
         {
             self.accounts[index].password_salt.clear();
             self.accounts[index].password_hash = hash;
@@ -764,10 +764,10 @@ fn is_argon2id_phc(password_hash: &str) -> bool {
 
 fn verify_stored_admin_password(account: &AdminAccount, password: &str) -> bool {
     if is_argon2id_phc(&account.password_hash) {
-        return crate::product_auth::verify_password(password, &account.password_hash);
+        return crate::credentials::verify_password(password, &account.password_hash);
     }
     let Ok(salt) = decode_hex(&account.password_salt) else {
-        let _ = crate::product_auth::verify_unknown_user_password(password);
+        let _ = crate::credentials::verify_unknown_user_password(password);
         return false;
     };
     hashes_equal(
@@ -815,7 +815,7 @@ fn decode_hex(value: &str) -> Result<Vec<u8>> {
 }
 
 pub fn cookie_token(headers: &axum::http::HeaderMap) -> Option<String> {
-    crate::product_auth::cookie_value(headers, ADMIN_SESSION_COOKIE)
+    crate::credentials::cookie_value(headers, ADMIN_SESSION_COOKIE)
 }
 
 #[must_use]
@@ -841,7 +841,7 @@ pub fn clear_session_cookie(secure: bool) -> String {
 
 #[must_use]
 pub fn setup_cookie_token(headers: &axum::http::HeaderMap) -> Option<String> {
-    crate::product_auth::cookie_value(headers, ADMIN_SETUP_COOKIE)
+    crate::credentials::cookie_value(headers, ADMIN_SETUP_COOKIE)
 }
 
 #[must_use]

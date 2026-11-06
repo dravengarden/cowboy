@@ -13,7 +13,7 @@ use webauthn_rs::prelude::{
     RegisterPublicKeyCredential, Webauthn, WebauthnBuilder,
 };
 
-use crate::product_auth::{new_session_token, new_user_id};
+use crate::credentials::{new_session_token, new_user_id};
 
 /// Default interval between product Passkey refresh assertions.
 pub const DEFAULT_PASSKEY_REAUTH_AFTER_MS: i64 = 24 * 60 * 60 * 1_000;

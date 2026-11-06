@@ -342,7 +342,7 @@ impl PluginCatalog {
                 continue;
             }
             let host = crate::plugin_host::PluginHostSpec::from_json(source.as_bytes())?;
-            crate::core_passkeys::validate_legacy_host(&host)?;
+            crate::core_passkeys_contract::validate_legacy_host(&host)?;
             if host
                 .native_capabilities
                 .iter()

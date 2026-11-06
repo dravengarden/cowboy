@@ -210,10 +210,8 @@ impl HostActivationPolicy {
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let document: HostActivationDocument = crate::auth_plugins::decode_private_json(
-            bytes,
-            "Plugin host activation configuration",
-        )?;
+        let document: HostActivationDocument =
+            crate::credentials::decode_private_json(bytes, "Plugin host activation configuration")?;
         ensure!(
             document.schema == CONFIG_SCHEMA,
             "unsupported Plugin host activation configuration"
@@ -373,7 +371,7 @@ impl HostActivationPolicy {
                     "CoreSecurity cannot select a local Authentication Plugin; remove its pin explicitly"
                 );
             } else {
-                crate::core_passkeys::validate_legacy_host(&host)?;
+                crate::core_passkeys_contract::validate_legacy_host(&host)?;
             }
         }
         for (id, renderer) in &self.authentication_methods {

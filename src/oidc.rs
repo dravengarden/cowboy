@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use url::Url;
 
+use crate::credentials::new_session_token;
 use crate::digest::hex_sha256;
-use crate::product_auth::new_session_token;
 
 pub const TRANSACTION_COOKIE: &str = "cowboy_oidc";
 pub const NATIVE_CALLBACK_SCHEME: &str = "xyz.stormbird.cowboy.manager";
@@ -691,7 +691,7 @@ impl OidcProvider {
         )
     }
     pub fn load(path: &Path) -> Result<Self> {
-        let document: ProviderDocument = crate::auth_plugins::decode_private_json(
+        let document: ProviderDocument = crate::credentials::decode_private_json(
             &read_protected_file(path)?,
             "OIDC provider config",
         )?;
@@ -710,12 +710,12 @@ impl OidcProvider {
                 && valid_identifier(&document.subject),
             "OIDC identifiers are invalid"
         );
-        let account = crate::product_auth::normalize_username(&document.account)
+        let account = crate::credentials::normalize_username(&document.account)
             .context("normalizing OIDC account mapping")?;
         let admin_account = document
             .admin_account
             .as_deref()
-            .map(crate::product_auth::normalize_username)
+            .map(crate::credentials::normalize_username)
             .transpose()
             .context("normalizing OIDC admin account mapping")?;
         let issuer = exact_https_origin(&document.issuer)?;
@@ -862,12 +862,12 @@ impl OidcProvider {
             post_logout_redirect_uri.is_none() || end_session_endpoint.is_some(),
             "OIDC post-logout redirect requires an end-session endpoint"
         );
-        let account = crate::product_auth::normalize_username(&runtime.account)
+        let account = crate::credentials::normalize_username(&runtime.account)
             .context("normalizing OIDC account mapping")?;
         let admin_account = runtime
             .admin_account
             .as_deref()
-            .map(crate::product_auth::normalize_username)
+            .map(crate::credentials::normalize_username)
             .transpose()
             .context("normalizing OIDC admin account mapping")?;
         let client_authentication = match runtime.client_authentication {

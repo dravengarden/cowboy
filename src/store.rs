@@ -94,7 +94,7 @@ fn valid_product_user_id(value: &str) -> bool {
 }
 
 fn normalized_product_username(username: &str) -> Result<String> {
-    crate::product_auth::normalize_username(username)
+    crate::credentials::normalize_username(username)
 }
 
 fn unique_constraint_error(
