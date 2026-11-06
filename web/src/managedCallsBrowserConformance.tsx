@@ -15,6 +15,7 @@ import { resetProviderCatalog } from "./providerCatalogRegistry";
 import { type ManagedCallSummary, useManagedCalls } from "./managedCalls";
 import { peekSession, retrySessionHydration } from "./store";
 import { AgentToolsSettings, SessionToolsSection } from "./AgentToolsPanel";
+import { superagentBrowserFixture } from "./superagentBrowserConformance";
 import { CallApprovalOverlay } from "./CallApprovalOverlay";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
 import {
@@ -241,6 +242,7 @@ const findingsResult = {
 };
 
 export async function runManagedCallsBrowserConformance(): Promise<string[]> {
+  const supervision = superagentBrowserFixture();
   bindProductSyncPrincipal("call-account-fixture");
   const originalFetch = globalThis.fetch;
   const tests: string[] = [];
@@ -274,6 +276,8 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     // A focused bootstrap names the client's cached high-water seq
     // (`?since_seq=`, docs/background-tasks.md); route it by its path.
     const url = String(input).replace(/(\/bootstrap)\?since_seq=\d+$/, "$1");
+    const supervised = supervision.fetch(url, init);
+    if (supervised) return supervised;
     if (url === "/api/provider-accounts") return Promise.resolve(Response.json({
       dataset: { dataset_id: "calls-fixture", user_id: "call-account-fixture" },
       registry: { revision: 1, accounts: [], defaults: {} }, session_admission: "enabled",
@@ -1312,6 +1316,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     );
     check(agentWrites[1] === null, "reset must restore built-in defaults");
     tests.push("agent-defaults-save-and-reset");
+    tests.push(...await supervision.run(render));
 
     // A refused call becomes one actionable prompt; answering removes it.
     root.unmount();

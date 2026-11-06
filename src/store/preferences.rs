@@ -3,6 +3,7 @@ use super::{StorageBackend, Store};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+mod superagent;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Preferences {
@@ -45,6 +46,7 @@ pub fn defaults(scope: &str) -> Option<Preferences> {
         "about" => json!({"usage_order":[],"machine_order":[]}),
         "subscriptions" => json!({"legacy_labels":{}}),
         "trash" => json!({"retention_days": TRASH_RETENTION_DEFAULT_DAYS}),
+        crate::superagent::SCOPE => json!({"configuration":crate::superagent::Settings::default()}),
         _ => return None,
     };
     Some(Preferences {
@@ -64,6 +66,9 @@ pub fn schema() -> Value {
         "fields":{"legacy_labels":{"type":"provider_label_map","default":{}}},
         "provider_label_map":{"max_items":128,"provider_pattern":"^[a-z0-9-]{1,64}$","label_max_utf8_bytes":128},
         "semantics":"Display names for each Provider's legacy default account. Replace the complete map using the observed revision; omitted entries restore Existing account. Labels must be trimmed, nonempty and contain no control characters. Does not change account identity, credentials, admission or session defaults."},
+        "superagent":{"storage":"database","ownership":"current_user","default":{"configuration":crate::superagent::Settings::default()},
+        "update":"preferences.update with expected_revision and changes:{configuration}; supplied sources/projects/sessions replace their field, omitted fields are retained; atomic validation and durable receipt",
+        "discovery":"cowboy_read({help:'superagent'})","semantics":"Explicit project coordinator bindings and session enrollment; immutable Markdown knowledge grants no external-action permission. Coordinators cannot edit settings."},
         "trash":{"storage":"database","ownership":"current_user",
         "fields":{"retention_days":{"type":"integer","min":1,"max":365,"default":30}},
         "semantics":"Days a session or folder stays in Trash before the Controller deletes it permanently. Applies to items already in Trash: each deadline is trashed_at + retention_days. Move items with sessions.trash, bring them back with sessions.restore."},
@@ -75,6 +80,9 @@ pub fn schema() -> Value {
 }
 
 fn valid(change: &PreferenceChange) -> bool {
+    if change.scope == crate::superagent::SCOPE {
+        return change.expected_revision >= 0 && crate::superagent::patch_shape(&change.changes);
+    }
     defaults(&change.scope).is_some()
         && change.expected_revision >= 0
         && change.changes.as_object().is_some_and(|fields| {
@@ -187,7 +195,15 @@ impl Store {
                 .bind(owner).bind(&change.scope).fetch_optional(&mut *tx).await?;
             let mut next: Preferences = value.map(|v| serde_json::from_str(&v)).transpose()?.unwrap_or_else(|| defaults(&change.scope).unwrap());
             if next.revision != change.expected_revision { return Ok(PreferenceResult::Conflict(next)); }
-            for (key,value) in change.changes.as_object().unwrap() { next.values[key] = value.clone(); }
+            if change.scope == crate::superagent::SCOPE {
+                let current: crate::superagent::Settings = serde_json::from_value(next.values["configuration"].clone())?;
+                match current.patched(&change.changes) {
+                    Ok(configuration) => next.values["configuration"] = serde_json::to_value(configuration)?,
+                    Err(code) => return Ok(PreferenceResult::Invalid(code)),
+                }
+            } else {
+                for (key,value) in change.changes.as_object().unwrap() { next.values[key] = value.clone(); }
+            }
             next.revision += 1;
             let encoded = serde_json::to_string(&next)?;
             sqlx::query("INSERT INTO user_preferences (owner_user_id,scope,value) VALUES ($1,$2,$3) ON CONFLICT (owner_user_id,scope) DO UPDATE SET value=excluded.value")

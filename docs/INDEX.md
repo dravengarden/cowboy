@@ -25,6 +25,15 @@ primary phone/desktop product path.
 - [`remote-session-disaster-recovery.md`](remote-session-disaster-recovery.md) — Proposed recovery contract, October 24 incident audit, durable ACK gaps, per-session reconciliation and fault acceptance matrix; not implemented or activated
 - [`session-start-latency-2026-10-09.md`](session-start-latency-2026-10-09.md) — Remote Claude start stalls: single-flow Machine transport saturated by bulk writes, credit pacing, one-command startup survey and measurements
 - [`agent-api.md`](agent-api.md) — Cowboy MCP: dynamic product control catalog, session/history/usage reads, durable receipts, coverage ledger and protocol 30–32 compatibility
+- [`superagent-patterns.md`](superagent-patterns.md) — Proposed global/workspace/project pattern profiles, Markdown contracts, evidence-based refinement, adoption and supervision boundaries
+- [`examples/superagent-patterns/global.md`](examples/superagent-patterns/global.md) — Inactive example: owner-global pattern selection
+- [`examples/superagent-patterns/suger.md`](examples/superagent-patterns/suger.md) — Inactive example: Suger workspace profile
+- [`examples/superagent-patterns/columbus.md`](examples/superagent-patterns/columbus.md) — Inactive example: Columbus workspace profile
+- [`examples/superagent-patterns/cowboy.md`](examples/superagent-patterns/cowboy.md) — Inactive example: Cowboy project procedure replacement
+- [`examples/superagent-patterns/patterns/follow-through.md`](examples/superagent-patterns/patterns/follow-through.md) — Inactive example: generic authorized-delivery supervision
+- [`examples/superagent-patterns/patterns/suger-delivery.md`](examples/superagent-patterns/patterns/suger-delivery.md) — Inactive example: Suger company-project delivery ownership
+- [`examples/superagent-patterns/patterns/columbus-delivery.md`](examples/superagent-patterns/patterns/columbus-delivery.md) — Inactive example: Columbus and external-project delivery routing
+- [`examples/superagent-patterns/patterns/cowboy-delivery.md`](examples/superagent-patterns/patterns/cowboy-delivery.md) — Inactive example: Cowboy component release evidence
 - [`session-context.md`](session-context.md) — Multiple session links, staged fresh-agent selection, account isolation and first-send recovery
 - [`session-fork.md`](session-fork.md) — Native ACP session fork from a whole conversation or a turn-final message, forked worktree state, admission and retries
 - [`background-tasks.md`](background-tasks.md) — Background tasks: one compact row, inspector and bar for subagents and Calls; durable transcript anchors, terminal-state reconciliation, approval binding, diagnostics (Phase 1 implemented) and the later notification/native-work/capability phases

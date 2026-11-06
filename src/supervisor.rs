@@ -13,6 +13,8 @@
     clippy::must_use_candidate
 )]
 
+mod delivery;
+
 use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -501,30 +503,6 @@ impl Supervisor {
             native_fork,
         });
         Ok(())
-    }
-
-    /// Forward a command to a session's agent thread.
-    ///
-    /// Fast path: a live agent thread owns the session → deliver directly.
-    ///
-    /// Slow path — **post-restart resume**: after a daemon restart,
-    /// [`Hub::restore`] brings session metadata + event history back from
-    /// postgres, but `senders` starts empty, so a restored session has no
-    /// agent process. Without reviving it here the first command returned
-    /// `unknown session`, which the WS layer turns into a fire-and-forget
-    /// [`Outbound::Error`], so the prompt never reached an agent (the Web UI
-    /// stayed empty). We lazily spawn an agent and resume the retained native
-    /// thread through `session/resume` or `session/load`. Failed restoration
-    /// never falls back to a blank session. Persisted configuration is restored
-    /// before the first queued prompt reaches that thread.
-    ///
-    /// [`Outbound::Error`]: crate::core::Outbound::Error
-    ///
-    /// # Errors
-    /// If the session is unknown to the Hub, its provider is no longer
-    /// registered, or the agent thread cannot be spawned.
-    pub fn send(&self, session_id: &str, command: AgentCommand) -> Result<(), String> {
-        self.send_traced(session_id, command, None)
     }
 
     pub fn start_steer(

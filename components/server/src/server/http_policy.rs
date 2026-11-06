@@ -113,11 +113,7 @@ pub(super) fn require_admin_role(
 }
 
 pub(super) fn classify_route(method: &Method, path: &str) -> RouteAuth {
-    if matches!(path, "/healthz" | "/version")
-        || path.starts_with("/plugin-artifacts/")
-        || path.starts_with("/provider-artifacts/")
-        || !path.starts_with("/api/") && path != "/ws" && path != "/metrics"
-    {
+    if public_route(path) {
         return RouteAuth::Public;
     }
     if path == "/metrics" {
@@ -133,7 +129,10 @@ pub(super) fn classify_route(method: &Method, path: &str) -> RouteAuth {
     {
         return RouteAuth::ProductOperator;
     }
-    if path == "/api/preferences" || path.starts_with("/api/preferences/") {
+    if path == "/api/preferences"
+        || path.starts_with("/api/preferences/")
+        || path == "/api/superagent/activity"
+    {
         return RouteAuth::Product;
     }
     if path == "/api/provider-accounts" || path.starts_with("/api/provider-accounts/") {
@@ -405,6 +404,13 @@ pub(super) fn classify_route(method: &Method, path: &str) -> RouteAuth {
         return RouteAuth::AdminOperator;
     }
     RouteAuth::Public
+}
+
+fn public_route(path: &str) -> bool {
+    matches!(path, "/healthz" | "/version")
+        || path.starts_with("/plugin-artifacts/")
+        || path.starts_with("/provider-artifacts/")
+        || !path.starts_with("/api/") && path != "/ws" && path != "/metrics"
 }
 
 pub(super) fn plugin_call_path(path: &str) -> bool {

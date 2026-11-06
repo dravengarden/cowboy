@@ -398,6 +398,13 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
+        if let Some(id) = cmid
+            .as_deref()
+            .filter(|id| id.starts_with("cowboy-superagent:"))
+        {
+            self.abandon_superagent_prompt(session_id, id);
+            return;
+        }
         let original = content.len();
         let content =
             crate::session_context::without_preamble(self, session_id, cmid.as_deref(), content);
@@ -488,12 +495,9 @@ impl Hub {
             );
             return;
         }
-        // A human (or any non-wakeup) submit resets the scheduler's runaway guard
-        // — the autonomous-fire streak only counts unattended iterations.
-        if !cmid.as_deref().is_some_and(|c| {
-            c.starts_with(crate::scheduler::WAKEUP_PREFIX)
-                || c.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)
-        }) {
+        // Only a human submit resets the scheduler's runaway guard; automated
+        // coordination and completion notices stay in the unattended streak.
+        if crate::prompt_origin::origin_from_cmid(cmid.as_deref()).is_human() {
             self.notify_human_turn(session_id);
         }
         let wired = self.inner.dispatch_tx.lock().is_some();
@@ -671,6 +675,10 @@ impl Hub {
         !cmid.is_empty() && !cmid.starts_with("__") && !cmid.starts_with("cowboy-")
     }
 
+    pub(super) fn tracks_delivery(cmid: &str) -> bool {
+        Self::is_client_cmid(cmid) || cmid.starts_with("cowboy-superagent:")
+    }
+
     /// True once this Hub has accepted the prompt: still queued, handed to a
     /// worker, or echoed into the transcript (which survives
     /// a Controller restart because the echo persists its `cmid`).
@@ -678,30 +686,12 @@ impl Hub {
         if s.queue.iter().any(|m| m.cmid.as_deref() == Some(cmid)) {
             return true;
         }
-        Self::is_client_cmid(cmid)
+        Self::tracks_delivery(cmid)
             && (s.dispatched_cmids.iter().any(|seen| seen.cmid == cmid)
                 || s.log
                     .iter()
                     .rev()
                     .any(|entry| entry.cmid.as_deref() == Some(cmid)))
-    }
-
-    const DISPATCHED_CMID_WINDOW: usize = 64;
-
-    pub(super) fn note_dispatched(s: &mut Session, cmid: Option<&str>) {
-        let Some(cmid) = cmid.filter(|c| Self::is_client_cmid(c)) else {
-            return;
-        };
-        if s.dispatched_cmids.iter().any(|seen| seen.cmid == cmid) {
-            return;
-        }
-        if s.dispatched_cmids.len() >= Self::DISPATCHED_CMID_WINDOW {
-            s.dispatched_cmids.pop_front();
-        }
-        s.dispatched_cmids.push_back(DispatchedPrompt {
-            cmid: cmid.to_owned(),
-            echoed: false,
-        });
     }
 
     /// Tell every client that `cmid` is already folded into this session, without

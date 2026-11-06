@@ -67,6 +67,9 @@ pub const READ_OPERATIONS: &[&str] = &[
     "documents.read",
     "preferences.schema",
     "preferences.get",
+    "superagent.catalog",
+    "superagent.document",
+    "superagent.context",
     "code.search",
     "code.outline",
     "code.symbols",
@@ -90,6 +93,8 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "code.check",
     "documents.mutate",
     "preferences.update",
+    "superagent.follow_up",
+    "superagent.propose",
     "accounts.update",
     "accounts.revoke",
     "accounts.login_start",
@@ -103,6 +108,25 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
 
 pub const EXECUTE_DESCRIPTION: &str = "Perform one scoped Cowboy action; discover arguments with cowboy_read(help). action + arguments, and a stable operation ID for writes. Reuse identical input/ID after uncertainty; query cowboy_receipt. Actions have individual receipts, never a cross-action transaction. Calls obey the session's Tools policy.";
 pub const RECEIPT_DESCRIPTION: &str = "Resolve an uncertain action without running code. Supply its original operation and domain from live help. unknown does not prove failure; never retry under a new ID blindly.";
+
+const SUPERAGENT_SDK: &str = r#"
+// Setup: preferences.get('superagent'), then preferences.update with scope:'superagent',
+// expected_revision and changes:{configuration:{sources,projects,sessions}}. Same DB writer as Settings.
+// Each supplied configuration field replaces that entire map/list; omitted fields are retained.
+// MCP preference reads/receipts omit source bodies and return source_catalog metadata.
+// Sources are immutable content bundles made from +++ TOML-frontmatter Markdown;
+// use tools/superagent_bundle.py (docs/superagent-patterns.md). No live filesystem reads.
+// Projects: {profile,coordinator,preset:'astra-max'|'fable-max',mode:'off'|'observe'|'coordinate',max_followups:1..5,learning:boolean}.
+// Sessions: {project,mode:null|'off'|'observe'|'coordinate',mandate:string}; explicit enrollment only.
+// Coordinator bindings restrict Cowboy MCP to this domain/help/own receipts; native tools retain their existing permissions.
+// Actions via cowboy_execute, always a stable operation:
+// superagent.follow_up: {session_id,evidence,catalog_digest,pattern,reason,expected_revision}
+// superagent.propose: {session_id,evidence,markdown,expected_revision} // candidate only, never adopted
+// Read fresh context before a follow-up; only coordinate mode, idle workers and an explicit mandate qualify.
+// An automatic message adds no permission. Never execute project shell work in the coordinator.
+// Receipts: cowboy_receipt({domain:'superagent',operation}); unknown never permits a new attempt.
+// A follow-up is submitted, not verified completion. Re-read worker evidence after its turn.
+"#;
 
 pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login. No automatic account rotation.
 // Read: await cowboy.accounts.transition_status(operation) -> stage planned|stop_confirmed|binding_committed|completed|unknown.
@@ -239,6 +263,7 @@ pub const HELP_TOPICS: &[&str] = &[
     "configuration",
     "documents",
     "preferences",
+    "superagent",
     "code",
     "control",
     "accounts",
@@ -251,7 +276,7 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
     // Agents ask for the operation they are about to call ("review.start",
     // "sessions.history"); answer with the topic that documents it.
     let topic = match topic.split_once('.') {
-        Some((namespace @ ("accounts" | "preferences"), _)) => namespace,
+        Some((namespace @ ("accounts" | "preferences" | "superagent"), _)) => namespace,
         Some(_) if INVOKE_OPERATIONS.contains(&topic) => "actions",
         Some((namespace, _)) => namespace,
         None => topic,
@@ -267,8 +292,11 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
             Some(json!({"api":API_VERSION,"types":([ACCOUNTS_READ_SDK,ACCOUNTS_SDK].concat())}))
         }
         "preferences" => Some(
-            json!({"api":API_VERSION,"types":([PREFERENCES_READ_SDK,PREFERENCES_SDK].concat())}),
+            json!({"api":API_VERSION,"types":([PREFERENCES_READ_SDK,PREFERENCES_TYPES,PREFERENCES_SDK].concat())}),
         ),
+        "superagent" => {
+            Some(json!({"api":API_VERSION,"types":([SUPERAGENT_READ_SDK,SUPERAGENT_SDK].concat())}))
+        }
         "read" => Some(json!({"api":API_VERSION,"types":([SDK,control::SDK].concat())})),
         "session" => Some(
             json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,SESSION_VIEW,SESSION_TYPES,SESSION_SDK].concat())}),
@@ -312,7 +340,14 @@ pub fn revision() -> &'static str {
     use sha2::{Digest as _, Sha256};
     static REVISION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         let mut hash = Sha256::new();
-        for source in [SDK, ACTION_SDK, PREFERENCES_SDK, control::SDK] {
+        for source in [
+            SDK,
+            ACTION_SDK,
+            PREFERENCES_SDK,
+            PREFERENCES_TYPES,
+            control::SDK,
+            SUPERAGENT_SDK,
+        ] {
             hash.update(source.as_bytes());
         }
         for op in control::OPERATIONS {
@@ -531,16 +566,32 @@ CODE_SDK: r#"
 type CodeP=Promise<unknown>;export interface Cowboy{code: {search(q:string,o?:object):CodeP;outline(path:string):CodeP;symbols(q:string,o?:object):CodeP;diagnostics(paths:string[]):CodeP;checks():CodeP}} // help("code")
 "#,
 PREFERENCES_READ_SDK: r#"
+export interface Cowboy { preferences: {
+ schema():Promise<unknown>;
+ get(scope:"code"|"about"|"subscriptions"|"superagent"):Promise<unknown>;
+}} // typed results and writes: help("preferences")
+"#,
+SUPERAGENT_READ_SDK: r#"
+export interface Cowboy { superagent: {
+ catalog():Promise<unknown>;
+ document(id:string,options?:{offset?:number;chars?:number}):Promise<unknown>;
+ context(session_id:string,options?:{offset?:number;chars?:number}):Promise<unknown>;
+}} // help("superagent"); scoped coordinator reads only
+"#,
+}
+
+/// Detailed preference results are discovered only by callers using this domain.
+const PREFERENCES_TYPES: &str = r#"
 export interface Cowboy {
   preferences: {
     schema(): Promise<unknown>; // typed scopes, storage and field rules
     get(scope: "code"): Promise<unknown>; // Review directory defaults: help("preferences")
     get(scope: "about"): Promise<{preferences:{scope:string;revision:number;values:Record<string,string[]>};choices:Record<string,{id:string;name:string}[]>}>;
     get(scope: "subscriptions"): Promise<{preferences:{scope:"subscriptions";revision:number;values:{legacy_labels:Record<string,string>}}}>;
+    get(scope: "superagent"): Promise<unknown>; // project/session settings + source_catalog metadata, omits source bodies; help("superagent")
   };
 }
-"#,
-}
+"#;
 
 /// Complete `code` declarations; the resident SDK carries only a pointer here.
 const CODE_TYPES: &str = r#"

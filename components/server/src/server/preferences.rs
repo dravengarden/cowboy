@@ -61,7 +61,28 @@ pub(super) async fn update_value(
     owner: &str,
     operation: &str,
     change: &PreferenceChange,
+    actor: Option<&crate::core::SessionMeta>,
 ) -> Result<Value, &'static str> {
+    let _guard = if change.scope == crate::superagent::SCOPE {
+        let guard = superagent::WRITES.lock().await;
+        if state
+            .store
+            .as_ref()
+            .ok_or("unavailable")?
+            .preference_receipt(owner, operation)
+            .await
+            .map_err(|_| "unavailable")?
+            .is_none()
+        {
+            if let Some(actor) = actor {
+                superagent::validate_editor(state, owner, actor, &change.changes).await?;
+            }
+            superagent::validate_change(state, owner, &change.changes).await?;
+        }
+        Some(guard)
+    } else {
+        None
+    };
     match state
         .store
         .as_ref()
@@ -120,6 +141,9 @@ pub(super) async fn update(
     Json(input): Json<Update>,
 ) -> Response {
     // Bind the write to the identity that read the editor, even after a cookie switch.
+    if input.change.scope == crate::superagent::SCOPE && !auth.principal.can_reorder() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if !headers
         .get("x-cowboy-dataset")
         .and_then(|v| v.to_str().ok())
@@ -137,6 +161,7 @@ pub(super) async fn update(
         &auth.principal.user_id,
         &input.operation,
         &input.change,
+        None,
     )
     .await
     {

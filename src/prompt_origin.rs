@@ -68,6 +68,16 @@ pub fn origin_from_cmid(cmid: Option<&str>) -> PromptOrigin {
         Some(value) if value.starts_with(CALL_NOTICE_PREFIX) => {
             PromptOrigin::cowboy("managed_call")
         }
+        Some(value) if value.starts_with("cowboy-superagent:") => {
+            PromptOrigin::cowboy("superagent")
+        }
+        Some(value)
+            if value
+                .strip_prefix("agent-")
+                .is_some_and(|id| id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit())) =>
+        {
+            PromptOrigin::cowboy("agent_message")
+        }
         _ => PromptOrigin::human_composer(),
     }
 }

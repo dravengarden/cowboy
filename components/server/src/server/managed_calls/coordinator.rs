@@ -387,6 +387,11 @@ pub(in crate::server) async fn dispatch_calls_from(
     action: Action,
     origin: &CallOrigin,
 ) -> Value {
+    match super::super::superagent::restricted(state, meta).await {
+        Ok(false) => {}
+        Ok(true) => return error("superagent_scope_denied", "not_submitted"),
+        Err(code) => return error(code, "not_submitted"),
+    }
     match action {
         Action::Capabilities {} => capabilities(state, meta, ledger).await,
         Action::Start {

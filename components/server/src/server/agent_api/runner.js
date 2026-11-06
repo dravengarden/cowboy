@@ -172,6 +172,11 @@ const cowboy = strict(Object.freeze({
     }),
   }),
   api: namespace("api", { help: keyed("topic", []) }),
+  superagent: namespace("superagent", {
+    catalog: none,
+    document: (id, options) => ({ ...options, id }),
+    context: (session_id, options) => ({ ...options, session_id }),
+  }),
   preferences: namespace("preferences", {
     schema: none,
     get: (scope) => ({ scope }),

@@ -18,6 +18,8 @@ export function agentOriginDisplayName(
 }
 
 export function cowboyOriginCaption(origin: PromptOrigin): string {
+  if (origin.source === "superagent") return "Super-agent follow-up";
+  if (origin.source === "agent_message") return "Message from another agent";
   if (origin.source === "auto-resume") return "Auto-resumed the interrupted turn";
   if (origin.source === "schedule") return "Scheduled wakeup";
   return `Cowboy · ${origin.source}`;

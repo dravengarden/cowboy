@@ -220,16 +220,10 @@ impl Host for SessionHost<'_> {
         // Programs can run for a minute. A parent may close, change owner or
         // lose its account while a preceding operation is awaiting a reply.
         actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
+        if let Some(value) = self.discovery(op, &args).await? {
+            return Ok(value);
+        }
         match op {
-            "control.list" | "control.describe" | "control.read" => {
-                control::read(self.state, self.meta, op, args).await
-            }
-            "machines.list"
-            | "machines.read"
-            | "configuration.schema"
-            | "configuration.read"
-            | "usage.diagnostics" => observations::read(self.state, self.meta, op, &args).await,
-            "api.help" => help(&args),
             op if op.starts_with("code.") => self.code(op, &args).await,
             "session.event" | "sessions.event" => {
                 let value = event_reads::read(
@@ -424,6 +418,7 @@ impl Host for SessionHost<'_> {
                 }
                 super::preferences::read_value(self.state, owner, arg_str(&args, "scope")?)
                     .await
+                    .map(crate::superagent::settings_discovery)
                     .map_err(str::to_owned)
             }
             "calls.capabilities" => {
@@ -521,6 +516,32 @@ impl Host for SessionHost<'_> {
 }
 
 impl SessionHost<'_> {
+    async fn discovery(&self, op: &str, args: &Value) -> Result<Option<Value>, String> {
+        if super::superagent::restricted(self.state, self.meta).await?
+            && !matches!(
+                op,
+                "api.help" | "superagent.catalog" | "superagent.document" | "superagent.context"
+            )
+        {
+            return Err("superagent_scope_denied".into());
+        }
+        Ok(Some(match op {
+            "superagent.catalog" | "superagent.document" | "superagent.context" => {
+                super::superagent::read(self.state, self.meta, op, args.clone()).await?
+            }
+            "control.list" | "control.describe" | "control.read" => {
+                control::read(self.state, self.meta, op, args.clone()).await?
+            }
+            "machines.list"
+            | "machines.read"
+            | "configuration.schema"
+            | "configuration.read"
+            | "usage.diagnostics" => observations::read(self.state, self.meta, op, args).await?,
+            "api.help" => help(args)?,
+            _ => return Ok(None),
+        }))
+    }
+
     /// Call observations share the gateway's exact contract.
     async fn code(&self, op: &str, args: &Value) -> Result<Value, String> {
         code_reads::read(self.state, self.meta, op, args).await

@@ -3,6 +3,10 @@
 use super::*;
 
 impl Hub {
+    /// Automatic supervision must wait for native preset acknowledgement.
+    pub fn config_changes_pending(&self, session_id: &str) -> bool {
+        self.inner.config_in_flight.lock().contains_key(session_id)
+    }
     /// Snapshot the captured config options for one session — used by the
     /// WS connect handler to replay the agent's last-seen `configOptions`
     /// to a freshly-connected client (so its composer dropdowns hydrate
