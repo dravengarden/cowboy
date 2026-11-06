@@ -22,12 +22,9 @@ pub(super) async fn recover(
         .as_deref()
         .ok_or("authentication_cleanup_required")?;
     check_enrollment(store, &receipt.input.machine_id, fingerprint).await?;
-    let (connection, protocol) = control
+    let (connection, _) = control
         .connection_protocol(&receipt.input.machine_id)
         .ok_or("authentication_cleanup_required")?;
-    if protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
-        return Err("authentication_cleanup_required");
-    }
     let correlation = format!("login-cancel-{}", uuid::Uuid::new_v4());
     control
         .command_on_connection(

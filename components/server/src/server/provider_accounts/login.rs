@@ -416,13 +416,10 @@ async fn prepare(
     {
         return Err("machine_not_permitted".into());
     }
-    let (connection, protocol) = state
+    let (connection, _) = state
         .machine_control
         .connection_protocol(&request.machine_id)
         .ok_or("machine_unavailable")?;
-    if protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
-        return Err("machine_account_protocol_required".into());
-    }
     let installed =
         current_machine_plugin(state, &request.machine_id, &account.provider_id).await?;
     if installed.plugin_version != request.provider_version

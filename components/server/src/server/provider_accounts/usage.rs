@@ -434,13 +434,10 @@ fn collection_outcome(error: Option<&str>) -> crate::usage::limiter::Outcome {
 async fn collect(state: &AppState, owner: &str, target: &Target) -> Result<Value, &'static str> {
     let completion = &target.completion;
     let store = state.store.as_ref().ok_or("unavailable")?;
-    let (connection, protocol) = state
+    let (connection, _) = state
         .machine_control
         .connection_protocol(&completion.machine_id)
         .ok_or("machine_unavailable")?;
-    if protocol < crate::machine_protocol::NATIVE_USAGE_PROTOCOL_VERSION {
-        return Err("machine_usage_update_required");
-    }
     let pending = store
         .with_native_login_binding(owner, &target.operation, completion, || {
             // Keep transport/admission reasons separate from a database binding

@@ -114,6 +114,13 @@ boundaries and stay.
 
 ## Retired
 
+- 2026-11-06: Controller gates on `PROVIDER_ACCOUNT_PROTOCOL_VERSION` (36)
+  and `NATIVE_USAGE_PROTOCOL_VERSION` (37) wherever the protocol is a
+  connected Machine's negotiated one (`connection_protocol`, the handshake
+  value): named-account login, cancellation, registration, readiness, usage
+  collection, Provider auth scope, reconnect grant reconciliation and the
+  runtime encryption key. `MACHINE_PROTOCOL_FLOOR` makes them unreachable.
+
 - 2026-11-05: the protocol-v4 `GET /api/machines/{id}/providers` inventory
   adapter. Every client in the repository reads `/plugins`.
 

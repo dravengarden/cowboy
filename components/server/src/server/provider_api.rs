@@ -594,9 +594,7 @@ pub(super) async fn provider_auth_scope_for_machine(
     if state
         .machine_control
         .connection_protocol(machine_id)
-        .is_none_or(|(_, protocol)| {
-            protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION
-        })
+        .is_none()
     {
         return Err("Machine does not support named Provider accounts".to_owned());
     }
