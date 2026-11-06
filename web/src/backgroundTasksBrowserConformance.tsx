@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Box, CssBaseline, Stack } from "@mui/material";
 import { MobileSheetContextDock } from "@cowboy/app-shell";
+import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import {
   buildTaskSummaries,
   CALLS_DOCK_LEGACY_KEY,
@@ -459,6 +460,19 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     const conversationNode = document.querySelector("[data-call-transcript]");
     document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.click();
     await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "call details open separately");
+    {
+      const coarse = document.documentElement.classList.contains(COARSE_POINTER_ROOT_CLASS);
+      document.documentElement.classList.add(COARSE_POINTER_ROOT_CLASS);
+      const summary = document.querySelector<HTMLElement>("[data-sheet-context-summary]")!;
+      const action = summary.querySelector<HTMLElement>("button")!;
+      action.focus({ preventScroll: true });
+      action.classList.add("Mui-focusVisible");
+      check(getComputedStyle(action).backgroundColor === "rgba(0, 0, 0, 0)", "Touch theme still clears the inner button background");
+      check(/^rgb\(/.test(getComputedStyle(summary).backgroundColor), "Focused summary keeps an opaque surface over the detail body");
+      action.classList.remove("Mui-focusVisible");
+      action.blur();
+      if (!coarse) document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
+    }
     check(history.length > historyBefore, "each level is a history entry");
     history.back();
     await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "Back returns to transcript");
