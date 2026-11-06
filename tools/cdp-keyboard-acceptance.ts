@@ -7,7 +7,7 @@
  * IME composition uses `Input.imeSetComposition`; it exercises the page's
  * composition path but is not a substitute for a real OS input method.
  *
- * Usage: bun tools/cdp-keyboard-acceptance.ts http://127.0.0.1:9223 <out-dir> [composer|draft|approval|tabs|run-config]
+ * Usage: bun tools/cdp-keyboard-acceptance.ts http://127.0.0.1:9223 <out-dir> [composer|draft|approval|tabs|run-config|surfaces]
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { type CdpParams, openFixturePage } from "./cdp-fixture.ts";
@@ -25,14 +25,17 @@ if (
   flow !== "draft" &&
   flow !== "approval" &&
   flow !== "tabs" &&
-  flow !== "run-config"
+  flow !== "run-config" &&
+  flow !== "surfaces"
 ) {
   throw new Error("unknown flow");
 }
 
 const page = await openFixturePage(
   endpoint,
-  "keyboard-acceptance",
+  // The surfaces flow mounts the whole App, whose store and Provider Catalog
+  // must not share a page with the other flows' fixtures.
+  flow === "surfaces" ? "composer-surfaces" : "keyboard-acceptance",
   () =>
     `<!doctype html><script type="module">
 addEventListener("error", (e) => (globalThis.__errors ??= []).push(String(e.message)));
@@ -40,22 +43,26 @@ addEventListener("error", (e) => (globalThis.__errors ??= []).push(String(e.mess
 addEventListener("unhandledrejection", (e) => (globalThis.__errors ??= []).push(String(e.reason?.stack ?? e.reason)));
 ${flow === "draft" ? 'localStorage.setItem("cowboy:vim", "1");' : ""}
 ${
-  flow === "run-config"
+  flow === "run-config" || flow === "surfaces"
     ? 'globalThis.CowboyDeviceProof = { proof: async () => "fixture", resetChallenge() {}, install() {} };'
     : ""
 }
-const fixture = await import("/fixture.js");
+${
+  flow === "surfaces"
+    ? "/* mounted by the runner */"
+    : `const fixture = await import("/fixture.js");
 await fixture.${
-      flow === "draft"
-        ? "mountDraftKeyboardAcceptance"
-        : flow === "approval"
-          ? "mountApprovalKeyboardAcceptance"
-          : flow === "tabs"
-            ? "mountTabsKeyboardAcceptance"
-            : flow === "run-config"
-              ? "mountRunConfigKeyboardAcceptance"
-              : "mountDesktopKeyboardAcceptance"
-    }();
+        flow === "draft"
+          ? "mountDraftKeyboardAcceptance"
+          : flow === "approval"
+            ? "mountApprovalKeyboardAcceptance"
+            : flow === "tabs"
+              ? "mountTabsKeyboardAcceptance"
+              : flow === "run-config"
+                ? "mountRunConfigKeyboardAcceptance"
+                : "mountDesktopKeyboardAcceptance"
+      }();`
+}
 </script>`,
 );
 const results: string[] = [];
@@ -550,8 +557,86 @@ const tabsFlow = async (): Promise<void> => {
   await shot("8-tabs");
 };
 
+// Composer surfaces in the real Desktop App: a trusted Escape reaches each
+// surface through the Desktop key dispatcher, as a physical key does.
+async function surfacesFlow(): Promise<void> {
+  const mounted = await page.evaluate<string>(
+    `import("/fixture.js").then((m) => m.mountComposerSurfacesKeyboardAcceptance()).then(() => "mounted", (e) => String(e && e.stack || e))`,
+  );
+  check(mounted === "mounted", `surfaces fixture mounts: ${mounted}`);
+  // The Prompt editor is a textarea or a contenteditable surface.
+  const editor =
+    "[data-desktop-pane='prompt'] textarea, [data-desktop-pane='prompt'] [contenteditable=true]";
+  const editorText = `(() => { const e = document.querySelector(${JSON.stringify(editor)}); return e.value ?? e.textContent; })()`;
+  await until(`document.querySelector(${JSON.stringify(editor)})`, "composer editor", 20_000);
+  await page.evaluate(`(() => {
+    const editor = document.querySelector(${JSON.stringify(editor)});
+    editor.focus();
+    document.execCommand("selectAll");
+    document.execCommand("insertText", false, "surface keys");
+  })()`);
+  const enabled = (id: string) => `[data-composer-action=${id}]:not([disabled])`;
+  await until(`document.querySelector(${JSON.stringify(enabled("schedule"))})`, "schedule enabled");
+  await click(enabled("schedule"));
+  await until(`document.querySelector("[aria-label=发送时间]")`, "schedule sheet opens");
+  await key("Escape");
+  await until(
+    `!document.querySelector("[aria-label=发送时间]")`,
+    "Escape closes the schedule sheet",
+  );
+  results.push("Schedule sheet: a trusted Escape closes it");
+
+  await click(enabled("send"));
+  await until(`document.querySelector("[aria-label='Choose delivery']")`, "delivery picker opens");
+  await shot("surfaces-1-picker");
+  await key("Escape");
+  await until(
+    `!document.querySelector("[aria-label='Choose delivery']")`,
+    "Escape closes the delivery picker",
+  );
+  await until(
+    `document.activeElement === document.querySelector(${JSON.stringify(editor)}) || document.querySelector(${JSON.stringify(editor)})?.contains(document.activeElement)`,
+    "focus returns to the Prompt editor after the picker closes",
+  );
+  check(
+    (await page.evaluate<string>(editorText)).includes("surface keys"),
+    "closing the picker keeps the draft",
+  );
+  results.push(
+    "Delivery picker: a trusted Escape closes it, returns focus to the Prompt editor and keeps the draft",
+  );
+
+  await click(enabled("draft"));
+  const move = "[aria-label='Move to another session…']";
+  await until(`document.querySelector(${JSON.stringify(move)})`, "saved draft offers Move");
+  // The inline action collapses into the row kebab on a narrow panel, so it
+  // may have no box to aim a pointer at; Escape below stays trusted.
+  await page.evaluate(`document.querySelector(${JSON.stringify(move)}).click()`);
+  const destination = `[...document.querySelectorAll("[role=dialog] *")].some((node) => node.textContent?.trim() === "Destination session")`;
+  await until(destination, "move picker opens");
+  await shot("surfaces-2-move");
+  await key("Escape");
+  await until(`!(${destination})`, "Escape closes the move picker");
+  check(
+    !(await page.evaluate<boolean>(
+      `globalThis.__surfaceSent.some((frame) => frame.type === "move_draft")`,
+    )),
+    "dismissing the move picker moves nothing",
+  );
+  results.push("Move-draft picker: a trusted Escape closes it and moves nothing");
+}
+
 try {
-  if (flow === "run-config") {
+  if (flow === "surfaces") {
+    await surfacesFlow();
+    console.log(
+      JSON.stringify(
+        { ok: true, browser: page.browser, flow, screenshots: output, tests: results },
+        null,
+        2,
+      ),
+    );
+  } else if (flow === "run-config") {
     await runConfigFlow({ page, key, until, sleep, check, shot, results, mac });
     console.log(
       JSON.stringify(

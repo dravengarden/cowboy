@@ -111,7 +111,9 @@ Mobile cover readers and inspectors use the shared `Sheet.islandContext` (or
 `MobileSheetContextDock` for direct DetentSheet owners) to place identity and
 status in the reusable `SheetContextSummary` beside the independent round
 navigation island. Place navigation on the left for left-handed access; match
-the summary's minimum height and floating surface treatment to the controls.
+the summary’s floating surface treatment to the controls, using small corners
+and compact padding for information rather than capsule geometry. Use available
+footer width with safe-area-aware side insets; retain the system bottom safe area.
 Facts wrap across the available width; excess content scrolls
 within the bounded summary. The summary title opens Details; avoid stacking a
 full-width information card over a centered navigation island. Use an action rail when multiple

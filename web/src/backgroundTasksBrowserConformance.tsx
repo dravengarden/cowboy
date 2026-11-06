@@ -441,7 +441,7 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
         .getBoundingClientRect();
       const details = document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.getBoundingClientRect();
       const transcript = document.querySelector<HTMLElement>("[data-call-transcript]")!.getBoundingClientRect();
-      check(chip.left - level.left >= 12, `T16 the state chip keeps the gutter (${String(chip.left - level.left)}px)`);
+      check(chip.left - level.left >= 8, `T16 the context dock keeps its compact gutter (${String(chip.left - level.left)}px)`);
       check(details.right <= level.right, "T16 Details stays inside the sheet");
       const island = document.querySelector<HTMLElement>("[data-sheet-context-summary]")!.getBoundingClientRect();
       check(details.width >= 44 && details.height >= 44, "The floating details button retains its touch target");
