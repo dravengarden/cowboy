@@ -2,6 +2,23 @@
 use super::*;
 
 fn current_boot() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    let value = {
+        // A LaunchAgent can restart within one login, so its PID or start
+        // time is not proof that the host rebooted. Use the kernel's boot
+        // session identity, just as Linux uses boot_id.
+        let output = std::process::Command::new("/usr/sbin/sysctl")
+            .args(["-n", "kern.bootsessionuuid"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8(output.stdout).ok()?
+    };
+    #[cfg(not(target_os = "macos"))]
     let value = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
     let value = value.trim();
     uuid::Uuid::parse_str(value).ok()?;
@@ -124,6 +141,11 @@ mod tests {
 
     #[test]
     fn boot_marker_is_private_persistent_and_never_reused() {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        assert!(
+            current_boot().is_some(),
+            "supported hosts must expose a boot identity"
+        );
         if current_boot().is_none() {
             return;
         }
