@@ -20,7 +20,7 @@ const page = await openFixturePage(
 globalThis.CowboyDeviceProof={proof:async()=>"fixture",resetChallenge(){},install(){}};</script>
 <script type="module">const m=await import('/fixture.js');globalThis.preview=m.renderReviewContextPreview;</script>`,
 );
-const measurements: unknown[] = [];
+const measurements: { name: string; theme: string; measure: unknown }[] = [];
 async function until(expression: string) {
   for (let i = 0; i < 250; i++) {
     if (await page.evaluate(expression)) return;
@@ -196,12 +196,7 @@ async function emptyOverview(p: FixturePage, controls: string[]) {
   await p.evaluate(
     `(()=>{const card=document.querySelector('[data-review-empty-state] > div').getBoundingClientRect();const reader=document.querySelector('[data-review-empty-state]').parentElement.getBoundingClientRect();if(Math.abs(card.top+card.height/2-reader.top-reader.height/2)>30)throw new Error('Empty overview is not centered');if(!document.querySelector('[data-review-context-branch]')?.textContent.includes('main'))throw new Error('Branch is missing from bottom context');})()`,
   );
-  await p.evaluate("document.documentElement.style.fontSize='10px'");
-  await capture(
-    "empty-small-text",
-    controls.filter((selector) => selector !== "[data-review-unread]"),
-  );
-  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
+  await overviewFontScales(p, controls);
   await viewport(320, 568);
   await capture(
     "empty-narrow",
@@ -239,6 +234,45 @@ async function emptyOverview(p: FixturePage, controls: string[]) {
   await until("!!document.querySelector('[data-review-commit]')");
   await click('[aria-label="Git changes"]');
   await until("!!document.querySelector('[data-review-empty-state]')");
+}
+
+async function overviewFontScales(p: FixturePage, controls: string[]) {
+  // The global reading setting applies a percentage at the document root.
+  // Measure actual text, not only whether its CSS mentions rem: pixel floors
+  // silently stopped scaling below 100% and a rem width shrank the facts card.
+  const text =
+    "[data-review-empty-state] .MuiTypography-root, [data-review-empty-state] button, [data-review-context-button] .MuiTypography-root, [data-segmented-tab]";
+  await p.evaluate("document.documentElement.style.fontSize='100%'");
+  const sizes = await p.evaluate<number[]>(
+    `Array.from(document.querySelectorAll(${JSON.stringify(text)}), n=>parseFloat(getComputedStyle(n).fontSize))`,
+  );
+  for (const scale of [0.5, 0.65, 1.25]) {
+    await p.evaluate(`document.documentElement.style.fontSize='${scale * 100}%'`);
+    const measure = await p.evaluate(`(() => {
+      const nodes=Array.from(document.querySelectorAll(${JSON.stringify(text)}));
+      const sizes=${JSON.stringify(sizes)};
+      if(nodes.length!==sizes.length)throw new Error('Review text changed during font scaling');
+      const fonts=nodes.map((node,i)=>{
+        const size=parseFloat(getComputedStyle(node).fontSize);
+        if(Math.abs(size-sizes[i]*${scale})>0.05)throw new Error('Text ignores global font scale: '+node.textContent+' '+size);
+        return {text:node.textContent,size};
+      });
+      const facts=document.querySelector('[data-review-empty-facts]').getBoundingClientRect();
+      const overview=document.querySelector('[data-review-empty-state]').parentElement.getBoundingClientRect();
+      if(overview.width-facts.width>24.5)throw new Error('Empty overview wastes available width');
+      for(const node of document.querySelectorAll('[data-review-empty-state] button, [data-review-context-button], [data-segmented-tab]')) {
+        const r=node.getBoundingClientRect();
+        if(r.width<44 || r.height<44)throw new Error('Font scaling shrank a touch target');
+      }
+      return {scale:${scale},factsWidth:facts.width,overviewWidth:overview.width,fonts};
+    })()`);
+    measurements.push({ name: "font-scale", theme, measure });
+    await capture(
+      `empty-font-${scale * 100}`,
+      controls.filter((selector) => selector !== "[data-review-unread]"),
+    );
+  }
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
 }
 
 async function reviewFilesAndDiff(p: FixturePage) {
@@ -311,7 +345,7 @@ try {
     JSON.stringify({
       ok: true,
       theme,
-      screenshots: measurements.length,
+      screenshots: measurements.filter((item) => item.name !== "font-scale").length,
       browser: page.browser,
       output,
     }),

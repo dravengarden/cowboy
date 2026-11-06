@@ -40,9 +40,10 @@ export function ReviewRepositoryControls({
           "--segmented-selected-fill": "transparent",
           "&& [data-segmented-tab]": {
             minHeight: 44,
+            minWidth: 44,
             px: 0.5,
             borderRadius: 1,
-            fontSize: "max(11px, 0.8125rem)",
+            fontSize: "0.8125rem",
             "&[data-selected='true']::after": {
               content: '""',
               position: "absolute",
