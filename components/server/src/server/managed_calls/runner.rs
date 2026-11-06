@@ -478,14 +478,14 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     {
         return step;
     }
-    if let Err(code) = configuration::ready(state, store, record).await {
-        if code == RETRY {
+    if let Err(error) = configuration::ready(state, store, record).await {
+        if error.code == RETRY {
             return Step::Wait(POLL);
         }
         // No prompt was admitted. Stop even a still-starting child so a late
         // ready event cannot leave an orphan worker after the failed call.
         state.supervisor.delete_session(child);
-        advance(state, store, record, fail(code, None)).await;
+        advance(state, store, record, fail(error.code, error.detail)).await;
         return Step::Again;
     }
     let Some(cursor) = state.hub.last_event_seq(child) else {
@@ -1112,12 +1112,12 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         // previous Controller stopped between the two. Same message id.
         // A replacement worker must confirm the original preset again before
         // this recovery path may send anything to the native model.
-        if let Err(code) = configuration::ready(state, store, record).await {
-            if code == RETRY {
+        if let Err(error) = configuration::ready(state, store, record).await {
+            if error.code == RETRY {
                 return Step::Wait(POLL);
             }
             state.supervisor.delete_session(child);
-            advance(state, store, record, fail(code, None)).await;
+            advance(state, store, record, fail(error.code, error.detail)).await;
             return Step::Again;
         }
         state

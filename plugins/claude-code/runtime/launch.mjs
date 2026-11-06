@@ -1,6 +1,7 @@
 import { agentCallsPrompt } from "./agent-calls.mjs";
 import { installSteeringPriority } from "./steering.mjs";
 import { installNativeCycles } from "./native-cycle.mjs";
+import { installConfigurationEquivalence } from "./configuration.mjs";
 import { spawn } from "node:child_process";
 import { constants as fsConstants, mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
@@ -1524,6 +1525,7 @@ export async function main(args) {
     new URL("./acp-agent.js", pathToFileURL(upstream))
   );
   advertiseCurrentTurn(ClaudeAcpAgent);
+  installConfigurationEquivalence(ClaudeAcpAgent);
   await import(upstream);
 }
 

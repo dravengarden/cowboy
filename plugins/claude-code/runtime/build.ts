@@ -92,6 +92,7 @@ try {
       "launch.mjs",
       "steering.mjs",
       "native-cycle.mjs",
+      "configuration.mjs",
       "connection.mjs",
       "mod-bridge.mjs",
       "tools.mjs",

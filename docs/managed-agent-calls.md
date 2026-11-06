@@ -478,6 +478,21 @@ explicit preset on its default model: the call ends as
 observed configuration, and continuation/recovery retains the original preset
 even after the parent's Tools defaults change.
 
+A signed Provider may annotate a native option with
+`_meta["cowboy.dev/configuration-equivalence"]`:
+`{schema: 1, value,
+equivalent_values: string[]}` (at most eight values).
+`value` must equal the actual `currentValue`. Only a connected worker's
+observation carries this evidence; saved preferences, UI projections, stale
+metadata and suffix guesses do not. The call still records the actual native
+value. Claude declares only the two exact Fable 5.1 spellings with and without
+`[1m]` equivalent: both have the native 1M window, as documented in
+[Claude model configuration](https://code.claude.com/docs/en/model-config#extended-context).
+Other versions, models and effort levels remain distinct. This avoids a
+configuration timeout when a continuation restores the transcript's canonical
+model spelling. Genuine confirmation timeouts retain bounded expected/observed
+values in the failure detail and send no prompt.
+
 The Matrix switches are stored and displayed now; Provider adapters enforce
 them in a later phase. Managed children have no Tools section; their policy is
 fixed by the managed profile.
