@@ -199,6 +199,16 @@ automatic warming. Controller buffer/worktree count reservations remain in
 addition to these measured thresholds; a definite resource refusal can release
 only a reservation with no prior possible native effect.
 
+Worktree runtime and readiness-probe groups reserve a bounded retirement slot before
+spawn (at most 4096 live or retiring groups). Dropping the last runtime owner
+signals its original group but transfers its opened containment descriptor to
+Machine-owned retirement tracking. Pending exits remain in resource samples;
+failed observations refuse warming. Only confirmed removal of that original
+group releases tracking, closing the late-membership race too. Cold readiness
+failure is a definite pre-buffer refusal, while its process cleanup is still
+owned independently. No missing group or replacement path is treated as a new
+cleanup target.
+
 The settings use the shared typed Device schema. Device writes currently have
 no remote configuration writer, so scoped AI control uses the host-owned
 `cowboy config show/check/diff/apply --scope device --format json` boundary;

@@ -294,6 +294,29 @@ fn remove_empty_children(directory: &File, depth: u32, budget: &mut usize) -> io
     Ok(())
 }
 
+pub(super) fn try_finish(identity: &ContainmentIdentity, directory: &File) -> io::Result<bool> {
+    if removed(directory)? {
+        return Ok(true);
+    }
+    let result = (|| {
+        kill(directory)?;
+        if !empty(directory)? {
+            return Ok(false);
+        }
+        match remove(identity, directory) {
+            Ok(()) => Ok(true),
+            Err(error) if error.raw_os_error() == Some(rustix::io::Errno::BUSY.raw_os_error()) => {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    })();
+    match result {
+        Err(_) if removed(directory)? => Ok(true),
+        other => other,
+    }
+}
+
 pub(super) async fn terminate(identity: &ContainmentIdentity) -> io::Result<()> {
     let relative = checked_path(identity)?;
     if boot()? != identity.owner.boot {

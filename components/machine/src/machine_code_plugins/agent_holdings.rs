@@ -159,6 +159,9 @@ impl CodeRuntimeHost {
     }
 
     async fn release_idle_agents(&self) {
+        if let Err(error) = self.reap_retired_processes().await {
+            tracing::warn!(%error, "Code process retirement remains unconfirmed");
+        }
         // Do not hold the registry while waiting on a native exchange. The
         // route lock serializes maintenance with both new Opens and UI work.
         let routes: Vec<_> = self.routes.lock().await.values().map(Arc::clone).collect();

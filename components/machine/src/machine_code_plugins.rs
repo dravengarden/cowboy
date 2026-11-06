@@ -172,6 +172,7 @@ impl WorktreeRoute {
 #[derive(Default)]
 pub struct CodeRuntimeHost {
     agent_admission: Mutex<()>,
+    retiring_processes: Arc<process_tree::retirement::Retirement>,
     routes: Mutex<WorktreeRoutes>,
     engines: Mutex<BTreeMap<(String, String), Weak<RunningCodeRuntime>>>,
     /// Old owners stay on their original incarnation after a leader exits.
@@ -185,6 +186,11 @@ pub struct CodeRuntimeHost {
 type WorktreeRoutes = BTreeMap<(String, PathBuf), Arc<Mutex<WorktreeRoute>>>;
 
 impl CodeRuntimeHost {
+    pub(super) async fn reap_retired_processes(&self) -> Result<()> {
+        let retiring = Arc::clone(&self.retiring_processes);
+        tokio::task::spawn_blocking(move || retiring.observe().map(|_| ())).await?
+    }
+
     pub async fn navigate(
         &self,
         invocation: crate::machine_plugins::CodeNavigationInvocation,
@@ -375,7 +381,17 @@ impl CodeRuntimeHost {
                     retired.len() < MAX_WORKTREE_ROUTES,
                     "too many retained Code runtime incarnations"
                 );
-                let engine = Arc::new(RunningCodeRuntime::start(&plan).await?);
+                // Cleanup failures keep their reservations and accounting.
+                // Interactive starts may use remaining slots; automatic
+                // warming separately refuses an unknown resource observation.
+                let _ = self.reap_retired_processes().await;
+                let engine = Arc::new(
+                    RunningCodeRuntime::start_tracked(
+                        &plan,
+                        Some(Arc::clone(&self.retiring_processes)),
+                    )
+                    .await?,
+                );
                 if let Some(previous) = previous {
                     retired.push(Arc::downgrade(&previous));
                 }
@@ -450,6 +466,13 @@ struct RunningCodeRuntime {
 
 impl RunningCodeRuntime {
     async fn start(plan: &CodeLaunchPlan) -> Result<Self> {
+        Self::start_tracked(plan, None).await
+    }
+
+    async fn start_tracked(
+        plan: &CodeLaunchPlan,
+        retirement: Option<Arc<process_tree::retirement::Retirement>>,
+    ) -> Result<Self> {
         let directory = PrivateRuntimeDirectory::create()?;
         let socket = directory.0.join("adapter.sock");
         let state_dir = directory.0.join("state");
@@ -458,8 +481,9 @@ impl RunningCodeRuntime {
             fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
         }
         let mut command = runtime_command(plan, &plan.runtime.launch, &socket, &state_dir)?;
-        let (child, process_tree) = process_tree::ProcessTree::spawn(&mut command)
-            .context("starting installed code runtime")?;
+        let (child, process_tree) =
+            process_tree::ProcessTree::spawn_in(&mut command, retirement.as_ref())
+                .context("starting installed code runtime")?;
         let runtime = Self {
             child: parking_lot::Mutex::new(child),
             process_group: parking_lot::Mutex::new(Some(process_tree)),
@@ -468,8 +492,9 @@ impl RunningCodeRuntime {
         };
         let mut probe =
             runtime_command(plan, &plan.runtime.readiness, &runtime.socket, &state_dir)?;
-        let (mut probe, _probe_group) = process_tree::ProcessTree::spawn(&mut probe)
-            .context("starting code runtime readiness probe")?;
+        let (mut probe, _probe_group) =
+            process_tree::ProcessTree::spawn_in(&mut probe, retirement.as_ref())
+                .context("starting code runtime readiness probe")?;
         let result = tokio::time::timeout(
             Duration::from_millis(plan.runtime.readiness_timeout_ms),
             probe.wait(),

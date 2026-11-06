@@ -136,6 +136,19 @@ impl Containment {
     pub async fn finish(self) -> io::Result<()> {
         self.identity.terminate().await
     }
+
+    /// Stop and try to unlink this original group without waiting. Only a
+    /// confirmed removal ends ownership; a pending exit keeps its descriptor.
+    pub fn try_finish(&self) -> io::Result<bool> {
+        #[cfg(target_os = "linux")]
+        {
+            linux::try_finish(&self.identity, &self.directory)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(io::Error::other("native process containment unavailable"))
+        }
+    }
 }
 
 impl Drop for Containment {

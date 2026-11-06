@@ -4,10 +4,13 @@ use super::*;
 use crate::cgroup::containment::Containment;
 use std::os::unix::process::CommandExt as _;
 
+pub(super) mod retirement;
+
 pub(super) struct ProcessTree {
     _containment: Option<Containment>,
     _fallback: Option<PluginProcessGroup>,
     stop_requested: bool,
+    retirement: Option<retirement::Reservation>,
 }
 
 impl ProcessTree {
@@ -33,7 +36,16 @@ impl ProcessTree {
             .context("observing original Code process tree")
     }
 
+    #[cfg(test)]
     pub(super) fn spawn(command: &mut Command) -> Result<(Child, Self)> {
+        Self::spawn_in(command, None)
+    }
+
+    pub(super) fn spawn_in(
+        command: &mut Command,
+        pool: Option<&Arc<retirement::Retirement>>,
+    ) -> Result<(Child, Self)> {
+        let retirement = pool.map(|pool| pool.reserve()).transpose()?;
         command.as_std_mut().process_group(0);
         // The membership FD is installed in pre_exec. A successful spawn
         // therefore cannot run any child code outside the original cgroup.
@@ -56,8 +68,22 @@ impl ProcessTree {
                 _containment: containment,
                 _fallback: fallback,
                 stop_requested: false,
+                retirement,
             },
         ))
+    }
+}
+
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        if let Some(group) = self._containment.take() {
+            let _ = group.signal_stop();
+            if let Some(reservation) = self.retirement.take() {
+                reservation.retire(group);
+            }
+            // Without a host pool, the containment retains its existing Drop
+            // behavior. Unsupported platforms also retain their PGID fallback.
+        }
     }
 }
 

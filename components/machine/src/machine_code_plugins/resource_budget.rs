@@ -44,7 +44,7 @@ struct Observation {
     // Retain the original instances through both samples. An allocation address
     // cannot be reused for a different runtime during the observation window.
     _runtimes: Vec<Arc<RunningCodeRuntime>>,
-    samples: BTreeMap<usize, ResourceSample>,
+    samples: BTreeMap<(bool, usize), ResourceSample>,
 }
 
 pub(super) struct Admission(Observation, Instant);
@@ -136,6 +136,7 @@ impl CodeRuntimeHost {
         );
         runtimes.sort_by_key(Arc::as_ptr);
         runtimes.dedup_by(|a, b| Arc::ptr_eq(a, b));
+        let retiring = Arc::clone(&self.retiring_processes);
         tokio::task::spawn_blocking(move || {
             let mut samples = BTreeMap::new();
             for runtime in &runtimes {
@@ -148,7 +149,10 @@ impl CodeRuntimeHost {
                     .as_ref()
                     .context("Code containment unavailable")?
                     .resources()?;
-                samples.insert(Arc::as_ptr(runtime) as usize, sample);
+                samples.insert((false, Arc::as_ptr(runtime) as usize), sample);
+            }
+            for (id, sample) in retiring.observe()? {
+                samples.insert((true, id), sample);
             }
             Ok(Observation {
                 _runtimes: runtimes,
@@ -227,7 +231,13 @@ impl CodeRuntimeHost {
         );
         // Keep a cold adapter alive while sampling, without taking a worktree
         // route lock. Interactive traffic never waits for this CPU window.
-        let (_runtime, _) = self.target(selection.clone()).await?;
+        let (_runtime, _) = match self.target(selection.clone()).await {
+            Ok(target) => target,
+            // Readiness has not ensured a worktree or opened a buffer. The
+            // retirement pool still owns any spawned process groups, but the
+            // Controller need not retain a possibly-open buffer reservation.
+            Err(_) => return Ok(unavailable()),
+        };
         let admission = match self.observe_budget().await {
             Ok((sample, admission)) if policy.fits(sample) => admission,
             Ok((sample, _)) => return Ok(refused("saturated", Some(sample))),
@@ -305,11 +315,33 @@ impl CodeRuntimeHost {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn failed_cold_readiness_is_a_definite_pre_buffer_refusal() {
+        let root = PrivateRuntimeDirectory::create().unwrap();
+        let host = CodeRuntimeHost::default();
+        let mut plan = super::super::tests::fixture_plan(&root.0, "readiness-refused");
+        plan.runtime.readiness.command = "undeclared-readiness-command".into();
+        let request = serde_json::json!({"type":"acquireAgentBuffer", "worktree":root.0, "path":"file.rs", "leaseId":"cowboy-agent-fixture"});
+        let result = host
+            .acquire_agent(
+                "fixture-code",
+                &request,
+                None,
+                Policy::from_config(None),
+                || Ok(CodeRuntimeSelection::Installed(plan)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["type"], "agentBufferBudget");
+        assert_eq!(result["state"], "unavailable");
+        assert!(host.routes.lock().await.is_empty());
+    }
+
     fn observation(cpu: u64, id: usize) -> Observation {
         Observation {
             _runtimes: vec![],
             samples: BTreeMap::from([(
-                id,
+                (false, id),
                 ResourceSample {
                     processes: 2,
                     rss_bytes: 100,
@@ -499,7 +531,7 @@ mod tests {
         assert!(
             observations
                 .samples
-                .contains_key(&(Arc::as_ptr(&old) as usize))
+                .contains_key(&(false, Arc::as_ptr(&old) as usize))
         );
     }
 }
