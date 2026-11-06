@@ -173,6 +173,22 @@ async function typeDraft(container: HTMLElement, text: string): Promise<void> {
   await until(() => draftText(container).includes(text), "typed draft");
 }
 
+/** Trusted-key flow (tools/cdp-keyboard-acceptance.ts `surfaces`): the same
+ *  fakes and Desktop App, with sent frames exposed for the runner. */
+export async function mountComposerSurfacesKeyboardAcceptance(): Promise<void> {
+  const sent: { type: string; session_id?: string }[] = [];
+  (globalThis as { __surfaceSent?: typeof sent }).__surfaceSent = sent;
+  installFakes(sent);
+  resetProviderCatalog();
+  await loadProviderCatalog();
+  const desktop = mount("desktop", "100vw");
+  (await until(
+    () => [...desktop.container.querySelectorAll<HTMLElement>("[data-desktop-session-row]")].find((row) => row.textContent?.includes("Surface session")),
+    "session row",
+  )).click();
+  await until(() => editorIn(desktop.container), "composer editor");
+}
+
 export async function runComposerSurfacesBrowserConformance(): Promise<string[]> {
   const sent: { type: string; session_id?: string }[] = [];
   installFakes(sent);

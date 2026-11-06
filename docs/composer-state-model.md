@@ -119,7 +119,13 @@ iOS acceptance (web/AGENTS.md pitfall #69).
   sends `move_draft`). Removing the picker's Stop transition, the popper's
   Escape close, the move entry or the toolbar options close fails it (checked).
   Synthetic Escape is not trusted input for the Desktop key dispatcher or the
-  move sheet, so those two are dismissed by backdrop or Close instead.
+  move sheet, so that suite dismisses those two by backdrop or Close.
+- `bun tools/cdp-keyboard-acceptance.ts <endpoint> <out> surfaces` (also part of
+  `just desktop-keyboard-acceptance`) mounts the same Desktop App and sends a
+  trusted Escape to the schedule sheet, the delivery picker and the move-draft
+  picker. Closing the picker must return focus to the Prompt editor and keep
+  the draft; removing `closeDeliveryPicker`'s focus restoration fails it
+  (checked).
   The older desktop-composer suite renders the toolbar alone and never mounted
   `ComposerWorkspace`.
 
