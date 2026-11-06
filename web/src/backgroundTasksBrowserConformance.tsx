@@ -159,7 +159,7 @@ function Row({ task, desktop, send }: {
   return <TaskRow task={task} sessionId="s" desktop={desktop} stop={stops.get(task.key)} stopSender={send} />;
 }
 
-export async function runBackgroundTasksBrowserConformance(): Promise<string[]> {
+export async function runBackgroundTasksBrowserConformance(observe?: () => Promise<void>): Promise<string[]> {
   const passed: string[] = [];
   const sent: string[] = [];
   const send = (session: string, child: string): boolean => {
@@ -195,7 +195,7 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
     render(
       <Box
         data-fixture-transcript
-        sx={{ width: desktop ? 760 : 390, height: 520, overflowY: "auto", p: 1 }}
+        sx={{ width: desktop ? 760 : 390, maxWidth: "100%", height: 520, overflowY: "auto", p: 1 }}
       >
         <Stack spacing={1}>
           {Array.from({ length: 12 }, (_, index) => (
@@ -434,19 +434,22 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
       // The state row keeps the sheet gutter and stays on screen; the
       // transcript runs to the inspector's bottom edge, under the island.
       const level = document.querySelector<HTMLElement>("[data-mobile-task-level='conversation']")!.getBoundingClientRect();
-      const chip = document.querySelector<HTMLElement>("[data-mobile-task-level='conversation'] [data-task-chip]")!
+      const chip = document.querySelector<HTMLElement>("[data-sheet-context-dock]")!
         .getBoundingClientRect();
-      const details = document.querySelector<HTMLElement>("[data-task-open-details]")!.getBoundingClientRect();
+      const details = document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.getBoundingClientRect();
       const transcript = document.querySelector<HTMLElement>("[data-call-transcript]")!.getBoundingClientRect();
       check(chip.left - level.left >= 12, `T16 the state chip keeps the gutter (${String(chip.left - level.left)}px)`);
       check(details.right <= level.right, "T16 Details stays inside the sheet");
       check(Math.abs(transcript.bottom - level.bottom) < 1, "T16 the transcript reaches the island");
     }
-    document.querySelector<HTMLElement>("[data-task-open-details]")!.click();
+    await observe?.();
+    const conversationNode = document.querySelector("[data-call-transcript]");
+    document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.click();
     await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "call details open separately");
     check(history.length > historyBefore, "each level is a history entry");
     history.back();
     await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "Back returns to transcript");
+    check(document.querySelector("[data-call-transcript]") === conversationNode, "Details preserves the transcript mount");
     history.back();
     await waitFor(() => document.querySelector("[data-mobile-task-level='list']"), "Back returns to the list");
     history.back();

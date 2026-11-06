@@ -2737,7 +2737,7 @@ function SessionInfoShell(
             cover={navbarAtBottom}
             open
             onClose={onClose}
-            title="Session info"
+            title="Session info" islandContext={navbarAtBottom ? { title: session.title || "Session info", status: session.status } : undefined}
         >
             {body}
         </Sheet>

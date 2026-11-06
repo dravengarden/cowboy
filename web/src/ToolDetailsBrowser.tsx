@@ -1123,7 +1123,7 @@ export function ToolDetailsBrowser({
         <Sheet
           open
           onClose={onClose}
-          title="Tool details"
+          title="Tool details" hideMobileTitle
           wide
           forceSheet
           cover

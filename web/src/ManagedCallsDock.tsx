@@ -803,7 +803,7 @@ export function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.El
 type CallRoute = { call: string; level: "transcript" | "details" };
 
 /** The floating mobile footer island the newest message passes under. */
-const MOBILE_FOOTER_CLEARANCE = "calc(76px + env(safe-area-inset-bottom, 0px))";
+const MOBILE_FOOTER_CLEARANCE = "var(--cowboy-sheet-dock-clearance, calc(76px + env(safe-area-inset-bottom, 0px)))";
 
 /** Level 2: the child's own conversation, headed by the call's state; its
  * details are one step further. */
@@ -1809,7 +1809,7 @@ export function ManagedChildNotice(
         <Sheet
           open={detailsOpen}
           onClose={(): void => setDetailsOpen(false)}
-          title="Details"
+          title="Details" islandContext={desktop ? undefined : { title: displayTitle(call), status: callStateLabel(call) }}
           {...(desktop ? { desktopMaxWidth: 560 } : { forceSheet: true })}
           cover
           portal
