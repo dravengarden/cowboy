@@ -114,6 +114,26 @@ pub(super) fn server(
 }
 
 impl LspStore {
+    /// The document version each server last received for this buffer. A
+    /// pull request is answered for the state the server holds when it
+    /// handles it, which follows every earlier change notification.
+    pub(super) fn cowboy_pull_versions(
+        &self,
+        buffer: &Entity<Buffer>,
+        cx: &App,
+    ) -> HashMap<LanguageServerId, i32> {
+        let id = buffer.read(cx).remote_id();
+        self.as_local()
+            .and_then(|local| local.buffer_snapshots.get(&id))
+            .map(|servers| {
+                servers
+                    .iter()
+                    .filter_map(|(server, snapshots)| Some((*server, snapshots.last()?.version)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(super) async fn handle_cowboy_analysis_frontier(
         this: Entity<Self>,
         envelope: TypedEnvelope<proto::CowboyAnalysisFrontier>,

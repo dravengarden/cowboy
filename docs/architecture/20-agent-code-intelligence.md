@@ -126,7 +126,10 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   `document_current` only for a versioned, not disk-based, not merged set of
   exactly that text; `stale` when the analyzed version is older; otherwise
   `unknown` with a reason (`unpublished`, `in_flight`, `unversioned`,
-  `save_triggered`, `merged`). `code.diagnostics` reports a file as
+  `save_triggered`, `merged`). Pulled diagnostics (`textDocument/diagnostic`,
+  used by gopls and most current servers) carry the document version the server
+  last received when the pull was sent (private server 1.10.0); the server
+  answers after every earlier change notification. `code.diagnostics` reports a file as
   `document_current` only when every listed server is. This is document
   evidence only; the input frontier for dependencies and configuration is
   still open, so nothing reports `fresh`.

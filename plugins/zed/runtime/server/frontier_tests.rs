@@ -179,3 +179,96 @@ async fn cowboy_frontier_records_the_analyzed_version_of_each_publication(cx: &m
     drop(handle);
     cx.executor().run_until_parked();
 }
+
+#[gpui::test]
+async fn cowboy_frontier_attributes_pulled_diagnostics_to_the_version_pulled(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        if cx.try_global::<settings::SettingsStore>().is_none() {
+            let settings = settings::SettingsStore::test(cx);
+            cx.set_global(settings);
+        }
+        release_channel::init(semver::Version::new(0, 0, 0), cx);
+    });
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree("/dir", serde_json::json!({"a.rs": "fn a() { A }\n"}))
+        .await;
+    let project = crate::Project::test(fs, [Path::new("/dir")], cx).await;
+    let registry = project.read_with(cx, |project, _| project.languages().clone());
+    registry.add(rust_lang());
+    let mut servers = registry.register_fake_lsp(
+        "Rust",
+        FakeLspAdapter {
+            capabilities: lsp::ServerCapabilities {
+                diagnostic_provider: Some(lsp::DiagnosticServerCapabilities::Options(
+                    lsp::DiagnosticOptions {
+                        identifier: Some("cowboy-pull".into()),
+                        inter_file_dependencies: false,
+                        workspace_diagnostics: false,
+                        work_done_progress_options: Default::default(),
+                    },
+                )),
+                ..Default::default()
+            },
+            initializer: Some(Box::new(|server| {
+                server.set_request_handler::<lsp::request::DocumentDiagnosticRequest, _, _>(
+                    |_, _| async move {
+                        Ok(lsp::DocumentDiagnosticReportResult::Report(
+                            lsp::DocumentDiagnosticReport::Full(
+                                lsp::RelatedFullDocumentDiagnosticReport {
+                                    related_documents: None,
+                                    full_document_diagnostic_report:
+                                        lsp::FullDocumentDiagnosticReport {
+                                            result_id: None,
+                                            items: vec![lsp::Diagnostic {
+                                                range: lsp::Range::new(
+                                                    lsp::Position::new(0, 9),
+                                                    lsp::Position::new(0, 10),
+                                                ),
+                                                severity: Some(lsp::DiagnosticSeverity::ERROR),
+                                                message: "undefined".into(),
+                                                ..Default::default()
+                                            }],
+                                        },
+                                },
+                            ),
+                        ))
+                    },
+                );
+            })),
+            ..Default::default()
+        },
+    );
+    let buffer = project
+        .update(cx, |project, cx| project.open_local_buffer("/dir/a.rs", cx))
+        .await
+        .unwrap();
+    let handle = project.update(cx, |project, cx| {
+        project.register_buffer_with_language_servers(&buffer, cx)
+    });
+    let _server = servers.next().await.unwrap();
+    cx.executor().run_until_parked();
+    let store = project.read_with(cx, |project, _| project.lsp_store());
+    for edit in [None, Some("\n")] {
+        if let Some(text) = edit {
+            buffer.update(cx, |buffer, cx| buffer.edit([(0..0, text)], None, cx));
+            cx.executor().run_until_parked();
+        }
+        store
+            .update(cx, |store, cx| {
+                store.pull_diagnostics_for_buffer(buffer.clone(), cx)
+            })
+            .await
+            .unwrap();
+        cx.executor().run_until_parked();
+        let (evidence, current) = observed(&project, &buffer, cx);
+        assert!(
+            evidence.versioned,
+            "a pull names the version it was answered for"
+        );
+        assert_eq!(evidence.published, current);
+    }
+    drop(handle);
+    cx.executor().run_until_parked();
+}

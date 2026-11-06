@@ -4,7 +4,6 @@
 //! read from. `document_current` covers one document's text only, never the
 //! project's other inputs, so nothing here ever claims project freshness.
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -14,7 +13,7 @@ use crate::BufferVersionEntry;
 use crate::sync_native::wire::{self, cowboy_buffer_sync_envelope::Payload};
 
 const MAX_SERVERS: usize = 32;
-/// A server without this extension never answers; do not hold the read.
+/// Bound on how long a language read waits for the evidence.
 const FRONTIER_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -120,28 +119,18 @@ pub(crate) fn classify(
     (State::DocumentCurrent, None)
 }
 
-pub(crate) struct Frontier {
-    supported: AtomicBool,
-}
-
-impl Default for Frontier {
-    fn default() -> Self {
-        Self {
-            supported: AtomicBool::new(true),
-        }
-    }
-}
+/// The paired private server always has this extension; a reply that misses
+/// the deadline (a busy server) only leaves that one read without evidence.
+#[derive(Default)]
+pub(crate) struct Frontier;
 
 impl Frontier {
-    /// The server's evidence, or `None` when it has no such extension.
+    /// The server's evidence, or `None` when it did not answer in time.
     pub(crate) async fn request(
         &self,
         zed: &crate::ZedRuntime,
         buffer_id: u64,
     ) -> Result<Option<Vec<wire::CowboyAnalysisServer>>> {
-        if !self.supported.load(Ordering::Relaxed) {
-            return Ok(None);
-        }
         let request = Payload::AnalysisRequest(wire::CowboyAnalysisFrontier {
             project_id: proto::REMOTE_SERVER_PROJECT_ID,
             protocol: 1,
@@ -150,7 +139,6 @@ impl Frontier {
         let Ok(reply) =
             tokio::time::timeout(FRONTIER_TIMEOUT, zed.sync.exchange(zed, request)).await
         else {
-            self.supported.store(false, Ordering::Relaxed);
             return Ok(None);
         };
         let Payload::AnalysisResponse(response) = reply? else {
