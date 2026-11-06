@@ -9,7 +9,7 @@ import { useDraftLibrary } from "./documents/store";
 import { draftMissingDirectory } from "./documents/model";
 import type { DraftFlush } from "./documents/DraftEditor";
 import { documentNotice } from "./documents/DocumentNotifications";
-import { recordUndo } from "./undoActions";
+import { movedToTrash } from "./trashFeedback";
 import { UNDO_NOTICE_MS } from "./undoHistory";
 
 import { WorkspaceDraftPane, WorkspaceDraftActions, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
@@ -2604,14 +2604,6 @@ const SettingsController = memo(forwardRef<
 // the browser `window.confirm` which is unstyled, blocks input, and can't
 // adapt its layout per viewport.
 /** Report a Trash move with Undo, or why it was refused. */
-function movedToTrash(session: SessionMeta, move: Promise<void>): void {
-    const title = session.title || "Session";
-    void move.then(() => {
-        recordUndo(`"${title}" moved to Trash`, [{ kind: "restore_trash", sessions: [session.id] }]);
-    }).catch((error: unknown) => {
-        documentNotice(error instanceof Error ? error.message : `Could not move "${title}" to Trash.`);
-    });
-}
 
 
 function RenameSessionShell({

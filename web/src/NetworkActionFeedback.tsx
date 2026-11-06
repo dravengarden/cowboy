@@ -74,7 +74,7 @@ export function useNetworkActionState(): NetworkActionState {
         ]);
         succeeded = true;
       } catch (error) {
-        if (!(error instanceof Error && error.name === "AbortError" && error.message === "New message kept in composer")) {
+        if (!(error instanceof Error && (error.name === "SessionActionCancelled" || (error.name === "AbortError" && error.message === "New message kept in composer")))) {
           notify(actionErrorMessage(error, "The action could not be completed"));
         }
       } finally {
