@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { test } from "bun:test";
 import { assertEquals, assertNotEquals, assertThrows } from "./test-assert.ts";
 import { workerRegistryInput, workerRegistryProjection } from "./worker-registry-input.ts";
+import { mergedComponentRegistrySource, readComponentRegistrySources } from "./component-registry.ts";
 
 function fixture() {
   const baseline = {
@@ -123,8 +124,23 @@ test("inactive or empty registries cannot produce a worker input", () => {
 });
 
 test("repository derived input matches the actual append-only component registry", async () => {
-  const expected = await workerRegistryInput(readFileSync("components/registry.json", "utf8"));
+  const expected = await workerRegistryInput(
+    mergedComponentRegistrySource(readComponentRegistrySources()),
+  );
   assertEquals(JSON.parse(readFileSync("components/worker-registry-input.json", "utf8")), expected);
+});
+
+test("archiving releases leaves the worker input unchanged", async () => {
+  const registry = fixture();
+  const unsplit = await workerRegistryInput(encode(registry));
+  const live = { ...registry, releases: registry.releases.slice(1) };
+  const archive = { schema_version: registry.schema_version, releases: registry.releases.slice(0, 1) };
+  const merged = mergedComponentRegistrySource({ live: encode(live), archive: encode(archive) });
+  assertEquals(merged, encode(registry));
+  assertEquals(await workerRegistryInput(merged), unsplit);
+  assertThrows(() =>
+    mergedComponentRegistrySource({ live: encode(registry), archive: encode(archive) }),
+  );
 });
 
 test("the build checker refuses stale or manually pinned inputs without writes", async () => {
@@ -135,6 +151,10 @@ test("the build checker refuses stale or manually pinned inputs without writes",
     const registry = fixture();
     const source = encode(registry);
     writeFileSync(`${root}/components/registry.json`, source);
+    writeFileSync(
+      `${root}/components/registry-archive.json`,
+      encode({ schema_version: registry.schema_version, releases: [] }),
+    );
     const expected = await workerRegistryInput(source);
     const path = `${root}/components/worker-registry-input.json`;
     const check = () =>

@@ -2,6 +2,7 @@
 // A tail changing only the unconsumed Web app shell is not a worker rollout.
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { mergedComponentRegistrySource, readComponentRegistrySources } from "./component-registry.ts";
 interface Release extends Record<string, unknown> {
   version: string;
   components: Array<{ id: string; [key: string]: unknown }>;
@@ -109,7 +110,7 @@ export async function workerRegistryInput(source: string) {
 if (import.meta.main) {
   const expected =
     JSON.stringify(
-      await workerRegistryInput(readFileSync("components/registry.json", "utf8")),
+      await workerRegistryInput(mergedComponentRegistrySource(readComponentRegistrySources())),
       null,
       2,
     ) + "\n";

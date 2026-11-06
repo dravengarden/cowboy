@@ -472,6 +472,19 @@ derivation closure of every row (2,699–2,706 derivations) is identical before
 and after with the revision and store hashes masked, and the check set is
 unchanged. No variant was added or retired.
 
+7.3 landed on 2026-11-06 with one deviation: the 98 unreferenced releases
+moved to a single `components/registry-archive.json` rather than one file per
+version, so the Rust reader needs one `include_str!` and `build.rs` (a hashed
+worker input) stays untouched. `registry.json` keeps eight releases (2.0.4,
+2.4.0 and 2.9.0 for the authentication and telemetry examples, 3.72.0, 3.79.0,
+3.82.0, the 3.83.0 worker pin and the active 3.84.0) and shrinks from 1.3 MB to
+90 KB. Runtime validation still embeds the whole history: a Catalog package
+pinned to an archived release must keep validating, and in-tree manifests
+cannot list every published pin. The merged encoding is byte-identical to the
+previous file, `components/worker-registry-input.json` is unchanged and the
+worker generation stays `worker-7c0b0aa9c3f8aaa3bee4`, so this is not a worker
+maintenance; the next routine Machine release carries it.
+
 ## 6. Not worth doing
 
 - A rewrite, a second controller, a microservices split or a wholesale state

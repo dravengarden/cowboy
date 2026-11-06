@@ -294,6 +294,21 @@ Release 3.60.2 records state-sync-idb 1.8.2 for the already-committed source
 whose digest differed from the 1.8.1 record. No Plugin depends on that package;
 this metadata correction changes no Plugin pins or runtime behavior.
 
+The registry is one ordered history stored in two files. `components/registry.json`
+keeps the active release and every release an in-tree `plugin.json` or the
+worker pin (`components/worker-registry-input.json`) still references; every
+other release moves unchanged, in the same schema, to
+`components/registry-archive.json`. `src/plugin.rs`,
+`tools/check-plugin-components.ts`, `tools/worker-registry-input.ts` and the
+closure tests read both through `tools/component-registry.ts` (Rust:
+`merged_component_registry`), which sorts by release version and refuses a
+duplicate or a schema mismatch, so ordered validation, identity history and
+installed Plugins pinned to an archived release behave as before. The merged
+two-space encoding is byte-identical to the unsplit file, so the worker
+registry digest and the worker generation do not change when a release is
+archived; the archive is excluded from the per-file worker hash. Archive a
+release only after no in-tree Plugin or worker pin references it.
+
 `components/registry.json` remains append-only. Schema-2 entries (through 2.9.0)
 still enforce strictly increasing versions for every Plugin between adjacent
 releases. Schema 3 appends a separate, unchanged 3.0.0 migration baseline before
