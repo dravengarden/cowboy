@@ -41,7 +41,11 @@ export const desktopComposerToolbarSx: SxProps<Theme> = {
   // Keep conversation shortcuts beside their controls at every inline width.
   // Quiet, compact keycaps provide the hierarchy without removing information.
   "& [data-composer-delivery] :is([data-composer-action='compact'], [data-composer-action='clear']) kbd":
-    { display: "inline-flex", gridColumn: "1 / -1", justifySelf: "center" },
+    { display: "inline-flex" },
+  "& [data-session-inline] button > .MuiStack-root": {
+    gridColumn: "1 / -1",
+    justifySelf: "center",
+  },
   "& [data-session-inline] button": {
     display: "grid",
     gridTemplateColumns: "max-content max-content",
