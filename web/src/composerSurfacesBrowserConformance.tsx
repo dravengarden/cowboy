@@ -262,6 +262,21 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
   check(!sent.some((frame) => frame.type === "reset" || frame.type === "clear_context"), "cancelling sends no context action");
   passed.push("Mobile clear-conversation confirmation opens and Cancel closes it without a request");
 
+  // Full-screen is a flag beside the slot: expanding carries the inline draft
+  // in, collapsing carries the edited draft back to the inline editor.
+  await typeDraft(mobile.container, "fullscreen draft");
+  (await until(() => mobile.container.querySelector<HTMLElement>("[aria-label='fullscreen editor']"), "fullscreen button")).click();
+  const sheet = () => document.querySelector<HTMLElement>("[aria-label='Fullscreen message editor']");
+  const fullscreen = await until(sheet, "fullscreen editor");
+  await until(() => draftText(fullscreen).includes("fullscreen draft"), "the draft carried into full-screen");
+  const fullscreenEditor = editorIn(fullscreen)!;
+  fullscreenEditor.focus();
+  document.execCommand("insertText", false, " edited");
+  (await until(() => fullscreen.querySelector<HTMLElement>("[data-testid=CloseFullscreenIcon]")?.closest<HTMLElement>("button"), "collapse button")).click();
+  await gone(sheet, "fullscreen editor");
+  await until(() => draftText(mobile.container).includes("edited"), "the edit carried back inline");
+  passed.push("Full-screen editor: expanding carries the draft in, collapsing carries the edit back inline");
+
   const customize = await until(
     () => mobile.container.querySelector<HTMLElement>("[data-mobile-focus-format-row] [data-testid=TuneIcon]")?.closest<HTMLElement>("button"),
     "customize toolbar button",

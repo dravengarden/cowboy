@@ -430,7 +430,7 @@ test("fullscreen pending edit distinguishes collapse from keyboard dismissal", (
 test("mobile compact and fullscreen handoffs preserve selection with one focus transfer", () => {
   assertEquals(
     composerSource.includes(
-      "const selection = editorRef.current?.getSelection();\n                    beginMobileEditorFocusTransfer();\n                    flushSync(() => setComposeFs(true));",
+      "const selection = editorRef.current?.getSelection();\n                    beginMobileEditorFocusTransfer();\n                    flushSync(() => surfaces.setFullscreen(true));",
     ),
     true,
   );
@@ -803,17 +803,17 @@ test("expanded mobile rails align while compact overlay stays undivided", () => 
 test("fullscreen delivery uses the shared picker and closes after durable ownership", () => {
   assertEquals(
     composerSource.includes(
-      "requestDelivery(() => setComposeFs(false))",
+      "requestDelivery(() => surfaces.setFullscreen(false))",
     ),
     true,
   );
   assertEquals(
-    /await confirmation;\s*dismissAfterMobileDelivery\(\);\s*setComposeFs\(false\)/.test(composerSource),
+    /await confirmation;\s*dismissAfterMobileDelivery\(\);\s*surfaces\.setFullscreen\(false\)/.test(composerSource),
     true,
   );
   assertEquals(
     composerSource.includes(
-      "submitAndNotify();\n            setComposeFs(false);",
+      "submitAndNotify();\n            surfaces.setFullscreen(false);",
     ),
     false,
   );
@@ -1061,8 +1061,8 @@ test("delivery picker dismisses mobile keyboard and restores the captured select
   );
   assertEquals(close.includes("flushSync("), true);
   assertEquals(close.includes("focusSelection(source.selection)"), true);
-  assertEquals(close.indexOf("setDeliveryAnchor(null)") >= 0 &&
-      close.indexOf("setDeliveryAnchor(null)") < close.indexOf("focusSelection"), true);
+  assertEquals(close.indexOf("surfaces.close(\"delivery\")") >= 0 &&
+      close.indexOf("surfaces.close(\"delivery\")") < close.indexOf("focusSelection"), true);
 });
 
 test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => {
