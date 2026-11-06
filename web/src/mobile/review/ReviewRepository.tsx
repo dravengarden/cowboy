@@ -307,6 +307,7 @@ export function ReviewRepository({
       color="primary"
       variant="outlined"
       sx={{
+        alignSelf: "flex-start",
         height: 22,
         borderRadius: "11px",
         fontSize: "0.6875rem",

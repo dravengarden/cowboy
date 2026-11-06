@@ -1,4 +1,4 @@
-import { AccountTreeOutlined, ArrowBack, ArrowForward, ChatBubbleOutline, CloudOutlined, CheckCircle, CheckCircleOutline, ChevronLeft, ChevronRight, Close, DifferenceOutlined, FolderOpenOutlined, FolderOutlined, FormatListBulleted, Undo, VisibilityOutlined, WrapText } from "@mui/icons-material";
+import { AccountTreeOutlined, ArrowBack, ArrowForward, ChatBubbleOutline, CloudOutlined, CheckCircle, CheckCircleOutline, ChevronLeft, ChevronRight, Close, DifferenceOutlined, ExtensionOutlined, FolderOpenOutlined, FolderOutlined, FormatListBulleted, Undo, VisibilityOutlined, WrapText } from "@mui/icons-material";
 import { Alert, Badge, Box, Button, Divider, IconButton, ListItemButton, ListItemText, Popover, Stack, Toolbar, Typography } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -1950,7 +1950,9 @@ export function ReviewApp({
                     mutateMobileReview(workspace.sessionId, "selectRemoteReview", { selected: true });
                   }}
                 >{syncedReview.remote_review ? `PR #${syncedReview.remote_review.number}` : "Remote PR"}</Button>}
-                <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={currentMachineId} />
+                <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={currentMachineId}
+                  renderTrigger={({ disabled, open }) => <Button aria-label="Open extensions" disabled={disabled} onClick={open}
+                    startIcon={<ExtensionOutlined />} sx={{ minHeight: 44, textTransform: "none" }}>Extensions</Button>} />
               </ReviewMoreActions>
             </Stack>
           </Box>

@@ -368,7 +368,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
         <CssBaseline />
         <SurfaceProvider>
           {desktop ? <SurfaceContext.Provider value={{ kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true }}>
-            <ReviewApp active onDrawerOpenChange={() => {}} />
+            <DesktopWorkspaceProvider><DesktopCommandProvider><ReviewApp active onDrawerOpenChange={() => {}} /></DesktopCommandProvider></DesktopWorkspaceProvider>
           </SurfaceContext.Provider> : <ReviewApp active onDrawerOpenChange={() => {}} />}
         </SurfaceProvider>
       </BrowserProductTheme>,

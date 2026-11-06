@@ -6,9 +6,7 @@ import { Sheet } from "../../Sheet";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 
 /** Secondary tools keep their place without taking space from the reader. */
-export function ReviewMoreActions(
-  { children }: { children: ReactNode },
-): React.JSX.Element {
+export function ReviewMoreActions({ children }: { children: ReactNode }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const surface = useSurfaceProfile();
   if (surface.kind === "desktop") {
@@ -39,7 +37,15 @@ export function ReviewMoreActions(
         title="Review actions"
         forceSheet
         portal
-        actions={<Button aria-label="Close review actions" onClick={() => setOpen(false)} sx={{ minHeight: 44 }}>Done</Button>}
+        actions={
+          <Button
+            aria-label="Close review actions"
+            onClick={() => setOpen(false)}
+            sx={{ minHeight: 44 }}
+          >
+            Done
+          </Button>
+        }
       >
         <Stack spacing={1} sx={{ px: 1, pb: 1 }}>
           <Box
@@ -55,7 +61,7 @@ export function ReviewMoreActions(
           <Button
             startIcon={<SettingsOutlined />}
             color="inherit"
-            sx={{ minHeight: 44, justifyContent: "flex-start" }}
+            sx={{ minHeight: 44, justifyContent: "flex-start", textTransform: "none" }}
             onClick={() => {
               setOpen(false);
               openAppSettings({ section: "code" });

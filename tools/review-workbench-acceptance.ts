@@ -13,9 +13,9 @@ const page = await openFixturePage(
   () =>
     `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<script>localStorage.setItem("cowboy:theme-system-default-v1","1");localStorage.setItem("cowboy-theme-mode",${
-      JSON.stringify(theme)
-    });
+<script>localStorage.setItem("cowboy:theme-system-default-v1","1");localStorage.setItem("cowboy-theme-mode",${JSON.stringify(
+      theme,
+    )});
 globalThis.CowboyDeviceProof={proof:async()=>"fixture",resetChallenge(){},install(){}};</script>
 <script type="module">const m=await import('/fixture.js');globalThis.preview=m.renderReviewContextPreview;</script>`,
 );
@@ -62,10 +62,7 @@ async function capture(name: string, selectors: string[]) {
   })()`);
   measurements.push({ name, theme, measure });
   const shot = await page.send("Page.captureScreenshot", { format: "png" });
-  await writeFile(
-    join(output, `${theme}-${name}.png`),
-    Buffer.from(shot.data, "base64"),
-  );
+  await writeFile(join(output, `${theme}-${name}.png`), Buffer.from(shot.data, "base64"));
 }
 async function viewport(width: number, height: number, mobile = true) {
   await page.send("Emulation.setDeviceMetricsOverride", {
@@ -84,9 +81,7 @@ async function run(p: FixturePage) {
   await viewport(390, 844);
   await until("typeof preview==='function'");
   await p.evaluate("void(globalThis.fixture=preview(true,false,true))");
-  await until(
-    "document.querySelector('[data-review-unread]')?.textContent==='51 unread'",
-  );
+  await until("document.querySelector('[data-review-unread]')?.textContent==='51 unread'");
   const controls = [
     "[data-review-compare]",
     "[data-review-unread]",
@@ -96,7 +91,9 @@ async function run(p: FixturePage) {
   ];
   await capture("changes", controls);
   await click('[aria-label="Repository details"]');
-  await until("document.querySelector('[data-repository-project-path]')?.textContent==='/tasks/cowboy/feature'");
+  await until(
+    "document.querySelector('[data-repository-project-path]')?.textContent==='/tasks/cowboy/feature'",
+  );
   await capture("repository-details", ['[aria-label="Close repository details"]']);
   await click('[aria-label="Close repository details"]');
   await p.evaluate(
@@ -115,25 +112,20 @@ async function run(p: FixturePage) {
   await capture("landscape", controls);
   await viewport(390, 844);
   await click('[aria-label="Worktree files"]');
-  await until(
-    "!!document.querySelector('[data-code-tree-path=\"README.md\"]')",
-  );
-  await capture("files", [
-    "[data-review-find-bar]",
-    "[data-review-context-button]",
-  ]);
+  await until("!!document.querySelector('[data-code-tree-path=\"README.md\"]')");
+  await capture("files", ["[data-review-find-bar]", "[data-review-context-button]"]);
   await click('[aria-label="More review actions"]');
   await until("!!document.querySelector('[aria-label=\"Refresh files\"]')");
-  await capture("more-actions", ['[aria-label="Refresh files"]', '[aria-label="Close review actions"]']);
+  await capture("more-actions", [
+    '[aria-label="Refresh files"]',
+    '[aria-label="Close review actions"]',
+  ]);
   await click('[aria-label="Expand folders"]');
   await click('[aria-label="Refresh files"]');
   await click('[aria-label="Close review actions"]');
   await viewport(390, 430);
   await click("input");
-  await capture("keyboard-sized", [
-    "[data-review-find-bar]",
-    "[data-review-context-button]",
-  ]);
+  await capture("keyboard-sized", ["[data-review-find-bar]", "[data-review-context-button]"]);
   await viewport(390, 844);
   await click('[data-code-tree-path="README.md"]');
   await until("!!document.querySelector('[data-markdown-review-preview]')");
@@ -144,14 +136,9 @@ async function run(p: FixturePage) {
     "[data-review-context-button]",
   ]);
   await click('[aria-label="Open file tree sidebar"]');
-  await capture("sidebar", [
-    "[data-review-find-bar]",
-    '[aria-label="Close worktree"]',
-  ]);
+  await capture("sidebar", ["[data-review-find-bar]", '[aria-label="Close worktree"]']);
   await click('[aria-label="Close worktree"]');
-  await until(
-    "!document.querySelector('[data-mobile-drawer-presented=\"true\"]')",
-  );
+  await until("!document.querySelector('[data-mobile-drawer-presented=\"true\"]')");
   await new Promise((resolve) => setTimeout(resolve, 500));
   await click('[aria-label="Git changes"]');
   await until("!!document.querySelector('[data-review-compare]')");
@@ -171,11 +158,12 @@ async function run(p: FixturePage) {
   await click('[aria-label="Mark reviewed"]');
   await until("!!document.querySelector('[aria-label=\"Mark unreviewed\"]')");
   await click('[aria-label="Next change"]');
-  await capture("diff-next", [
-    '[aria-label="Previous change"]',
-    '[aria-label="Next change"]',
-  ]);
+  await capture("diff-next", ['[aria-label="Previous change"]', '[aria-label="Next change"]']);
   await viewport(1280, 900, false);
+  await p.evaluate(
+    "fixture.cleanup(); void(globalThis.fixture=preview(true,false,true,false,true))",
+  );
+  await until("!!document.querySelector('[aria-label=\"Refresh repository\"]')");
   await capture("desktop", ["[data-review-workbench]"]);
   await writeFile(
     join(output, `${theme}-design.html`),
@@ -184,10 +172,7 @@ async function run(p: FixturePage) {
 }
 try {
   await run(page);
-  await writeFile(
-    join(output, `${theme}-measure.json`),
-    JSON.stringify(measurements, null, 2),
-  );
+  await writeFile(join(output, `${theme}-measure.json`), JSON.stringify(measurements, null, 2));
   console.log(
     JSON.stringify({
       ok: true,
@@ -199,10 +184,7 @@ try {
   );
 } catch (error) {
   const shot = await page.send("Page.captureScreenshot", { format: "png" });
-  await writeFile(
-    join(output, `${theme}-failure.png`),
-    Buffer.from(shot.data, "base64"),
-  );
+  await writeFile(join(output, `${theme}-failure.png`), Buffer.from(shot.data, "base64"));
   throw error;
 } finally {
   await page.close();

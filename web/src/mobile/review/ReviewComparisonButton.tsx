@@ -1,7 +1,11 @@
 import { UnfoldMore } from "@mui/icons-material";
 import { Box, ButtonBase, Typography } from "@mui/material";
 
-export function ReviewComparisonButton({ label, disabled, onClick }: {
+export function ReviewComparisonButton({
+  label,
+  disabled,
+  onClick,
+}: {
   label: string;
   disabled: boolean;
   onClick: () => void;
@@ -38,10 +42,7 @@ export function ReviewComparisonButton({ label, disabled, onClick }: {
           </Typography>
         )}
       </Box>
-      <UnfoldMore
-        fontSize="small"
-        sx={{ color: "text.secondary", flexShrink: 0 }}
-      />
+      <UnfoldMore fontSize="small" sx={{ color: "text.secondary", flexShrink: 0 }} />
     </ButtonBase>
   );
 }
