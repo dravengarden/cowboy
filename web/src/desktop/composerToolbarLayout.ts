@@ -38,28 +38,22 @@ export const desktopComposerToolbarSx: SxProps<Theme> = {
     { display: "none" },
   "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='schedule']) kbd":
     { display: "none" },
-  // Keep conversation shortcuts beside their controls at every inline width.
-  // Quiet, compact keycaps provide the hierarchy without removing information.
+  // Conversation shortcuts read as secondary inline text, not another row
+  // of outlined controls. Keep the information visible at every inline width.
   "& [data-composer-delivery] :is([data-composer-action='compact'], [data-composer-action='clear']) kbd":
-    { display: "inline-flex" },
-  "& [data-session-inline] button > .MuiStack-root": {
-    gridColumn: "1 / -1",
-    justifySelf: "center",
-  },
-  "& [data-session-inline] button": {
-    display: "grid",
-    gridTemplateColumns: "max-content max-content",
-    columnGap: "0.25rem",
-    rowGap: 0,
-    justifyContent: "center",
-  },
-  "& [data-composer-action='clear'] > svg": {
-    gridColumn: "1 / -1",
-    justifySelf: "center",
-  },
-  "@container composer-tools (min-width: 46rem)": {
-    "& [data-session-inline] button": { display: "inline-flex" },
-  },
+    {
+      display: "inline-flex",
+      border: 0,
+      bgcolor: "transparent",
+      boxShadow: "none",
+      px: 0,
+      minWidth: 0,
+      fontWeight: 500,
+      fontFamily: "inherit",
+      color: "text.secondary",
+      opacity: 0.8,
+      "&[data-shortcut-state='inactive']": { opacity: 0.55 },
+    },
   // The narrowest row keeps the gauge and drops its number.
   "& [data-session-overflow] [data-context-reading]": { display: "none" },
   "@container composer-tools (min-width: 22rem)": {
