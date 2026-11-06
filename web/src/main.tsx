@@ -34,6 +34,7 @@ import { ownPluginHostLifecycle } from "./pluginHost/lifecycle";
 import { installBrowserDevice } from "./browserDevice";
 import { DocumentNotifications } from "./documents/DocumentNotifications";
 import { UndoHistoryHost } from "./UndoHistorySheet";
+import { SessionActionWaitDialog } from "./SessionActionWaitDialog";
 import { EditorExtensionsDialog } from "./editorExtensions/EditorExtensionsDialog";
 import { lowPriorityInterval } from "./network/bandwidth";
 import { restoreSubscriptionSignIn, subscribeSignInLocation, subscriptionSignInLocation } from "./subscriptionSignInLink";
@@ -120,6 +121,7 @@ function Root(): React.JSX.Element {
             <Suspense fallback={<BootSkeleton />}>{subscriptionSignIn ? <SubscriptionSignInHandoff key={subscriptionSignIn} hash={subscriptionSignIn} /> : app}</Suspense>
             <DocumentNotifications mobile={!desktop} />
             <UndoHistoryHost />
+            <SessionActionWaitDialog />
             <EditorExtensionsDialog />
           </DeviceAuthorizationRoute>
         </ProductAuthGate>
