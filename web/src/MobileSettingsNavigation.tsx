@@ -1,6 +1,5 @@
-import { Box, ButtonBase, IconButton, Typography } from "@mui/material";
+import { alpha, Box, IconButton, Typography } from "@mui/material";
 import { ArrowBackIosNew, Close } from "@mui/icons-material";
-import { FloatingActionIsland } from "@cowboy/app-shell";
 import type { MobileSettingsSection } from "./SettingsShell";
 
 const titles: Record<MobileSettingsSection, string> = {
@@ -16,16 +15,22 @@ export function MobileSettingsNavigation({ section, onBack, onClose }: {
 }) {
   const title = section ? titles[section] : "Settings";
   return (
-    <Box data-mobile-settings-navigation sx={{ width: "100%", display: "flex", justifyContent: "flex-start", pointerEvents: "none" }}>
-      <FloatingActionIsland columns="minmax(0, 1fr) 46px" maxWidth="max-content" minHeight={56}>
-        {section
-          ? <ButtonBase aria-label={`Back to Settings from ${title}`} onClick={onBack} sx={{ minHeight: 46, minWidth: 0, gap: 1, px: 1.5, borderRadius: "999px" }}>
-              <ArrowBackIosNew sx={{ fontSize: "1.125rem", flexShrink: 0 }} />
-              <Typography component="span" sx={{ fontSize: "0.875rem", fontWeight: 600, overflowWrap: "anywhere" }}>{title}</Typography>
-            </ButtonBase>
-          : <Typography sx={{ alignSelf: "center", px: 1.5, fontSize: "0.875rem", fontWeight: 600 }}>{title}</Typography>}
-        <IconButton aria-label="Close settings" onClick={onClose} sx={{ width: 46, height: 46 }}><Close sx={{ fontSize: "1.25rem" }} /></IconButton>
-      </FloatingActionIsland>
+    <Box component="nav" aria-label="Settings navigation" data-mobile-settings-navigation sx={{
+      width: "100%", display: "grid", gridTemplateColumns: "44px minmax(0, 1fr) 44px",
+      alignItems: "center", gap: 1, position: "relative", isolation: "isolate", pointerEvents: "none",
+      "& .MuiIconButton-root": { padding: 0, "& .MuiSvgIcon-root": { fontSize: "clamp(16px, 1.5rem, 28px)" } },
+      "&::before": { content: '""', position: "absolute", zIndex: -1, pointerEvents: "none",
+        top: -24, left: 0, right: 0, bottom: "calc(-16px - env(safe-area-inset-bottom, 0px))",
+        background: theme => `linear-gradient(to bottom, ${alpha(theme.palette.background.default, 0)}, ${alpha(theme.palette.background.default, 0.94)} 24px, ${theme.palette.background.default} 48px)` },
+    }}>
+      <IconButton aria-label={section ? `Back to Settings from ${title}` : "Close settings"} onClick={section ? onBack : onClose}
+        sx={{ width: 44, height: 44, pointerEvents: "auto", borderRadius: "999px", bgcolor: "background.paper",
+          border: "1px solid", borderColor: theme => alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.15 : 0.7),
+          boxShadow: theme => `0 3px 12px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.24 : 0.12)}` }}>
+        {section ? <ArrowBackIosNew sx={{ fontSize: "clamp(16px, 1.5rem, 28px)" }} /> : <Close sx={{ fontSize: "clamp(16px, 1.5rem, 28px)" }} />}
+      </IconButton>
+      <Typography title={title} noWrap sx={{ minWidth: 0, textAlign: "center", fontSize: "1.125rem", lineHeight: 1.3, fontWeight: 600 }}>{title}</Typography>
+      {section && <IconButton aria-label="Close settings" onClick={onClose} sx={{ width: 44, height: 44, pointerEvents: "auto", color: "text.secondary" }}><Close sx={{ fontSize: "clamp(16px, 1.375rem, 28px)" }} /></IconButton>}
     </Box>
   );
 }

@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "grok",
-  "version": "3.1.52",
+  "version": "3.1.54",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.17",
   "display": {
@@ -23,7 +23,7 @@
       "kind": "text",
       "value": {
         "source": "literal",
-        "value": "Working\u2026"
+        "value": "Working…"
       },
       "effect": "shimmer"
     },
@@ -32,7 +32,7 @@
   "configuration_presets": [
     {
       "id": "grok-high",
-      "name": "High \u00b7 Always approve",
+      "name": "High · Always approve",
       "detail": "High reasoning with Provider-managed approval policy",
       "is_default": true,
       "values": {
@@ -59,7 +59,7 @@
       "thought": {
         "variant": "signal",
         "density": "compact",
-        "active_label": "Working\u2026",
+        "active_label": "Working…",
         "current_surface": "soft"
       }
     },
