@@ -145,6 +145,8 @@ export interface ProviderUpdateAvailable {
 }
 
 export interface SessionMeta {
+  /** Live human requests, independent of read state and transcript hydration. */
+  attention?: { approvals: number; questions: number; other?: number };
   /** Advertised by this running worker, never inferred from installed packages. */
   supports_current_turn?: boolean;
   id: string;

@@ -106,7 +106,8 @@ primary phone/desktop product path.
 - [`../examples/editor-plugins/README.md`](../examples/editor-plugins/README.md) — Installable editor plugin example and packing command
 - [`architecture/runtime-incident-ledger.md`](architecture/runtime-incident-ledger.md) — Runtime failure evidence and resolved invariants
 - [`structural-refactor-plan-2026-11.md`](structural-refactor-plan-2026-11.md) — Measured structural baseline after five months of iteration, ranked decay risks, behaviour-preserving refactor slices with their guards, rejected options and quarterly health metrics
-- [`compatibility-exits.md`](compatibility-exits.md) — Every legacy compatibility path with its exit condition, the check that proves it and whether removal is a Machine maintenance boundary; the protocol floors are still 1
+- [`composer-state-model.md`](composer-state-model.md) — Remaining `ComposerWorkspace` state, the focus and overlap constraints any new model must keep, and a staged surface reducer proposal
+- [`compatibility-exits.md`](compatibility-exits.md) — Every legacy compatibility path with its exit condition, the check that proves it and whether removal is a Machine maintenance boundary; the Controller enforces Machine protocol 37 and broker protocol 5 while the wire crate minimums stay 1
 
 ### Core documents
 

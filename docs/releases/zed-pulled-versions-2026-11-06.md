@@ -32,4 +32,15 @@ longer disables evidence for the whole process after one slow reply.
 - `hawk-zed-1-25-0-converge`: HTTP 204, phase `completed`, Machine receipt
   `applied`; zero Zed session leases.
 
-Production verification is recorded below once the idle route has moved.
+## Production
+
+- With the routing fix live, a worktree route that was idle moved to 1.25.0 on
+  its own: a 1.25.0 adapter/server pair started about 12 minutes after
+  installation while the 1.24.0 pair kept serving another route.
+- This session's worktree stayed on 1.24.0 (`gopls` still `unversioned`) after
+  the agent's holdings were released when idle: another lease holder, most
+  likely an open Code pane, keeps the route pinned, as designed. Its evidence
+  moves to 1.25.0 once that worktree is next idle.
+- The Controller (`c27b9ac5f`) now also holds an already-open file under the
+  agent owner, so holdings left by an earlier Controller are re-tracked and
+  released when idle.

@@ -38,13 +38,14 @@ import { requestPickSession } from "./sessionPickRequest";
 import { openSessionSettings, requestNewFrom } from "./sessionSettingsOpen";
 import { SessionNextMessageBadge, useContinuation } from "./SessionContextCue";
 import { isManagedChild } from "./managedCalls";
-import { SessionCallsBadge } from "./SessionCallsBadge";
-import { SessionCacheGlyph, SessionObligationBadge, SessionsSyncedCaption } from "./SessionOfflineBadges";
+import { SessionRowTitle } from "./SessionRowTitle";
+import { SessionActionBadge, SessionAttentionMenu } from "./SessionAttention";
+import { SessionObligationBadge, SessionsSyncedCaption } from "./SessionOfflineBadges";
 import { mergeSessionOverview, type SessionInfoPayload, sessionOverviewSections } from "./sessionOverview";
 import { useProviderCatalog } from "./providerCatalog";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { type SessionMeta } from "./protocol";
-import { StatusDot, statusColor } from "./SessionStatusDot";
+import { statusColor } from "./SessionStatusDot";
 import { bindSessionFolderProject, createSessionFolder, markSessionHydrated, moveSessionFolder, notify, prefetchSessionTail, organizeSessionsByProject, placeSessions, removeSessionFolder, renameSession, renameSessionFolder, reorderSessionFolders, reorderSessions, setSessionFolderDefaults, useStoreSelector } from "./store";
 import { type SessionFolder, folderAncestors, normalizeSessionFolderName, sessionFolderById, sessionFolderLocation, unboundProjectLabels } from "./sessionFolders";
 import { buildSessionTree, displayedSessionOrder, dropTargetFolder, type FolderActivity, folderIdFromRowKey, foldersRevealing, movedRowKey, projectSessionDrop, rowInsideFolder, type SessionDropProjection, sessionTreeRowKey, type SessionTreeRow } from "./sessionTree";
@@ -61,7 +62,6 @@ import { type SortableDrag, useSortable } from "./useSortable";
 import { haptic } from "./haptic";
 import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
 import { useNavbarAtBottom } from "./navbarSettings";
-import { ProviderIcon } from "./ProviderIcon";
 import { setTranscriptProjection, captureTranscriptViewportAnchor, useExploreSessionState } from "./explore/exploreStore";
 import { DetentSheet, MobileSheetActionGroup } from "@cowboy/app-shell";
 import { ConfirmSheet, Sheet } from "./Sheet";
@@ -1530,6 +1530,7 @@ export function SessionList({
                     </Box>
                 )}
             </Box>}
+            <SessionAttentionMenu sessions={sessions} onPick={onPick} />
             <List
                 dense
                 ref={listRef}
@@ -1841,6 +1842,7 @@ export function SessionList({
                                     >
                                         {row.sessionCount}
                                     </Typography>
+                                    <SessionAttentionMenu sessions={sessions} folder={f.id} folders={sessionFolders} onPick={onPick} />
                                 </Stack>
                             }
                             slotProps={{ primary: { component: "div" } }}
@@ -2077,40 +2079,7 @@ export function SessionList({
                         </Box>
                         <ListItemText
                             sx={{ my: 0.25, minWidth: 0 }}
-                            primary={
-                                <Stack
-                                    direction="row"
-                                    spacing={0.75}
-                                    alignItems="center"
-                                    sx={{ minWidth: 0 }}
-                                >
-                                    {/* Status, Provider mark and title share
-                                        the title line: the status no longer
-                                        floats to the row's middle, and the
-                                        mark keeps the title's optical size
-                                        instead of towering over it. All three
-                                        are rem, so they follow the global
-                                        font size together. */}
-                                    <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} resourceWait={s.resource_wait} />
-                                    <ProviderIcon
-                                        provider={s.provider}
-                                        providerVersion={s.provider_version}
-                                        providerDigest={s.provider_generation_digest}
-                                        sx={{ fontSize: "1.125rem", flexShrink: 0 }}
-                                    />
-                                    <Typography
-                                        variant="body2"
-                                        noWrap
-                                        sx={{ minWidth: 0 }}
-                                    >
-                                        {s.title}
-                                    </Typography>
-                                    {/* On the title line, which truncates, so a
-                                        running call never adds a row line. */}
-                                    <SessionCallsBadge sessionId={s.id} />
-                                    <SessionCacheGlyph sessionId={s.id} active={s.id === activeId} />
-                                </Stack>
-                            }
+                            primary={<SessionRowTitle session={s} active={s.id === activeId} />}
                             secondary={
                                 // Placement belongs with the project it runs: on
                                 // the title line the badge took a third of a
@@ -2132,6 +2101,7 @@ export function SessionList({
                                         compact
                                     />
                                     <AccountBadge account={sessionAccountIdentity(accounts, s)} />
+                                    <SessionActionBadge session={s} />
                                     <SessionNextMessageBadge sessionId={s.id} />
                                     {handedOff.has(s.id) && (
                                         // The pair shares a title; this marks the one the work left.

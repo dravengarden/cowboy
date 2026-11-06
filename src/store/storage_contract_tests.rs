@@ -29,6 +29,7 @@ pub(super) fn session(id: &str) -> SessionMeta {
         context_used: 0,
         context_size: 0,
         usage: None,
+        attention: crate::core::SessionAttention::default(),
         background_tasks: 0,
         supports_current_turn: false,
         provider_update: None,
