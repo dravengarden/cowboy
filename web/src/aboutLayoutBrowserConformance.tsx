@@ -7,6 +7,8 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { AboutLayoutEditor } from "./AboutLayoutEditor";
 import { type AboutPreferences, PREFERENCES_CHANGED, useAboutPreferences } from "./aboutPreferences";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
+import { checkMobileSettingsReader } from "./mobileSettingsReaderBrowserChecks";
+export { checkMobileSettingsReader } from "./mobileSettingsReaderBrowserChecks";
 
 export async function runAboutLayoutBrowserConformance(keepFixture = false): Promise<string[]> {
   bindProductSyncPrincipal("layout-fixture");
@@ -97,6 +99,7 @@ export async function runAboutLayoutBrowserConformance(keepFixture = false): Pro
     button("Restore default order").click();
     await until(() => data.preferences.revision === 6);
     check(data.preferences.values.usage_order.length === 0 && data.preferences.values.machine_order.length === 0, "restore defaults updates both lists atomically");
+    await checkMobileSettingsReader();
     return tests;
   } finally {
     if (!keepFixture) { root.unmount(); container.remove(); }
