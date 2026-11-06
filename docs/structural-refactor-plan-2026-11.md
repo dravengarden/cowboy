@@ -435,7 +435,7 @@ lifecycle or connection-level test that 1.5/1.6 name first.
 |---|---|
 | 3.2 | `SettingsShell.tsx` and `ToolDetailsBrowser.tsx` extracted (Phase 0 batch) |
 | 3.3 | `SessionList.tsx` extracted; `App` 2,406 → 2,191 lines through `useSessionFocusLifecycle`, `useDesktopSplitters` and `useMobileDrawerSurface`, each called where its effects ran so hook order is unchanged |
-| 3.4 | `PendingPanel.tsx` and `ComposerSheet.tsx` extracted; `Composer.tsx` 4,911 → 3,292 lines. `ComposerWorkspace` itself (2,524 lines) is not yet split, and physical iOS composer acceptance was not run |
+| 3.4 | `PendingPanel.tsx` and `ComposerSheet.tsx` extracted; `Composer.tsx` 4,911 → 3,292 lines. `ComposerWorkspace` 2,524 → 2,314 lines: the inline-image selection (`composerImageSelection.tsx`) and the move-draft surfaces (`DraftMoveSurfaces.tsx`) left with the state only they read. The remaining state (delivery picker anchor, full-screen compose, stop and session-action confirmations) is read by handlers, effects and several JSX regions at once, so further cuts need a redesigned state model rather than moves; the desktop toolbar subtree alone reads 49 locals. Physical iOS composer acceptance was not run |
 | 3.5 | `TranscriptItems.tsx` and `TranscriptPlaceholders.tsx` extracted; `Transcript.tsx` 5,042 → 3,117 lines with the scroll contract kept in place. `DocumentView` left `ReviewApp` |
 
 Every slice ran the browser suites named for it in Firefox and Chromium, in
