@@ -438,20 +438,21 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
       const level = document.querySelector<HTMLElement>("[data-mobile-task-level='conversation']")!.getBoundingClientRect();
       const chip = document.querySelector<HTMLElement>("[data-sheet-context-dock]")!
         .getBoundingClientRect();
-      const details = document.querySelector<HTMLElement>("[data-sheet-context-dock] [data-context-action='Details']")!.getBoundingClientRect();
+      const details = document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.getBoundingClientRect();
       const transcript = document.querySelector<HTMLElement>("[data-call-transcript]")!.getBoundingClientRect();
       check(chip.left - level.left >= 12, `T16 the state chip keeps the gutter (${String(chip.left - level.left)}px)`);
       check(details.right <= level.right, "T16 Details stays inside the sheet");
       const island = document.querySelector<HTMLElement>("[data-sheet-context-dock] > div")!.getBoundingClientRect();
-      check(details.width > island.width * 0.6, "The identity and details target owns most of the dock width");
-      check(chip.height <= 84, "Identity and supporting information remain compact");
+      check(details.width >= 44 && details.height >= 44, "The floating details button retains its touch target");
+      check(island.width > details.width * 3, "The information surface is independent from the floating buttons");
+      check(chip.height <= 180, "Identity and supporting information remain compact");
       check(Boolean(document.querySelector("[data-context-facts]")), "Execution facts stay visible beside navigation");
       check(document.querySelector("[data-context-facts]")?.textContent?.includes("gpt-6.1-sol"), "The model is visible without opening Details");
       check(Math.abs(transcript.bottom - level.bottom) < 1, "T16 the transcript reaches the island");
     }
     await observe?.();
     const conversationNode = document.querySelector("[data-call-transcript]");
-    document.querySelector<HTMLElement>("[data-sheet-context-dock] [data-context-action='Details']")!.click();
+    document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.click();
     await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "call details open separately");
     check(history.length > historyBefore, "each level is a history entry");
     history.back();
@@ -621,7 +622,7 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
       actions={["Latest", "Open session"].map(label => ({ label, icon: <span>↗</span>, onActivate: () => activated.push(label) }))}
     /></Box>);
     const rail = document.querySelector<HTMLElement>("[data-context-facts]")!;
-    check(rail.scrollWidth > rail.clientWidth, "Long facts scroll within their own rail");
+    check(rail.scrollWidth <= rail.clientWidth, "Long facts wrap inside the information surface");
     check(document.querySelector<HTMLElement>("[data-sheet-context-dock]")!.scrollWidth <= 320, "Information and actions do not widen the dock");
     document.querySelectorAll<HTMLButtonElement>("[data-context-actions] button").forEach(button => button.click());
     check(activated.join(",") === "Latest,Open session", "Multiple contextual actions remain directly available");
