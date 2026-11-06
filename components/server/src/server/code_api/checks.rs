@@ -23,6 +23,8 @@ use crate::execution_environment::BindingV1;
 use crate::execution_protocol::{Command, Invocation, Outcome, Response as KeeperResponse};
 use crate::machine_protocol::execution::{Action, Request, Response as ExecutionResponse};
 
+mod product;
+
 const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const READ_BYTES: u64 = 1024 * 1024;
 const KEEPER_WAIT_MS: u64 = 5_000;
@@ -74,6 +76,10 @@ pub(in crate::server) fn runs(session_id: &str) -> Vec<Run> {
 
 fn record(session_id: &str, run: Run) {
     let mut all = RUNS.lock();
+    record_locked(&mut all, session_id, run);
+}
+
+fn record_locked(all: &mut HashMap<String, BTreeMap<String, Run>>, session_id: &str, run: Run) {
     if all.len() >= MAX_SESSIONS && !all.contains_key(session_id) {
         // Forget a session with nothing running; never drop a live run.
         if let Some(idle) = all
@@ -116,7 +122,10 @@ pub(in crate::server) async fn declared(
 }
 
 pub(in crate::server) fn routes() -> Router<Arc<AppState>> {
-    Router::new().route("/api/code/sessions/{id}/checks", get(api_checks))
+    Router::new().route(
+        "/api/code/sessions/{id}/checks",
+        get(api_checks).post(product::start_product),
+    )
 }
 
 #[derive(Serialize)]
@@ -133,7 +142,9 @@ struct DeclaredCheck {
 #[serde(rename_all = "camelCase")]
 struct ChecksResponse {
     api_version: u8,
+    epoch: &'static str,
     allowed: bool,
+    runnable: bool,
     declared: Vec<DeclaredCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     declaration_error: Option<String>,
@@ -161,7 +172,17 @@ async fn api_checks(
         };
         Json(ChecksResponse {
             api_version: 1,
+            epoch: &product::EPOCH,
             allowed: session && state.hub.language_servers_allowed(&session_id),
+            runnable: session
+                && state.hub.language_servers_allowed(&session_id)
+                && state.hub.session_info(&session_id).is_some_and(|info| {
+                    info.meta.execution_binding.as_ref().is_some_and(|binding| {
+                        binding
+                            .for_runtime(&info.meta.machine_id, &info.meta.cwd)
+                            .is_ok()
+                    })
+                }),
             declared: declared
                 .into_iter()
                 .map(|check| DeclaredCheck {
@@ -195,6 +216,19 @@ pub(in crate::server) async fn start(
     check_id: &str,
     operation: &str,
 ) -> Result<Started, String> {
+    start_authorized(state, session_id, check_id, operation, None).await
+}
+
+async fn start_authorized(
+    state: &Arc<AppState>,
+    session_id: &str,
+    check_id: &str,
+    operation: &str,
+    approval: Option<&crate::server::operator_approval::OperatorApproval>,
+) -> Result<Started, String> {
+    if let Some(approval) = approval {
+        product::authorize(state, session_id, approval).await?;
+    }
     if let Some(run) = runs(session_id).into_iter().find(|run| {
         run.check == check_id && (run.run_id == operation || run.state == RunState::Running)
     }) {
@@ -240,7 +274,25 @@ pub(in crate::server) async fn start(
         output_truncated: false,
         parsed: Parsed::default(),
     };
-    record(session_id, run.clone());
+    if let Some(approval) = approval {
+        product::authorize(state, session_id, approval).await?;
+    }
+    if !state.hub.code_scope_is_current(observed.session())
+        || !state.hub.language_servers_allowed(session_id)
+    {
+        return Err("restricted: session scope changed".into());
+    }
+    {
+        let mut all = RUNS.lock();
+        if let Some(existing) = all
+            .get(session_id)
+            .and_then(|runs| runs.get(check_id))
+            .filter(|run| run.run_id == operation || run.state == RunState::Running)
+        {
+            return Ok(Started::Existing(existing.clone()));
+        }
+        record_locked(&mut all, session_id, run.clone());
+    }
     let state = Arc::clone(state);
     let session = session_id.to_owned();
     let initial = run.clone();

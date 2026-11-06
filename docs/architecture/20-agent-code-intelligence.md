@@ -166,7 +166,12 @@ worktree that no Code pane holds under one deterministic legacy owner per
 session (`cowboy-agent-<session>`), so a retry or Controller restart re-adopts
 rather than leaks. Agent holdings are a bounded share below interactive use:
 4 per session, 8 per Machine, at most 2 agent-warmed worktrees per Machine;
-they are released after 5 minutes idle or when the switch is off. Gates 1 and
+an independent Controller task checks every 30 seconds for holdings idle for
+5 minutes or with the switch off. Cleanup waits for in-flight opens, rechecks
+idle state before closing, and frees capacity only after a confirmed close.
+An unknown close keeps the owner fenced and counted; it is not retried under
+the same owner or redirected to a replacement worktree. Reads do not wait for
+unrelated idle cleanup. Gates 1 and
 2 hold for opens (target-confined admission, same-process recovery). Gate 4 is
 met by counts only: language-server RSS/CPU are not measured, and navigation
 and synchronization Unknowns keep their own fences. Holdings are process-local:

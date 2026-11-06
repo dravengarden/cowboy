@@ -113,6 +113,16 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
   Review polls it while a source file is open, annotates that file's findings
   beside the language engine's diagnostics and states, per run, when it ran:
   findings are evidence for the files as the check saw them.
+- `POST /checks` explicitly runs a declared check with `{check, operation, epoch}`.
+  It requires a current product Operator with session mutation authority.
+  The operation is a nonempty ASCII alphanumeric/hyphen ID of at most 128 bytes;
+  unknown fields are rejected. The epoch comes from `GET /checks`.
+  Success returns `accepted` or `existing`; a changed epoch returns 409
+  `epoch_changed`, and definite pre-execution refusal returns `refused` with a
+  reason (403 restricted, 404 absent declaration, 503 unavailable).
+  Unresolved requests remain 409 and must retain their operation ID. Receipts
+  are process-local, capped at 64 per session and 4,096 globally without eviction;
+  capacity refusal is 429/503. Restart rejects old requests rather than replaying them.
 - `GET /changes` returns normalized working-tree change records, with line
   counts where Git has them, and the revision of that exact status snapshot. Each record may carry a
   `fingerprint` that changes whenever that entry's diff can: its Git status,

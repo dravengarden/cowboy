@@ -28,36 +28,40 @@ function checks(runs: CodeCheckRun[]): CodeChecks {
   return {
     apiVersion: 1,
     allowed: true,
-    declared: [{
-      id: "clippy",
-      title: "Clippy",
-      format: "cargo-json",
-      timeoutSeconds: 600,
-    }],
+    declared: [
+      {
+        id: "clippy",
+        title: "Clippy",
+        format: "cargo-json",
+        timeoutSeconds: 600,
+      },
+    ],
     runs,
   };
 }
 
-const findings = checks([run({
-  diagnostics: [
-    {
-      path: "src/main.rs",
-      line: 3,
-      column: 5,
-      severity: "error",
-      code: "E0425",
-      message: "cannot find value",
-    },
-    {
-      path: "./src/main.rs",
-      line: 9,
-      column: 0,
-      severity: "warning",
-      message: "unused",
-    },
-    { path: "src/lib.rs", line: 1, column: 1, severity: "note", message: "x" },
-  ],
-})]);
+const findings = checks([
+  run({
+    diagnostics: [
+      {
+        path: "src/main.rs",
+        line: 3,
+        column: 5,
+        severity: "error",
+        code: "E0425",
+        message: "cannot find value",
+      },
+      {
+        path: "./src/main.rs",
+        line: 9,
+        column: 0,
+        severity: "warning",
+        message: "unused",
+      },
+      { path: "src/lib.rs", line: 1, column: 1, severity: "note", message: "x" },
+    ],
+  }),
+]);
 
 test("check findings for a file become 0-based viewer diagnostics", () => {
   const diagnostics = checkDiagnosticsForPath(findings, "src/main.rs");
@@ -74,23 +78,21 @@ test("check findings for a file become 0-based viewer diagnostics", () => {
 
 test("check diagnostics join the language engine's, or stand alone", () => {
   const diagnostics = checkDiagnosticsForPath(findings, "src/main.rs");
-  const synthesized = withCheckDiagnostics(
-    undefined,
-    "src/main.rs",
-    diagnostics,
-  );
+  const synthesized = withCheckDiagnostics(undefined, "src/main.rs", diagnostics);
   assertEquals(synthesized?.diagnostics.length, 2);
   assertEquals(synthesized?.semanticTokens, []);
   const language: CodeLanguage = {
     apiVersion: 1,
     path: "src/main.rs",
     version: [],
-    diagnostics: [{
-      start: { row: 0, column: 0 },
-      end: { row: 0, column: 1 },
-      severity: 1,
-      message: "lsp",
-    }],
+    diagnostics: [
+      {
+        start: { row: 0, column: 0 },
+        end: { row: 0, column: 1 },
+        severity: 1,
+        message: "lsp",
+      },
+    ],
     inlayHints: [],
     semanticTokens: [1, 2, 3, 0, 0],
   };
@@ -108,12 +110,13 @@ test("the status line counts this file's findings and dates each run", () => {
   assertEquals(status?.severity, "error");
   assertEquals(status?.summary, "Checks · 1 error, 1 warning in this file");
   assert(status?.detail.includes("Clippy: failed 4 min ago"));
-  assert(
-    status?.detail.includes("3 findings, 1 error, 1 warning in this file"),
-  );
+  assert(status?.detail.includes("3 findings, 1 error, 1 warning in this file"));
   const elsewhere = checkStatusSummary(findings, "README.md", NOW);
-  assertEquals(elsewhere?.severity, "success");
-  assertEquals(elsewhere?.summary, "Checks · no findings in this file");
+  assertEquals(elsewhere?.severity, "warning");
+  assertEquals(
+    elsewhere?.summary,
+    "Checks incomplete or failed · no findings reported in this file",
+  );
   const running = checkStatusSummary(
     checks([run({ state: "running", finishedAtMs: undefined })]),
     "src/main.rs",
@@ -121,4 +124,19 @@ test("the status line counts this file's findings and dates each run", () => {
   );
   assertEquals(running?.severity, "info");
   assertEquals(running?.summary, "Checks running · Clippy");
+});
+
+test("failed, timed-out and truncated checks never show a green empty result", () => {
+  for (const overrides of [
+    { state: "error" as const },
+    { state: "timed_out" as const },
+    { state: "passed" as const, truncated: true },
+    { state: "passed" as const, outputTruncated: true },
+  ]) {
+    assertEquals(checkStatusSummary(checks([run(overrides)]), "a", NOW)?.severity, "warning");
+  }
+  assertEquals(
+    checkStatusSummary(checks([run({ state: "passed" })]), "a", NOW)?.severity,
+    "success",
+  );
 });

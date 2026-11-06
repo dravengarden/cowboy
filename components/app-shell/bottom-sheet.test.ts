@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "../../tools/test-assert.ts";
+import { ok as assert, deepStrictEqual as assertEquals } from "node:assert/strict";
 
 const source = await readFile(
   new URL("bottom-sheet.tsx", import.meta.url), "utf8",
