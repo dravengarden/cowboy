@@ -84,6 +84,22 @@ before the lease leaves Prepared and again under the active-map write lock
 before dispatch. Unresolved opens and unresolved navigation remain
 process-wide fences: their native IDs are not known.
 
+## Legacy path holdings (Zed 1.26.0)
+
+Legacy Open retains the original resolved key before dispatch and the native
+buffer ID before returning. Repeating the same request cannot retarget a
+changed symlink or adopt a replacement native ID. Legacy Close uses that
+holding, without resolving the filesystem again, so deletion and renaming do
+not strand a known resource. Identity validation and confirmed native release
+share the active-map write lock. Other owners, including interactive panes,
+remain held. Missing replies retain the pin and the existing native fences.
+
+An interrupted Open is resolved through the same-process recovery above before
+Close can free its reservation. A known holding is released only by its exact
+native ID; a recovered orphan is never adopted just to close it. The bounded
+legacy registry serializes its own opens and closes; it is runtime-local and
+does not provide Controller-restart inventory or Machine-wide resource budgets.
+
 ## Evidence and limits
 
 Source tests cover cancellation at all three native awaits, malformed replies,

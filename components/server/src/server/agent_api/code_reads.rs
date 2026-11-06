@@ -21,6 +21,18 @@ use crate::core::SessionMeta;
 mod acquire;
 mod diagnostics;
 
+pub(in crate::server) async fn maintain_holdings(state: std::sync::Arc<AppState>) {
+    let mut shutdown = state.shutdown.clone();
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => break,
+            _ = tick.tick() => acquire::release_stale(&state).await,
+        }
+    }
+}
+
 /// Smaller than Review's bound: replies pass the 256 KiB broker limit.
 const MAX_AGENT_LIMIT: usize = 200;
 

@@ -55,7 +55,7 @@ async function capture(name: string, selectors: string[], sideInset = 0) {
       const n=document.querySelector(selector);if(!n)throw new Error('Missing '+selector);
       const r=n.getBoundingClientRect();
       if(r.top<innerHeight/2 || r.bottom>innerHeight+1 || r.left<${sideInset} || r.right>innerWidth-${sideInset}+1) throw new Error('Unreachable '+selector+' '+JSON.stringify(r));
-      if(n.matches('button') && (r.height<44 || r.width<44))throw new Error('Small target '+selector);
+      if(n.matches('button') && (r.height<44 || r.width<44))throw new Error('Small target '+selector+' '+JSON.stringify(r));
       return {selector,x:r.x,y:r.y,width:r.width,height:r.height};
     });
     if(document.documentElement.scrollWidth>innerWidth)throw new Error('Page overflow');
@@ -118,7 +118,7 @@ async function navigationActions() {
 async function run(p: FixturePage) {
   await viewport(390, 844);
   await until("typeof preview==='function'");
-  await p.evaluate("void(globalThis.fixture=preview(true,false,true))");
+  await p.evaluate("void(globalThis.fixture=preview(true,false,true,false,false,true))");
   await until(
     "document.querySelector('[data-review-unread]')?.getAttribute('aria-label')==='51 unread'",
   );
@@ -315,12 +315,18 @@ async function reviewFilesAndDiff(p: FixturePage) {
     `Array.from(document.querySelectorAll('[role="button"]')).find(n=>n.textContent?.startsWith('app.ts'))?.click()`,
   );
   await until("!!document.querySelector('[aria-label=\"Mark reviewed\"]')");
+  await until("!!document.querySelector('[data-review-check-action=\"lint\"]')");
   await readingSizes("diff", [
+    '[data-review-check-action="lint"]',
     '[aria-label="Next hunk"]',
     '[aria-label="Mark reviewed"]',
     '[aria-label="Next change"]',
     '[aria-label="Open Git changes sidebar"]',
   ]);
+  await click('[data-review-check-action="lint"]');
+  await until("fixture.requests.some(r=>r.startsWith('POST ') && r.endsWith('/checks'))");
+  await until("!!document.querySelector('[data-review-check-status]')");
+  await capture("diff-check-completed", ['[data-review-check-action="lint"]']);
   await click('[aria-label="Mark reviewed"]');
   await until("!!document.querySelector('[aria-label=\"Mark unreviewed\"]')");
   await click('[aria-label="Next change"]');

@@ -440,7 +440,7 @@ zed-plugin-conformance ADAPTER SERVER:
 # TMPDIR=/tmp keeps the private server's Unix socket paths within their limit.
 zed-native-sync-conformance SERVER:
     cargo build --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml --example navigation_lsp
-    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export TMPDIR=/tmp; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_NATIVE_SYNC_SERVER="$1"; exec cargo test --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml sync_native::connected::immutable_native_sync -- --ignored --exact --nocapture' conformance "{{SERVER}}"
+    COWBOY_TEST_NAVIGATION_LSP="$(cargo metadata --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug/examples/navigation_lsp")')" unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export TMPDIR=/tmp; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_NATIVE_SYNC_SERVER="$1"; exec cargo test --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml sync_native::connected::immutable_native_sync -- --ignored --exact --nocapture' conformance "{{SERVER}}"
 
 # The same isolated gate also drives the exact distributable adapter's socket.
 zed-native-navigation-conformance ADAPTER SERVER:

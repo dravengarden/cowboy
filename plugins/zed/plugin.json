@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "zed",
-  "version": "1.25.0",
-  "component_release": "3.72.0",
+  "version": "1.26.0",
+  "component_release": "3.83.0",
   "publisher": "cowboy-first-party",
   "kind": "code_intelligence",
   "entrypoint": "contract.json",
