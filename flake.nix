@@ -256,6 +256,7 @@
         ./worker-generation.txt
         ./src/acp.rs
         ./src/acp_subagents.rs
+        ./src/artifact_refs.rs
         ./src/agent_model.rs
         ./src/agent_sink.rs
         ./src/bin/cowboy-codex-app-server.rs

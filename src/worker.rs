@@ -80,7 +80,7 @@ pub struct Shared {
 
 struct ManagedRound {
     ready: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
-    marker: Arc<Mutex<Option<crate::managed_calls::round::RoundMarker>>>,
+    marker: Arc<Mutex<Option<crate::managed_call_round::RoundMarker>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,7 +236,7 @@ impl Shared {
             (block.get("type").and_then(serde_json::Value::as_str) == Some("image"))
                 .then(|| block.get("data").and_then(serde_json::Value::as_str))
                 .flatten()
-                .and_then(crate::artifacts::large_image_digest)
+                .and_then(crate::artifact_refs::large_image_digest)
         });
         let mut stored = self.echo_artifacts.lock();
         for digest in digests {
@@ -270,7 +270,7 @@ impl RemoteSink {
         let runtime = match event {
             Event::Update { mut update } => {
                 let mut stored = self.shared.echo_artifacts.lock();
-                crate::artifacts::reference_echoed_image(&mut update, stored.make_contiguous());
+                crate::artifact_refs::reference_echoed_image(&mut update, stored.make_contiguous());
                 drop(stored);
                 RuntimeEvent::Update { update, cmid }
             }
@@ -346,7 +346,7 @@ impl AgentSink for RemoteSink {
                 .map(|round| Some(round.prompt_meta()))
                 .ok_or_else(|| "managed call round is unavailable".to_owned());
         }
-        crate::managed_calls::round::read_round(&self.shared.workspace_path)
+        crate::managed_call_round::read_round(&self.shared.workspace_path)
             .map(|round| Some(round.prompt_meta()))
             .ok_or_else(|| "managed call round is unavailable".to_owned())
     }
@@ -1982,8 +1982,8 @@ mod tests {
         assert_eq!(contents.len(), 3);
         assert!(contents[0].get("data").is_none());
         assert_eq!(
-            contents[0][crate::artifacts::ECHO_ARTIFACT_FIELD],
-            crate::artifacts::large_image_digest(image(1)["data"].as_str().unwrap()).unwrap()
+            contents[0][crate::artifact_refs::ECHO_ARTIFACT_FIELD],
+            crate::artifact_refs::large_image_digest(image(1)["data"].as_str().unwrap()).unwrap()
         );
         assert_eq!(contents[1], image(2), "an unstored image stays inline");
         assert_eq!(contents[2], image(1), "only prompt echoes are referenced");

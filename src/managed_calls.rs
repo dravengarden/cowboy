@@ -8,7 +8,9 @@ pub mod gateway;
 #[cfg(all(unix, feature = "machine-host"))]
 pub mod host;
 #[cfg(unix)]
-pub mod round;
+/// Declared at the crate root (`crate::managed_call_round`) so the worker can
+/// name round markers without depending on the rest of managed calls.
+pub use crate::managed_call_round as round;
 #[cfg(all(unix, feature = "machine-host"))]
 pub mod snapshot;
 

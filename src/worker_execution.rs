@@ -219,7 +219,7 @@ impl Client {
     pub async fn managed_round(
         &self,
         profile: cowboy_provider_sdk::ManagedRuntimeProfile,
-    ) -> Result<crate::managed_calls::round::RoundMarker> {
+    ) -> Result<crate::managed_call_round::RoundMarker> {
         use base64::Engine as _;
         let Response::Ready { initialization, .. } = self.call(Command::Describe).await? else {
             bail!("execution environment unavailable");
@@ -253,10 +253,10 @@ impl Client {
                 .context("managed round is unreadable")?,
         )?;
         ensure!(
-            bytes.len() as u64 <= crate::managed_calls::round::MAX_ROUND_BYTES,
+            bytes.len() as u64 <= crate::managed_call_round::MAX_ROUND_BYTES,
             "managed round exceeds its limit"
         );
-        let round: crate::managed_calls::round::RoundMarker = serde_json::from_slice(&bytes)?;
+        let round: crate::managed_call_round::RoundMarker = serde_json::from_slice(&bytes)?;
         ensure!(round.schema == 1, "unsupported managed round");
         Ok(round)
     }

@@ -30,6 +30,8 @@ pub mod agent_model;
 #[cfg(feature = "full")]
 pub mod agent_sink;
 #[cfg(feature = "full")]
+pub mod artifact_refs;
+#[cfg(feature = "full")]
 pub mod artifacts;
 #[cfg(feature = "full")]
 pub mod auth_plugins;
@@ -116,6 +118,9 @@ pub mod machine_lanes;
 pub use cowboy_wire::machine_protocol;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_transport;
+#[cfg(all(unix, any(feature = "full", feature = "machine-host")))]
+#[path = "managed_calls/round.rs"]
+pub mod managed_call_round;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod managed_calls;
 #[cfg(feature = "full")]
