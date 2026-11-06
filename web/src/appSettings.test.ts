@@ -99,7 +99,7 @@ test("Code chrome uses Agent instead of a local settings sheet", () => {
     assert(switcher.includes("height: 44"));
     assert(switcher.includes('alignItems: "center"'));
     assert(switcher.includes('boxSizing: "border-box"'));
-    assert(switcher.includes('fontSize: "clamp(20px, 1.5rem, 28px)"'));
+    assert(switcher.includes('fontSize: "1.5rem"'));
     assert(switcher.includes("theme.palette.primary.main"));
     assert(switcher.includes("disableRipple"));
     assert(switcher.includes("dataset.touchActivated"));

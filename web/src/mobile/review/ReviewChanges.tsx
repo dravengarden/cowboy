@@ -61,7 +61,6 @@ export function ReviewChanges({
   drawer = false,
   onClose,
   refreshToken = 0,
-  onBrowseFiles,
   linkedSession,
   compact = false,
   documentsOnly = false,
@@ -86,7 +85,6 @@ export function ReviewChanges({
   drawer?: boolean;
   onClose?: () => void;
   refreshToken?: number;
-  onBrowseFiles?: () => void;
   /** A linked session's worktree, for a session with nothing of its own. */
   linkedSession?: { title: string; onOpen: () => void } | undefined;
   compact?: boolean;
@@ -404,7 +402,7 @@ export function ReviewChanges({
           ? (
             <ReviewEmptyState comparisonLabel={reviewCompareLabel(comparison, scenarios, comparisons)}
               compared={!!comparison} documentsOnly={documentsOnly} target={target} head={head}
-              repository={repository} onBrowseFiles={onBrowseFiles} linkedSession={linkedSession} />
+              repository={repository} linkedSession={linkedSession} />
           )
           : listedCount === 0
           ? (
