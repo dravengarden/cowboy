@@ -190,6 +190,7 @@ import { applyEnvelope, mergeEvents, containsSeq } from "./storeTimeline";
 import { conn } from "./clientConnection";
 import { createReconnectScheduler } from "./reconnectScheduler";
 import { createLivenessWatch } from "./livenessWatch";
+import { createOutageTracker } from "./outageTracker";
 
 /// One staged message — a queued prompt or a draft. SERVER-AUTHORITATIVE: the
 /// daemon owns the per-session queue/drafts and the drain (next-on-turn-end), so
@@ -505,8 +506,7 @@ function retainTranscriptSessions(valid: ReadonlySet<string>): void {
 // open/close into it and reads back the backoff delay. The only reconnect state
 // kept here is the single pending attempt (reconnectScheduler.ts).
 const reconnect = createReconnectScheduler();
-let outageStartedAt: number | undefined;
-let reconnectAttempts = 0;
+const outage = createOutageTracker();
 let nextConnectReason = "initial";
 
 function clearReconnectTimer(): void {
@@ -642,7 +642,7 @@ function reconnectNow(reason: string): void {
     visibility: document.visibilityState,
     network_online: navigator.onLine,
   });
-  outageStartedAt ??= Date.now();
+  outage.begin();
   socket = undefined;
   socketReady = false;
   clearReconnectTimer();
@@ -2075,7 +2075,7 @@ function scheduleReconnect(delay: number): void {
   if (reconnect.pending) return;
   reportClientLog("info", "websocket_reconnect_scheduled", "Cowboy WebSocket reconnect scheduled", {
     delay_ms: delay,
-    attempt: reconnectAttempts + 1,
+    attempt: outage.attempts + 1,
   });
   reconnect.schedule(delay, () => {
     nextConnectReason = "backoff";
@@ -2224,7 +2224,7 @@ function openSocket(): void {
         notify("The Service dataset changed. Reload before sending; existing local records are retained.", "error");
         return;
       }
-      outageFailures += 1;
+      outage.countFailure();
       globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
       scheduleReconnect(conn.connectionLost());
     }
@@ -2246,12 +2246,12 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
   const proto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
   const connectStartedAt = performance.now();
   const connectReason = nextConnectReason;
-  const reconnecting = outageStartedAt !== undefined;
+  const reconnecting = outage.active;
   const connectionSpan = startClientSpan("connect", { connection: reconnecting ? "reconnect" : "initial", reason: connectReason });
-  if (reconnecting) reconnectAttempts += 1;
+  if (reconnecting) outage.countAttempt();
   reportClientLog("info", "websocket_connect_attempt", "Cowboy WebSocket connection attempt", {
     reason: connectReason,
-    attempt: reconnecting ? reconnectAttempts : 0,
+    attempt: reconnecting ? outage.attempts : 0,
     reconnecting,
     network_online: navigator.onLine,
     visibility: document.visibilityState,
@@ -2305,7 +2305,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     if (socket === ws && ws.readyState === WebSocket.CONNECTING) {
       reportClientLog("warn", "websocket_connect_timeout", "Cowboy WebSocket upgrade timed out", {
         reason: connectReason,
-        attempt: reconnecting ? reconnectAttempts : 0,
+        attempt: reconnecting ? outage.attempts : 0,
         timeout_ms: 8000,
       });
       ws.close();
@@ -2321,9 +2321,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     connectionSpan?.end();
     const readyAt = performance.now();
     const connectDurationMs = readyAt - connectStartedAt;
-    const outageDurationMs = outageStartedAt === undefined
-      ? 0
-      : Math.max(0, Date.now() - outageStartedAt);
+    const outageDurationMs = outage.durationMs();
     reportClientMetric("websocket_connect_duration_ms", connectDurationMs, {
       connection: reconnecting ? "reconnect" : "initial",
     });
@@ -2333,15 +2331,12 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     }
     reportClientLog("info", "websocket_ready", "Cowboy WebSocket admitted and ready", {
       reason: connectReason,
-      attempt: reconnecting ? reconnectAttempts : 0,
+      attempt: reconnecting ? outage.attempts : 0,
       reconnecting,
       connect_duration_ms: connectDurationMs,
       outage_duration_ms: outageDurationMs,
     });
-    outageStartedAt = undefined;
-    reconnectAttempts = 0;
-    outageFailures = 0;
-    lastLiveAt = Date.now();
+    outage.recovered();
     setState({ ...state, connected: true });
     conn.connectionReady();
     inspectLegacyRecordsOnce();
@@ -2383,7 +2378,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     openedAt = performance.now();
     reportClientLog("info", "websocket_transport_open", "Cowboy WebSocket transport opened", {
       reason: connectReason,
-      attempt: reconnecting ? reconnectAttempts : 0,
+      attempt: reconnecting ? outage.attempts : 0,
       reconnecting,
       transport_duration_ms: openedAt - transportStartedAt,
     });
@@ -2429,11 +2424,11 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     liveBootstrapped = false;
     prefetch.cancel();
     stopLiveness();
-    if (ready) lastLiveAt = Date.now();
-    outageFailures += 1;
+    if (ready) outage.markLive();
+    outage.countFailure();
     setState({ ...state, connected: false });
     reconcileStallWatchdogsForEverySession();
-    outageStartedAt ??= Date.now();
+    outage.begin();
     reportClientLog("warn", "websocket_close", "Cowboy WebSocket disconnected", {
       code: event.code,
       clean: event.wasClean,
@@ -2481,7 +2476,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     if (socket !== ws) return;
     reportClientLog("error", "websocket_error", "Cowboy WebSocket failed", {
       reason: connectReason,
-      attempt: reconnecting ? reconnectAttempts : 0,
+      attempt: reconnecting ? outage.attempts : 0,
       ready_state: ws.readyState,
       network_online: navigator.onLine,
     });
@@ -2588,8 +2583,6 @@ const replica = createReplica(syncDatabase, {
 let machinesSource: "none" | "replica" | "live" = "none";
 let retainedReplicaKey = "";
 let datasetFenced = false;
-let outageFailures = 0;
-let lastLiveAt: number | undefined;
 
 function withoutReplicaSyncedAt(current: State): Omit<State, "replicaSyncedAt"> {
   const { replicaSyncedAt: _replicaSyncedAt, ...rest } = current;
@@ -2622,7 +2615,7 @@ async function hydrateReplica(layoutRestored: Promise<unknown>): Promise<void> {
       sessionsSource: "replica",
       replicaSyncedAt: sessionsResult.value.receivedAt,
     });
-    lastLiveAt ??= sessionsResult.value.receivedAt;
+    outage.restoreLastLive(sessionsResult.value.receivedAt);
     commitSessions();
   }
   if (
@@ -2985,14 +2978,14 @@ function syncStatusInput(): SyncStatusInput {
     connected: state.connected,
     socket: socket === undefined ? "none" : open ? "open" : "connecting",
     online: globalThis.navigator?.onLine ?? true,
-    attempts: outageFailures,
+    attempts: outage.failures,
     ...(reconnect.retryAt !== undefined ? { retryAt: reconnect.retryAt } : {}),
     ...(capacity !== undefined ? { capacity: capacity.status } : {}),
     ...(capacity?.position !== undefined && capacity.position !== null ? { position: capacity.position } : {}),
     pausedForAuth: productSessionPausedForAuth,
     fenced: datasetFenced,
     silenceMs: open && liveness.lastMessageAt > 0 ? Math.max(0, Date.now() - liveness.lastMessageAt) : 0,
-    ...(lastLiveAt !== undefined ? { lastLiveAt } : {}),
+    ...(outage.lastLiveAt !== undefined ? { lastLiveAt: outage.lastLiveAt } : {}),
     outbox: outboxSummary(),
     updateReady: false,
   };
