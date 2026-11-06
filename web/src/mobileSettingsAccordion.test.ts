@@ -28,7 +28,7 @@ test("mobile Settings uses an index and one lightweight detail route", () => {
   assert(appSource.includes('willChange: "transform, opacity"'));
   assert(appSource.includes("prefers-reduced-motion: reduce"));
   assert(appSource.includes("Back to Settings from"));
-  assert(appSource.includes('aria-label="Close settings"'));
+  assert(appSource.includes('label: "Close settings"'));
   assert(appSource.includes("data-mobile-settings-navigation"));
   assert(appSource.includes("KEYBOARD_INSET_CHANGED_EVENT"));
   assert(appSource.includes("settingsFocusRevealDelta("));
