@@ -103,7 +103,8 @@ import {
 } from "./pendingEditStore";
 import { revealPendingArrival } from "./pendingPanelState";
 import { linkTimeline } from "./derive";
-import { beginConversationClear } from "./conversationClearance";
+import { acknowledgedCommand, latestClearBoundary } from "./acknowledgedCommand";
+import { SessionActionCancelled, sessionActionSnapshot, waitForSessionAction, waitForSnapshot } from "./sessionActionWait";
 import { resetExploreAfterContextClear } from "./explore/exploreStore";
 import { optimisticQuestionKey } from "./explore/optimisticPages";
 import { notifyHaptic } from "./haptic";
@@ -885,25 +886,7 @@ function waitForState(
   predicate: (snapshot: State) => boolean,
   label: string,
 ): Promise<void> {
-  if (predicate(state)) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    let timeout = 0;
-    const done = (): void => {
-      canonicalAckListeners.delete(check);
-      globalThis.clearTimeout(timeout);
-      resolve();
-    };
-    const check = (): void => {
-      if (predicate(state)) done();
-    };
-    canonicalAckListeners.add(check);
-    timeout = globalThis.setTimeout(() => {
-      canonicalAckListeners.delete(check);
-      reject(new Error(`${label} was not acknowledged`));
-    }, NETWORK_ACTION_TIMEOUT_MS);
-    // Close the tiny send/register race against a synchronous test transport.
-    check();
-  });
+  return waitForSnapshot(() => state, canonicalAckListeners, predicate, label, NETWORK_ACTION_TIMEOUT_MS);
 }
 
 /** Composer clear must wait for the painted snapshot, not canonical reduce.
@@ -913,24 +896,7 @@ function waitForPresentedState(
   predicate: (snapshot: State) => boolean,
   label: string,
 ): Promise<void> {
-  if (predicate(presentedState)) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    let timeout = 0;
-    const done = (): void => {
-      listeners.delete(check);
-      globalThis.clearTimeout(timeout);
-      resolve();
-    };
-    const check = (): void => {
-      if (predicate(presentedState)) done();
-    };
-    listeners.add(check);
-    timeout = globalThis.setTimeout(() => {
-      listeners.delete(check);
-      reject(new Error(`${label} was not acknowledged`));
-    }, NETWORK_ACTION_TIMEOUT_MS);
-    check();
-  });
+  return waitForSnapshot(() => presentedState, listeners, predicate, label, NETWORK_ACTION_TIMEOUT_MS);
 }
 
 function transcriptDeliveryVisible(
@@ -952,21 +918,48 @@ function transcriptDeliveryVisible(
   );
 }
 
+let confirmedActionProbe = 0;
+function acknowledgeActionProbe(nonce: number): boolean {
+  if (!foregroundProbe.acknowledge(nonce)) return false;
+  confirmedActionProbe++;
+  return true;
+}
 function sendWithAck(
   command: Inbound,
   predicate: (snapshot: State) => boolean,
   label: string,
+  prepare?: () => void,
 ): Promise<void> {
-  const operation = startClientSpan("command", { operation: command.type, transport: "websocket" });
-  const started = performance.now();
-  if (!send(command)) {
-    operation?.end("error");
-    return Promise.reject(new Error(`${label} is unavailable while reconnecting`));
-  }
-  return waitForState(predicate, label).then(() => {
-    operation?.end();
-    reportClientDuration("command", performance.now() - started, { operation: command.type, transport: "websocket" });
-  }, (error) => { operation?.end("timeout"); throw error; });
+  if (!["reset_session", "delete_session", "trash_items"].includes(command.type)) return sendWithAckNow(command, predicate, label);
+  const sessionId = command.type === "reset_session" ? command.session_id : undefined;
+  const fingerprint = (): string => sessionId === undefined ? "" : JSON.stringify([
+    state.timelines.get(sessionId)?.at(-1)?.seq,
+    state.queues.get(sessionId), state.sessions.find((session) => session.id === sessionId)?.status,
+  ]);
+  const before = fingerprint();
+  const previousSocket = socket, previousProbe = confirmedActionProbe;
+  const ready = (): boolean => {
+    if (!isConnected()) return false;
+    if (socket === previousSocket && confirmedActionProbe === previousProbe) return false;
+    const machine = state.sessions.find((session) => session.id === sessionId)?.machine_id;
+    return !machine || machine === "local" || state.machines.some((item) => item.id === machine && item.connected);
+  };
+  return waitForSessionAction({ label, ready, reconnect: () => recoverSocket("session_action"),
+    prepare: async () => {
+      const connection = socket;
+      if (sessionId) await hydrateSession(sessionId, true, 0, true);
+      if (socket !== connection) throw new Error("Connection changed during sync; nothing was changed. Please try again.");
+    },
+    unchanged: () => fingerprint() === before,
+    execute: () => { prepare?.(); return sendWithAckNow(command, predicate, label); } });
+}
+
+function sendWithAckNow(
+  command: Inbound,
+  predicate: (snapshot: State) => boolean,
+  label: string,
+): Promise<void> {
+  return acknowledgedCommand(command, predicate, label, send, waitForState);
 }
 
 /** Apply one atomic UI intent that may span several ACP options. The Controller
@@ -1026,7 +1019,7 @@ export function deleteSession(sessionId: string, options: { quiet?: boolean } = 
       closingDeletes.add(sessionId);
     }
   }).catch((error: unknown) => {
-    if (!options.quiet) notify(deleteSessionFailureMessage(error));
+    if (!options.quiet && !(error instanceof SessionActionCancelled)) notify(deleteSessionFailureMessage(error));
     throw error;
   }).finally(() => {
     markDeletingSession(sessionId, false);
@@ -1441,7 +1434,7 @@ function setPagination(
 function handle(msg: Outbound): void {
   switch (msg.type) {
     case "connection_probe":
-      if (foregroundProbe.acknowledge(msg.nonce)) {
+      if (acknowledgeActionProbe(msg.nonce)) {
         const durationMs = performance.now() - foregroundProbeStartedAt;
         reportClientMetric("websocket_probe_duration_ms", durationMs);
         reportClientLog("info", "websocket_probe_succeeded", "Reused the existing Cowboy connection", {
@@ -1879,6 +1872,7 @@ async function hydrateSession(
   sessionId: string,
   replace = false,
   retryAttempt = 0,
+  strict = false,
 ): Promise<void> {
   const existing = sessionHydrations.get(sessionId);
   if (existing && !replace) return existing.promise;
@@ -1912,7 +1906,7 @@ async function hydrateSession(
         throw new Error(`session bootstrap failed: ${String(response.status)}`);
       }
       const bootstrap = (await response.json()) as SessionBootstrapResponse;
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) { if (strict) throw new Error("Conversation sync was interrupted; nothing was cleared."); return; }
       const applyHydratedConfigOptions = shouldApplyHydratedConfigOptions(
         configOptionsRevisionAtRequestStart,
         configOptionsRevisions.get(sessionId) ?? 0,
@@ -1929,11 +1923,7 @@ async function hydrateSession(
       receiveTaskAcknowledgements(sessionId, bootstrap.task_acknowledgements ?? []);
       // Repair cached subagent rows the bounded tail cannot (I5/I6). A
       // Controller without the contract leaves them as rendered (I7).
-      void reconcileSubagents(
-        sessionId,
-        bootstrap.subagent_state,
-        state.timelines.get(sessionId) ?? [],
-      ).catch((error: unknown) => console.warn("subagent reconciliation failed", error));
+      reconcileHydratedSubagents(sessionId, bootstrap);
       // HTTP 200 is not a source acknowledgement: creation can still be racing,
       // or another terminal may have removed it. Bound retries in both cases.
       retryableFailure = needsDraftSource(sessionId);
@@ -1941,6 +1931,7 @@ async function hydrateSession(
         session_id: sessionId, duration_ms: performance.now() - startedAt, retry_attempt: retryAttempt,
       });
     } catch (error) {
+      if (strict) throw error;
       retryableFailure = timedOut || !controller.signal.aborted;
       if (retryableFailure) {
         console.warn("session bootstrap failed", error);
@@ -1991,6 +1982,11 @@ async function hydrateSession(
   })();
   sessionHydrations.set(sessionId, { promise, controller });
   return promise;
+}
+
+function reconcileHydratedSubagents(sessionId: string, bootstrap: SessionBootstrapResponse): void {
+  void reconcileSubagents(sessionId, bootstrap.subagent_state, state.timelines.get(sessionId) ?? [])
+    .catch((error: unknown) => console.warn("subagent reconciliation failed", error));
 }
 
 /** Stop the running turn. Cancel is live-only (docs/offline-first-sync.md,
@@ -2940,7 +2936,10 @@ const authoredSendGate = createAuthoredSendGate({
   }),
 });
 export const hasPendingPriorSends = authoredSendGate.hasPending;
-const prepareAuthoredSend = authoredSendGate.prepare;
+const prepareAuthoredSend: typeof authoredSendGate.prepare = (...args) => {
+  if (sessionActionSnapshot()) return Promise.reject(new Error("Finish or cancel the pending session action before sending."));
+  return authoredSendGate.prepare(...args);
+};
 
 function outboxSummary(): SyncStatusInput["outbox"] {
   let pending = 0;
@@ -3326,7 +3325,7 @@ function trashCommand(
   settled: (snapshot: State) => boolean,
   label: string,
 ): Promise<void> {
-  const errorBefore = state.lastError?.seq ?? 0;
+  let errorBefore = state.lastError?.seq ?? 0;
   const refused = (snapshot: State): boolean =>
     (snapshot.lastError?.seq ?? 0) > errorBefore && snapshot.lastError?.sessionId === undefined;
   return sendWithAck(
@@ -3337,6 +3336,7 @@ function trashCommand(
     },
     (snapshot) => settled(snapshot) || refused(snapshot),
     label,
+    () => { errorBefore = state.lastError?.seq ?? 0; },
   ).then(() => {
     if (!settled(state) && refused(state)) throw new Error(state.lastError?.message ?? `${label} failed`);
   });
@@ -4069,6 +4069,7 @@ async function mutateQueueDurably<K extends keyof typeof qMut & string>(
   try {
     await before?.();
     const store = await durableQueue(sessionId);
+    if (sessionActionSnapshot() && ["submitPrompt", "activateDraft", "sendQueued", "forceQueued"].includes(name)) throw new Error("Finish or cancel the pending session action before sending.");
     return await store.mutateDurably(name, args, id);
   } catch (error) {
     // A preview is not a saved message. Keep the editor/source row as recovery,
@@ -5130,6 +5131,7 @@ export async function submitPrompt(
   text: string,
   attachments: Attachment[] = [],
 ): Promise<void> {
+  if (sessionActionSnapshot()) throw new Error("Finish or cancel the pending session action before sending.");
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
   if (await sendWithContextNotice(sessionId, trimmed, contentOf(trimmed, attachments))) return;
@@ -5330,22 +5332,14 @@ export function clearQueue(sessionId: string): Promise<void> {
 // `context_cleared` boundary after clearing memory + durable history. This is
 // the Clear composer action — NOT a slash command (no agent exposes `clear`).
 export function resetSession(sessionId: string): Promise<void> {
-  beginConversationClear(sessionId);
-  const previousBoundary = [...(state.timelines.get(sessionId) ?? [])]
-    .reverse()
-    .find((event) =>
-      event.kind === "update" && event.update.sessionUpdate === "context_cleared"
-    )?.seq ?? -1;
+  const previousBoundary = latestClearBoundary(state.timelines.get(sessionId));
   return sendWithAck(
     { type: "reset_session", session_id: sessionId },
-    (snapshot) =>
-      (snapshot.timelines.get(sessionId) ?? []).some((event) =>
-        event.seq > previousBoundary &&
-        event.kind === "update" &&
-        event.update.sessionUpdate === "context_cleared"
-      ),
+    (snapshot) => latestClearBoundary(snapshot.timelines.get(sessionId)) > previousBoundary,
     "Clear conversation",
-  );
+  ).catch((error: unknown) => {
+    if (!(error instanceof SessionActionCancelled)) notify(error instanceof Error ? error.message : "Could not clear the conversation.");
+  });
 }
 
 // Manually PAUSE / RESUME the queue drain (the ⏸ toggle). Paused holds the
@@ -5369,6 +5363,7 @@ export async function pauseQueueConfirmed(sessionId: string): Promise<void> {
 
 /** Overlay "Retry": re-run the last prompt of an errored/crashed turn. */
 export function retryTurn(sessionId: string): void {
+  if (sessionActionSnapshot()) return;
   send({ type: "retry_turn", session_id: sessionId });
 }
 

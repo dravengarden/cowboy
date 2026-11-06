@@ -25,7 +25,7 @@ test("Clear starts a page transition before the transcript is replaced", () => {
   assertEquals(seen, ["sess-1"]);
   assertEquals(conversationClearExitMs, 320);
   assertEquals(conversationClearEnterMs, 280);
-  assertEquals(storeSource.includes("beginConversationClear(sessionId);"), true);
+  assertEquals(storeSource.includes("acknowledgedCommand(command, predicate, label, send, waitForState)"), true);
   assertEquals(
     transcriptSource.includes("data-conversation-clear-phase={clearPhase === \"idle\""),
     true,

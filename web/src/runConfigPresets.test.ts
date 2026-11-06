@@ -214,11 +214,7 @@ test("mobile preset progress is delayed, acknowledged, and bounded", () => {
   )?.[0] ?? "";
   assertEquals(waitForState.startsWith("function waitForState("), true);
   assertEquals(
-    waitForState.includes("canonicalAckListeners.add(check)"),
-    true,
-  );
-  assertEquals(
-    waitForState.includes("canonicalAckListeners.delete(check)"),
+    waitForState.includes("waitForSnapshot(() => state, canonicalAckListeners,"),
     true,
   );
   assertEquals(waitForState.includes("listeners.add(check)"), false);
