@@ -163,7 +163,7 @@ impl Store {
             anyhow::ensure!(machine.rows_affected() == 1, "machine_unavailable");
             let recipient: Option<String> = sqlx::query_scalar("SELECT encryption_public_key FROM machines WHERE id=$1")
                 .bind(&completion.machine_id).fetch_one(&mut *tx).await?;
-            anyhow::ensure!(recipient.as_ref().is_some_and(|key| crate::admin::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint), "machine_enrollment_changed");
+            anyhow::ensure!(recipient.as_ref().is_some_and(|key| crate::digest::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint), "machine_enrollment_changed");
             let value: String = sqlx::query_scalar("SELECT value FROM provider_account_registries WHERE owner_user_id=$1")
                 .bind(owner).fetch_one(&mut *tx).await?;
             let registry: Registry = serde_json::from_str(&value)?;
@@ -290,7 +290,7 @@ impl Store {
                 "invalid_login_input"
             );
         }
-        let hash = crate::admin::hex_sha256(&serde_json::to_vec(input)?);
+        let hash = crate::digest::hex_sha256(&serde_json::to_vec(input)?);
         macro_rules! claim { ($db:expr) => {{
             let mut tx = $db.pool.begin().await?;
             let locked = sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")

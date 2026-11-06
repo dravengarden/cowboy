@@ -136,7 +136,7 @@ impl RemoteRuntime {
         self.shared
             .auth_recipient_key
             .as_ref()
-            .map(|key| crate::admin::hex_sha256(key.as_bytes()))
+            .map(|key| crate::digest::hex_sha256(key.as_bytes()))
     }
 
     /// The caller must authorize the durable revocation operation and exact

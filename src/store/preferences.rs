@@ -171,7 +171,7 @@ impl Store {
         if !valid(change) || !crate::managed_calls::valid_id(operation) {
             return Ok(PreferenceResult::Invalid("invalid_preferences"));
         }
-        let hash = crate::admin::hex_sha256(&serde_json::to_vec(change)?);
+        let hash = crate::digest::hex_sha256(&serde_json::to_vec(change)?);
         macro_rules! write { ($db:expr) => {{
             let mut tx = $db.pool.begin().await?;
             // Acquire the owner's writer lock before reading, including on SQLite.

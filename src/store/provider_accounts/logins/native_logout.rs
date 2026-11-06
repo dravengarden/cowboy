@@ -130,7 +130,7 @@ impl Store {
             ensure!(machine.rows_affected() == 1, "machine_unavailable");
             let key: Option<String> = sqlx::query_scalar("SELECT encryption_public_key FROM machines WHERE id=$1")
                 .bind(&completion.machine_id).fetch_one(&mut *tx).await?;
-            ensure!(key.is_some_and(|key| crate::admin::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint), "machine_enrollment_changed");
+            ensure!(key.is_some_and(|key| crate::digest::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint), "machine_enrollment_changed");
             let output = action()?;
             if record {
                 login.native_logout = Some(completion.clone());

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use url::Url;
 
-use crate::admin::hex_sha256;
+use crate::digest::hex_sha256;
 use crate::product_auth::new_session_token;
 
 pub const TRANSACTION_COOKIE: &str = "cowboy_oidc";
@@ -681,7 +681,7 @@ impl OidcProvider {
     pub fn cardea_product_device_id(&self, grant: &str) -> Result<String> {
         let config = self.cardea_device_configuration()?;
         Ok(
-            crate::admin::hex_sha256(&serde_json::to_vec(&serde_json::json!([
+            crate::digest::hex_sha256(&serde_json::to_vec(&serde_json::json!([
                 "cardea-device/v1",
                 config["issuer"],
                 config["client_id"],

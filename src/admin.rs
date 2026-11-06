@@ -311,16 +311,9 @@ pub fn disable_registration_token(policy: &mut RegistrationPolicy, token_id: &st
     Ok(())
 }
 
-pub fn hex_sha256(value: &[u8]) -> String {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(value)
-        .iter()
-        .fold(String::with_capacity(64), |mut output, byte| {
-            use std::fmt::Write as _;
-            write!(output, "{byte:02x}").expect("writing to a String cannot fail");
-            output
-        })
-}
+/// Kept for the Controller crate's existing paths; base-crate code names
+/// `crate::digest` directly so it does not depend on `admin`.
+pub use crate::digest::hex_sha256;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

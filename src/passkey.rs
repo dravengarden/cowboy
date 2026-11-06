@@ -795,7 +795,7 @@ impl PasskeyCeremonies {
         let mut entries = self.external.lock();
         trim_external_entries(&mut entries, now_ms);
         entries.insert(
-            crate::admin::hex_sha256(transaction_id.as_bytes()),
+            crate::digest::hex_sha256(transaction_id.as_bytes()),
             StoredExternalPasskey {
                 user_id: user_id.to_owned(),
                 session_id: session_id.to_owned(),
@@ -924,7 +924,7 @@ pub fn external_transaction_hash(transaction_id: &str) -> Result<String> {
                 .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')),
         "invalid external passkey ceremony"
     );
-    Ok(crate::admin::hex_sha256(transaction_id.as_bytes()))
+    Ok(crate::digest::hex_sha256(transaction_id.as_bytes()))
 }
 
 fn external_transaction_key(transaction_id: &str) -> Result<String> {

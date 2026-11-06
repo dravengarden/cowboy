@@ -3505,7 +3505,7 @@ impl SqliteStorage {
         if claim.enforce && claim.principal_class != "system" {
             let waiter_id = format!(
                 "wait-{}",
-                crate::admin::hex_sha256(claim.client_id.as_bytes())
+                crate::digest::hex_sha256(claim.client_id.as_bytes())
             );
             sqlx::query(
                 "INSERT INTO capacity_waiters (waiter_id, client_id, user_id, principal_class, \

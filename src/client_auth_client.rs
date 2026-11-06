@@ -205,7 +205,7 @@ impl DeviceCredentialManager {
         validate_base_url(&base_url)?;
         let state_dir = state_dir.map_or_else(default_auth_state_dir, Ok)?;
         prepare_private_directory(&state_dir)?;
-        let key = crate::admin::hex_sha256(base_url.as_str().as_bytes());
+        let key = crate::digest::hex_sha256(base_url.as_str().as_bytes());
         let credential_path = state_dir.join(format!("{}.json", &key[..24]));
         let lock_path = state_dir.join(format!("{}.lock", &key[..24]));
         let device_name = device_name.unwrap_or_else(default_device_name);

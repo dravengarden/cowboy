@@ -94,7 +94,7 @@ pub(super) async fn snapshot(
     };
     let profile = &completion.profile;
     if !shared.auth_recipient_key.as_ref().is_some_and(|key| {
-        crate::admin::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
+        crate::digest::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
     }) || meta.provider != profile.provider_id
         // A compatible later release keeps the login (see native_generation);
         // the Machine re-verifies the authentication contract at launch.
@@ -246,7 +246,7 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
         return Ok(false);
     };
     if !shared.auth_recipient_key.as_ref().is_some_and(|key| {
-        crate::admin::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
+        crate::digest::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
     }) {
         return Ok(false);
     }
