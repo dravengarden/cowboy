@@ -3,7 +3,7 @@ import {
   assertEquals,
   assertStrictEquals,
   assertThrows,
-} from "../../tools/test-assert.ts";
+} from "@std/assert";
 import {
   type KvStorage,
   persisted,
