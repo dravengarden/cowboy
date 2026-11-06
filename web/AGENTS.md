@@ -107,6 +107,19 @@ the peek, or freeze the session list to make a swipe cheaper.
 
 ## Desktop and mobile are separate products
 
+Mobile cover readers and inspectors use the shared `Sheet.islandContext` (or
+`MobileSheetContextDock` for direct DetentSheet owners) to place identity and
+status beside Back/Close. Use the identity action for Details, supporting facts
+in the horizontal information rail, and a separate action rail when multiple
+commands are useful. Do not hide common information just to shrink the dock.
+Empty rails consume no space. Avoid a duplicate
+top title/status bar. Preserve specialized multi-action navigators such as Tool
+details; use `hideMobileTitle` to remove redundant generic titles. Forms,
+editors, confirmation cards and connectivity notices retain their own surfaces.
+Reader scroll clearance must consume `--cowboy-sheet-dock-clearance` with a
+legacy fallback so large text cannot cover the last item. Details navigation
+must preserve the mounted transcript and its reading position.
+
 - Mobile is touch-first: single-task focus, large targets, progressive
   disclosure, safe system-keyboard behaviour, and native gestures.
 - Desktop is efficiency-first: keyboard-first operation, high information

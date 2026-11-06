@@ -765,7 +765,7 @@ export function DetentSheet(
     if (footer == null) {
       bodyPb = SAFE_BOTTOM;
     } else if (footerOverlay) {
-      bodyPb = `calc(76px + ${SAFE_BOTTOM})`;
+      bodyPb = `var(--cowboy-sheet-dock-clearance, calc(76px + ${SAFE_BOTTOM}))`;
     } else {
       bodyPb = 1;
     }

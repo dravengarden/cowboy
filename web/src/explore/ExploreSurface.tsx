@@ -38,7 +38,7 @@ import {
 import { createPortal } from "react-dom";
 import {
   DetentSheet,
-  MobileSheetActionGroup,
+  MobileSheetContextDock,
 } from "@cowboy/app-shell";
 import {
   type DesktopCommand,
@@ -1088,7 +1088,7 @@ function PageList({
             // clearance inside the scroll content so the final page can still
             // rest fully above the island at the real end.
             pb: onDismiss
-              ? "calc(76px + env(safe-area-inset-bottom, 0px))"
+              ? "var(--cowboy-sheet-dock-clearance, calc(76px + env(safe-area-inset-bottom, 0px)))"
               : 0.5,
             overflowAnchor: "none",
             ...(vimNavigation ? desktopScrollbarSx : {}),
@@ -1938,7 +1938,6 @@ export function MobilePageDock({
   const [open, setOpen] = useState(false);
   const [loadingDirectoryPageId, setLoadingDirectoryPageId] = useState<string | null>(null);
   const [loadingAdjacentPageId, setLoadingAdjacentPageId] = useState<string | null>(null);
-  const [pageDirectoryAwayFromBottom, setPageDirectoryAwayFromBottom] = useState(false);
   const pageDirectoryListRef = useRef<HTMLUListElement | null>(null);
   const [showPageTop, setShowPageTop] = useState(false);
   const [pendingPrevious, setPendingPrevious] = useState<{
@@ -2001,7 +2000,6 @@ export function MobilePageDock({
     // DetentSheet is transformed; direct nested-scroll assignment is reliable
     // on iOS where smooth Element.scrollTo() can be dropped.
     list.scrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
-    setPageDirectoryAwayFromBottom(false);
   }, []);
 
   useEffect(() => {
@@ -2347,22 +2345,10 @@ export function MobilePageDock({
         frosted
         cover
         footer={
-          <MobileSheetActionGroup
-            actions={[
-              {
-                key: "close",
-                label: "Close",
-                onPress: closePageDirectory,
-                icon: <Close aria-hidden fontSize="small" sx={{ transform: "translate(-0.75px, -0.5px)" }} />,
-              },
-              {
-                key: "latest",
-                label: "Scroll to latest page",
-                onPress: scrollPageDirectoryToLatest,
-                visible: pageDirectoryAwayFromBottom,
-                icon: <ArrowDownward aria-hidden sx={{ fontSize: "1.25em" }} />,
-              },
-            ]}
+          <MobileSheetContextDock
+            context={{ title: "Pages", status: pageIndex.loading && pageIndex.data === null ? "Loading…" : `${total}${pageIndex.data?.exact === false ? "+" : ""}` }}
+            onClose={closePageDirectory}
+            actions={[{ label: "Scroll to latest page", onActivate: scrollPageDirectoryToLatest, icon: <ArrowDownward /> }]}
           />
         }
         footerOverlay
@@ -2372,51 +2358,19 @@ export function MobilePageDock({
             // Consume DetentSheet's generic overlay-footer clearance so page
             // rows extend behind the floating Close island. PageList owns the
             // equivalent clearance inside its scrollable content instead.
-            height: "calc(100% + 76px + env(safe-area-inset-bottom, 0px))",
-            mb: "calc(-76px - env(safe-area-inset-bottom, 0px))",
+            height: "calc(100% + var(--cowboy-sheet-dock-clearance, calc(76px + env(safe-area-inset-bottom, 0px))))",
+            mb: "calc(-1 * var(--cowboy-sheet-dock-clearance, calc(76px + env(safe-area-inset-bottom, 0px))))",
             display: "flex",
             flexDirection: "column",
             minHeight: 0,
           }}
         >
-          <Stack
-            direction="row"
-            alignItems="center"
-            sx={{
-              minHeight: 52,
-              px: 2,
-              pt: 1,
-              flexShrink: 0,
-              overflow: "visible",
-            }}
-          >
-            <Typography
-              variant="h6"
-              sx={{ fontWeight: 750, lineHeight: 1.25, overflow: "visible" }}
-            >
-              Pages
-            </Typography>
-            {pageIndex.loading && pageIndex.data === null
-              ? (
-                <Skeleton
-                  aria-label="Loading page count"
-                  variant="text"
-                  width="2.5em"
-                  sx={{ ml: 1, fontSize: "0.75rem" }}
-                />
-              )
-              : (
-                <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                  {`${String(total)}${pageIndex.data?.exact === false ? "+" : ""}`}
-                </Typography>
-              )}
-          </Stack>
+
           <Box sx={{ flex: 1, minHeight: 0 }}>
             <PageList
               active={open}
               searchable={false}
               listElementRef={pageDirectoryListRef}
-              onAwayFromBottomChange={setPageDirectoryAwayFromBottom}
               pages={directoryPages}
               currentId={current?.id ?? null}
               firstOrdinal={Math.max(1, total - directoryPages.length + 1)}
