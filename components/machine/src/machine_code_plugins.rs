@@ -318,7 +318,20 @@ impl CodeRuntimeHost {
             && active.is_some()
             && route.generation != active;
         if route.target.is_none() || follow {
-            let (target, generation) = self.target(select()?).await?;
+            let selection = select()?;
+            // Looking for an existing observation must not cold-start an
+            // installed backend before the agent's acquisition budget runs.
+            // A configured legacy socket already belongs to another process;
+            // retain that read-only compatibility path without launching one.
+            ensure!(
+                !matches!(selection, CodeRuntimeSelection::Installed(_))
+                    || !matches!(
+                        payload["type"].as_str(),
+                        Some("bufferLanguage" | "bufferHover" | "bufferNavigate" | "bufferSymbols")
+                    ),
+                "buffer not open"
+            );
+            let (target, generation) = self.target(selection).await?;
             route.target = Some(target);
             route.generation = generation;
         }

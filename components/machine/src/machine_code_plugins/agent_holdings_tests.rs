@@ -4,6 +4,32 @@ use serde_json::json;
 const OWNER: &str = "cowboy-agent-3f3af1ecebbd1410ab417ec0d27bbfcb5d340e177ae159b59fc8626c2dfd9175-00000000000000000000000000000001";
 
 #[tokio::test]
+async fn passive_observation_cannot_start_a_backend_before_acquisition_admission() {
+    let root = PrivateRuntimeDirectory::create().unwrap();
+    let host = CodeRuntimeHost::default();
+    let plan = super::super::tests::fixture_plan(&root.0, "passive-cold");
+    for kind in [
+        "bufferLanguage",
+        "bufferHover",
+        "bufferNavigate",
+        "bufferSymbols",
+    ] {
+        let request = json!({"type":kind, "worktree":root.0, "path":"file.rs"});
+        let error = host
+            .request("fixture-code", &request, || {
+                Ok(CodeRuntimeSelection::Installed(plan.clone()))
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not open"), "{error}");
+        assert!(host.engines.lock().await.is_empty());
+        for route in host.routes.lock().await.values() {
+            assert!(route.lock().await.target.is_none());
+        }
+    }
+}
+
+#[tokio::test]
 async fn invalid_files_refuse_before_runtime_selection_or_owner_reservation() {
     use std::os::unix::fs::symlink;
     let root = PrivateRuntimeDirectory::create().unwrap();

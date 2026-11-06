@@ -247,12 +247,29 @@ production pin activation. The session fixture uses a short `/tmp` root;
 the initial long Nix-shell temporary path failed Unix socket startup before
 the scenario ran and is not included as accepted evidence.
 
+Hawk subsequently activated pin commit
+`53fcbb9500cc8648298ec221dbdd9f810a800615`, transaction
+`1793980312127758480-53fcbb9500cc` (`succeeded` / `committed`). Both existing
+idle workers actually cut over from `worker-4f248c87703274b63cd9` to
+`worker-39e0360cdcbff26cfa61`, verified by their executable paths, generation
+arguments and Machine cutover logs. Six missing-file production reads left
+`tracked: 0`; four subsequent existing Go files each returned `acquired: true`
+and `document_current`. The Machine reconnected ready, `/healthz` returned
+`ok`, and the public SPA returned HTTP 200 with `no-store`. This accepts the
+Hawk worker cutover, not an upgrade of the current OVH-hosted Provider session.
+
 Automatic acquisition now preflights regular files before selecting a runtime
 or reserving an owner. Missing files, directories and symlink components return
 a definite pre-dispatch refusal, avoiding an orphan reservation for inputs
 already known to be unusable. Native resolution remains authoritative: a file
 can change after preflight, and an uncertain dispatched request still retains
 its original ownership and capacity.
+
+Passive language/hover/navigation/symbol requests also refuse a cold installed
+runtime with `not open`. The first diagnostic observation therefore cannot
+launch a backend before the automatic acquisition budget. Reads through an
+already configured legacy socket retain their existing behavior; this does not
+launch a process or confer new buffer ownership.
 
 ### Baselines, attribution, matching
 
