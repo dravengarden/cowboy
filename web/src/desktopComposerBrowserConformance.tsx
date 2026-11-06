@@ -44,7 +44,7 @@ function check(value: unknown, message: string): asserts value {
 }
 
 /** Real toolbar, CodeMirror, command dispatcher and product theme; no account. */
-export async function runDesktopComposerBrowserConformance(): Promise<
+export async function runDesktopComposerBrowserConformance(observe?: () => Promise<void>): Promise<
   string[]
 > {
   const container = document.createElement("div");
@@ -293,8 +293,9 @@ export async function runDesktopComposerBrowserConformance(): Promise<
           `Idle Stop holds its slot before Send at ${width}/${font}`,
         );
         check(
-          button("compact").textContent?.includes("51%"),
-          `Compact keeps its reading at ${width}/${font}`,
+          button("compact").textContent?.includes("Compact") &&
+            !button("compact").querySelector("[data-composer-action-reading], .context-gauge-track"),
+          `Compact uses the shared icon and label at ${width}/${font}`,
         );
         for (const id of ["compact", "clear"]) {
           if (button(id).getClientRects().length === 0) continue;
@@ -341,6 +342,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
     document.documentElement.style.fontSize = originalFont;
     container.style.width = "960px";
     await tick();
+    await observe?.();
     results.push(
       "320–1560px panes and enlarged text retain visible delivery controls, right-edge Send, editor and selection",
     );
