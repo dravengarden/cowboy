@@ -1,5 +1,6 @@
 import { CheckRounded, CommitOutlined, FolderOutlined, History } from "@mui/icons-material";
 import { Box, Button, List, ListItemButton, Stack, Typography } from "@mui/material";
+import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import type { GitChangeTarget, GitCommitSummary } from "./codeApi";
 import { relativeDate, shortOid } from "./ReviewRepositoryRows";
 
@@ -32,6 +33,7 @@ export function ReviewEmptyState({
   onBrowseFiles?: (() => void) | undefined;
   linkedSession?: { title: string; onOpen: () => void } | undefined;
 }): React.JSX.Element {
+  const desktop = useSurfaceProfile().kind === "desktop";
   return (
     <Box
       data-review-empty-state
@@ -40,11 +42,11 @@ export function ReviewEmptyState({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        px: 1.5,
+        px: 0.75,
         py: 3,
       }}
     >
-      <Stack spacing={2} sx={{ width: "100%", maxWidth: "30rem", minWidth: 0 }}>
+      <Stack spacing={2} sx={{ width: "100%", maxWidth: desktop ? 720 : "none", minWidth: 0 }}>
         <Stack alignItems="center" spacing={0.75} sx={{ textAlign: "center" }}>
           <Box
             sx={{
@@ -57,20 +59,16 @@ export function ReviewEmptyState({
               color: "success.main",
             }}
           >
-            <CheckRounded sx={{ fontSize: "clamp(20px, 1.5rem, 28px)" }} />
+            <CheckRounded sx={{ fontSize: "1.5rem" }} />
           </Box>
-          <Typography sx={{ fontSize: "max(16px, 1.125rem)", fontWeight: 600 }}>
+          <Typography sx={{ fontSize: "1.125rem", fontWeight: 600 }}>
             {documentsOnly
               ? "No Markdown changes in this comparison"
               : compared
                 ? "No changes to review"
                 : "Working tree is clean"}
           </Typography>
-          <Typography
-            variant="body2"
-            color="text.secondary"
-            sx={{ fontSize: "max(12px, 0.875rem)" }}
-          >
+          <Typography variant="body2" color="text.secondary" sx={{ fontSize: "0.875rem" }}>
             {documentsOnly
               ? "This view includes Markdown files only."
               : compared
@@ -94,7 +92,7 @@ export function ReviewEmptyState({
             <Button
               data-review-linked-session
               onClick={linkedSession.onOpen}
-              sx={{ minHeight: 44, textTransform: "none", fontSize: "max(12px, 0.875rem)" }}
+              sx={{ minHeight: 44, textTransform: "none", fontSize: "0.875rem" }}
             >
               Review linked session
             </Button>
@@ -110,7 +108,7 @@ export function ReviewEmptyState({
                 px: 1.5,
                 borderRadius: 1,
                 textTransform: "none",
-                fontSize: "max(12px, 0.875rem)",
+                fontSize: "0.875rem",
                 bgcolor: "action.selected",
               }}
             >
@@ -127,7 +125,7 @@ export function ReviewEmptyState({
                 px: 1.5,
                 textTransform: "none",
                 color: "text.secondary",
-                fontSize: "max(12px, 0.875rem)",
+                fontSize: "0.875rem",
               }}
             >
               View history
@@ -147,11 +145,7 @@ function RecentActivity({
   if (!repository.commits.length) return null;
   return (
     <Box>
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        sx={{ px: 1, fontSize: "max(11px, 0.75rem)" }}
-      >
+      <Typography variant="caption" color="text.secondary" sx={{ px: 1, fontSize: "0.75rem" }}>
         Recent activity
       </Typography>
       <List disablePadding aria-label="Recent repository activity">
@@ -163,20 +157,20 @@ function RecentActivity({
           >
             <CommitOutlined
               sx={{
-                fontSize: "clamp(18px, 1.25rem, 24px)",
+                fontSize: "1.25rem",
                 color: "text.secondary",
                 flexShrink: 0,
               }}
             />
             <Box sx={{ minWidth: 0, flex: 1 }}>
-              <Typography noWrap sx={{ fontSize: "max(12px, 0.875rem)" }}>
+              <Typography noWrap sx={{ fontSize: "0.875rem" }}>
                 {commit.subject}
               </Typography>
               <Typography
                 variant="caption"
                 color="text.secondary"
                 noWrap
-                sx={{ display: "block", fontSize: "max(10px, 0.75rem)" }}
+                sx={{ display: "block", fontSize: "0.75rem" }}
               >
                 {commit.author} · {relativeDate(commit.authoredAt)} · {shortOid(commit.oid)}
               </Typography>
@@ -246,7 +240,7 @@ function EmptyFacts({
             <Typography
               component="dt"
               color="text.secondary"
-              sx={{ fontSize: "max(11px, 0.75rem)", lineHeight: 1.5 }}
+              sx={{ fontSize: "0.75rem", lineHeight: 1.5 }}
             >
               {label}
             </Typography>
@@ -255,7 +249,7 @@ function EmptyFacts({
               sx={{
                 m: 0,
                 overflowWrap: "anywhere",
-                fontSize: "max(11px, 0.75rem)",
+                fontSize: "0.75rem",
                 lineHeight: 1.5,
               }}
             >

@@ -43,11 +43,7 @@ export function ReviewContextButton({
           ...(mobile ? { px: 1, py: 0.5, borderRadius: "8px" } : {}),
         }}
       >
-        <Typography
-          variant="body2"
-          noWrap
-          sx={{ fontSize: "max(12px, 0.875rem)", fontWeight: 500 }}
-        >
+        <Typography variant="body2" noWrap sx={{ fontSize: "0.875rem", fontWeight: 500 }}>
           {title}
         </Typography>
         <Box
@@ -80,7 +76,7 @@ export function ReviewContextButton({
             variant="caption"
             noWrap
             title={branch}
-            sx={{ color: "text.secondary", fontSize: "max(10px, 0.75rem)", lineHeight: 1.4 }}
+            sx={{ color: "text.secondary", fontSize: "0.75rem", lineHeight: 1.4 }}
           >
             {branch}
             {changes ? ` · ${changes} uncommitted` : ""}
