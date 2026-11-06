@@ -1654,7 +1654,7 @@ export function ReviewApp({
           data-mobile-backdrop-chrome="true"
           sx={{
             flexShrink: 0,
-            borderTop: 1,
+            borderTop: navigationInline ? 0 : 1,
             borderColor: "divider",
             bgcolor: "background.default",
 

@@ -1,6 +1,5 @@
 import {
   CheckCircleOutline,
-  CloudDownloadOutlined,
   DescriptionOutlined,
   FolderOutlined,
   Refresh,
@@ -34,7 +33,7 @@ import {
 import { buildGitChangeTree } from "./gitChangeTree";
 import { reviewEntryKey } from "./diffNavigationModel";
 import { useReviewRecovery } from "./useReviewRecovery";
-import { ReviewComparisonButton } from "./ReviewComparisonButton";
+import { ReviewChangeControls } from "./ReviewChangeControls";
 import { ReviewComparePicker } from "./ReviewComparePicker";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
 import {
@@ -43,7 +42,6 @@ import {
   resolveReviewComparison,
   reviewCompareLabel,
   reviewCompareScenarios,
-  reviewFetchAge,
 } from "./reviewCompareModel";
 
 import { GitTreeRows } from "./ReviewChangeRows";
@@ -69,6 +67,8 @@ export function ReviewChanges({
   compact = false,
   documentsOnly = false,
   onPreview,
+  controlsContainer,
+  actionsContainer,
 }: {
   sessionId: string | undefined;
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
@@ -92,6 +92,8 @@ export function ReviewChanges({
   compact?: boolean;
   documentsOnly?: boolean;
   onPreview?: ((path: string) => void) | undefined;
+  controlsContainer?: HTMLElement | null | undefined;
+  actionsContainer?: HTMLElement | null | undefined;
 }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<{
     sessionId: string;
@@ -513,56 +515,12 @@ export function ReviewChanges({
             </Stack>
           )}
       </Box>
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={1}
-        data-review-change-controls sx={{ px: 1.25, flexShrink: 0, minHeight: 48, borderTop: 1, borderColor: "divider" }}
-      >
-        <ReviewComparisonButton label={reviewCompareLabel(comparison, scenarios, comparisons)}
-          disabled={comparison === undefined} onClick={() => setPickerOpen(true)} />
-        {result?.fetchAvailable && comparisonFetchable(comparison) && (
-          <NetworkIconButton
-            data-review-fetch
-            sx={{ width: 44, height: 44 }}
-            aria-label="Fetch this branch"
-            networkAction={fetchComparison}
-          >
-            <CloudDownloadOutlined fontSize="small" />
-          </NetworkIconButton>
-        )}
-        {queue.length > 0 && (
-          <Chip
-            data-review-unread
-            sx={{ minHeight: 44 }}
-            variant={unreadOnly ? "filled" : "outlined"}
-            color={unreadOnly ? "primary" : "default"}
-            aria-pressed={unreadOnly}
-            label={unreadCount === 0 ? "All viewed" : `${unreadCount} unread`}
-            onClick={() => setUnreadOnly((current) => !current)}
-          />
-        )}
-      </Stack>
-      {fetchError
-        ? (
-          <Typography
-            role="alert"
-            variant="caption"
-            color="error.main"
-            sx={{ mx: 1.75, mb: 0.5 }}
-          >
-            {fetchError}
-          </Typography>
-        )
-        : result?.fetchedAtMs !== undefined && (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ mx: 1.75, mb: 0.5 }}
-          >
-            {reviewFetchAge(result.fetchedAtMs, Date.now())}
-          </Typography>
-        )}
+      <ReviewChangeControls container={controlsContainer} actionsContainer={actionsContainer}
+        label={reviewCompareLabel(comparison, scenarios, comparisons)} disabled={comparison === undefined}
+        onCompare={() => setPickerOpen(true)} hasChanges={queue.length > 0}
+        unreadCount={unreadCount} unreadOnly={unreadOnly} onUnread={() => setUnreadOnly((current) => !current)}
+        fetchAvailable={!!result?.fetchAvailable && comparisonFetchable(comparison)} onFetch={fetchComparison}
+        fetchError={fetchError} fetchedAtMs={result?.fetchedAtMs} />
       <ReviewComparePicker
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}

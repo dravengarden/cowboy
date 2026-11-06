@@ -1,9 +1,17 @@
 import { MoreHoriz, SettingsOutlined } from "@mui/icons-material";
 import { Box, Button, IconButton, Stack } from "@mui/material";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useCallback, useState } from "react";
 import { openAppSettings } from "../../appSettings";
 import { Sheet } from "../../Sheet";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
+
+const DISMISS_ACTIONS_EVENT = "cowboy:review-dismiss-actions";
+
+/** Portal actions keep their React owner, so notify the DOM action host only
+ * after their handler has opened the destination. */
+export function dismissReviewActions(container: HTMLElement): void {
+  container.dispatchEvent(new Event(DISMISS_ACTIONS_EVENT, { bubbles: true }));
+}
 
 /** Secondary tools keep their place without taking space from the reader. */
 export function ReviewMoreActions({
@@ -12,6 +20,12 @@ export function ReviewMoreActions({
   children: (close: () => void) => ReactNode;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
+  const content = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return;
+    const dismiss = () => setOpen(false);
+    node.addEventListener(DISMISS_ACTIONS_EVENT, dismiss);
+    return () => node.removeEventListener(DISMISS_ACTIONS_EVENT, dismiss);
+  }, []);
   const surface = useSurfaceProfile();
   const close = () => setOpen(false);
   if (surface.kind === "desktop") {
@@ -54,6 +68,7 @@ export function ReviewMoreActions({
       >
         <Stack spacing={1} sx={{ px: 1, pb: 1 }}>
           <Box
+            ref={content}
             sx={{
               display: "flex",
               flexWrap: "wrap",

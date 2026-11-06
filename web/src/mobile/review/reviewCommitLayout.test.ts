@@ -8,6 +8,10 @@ const repositorySource = await readFile(
   new URL("./ReviewRepository.tsx", import.meta.url),
   "utf8",
 );
+const controlsSource = await readFile(
+  new URL("./ReviewRepositoryControls.tsx", import.meta.url),
+  "utf8",
+);
 const actionsSource = await readFile(
   new URL("./ReviewNavigationActions.tsx", import.meta.url),
   "utf8",
@@ -53,14 +57,14 @@ test("repository history opens commit content on the main review surface", () =>
 
 test("repository tabs use the shared segmented tabs", () => {
   // SegmentedTabs.test.ts pins the iOS selected-pill invariants.
-  const start = repositorySource.indexOf("<SegmentedTabs");
-  const tabs = repositorySource.slice(
+  const start = controlsSource.indexOf("<SegmentedTabs");
+  const tabs = controlsSource.slice(
     start,
-    repositorySource.indexOf("/>", start),
+    controlsSource.indexOf("/>", start),
   );
   assertStringIncludes(tabs, "data-mobile-repository-tabs");
   assertStringIncludes(tabs, 'aria-label="Repository views"');
-  assertEquals(repositorySource.includes('role="tab"'), false);
+  assertEquals(controlsSource.includes('role="tab"'), false);
 });
 
 test("repository header identifies the Machine and actual review root", () => {
