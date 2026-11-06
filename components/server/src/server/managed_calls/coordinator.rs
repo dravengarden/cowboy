@@ -19,9 +19,6 @@ use super::super::agent_tools;
 use super::super::background_tasks::CallOrigin;
 use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::execution;
-use crate::machine_protocol::{
-    AGENT_ACTION_PROTOCOL_VERSION, AGENT_API_PROTOCOL_VERSION, MANAGED_CALL_PROTOCOL_VERSION,
-};
 use crate::managed_calls::authority::Authority;
 use crate::managed_calls::lifecycle::{Record, State};
 use crate::managed_calls::protocol::{Action, Grant};
@@ -164,30 +161,17 @@ fn reconcile(state: &Arc<AppState>) {
         });
         for (parent, authority) in desired {
             let machine = authority.placement().machine_id.clone();
-            let Some((connection, protocol)) = state.machine_control.connection_protocol(&machine)
-            else {
+            let Some((connection, _)) = state.machine_control.connection_protocol(&machine) else {
                 continue;
             };
-            if protocol < MANAGED_CALL_PROTOCOL_VERSION {
-                continue;
-            }
-            let agent_api = protocol >= AGENT_API_PROTOCOL_VERSION;
-            let agent_actions = protocol >= AGENT_ACTION_PROTOCOL_VERSION;
-            // An older Machine refuses a grant carrying the flag, and an
-            // upgraded one refuses Agent API actions under a grant without
-            // it, so a reconnect at another protocol replaces the grant.
-            if grants.get(&parent).is_some_and(|entry| {
-                entry.grant.agent_api != agent_api || entry.grant.agent_actions != agent_actions
-            }) && let Some(entry) = grants.remove(&parent)
-            {
-                revoked.push((entry.grant, machine.clone()));
-            }
             let entry = grants.entry(parent.clone()).or_insert_with(|| GrantEntry {
                 grant: Grant {
                     grant_id: random_id("grant"),
                     parent_session_id: parent.clone(),
-                    agent_api,
-                    agent_actions,
+                    // Every admitted Machine speaks the Agent API and
+                    // action protocols (MACHINE_PROTOCOL_FLOOR).
+                    agent_api: true,
+                    agent_actions: true,
                 },
                 authority,
                 installed_on: None,
@@ -513,9 +497,7 @@ pub(super) async fn child_runtime(
         && state
             .machine_control
             .connection_protocol(execution_machine)
-            .is_none_or(|(_, version)| {
-                version < crate::machine_protocol::MANAGED_IMAGE_PROTOCOL_VERSION
-            })
+            .is_none()
     {
         return (
             execution_machine.into(),
@@ -612,9 +594,7 @@ async fn remote_ready(
 ) -> Result<(), &'static str> {
     for machine in [execution_machine, runtime_machine] {
         match state.machine_control.connection_protocol(machine) {
-            Some((_, protocol))
-                if protocol >= crate::machine_protocol::MANAGED_ENVIRONMENT_PROTOCOL_VERSION => {}
-            Some(_) => return Err("unsupported_capability"),
+            Some(_) => {}
             None => return Err("machine_unavailable"),
         }
     }
@@ -656,12 +636,7 @@ pub(super) async fn provider_readiness(
         return unavailable("machine_unavailable");
     }
     if profile == cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1
-        && state
-            .machine_control
-            .connection_protocol(machine)
-            .is_none_or(|(_, version)| {
-                version < crate::machine_protocol::MANAGED_IMAGE_PROTOCOL_VERSION
-            })
+        && state.machine_control.connection_protocol(machine).is_none()
     {
         return unavailable("unsupported_capability");
     }

@@ -43,8 +43,7 @@ use crate::machine_protocol::telemetry_binding::{
     BindingCommitResult, BindingObservation, BindingStep,
 };
 use crate::machine_protocol::{
-    MachineCommand, MachineEvent, PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION, PluginHostOperation,
-    PluginInstallationState, PluginInventory,
+    MachineCommand, MachineEvent, PluginHostOperation, PluginInstallationState, PluginInventory,
 };
 
 const DEFAULT_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
@@ -1365,11 +1364,10 @@ impl MachineControl {
         let live = self.live.read();
         step.validate_commit().is_ok()
             && self.matches_site(token, &step.service_id, &step.machine_id)
-            && live.connections.get(&token.0.machine_id).is_some_and(|c| {
-                c.token.same(token)
-                    && c.protocol
-                        >= crate::machine_protocol::TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION
-            })
+            && live
+                .connections
+                .get(&token.0.machine_id)
+                .is_some_and(|c| c.token.same(token))
             && live.telemetry_target_matches(token, step, lease)
     }
 
@@ -1853,9 +1851,8 @@ impl MachineControl {
         let live = self.live.read();
         let mut inventory = live
             .connections
-            .iter()
-            .filter(|(_, connection)| connection.protocol >= PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION)
-            .filter_map(|(machine_id, _)| {
+            .keys()
+            .filter_map(|machine_id| {
                 live.plugin_inventory
                     .get(machine_id)
                     .map(|inventory| (machine_id, &inventory.plugins))
@@ -2903,18 +2900,8 @@ mod tests {
     }
 
     #[test]
-    fn exact_host_inventory_is_independent_of_bounded_history_and_old_protocols() {
+    fn exact_host_inventory_is_independent_of_bounded_history() {
         let control = MachineControl::default();
-        let (old_tx, _) = mpsc::unbounded_channel();
-        let old_connection =
-            control.install("old".to_owned(), "old-epoch".to_owned(), false, 6, old_tx);
-        control.record_remote(
-            &old_connection,
-            MachineEvent::PluginInventory {
-                plugins: vec![plugin_inventory("codex")],
-                observed_at_ms: 1,
-            },
-        );
         let (current_tx, _) = mpsc::unbounded_channel();
         let connection = control.install(
             "current".to_owned(),

@@ -78,9 +78,7 @@ fn control_supported(state: &AppState, meta: &SessionMeta) -> bool {
                 .machine_control
                 .connection_protocol(&authority.placement().machine_id)
         })
-        .is_some_and(|(_, protocol)| {
-            protocol >= crate::machine_protocol::AGENT_CONTROL_PROTOCOL_VERSION
-        })
+        .is_some()
 }
 
 fn status_view(info: &SessionInfo, calls_enabled: bool, grant: &Grant) -> Value {

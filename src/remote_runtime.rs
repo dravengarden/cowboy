@@ -93,8 +93,6 @@ pub struct Shared {
     hub: Hub,
     pending: Mutex<HashMap<String, CoreCommand>>,
     steering: Mutex<HashMap<(String, String), oneshot::Sender<String>>>,
-    current_turn_protocol: bool,
-    delivery_controls_protocol: bool,
     /// The Machine starts a `native_fork` launch with `session/fork`; an
     /// older one would ignore the field and open an empty thread.
     native_fork_protocol: bool,
@@ -230,10 +228,6 @@ impl RemoteRuntime {
                 hub,
                 pending: Mutex::new(HashMap::new()),
                 steering: Mutex::new(HashMap::new()),
-                current_turn_protocol: machine_protocol
-                    >= crate::machine_protocol::CURRENT_TURN_PROTOCOL_VERSION,
-                delivery_controls_protocol: machine_protocol
-                    >= crate::machine_protocol::DELIVERY_CONTROLS_PROTOCOL_VERSION,
                 native_fork_protocol: machine_protocol
                     >= crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
                 machine_protocol,
@@ -290,8 +284,6 @@ impl RemoteRuntime {
                 hub,
                 pending: Mutex::new(HashMap::new()),
                 steering: Mutex::new(HashMap::new()),
-                current_turn_protocol: true,
-                delivery_controls_protocol: true,
                 native_fork_protocol: true,
                 machine_protocol: crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
                 account_stops: Mutex::new(HashMap::new()),
@@ -857,7 +849,7 @@ impl RemoteRuntime {
     }
 
     pub fn delivery_controls(&self, session_id: &str) -> crate::runtime_wire::DeliveryControls {
-        if !self.shared.delivery_controls_protocol || !self.connected() {
+        if !self.connected() {
             return crate::runtime_wire::DeliveryControls::default();
         }
         self.shared
@@ -872,7 +864,7 @@ impl RemoteRuntime {
         &self,
         session_id: &str,
     ) -> Option<crate::send_delivery::DeliveryTarget> {
-        if !self.shared.current_turn_protocol || !self.connected() {
+        if !self.connected() {
             return None;
         }
         let workers = self.shared.workers.lock();
@@ -906,9 +898,6 @@ impl RemoteRuntime {
         target: Option<&crate::send_delivery::DeliveryTarget>,
         next_checkpoint: bool,
     ) -> Result<SteeringDelivery, String> {
-        if !self.shared.current_turn_protocol {
-            return Err("the connected Machine does not support current-turn delivery".into());
-        }
         if !self.connected() {
             return Err("runtime is disconnected".into());
         }
@@ -923,9 +912,7 @@ impl RemoteRuntime {
             return Err("current-turn delivery is unavailable in this running worker".into());
         }
         if next_checkpoint
-            && (!self.shared.delivery_controls_protocol
-                || worker.delivery_controls.version == 0
-                || !worker.delivery_controls.next_checkpoint)
+            && (worker.delivery_controls.version == 0 || !worker.delivery_controls.next_checkpoint)
         {
             return Err("next checkpoint is unavailable in this running worker".into());
         }
@@ -1929,7 +1916,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             session_id,
             worker_epoch,
             runtime_seq,
-            mut event,
+            event,
             diagnostics,
         } => {
             if foreign_session(shared, &session_id) {
@@ -1937,12 +1924,6 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 // cannot reach this, and an ACK would claim consumption.
                 reject_foreign_frame(shared, &session_id, "worker event");
                 return Ok(());
-            }
-            if !shared.current_turn_protocol
-                && let RuntimeEvent::Update { update, .. } = &mut event
-                && crate::runtime_wire::current_turn_support(update).is_some()
-            {
-                update["currentTurn"] = serde_json::json!(false);
             }
             let key = (session_id.clone(), worker_epoch.clone());
             let previous = shared.highwaters.lock().get(&key).copied();
@@ -2619,10 +2600,9 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
         return false;
     }
     shared.optimistic_revivals.lock().remove(&worker.session_id);
-    shared.hub.set_current_turn_support(
-        &worker.session_id,
-        shared.current_turn_protocol && worker.supports_current_turn,
-    );
+    shared
+        .hub
+        .set_current_turn_support(&worker.session_id, worker.supports_current_turn);
     shared
         .hub
         .set_machine_lineage(&worker.session_id, worker.incarnation.as_deref());
@@ -3475,25 +3455,6 @@ mod tests {
         hub.set_background_tasks("s", 3);
         hub.set_status("s", Status::Starting, None);
         assert_eq!(background(&hub), 0);
-    }
-
-    #[tokio::test]
-    async fn old_machine_connection_cannot_inject_even_with_a_capable_worker() {
-        let mut worker = snapshot("steering");
-        worker.supports_current_turn = true;
-        worker.current_turn_id = Some("original-turn".into());
-        let mut runtime = RemoteRuntime::for_test(Hub::new(), vec![worker]);
-        Arc::get_mut(&mut Arc::get_mut(&mut runtime).unwrap().shared)
-            .unwrap()
-            .current_turn_protocol = false;
-        runtime.connect_for_test();
-        assert!(
-            runtime
-                .start_steer("steering", vec![], "one".into())
-                .is_err()
-        );
-        assert!(runtime.pending_for_test().is_empty());
-        assert!(runtime.shared.steering.lock().is_empty());
     }
 
     #[tokio::test]
