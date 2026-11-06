@@ -1,27 +1,22 @@
 import {
   ChevronRight,
-  Close,
   DescriptionOutlined,
   FolderOutlined,
   MyLocation,
   Refresh,
-  Search,
   UnfoldLess,
   UnfoldMore,
 } from "@mui/icons-material";
 import {
   Alert,
   Box,
-  Chip,
   CircularProgress,
   IconButton,
-  InputAdornment,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
 import {
@@ -51,6 +46,7 @@ import {
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { useReviewRecovery } from "./useReviewRecovery";
 import { ReviewNavigationActions } from "./ReviewNavigationActions";
+import { ReviewFileSearchBar } from "./ReviewFileSearchBar";
 import {
   firstReviewSearchResult,
   type ReviewSearchMode,
@@ -633,115 +629,34 @@ export function ReviewFileTree({
 
   const trimmedQuery = query.trim();
   const findBar = (
-    <Stack
-      direction="row"
-      alignItems="center"
-      spacing={1}
-      data-review-find-bar="true"
-      sx={{
-        flex: "0 0 auto",
-        px: 1.5,
-        pt: 1,
-        // Thumb-reach search. At rest it clears the controls below it; with
-        // the on-screen keyboard up it rides the keyboard's top edge instead.
-        pb: embedded
-          ? `max(8px, calc(var(--kb-inset, 0px) + 8px - ${INLINE_NAV_HEIGHT}))`
-          : `max(8px, calc(var(--kb-inset, 0px) + 8px - ${SIDEBAR_ACTIONS_RESERVE}))`,
-        borderTop: 1,
-        borderColor: "divider",
+    <ReviewFileSearchBar
+      query={query}
+      mode={searchMode}
+      searching={search.searching}
+      disabled={!sessionId}
+      keyboardReserve={embedded ? INLINE_NAV_HEIGHT : SIDEBAR_ACTIONS_RESERVE}
+      showDocuments={showDocuments}
+      onQuery={(value) => {
+        setQuery(value);
+        if (value.trim()) setShowDocuments(false);
       }}
-    >
-      <TextField
-        value={query}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          if (event.target.value.trim()) setShowDocuments(false);
-        }}
-        onKeyDown={(event) => {
-          if (isImeKeyEvent(event.nativeEvent)) return;
-          const first = firstReviewSearchResult(search, searchMode);
-          if (event.key === "Enter" && trimmedQuery && first) {
-            event.preventDefault();
-            onOpenFile(first.path, first.line);
-          } else if (event.key === "Escape" && query) {
-            event.preventDefault();
-            setQuery("");
-          }
-        }}
-        placeholder={searchMode === "text" ? "Find text" : "Find a file"}
-        aria-label={searchMode === "text" ? "Find text" : "Find a file"}
-        size="small"
-        fullWidth
-        disabled={!sessionId}
-        slotProps={{
-          htmlInput: {
-            enterKeyHint: "go",
-            autoCapitalize: "off",
-            autoCorrect: "off",
-            spellCheck: false,
-          },
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                {search.searching
-                  ? <CircularProgress size={16} aria-label="Searching" />
-                  : <Search fontSize="small" />}
-              </InputAdornment>
-            ),
-            endAdornment: query
-              ? (
-                <InputAdornment position="end">
-                  <IconButton
-                    size="small"
-                    edge="end"
-                    aria-label="Clear file search"
-                    onClick={() => setQuery("")}
-                  >
-                    <Close fontSize="small" />
-                  </IconButton>
-                </InputAdornment>
-              )
-              : undefined,
-          },
-        }}
-        sx={{
-          "& .MuiOutlinedInput-root": {
-            minHeight: 40,
-            borderRadius: 999,
-            bgcolor: "action.hover",
-          },
-          "& .MuiOutlinedInput-notchedOutline": { borderColor: "transparent" },
-          // 16px keeps iOS from zooming the page when the field takes focus.
-          "& input": { fontSize: 16 },
-        }}
-      />
-      <Chip
-        data-review-text-search
-        variant={searchMode === "text" ? "filled" : "outlined"}
-        color={searchMode === "text" ? "primary" : "default"}
-        aria-pressed={searchMode === "text"}
-        aria-label="Search file contents"
-        label="Text"
-        onClick={() =>
-          setSearchMode((mode) => mode === "text" ? "files" : "text")}
-        sx={{ height: 44, borderRadius: 999, flex: "0 0 auto" }}
-      />
-      {documentChanges && (
-        <Chip
-          data-review-changed-documents
-          variant={showDocuments ? "filled" : "outlined"}
-          color={showDocuments ? "primary" : "default"}
-          aria-pressed={showDocuments}
-          aria-label={showDocuments ? "Browse all files" : "Changed documents"}
-          label="Changed"
-          onClick={() => {
-            setQuery("");
-            setShowDocuments((value) => !value);
-          }}
-          sx={{ height: 44, borderRadius: 999, flex: "0 0 auto" }}
-        />
-      )}
-    </Stack>
+      onKeyDown={(event) => {
+        if (isImeKeyEvent(event.nativeEvent)) return;
+        const first = firstReviewSearchResult(search, searchMode);
+        if (event.key === "Enter" && trimmedQuery && first) {
+          event.preventDefault();
+          onOpenFile(first.path, first.line);
+        } else if (event.key === "Escape" && query) {
+          event.preventDefault();
+          setQuery("");
+        }
+      }}
+      onMode={() => setSearchMode((mode) => mode === "text" ? "files" : "text")}
+      onDocuments={documentChanges ? () => {
+        setQuery("");
+        setShowDocuments((value) => !value);
+      } : undefined}
+    />
   );
 
   return (

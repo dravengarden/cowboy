@@ -278,6 +278,7 @@ async function overviewFontScales(p: FixturePage, controls: string[]) {
 async function reviewFilesAndDiff(p: FixturePage) {
   await click('[aria-label="Worktree files"]');
   await until("!!document.querySelector('[data-code-tree-path=\"README.md\"]')");
+  await fileSearchBar(p);
   await capture("files", ["[data-review-find-bar]", "[data-review-context-button]"]);
   await click('[aria-label="More review actions"]');
   await until("!!document.querySelector('[aria-label=\"Refresh files\"]')");
@@ -337,6 +338,56 @@ async function reviewFilesAndDiff(p: FixturePage) {
     join(output, `${theme}-design.html`),
     await p.evaluate<string>("document.documentElement.outerHTML"),
   );
+}
+
+async function fileSearchBar(p: FixturePage) {
+  for (const width of [390, 320]) {
+    await viewport(width, 844);
+    for (const scale of [0.5, 0.65, 1, 1.25]) {
+      await p.evaluate(`document.documentElement.style.fontSize='${scale * 100}%'`);
+      await p.evaluate(`(() => {
+        const bar=document.querySelector('[data-review-search-surface]');
+        const input=bar.querySelector('input');
+        const size=parseFloat(getComputedStyle(input).fontSize);
+        if(Math.abs(size-14*${scale})>0.05)throw new Error('Search text ignores global font size');
+        const r=input.getBoundingClientRect();
+        if(r.width<90 || r.right>bar.getBoundingClientRect().right)throw new Error('Search input has too little space');
+        for(const option of bar.querySelectorAll('[aria-pressed]')) {
+          const r=option.getBoundingClientRect();
+          if(r.height<44 || r.width<44 || r.right>bar.getBoundingClientRect().right)throw new Error('Search option is not reachable');
+          if(Math.abs(parseFloat(getComputedStyle(option).fontSize)-13*${scale})>0.05)throw new Error('Search option ignores global font size');
+        }
+      })()`);
+      await capture(`search-${width}-font-${scale * 100}`, [
+        "[data-review-find-bar]",
+        "[data-review-context-button]",
+      ]);
+    }
+  }
+  await viewport(390, 844);
+  await p.evaluate("document.documentElement.style.fontSize='65%'");
+  await click("[data-review-text-search]");
+  await until("document.querySelector('input')?.placeholder==='Find text'");
+  await p.evaluate(`(() => {
+    const option=document.querySelector('[data-review-text-search]');
+    if(option.getAttribute('aria-pressed')!=='true' || getComputedStyle(option.querySelector('[data-review-search-option]')).backgroundColor==='rgba(0, 0, 0, 0)')throw new Error('Selected text search has no visible state');
+    if(document.activeElement?.matches('input'))throw new Error('Search mode opened the keyboard');
+  })()`);
+  await capture("search-text-selected", ["[data-review-find-bar]"]);
+  await click("[data-review-text-search]");
+  await click("[data-review-changed-documents]");
+  await until(
+    "document.querySelector('[data-review-changed-documents]')?.getAttribute('aria-pressed')==='true'",
+  );
+  await capture("search-changed-selected", ["[data-review-find-bar]"]);
+  await click("[data-review-changed-documents]");
+  await click('input[aria-label="Find a file"]');
+  await p.send("Input.insertText", { text: "README" });
+  await until("document.querySelector('input')?.value==='README'");
+  await capture("search-query", ['[aria-label="Clear file search"]', "[data-review-find-bar]"]);
+  await click('[aria-label="Clear file search"]');
+  await until("document.querySelector('input')?.value===''");
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
 }
 try {
   await run(page);
