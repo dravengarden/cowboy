@@ -22,6 +22,10 @@ labels, without adding a second navigation hierarchy.
 - Let the upper area present the work. A compact, passive file/branch label
   can orient the reader; stacked headings, tabs and toolbar rows cannot consume
   the start of every reading surface. Put expanded metadata in a bottom sheet.
+- Group related bottom controls into compact rows. Let short view labels use
+  their natural width, with comparison or filter controls beside them. Avoid
+  stacked full-width segmented bars, oversized capsules and repeated dividers.
+  Reduce decoration and wasted space while preserving 44 px touch targets.
 - Put next/previous, review marks, view selection and search directly in their
   active view. Secondary actions may contain refresh, integrations and settings.
   Useful facts remain visible in the reader's context dock or information rail;

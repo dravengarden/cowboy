@@ -1,9 +1,6 @@
 import {
-  AccountTreeOutlined,
-  DescriptionOutlined,
   ExpandLess,
   ExpandMore,
-  History,
   InfoOutlined,
   Refresh,
 } from "@mui/icons-material";
@@ -12,7 +9,6 @@ import {
   Box,
   Button,
   Chip,
-  IconButton,
   List,
   ListItemButton,
   ListItemText,
@@ -20,7 +16,6 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { SegmentedTabs } from "../../SegmentedTabs";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import type { GitReviewEntry } from "./gitReviewModel";
@@ -38,6 +33,7 @@ import {
 import { ReviewChanges } from "./ReviewChanges";
 import { useReviewRecovery } from "./useReviewRecovery";
 import { ReviewNavigationActions } from "./ReviewNavigationActions";
+import { ReviewRepositoryControls, type RepositorySection } from "./ReviewRepositoryControls";
 import type { SessionMeta } from "../../protocol";
 import type { PullSummary } from "../../extensions/api";
 import { loadRepositoryPulls, type RepositoryPulls } from "./repositoryPulls";
@@ -50,8 +46,6 @@ import {
   remoteRepositories,
 } from "./repositoryTargetModel";
 import type { Choice } from "./remoteReviewSources";
-
-type RepositorySection = "changes" | "history" | "worktrees";
 
 import { shortOid, relativeDate, GraphCell, HistoryCommitSkeleton, WorktreeGroupLabel, PullChip, WorktreeRow, factChipSx } from "./ReviewRepositoryRows";
 import { Sheet } from "../../Sheet";
@@ -113,6 +107,7 @@ export function ReviewRepository({
   const [changesRefresh, setChangesRefresh] = useState(0);
   const [otherOpen, setOtherOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [controlsContainer, setControlsContainer] = useState<HTMLElement | null>(null);
   const [pulls, setPulls] = useState<RepositoryPulls | null>(null);
   useEffect(() => {
     setPulls(null);
@@ -366,6 +361,8 @@ export function ReviewRepository({
               onComparisonResolved={onComparisonResolved}
               onChanges={onChanges}
               compact
+              controlsContainer={controlsContainer}
+              actionsContainer={embedded ? actionsContainer ?? null : undefined}
               {...(onBrowseFiles ? { onBrowseFiles } : {})}
               linkedSession={linkedSession}
               refreshToken={(refreshToken ?? 0) + changesRefresh}
@@ -611,23 +608,7 @@ export function ReviewRepository({
             </Box>
           )}
       </Box>
-      <Stack data-review-repository-controls direction="row" alignItems="center"
-        sx={{ flexShrink: 0, px: 0.75, py: 0.5, borderTop: 1, borderColor: "divider" }}>
-        <SegmentedTabs
-          rootProps={{ "data-mobile-repository-tabs": "" }}
-          aria-label="Repository views"
-          sx={{ flex: 1, minWidth: 0, gridAutoColumns: "minmax(0, 1fr)", "&& [data-segmented-tab]": { minHeight: 44, px: 0.5, fontSize: "0.75rem" }, "&& .segmented-tab-icon": { display: "none" } }}
-          value={section}
-          onChange={setSection}
-          options={[
-            { value: "changes", label: "Changes", icon: <DescriptionOutlined /> },
-            { value: "history", label: "History", icon: <History /> },
-            { value: "worktrees", label: "Worktrees", icon: <AccountTreeOutlined /> },
-          ]}
-        />
-        <IconButton data-repository-details-toggle aria-label="Repository details" aria-expanded={detailsOpen}
-          onClick={() => setDetailsOpen(true)} sx={{ width: 44, height: 44 }}><InfoOutlined /></IconButton>
-      </Stack>
+      <ReviewRepositoryControls section={section} onSection={setSection} onControls={setControlsContainer} />
       <Sheet open={detailsOpen} onClose={() => setDetailsOpen(false)} title="Repository details" forceSheet portal
         actions={<Button aria-label="Close repository details" onClick={() => setDetailsOpen(false)} sx={{ minHeight: 44 }}>Done</Button>}>
         <Stack spacing={1} sx={{ p: 1 }}>
@@ -642,6 +623,8 @@ export function ReviewRepository({
         embedded={embedded}
         container={actionsContainer}
         label="Repository controls"
+        actions={[{ key: "details", label: "Repository details", icon: <InfoOutlined fontSize="small" />,
+          opensDialog: true, onPress: () => setDetailsOpen(true) }]}
         refreshLabel="Refresh repository"
         onRefresh={async () => {
           await load();

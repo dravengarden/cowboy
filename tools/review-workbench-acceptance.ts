@@ -119,7 +119,9 @@ async function run(p: FixturePage) {
   await viewport(390, 844);
   await until("typeof preview==='function'");
   await p.evaluate("void(globalThis.fixture=preview(true,false,true))");
-  await until("document.querySelector('[data-review-unread]')?.textContent==='51 unread'");
+  await until(
+    "document.querySelector('[data-review-unread]')?.getAttribute('aria-label')==='51 unread'",
+  );
   const controls = [
     "[data-review-compare]",
     "[data-review-unread]",
@@ -128,12 +130,30 @@ async function run(p: FixturePage) {
     '[aria-label="Git changes"]',
   ];
   await capture("changes", controls);
+  await click('[aria-label="More review actions"]');
   await click('[aria-label="Repository details"]');
   await until(
-    "document.querySelector('[data-repository-project-path]')?.textContent==='/tasks/cowboy/feature'",
+    "document.querySelector('[data-repository-project-path]')?.textContent==='/tasks/cowboy/feature' && !document.querySelector('[aria-label=\"Close review actions\"]')",
   );
   await capture("repository-details", ['[aria-label="Close repository details"]']);
   await click('[aria-label="Close repository details"]');
+  await click("[data-review-compare]");
+  await click('[aria-label="Other branches"] [role="button"]:last-child');
+  await until(
+    "document.querySelector('[data-review-compare]')?.getAttribute('aria-label')?.includes('long-review-comparison-name')",
+  );
+  await capture("long-branch", controls);
+  await viewport(320, 568);
+  await capture("long-branch-narrow", controls);
+  await viewport(390, 844);
+  await p.evaluate("document.documentElement.style.fontSize='20px'");
+  await capture("large-text", controls);
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
+  await click("[data-review-compare]");
+  await click('[aria-label="Comparison scenarios"] [role="button"]:last-child');
+  await until(
+    "document.querySelector('[data-review-compare]')?.getAttribute('aria-label')?.includes('Ready to merge · origin/main')",
+  );
   await p.evaluate(
     `(()=>{const n=document.querySelector('[data-review-navigation-inline] [data-mobile-overflow-layer]');n.scrollTop=n.scrollHeight})()`,
   );
@@ -149,6 +169,26 @@ async function run(p: FixturePage) {
   await viewport(844, 390);
   await capture("landscape", controls);
   await viewport(390, 844);
+  await p.evaluate("fixture.select('project')");
+  await until("document.body.textContent.includes('No changes from this branch')");
+  await capture(
+    "empty",
+    controls.filter((selector) => selector !== "[data-review-unread]"),
+  );
+  await p.evaluate(
+    `(()=>{const r=document.querySelector('[data-review-repository-controls]').getBoundingClientRect();if(r.height>52)throw new Error('Empty review uses more than one repository toolbar row')})()`,
+  );
+  await viewport(320, 568);
+  await capture(
+    "empty-narrow",
+    controls.filter((selector) => selector !== "[data-review-unread]"),
+  );
+  await p.evaluate(
+    `(()=>{const r=document.querySelector('[data-review-repository-controls]').getBoundingClientRect();if(r.height>52)throw new Error('Empty narrow review should fit one repository row')})()`,
+  );
+  await viewport(390, 844);
+  await p.evaluate("fixture.select('worktree')");
+  await until("!!document.querySelector('[data-review-unread]')");
   await click('[aria-label="Worktree files"]');
   await until("!!document.querySelector('[data-code-tree-path=\"README.md\"]')");
   await capture("files", ["[data-review-find-bar]", "[data-review-context-button]"]);
