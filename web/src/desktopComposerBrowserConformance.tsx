@@ -296,6 +296,14 @@ export async function runDesktopComposerBrowserConformance(): Promise<
           button("compact").textContent?.includes("51%"),
           `Compact keeps its reading at ${width}/${font}`,
         );
+        for (const id of ["compact", "clear"]) {
+          if (button(id).getClientRects().length === 0) continue;
+          const keycap = button(id).querySelector("kbd");
+          check(
+            keycap !== null && keycap.getClientRects().length > 0,
+            `${id} keeps its shortcut beside the control at ${width}/${font}`,
+          );
+        }
         // Delivery is one line: actions fold into menus before they wrap.
         const delivery = [
           ...toolbar.querySelectorAll<HTMLElement>(

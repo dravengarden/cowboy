@@ -38,13 +38,23 @@ export const desktopComposerToolbarSx: SxProps<Theme> = {
     { display: "none" },
   "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='schedule']) kbd":
     { display: "none" },
-  // Compact's and Clear's Prompt chords are the widest keycaps
-  // (`Ctrl⇧.` off macOS): they appear only once the row has room.
+  // Keep conversation shortcuts beside their controls at every inline width.
+  // Quiet, compact keycaps provide the hierarchy without removing information.
   "& [data-composer-delivery] :is([data-composer-action='compact'], [data-composer-action='clear']) kbd":
-    { display: "none" },
+    { display: "inline-flex", gridColumn: "1 / -1", justifySelf: "center" },
+  "& [data-session-inline] button": {
+    display: "grid",
+    gridTemplateColumns: "max-content max-content",
+    columnGap: "0.25rem",
+    rowGap: 0,
+    justifyContent: "center",
+  },
+  "& [data-composer-action='clear'] > svg": {
+    gridColumn: "1 / -1",
+    justifySelf: "center",
+  },
   "@container composer-tools (min-width: 46rem)": {
-    "& [data-composer-delivery] :is([data-composer-action='compact'], [data-composer-action='clear']) kbd":
-      { display: "inline-flex" },
+    "& [data-session-inline] button": { display: "inline-flex" },
   },
   // The narrowest row keeps the gauge and drops its number.
   "& [data-session-overflow] [data-context-reading]": { display: "none" },
