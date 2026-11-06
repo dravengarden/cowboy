@@ -441,6 +441,14 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
         .getBoundingClientRect();
       const details = document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.getBoundingClientRect();
       const transcript = document.querySelector<HTMLElement>("[data-call-transcript]")!.getBoundingClientRect();
+      const scroller = document.querySelector<HTMLElement>("[data-call-transcript] [data-transcript-session]")!;
+      const fade = getComputedStyle(scroller.parentElement!, "::after");
+      check(fade.backgroundImage.includes("linear-gradient") && fade.pointerEvents === "none", "Transcript top gradient paints without intercepting gestures");
+      const dialog = scroller.closest<HTMLElement>('[role="dialog"]')!;
+      dialog.style.setProperty("--cowboy-system-top-clearance", "47px");
+      check(Math.abs(scroller.getBoundingClientRect().top - dialog.getBoundingClientRect().top) < 1, "Cover transcript reaches the top behind the system status area");
+      check(parseFloat(getComputedStyle(scroller).paddingTop) === 67 && parseFloat(getComputedStyle(scroller.parentElement!, "::after").height) === 67, "Safe inset and fade adapt together without hiding the first message");
+      dialog.style.removeProperty("--cowboy-system-top-clearance");
       check(chip.left - level.left >= 8, `T16 the context dock keeps its compact gutter (${String(chip.left - level.left)}px)`);
       check(details.right <= level.right, "T16 Details stays inside the sheet");
       const island = document.querySelector<HTMLElement>("[data-sheet-context-summary]")!.getBoundingClientRect();

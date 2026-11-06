@@ -1,5 +1,5 @@
 import { desktopSize, glyphSize } from "./surface/desktopSize";
-
+import { readerTopEdge, readerTopInset } from "./readerTopEdge";
 // Paged transcript. One row per canonical `RenderItem`; every row remains in
 // normal layout so native scroll anchoring can track streamed markdown / code
 // blocks / images as they grow.
@@ -2622,17 +2622,16 @@ export function Transcript({
 
   return (
     <Box
-      sx={{
+      sx={(theme) => ({
         flex: 1,
         position: "relative",
         overflow: "hidden",
-        // Column so the status bar can sit at the bottom IN FLOW (pushing the
-        // scroll area up, never overlapping the last message). The "loading
-        // older" spinner stays absolutely positioned, unaffected.
+        ...readerTopEdge(theme, topInset), // Shared paint-only top fade.
+        // Column keeps the status bar in flow; loading stays absolute.
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
-      }}
+      })}
     >
       <Box
         ref={parentRef}
@@ -2709,10 +2708,10 @@ export function Transcript({
           // clears the bottom glass); content still scrolls UNDER both mid-scroll,
           // and growing pb only reflows the scroll RANGE (no container reflow), so
           // the panel can grow (drafts expand) with the newest pinned just above it.
-          pt: topInset ? `calc(${topInset} + 8px)` : { xs: 1, sm: 1.5 },
+          pt: `calc(${readerTopInset(topInset)} + 20px)`,
           // So scrollIntoView (e.g. a ToolCard expanding) aligns a row BELOW the
           // frosted AppBar, not under it — content scrolls under the bar otherwise.
-          scrollPaddingTop: topInset ? `calc(${topInset} + 8px)` : 8,
+          scrollPaddingTop: `calc(${readerTopInset(topInset)} + 20px)`,
           // `bottomInset` is the one settled border-box measurement for the
           // complete floating stack (status, Plan, Pending, Composer and the
           // bottom navbar when present). Transcript must not recombine child

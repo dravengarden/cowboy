@@ -739,6 +739,7 @@ export function BackgroundTasksInspector({
         ? undefined
         : (): void => globalThis.history?.back()}
       fill={level !== "list" && Boolean(selected?.call)}
+      readerTopBleed={level === "conversation" && Boolean(selected?.call)}
       forceSheet
       cover
       portal
@@ -747,8 +748,7 @@ export function BackgroundTasksInspector({
         data-background-tasks-inspector={sessionId}
         data-mobile-task-level={level}
         sx={{
-          // A conversation's transcript passes under the floating island and
-          // reserves that clearance itself; padding here stopped it short.
+          // Transcript owns the floating footer clearance; avoid doubling it here.
           pb: selected?.call && level !== "list" ? 0 : "calc(16px + env(safe-area-inset-bottom, 0px))",
           color: "text.primary",
           typography: "body2",
