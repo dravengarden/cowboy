@@ -21,6 +21,7 @@ globalThis.CowboyDeviceProof={proof:async()=>"fixture",resetChallenge(){},instal
 <script type="module">const m=await import('/fixture.js');globalThis.preview=m.renderReviewContextPreview;</script>`,
 );
 const measurements: { name: string; theme: string; measure: unknown }[] = [];
+let screenshotCount = 0;
 async function until(expression: string) {
   for (let i = 0; i < 250; i++) {
     if (await page.evaluate(expression)) return;
@@ -67,6 +68,7 @@ async function capture(name: string, selectors: string[], sideInset = 0) {
   measurements.push({ name, theme, measure });
   const shot = await page.send("Page.captureScreenshot", { format: "png" });
   await writeFile(join(output, `${theme}-${name}.png`), Buffer.from(shot.data, "base64"));
+  screenshotCount++;
 }
 async function viewport(width: number, height: number, mobile = true) {
   await page.send("Emulation.setDeviceMetricsOverride", {
@@ -288,7 +290,7 @@ async function tapPadding(selector: string, trailing = false) {
     if(!button)throw new Error('Missing touch target '+${JSON.stringify(selector)});
     const r=button.getBoundingClientRect();
     if(r.width<48 || r.height<48)throw new Error('Touch target smaller than 48px: '+button.outerHTML);
-    const x=${trailing} ? r.right-4 : r.left+4, y=r.bottom-4;
+    const x=${trailing} ? r.right-4 : r.left+4, y=r.y+r.height/2;
     if(!button.contains(document.elementFromPoint(x,y)))throw new Error('Touch padding is covered: '+button.outerHTML);
     return {x,y};
   })()`);
@@ -310,6 +312,11 @@ async function workbenchTouchTargets(p: FixturePage) {
         return buttons.map(button=>{
           const r=button.getBoundingClientRect();
           if(r.width<48 || r.height<48 || r.left<0 || r.right>innerWidth || r.bottom>innerHeight)throw new Error('Unusable workbench target: '+button.outerHTML);
+          if(button.matches('[data-segmented-tab], [data-review-compare], .MuiToggleButton-root')) {
+            const s=getComputedStyle(button);
+            if(parseFloat(s.borderTopLeftRadius)<r.height/2 || parseFloat(s.borderTopRightRadius)<r.height/2)throw new Error('Mobile Review control lost its rounded shape');
+            if(parseFloat(s.borderTopWidth)>0 || s.boxShadow!=='none')throw new Error('Mobile Review retained a hard border or shadow');
+          }
           return {label:button.getAttribute('aria-label')||button.textContent,width:r.width,height:r.height};
         });
       })()`);
@@ -394,6 +401,7 @@ async function reviewFilesAndDiff(p: FixturePage) {
   await click('[aria-label="Next change"]');
   await capture("diff-next", ['[aria-label="Previous change"]', '[aria-label="Next change"]']);
   await navigationActions();
+  await contextPickerLayout(p);
   await viewport(1280, 900, false);
   await p.evaluate(
     "fixture.cleanup(); void(globalThis.fixture=preview(true,false,true,false,true))",
@@ -422,7 +430,7 @@ async function fileSearchBar(p: FixturePage) {
         if(r.width<90 || r.right>bar.getBoundingClientRect().right)throw new Error('Search input has too little space');
         for(const option of bar.querySelectorAll('[aria-pressed]')) {
           const r=option.getBoundingClientRect();
-          if(r.height<44 || r.width<44 || r.right>bar.getBoundingClientRect().right)throw new Error('Search option is not reachable');
+          if(r.height<48 || r.width<48 || r.right>bar.getBoundingClientRect().right)throw new Error('Search option is not reachable');
           if(Math.abs(parseFloat(getComputedStyle(option).fontSize)-13*${scale})>0.05)throw new Error('Search option ignores global font size');
         }
       })()`);
@@ -430,6 +438,19 @@ async function fileSearchBar(p: FixturePage) {
         "[data-review-find-bar]",
         "[data-review-context-button]",
       ]);
+      await viewport(width, 430);
+      await click("[data-review-find-bar] input");
+      await p.evaluate(`(() => {
+        const surface=document.querySelector('[data-review-search-surface]');
+        if(document.activeElement!==surface.querySelector('input'))throw new Error('Search did not focus');
+        const boundaries=[surface,...surface.querySelectorAll('input, .MuiInputBase-root, fieldset')].filter(node=>{
+          const s=getComputedStyle(node);
+          return (s.outlineStyle!=='none' && parseFloat(s.outlineWidth)>0) || (s.borderTopStyle!=='none' && parseFloat(s.borderTopWidth)>0);
+        });
+        if(boundaries.length!==1 || boundaries[0]!==surface)throw new Error('Search must have one focus boundary: '+boundaries.map(n=>n.tagName+' '+n.className).join());
+      })()`);
+      await capture(`search-focused-${width}-font-${scale * 100}`, ["[data-review-find-bar]"]);
+      await viewport(width, 844);
     }
   }
   await viewport(390, 844);
@@ -438,7 +459,7 @@ async function fileSearchBar(p: FixturePage) {
   await until("document.querySelector('input')?.placeholder==='Find text'");
   await p.evaluate(`(() => {
     const option=document.querySelector('[data-review-text-search]');
-    if(option.getAttribute('aria-pressed')!=='true' || getComputedStyle(option.querySelector('[data-review-search-option]')).backgroundColor==='rgba(0, 0, 0, 0)')throw new Error('Selected text search has no visible state');
+    if(option.getAttribute('aria-pressed')!=='true' || getComputedStyle(option).backgroundColor==='rgba(0, 0, 0, 0)')throw new Error('Selected text search has no visible state');
     if(document.activeElement?.matches('input'))throw new Error('Search mode opened the keyboard');
   })()`);
   await capture("search-text-selected", ["[data-review-find-bar]"]);
@@ -457,6 +478,67 @@ async function fileSearchBar(p: FixturePage) {
   await until("document.querySelector('input')?.value===''");
   await p.evaluate("document.documentElement.style.removeProperty('font-size')");
 }
+
+async function contextPickerLayout(p: FixturePage) {
+  await viewport(390, 844);
+  await p.evaluate("fixture.addWorktrees(16)");
+  for (const width of [390, 320]) {
+    await viewport(width, 844);
+    for (const scale of [0.5, 0.65, 1, 1.25]) {
+      await p.evaluate(`document.documentElement.style.fontSize='${scale * 100}%'`);
+      await click("[data-review-context-button]");
+      await until("document.querySelectorAll('[data-review-worktree]').length>=17");
+      const measure = await p.evaluate(`(() => {
+        const list=document.querySelector('[data-review-context-list]');
+        const section=list.querySelector('[data-session-review-directory]');
+        const r=section.getBoundingClientRect();
+        if(r.height<48)throw new Error('Long context list collapsed directory settings');
+        for(const button of section.querySelectorAll('button,[role="button"]')) {
+          const b=button.getBoundingClientRect();
+          if(b.top<r.top || b.bottom>r.bottom+1)throw new Error('Directory action escaped its section');
+          if(b.height<48)throw new Error('Directory action has a small touch target');
+        }
+        if(section.nextElementSibling.getBoundingClientRect().top<r.bottom)throw new Error('Context sections overlap');
+        if(list.querySelector('[data-use-review-default]'))throw new Error('Opening the current default is redundant');
+        let bottom=list.querySelector('[data-review-project-checkout]').getBoundingClientRect().bottom;
+        for(const row of list.querySelectorAll('[data-review-worktree]')) {
+          const b=row.getBoundingClientRect();
+          if(b.height<48 || b.top<bottom)throw new Error('Context rows overlap or are too small');
+          bottom=b.bottom;
+        }
+        if(list.scrollHeight<=list.clientHeight)throw new Error('Dense context fixture must scroll');
+        return {width:innerWidth,scale:${scale},sectionHeight:r.height,rows:list.querySelectorAll('[data-review-worktree]').length};
+      })()`);
+      measurements.push({ name: "context-layout", theme, measure });
+      await capture(`context-${width}-font-${scale * 100}`, ['[data-detent-sheet] [aria-label="Close"]']);
+      await click('[data-detent-sheet] [aria-label="Close"]');
+      await until("!document.querySelector('[data-review-context-list]')");
+    }
+  }
+  await viewport(390, 844);
+  await p.evaluate("document.documentElement.style.fontSize='65%'");
+  await click("[data-review-context-button]");
+  await until("!!document.querySelector('[data-review-project-checkout]')");
+  await click("[data-review-project-checkout]");
+  await until("document.querySelector('[data-review-context-button]')?.textContent.includes('Project code · Cowboy')");
+  await click("[data-review-context-button]");
+  await until("!!document.querySelector('[data-use-review-default]')");
+  await p.evaluate(`(() => {
+    const button=document.querySelector('[data-use-review-default]');
+    const b=button.getBoundingClientRect(), s=button.closest('[data-session-review-directory]').getBoundingClientRect();
+    if(b.bottom>s.bottom || b.height<48)throw new Error('Open default escaped its section');
+    if(!button.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)))throw new Error('Open default is covered');
+  })()`);
+  await capture("context-default-available", ['[data-detent-sheet] [aria-label="Close"]']);
+  await click("[data-use-review-default]");
+  await until("document.querySelector('[data-review-context-button]')?.textContent.includes('Worktree · Cowboy')");
+  await click("[data-review-context-button]");
+  await until("!!document.querySelector('[data-review-context-list]')");
+  await p.evaluate("if(document.querySelector('[data-use-review-default]'))throw new Error('Open default should disappear after applying it')");
+  await click('[data-detent-sheet] [aria-label="Close"]');
+  await until("!document.querySelector('[data-review-context-list]')");
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
+}
 try {
   await run(page);
   await writeFile(join(output, `${theme}-measure.json`), JSON.stringify(measurements, null, 2));
@@ -464,7 +546,7 @@ try {
     JSON.stringify({
       ok: true,
       theme,
-      screenshots: measurements.filter((item) => item.name !== "font-scale").length,
+      screenshots: screenshotCount,
       browser: page.browser,
       output,
     }),

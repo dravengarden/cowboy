@@ -1,5 +1,6 @@
 import { CompareArrowsRounded, FolderOutlined } from "@mui/icons-material";
 import { ToggleButton, ToggleButtonGroup } from "@mui/material";
+import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import type { ReviewMode } from "./reviewMode";
 
 export function ReviewModeSwitcher({
@@ -9,6 +10,7 @@ export function ReviewModeSwitcher({
   mode: ReviewMode;
   onChange: (mode: ReviewMode) => void;
 }): React.JSX.Element {
+  const mobile = useSurfaceProfile().kind !== "desktop";
   return (
     <ToggleButtonGroup
       data-mobile-review-mode-switcher
@@ -21,10 +23,12 @@ export function ReviewModeSwitcher({
       }}
       sx={{
         flex: "0 0 auto",
+        ...(mobile ? { borderRadius: "999px", bgcolor: "action.hover" } : {}),
         "& .MuiToggleButton-root": {
           minWidth: 48,
           minHeight: 48,
           p: 1,
+          ...(mobile ? { border: 0, borderRadius: "999px", m: 0 } : {}),
         },
         "& .MuiSvgIcon-root": { fontSize: "1.5rem" },
       }}
