@@ -41,6 +41,14 @@ worktrees can start against a newer installed generation; no shared socket or
 global server path is replaced underneath a leased worktree. Runtime death
 reports lost protocol state rather than replaying against an ambient binary.
 
+Legacy opens reserve their original route before dispatch, so a lost reply or
+cancelled caller cannot make a possibly held buffer look idle during a Plugin
+upgrade. A buffer reservation ends only after that owner's close is confirmed.
+An unconfirmed non-idempotent worktree open also pins its runtime and refuses
+another open; a later ensure/close observation does not prove that the original
+handler finished. This conservative pin ends with runtime loss; it is not
+independent worktree-open recovery.
+
 Each generation has a private home below
 `plugins/<id>/runtime/<digest>/home`. Each live process group has a fresh 0700
 Unix-socket/state directory with a short path, separate from that home. The

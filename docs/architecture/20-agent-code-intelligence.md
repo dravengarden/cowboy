@@ -1,6 +1,6 @@
 # Agent Code Intelligence from the Code Review Engine
 
-**Status: design proposal r3 (2026-11-05), not implemented.** r3 folds in two
+**Status: partially implemented; remaining gates below (2026-11-06).** r3 folds in two
 static design reviews (Fable 5.1, then Codex Astra Max). Agents become
 consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
 "Language engine" means the Engine's LSP-backed implementation, the
@@ -139,8 +139,10 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   `didOpen` version 0, but include version 1. Private server 1.11.0 starts
   document versions at 1 and only treats a publication as versioned when the
   exact LSP snapshot is retained. Zed's special version-0 fallback when no
-  snapshot exists is not analysis evidence. These changes still require
-  acceptance of the installed, serving pair; installation alone is not proof.
+  snapshot exists is not analysis evidence. Hawk's production MCP route returned
+  `document_current` for gopls after the 1.26.0 installation and Controller
+  activation; see the [exact release evidence](../releases/zed-initial-version-2026-11-06.md).
+  This remains document evidence, not project freshness.
 
 ### Acquisition: gated
 

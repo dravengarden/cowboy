@@ -442,6 +442,7 @@ primary phone/desktop product path.
 - [`releases/zed-snapshot-install-2026-09-19.md`](releases/zed-snapshot-install-2026-09-19.md) — Hawk Zed snapshot-lifetime installation — 2026-09-19
 - [`releases/zed-open-target-admission-2026-11-06.md`](releases/zed-open-target-admission-2026-11-06.md) — Zed 1.24.0 open admission confined to the target, publication and Hawk installation
 - [`releases/zed-pulled-versions-2026-11-06.md`](releases/zed-pulled-versions-2026-11-06.md) — Zed 1.25.0 pulled diagnostics attributed to the version pulled, publication and Hawk installation
+- [`releases/zed-initial-version-2026-11-06.md`](releases/zed-initial-version-2026-11-06.md) — Zed 1.26.0 nonzero initial LSP versions, exact native ownership and production document-current evidence
 - [`releases/review-call-failures-2026-11-06.md`](releases/review-call-failures-2026-11-06.md) — Retained review failure audit and exact Fable continuation configuration equivalence
 - [`releases/worker-pin-code-routing-2026-11-06.md`](releases/worker-pin-code-routing-2026-11-06.md) — Worker pin advance to bc6efdbea so idle code worktrees follow new Zed generations; Hawk Machine maintenance
 - [`releases/zed-open-recovery-2026-11-06.md`](releases/zed-open-recovery-2026-11-06.md) — Zed 1.23.0 same-process native open recovery publication and Hawk installation
