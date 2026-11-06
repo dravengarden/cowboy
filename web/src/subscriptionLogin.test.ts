@@ -339,6 +339,42 @@ test("storage failure, wrong dataset, and changed product account prevent login 
   f.invalidate(); await saved.cancel(); assertEquals(f.calls.length, count);
 });
 
+test("corrupt saved login permits only scoped receipt inspection and preserves the recovery fence", async () => {
+  const f = fixture();
+  const key = "cowboy:subscription-login:owner:account";
+  f.values.set(key, "broken-json");
+  const owner = subscriptionLogin(scope, f.ports); owner.restore();
+  assert(owner.snapshot.storageBlocked);
+  await owner.inspect("request");
+  assertEquals(owner.snapshot.observation?.status, "active");
+  assertEquals(f.calls.map((call) => call.path), ["/api/provider-accounts/account/logins/request"]);
+  assertEquals(owner.snapshot.events, []);
+  await owner.start(options, "native"); await owner.submit("code"); await owner.retry(); await owner.cancel();
+  assertEquals(f.calls.length, 1);
+  assertEquals(f.values.get(key), "broken-json");
+  f.setFetch(async () => Response.json({ status: "completed", request_id: "request", account_id: "other", provider_id: "claude-code", machine_id: "machine" }));
+  await owner.inspect("request");
+  assertEquals(owner.snapshot.observation, undefined);
+  assert(owner.snapshot.error);
+});
+
+test("temporary storage failure can recover the original submitted operation without replay", async () => {
+  const f = fixture();
+  const original = subscriptionLogin(scope, f.ports); original.restore(); await original.start(options, "native"); await original.submit("code");
+  let denied = true;
+  const owner = subscriptionLogin(scope, { ...f.ports, storage: { ...f.ports.storage, getItem: (key) => {
+    if (denied) throw new Error("storage unavailable");
+    return f.ports.storage.getItem(key);
+  } } });
+  owner.restore(); assert(owner.snapshot.storageBlocked);
+  const count = f.calls.length;
+  denied = false; owner.restore();
+  assert(!owner.snapshot.storageBlocked);
+  assertEquals(owner.snapshot.pending?.codeState, "accepted");
+  assertEquals(f.calls.length, count);
+  await owner.submit("second-code"); assertEquals(f.calls.length, count);
+});
+
 test("challenges are ephemeral, scoped, and cannot produce a dangerous navigation", async () => {
   const f = fixture();
   f.setFetch(async (path, init) => path.includes("/api/providers/") && init?.method === "POST" ? new Response(null, { status: 202 }) : Response.json(path.includes("/api/providers/") ? { request_id: "request", events: [{

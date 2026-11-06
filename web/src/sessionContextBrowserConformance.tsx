@@ -6,6 +6,7 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
+import { PreparingConversation } from "./PreparingConversation";
 import { SessionContextCue, SessionContinuedFrom, SessionHandedOffDock, SessionNextMessageBadge, SessionProvenance } from "./SessionContextCue";
 import {
   CLOSE_SESSION_SETTINGS_EVENT,
@@ -1042,6 +1043,27 @@ export async function runSessionContextBrowserConformance(
     flushSync(() => root.render(null));
     Socket.active.at(-1)?.publish({ type: "machines", machines: [machine], resync: true });
     await runCreateDefaultsBrowserChecks(sessions[1]!, "Claude · Mink");
+    sessions[1] = { ...sessions[1]!, title: "network", trashed_at_ms: Date.now() };
+    sessions[3] = { ...sessions[3]!, status: "starting", continued_from: sessions[1]!.id };
+    for (const width of [360, 680]) {
+      container.style.cssText = `width:${width}px;max-width:100%;margin:auto`;
+      flushSync(() => root.render(
+        <BrowserProductTheme>
+          <CssBaseline />
+          <Box sx={{ height: 560, display: "flex", flexDirection: "column-reverse" }}>
+            <PreparingConversation sessionId={sessions[3]!.id} location="columbus on ovh" />
+          </Box>
+        </BrowserProductTheme>,
+      ));
+      for (const socket of Socket.active) socket.publish({ type: "sessions", sessions });
+      await until(() => Boolean(container.querySelector('[data-session-handoff-link="trash"]')));
+      const status = container.querySelector('[role="status"]')!.getBoundingClientRect();
+      const bounds = container.getBoundingClientRect();
+      check(Math.abs(status.top + status.height / 2 - (bounds.top + bounds.height / 2)) < 65 && container.scrollWidth <= width,
+        `preparing ${width}: status is centered without horizontal overflow`);
+      check(Boolean(exactButton("Restore")), `preparing ${width}: source recovery stays visible`);
+      await observe?.(`preparing-${width}`);
+    }
   } finally {
     root.unmount();
     container.remove();

@@ -12,7 +12,7 @@ import { signalBootReady } from "./bootSnapshot";
 /** Lazy mounted behind ProductAuthGate on both surfaces. Fetches authoritative
  * labels/scope before presenting a reference received from an agent or CLI. */
 export function SubscriptionSignInHandoff({ hash }: { hash: string }): React.JSX.Element {
-  const [account, setAccount] = useState<{ scope: LoginScope; label: string }>();
+  const [account, setAccount] = useState<{ scope: LoginScope; label: string; loginAllowed: boolean }>();
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const reference = subscriptionSignInLink(hash);
@@ -32,7 +32,7 @@ export function SubscriptionSignInHandoff({ hash }: { hash: string }): React.JSX
         const found = value.registry.accounts.find((entry) => entry.id === accountId);
         if (!found) throw new Error("This subscription is not available to the current Cowboy account.");
         if (!abort.signal.aborted && !productSessionSignal().aborted && productSyncPrincipal() === owner) {
-          setAccount({ label: found.label, scope: { owner, dataset: value.dataset.dataset_id, account: found.id, provider: found.provider_id } });
+          setAccount({ label: found.label, loginAllowed: found.enabled && !found.revoking, scope: { owner, dataset: value.dataset.dataset_id, account: found.id, provider: found.provider_id } });
         }
       } catch (cause) {
         if (!abort.signal.aborted) setError(cause instanceof Error ? cause.message : "Could not load sign-in.");
@@ -42,7 +42,7 @@ export function SubscriptionSignInHandoff({ hash }: { hash: string }): React.JSX
   }, [accountId, attempt]);
   return <ConfirmSheet open onClose={closeSubscriptionSignIn} title={account ? `${account.label} · Sign in` : "Subscription sign-in"} wide>
     {account && reference
-      ? <SubscriptionLoginForm key={`${hash}:${account.scope.owner}:${account.scope.dataset}`} scope={account.scope} label={account.label} request={reference.request} onClose={closeSubscriptionSignIn}
+      ? <SubscriptionLoginForm key={`${hash}:${account.scope.owner}:${account.scope.dataset}`} scope={account.scope} label={account.label} loginAllowed={account.loginAllowed} request={reference.request} onClose={closeSubscriptionSignIn}
         onStarted={(request) => {
           history.replaceState(history.state, "", `${location.pathname}${location.search}#subscription-sign-in/${account.scope.account}/${request}`);
           window.dispatchEvent(new Event("hashchange"));

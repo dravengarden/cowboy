@@ -309,6 +309,15 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
     check(bar.textContent?.includes("◐ 2 working"), "the bar counts working tasks (subagent + call)");
     check(bar.textContent?.includes("✕ 1 failed"), "an unseen failure is counted");
     check(bar.getBoundingClientRect().height < 48, "the bar is one line");
+    bar.style.width = "220px";
+    await settle();
+    const opener = bar.querySelector<HTMLElement>("[data-background-tasks-open]")!;
+    check(opener.scrollWidth <= opener.clientWidth + 1, "status counts do not overflow a narrow pane");
+    check(
+      opener.querySelector("svg")!.getBoundingClientRect().right <= opener.getBoundingClientRect().right,
+      "the inspector entry stays inside a narrow pane",
+    );
+    bar.style.width = "";
     bar.querySelector<HTMLElement>("[data-background-tasks-open]")!.click();
     await waitFor(inspector, "the bar opens the inspector");
     check(

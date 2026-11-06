@@ -69,10 +69,10 @@ export function SubscriptionLogins({ scope, label, disabled, expanded }: { scope
             ? `Provider updated ${login.outdated.signed_in_version} → ${login.outdated.installed_version}`
             : undefined,
         ].filter(Boolean).join(" · ")} />
-      {expanded && <SubscriptionLogin scope={scope} label={label} request={login.request_id} status={login.status} disabled={busy} onChange={() => void load()} />}
+      {expanded && <SubscriptionLogin scope={scope} label={label} request={login.request_id} status={login.status} disabled={busy} loginAllowed={!disabled} onChange={() => void load()} />}
     </Stack>)}
     {expanded && <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-      <SubscriptionLogin scope={scope} label={label} disabled={disabled || busy}
+      <SubscriptionLogin scope={scope} label={label} disabled={disabled || busy} loginAllowed={!disabled}
         {...(page?.logins.find(outdated) ? { machine: page.logins.find(outdated)!.machine_id } : {})}
         startLabel={page?.logins.some(outdated) ? "Sign in again…"
           : page?.logins.some((login) => login.status === "completed") ? "Sign in on another Machine…" : "Sign in…"} onChange={() => void load()} />

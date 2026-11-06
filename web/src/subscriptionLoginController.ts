@@ -13,6 +13,7 @@ type Pending = LoginScope & { machine: string; cancelling: boolean; codeState?: 
 );
 export interface LoginObservation { status: string; request_id?: string; cancel_requested?: boolean }
 export interface LoginView {
+  storageBlocked?: boolean;
   pending?: Pending | undefined; observation?: LoginObservation | undefined; events: ProviderLoginEvent[]; busy: boolean; error: string;
   referenceMismatch?: boolean;
   checking?: boolean;
@@ -75,6 +76,21 @@ function sameAttempt(left: Pending, right: Pending): boolean {
   return (["machine", "operation", "request", "version", "digest", "method"] as const).every((field) => left[field] === right[field]);
 }
 
+function validateObservation(value: unknown, pending: Pending, previous?: LoginObservation): asserts value is Record<string, unknown> & LoginObservation {
+  if (!object(value) || !text(value.status) ||
+    (value.cancel_requested !== undefined && typeof value.cancel_requested !== "boolean") ||
+    (!["unknown", "cancellation_requested"].includes(value.status) &&
+      (value.account_id !== pending.account || value.provider_id !== pending.provider || value.machine_id !== pending.machine || !id(value.request_id))) ||
+    (value.request_id !== undefined && !id(value.request_id)) ||
+    (value.account_id !== undefined && value.account_id !== pending.account) ||
+    (value.provider_id !== undefined && value.provider_id !== pending.provider) ||
+    (value.machine_id !== undefined && value.machine_id !== pending.machine) ||
+    (pending.request !== undefined && value.request_id !== pending.request) ||
+    (previous?.request_id && value.request_id && previous.request_id !== value.request_id)) {
+    throw new Error("Sign-in response does not match this operation.");
+  }
+}
+
 /** One persisted operation per account. Only metadata is stored, never codes or links.
  * No mutation on mount/unmount, automatic login retry, or vendor polling. */
 export function subscriptionLogin(scope: LoginScope, ports: {
@@ -131,18 +147,7 @@ export function subscriptionLogin(scope: LoginScope, ports: {
     return value;
   }
   function observe(value: unknown, pending: Pending): void {
-    if (!object(value) || !text(value.status) ||
-      (value.cancel_requested !== undefined && typeof value.cancel_requested !== "boolean") ||
-      (!["unknown", "cancellation_requested"].includes(value.status) &&
-        (value.account_id !== pending.account || value.provider_id !== pending.provider || value.machine_id !== pending.machine || !id(value.request_id))) ||
-      (value.request_id !== undefined && !id(value.request_id)) ||
-      (value.account_id !== undefined && value.account_id !== pending.account) ||
-      (value.provider_id !== undefined && value.provider_id !== pending.provider) ||
-      (value.machine_id !== undefined && value.machine_id !== pending.machine) ||
-      (pending.request !== undefined && value.request_id !== pending.request) ||
-      (state.observation?.request_id && value.request_id && state.observation.request_id !== value.request_id)) {
-      throw new Error("Sign-in response does not match this operation.");
-    }
+    validateObservation(value, pending, state.observation);
     // Keep the same live challenge mounted during receipt polling. Unmounting
     // it every two seconds discards a code while the user is entering it.
     // Terminal/cancellation transitions and all read failures still clear it.
@@ -165,8 +170,8 @@ export function subscriptionLogin(scope: LoginScope, ports: {
       publish({ events: eventsFrom(events, scope.provider, observation.request_id) });
     }
   }
-  async function run(action: () => Promise<void>, checking = false) {
-    if (!ready || state.busy || !ports.current()) return;
+  async function run(action: () => Promise<void>, checking = false, readOnlyRecovery = false) {
+    if ((!ready && !readOnlyRecovery) || state.busy || !ports.current()) return;
     publish({ busy: true, checking, error: "" });
     try { await action(); } catch (error) {
       publish({ error: error instanceof Error ? error.message : "Sign-in is not confirmed. Check status.", events: [], observation: undefined });
@@ -187,6 +192,8 @@ export function subscriptionLogin(scope: LoginScope, ports: {
   return {
     get snapshot() { return state; },
     restore() {
+      if (state.busy || !ports.current()) return;
+      ready = false;
       try {
         const saved = ports.storage.getItem(key);
         if (saved) {
@@ -195,8 +202,17 @@ export function subscriptionLogin(scope: LoginScope, ports: {
           publish({ pending: pending.codeState === "submitting" ? { ...pending, codeState: "unconfirmed" } : pending });
         }
         ready = true;
-      } catch { publish({ error: "Saved sign-in could not be read. No new login will start." }); }
+        publish({ storageBlocked: false, error: "" });
+      } catch { publish({ storageBlocked: true, events: [], observation: undefined, error: "Saved sign-in could not be read. No new login will start." }); }
     },
+    inspect(reference: string) { return run(async () => {
+      if (!state.storageBlocked || !id(reference)) throw new Error("Invalid recovery reference.");
+      const value = await request(`/api/provider-accounts/${scope.account}/logins/${reference}`);
+      if (!object(value) || !id(value.machine_id) || value.request_id !== reference) throw new Error("Sign-in could not be found for this account.");
+      // Read the scoped receipt only. A missing local submission marker must
+      // never become permission to fetch a challenge or submit another code.
+      observe(value, { ...scope, request: reference, machine: value.machine_id, cancelling: value.cancel_requested === true });
+    }, true, true); },
     resume(reference: string) { return run(async () => {
       if (!id(reference)) throw new Error("Invalid sign-in reference.");
       const mismatch = () => {
