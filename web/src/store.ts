@@ -1,5 +1,5 @@
 import { createBootstrapPresentation } from "./bootstrapPresentation";
-import { validReviewDirectory } from "./reviewDirectoryIdentity";
+
 import { transcriptNeedsHydration, transcriptRetryDelay } from "./transcriptHydrationPolicy";
 import { browserDeviceProtocol, resetBrowserDeviceChallenge } from "./browserDevice";
 import { createAuthoredSendGate } from "./authoredSendGate";
@@ -138,28 +138,9 @@ import {
   acceptsMachineSnapshot,
   projectMachineOccupancy,
 } from "./machineState";
-import {
-  type ConfigOption,
-  type ClientCapacity,
-  type ContentBlock,
-  type Delivery,
-  type DraftSchedule,
-  type Envelope,
-  type Inbound,
-  isPureTerminalOutputDelta,
-  type MachineSummary,
-  type Outbound,
-  type SessionBootstrapResponse,
-  type SessionMeta,
-  type WireQueued,
-} from "./protocol";
+import { type ConfigOption, type ClientCapacity, type ContentBlock, type Delivery, type DraftSchedule, type Envelope, type Inbound, type MachineSummary, type Outbound, type SessionBootstrapResponse, type SessionMeta, type WireQueued } from "./protocol";
 import { observePromptSuggestion } from "./promptSuggestions";
-import {
-  dropEventsBefore,
-  lastContextClearSeq,
-  mergeCanonicalTimeline,
-  snapshotJoinGap,
-} from "./canonicalTimeline";
+import { dropEventsBefore, lastContextClearSeq, snapshotJoinGap } from "./canonicalTimeline";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
 import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
 import { readUsage, startUsageRefresh } from "./usageApi";
@@ -202,6 +183,10 @@ export interface ErrorNotice {
 /// into `conn` and read back its reconnect delay; bundle checks, downloads and
 /// guarded navigation live in clientConnection, independently of this store.
 export { conn } from "./clientConnection";
+import { deriveSessions, type TitleMap, type OrderList } from "./sessionDerivation";
+import { mobileReviewMutators, type MobileReviewState } from "./mobileReviewState";
+export type { MobileReviewTabState, MobileReviewState } from "./mobileReviewState";
+import { applyEnvelope, mergeEvents, containsSeq } from "./storeTimeline";
 import { conn } from "./clientConnection";
 
 /// One staged message — a queued prompt or a draft. SERVER-AUTHORITATIVE: the
@@ -1110,153 +1095,6 @@ function sameQueuedContent(
   return left.text === right.text &&
     JSON.stringify(contentOf(left.text, left.attachments)) ===
       JSON.stringify(contentOf(right.text, right.attachments));
-}
-
-// A canonical live envelope may absorb many raw sequence numbers. Keep those
-// numbers out-of-band so reconnect snapshots can still deduplicate their raw
-// overlap without retaining every large payload. Weak keys disappear with the
-// timeline rows they describe.
-const absorbedSeqs = new WeakMap<Envelope, Set<number>>();
-
-function absorbed(previous: Envelope, replacement: Envelope, seq: number): Envelope {
-  const seen = absorbedSeqs.get(previous) ?? new Set([previous.seq]);
-  seen.add(seq);
-  absorbedSeqs.set(replacement, seen);
-  return replacement;
-}
-
-function containsSeq(events: Envelope[], seq: number): boolean {
-  const last = events[events.length - 1];
-  if (last && absorbedSeqs.get(last)?.has(seq) === true) return true;
-  // Live traffic is monotonic. Avoid scanning the whole visible history for
-  // the overwhelmingly common append case; reconnect/history overlap falls
-  // through to the full check below.
-  if (last && seq > last.seq) return false;
-  return events.some((event) => event.seq === seq || absorbedSeqs.get(event)?.has(seq) === true);
-}
-
-function findLatestTool(events: Envelope[], toolId: string): number {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const candidate = events[index];
-    if (
-      candidate?.kind === "update" &&
-      candidate.update.sessionUpdate === "tool_call" &&
-      candidate.update.toolCallId === toolId
-    ) return index;
-  }
-  return -1;
-}
-
-function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<string, Envelope[]> {
-  const existing = timelines.get(env.session_id) ?? [];
-  if (containsSeq(existing, env.seq)) return timelines; // dedup
-
-  // Clear is a destructive transcript boundary, not an ordinary divider.
-  // Replace the local history immediately; the daemon deletes the same rows
-  // durably so a reload cannot restore them.
-  if (
-    env.kind === "update" &&
-    env.update.sessionUpdate === "context_cleared"
-  ) {
-    const next = new Map(timelines);
-    next.set(env.session_id, [env]);
-    return next;
-  }
-
-  // These high-frequency frames are runtime telemetry, not transcript history.
-  // The daemon persists their sequence watermark without storing a row; mirror
-  // that canonical representation in the live client so long turns don't grow
-  // one inert object per token update.
-  if (
-    env.kind === "update" &&
-    (env.update.sessionUpdate === "usage_update" ||
-      env.update.sessionUpdate === "session_info_update" ||
-      isPureTerminalOutputDelta(env.update))
-  ) {
-    return timelines;
-  }
-
-  let merged: Envelope[] | undefined;
-  if (env.kind === "update") {
-    const updateKind = env.update.sessionUpdate;
-    if (
-      updateKind === "agent_message_chunk" ||
-      updateKind === "agent_thought_chunk" ||
-      updateKind === "user_message_chunk"
-    ) {
-      const last = existing[existing.length - 1];
-      if (
-        last?.kind === "update" &&
-        last.update.sessionUpdate === updateKind &&
-        last.update.messageId === env.update.messageId &&
-        last.update.content?.type === "text" &&
-        env.update.content?.type === "text"
-      ) {
-        const replacement: Envelope = {
-          ...last,
-          update: {
-            ...last.update,
-            content: {
-              ...last.update.content,
-              text: `${last.update.content.text ?? ""}${env.update.content.text ?? ""}`,
-            },
-          },
-        };
-        merged = linkTimeline(
-          [...existing.slice(0, -1), absorbed(last, replacement, env.seq)],
-          existing,
-        );
-      }
-    } else if (updateKind === "tool_call_update") {
-      const toolId = env.update.toolCallId;
-      const index = toolId ? findLatestTool(existing, toolId) : -1;
-      const initial = index >= 0 ? existing[index] : undefined;
-      if (initial?.kind === "update") {
-        const replacement: Envelope = {
-          ...initial,
-          update: {
-            ...initial.update,
-            ...env.update,
-            sessionUpdate: "tool_call",
-          },
-        };
-        merged = linkTimeline([...existing], existing);
-        merged[index] = absorbed(initial, replacement, env.seq);
-      }
-    }
-  }
-
-  merged ??= linkTimeline(
-    existing.length === 0 || env.seq > (existing[existing.length - 1]?.seq ?? 0)
-      ? [...existing, env]
-      : [...existing, env].sort((a, b) => a.seq - b.seq),
-    existing,
-  );
-  const next = new Map(timelines);
-  next.set(env.session_id, merged);
-  return next;
-}
-
-// Merge two seq-ordered runs in linear time while preserving object identity
-// for existing events. Scrollback used to scan the whole window for every
-// incoming event and then sort the combined window on every page, making
-// progressively older history increasingly expensive.
-function mergeEvents(
-  timelines: Map<string, Envelope[]>,
-  sessionId: string,
-  events: Envelope[],
-): Map<string, Envelope[]> {
-  const existing = timelines.get(sessionId) ?? [];
-  const merged = mergeCanonicalTimeline(existing, events);
-  if (
-    merged.length === existing.length &&
-    merged.every((event, index) => event === existing[index])
-  ) {
-    return timelines;
-  }
-  const next = new Map(timelines);
-  next.set(sessionId, linkTimeline(merged, existing));
-  return next;
 }
 
 // Fetch the next OLDER page of a session's history and prepend it. Pages come
@@ -2729,9 +2567,6 @@ function newCmid(): string {
 // are overlays on top, so we keep the raw list and re-derive on any change.
 let rawSessions: SessionMeta[] = [];
 
-type TitleMap = Readonly<Record<string, string>>;
-type OrderList = readonly string[];
-
 const titleMutators = {
   rename: (m: TitleMap, a: { session_id: string; title: string }): TitleMap => ({ ...m, [a.session_id]: a.title }),
 } satisfies Mutators<TitleMap>;
@@ -3389,145 +3224,12 @@ const foldersSync = registerSync<SessionFoldersValue, typeof sessionFolderMutato
   EMPTY_SESSION_FOLDERS,
 );
 
-export interface MobileReviewTabState {
-  readonly path: string;
-  readonly pinned: boolean;
-}
-
-export interface MobileReviewState {
-  readonly open_revision?: number;
-  readonly reveal_revision?: number;
-  readonly directory?: string | null;
-  readonly remote_review?: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null;
-  readonly remote_selected?: boolean;
-  /** `""` is uncommitted work; absent follows the repository default. */
-  readonly comparison?: string;
-  /** Other code contexts this session works in. */
-  readonly bindings?: readonly string[];
-  readonly mode: "files" | "git";
-  readonly tabs: readonly MobileReviewTabState[];
-  readonly active?: string;
-  readonly progress: Readonly<Record<string, string>>;
-  readonly positions: Readonly<
-    Record<string, { readonly line: number; readonly revision?: string }>
-  >;
-}
-
 const EMPTY_MOBILE_REVIEW_STATE: MobileReviewState = {
   mode: "git",
   tabs: [],
   progress: {},
   positions: {},
 };
-
-const mobileReviewMutators = {
-  setDirectory: (value: MobileReviewState, args: { directory?: string | null; inherit?: boolean }): MobileReviewState => {
-    if ((args.inherit && args.directory !== undefined) || (!args.inherit && args.directory !== null && !validReviewDirectory(args.directory))) throw new Error("Invalid Review directory");
-    const next = { ...value };
-    if (args.inherit) delete next.directory;
-    else if (args.directory !== undefined) return { ...value, directory: args.directory };
-    return next;
-  },
-  setRemoteReview: (
-    value: MobileReviewState,
-    args: { binding: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null },
-  ): MobileReviewState => ({ ...value, remote_review: args.binding }),
-  selectRemoteReview: (
-    value: MobileReviewState, args: { selected: boolean },
-  ): MobileReviewState => ({ ...value, remote_selected: args.selected }),
-  setComparison: (
-    value: MobileReviewState, args: { comparison: string | null },
-  ): MobileReviewState => {
-    const { comparison: _comparison, ...rest } = value;
-    return args.comparison === null ? rest : { ...rest, comparison: args.comparison };
-  },
-  bind: (value: MobileReviewState, args: { context: string }): MobileReviewState => ({
-    ...value,
-    bindings: [...new Set([...(value.bindings ?? []), args.context])],
-  }),
-  unbind: (value: MobileReviewState, args: { context: string }): MobileReviewState => {
-    const { bindings = [], ...rest } = value;
-    const kept = bindings.filter((context) => context !== args.context);
-    return kept.length > 0 ? { ...rest, bindings: kept } : rest;
-  },
-  open: (value: MobileReviewState, args: { path: string; reveal?: boolean }): MobileReviewState => {
-    const existing = value.tabs.find((tab) => tab.path === args.path);
-    let tabs = existing ? [...value.tabs] : [...value.tabs, { path: args.path, pinned: false }];
-    if (tabs.length > 12) {
-      const evict = tabs.findIndex((tab) => !tab.pinned);
-      tabs = tabs.filter((_, index) => index !== (evict < 0 ? 0 : evict));
-    }
-    return { ...value, mode: "files", tabs, active: args.path, open_revision: (value.open_revision ?? 0) + 1,
-      ...(args.reveal ? { reveal_revision: (value.reveal_revision ?? 0) + 1, remote_selected: false } : {}) };
-  },
-  close: (value: MobileReviewState, args: { path: string }): MobileReviewState => {
-    const tabs = value.tabs.filter((tab) => tab.path !== args.path);
-    const active = value.active === args.path ? tabs.at(-1)?.path : value.active;
-    const { active: _active, ...rest } = value;
-    return {
-      ...rest,
-      tabs,
-      ...(active === undefined ? {} : { active }),
-    };
-  },
-  reorder: (value: MobileReviewState, args: { paths: readonly string[] }): MobileReviewState => {
-    const position = new Map(args.paths.map((path, index) => [path, index]));
-    return {
-      ...value,
-      tabs: [...value.tabs].sort((left, right) =>
-        (position.get(left.path) ?? Number.MAX_SAFE_INTEGER) -
-        (position.get(right.path) ?? Number.MAX_SAFE_INTEGER)
-      ),
-    };
-  },
-  setPinned: (
-    value: MobileReviewState,
-    args: { path: string; pinned: boolean },
-  ): MobileReviewState => ({
-    ...value,
-    tabs: value.tabs.map((tab) =>
-      tab.path === args.path ? { ...tab, pinned: args.pinned } : tab
-    ),
-  }),
-  activate: (
-    value: MobileReviewState,
-    args: { path: string | null },
-  ): MobileReviewState => {
-    const { active: _active, ...rest } = value;
-    return {
-      ...rest,
-      ...(args.path && value.tabs.some((tab) => tab.path === args.path)
-        ? { active: args.path }
-        : {}),
-    };
-  },
-  setMode: (
-    value: MobileReviewState,
-    args: { mode: "files" | "git" },
-  ): MobileReviewState => ({ ...value, mode: args.mode }),
-  markReviewed: (
-    value: MobileReviewState,
-    args: { key: string; revision: string | null },
-  ): MobileReviewState => {
-    const progress = { ...value.progress };
-    if (args.revision === null) delete progress[args.key];
-    else progress[args.key] = args.revision;
-    return { ...value, progress };
-  },
-  setPosition: (
-    value: MobileReviewState,
-    args: { path: string; line: number; revision: string | null },
-  ): MobileReviewState => ({
-    ...value,
-    positions: {
-      ...value.positions,
-      [args.path]: {
-        line: Math.max(1, Math.trunc(args.line)),
-        ...(args.revision === null ? {} : { revision: args.revision }),
-      },
-    },
-  }),
-} satisfies Mutators<MobileReviewState>;
 
 type MobileReviewMutation = keyof typeof mobileReviewMutators & string;
 const mobileReviewClients = new Map<
@@ -3603,26 +3305,6 @@ export function mutateMobileReview<K extends MobileReviewMutation>(
   }
   mobileReviewClient(sessionId).mutate(name, args);
   commitMobileReview(sessionId);
-}
-
-/** Apply the title + order overlays to the raw session list (title override
- *  wins; then a stable sort by the synced order — ids not in `order` keep their
- *  relative position at the end, mirroring the daemon's `sort_by_id_order`). */
-function deriveSessions(raw: SessionMeta[], titles: TitleMap, order: OrderList): SessionMeta[] {
-  const titled = raw.map((s) => {
-    const t = titles[s.id];
-    return t !== undefined && t !== s.title ? { ...s, title: t } : s;
-  });
-  if (order.length === 0) return titled;
-  const pos = new Map(order.map((id, i): [string, number] => [id, i]));
-  return titled
-    .map((s, i): { s: SessionMeta; i: number } => ({ s, i }))
-    .sort((a, b) => {
-      const pa = pos.get(a.s.id) ?? Number.MAX_SAFE_INTEGER;
-      const pb = pos.get(b.s.id) ?? Number.MAX_SAFE_INTEGER;
-      return pa !== pb ? pa - pb : a.i - b.i;
-    })
-    .map((x) => x.s);
 }
 
 /** Re-derive the rendered session list from the raw list + every synced overlay
@@ -5632,8 +5314,6 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
     "Send queued message",
   );
 }
-
-
 
 // Edit a queued prompt in place — text AND attachments. Clearing both removes it
 // (handled server-side).
