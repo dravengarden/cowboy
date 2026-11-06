@@ -76,6 +76,23 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
+/** All live call prompts, including sessions whose conversation is closed. */
+export function useCallApprovalSessionIds(): string {
+  const snapshot = useSyncExternalStore(subscribe, () => JSON.stringify(
+    [...entries].filter(([, entry]) => entry.until > Date.now()).map(([id, entry]) => [id, entry.until]).sort(),
+  ), () => "[]");
+  useEffect(() => {
+    const until = Math.min(...[...entries.values()].map((entry) => entry.until));
+    if (!Number.isFinite(until)) return;
+    const timer = globalThis.setTimeout(() => {
+      for (const [id, entry] of entries) if (entry.until <= Date.now()) entries.delete(id);
+      emit();
+    }, Math.max(0, until - Date.now()) + 1);
+    return (): void => globalThis.clearTimeout(timer);
+  }, [snapshot]);
+  return JSON.stringify((JSON.parse(snapshot) as [string, number][]).map(([id]) => id));
+}
+
 /** Fold one pushed prompt (or its removal) into the local view. */
 export function receiveCallApproval(
   sessionId: string,
