@@ -1,11 +1,12 @@
 # Original-peer native close confirmation
 
-## Original-operation recovery candidate
+## Original-operation recovery release
 
 Zed `1.27.0` pairs adapter `1.27.0` with private server `1.12.0` and
-introduces private Close protocol 2. The implementation below is a release
-candidate until exact signed artifacts and serving-process acceptance are
-recorded; the original protocol-1 acceptance follows separately.
+introduces private Close protocol 2. Its signed artifacts were published on
+2026-11-06; Machine maintenance, installation and serving-process acceptance
+remain separate and are not implied by publication. The original protocol-1
+acceptance follows separately.
 
 Before dispatch, the adapter retains a non-recycled operation ID, server
 instance, complete native ID set and original local owner bindings. The
@@ -34,12 +35,12 @@ the same native IDs have been shared anew. Forget cannot advance that mark.
 Process loss invalidates this process-local evidence; Controller restart does
 not gain authority to adopt a replacement adapter or reconstruct old owners.
 
-The 2026-11-06 candidate passed 68 native server tests and the isolated
-`zed-native-navigation-conformance` gate against these static artifacts:
+The native server passed 68 tests. On 2026-11-06 the final published pair
+passed the isolated `zed-native-navigation-conformance` gate:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| Adapter 1.27.0 | `b8b522c43df2cdf1e06e29d505eaf62ddc35271547c9be5643a5162205517006` |
+| Adapter 1.27.0 | `4118af66fa6716b4e02e129178a4c16649ec739e26f00225ba84950a062c4579` |
 | Server 1.12.0 | `a5c55631eaa36492f291745bcd73ec559091a83f1f85edfd8d7f298a4cb7848e` |
 
 The fault fixture discards a real Closed reply, observes retained local
@@ -47,6 +48,15 @@ uncertainty, then recovers by the original receipt. Duplicate open of the
 released lease remains refused. The same gate covers nonempty LSP navigation,
 independent handoff, native input bounds and synchronization recovery. These
 are isolated acceptance results, not evidence of production activation.
+
+Source `5e8dc29f74b81da6ae6c9ac15f4522d73696eb9e` produced signed artifact
+`sha256:856370dffc2f32dbe5a25884510ea68416259147bd65502369b328f9235b4d2f`.
+The active and next-transaction recovery Controller readers accepted its exact
+envelope before publication. The Catalog reported `ready`, and independent
+HTTP reads of the published package, adapter and server matched all three
+content-addressed digests. The publication receipt is
+`zed-1.27.0-856370dffc2f32dbe5a25884510ea68416259147bd65502369b328f9235b4d2f.json`
+in the host Catalog's `receipts/`, recorded at `2026-11-06T11:44:36.145Z`.
 
 ## Original protocol-1 acceptance
 
