@@ -91,7 +91,7 @@ closure validation remains strict and historical release records stay unchanged.
 
 Scoped release 3.85.0 records app-shell 1.1.39 for the already-committed
 floating dock, footer edge and test-assertion changes after 3.84.0
-(`bd212af9`..`fc0d5544`); no Plugin depends on that component, so the worker
+(`bd212af9`..`ca711c65`); no Plugin depends on that component, so the worker
 registry input is unchanged. Native pins are unchanged.
 
 Scoped release 3.81.0 records app-shell 1.1.36 for the already-committed

@@ -2922,7 +2922,7 @@
           "sources": [
             "components/app-shell"
           ],
-          "digest": "sha256:a83c1c921ffcfdfd8773bb777908a1f675fc368ee8a741468e9c9fc70e0fe6a5",
+          "digest": "sha256:7871023f23cf711f745483b935a4fc8a76b687cfbb389d76ac59e909e6fefeb3",
           "package": {
             "kind": "npm",
             "name": "@cowboy/app-shell",
