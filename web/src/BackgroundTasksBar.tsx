@@ -66,6 +66,9 @@ export function BackgroundTasksBarView({
   if (summary.notReporting > 0) parts.push({ key: "not-reporting", text: `○ ${String(summary.notReporting)} not reporting`, color: "text.secondary" });
   if (summary.needsYou > 0) parts.push({ key: "needs", text: `⚠ ${String(summary.needsYou)} needs you`, color: "warning.main" });
   if (summary.failed > 0) parts.push({ key: "failed", text: `✕ ${String(summary.failed)} failed`, color: "error.main" });
+  // Keep actionable states visible when a narrow pane clips the summary.
+  parts.sort((a, b) => ["needs", "failed", "not-reporting", "working"].indexOf(a.key) -
+    ["needs", "failed", "not-reporting", "working"].indexOf(b.key));
   const lead = summary.lead;
   const leadText = lead
     ? `${lead.title}${lead.subtitle ? ` ${lead.subtitle.split(" · ").at(-1) ?? ""}` : ""}`
@@ -103,10 +106,11 @@ export function BackgroundTasksBarView({
           variant="caption"
           noWrap
           component="span"
-          sx={{ display: "flex", gap: 0.75, flexShrink: 0, fontWeight: 650 }}
+          title={parts.map((part) => part.text).join(" · ")}
+          sx={{ display: "flex", gap: 0.75, minWidth: 0, overflow: "hidden", fontWeight: 650 }}
         >
           {parts.map((part, index) => (
-            <Box key={part.key} component="span" data-bar-part={part.key} sx={{ color: part.color }}>
+            <Box key={part.key} component="span" data-bar-part={part.key} sx={{ color: part.color, flexShrink: 0 }}>
               {index > 0 ? "· " : ""}{part.text}
             </Box>
           ))}
@@ -127,6 +131,7 @@ export function BackgroundTasksBarView({
             noWrap
             component="span"
             data-bar-lead={lead?.key}
+            title={leadText}
             sx={{ flex: 1, minWidth: 0, color: "text.secondary" }}
           >
             — {leadText}
