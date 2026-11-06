@@ -5,6 +5,9 @@ use crate::{ZedRuntime, *};
 use anyhow::ensure;
 use wire::cowboy_navigation_response::{Outcome, Refusal};
 
+mod recovery;
+pub(super) use recovery::Ticket;
+
 #[derive(Debug)]
 pub(super) struct NativeRefusal(pub(super) Refusal);
 
@@ -20,7 +23,7 @@ fn decode(
     response: &wire::CowboyNavigationResponse,
 ) -> Result<Vec<proto::LspResponse>> {
     ensure!(
-        response.protocol == 1,
+        matches!(response.protocol, 1 | 2),
         "unsupported native navigation protocol"
     );
     let outcome = Outcome::from_i32(response.outcome).context("invalid navigation outcome")?;
@@ -70,6 +73,7 @@ async fn exchange(zed: &ZedRuntime, query: Vec<u8>) -> Result<Vec<proto::LspResp
                 project_id: proto::REMOTE_SERVER_PROJECT_ID,
                 protocol: 1,
                 query,
+                ..Default::default()
             }),
         )
         .await?;
@@ -84,6 +88,7 @@ pub(super) async fn support(zed: Option<&Zed>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) async fn query(
     zed: &ZedRuntime,
     request: proto::lsp_query::Request,

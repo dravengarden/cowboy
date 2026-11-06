@@ -145,8 +145,11 @@ fn validate_response(
 pub(super) struct Transport {
     outbound: mpsc::Sender<wire::CowboyBufferSyncEnvelope>,
     pending: Pending,
+    navigation_sequence: AtomicU64,
     #[cfg(test)]
     close_fault: std::sync::atomic::AtomicU8,
+    #[cfg(test)]
+    navigation_fault: std::sync::atomic::AtomicU8,
 }
 
 struct PendingGuard<'a> {
@@ -171,8 +174,11 @@ impl Transport {
             Arc::new(Self {
                 outbound,
                 pending: Arc::default(),
+                navigation_sequence: AtomicU64::new(1),
                 #[cfg(test)]
                 close_fault: std::sync::atomic::AtomicU8::new(0),
+                #[cfg(test)]
+                navigation_fault: std::sync::atomic::AtomicU8::new(0),
             }),
             receiver,
         )
@@ -228,6 +234,16 @@ impl Transport {
         {
             return true;
         }
+        #[cfg(test)]
+        if matches!(response.as_ref(), Some(Payload::NavigationResponse(value))
+            if value.protocol == 2 && value.outcome == wire::cowboy_navigation_response::Outcome::Complete as i32)
+            && self
+                .navigation_fault
+                .compare_exchange(1, 2, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            return true;
+        }
         let _ = sender.send(response);
         true
     }
@@ -240,6 +256,11 @@ impl Transport {
     #[cfg(test)]
     pub(crate) fn discarded_close_response(&self) -> bool {
         self.close_fault.load(Ordering::Relaxed) == 2
+    }
+
+    #[cfg(test)]
+    pub(crate) fn discard_next_navigation_response(&self) {
+        assert_eq!(self.navigation_fault.swap(1, Ordering::Relaxed), 0);
     }
 
     pub async fn request(
@@ -298,6 +319,27 @@ impl Transport {
                 (id > 0 && id < 1_000_000_000).then_some(id + 1)
             })
             .map_err(|_| anyhow::anyhow!("native request IDs exhausted"))
+    }
+
+    pub(super) fn navigation_id(&self) -> Result<u64> {
+        self.navigation_sequence
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| anyhow::anyhow!("navigation operation IDs exhausted"))
+    }
+
+    pub(super) fn forget_navigation(
+        &self,
+        zed: &ZedRuntime,
+        mut request: wire::CowboyNavigation,
+    ) -> Result<()> {
+        request.action = wire::cowboy_navigation::Action::Forget as i32;
+        self.outbound
+            .try_send(wire::CowboyBufferSyncEnvelope {
+                id: Self::message_id(zed)?,
+                responding_to: None,
+                payload: Some(Payload::NavigationRequest(request)),
+            })
+            .context("native navigation retirement queue unavailable")
     }
 
     /// Receipt GC only, after a matching Closed observation. This cannot

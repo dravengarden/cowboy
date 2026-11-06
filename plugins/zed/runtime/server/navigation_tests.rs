@@ -201,6 +201,7 @@ async fn cowboy_navigation_two_real_request_handlers_refuse_before_any_target_op
             request,
             PeerId::default(),
             &mut cx.to_async(),
+            None,
         )
         .await;
         if let Some(reason) = reason {
@@ -211,7 +212,7 @@ async fn cowboy_navigation_two_real_request_handlers_refuse_before_any_target_op
             assert!(result.responses.iter().all(|response| matches!(&response.response, Some(proto::lsp_response::Response::GetDefinitionResponse(value)) if value.links.len() == 128)));
         }
         assert_eq!(
-            store.read_with(cx, |store, _| store.cowboy_navigation.1),
+            store.read_with(cx, |store, _| store.cowboy_navigation.acquisitions),
             expected_opens
         );
     }
@@ -241,7 +242,8 @@ async fn cowboy_navigation_two_real_request_handlers_refuse_before_any_target_op
             store.clone(),
             request.clone(),
             PeerId::default(),
-            &mut cx.to_async()
+            &mut cx.to_async(),
+            None,
         )
         .await
         .unwrap_err(),
@@ -261,7 +263,8 @@ async fn cowboy_navigation_two_real_request_handlers_refuse_before_any_target_op
             store.clone(),
             request,
             PeerId::default(),
-            &mut cx.to_async()
+            &mut cx.to_async(),
+            None,
         )
         .await
         .unwrap_err(),
@@ -288,6 +291,7 @@ async fn cowboy_navigation_two_real_request_handlers_refuse_before_any_target_op
         request,
         PeerId::default(),
         &mut cx.to_async(),
+        None,
     )
     .await;
     assert_eq!(result.unwrap_err(), Refusal::Source);
@@ -296,5 +300,8 @@ async fn cowboy_navigation_two_real_request_handlers_refuse_before_any_target_op
         calls_before,
         "lost source ownership dispatched language queries"
     );
-    assert_eq!(store.read_with(cx, |store, _| store.cowboy_navigation.1), 2);
+    assert_eq!(
+        store.read_with(cx, |store, _| store.cowboy_navigation.acquisitions),
+        2
+    );
 }

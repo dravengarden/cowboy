@@ -39,7 +39,7 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.12.0";
+  version = "1.13.0";
   inherit src cargoDeps;
   patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ./server/acquisition-bounds.patch ./server/replacement-bounds.patch ./server/snapshot-lifetimes.patch ./server/remote-edits.patch ];
   postPatch = ''
@@ -67,6 +67,7 @@ in platform.buildRustPackage {
     mkdir -p crates/project/src/lsp_store/cowboy_navigation
     cp ${./server/cowboy_navigation.rs} crates/project/src/lsp_store/cowboy_navigation.rs
     cp ${./server/navigation_tests.rs} crates/project/src/lsp_store/cowboy_navigation/tests.rs
+    cp ${./server/navigation_receipts.rs} crates/project/src/lsp_store/navigation_receipts.rs
     mkdir -p crates/project/src/lsp_store/cowboy_frontier
     cp ${./server/cowboy_frontier.rs} crates/project/src/lsp_store/cowboy_frontier.rs
     cp ${./server/frontier_tests.rs} crates/project/src/lsp_store/cowboy_frontier/tests.rs
