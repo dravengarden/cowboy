@@ -5,7 +5,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { test } from "bun:test";
 import { assertEquals, assertNotEquals, assertThrows } from "./test-assert.ts";
 import { workerRegistryInput, workerRegistryProjection } from "./worker-registry-input.ts";
-import { mergedComponentRegistrySource, readComponentRegistrySources } from "./component-registry.ts";
+import {
+  mergedComponentRegistrySource,
+  readComponentRegistrySources,
+} from "./component-registry.ts";
 
 function fixture() {
   const baseline = {
@@ -134,7 +137,10 @@ test("archiving releases leaves the worker input unchanged", async () => {
   const registry = fixture();
   const unsplit = await workerRegistryInput(encode(registry));
   const live = { ...registry, releases: registry.releases.slice(1) };
-  const archive = { schema_version: registry.schema_version, releases: registry.releases.slice(0, 1) };
+  const archive = {
+    schema_version: registry.schema_version,
+    releases: registry.releases.slice(0, 1),
+  };
   const merged = mergedComponentRegistrySource({ live: encode(live), archive: encode(archive) });
   assertEquals(merged, encode(registry));
   assertEquals(await workerRegistryInput(merged), unsplit);

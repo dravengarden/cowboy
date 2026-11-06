@@ -2,7 +2,10 @@
 // A tail changing only the unconsumed Web app shell is not a worker rollout.
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { mergedComponentRegistrySource, readComponentRegistrySources } from "./component-registry.ts";
+import {
+  mergedComponentRegistrySource,
+  readComponentRegistrySources,
+} from "./component-registry.ts";
 interface Release extends Record<string, unknown> {
   version: string;
   components: Array<{ id: string; [key: string]: unknown }>;

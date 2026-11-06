@@ -68,7 +68,10 @@ export function readComponentRegistrySources(root = "."): { live: string; archiv
 /** The merged registry, re-encoded in the historical two-space form. */
 export function mergedComponentRegistrySource(sources: { live: string; archive: string }): string {
   return (
-    JSON.stringify(mergeComponentRegistry(JSON.parse(sources.live), JSON.parse(sources.archive)), null, 2) +
-    "\n"
+    JSON.stringify(
+      mergeComponentRegistry(JSON.parse(sources.live), JSON.parse(sources.archive)),
+      null,
+      2,
+    ) + "\n"
   );
 }

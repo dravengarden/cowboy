@@ -89,6 +89,11 @@ state-store's dependent packages and the plugin-api consumers without changing
 native pins. It removes the temporary root `@std/assert` dependency; package
 closure validation remains strict and historical release records stay unchanged.
 
+Scoped release 3.85.0 records app-shell 1.1.39 for the already-committed
+floating dock, footer edge and test-assertion changes after 3.84.0
+(`bd212af9`..`fc0d5544`); no Plugin depends on that component, so the worker
+registry input is unchanged. Native pins are unchanged.
+
 Scoped release 3.81.0 records app-shell 1.1.36 for the already-committed
 reader edge and dock changes (`b1234031`..`c9c226a3`); no Plugin depends on that
 component, so the worker registry input stays at 3.79.0. The plugin-api and
