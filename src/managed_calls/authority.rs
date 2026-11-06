@@ -5,7 +5,7 @@
 use anyhow::{Result, ensure};
 
 use crate::{
-    core::SessionMeta,
+    model::SessionMeta,
     runtime_wire::{WorkerSnapshot, WorkerState},
 };
 

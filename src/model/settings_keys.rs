@@ -5,7 +5,22 @@
 //! ignored. Every `Hub::set_setting` caller must use a key registered here;
 //! `examples()` drives the backend round-trip tests.
 
-use crate::admin;
+pub const REGISTRATION_SETTING: &str = "cowboy.registration";
+pub const PERMISSIONS_SETTING: &str = "cowboy.permissions";
+pub const SESSION_LIMITS_SETTING: &str = "cowboy.session_limits";
+pub const ADMIN_IDENTITIES_SETTING: &str = "cowboy.admin.identities";
+
+/// Admin keys persist like every other key here but on the Hub never appear on product `/ws`.
+#[must_use]
+pub fn is_admin_setting_key(key: &str) -> bool {
+    matches!(
+        key,
+        REGISTRATION_SETTING
+            | PERMISSIONS_SETTING
+            | SESSION_LIMITS_SETTING
+            | ADMIN_IDENTITIES_SETTING
+    )
+}
 
 /// When this database first ran a Controller that writes Call transcript
 /// anchors (docs/background-tasks.md). Older calls are not anchored.
@@ -42,7 +57,7 @@ pub const SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX: &str = "session_provider_upd
 
 #[must_use]
 pub fn is_persisted_setting_key(key: &str) -> bool {
-    admin::is_admin_setting_key(key)
+    is_admin_setting_key(key)
         || key == SESSION_DORMANT_SINCE
         || key == TRANSCRIPT_ANCHORS_CALLS_SINCE
         || [
@@ -72,10 +87,10 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
 #[cfg(any(test, feature = "test-support"))]
 pub fn examples() -> Vec<String> {
     vec![
-        admin::REGISTRATION_SETTING.to_owned(),
-        admin::PERMISSIONS_SETTING.to_owned(),
-        admin::SESSION_LIMITS_SETTING.to_owned(),
-        admin::ADMIN_IDENTITIES_SETTING.to_owned(),
+        REGISTRATION_SETTING.to_owned(),
+        PERMISSIONS_SETTING.to_owned(),
+        SESSION_LIMITS_SETTING.to_owned(),
+        ADMIN_IDENTITIES_SETTING.to_owned(),
         SESSION_DORMANT_SINCE.to_owned(),
         TRANSCRIPT_ANCHORS_CALLS_SINCE.to_owned(),
         format!("{MACHINE_MAINTENANCE_PREFIX}ovh"),

@@ -42,7 +42,7 @@ impl SessionRow {
             context_used: 0,
             context_size: 0,
             usage: None,
-            attention: crate::core::SessionAttention::default(),
+            attention: crate::model::SessionAttention::default(),
             background_tasks: 0,
             supports_current_turn: false,
             provider_update: None,

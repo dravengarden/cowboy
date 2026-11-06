@@ -19,22 +19,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-pub const REGISTRATION_SETTING: &str = "cowboy.registration";
-pub const PERMISSIONS_SETTING: &str = "cowboy.permissions";
-pub const SESSION_LIMITS_SETTING: &str = "cowboy.session_limits";
-pub const ADMIN_IDENTITIES_SETTING: &str = "cowboy.admin.identities";
-
-/// Keys that persist on the Hub but must never appear on product `/ws`.
-#[must_use]
-pub fn is_admin_setting_key(key: &str) -> bool {
-    matches!(
-        key,
-        REGISTRATION_SETTING
-            | PERMISSIONS_SETTING
-            | SESSION_LIMITS_SETTING
-            | ADMIN_IDENTITIES_SETTING
-    )
-}
+/// The admin setting keys live in the settings key registry; these paths stay
+/// for existing callers.
+pub use crate::model::settings_keys::{
+    ADMIN_IDENTITIES_SETTING, PERMISSIONS_SETTING, REGISTRATION_SETTING, SESSION_LIMITS_SETTING,
+    is_admin_setting_key,
+};
 
 pub const ADMIN_SESSION_COOKIE: &str = "cowboy_admin";
 /// One-time Portainer-style proof that the caller can read the host data dir.
@@ -1026,7 +1016,7 @@ impl Default for SessionLimits {
         Self {
             max_sessions: None,
             max_retention_days: None,
-            last_n: Some(u32::try_from(crate::core::HOT_TAIL).unwrap_or(1_000)),
+            last_n: Some(u32::try_from(crate::model::HOT_TAIL).unwrap_or(1_000)),
             last_time_hours: None,
         }
     }

@@ -93,7 +93,7 @@ fn initial_counter(hub: &Hub, persistent_floor: u64, clock_floor: u64) -> u64 {
 }
 
 fn session_configuration(
-    meta: &crate::core::SessionMeta,
+    meta: &crate::model::SessionMeta,
 ) -> cowboy_provider_sdk::ConfigurationBehavior {
     meta.provider_behavior.as_ref().map_or_else(
         || provider::legacy_behavior(&meta.provider).configuration,
@@ -1125,7 +1125,7 @@ impl Supervisor {
     /// `automatic` marks an unattended idle update for client presentation.
     pub fn reload_session_provider(
         &self,
-        expected: &crate::core::SessionMeta,
+        expected: &crate::model::SessionMeta,
         generation: ProviderGeneration<'_>,
         automatic: bool,
         carry: Option<&crate::core::NamedReleaseCarry>,
@@ -1306,7 +1306,7 @@ impl Supervisor {
         // permanently crashed. Workspace preparation owns its first launch.
         if session
             .as_ref()
-            .is_some_and(crate::core::SessionMeta::awaits_workspace_preparation)
+            .is_some_and(crate::model::SessionMeta::awaits_workspace_preparation)
             && !self.has_worker(session_id)
         {
             return Ok(false);

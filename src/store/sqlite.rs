@@ -2279,8 +2279,8 @@ impl SqliteStorage {
                  ORDER BY sized.seq DESC",
             )
             .bind(&id)
-            .bind(i64::try_from(crate::core::HOT_TAIL).unwrap_or(i64::MAX))
-            .bind(i64::try_from(crate::core::HOT_TAIL_MAX_BYTES).unwrap_or(i64::MAX))
+            .bind(i64::try_from(crate::model::HOT_TAIL).unwrap_or(i64::MAX))
+            .bind(i64::try_from(crate::model::HOT_TAIL_MAX_BYTES).unwrap_or(i64::MAX))
             .bind(i64::try_from(id.len().saturating_add(64)).unwrap_or(i64::MAX))
             .fetch_all(&self.pool)
             .await
@@ -2296,7 +2296,7 @@ impl SqliteStorage {
                      OR (json_extract(payload, '$.kind') = 'update' \
                          AND json_extract(payload, '$.update.sessionUpdate') IN ({})) \
                  ) ORDER BY seq DESC LIMIT 1",
-                crate::core::NON_ACTIVITY_SESSION_UPDATES_SQL,
+                crate::model::NON_ACTIVITY_SESSION_UPDATES_SQL,
             ))
             .bind(&id)
             .fetch_optional(&self.pool)
@@ -2309,7 +2309,7 @@ impl SqliteStorage {
                 .rev()
                 .filter_map(|event| decode_event_row(event, &id, "restore"))
                 .collect();
-            if crate::core::bound_restored_hot_log(&mut events) {
+            if crate::persistence::bound_restored_hot_log(&mut events) {
                 reached_start = false;
             }
             let next_seq = u64::try_from(row.next_seq).unwrap_or(0);
@@ -4815,13 +4815,13 @@ impl SqliteStorage {
                 .context("SELECT SQLite Hub settings")?;
         Ok(rows
             .into_iter()
-            .filter(|(key, _)| crate::core::settings_keys::is_persisted_setting_key(key))
+            .filter(|(key, _)| crate::model::settings_keys::is_persisted_setting_key(key))
             .collect())
     }
 
     pub(super) async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         anyhow::ensure!(
-            crate::core::settings_keys::is_persisted_setting_key(key),
+            crate::model::settings_keys::is_persisted_setting_key(key),
             "unsupported Hub setting"
         );
         let mut value = value.clone();
@@ -4847,7 +4847,7 @@ impl SqliteStorage {
         value: &serde_json::Value,
     ) -> Result<bool> {
         anyhow::ensure!(
-            crate::core::settings_keys::is_persisted_setting_key(key),
+            crate::model::settings_keys::is_persisted_setting_key(key),
             "unsupported Hub setting"
         );
         let result = sqlx::query(

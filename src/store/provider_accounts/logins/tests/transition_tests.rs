@@ -4,7 +4,7 @@ use super::*;
 pub(super) async fn contract(
     store: &Store,
     old: &NativeCompletion,
-    meta: &crate::core::SessionMeta,
+    meta: &crate::model::SessionMeta,
 ) {
     use crate::store::provider_accounts::transitions::{Intent, Request as Transition};
     let input = Request {

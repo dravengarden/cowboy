@@ -526,8 +526,9 @@ mod tests {
     }
 
     async fn assert_rejected_images_do_not_poison_event_batches(store: &Store) {
-        use crate::core::{Envelope, Event};
+        use crate::agent_model::Event;
         use crate::managed_calls::media;
+        use crate::model::Envelope;
         let image = |seq, data| Envelope {
             session_id: "parent-1".into(),
             seq,

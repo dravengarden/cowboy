@@ -65,7 +65,7 @@ pub struct Carrier {
 pub fn carrier_key(id: &str) -> String {
     format!(
         "{}{id}",
-        crate::core::settings_keys::SESSION_CONTEXT_CARRIER_PREFIX
+        crate::model::settings_keys::SESSION_CONTEXT_CARRIER_PREFIX
     )
 }
 
@@ -298,7 +298,10 @@ pub fn promotion(hub: &crate::core::Hub, id: &str, cmid: Option<&str>) -> Option
 }
 
 pub fn key(id: &str) -> String {
-    format!("{}{id}", crate::core::settings_keys::SESSION_CONTEXT_PREFIX)
+    format!(
+        "{}{id}",
+        crate::model::settings_keys::SESSION_CONTEXT_PREFIX
+    )
 }
 
 pub fn announce(hub: &crate::core::Hub, id: &str, context: &Context) {
@@ -590,7 +593,7 @@ mod tests {
             execution_binding: None,
             cwd: "/fixture".into(),
             title: id.into(),
-            origin: crate::core::SessionOrigin::Web,
+            origin: crate::model::SessionOrigin::Web,
             system: false,
             owner_user_id: Some(owner.into()),
             owner_username: None,

@@ -126,7 +126,7 @@ fn session_meta_owner_fields_are_optional_on_the_wire() {
 }
 
 /// An unowned session as the Controller lists it.
-fn sample_session_meta() -> crate::core::SessionMeta {
+fn sample_session_meta() -> crate::model::SessionMeta {
     use crate::core::{SessionMeta, SessionOrigin, Status};
 
     SessionMeta {

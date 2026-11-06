@@ -1,22 +1,8 @@
 //! Live requests are independent of the bounded transcript and read/unread state.
 use super::{Event, Hub, Status};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionAttention {
-    pub approvals: usize,
-    pub questions: usize,
-    /// Native recovery knows the request is live but its description left the hot tail.
-    #[serde(default)]
-    pub other: usize,
-}
-
-impl SessionAttention {
-    pub fn is_empty(&self) -> bool {
-        self.approvals == 0 && self.questions == 0 && self.other == 0
-    }
-}
+pub use crate::model::SessionAttention;
 
 #[derive(Default)]
 pub(super) struct PendingActions(BTreeMap<String, Request>);

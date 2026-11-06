@@ -3,7 +3,7 @@ use super::{NativeCompletion, Receipt, Registry, Result, StorageBackend, Store};
 
 enum BindingUse<'a> {
     Latest,
-    Insert(&'a crate::core::SessionMeta),
+    Insert(&'a crate::model::SessionMeta),
     /// Session id and the exact release persisted on its row. A compatible
     /// later release may differ from the login's own (see `native_generation`).
     Existing(&'a str, &'a str, &'a str),
@@ -205,13 +205,13 @@ impl Store {
     /// Commit first, then publish under a fresh admission check. If revocation
     /// wins between the two transactions, its plan already contains the row.
     /// This registers metadata only; it never starts a worker.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub async fn register_native_session(
         &self,
         owner: &str,
         operation: &str,
         completion: &NativeCompletion,
-        session: crate::core::SessionMeta,
+        session: crate::model::SessionMeta,
         hub: &crate::core::Hub,
     ) -> Result<()> {
         self.register_native_session_with_projection(
@@ -235,8 +235,8 @@ impl Store {
         owner: &str,
         operation: &str,
         completion: &NativeCompletion,
-        session: crate::core::SessionMeta,
-        project: impl FnOnce(crate::core::SessionMeta) -> Result<()>,
+        session: crate::model::SessionMeta,
+        project: impl FnOnce(crate::model::SessionMeta) -> Result<()>,
     ) -> Result<()> {
         self.insert_native_session(owner, operation, completion, &session)
             .await?;
@@ -297,7 +297,7 @@ impl Store {
         owner: &str,
         operation: &str,
         completion: &NativeCompletion,
-        session: &crate::core::SessionMeta,
+        session: &crate::model::SessionMeta,
         action: impl FnOnce() -> F,
     ) -> Result<T> {
         self.native_binding_action(
@@ -322,7 +322,7 @@ impl Store {
         owner: &str,
         operation: &str,
         completion: &NativeCompletion,
-        session: &crate::core::SessionMeta,
+        session: &crate::model::SessionMeta,
     ) -> Result<()> {
         let profile = &completion.profile;
         anyhow::ensure!(
@@ -336,7 +336,7 @@ impl Store {
                 && !session.provider_version.is_empty()
                 && !session.provider_generation_digest.is_empty()
                 && session.provider_auth_generation == Some(profile.generation)
-                && session.status == crate::core::Status::Starting,
+                && session.status == crate::agent_model::Status::Starting,
             "native_session_scope_mismatch"
         );
         self.native_binding_action(

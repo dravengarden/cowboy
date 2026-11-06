@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 
-use crate::core::SessionMeta;
+use crate::model::SessionMeta;
 use crate::plugin_host::{PluginUsageSpec, UsageSessionRateLimits};
 use crate::usage::ProviderUsage;
 
@@ -322,7 +322,7 @@ mod tests {
             execution_binding: None,
             cwd: "/fixture".into(),
             title: String::new(),
-            origin: crate::core::SessionOrigin::Web,
+            origin: crate::model::SessionOrigin::Web,
             system: false,
             owner_user_id: Some("owner".into()),
             owner_username: None,

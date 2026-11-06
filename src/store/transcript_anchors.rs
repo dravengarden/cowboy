@@ -5,7 +5,8 @@
 //! (see `upsert_event_batch_with_anchors`) and deleted with the transcript.
 
 use super::{PostgresStorage, SqliteStorage, StorageBackend, Store};
-use crate::core::{Envelope, Event};
+use crate::agent_model::Event;
+use crate::model::Envelope;
 use crate::transcript_anchors::{
     AnchorWrite, BACKFILL_SENTINEL, CALL_PREFIX, METRICS, SUBAGENT_PREFIX, SUBAGENT_UPDATE,
     snapshot_order,
