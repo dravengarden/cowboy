@@ -337,7 +337,7 @@ export function SessionContinuedFrom(
   const source = links.find((link) => link.kind === "continued");
   if (!source) return null;
   return (
-    <Box data-session-handoff="start" sx={{ width: "100%", maxWidth: 560, minWidth: 0, px: 1 }}>
+    <Box data-session-handoff="start" sx={{ alignSelf: "center", maxWidth: "100%", minWidth: 0 }}>
       <SessionLink link={source} handoff />
     </Box>
   );
@@ -460,7 +460,7 @@ function SessionLink({ link, handoff = false }: { link: SessionLinkRow; handoff?
   const [failure, setFailure] = useState("");
   const note = link.state === "trash" ? "In Trash" : link.state === "deleted" ? "Deleted" : "";
   const detail = [
-    SESSION_LINK_LABEL[link.kind],
+    !handoff && SESSION_LINK_LABEL[link.kind],
     session && sessionAccountIdentity(accounts, session).short,
     note,
   ].filter(Boolean).join(" · ");
@@ -471,7 +471,7 @@ function SessionLink({ link, handoff = false }: { link: SessionLinkRow; handoff?
     ? CallSplitOutlined
     : LinkOutlined;
   return (
-    <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0 }}>
+    <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0, maxWidth: "100%" }}>
       <ButtonBase
         data-session-link={handoff ? undefined : link.state}
         data-session-handoff-link={handoff ? link.state : undefined}
@@ -479,7 +479,7 @@ function SessionLink({ link, handoff = false }: { link: SessionLinkRow; handoff?
         title={open ? "Open at the point it was linked" : link.title}
         onClick={(): void => openSessionLink(link, session)}
         sx={{
-          flex: 1,
+          flex: handoff ? "0 1 auto" : 1,
           minWidth: 0,
           minHeight: 44,
           gap: 1,
@@ -489,29 +489,29 @@ function SessionLink({ link, handoff = false }: { link: SessionLinkRow; handoff?
           textAlign: "left",
         }}
       >
-        <Icon
+        {!handoff && <Icon
           sx={{
             fontSize: glyphSize(18),
             flexShrink: 0,
             color: open ? "primary.main" : "text.disabled",
           }}
-        />
+        />}
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography
-            variant="body2"
+            variant={handoff ? "caption" : "body2"}
             noWrap
             color={open ? "text.primary" : "text.secondary"}
           >
-            {link.title}
+            {handoff && "From "}{link.title}
           </Typography>
-          <Typography
+          {(failure || detail) && <Typography
             variant="caption"
             noWrap
             color={failure ? "error" : "text.secondary"}
             sx={{ display: "block" }}
           >
             {failure || detail}
-          </Typography>
+          </Typography>}
         </Box>
         {open && (
           <ChevronRightRounded
@@ -532,7 +532,7 @@ function SessionLink({ link, handoff = false }: { link: SessionLinkRow; handoff?
               )
               .finally(() => setBusy(false));
           }}
-          sx={{ flexShrink: 0, minWidth: 0, textTransform: "none" }}
+          sx={{ flexShrink: 0, minWidth: 0, minHeight: 44, textTransform: "none", ...(handoff ? { fontSize: "0.75rem", px: 1 } : {}) }}
         >
           Restore
         </Button>
