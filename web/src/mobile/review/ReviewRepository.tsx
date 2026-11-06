@@ -72,7 +72,6 @@ export function ReviewRepository({
   onOpenPull,
   embedded = false,
   actionsContainer,
-  onBrowseFiles,
   linkedSession,
   onOpenWorktree,
 }: {
@@ -99,7 +98,6 @@ export function ReviewRepository({
   onOpenPull?: (choice: Choice, pull: PullSummary) => void;
   embedded?: boolean;
   actionsContainer?: HTMLElement | null;
-  onBrowseFiles?: () => void;
   linkedSession?: { title: string; onOpen: () => void } | undefined;
   /** Review a worktree of this repository that no session owns. */
   onOpenWorktree?: ((path: string) => void) | undefined;
@@ -365,8 +363,7 @@ export function ReviewRepository({
               compact
               controlsContainer={controlsContainer}
               actionsContainer={embedded ? actionsContainer ?? null : undefined}
-              repository={{ machineLabel, projectPath, commits, onHistory: () => setSection("history"), onCommit: (commit) => { onOpenCommit(commit); onClose(); } }}
-              {...(onBrowseFiles ? { onBrowseFiles } : {})}
+              repository={{ machineLabel, projectPath, commits, onCommit: (commit) => { onOpenCommit(commit); onClose(); } }}
               linkedSession={linkedSession}
               refreshToken={(refreshToken ?? 0) + changesRefresh}
             />

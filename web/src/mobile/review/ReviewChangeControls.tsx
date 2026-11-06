@@ -43,7 +43,7 @@ export function ReviewChangeControls({
       data-review-change-controls
       direction="row"
       alignItems="center"
-      sx={{ minWidth: hasChanges ? 144 : 100, flex: "1 1 100px", gap: 0.25 }}
+      sx={{ minWidth: hasChanges ? 144 : 100, flex: "1 1 100px", justifyContent: "flex-end", gap: 0.25 }}
     >
       <ReviewComparisonButton label={label} disabled={disabled} onClick={onCompare} />
       {hasChanges && (

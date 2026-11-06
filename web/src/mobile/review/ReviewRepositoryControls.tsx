@@ -23,8 +23,6 @@ export function ReviewRepositoryControls({
         columnGap: 0.5,
         px: 0.75,
         py: 0.25,
-        borderTop: 1,
-        borderColor: "divider",
         bgcolor: "background.default",
       }}
     >
@@ -35,25 +33,36 @@ export function ReviewRepositoryControls({
         sx={{
           flex: "0 0 auto",
           minWidth: 0,
+          position: "relative",
+          zIndex: 0,
           gap: 0,
           gridAutoColumns: "max-content",
           "--segmented-selected-fill": "transparent",
+          "&::before": {
+            content: '""',
+            position: "absolute",
+            inset: 0,
+            my: "auto",
+            height: "2rem",
+            borderRadius: "0.5rem",
+            bgcolor: "action.hover",
+            zIndex: -1,
+            pointerEvents: "none",
+          },
           "&& [data-segmented-tab]": {
             minHeight: 44,
             minWidth: 44,
-            px: 0.5,
-            borderRadius: 1,
+            px: 0,
+            borderRadius: "0.5rem",
             fontSize: "0.8125rem",
-            "&[data-selected='true']::after": {
-              content: '""',
-              position: "absolute",
-              left: 6,
-              right: 6,
-              bottom: 5,
-              height: 2,
-              borderRadius: 1,
-              bgcolor: "primary.main",
-              pointerEvents: "none",
+            "& .segmented-tab-label": {
+              px: "0.25rem",
+              py: "0.375rem",
+              borderRadius: "0.375rem",
+            },
+            "&[data-selected='true'] .segmented-tab-label": {
+              bgcolor: "action.selected",
+              fontWeight: 600,
             },
           },
         }}

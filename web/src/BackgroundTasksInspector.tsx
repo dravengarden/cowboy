@@ -735,7 +735,7 @@ export function BackgroundTasksInspector({
       open
       onClose={close}
       title={mobileTitle}
-      islandContext={{ ...taskDockContext(level === "list" ? null : selected, Date.now(), accounts), action: level !== "list" && selected?.call ? { label: level === "detail" ? "Back to transcript" : "Details", onActivate: showMobileDetails } : undefined }}
+      islandContext={{ ...taskDockContext(level === "list" ? null : selected, Date.now(), accounts), ...(level === "list" || !selected ? { title: "" } : {}), action: level !== "list" && selected?.call ? { label: level === "detail" ? "Back to transcript" : "Details", onActivate: showMobileDetails } : undefined }}
       onBack={level === "list"
         ? undefined
         : (): void => globalThis.history?.back()}

@@ -84,6 +84,7 @@
           file.name == "contract.json"
         ) ./plugins)
         ./components/registry.json
+        ./components/registry-archive.json
         ./components/plugin-contract/schema.json
         ./components/code-intelligence/contract.json
       ];
@@ -243,7 +244,12 @@
       # Only behavior that runs inside a detached session contributes to the
       # pool generation. A control-plane-only change updates Cowboy without
       # draining live ACP sessions.
-      worker-generation-files = pkgs.lib.fileset.toList (pkgs.lib.fileset.unions ([
+      # The registry archive is part of the history that worker-registry-digest
+      # already covers, so it is not hashed again file by file: archiving a
+      # release must not change the worker generation.
+      worker-generation-files = builtins.filter
+        (path: path != ./components/registry-archive.json)
+        (pkgs.lib.fileset.toList (pkgs.lib.fileset.unions ([
         ./Cargo.toml
         ./Cargo.lock
         ./build.rs
@@ -285,7 +291,7 @@
         ./src/bin/cowboy-acp-worker.rs
       ] ++ plugin-contract-files ++ [
         (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
-      ]));
+      ])));
       worker-registry-input = builtins.fromJSON (builtins.readFile ./components/worker-registry-input.json);
       worker-registry-digest = assert worker-registry-input.schema == 1;
         assert builtins.match "[0-9a-f]{64}" worker-registry-input.registry_sha256 != null;
@@ -293,8 +299,12 @@
       worker-registry-check = pkgs.runCommand "cowboy-worker-registry-input-check" { } ''
         mkdir -p components
         ln -s ${./components/registry.json} components/registry.json
+        ln -s ${./components/registry-archive.json} components/registry-archive.json
         ln -s ${./components/worker-registry-input.json} components/worker-registry-input.json
-        ${bun}/bin/bun ${./tools/worker-registry-input.ts}
+        mkdir tools
+        cp ${./tools/worker-registry-input.ts} tools/worker-registry-input.ts
+        cp ${./tools/component-registry.ts} tools/component-registry.ts
+        ${bun}/bin/bun tools/worker-registry-input.ts
         touch "$out"
       '';
       worker-generation = "worker-" + builtins.substring 0 20 (

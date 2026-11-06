@@ -91,7 +91,7 @@ export function ReviewModeSwitcher({
         "& .MuiSvgIcon-root": {
           // Root-relative geometry keeps both mode glyphs in step with the
           // global font-size setting.
-          fontSize: "clamp(20px, 1.5rem, 28px)",
+          fontSize: "1.5rem",
         },
       }}
     >
@@ -138,6 +138,6 @@ export function ReviewModeSwitcher({
 }
 
 function ModeGlyph({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return <Box component="span" data-review-mode-glyph sx={{ width: 32, height: 32,
-    display: "grid", placeItems: "center", borderRadius: "10px" }}>{children}</Box>;
+  return <Box component="span" data-review-mode-glyph sx={{ width: "2rem", height: "2rem",
+    display: "grid", placeItems: "center", borderRadius: "0.625rem" }}>{children}</Box>;
 }

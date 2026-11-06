@@ -8,7 +8,6 @@ import {
 } from "react";
 import { EditorPluginToolbar } from "../editorPlugins/EditorPluginToolbar";
 import {
-  alpha,
   Box,
   Button,
   CircularProgress,
@@ -27,7 +26,6 @@ import {
   EditNoteOutlined,
   MoreHoriz,
   MoreVert,
-  KeyboardArrowUp,
   RawOn,
   Schedule,
   Send,
@@ -159,7 +157,6 @@ export function DesktopComposerToolbarView(
     pressed,
     anywhere = false,
     tone,
-    reading,
     held = false,
   }: {
     id: string;
@@ -175,10 +172,8 @@ export function DesktopComposerToolbarView(
     pressed?: boolean;
     /** The key runs from any focus (a Prompt-group or global command). */
     anywhere?: boolean;
-    /** Error marks Stop, and Clear on hover. */
-    tone?: "error" | "error-hover";
-    /** A short value that stays visible at every width (Compact's 51%). */
-    reading?: string;
+    /** Error marks Stop. */
+    tone?: "error";
     /** Keep the slot's width but show nothing: idle Stop, so the row does
      *  not move when a turn starts. */
     held?: boolean;
@@ -220,21 +215,9 @@ export function DesktopComposerToolbarView(
           sx={{
             ...desktopToolbarActionSx,
             bgcolor: pressed ? "action.selected" : "transparent",
-            ...(tone === "error-hover" && {
-              "&:hover": { color: "error.main" },
-            }),
           }}
         >
           {icon}
-          {reading && (
-            <Box
-              component="span"
-              data-composer-action-reading
-              sx={{ fontVariantNumeric: "tabular-nums" }}
-            >
-              {reading}
-            </Box>
-          )}
           <Box component="span" data-composer-action-label>{label}</Box>
           {key
             ? (
@@ -460,16 +443,7 @@ export function DesktopComposerToolbarView(
               />
               {session.compact && action({
                 id: "compact",
-                icon: (
-                  <ContextGauge
-                    used={session.compact.used}
-                    size={session.compact.size}
-                    running={session.compact.running}
-                  />
-                ),
-                ...(contextPercent(session.compact) !== null && {
-                  reading: `${String(contextPercent(session.compact))}%`,
-                }),
+                icon: <Compress />,
                 label: "Compact",
                 title: session.compact.title,
                 shortcut: DESKTOP_SHORTCUTS.compact,
@@ -483,7 +457,6 @@ export function DesktopComposerToolbarView(
                 label: "Clear",
                 title: "Clear conversation · start with a fresh context",
                 shortcut: DESKTOP_SHORTCUTS.clear,
-                tone: "error-hover",
                 onClick: session.clear.open,
               })}
             </Box>
@@ -504,30 +477,7 @@ export function DesktopComposerToolbarView(
                   onClick={(event) => setSessionAnchor(event.currentTarget)}
                   sx={desktopToolbarActionSx}
                 >
-                  {
-                    /* The context reading travels with the folded actions. */
-                  }
-                  {session.compact
-                    ? (
-                      <>
-                        <ContextGauge
-                          used={session.compact.used}
-                          size={session.compact.size}
-                          running={session.compact.running}
-                        />
-                        {contextPercent(session.compact) !== null && (
-                          <Box
-                            component="span"
-                            data-context-reading
-                            sx={{ fontVariantNumeric: "tabular-nums" }}
-                          >
-                            {contextPercent(session.compact)}%
-                          </Box>
-                        )}
-                        <KeyboardArrowUp sx={{ ml: "-0.125rem" }} />
-                      </>
-                    )
-                    : <MoreVert />}
+                  <MoreVert />
                 </Button>
               </HintTooltip>
             </Box>
@@ -674,70 +624,6 @@ export function DesktopComposerToolbarView(
           </MenuItem>
         ))}
       </Menu>
-    </Box>
-  );
-}
-
-function contextPercent(
-  { used, size }: { used: number; size: number },
-): number | null {
-  if (!(size > 0)) return null;
-  return used > 0 ? Math.max(1, Math.round(Math.min(100, used / size * 100))) : 0;
-}
-
-/** Context fullness at the toolbar's icon size and weight: a thin neutral
- *  ring that turns amber at 70% and red at 90% (the auto-compaction zone).
- *  The number sits beside it as text, not inside it. */
-function ContextGauge(
-  { used, size, running }: { used: number; size: number; running: boolean },
-): React.JSX.Element {
-  const pct = contextPercent({ used, size });
-  if (running) {
-    return <CircularProgress size="0.875rem" thickness={5} color="inherit" />;
-  }
-  if (pct === null) return <Compress />;
-  const color = pct >= 90
-    ? "error.main"
-    : pct >= 70
-    ? "warning.main"
-    : "text.secondary";
-  return (
-    <Box
-      component="svg"
-      viewBox="0 0 16 16"
-      aria-hidden="true"
-      sx={(theme) => ({
-        width: "0.875rem",
-        height: "0.875rem",
-        flexShrink: 0,
-        color,
-        "& .context-gauge-track": {
-          stroke: alpha(theme.palette.text.secondary, 0.42),
-        },
-      })}
-    >
-      <circle
-        className="context-gauge-track"
-        cx="8"
-        cy="8"
-        r="6.25"
-        fill="none"
-        strokeWidth="1.75"
-      />
-      {pct > 0 && (
-        <circle
-          cx="8"
-          cy="8"
-          r="6.25"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.75"
-          strokeLinecap={pct < 100 ? "round" : undefined}
-          pathLength="100"
-          strokeDasharray={pct < 100 ? `${pct} ${100 - pct}` : undefined}
-          transform="rotate(-90 8 8)"
-        />
-      )}
     </Box>
   );
 }

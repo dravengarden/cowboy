@@ -152,6 +152,8 @@ separate section name centered across the entire footer over a theme-aware gradi
 Use `MobileSheetActionGroup` for standard navigation, including Settings and Sessions.
 Floating islands share a 56px minimum shell height, theme material and 1.5rem glyphs;
 standard action targets are 46px. Do not override individual navigation colors or sizes.
+Title-only reader footers center the title across the entire footer, with at least
+16px side clearance. The Background tasks list omits its redundant footer title.
 Do not enclose the
 title and controls in a large capsule. Descriptions belong in the Settings index.
 

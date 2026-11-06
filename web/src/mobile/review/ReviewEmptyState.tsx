@@ -1,4 +1,4 @@
-import { CheckRounded, CommitOutlined, FolderOutlined, History } from "@mui/icons-material";
+import { CheckRounded, CommitOutlined } from "@mui/icons-material";
 import { Box, Button, List, ListItemButton, Stack, Typography } from "@mui/material";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import type { GitChangeTarget, GitCommitSummary } from "./codeApi";
@@ -8,7 +8,6 @@ export interface EmptyReviewContext {
   machineLabel?: string | undefined;
   projectPath?: string | undefined;
   commits: readonly GitCommitSummary[];
-  onHistory: () => void;
   onCommit: (commit: GitCommitSummary) => void;
 }
 
@@ -21,7 +20,6 @@ export function ReviewEmptyState({
   target,
   head,
   repository,
-  onBrowseFiles,
   linkedSession,
 }: {
   comparisonLabel: string;
@@ -30,7 +28,6 @@ export function ReviewEmptyState({
   target?: GitChangeTarget | undefined;
   head?: string | undefined;
   repository?: EmptyReviewContext | undefined;
-  onBrowseFiles?: (() => void) | undefined;
   linkedSession?: { title: string; onOpen: () => void } | undefined;
 }): React.JSX.Element {
   const desktop = useSurfaceProfile().kind === "desktop";
@@ -98,40 +95,6 @@ export function ReviewEmptyState({
             </Button>
           </Box>
         )}
-        <Stack direction="row" sx={{ flexWrap: "wrap", justifyContent: "center", gap: 1 }}>
-          {onBrowseFiles && (
-            <Button
-              startIcon={<FolderOutlined />}
-              onClick={onBrowseFiles}
-              sx={{
-                minHeight: 44,
-                px: 1.5,
-                borderRadius: 1,
-                textTransform: "none",
-                fontSize: "0.875rem",
-                bgcolor: "action.selected",
-              }}
-            >
-              Browse files
-            </Button>
-          )}
-          {repository && (
-            <Button
-              aria-label="View repository history"
-              startIcon={<History />}
-              onClick={repository.onHistory}
-              sx={{
-                minHeight: 44,
-                px: 1.5,
-                textTransform: "none",
-                color: "text.secondary",
-                fontSize: "0.875rem",
-              }}
-            >
-              View history
-            </Button>
-          )}
-        </Stack>
       </Stack>
     </Box>
   );
