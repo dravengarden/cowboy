@@ -7,7 +7,7 @@ import { StatusChip } from "./StatusChip";
 
 import { memo, useState } from "react";
 import { Box, ButtonBase, Chip, IconButton, Paper, Typography } from "@mui/material";
-import { alpha, type Theme } from "@mui/material/styles";
+import { activityRowSurface } from "./activityRowStyle";
 import { AccountTreeOutlined, CallSplitOutlined, StopCircleOutlined } from "@mui/icons-material";
 import type { TaskSummary } from "./backgroundTasks";
 import { openBackgroundTask } from "./backgroundTaskInspectorState";
@@ -116,7 +116,8 @@ export const TaskRow = memo(function TaskRow({
       onBlur={(event: React.FocusEvent<HTMLElement>): void => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
       }}
-      sx={(theme: Theme) => ({
+      sx={{
+        ...activityRowSurface,
         alignSelf: "stretch",
         display: "flex",
         alignItems: "center",
@@ -124,17 +125,7 @@ export const TaskRow = memo(function TaskRow({
         pr: 1,
         minHeight: desktop ? 40 : 44,
         overflow: "hidden",
-        bgcolor: "background.paper",
-        backgroundImage: `linear-gradient(105deg, ${alpha(
-          taskToneColor(tone, theme),
-          theme.palette.mode === "dark" ? 0.12 : 0.06,
-        )}, transparent 52%)`,
-        boxShadow: `0 1px 3px ${alpha(
-          theme.palette.common.black,
-          theme.palette.mode === "dark" ? 0.16 : 0.06,
-        )}`,
-        borderRadius: desktop ? `${DESKTOP_INSET_RADIUS}px` : 1,
-      })}
+      }}
     >
       <ButtonBase
         data-desktop-item-action="default"

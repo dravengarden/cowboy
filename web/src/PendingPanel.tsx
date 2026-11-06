@@ -2900,11 +2900,9 @@ export function PendingRow({
       variant="outlined"
       sx={{
         p: 0.75,
-        ...(desktop && {
-          border: 0,
-          borderRadius: 0,
-          bgcolor: "transparent",
-        }),
+        border: 0,
+        borderRadius: 0,
+        bgcolor: "transparent",
         display: "flex",
         alignItems: callNotice ? "center" : "flex-start",
         minHeight: callNotice ? 0 : mobilePendingRowMinHeight,
@@ -2935,7 +2933,7 @@ export function PendingRow({
         }}
       >
         {callNotice
-          ? <CallNoticeLine notice={callNotice} sessionId={sessionId} />
+          ? <CallNoticeLine notice={callNotice} sessionId={sessionId} embedded />
           : seedText.trim() !== "" && (
             <MessagePreview text={seedText} attachments={seedAttachments} />
           )}

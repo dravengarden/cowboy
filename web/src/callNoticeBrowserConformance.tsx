@@ -79,13 +79,13 @@ export async function checkCallNoticeLayout(): Promise<string> {
           for (const line of lines) {
             const rect = line.getBoundingClientRect();
             check(
-              rect.height <= Math.max(34, 2.4 * fontSize) + 1,
-              `Callback stays one line at ${String(width)}px/${String(fontSize)}px (${String(rect.height)})`,
+              rect.height >= 44 && rect.height <= Math.max(64, 4 * fontSize),
+              `Callback keeps a readable two-line touch target at ${String(width)}px/${String(fontSize)}px (${String(rect.height)})`,
             );
             check(line.scrollWidth <= line.clientWidth + 1, "Callback never overflows sideways");
-            check(getComputedStyle(line).borderLeftStyle === "solid", "Callback keeps its tone rail");
           }
           check(queued.dataset["callNoticeTone"] === "success", "Completed call reads as success");
+          check(getComputedStyle(queued).borderLeftWidth === "0px", "Embedded callback does not nest another card");
           check(transcript.dataset["callNoticeTone"] === "error", "Failed call reads as error");
           check(transcript.textContent?.includes("Failed · provider unavailable"), "Failure keeps its code");
           check(queued.textContent?.includes("Stormbird code-health plan"), "Queue shows the call title");
@@ -111,7 +111,7 @@ export async function checkCallNoticeLayout(): Promise<string> {
         }
       }
     }
-    return "Managed-call callbacks render as one tinted line and open their call";
+    return "Managed-call callbacks share readable activity rows and open their call";
   } finally {
     flushSync(() => root.render(null));
     root.unmount();
