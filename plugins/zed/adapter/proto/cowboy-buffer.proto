@@ -141,3 +141,25 @@ message CowboyAnalysisFrontierResponse {
   uint32 protocol = 1;
   repeated CowboyAnalysisServer servers = 2;
 }
+
+// The outcome this exact server process recorded for one of the peer's own
+// `OpenBufferByPath` requests, by its message ID. `UNKNOWN` means it was never
+// received before this query on the same connection. Querying has no effect.
+message CowboyOpenAttempt {
+  uint64 project_id = 1;
+  uint32 protocol = 2;
+  uint32 message_id = 3;
+}
+
+message CowboyOpenAttemptResponse {
+  uint32 protocol = 1;
+  enum Outcome {
+    UNSPECIFIED = 0;
+    UNKNOWN = 1;
+    PENDING = 2;
+    OPENED = 3;
+    FAILED = 4;
+  }
+  Outcome outcome = 2;
+  uint64 buffer_id = 3;
+}

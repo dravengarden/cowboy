@@ -45,6 +45,32 @@ no native I/O in the healthy case, but does not bypass an unresolved Open fence.
 This conservative availability tradeoff is intentional: pathname inequality
 cannot prove that an unobserved native ID is independent.
 
+## Recovery from the same native process (Zed 1.23.0)
+
+Private server `1.8.0` records each peer's `OpenBufferByPath` by message ID
+before the handler's first await, settling it as opened (with the original
+buffer ID) or failed; `CowboyOpenAttempt` reads that record and has no effect.
+The adapter remembers the latched attempt's message ID before queuing it. The
+next owned or legacy acquisition first resolves the fence under the active-map
+write lock:
+
+1. An upstream `Ping` round trip proves the original request, queued earlier
+   on the same connection, was received: the adapter's writer interleaves the
+   upstream and private channels, so only this barrier orders them.
+2. `CowboyOpenAttempt` then reports the outcome. `UNKNOWN` (never received) and
+   `FAILED` clear the fence with no effect. `OPENED` with a buffer ID another
+   committed owner already holds is an alias and clears it. Any other opened
+   buffer is an orphan: it is released through the confirmed
+   [native close](plugin-native-close-confirmation.md), and only a `Closed`
+   receipt clears the fence. `PENDING`, an unreachable server or an
+   unconfirmed close keep it latched.
+
+Recovery never replays the open, never uses upstream `CloseBuffer` and never
+adopts the orphan for the abandoned owner: that lease stays Unknown. It is
+bound to the exact native process by the connection itself; a replaced server
+starts a new adapter runtime with no latched attempt. The owner chose this
+automatic, query-only recovery (2026-11-05), so no Operator step is involved.
+
 ## Evidence and limits
 
 Source tests cover cancellation at all three native awaits, malformed replies,

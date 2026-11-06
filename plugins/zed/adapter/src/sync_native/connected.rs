@@ -451,6 +451,40 @@ async fn restart_does_not_adopt_old_ticket(
     stop(&replacement).await;
 }
 
+async fn private_extensions(zed: &ZedRuntime, buffer: u64, worktree: u64, workspace: &Path) {
+    analysis_frontier_answers(zed, buffer).await;
+    recovers_an_abandoned_open(zed, worktree, workspace).await;
+}
+
+// An open whose owner never committed latches the fence; the same server
+// reports what it opened, recovery releases that orphan with a confirmed
+// close, and a later open of the same path is an ordinary new acquisition.
+async fn recovers_an_abandoned_open(zed: &ZedRuntime, worktree: u64, workspace: &Path) {
+    tokio::fs::write(workspace.join("abandoned.txt"), "abandoned\n")
+        .await
+        .unwrap();
+    let fence = crate::native_open::Fence::default();
+    let attempt = fence.begin().unwrap();
+    let (orphan, _) = zed
+        .open_buffer_tracked(worktree, Path::new("abandoned.txt"), |id| {
+            attempt.dispatching(id);
+        })
+        .await
+        .unwrap();
+    drop(attempt);
+    assert!(fence.check().is_err());
+    crate::native_open::recover(&fence, &HashMap::new(), zed)
+        .await
+        .unwrap();
+    assert!(fence.check().is_ok());
+    assert!(zed.diagnostics.lock().unwrap().revision(orphan).is_err());
+    // Zed shares a buffer with a peer once; observing a fresh initial share
+    // proves the peer no longer held the orphan.
+    zed.open_buffer(worktree, Path::new("abandoned.txt"))
+        .await
+        .expect("the released orphan was not shared afresh");
+}
+
 // The private server answers the analysis frontier for the peer's buffer;
 // with no language server running for a text file it lists none.
 async fn analysis_frontier_answers(zed: &ZedRuntime, buffer: u64) {
@@ -482,7 +516,7 @@ async fn native_process_child() {
         .await
         .unwrap();
     duplicate_native_open_preserves_original_peer(&zed, worktree, buffer).await;
-    analysis_frontier_answers(&zed, buffer).await;
+    private_extensions(&zed, buffer, worktree, &workspace).await;
     let revision = zed.diagnostics.lock().unwrap().revision(buffer).unwrap();
     let id = prepare(&zed, &instance, buffer, &version, new.as_bytes())
         .await

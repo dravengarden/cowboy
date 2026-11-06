@@ -18,7 +18,7 @@
     "components/provider-ui/src/index.ts": 3262,
     "components/server/src/server.rs": 2668,
     "components/wire/src/machine_protocol.rs": 1815,
-    "plugins/zed/adapter/src/main.rs": 1813,
+    "plugins/zed/adapter/src/main.rs": 1742,
     "src/acp.rs": 4185,
     "src/acp_bridge.rs": 2539,
     "src/code_review.rs": 1609,

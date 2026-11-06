@@ -204,11 +204,13 @@ impl Transport {
                     response @ (Payload::Response(_)
                     | Payload::NavigationResponse(_)
                     | Payload::CloseResponse(_)
-                    | Payload::AnalysisResponse(_)) => Some(response),
+                    | Payload::AnalysisResponse(_)
+                    | Payload::OpenAttemptResponse(_)) => Some(response),
                     Payload::Request(_)
                     | Payload::NavigationRequest(_)
                     | Payload::CloseRequest(_)
-                    | Payload::AnalysisRequest(_) => None,
+                    | Payload::AnalysisRequest(_)
+                    | Payload::OpenAttemptRequest(_) => None,
                 }
             });
         // Test-only loss of an actual native acknowledgement, never a synthetic

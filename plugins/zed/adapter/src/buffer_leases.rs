@@ -313,6 +313,10 @@ impl Registry {
         );
         // Synchronization preparation takes this same registry lock before
         // installing its fence. A local admission refusal has no open effect.
+        if let Some(zed) = zed {
+            let active = buffers.active.write().await;
+            super::native_open::recover(&buffers.native_open, &active, zed).await?;
+        }
         super::sync_owners::ensure_admission(buffers, &*buffers.active.read().await)?;
         open_prevalidated(slot, id, current.remote_id, buffers, zed).await?;
         Ok(reply(lease, LeaseState::Open))

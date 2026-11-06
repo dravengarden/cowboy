@@ -1,6 +1,36 @@
 use super::*;
 use crate::native_open::tests::{ack, opened, reply, share};
+use crate::sync_native::wire::{self, cowboy_buffer_sync_envelope::Payload};
 use crate::{Zed, coordinate_queries};
+use prost::Message as _;
+use wire::cowboy_open_attempt_response::Outcome;
+
+type Outbound = tokio::sync::mpsc::UnboundedReceiver<proto::Envelope>;
+
+/// Run `work` while answering recovery's reachability barrier with an error:
+/// the outcome stays unresolved. Any other native dispatch fails the test.
+async fn unreachable_recovery<T>(
+    zed: &Zed,
+    outbound: &mut Outbound,
+    work: impl Future<Output = T>,
+) -> T {
+    tokio::pin!(work);
+    loop {
+        tokio::select! {
+            value = &mut work => return value,
+            Some(message) = outbound.recv() => {
+                assert!(
+                    matches!(message.payload, Some(proto::envelope::Payload::Ping(_))),
+                    "recovery may only query: {message:?}"
+                );
+                reply(zed, &message, proto::envelope::Payload::Error(proto::Error {
+                    message: "unreachable".into(),
+                    ..Default::default()
+                })).await;
+            }
+        }
+    }
+}
 
 fn spawn(f: &Fixture, zed: &Zed, request: Request) -> tokio::task::JoinHandle<Result<Response>> {
     let (worktrees, buffers, zed) = (f.worktrees.clone(), f.buffers.clone(), zed.clone());
@@ -112,7 +142,12 @@ async fn cancelled_acquisition_at_every_native_await_cannot_be_adopted_or_replay
         }
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
-        assert_unknown(&f, &zed, &lease).await;
+        Box::pin(unreachable_recovery(
+            &zed,
+            &mut outbound,
+            assert_unknown(&f, &zed, &lease),
+        ))
+        .await;
         assert!(f.buffers.active.read().await.is_empty());
         assert!(
             outbound.try_recv().is_err(),
@@ -159,7 +194,12 @@ async fn invalid_open_and_registration_replies_leave_the_same_unknown_fence() {
             }
         }
         assert!(task.await.unwrap().is_err());
-        assert_unknown(&f, &zed, &lease).await;
+        Box::pin(unreachable_recovery(
+            &zed,
+            &mut outbound,
+            assert_unknown(&f, &zed, &lease),
+        ))
+        .await;
         assert!(outbound.try_recv().is_err());
     }
 }
@@ -239,10 +279,15 @@ async fn unknown_legacy_open_blocks_new_acquisitions_but_not_existing_safe_reads
     let opening = outbound.recv().await.unwrap();
     reply(&zed, &opening, ack()).await;
     assert!(task.await.unwrap().is_err());
+    // Its recovery query finds the server unreachable: still refused.
     assert!(
-        request(&f, &zed, Request::OpenBufferLease { lease: prepared })
-            .await
-            .is_err()
+        Box::pin(unreachable_recovery(
+            &zed,
+            &mut outbound,
+            request(&f, &zed, Request::OpenBufferLease { lease: prepared })
+        ))
+        .await
+        .is_err()
     );
     assert!(
         request(
@@ -331,4 +376,156 @@ async fn assert_text_read(
             ..
         }
     ));
+}
+
+async fn answer_attempt(
+    zed: &Zed,
+    private: &mut tokio::sync::mpsc::Receiver<wire::CowboyBufferSyncEnvelope>,
+    message_id: u32,
+    outcome: Outcome,
+    buffer_id: u64,
+) {
+    let envelope = private.recv().await.unwrap();
+    let Some(Payload::OpenAttemptRequest(query)) = &envelope.payload else {
+        panic!("not an open attempt query: {envelope:?}")
+    };
+    assert_eq!((query.protocol, query.message_id), (1, message_id));
+    let encoded = wire::CowboyBufferSyncEnvelope {
+        responding_to: Some(envelope.id),
+        payload: Some(Payload::OpenAttemptResponse(
+            wire::CowboyOpenAttemptResponse {
+                protocol: 1,
+                outcome: outcome as i32,
+                buffer_id,
+            },
+        )),
+        ..Default::default()
+    }
+    .encode_to_vec();
+    assert!(zed.sync.response(envelope.id, &encoded));
+}
+
+/// An owned open abandoned after its `OpenBufferByPath` was queued.
+async fn abandoned_open(f: &Fixture, zed: &Zed, outbound: &mut Outbound) -> u32 {
+    let lease = f.prepare().await;
+    let task = spawn(f, zed, Request::OpenBufferLease { lease });
+    let opening = outbound.recv().await.unwrap();
+    assert!(matches!(
+        opening.payload,
+        Some(proto::envelope::Payload::OpenBufferByPath(_))
+    ));
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(f.buffers.native_open.check().is_err());
+    opening.id
+}
+
+async fn barrier(zed: &Zed, outbound: &mut Outbound) {
+    let ping = outbound.recv().await.unwrap();
+    assert!(matches!(
+        ping.payload,
+        Some(proto::envelope::Payload::Ping(_))
+    ));
+    reply(zed, &ping, ack()).await;
+}
+
+async fn ordinary_open(zed: &Zed, outbound: &mut Outbound, id: u64) {
+    let opening = outbound.recv().await.unwrap();
+    assert!(matches!(
+        opening.payload,
+        Some(proto::envelope::Payload::OpenBufferByPath(_))
+    ));
+    share(zed, id);
+    reply(zed, &opening, opened(id)).await;
+    let registration = outbound.recv().await.unwrap();
+    reply(zed, &registration, ack()).await;
+}
+
+#[tokio::test]
+async fn recovery_releases_the_orphan_an_abandoned_open_acquired() {
+    let f = Fixture::new().await;
+    let (sync, mut private, mut closed) = crate::native_close::tests::fixture();
+    let (zed, mut outbound) = coordinate_queries::fixture_with(sync).await;
+    let message_id = abandoned_open(&f, &zed, &mut outbound).await;
+    let next = prepare_other(&f).await;
+    let task = spawn(&f, &zed, Request::OpenBufferLease { lease: next });
+    barrier(&zed, &mut outbound).await;
+    answer_attempt(&zed, &mut private, message_id, Outcome::Opened, 8).await;
+    // Confirmed close of exactly the orphan, then an ordinary open.
+    assert_eq!(closed.recv().await.unwrap(), vec![8]);
+    ordinary_open(&zed, &mut outbound, 9).await;
+    assert_eq!(state(task.await.unwrap().unwrap()), LeaseState::Open);
+    assert!(f.buffers.native_open.check().is_ok());
+    assert!(outbound.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn recovery_clears_failed_and_unreceived_opens_without_any_effect() {
+    for outcome in [Outcome::Failed, Outcome::Unknown] {
+        let f = Fixture::new().await;
+        let (sync, mut private, mut closed) = crate::native_close::tests::fixture();
+        let (zed, mut outbound) = coordinate_queries::fixture_with(sync).await;
+        let message_id = abandoned_open(&f, &zed, &mut outbound).await;
+        let next = prepare_other(&f).await;
+        let task = spawn(&f, &zed, Request::OpenBufferLease { lease: next });
+        barrier(&zed, &mut outbound).await;
+        answer_attempt(&zed, &mut private, message_id, outcome, 0).await;
+        ordinary_open(&zed, &mut outbound, 9).await;
+        assert_eq!(state(task.await.unwrap().unwrap()), LeaseState::Open);
+        assert!(closed.try_recv().is_err(), "nothing to release");
+    }
+}
+
+#[tokio::test]
+async fn recovery_never_closes_an_alias_held_by_another_owner() {
+    let f = Fixture::new().await;
+    let (sync, mut private, mut closed) = crate::native_close::tests::fixture();
+    let (zed, mut outbound) = coordinate_queries::fixture_with(sync).await;
+    // One owner already holds native buffer 8.
+    let held = f.prepare().await;
+    let task = spawn(&f, &zed, Request::OpenBufferLease { lease: held });
+    ordinary_open(&zed, &mut outbound, 8).await;
+    assert_eq!(state(task.await.unwrap().unwrap()), LeaseState::Open);
+    let message_id = {
+        std::fs::write(f.root.join("alias.txt"), "fixture\n").unwrap();
+        let Response::BufferLease { lease, .. } = f
+            .request(Request::PrepareBuffer {
+                worktree: f.root.clone(),
+                path: "alias.txt".into(),
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("not prepared")
+        };
+        let task = spawn(&f, &zed, Request::OpenBufferLease { lease });
+        let opening = outbound.recv().await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        opening.id
+    };
+    let next = prepare_other(&f).await;
+    let task = spawn(&f, &zed, Request::OpenBufferLease { lease: next });
+    barrier(&zed, &mut outbound).await;
+    answer_attempt(&zed, &mut private, message_id, Outcome::Opened, 8).await;
+    ordinary_open(&zed, &mut outbound, 9).await;
+    assert_eq!(state(task.await.unwrap().unwrap()), LeaseState::Open);
+    assert!(closed.try_recv().is_err(), "an alias is not an orphan");
+}
+
+#[tokio::test]
+async fn a_pending_open_stays_fenced() {
+    let f = Fixture::new().await;
+    let (sync, mut private, mut closed) = crate::native_close::tests::fixture();
+    let (zed, mut outbound) = coordinate_queries::fixture_with(sync).await;
+    let message_id = abandoned_open(&f, &zed, &mut outbound).await;
+    let next = prepare_other(&f).await;
+    let task = spawn(&f, &zed, Request::OpenBufferLease { lease: next });
+    barrier(&zed, &mut outbound).await;
+    answer_attempt(&zed, &mut private, message_id, Outcome::Pending, 0).await;
+    let error = task.await.unwrap().unwrap_err();
+    assert!(error.to_string().contains("still pending"), "{error:#}");
+    assert!(f.buffers.native_open.check().is_err());
+    assert!(closed.try_recv().is_err());
+    assert!(outbound.try_recv().is_err());
 }

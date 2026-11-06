@@ -16,5 +16,7 @@ message CowboyBufferSyncEnvelope {
     CowboyCloseBuffersResponse close_response = 1005;
     CowboyAnalysisFrontier analysis_request = 1006;
     CowboyAnalysisFrontierResponse analysis_response = 1007;
+    CowboyOpenAttempt open_attempt_request = 1008;
+    CowboyOpenAttemptResponse open_attempt_response = 1009;
   }
 }

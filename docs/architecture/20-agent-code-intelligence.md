@@ -144,7 +144,10 @@ or push) until all of:
 1. fences scoped to the native-ID alias set of the target, never to pathname
    equality;
 2. independently authorized Unknown recovery and cleanup tied to exact native
-   process identity, surviving Controller restart and worker replacement;
+   process identity, surviving Controller restart and worker replacement
+   (open recovery implemented in Zed 1.23.0: an automatic query of the same
+   server process, see `docs/plugin-native-open-once.md`; navigation and
+   synchronization Unknowns remain);
 3. proven isolation from and priority below interactive Code-pane acquisition;
 4. the per-Machine process budgets of [19](19-code-review-engine.md).
 

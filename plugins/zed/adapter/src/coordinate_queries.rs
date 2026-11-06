@@ -5,6 +5,12 @@ use coordinates::tests::{peer, wire};
 mod content;
 
 pub(crate) async fn fixture() -> (Arc<ZedRuntime>, mpsc::UnboundedReceiver<proto::Envelope>) {
+    fixture_with(native_close::tests::fixture().0).await
+}
+
+pub(crate) async fn fixture_with(
+    sync: Arc<sync_native::Transport>,
+) -> (Arc<ZedRuntime>, mpsc::UnboundedReceiver<proto::Envelope>) {
     let (outbound, receiver) = mpsc::unbounded_channel();
     let mut child = Command::new("true").spawn().unwrap();
     child.wait().await.unwrap();
@@ -12,7 +18,7 @@ pub(crate) async fn fixture() -> (Arc<ZedRuntime>, mpsc::UnboundedReceiver<proto
         _child: Mutex::new(child),
         outbound,
         pending: Arc::default(),
-        sync: native_close::tests::fixture().0,
+        sync,
         events: broadcast::channel(16).0,
         buffer_files: Arc::default(),
         worktree_paths: Arc::default(),

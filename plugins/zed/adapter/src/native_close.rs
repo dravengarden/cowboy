@@ -131,6 +131,18 @@ impl Plan {
     }
 }
 
+/// Confirmed release of a native buffer the peer holds without any owner,
+/// such as one a recovered open acquired after its caller went away.
+pub(super) async fn release_unowned(zed: &ZedRuntime, buffer_id: u64) -> Result<()> {
+    let instance = exchange(zed, request(Vec::new(), Vec::new())).await?;
+    exchange(zed, request(instance.0.to_vec(), vec![buffer_id])).await?;
+    zed.diagnostics
+        .lock()
+        .expect("diagnostic cache poisoned")
+        .remove(buffer_id);
+    Ok(())
+}
+
 pub(super) async fn release(
     keys: HashSet<Key>,
     owner: &BufferOwner,
