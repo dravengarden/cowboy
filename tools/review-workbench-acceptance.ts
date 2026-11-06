@@ -133,7 +133,7 @@ async function run(p: FixturePage) {
   await p.evaluate("document.documentElement.style.fontSize='10px'");
   await capture("small-text", controls);
   await p.evaluate(
-    `(()=>{const icon=document.querySelector('[data-review-mode-glyph] svg').getBoundingClientRect();if(icon.width!==15||icon.height!==15)throw new Error('Review mode glyph ignores the small root font');if(document.querySelector('[data-repository-change-target]'))throw new Error('Mobile retained a duplicate top branch header');})()`,
+    `(()=>{const icon=document.querySelector('[data-mobile-review-mode-switcher] svg').getBoundingClientRect();if(icon.width!==15||icon.height!==15)throw new Error('Review mode glyph ignores the small root font');if(document.querySelector('[data-repository-change-target]'))throw new Error('Mobile retained a duplicate top branch header');})()`,
   );
   await p.evaluate("document.documentElement.style.removeProperty('font-size')");
   await click('[aria-label="More review actions"]');
@@ -197,6 +197,7 @@ async function emptyOverview(p: FixturePage, controls: string[]) {
     `(()=>{const card=document.querySelector('[data-review-empty-state] > div').getBoundingClientRect();const reader=document.querySelector('[data-review-empty-state]').parentElement.getBoundingClientRect();if(Math.abs(card.top+card.height/2-reader.top-reader.height/2)>30)throw new Error('Empty overview is not centered');if(!document.querySelector('[data-review-context-branch]')?.textContent.includes('main'))throw new Error('Branch is missing from bottom context');})()`,
   );
   await overviewFontScales(p, controls);
+  await workbenchTouchTargets(p);
   await viewport(320, 568);
   await capture(
     "empty-narrow",
@@ -257,20 +258,18 @@ async function overviewFontScales(p: FixturePage, controls: string[]) {
         if(Math.abs(size-sizes[i]*${scale})>0.05)throw new Error('Text ignores global font scale: '+node.textContent+' '+size);
         return {text:node.textContent,size};
       });
-      const icons=Array.from(document.querySelectorAll('[data-review-workbench] .MuiIconButton-root > svg, [data-review-mode-glyph] > svg'));
+      const icons=Array.from(document.querySelectorAll('[data-review-workbench] .MuiIconButton-root > svg, [data-mobile-review-mode-switcher] svg'));
       if(icons.length<4)throw new Error('Missing workbench icons');
       for(const icon of icons) {
         const r=icon.getBoundingClientRect();
         if(Math.abs(r.width-24*${scale})>0.05 || Math.abs(r.height-24*${scale})>0.05)throw new Error('Workbench icon ignores global font size');
       }
-      const plate=document.querySelector('[data-review-mode-glyph]').getBoundingClientRect();
-      if(Math.abs(plate.width-32*${scale})>0.05)throw new Error('Mode highlight ignores global font size');
       const facts=document.querySelector('[data-review-empty-facts]').getBoundingClientRect();
       const overview=document.querySelector('[data-review-empty-state]').parentElement.getBoundingClientRect();
       if(overview.width-facts.width>24.5)throw new Error('Empty overview wastes available width');
-      for(const node of document.querySelectorAll('[data-review-empty-state] button, [data-review-context-button], [data-segmented-tab]')) {
+      for(const node of document.querySelectorAll('[data-review-workbench] button, [data-review-repository-controls] button')) {
         const r=node.getBoundingClientRect();
-        if(r.width<44 || r.height<44)throw new Error('Font scaling shrank a touch target');
+        if(r.width<48 || r.height<48)throw new Error('Font scaling shrank a workbench touch target');
       }
       return {scale:${scale},factsWidth:facts.width,overviewWidth:overview.width,fonts};
     })()`);
@@ -279,6 +278,61 @@ async function overviewFontScales(p: FixturePage, controls: string[]) {
       `empty-font-${scale * 100}`,
       controls.filter((selector) => selector !== "[data-review-unread]"),
     );
+  }
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
+}
+
+async function tapPadding(selector: string, trailing = false) {
+  const point = await page.evaluate<{ x: number; y: number }>(`(() => {
+    const button=document.querySelector(${JSON.stringify(selector)});
+    if(!button)throw new Error('Missing touch target '+${JSON.stringify(selector)});
+    const r=button.getBoundingClientRect();
+    if(r.width<48 || r.height<48)throw new Error('Touch target smaller than 48px: '+button.outerHTML);
+    const x=${trailing} ? r.right-4 : r.left+4, y=r.bottom-4;
+    if(!button.contains(document.elementFromPoint(x,y)))throw new Error('Touch padding is covered: '+button.outerHTML);
+    return {x,y};
+  })()`);
+  await page.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ ...point, id: 1 }],
+  });
+  await page.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+}
+
+async function workbenchTouchTargets(p: FixturePage) {
+  for (const width of [390, 320]) {
+    await viewport(width, 844);
+    for (const scale of [0.5, 0.65, 1, 1.25, 2]) {
+      await p.evaluate(`document.documentElement.style.fontSize='${scale * 100}%'`);
+      const measure = await p.evaluate(`(() => {
+        const buttons=Array.from(document.querySelectorAll('[data-review-workbench] button, [data-review-repository-controls] button'));
+        return buttons.map(button=>{
+          const r=button.getBoundingClientRect();
+          if(r.width<48 || r.height<48 || r.left<0 || r.right>innerWidth || r.bottom>innerHeight)throw new Error('Unusable workbench target: '+button.outerHTML);
+          return {label:button.getAttribute('aria-label')||button.textContent,width:r.width,height:r.height};
+        });
+      })()`);
+      for (const section of ["history", "worktrees", "changes"]) {
+        await tapPadding(`[data-segmented-tab="${section}"]`, section === "worktrees");
+        await until(`document.querySelector('[data-segmented-tab="${section}"]')?.getAttribute('aria-selected')==='true'`);
+      }
+      await tapPadding("[data-review-compare]", true);
+      await until("!!document.querySelector('[aria-label=\"Comparison scenarios\"]')");
+      await click('[aria-label="Comparison scenarios"] .Mui-selected');
+      await until("!document.querySelector('[aria-label=\"Comparison scenarios\"]')");
+      await tapPadding('[aria-label="Worktree files"]', true);
+      await until("!!document.querySelector('[data-review-find-bar]')");
+      // An exclusive mode cannot be toggled off by tapping its selected button.
+      await tapPadding('[aria-label="Worktree files"]');
+      await until("document.querySelector('[aria-label=\"Worktree files\"]')?.getAttribute('aria-pressed')==='true'");
+      await tapPadding('[aria-label="Git changes"]');
+      await until("!!document.querySelector('[data-review-empty-state]')");
+      measurements.push({ name: `touch-padding-${width}-${scale * 100}`, theme, measure });
+      await capture(`touch-padding-${width}-${scale * 100}`, [
+        '[data-segmented-tab="worktrees"]', "[data-review-compare]", '[aria-label="Git changes"]',
+      ]);
+    }
   }
   await p.evaluate("document.documentElement.style.removeProperty('font-size')");
 }
