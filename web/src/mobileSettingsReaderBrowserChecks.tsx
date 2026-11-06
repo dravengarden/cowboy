@@ -38,7 +38,9 @@ export async function checkMobileSettingsReader(keep = false): Promise<void> {
     check(back.getBoundingClientRect().height >= 44, "Back retains its touch target");
     check(back.getBoundingClientRect().width === 44, "Back remains an independent round action");
     const title = footer.querySelector<HTMLElement>('[title="About"]')!;
-    check(Math.abs(title.getBoundingClientRect().left + title.getBoundingClientRect().width / 2 - (footer.getBoundingClientRect().left + footer.getBoundingClientRect().width / 2)) < 1, "Section identity is centered independently of the buttons");
+    const actions = footer.querySelector<HTMLElement>('[data-settings-navigation-actions]')!;
+    check(actions.querySelectorAll('button').length === 2, "Back and Close share the left floating group");
+    check(actions.getBoundingClientRect().left === footer.getBoundingClientRect().left && actions.getBoundingClientRect().right <= title.getBoundingClientRect().left, "Both actions remain left of the separate section identity");
     const scroller = dialog.querySelector<HTMLElement>("[data-scroll-edges]")!;
     scroller.scrollTop = scroller.scrollHeight;
     await wait();

@@ -144,8 +144,8 @@ image-pan canvases. Those retain their cursor and image-safe-area contracts.
 Full-screen headerless sheets put safe-area clearance inside their scrolling
 body. Never stack a second mask on a Transcript or the Sessions rail.
 Mobile Settings details start with their useful content. The bottom navigation
-uses a round Back action on the left, a separate centered section name, and a
-quiet Close action on the right over a theme-aware gradient; do not enclose the
+groups Back and Close in a compact rounded floating control on the left, with a
+separate section name beside it over a theme-aware gradient; do not enclose the
 title and controls in a large capsule. Descriptions belong in the Settings index.
 
 - Mobile is touch-first: single-task focus, large targets, progressive
