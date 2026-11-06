@@ -30,6 +30,7 @@ import { SessionControls } from "./Composer";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { MobileComposer } from "./mobile/MobileComposer";
 import { openMobileProduct } from "./mobile/appPagerMotion";
+import { BOTTOM_NAV_PADDING } from "./mobile/bottomNavigation";
 import {
     OPEN_APP_SETTINGS_EVENT,
     appSettingsFromEvent,
@@ -1817,24 +1818,10 @@ export function App({
                         // the composer (1) — for a mobile-browser bottom-bar feel.
                         // Top mode: order 0, first child.
                         order: navbarAtBottom ? 2 : 0,
-                        // Own the safe-area inset of whichever edge the bar hugs.
-                        // Top: clear the status bar / notch. Bottom: the bar's buttons
-                        // must clear the home-indicator zone — an earlier `home-inset −
-                        // 20px` dropped the bar so low that the bottom-RIGHT buttons
-                        // (settings gear, send) landed ON the iPad home indicator /
-                        // rounded corner and were very hard to tap. Reserve the FULL
-                        // safe-area inset (floored to 10px off-device) so the buttons
-                        // sit just ABOVE the indicator — the standard, tappable iOS
-                        // placement. Landscape rounded-corner side insets (pl/pr) keep
-                        // the bar clear of the iPhone/iPad R角. env() insets are 0
-                        // off-device + when hosted.
+                        // Agent and Review share the established bottom navigation
+                        // baseline. Landscape side insets clear the rounded corners.
                         pt: navbarAtBottom ? 0 : "var(--cowboy-system-top-clearance)",
-                        // Bottom gap = the home-indicator zone. The FULL inset (~34px)
-                        // read as a big, lopsided gap vs the slim composer→navbar gap
-                        // above; shave it so the bar sits closer to the edge while the
-                        // 44px buttons still clear the indicator (an earlier `inset−20`
-                        // ≈14px dropped them ONTO it — keep ≥ ~20px).
-                        pb: navbarAtBottom ? "max(calc(env(safe-area-inset-bottom) - 18px), 12px)" : 0,
+                        pb: navbarAtBottom ? BOTTOM_NAV_PADDING : 0,
                         pl: navbarAtBottom ? "env(safe-area-inset-left, 0px)" : 0,
                         pr: navbarAtBottom ? "env(safe-area-inset-right, 0px)" : 0,
                         ...(mobile && draftRoute.id && { display: "none" }),

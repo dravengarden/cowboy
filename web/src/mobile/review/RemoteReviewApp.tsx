@@ -241,18 +241,6 @@ function PullRequest(
               : "Remote pull request"}
           </Typography>
         </Box>
-        {file && marks && fileKey && (
-          <Button
-            size="small"
-            color={viewed(file) ? "success" : "inherit"}
-            aria-pressed={viewed(file)}
-            startIcon={viewed(file) ? <CheckCircle /> : <CheckCircleOutline />}
-            onClick={toggleViewed}
-            sx={{ minHeight: 44, textTransform: "none", flexShrink: 0 }}
-          >
-            Viewed
-          </Button>
-        )}
       </Stack>
       {error && <Alert severity="warning">{error}</Alert>}
       {loading && (
@@ -422,6 +410,18 @@ function PullRequest(
               Local
             </Button>
           )}
+        {file && marks && fileKey && (
+          <Button
+            size="small"
+            color={viewed(file) ? "success" : "inherit"}
+            aria-pressed={viewed(file)}
+            startIcon={viewed(file) ? <CheckCircle /> : <CheckCircleOutline />}
+            onClick={toggleViewed}
+            sx={{ minHeight: 44, textTransform: "none", flexShrink: 0 }}
+          >
+            Viewed
+          </Button>
+        )}
         <Box sx={{ flex: 1 }} />
         <IconButton
           aria-label="Refresh PR"
@@ -530,7 +530,7 @@ export function RemoteReviewApp(
       <Box
         sx={{
           px: 2,
-          py: 1.5,
+          py: 0.75,
           borderBottom: 1,
           borderColor: "divider",
           flexShrink: 0,

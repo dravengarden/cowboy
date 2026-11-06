@@ -192,6 +192,11 @@ require the exact successful build receipt and published SideStore version.
   lifecycle or binds it to the session.
 
 ## Frontend
+Efficiency is the core UX criterion. Follow [the core UX principles](docs/ux-principles.md):
+Mobile keeps frequent controls in a bottom workbench and content above;
+Desktop keeps commands visible and keyboard reachable. Verify rendered task
+flows, not just static source or visual tidiness.
+
 Composer (mdlive / CM6), optimistic-send, transcript (column-reverse scroll),
 the Tauri native shell — see `web/AGENTS.md` and the
 `cowboy-*` memories.
