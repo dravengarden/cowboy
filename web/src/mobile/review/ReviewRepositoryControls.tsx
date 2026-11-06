@@ -1,4 +1,5 @@
 import { Box, Stack, Tab, Tabs } from "@mui/material";
+import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 
 export type RepositorySection = "changes" | "history" | "worktrees";
 
@@ -11,6 +12,7 @@ export function ReviewRepositoryControls({
   onSection: (section: RepositorySection) => void;
   onControls: (container: HTMLDivElement | null) => void;
 }): React.JSX.Element {
+  const mobile = useSurfaceProfile().kind !== "desktop";
   return (
     <Stack
       data-review-repository-controls
@@ -34,7 +36,7 @@ export function ReviewRepositoryControls({
           minWidth: 0,
           maxWidth: "100%",
           minHeight: 48,
-          borderRadius: 1,
+          borderRadius: mobile ? "24px" : 1,
           bgcolor: "action.hover",
           "& .MuiTabs-indicator": { display: "none" },
           "& .MuiTabs-list": { flexWrap: "wrap" },
@@ -42,7 +44,7 @@ export function ReviewRepositoryControls({
             minHeight: 48,
             minWidth: 48,
             px: 0.5,
-            borderRadius: 1,
+            borderRadius: mobile ? "999px" : 1,
             fontSize: "0.8125rem",
             textTransform: "none",
             "&.Mui-selected": {
