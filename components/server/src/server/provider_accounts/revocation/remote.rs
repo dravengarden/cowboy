@@ -47,14 +47,10 @@ async fn deliver(
         );
         return Ok(recorded.generation);
     }
-    let (connection, protocol) = state
+    let (connection, _) = state
         .machine_control
         .connection_protocol(&target.machine_id)
         .context("machine offline")?;
-    anyhow::ensure!(
-        protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION,
-        "named account protocol unavailable"
-    );
     let key = store
         .machine_encryption_public_key(&target.machine_id)
         .await?

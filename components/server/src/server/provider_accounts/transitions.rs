@@ -123,14 +123,10 @@ pub(super) async fn complete(
     let epoch = runtime
         .account_stop_connection()
         .context("runtime_offline")?;
-    let (connection, protocol) = state
+    let (connection, _) = state
         .machine_control
         .connection_protocol(machine)
         .context("machine_offline")?;
-    ensure!(
-        protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION,
-        "account_protocol_unavailable"
-    );
     let current = || {
         ensure!(
             runtime.account_stop_connection() == Some(epoch)
@@ -272,14 +268,10 @@ pub(super) async fn commit(
         .await?
         .context("transition_not_found")?;
     let machine = &intent.request.machine_id;
-    let (connection, protocol) = state
+    let (connection, _) = state
         .machine_control
         .connection_protocol(machine)
         .context("machine_offline")?;
-    ensure!(
-        protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION,
-        "account_protocol_unavailable"
-    );
     let registered = store
         .list_machines()
         .await?
@@ -393,13 +385,9 @@ pub(super) async fn stop(
     let Some(epoch) = runtime.account_stop_connection() else {
         return Ok(None);
     };
-    let Some((connection, protocol)) = state.machine_control.connection_protocol(machine) else {
+    let Some((connection, _)) = state.machine_control.connection_protocol(machine) else {
         return Ok(None);
     };
-    ensure!(
-        protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION,
-        "account_protocol_unavailable"
-    );
     let current = || {
         runtime.account_stop_connection() == Some(epoch)
             && state

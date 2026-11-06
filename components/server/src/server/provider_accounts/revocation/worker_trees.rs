@@ -42,14 +42,10 @@ async fn observe(
         crate::admin::hex_sha256(key.as_bytes()) == evidence.recipient_fingerprint,
         "machine enrollment changed"
     );
-    let (connection, protocol) = state
+    let (connection, _) = state
         .machine_control
         .connection_protocol(&evidence.machine_id)
         .context("machine offline")?;
-    anyhow::ensure!(
-        protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION,
-        "account protocol unavailable"
-    );
     let tree = state
         .machine_control
         .query_worker_exit(

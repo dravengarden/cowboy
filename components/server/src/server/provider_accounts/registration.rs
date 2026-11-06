@@ -134,13 +134,10 @@ pub(in crate::server) async fn register(
         .clone()
         .ok_or("account_owner_required")?;
     let store = state.store.as_ref().ok_or("account_store_unavailable")?;
-    let (connection, protocol) = state
+    let (connection, _) = state
         .machine_control
         .connection_protocol(&registration.machine_id)
         .ok_or("machine_unavailable")?;
-    if protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
-        return Err("named_account_protocol_unavailable".into());
-    }
     let (operation, completion) = store
         .native_login_for_session(
             &owner,

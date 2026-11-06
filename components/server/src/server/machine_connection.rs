@@ -854,7 +854,7 @@ pub(super) async fn handle_machine_ws(
             observed_at_ms: now_ms(),
         },
     );
-    spawn_machine_reconnect_sync(&state, &hello, &connection, protocol);
+    spawn_machine_reconnect_sync(&state, &hello, &connection);
     let (runtime_core, runtime_tunnel) = match UnixStream::pair() {
         Ok(pair) => pair,
         Err(error) => {
@@ -1119,17 +1119,14 @@ fn spawn_machine_reconnect_sync(
     state: &Arc<AppState>,
     hello: &crate::machine_protocol::MachineHello,
     connection: &crate::machine_control::ConnectionToken,
-    protocol: u16,
 ) {
-    if protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
-        let sync_state = Arc::clone(state);
-        let machine_id = hello.machine_id.clone();
-        tokio::spawn(async move {
-            if let Err(error) = reconcile_machine_account_grants(&sync_state, &machine_id).await {
-                tracing::warn!(%error, %machine_id, "cannot reconcile account credential grants");
-            }
-        });
-    }
+    let sync_state = Arc::clone(state);
+    let machine_id = hello.machine_id.clone();
+    tokio::spawn(async move {
+        if let Err(error) = reconcile_machine_account_grants(&sync_state, &machine_id).await {
+            tracing::warn!(%error, %machine_id, "cannot reconcile account credential grants");
+        }
+    });
     // A Machine that restarted mid-install proves an interrupted staging
     // attempt durably at startup; release its Service fence without an Operator.
     tokio::spawn(plugin_install::recover_interrupted_staging(
@@ -1196,11 +1193,7 @@ fn install_machine_runtime(
         generation,
         provider_auth,
         protocol,
-        if protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION {
-            hello.encryption_public_key.clone()
-        } else {
-            None
-        },
+        hello.encryption_public_key.clone(),
     );
     runtime.attach_telemetry(machine_id.clone(), runtime_telemetry);
     if let Some(store) = state.store.as_ref() {

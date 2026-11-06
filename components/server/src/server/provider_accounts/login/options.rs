@@ -162,10 +162,6 @@ fn readiness_reason(
         Some("machine_not_permitted")
     } else if !enrolled || protocol.is_none() {
         Some("machine_unavailable")
-    } else if protocol.is_some_and(|protocol| {
-        protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION
-    }) {
-        Some("machine_account_protocol_required")
     } else if !installed {
         Some("provider_not_installed")
     } else if !package {
@@ -228,16 +224,6 @@ mod tests {
                 true,
                 true,
                 "machine_unavailable",
-            ),
-            (
-                true,
-                true,
-                true,
-                Some(0),
-                true,
-                true,
-                true,
-                "machine_account_protocol_required",
             ),
             (
                 true,
