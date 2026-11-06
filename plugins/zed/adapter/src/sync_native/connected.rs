@@ -52,6 +52,14 @@ fn immutable_native_sync() {
         .env("TMPDIR", scratch.0.join("tmp"))
         .env("PATH", "/nonexistent-cowboy-test-tools")
         .env("COWBOY_TEST_NATIVE_SYNC_SERVER", server)
+        .env(
+            "COWBOY_TEST_NAVIGATION_LSP",
+            std::fs::canonicalize(
+                std::env::var_os("COWBOY_TEST_NAVIGATION_LSP")
+                    .expect("explicit test LSP fixture is required"),
+            )
+            .unwrap(),
+        )
         .env("COWBOY_TEST_NATIVE_SYNC_ROOT", &scratch.0)
         .current_dir(&scratch.0);
     if let Some(adapter) = std::env::var_os("COWBOY_TEST_NATIVE_NAVIGATION_ADAPTER") {

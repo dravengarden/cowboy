@@ -127,12 +127,20 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   exactly that text; `stale` when the analyzed version is older; otherwise
   `unknown` with a reason (`unpublished`, `in_flight`, `unversioned`,
   `save_triggered`, `merged`). Pulled diagnostics (`textDocument/diagnostic`,
-  used by gopls and most current servers) carry the document version the server
+  for servers that advertise that capability) carry the document version the server
   last received when the pull was sent (private server 1.10.0); the server
   answers after every earlier change notification. `code.diagnostics` reports a file as
   `document_current` only when every listed server is. This is document
   evidence only; the input frontier for dependencies and configuration is
   still open, so nothing reports `fresh`.
+
+  Hawk's gopls v0.22.0 does not advertise diagnostic pull. A direct stdio
+  probe on 2026-11-06 showed that its pushed diagnostics omit the version for
+  `didOpen` version 0, but include version 1. Private server 1.11.0 starts
+  document versions at 1 and only treats a publication as versioned when the
+  exact LSP snapshot is retained. Zed's special version-0 fallback when no
+  snapshot exists is not analysis evidence. These changes still require
+  acceptance of the installed, serving pair; installation alone is not proof.
 
 ### Acquisition: gated
 
