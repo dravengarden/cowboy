@@ -27,6 +27,16 @@ primary phone/desktop product path.
 - [`agent-api.md`](agent-api.md) — Cowboy MCP: dynamic product control catalog, session/history/usage reads, durable receipts, coverage ledger and protocol 30–32 compatibility
 - [`superagent-patterns.md`](superagent-patterns.md) — Proposed global/workspace/project pattern profiles, Markdown contracts, evidence-based refinement, adoption and supervision boundaries
 - [`examples/superagent-patterns/global.md`](examples/superagent-patterns/global.md) — Inactive example: owner-global pattern selection
+- [`examples/superagent-patterns/patterns/scope-continuation.md`](examples/superagent-patterns/patterns/scope-continuation.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/failure-recovery.md`](examples/superagent-patterns/patterns/failure-recovery.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/review-follow-through.md`](examples/superagent-patterns/patterns/review-follow-through.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/delivery-evidence.md`](examples/superagent-patterns/patterns/delivery-evidence.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/dependency-handoff.md`](examples/superagent-patterns/patterns/dependency-handoff.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/review-ready.md`](examples/superagent-patterns/patterns/review-ready.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/resource-closeout.md`](examples/superagent-patterns/patterns/resource-closeout.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/observed-global.md`](examples/superagent-patterns/observed-global.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/observed-routing.md`](examples/superagent-patterns/observed-routing.md) — Inactive historical-usage pattern candidate or analysis
+- [`superagent-usage-patterns-2026-11.md`](superagent-usage-patterns-2026-11.md) — Inactive historical-usage pattern candidate or analysis
 - [`examples/superagent-patterns/suger.md`](examples/superagent-patterns/suger.md) — Inactive example: Suger workspace profile
 - [`examples/superagent-patterns/columbus.md`](examples/superagent-patterns/columbus.md) — Inactive example: Columbus workspace profile
 - [`examples/superagent-patterns/cowboy.md`](examples/superagent-patterns/cowboy.md) — Inactive example: Cowboy project procedure replacement
