@@ -169,3 +169,33 @@ test("a user retry during backoff clears the pending retry countdown", async () 
   // retry that never comes.
   expect(store.getSyncStatus().retryAt).toBeUndefined();
 });
+
+test("a capacity close waits for the admission retry delay before reconnecting", async () => {
+  const current = FakeSocket.all.at(-1)!;
+  current.accept();
+  current.receive({ type: "bootstrap_complete" });
+  await until(() => store.getSyncStatus().phase === "live");
+  const before = FakeSocket.all.length;
+  current.drop(4429);
+  // No retry_after_ms was announced, so the Controller default of 5 s applies.
+  await settle(3_000);
+  expect(FakeSocket.all.length).toBe(before);
+  await until(() => FakeSocket.all.length === before + 1, 4_000);
+}, 10_000);
+
+// Last: an auth-required close pauses the product socket until the sign-in
+// cookie changes, which this harness never signals.
+test("an auth-required close pauses reconnecting until sign-in changes", async () => {
+  const current = FakeSocket.all.at(-1)!;
+  current.accept();
+  current.receive({ type: "bootstrap_complete" });
+  await until(() => store.getSyncStatus().phase === "live");
+  const before = FakeSocket.all.length;
+  current.drop(4001);
+  await until(() => store.getSyncStatus().phase === "auth_required");
+  await settle(1_500);
+  store.retrySyncNow();
+  await settle(200);
+  expect(FakeSocket.all.length).toBe(before);
+  expect(store.getSyncStatus().phase).toBe("auth_required");
+});

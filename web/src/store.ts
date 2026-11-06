@@ -37,6 +37,7 @@ import {
 } from "./sendImagePreviews";
 import {
   checkReconnectAdmission,
+  classifySocketClose,
   ForegroundProbe,
   isAppleTouchWebView,
   shouldReconnectOnForeground,
@@ -2034,8 +2035,6 @@ export function notify(message: string, severity: "error" | "warning" | "info" =
 // Schedule the next reconnect after `delay` ms (the backoff `conn.connectionLost`
 // computed off the consecutive-failure count). One pending attempt at a time.
 const PRODUCT_AUTH_LOST_EVENT = "cowboy:product-auth-lost";
-const WS_AUTH_REQUIRED_CLOSE_CODE = 4001;
-const WS_CAPACITY_REQUIRED_CLOSE_CODE = 4429;
 
 type MeHandshake = "reconnect" | "logout" | "keep";
 
@@ -2436,15 +2435,9 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
       visibility: document.visibilityState,
       network_online: navigator.onLine,
     });
-    if (event.code === WS_AUTH_REQUIRED_CLOSE_CODE) {
-      pauseProductSocketForAuth();
-      return;
-    }
-    if (event.code === WS_CAPACITY_REQUIRED_CLOSE_CODE) {
-      const retryAfter = state.activeCapacity?.retry_after_ms ?? 5_000;
-      scheduleReconnect(Math.max(1_000, retryAfter));
-      return;
-    }
+    const closeAction = classifySocketClose(event.code, state.activeCapacity?.retry_after_ms);
+    if (closeAction.kind === "pause_for_auth") return pauseProductSocketForAuth();
+    if (closeAction.kind === "wait_for_capacity") return scheduleReconnect(closeAction.delayMs);
     void (async () => {
       // Do not put an HTTP auth probe in front of an admitted socket's retry.
       // The replacement handshake still validates the cookie and frozen dataset.

@@ -6,6 +6,9 @@
 pub use cowboy::*;
 
 #[cfg(feature = "machine-host")]
+mod boot_identity;
+
+#[cfg(feature = "machine-host")]
 pub mod execution_host;
 #[cfg(feature = "machine-host")]
 pub mod machine_broker;

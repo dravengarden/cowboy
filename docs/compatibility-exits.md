@@ -114,6 +114,12 @@ boundaries and stay.
 
 ## Retired
 
+- 2026-11-06: the legacy Plugin uninstall transport. Every admitted Machine
+  runs uninstall as a leased durable step, so `PluginUninstallTransport`,
+  the unleased `UninstallPlugin` dispatch and the Controller's unjournaled
+  `ReactivatePlugin` compensation (`reactivate_plugin_on_connection`,
+  `RetainedPluginTarget`) are gone; the wire command and the Machine's handler
+  stay for the pinned worker.
 - 2026-11-06: Controller gates on `PROVIDER_ACCOUNT_PROTOCOL_VERSION` (36)
   and `NATIVE_USAGE_PROTOCOL_VERSION` (37) wherever the protocol is a
   connected Machine's negotiated one (`connection_protocol`, the handshake

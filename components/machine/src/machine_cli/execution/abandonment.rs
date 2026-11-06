@@ -84,15 +84,20 @@ mod tests {
     #[tokio::test]
     async fn bound_runtime_entry_requires_original_private_service_and_session_marker() {
         let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&state, &alias).unwrap();
         let manager = Manager::new(
             Some(format!("svc-{}", "1".repeat(32))),
             "runtime".into(),
-            root.path(),
+            &alias,
             None,
             false,
         )
         .unwrap();
         let runtime = manager.prepare_runtime("session").await.unwrap();
+        assert!(Path::new(&runtime.cwd).starts_with(state.canonicalize().unwrap()));
         let mut binding = crate::execution_environment::fixture().record().clone();
         binding["runtime"] = serde_json::to_value(&runtime).unwrap();
         let session: crate::runtime_wire::StartSession =
@@ -105,7 +110,7 @@ mod tests {
         let other_service = Manager::new(
             Some(format!("svc-{}", "2".repeat(32))),
             "runtime".into(),
-            root.path(),
+            &alias,
             None,
             false,
         )
@@ -117,6 +122,17 @@ mod tests {
         other_session = session.clone();
         other_session.cwd = root.path().display().to_string();
         assert!(!manager.owns_runtime_entry(&other_session));
+        let directory = Path::new(&session.cwd);
+        let moved = directory.with_extension("moved");
+        std::fs::rename(directory, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, directory).unwrap();
+        assert!(
+            !manager.owns_runtime_entry(&session),
+            "a linked session is not an owned entry"
+        );
+        std::fs::remove_file(directory).unwrap();
+        std::fs::rename(&moved, directory).unwrap();
+        assert!(manager.owns_runtime_entry(&session));
         let marker = Path::new(&session.cwd).join("entry.json");
         std::fs::remove_file(&marker).unwrap();
         assert!(!manager.owns_runtime_entry(&session));
