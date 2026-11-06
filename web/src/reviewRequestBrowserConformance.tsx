@@ -267,9 +267,9 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
     check(button && !button.disabled, `missing enabled ${label}`);
     button.click();
   };
-  const press = (label: string) => {
+  const press = (label: string, owner: ParentNode = container) => {
     const control = [
-      ...container.querySelectorAll<HTMLElement>('[role="button"]'),
+      ...owner.querySelectorAll<HTMLElement>('[role="button"]'),
     ].find((node) => node.textContent?.trim() === label);
     check(control, `missing ${label}`);
     flushSync(() => control.click());
@@ -418,14 +418,22 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
       "[data-repository-change-target]",
     );
     await until(
-      () => !!strip?.querySelector("[data-repository-pull]"),
+      () => !!strip?.textContent?.includes("#12"),
       "the branch's pull request",
     );
     check(
       strip?.textContent ===
-        "task/mine2 uncommittedNot pushed↑3 ↓1 origin/main#12",
+        "task/mine · #122 uncommitted · Not pushed · ↑3 ↓1 origin/main",
       `change target strip reads ${strip?.textContent}`,
     );
+    click("Repository details");
+    await until(() => !!document.querySelector("[data-repository-pull]"), "PR action in repository details");
+    const pull = document.querySelector<HTMLElement>("[data-repository-pull]")!;
+    check(pull.textContent === "#12", "the PR stays identified in repository details");
+    pull.click();
+    await until(() => !document.querySelector('[aria-label="Close repository details"]'), "choosing a PR closes details");
+    check(pulled.join() === "origin#12", "repository details opens the associated PR");
+    pulled.length = 0;
     click("Worktrees");
     await settle();
     const rows = () =>
@@ -465,7 +473,10 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
       pulled.join() === "origin#7,origin#12",
       `pull requests opened as ${pulled.join()}`,
     );
-    press("↑3 ↓1 origin/main");
+    click("Repository details");
+    await until(() => !!document.querySelector('[aria-label="Close repository details"]'), "repository comparison actions");
+    press("↑3 ↓1 origin/main", document);
+    await until(() => !document.querySelector('[aria-label="Close repository details"]'), "choosing a comparison closes details");
     check(
       comparisons.join() === "refs/remotes/origin/main",
       `the base fact requested ${comparisons.join()}`,

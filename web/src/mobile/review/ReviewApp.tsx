@@ -64,6 +64,7 @@ import { resolveReviewLink } from "./reviewLinkTarget";
 import type { ReviewMode } from "./reviewMode";
 import { setReviewLanguageCapabilities, updateReviewSettings, useReviewSettings } from "./reviewSettings";
 import { openMobileProduct } from "../appPagerMotion";
+import { BOTTOM_NAV_PADDING } from "../bottomNavigation";
 import { appendDraftText } from "../../draftStore";
 
 import { type ReviewQuestion, reviewExplainPrompt, reviewExplainSessions, reviewExplainTitle } from "./reviewLineSelection";
@@ -1496,7 +1497,9 @@ export function ReviewApp({
         }}
       >
         {(target.kind !== "changes" || commitTarget) && (
-          <Box data-review-document-title sx={{ px: 1.5, py: 0.75, flexShrink: 0, borderBottom: 1, borderColor: "divider" }}>
+          <Box data-review-document-title sx={{ pl: "max(env(safe-area-inset-left, 0px), 12px)", pr: "max(env(safe-area-inset-right, 0px), 12px)", py: 0.75, flexShrink: 0, borderBottom: 1, borderColor: "divider",
+            "@media (max-height: 500px) and (min-width: 600px)": { display: "flex", alignItems: "center", gap: 2, "& > :first-child": { flex: 1 }, "& > *": { minWidth: 0 } },
+          }}>
             <Typography variant="caption" noWrap sx={{ display: "block", fontFamily: "var(--cowboy-font-mono)" }}>
               {commitTarget ? commitTarget.path ?? commitTarget.commit.subject : target.kind !== "changes" ? target.path : ""}
             </Typography>
@@ -1712,15 +1715,19 @@ export function ReviewApp({
             component="nav"
             aria-label="Code Review controls"
             sx={{
-              pb: "max(env(safe-area-inset-bottom), 12px)",
-              // Match Agent's bottom AppBar: safe-area on the chrome, then the
-              // Toolbar's default 16px gutter so Open Agent lines up with the
-              // Sessions hamburger.
+              pb: BOTTOM_NAV_PADDING,
+              // Keep the pager's bottom baseline while leaving room for the
+              // context selector and 44px actions on a narrow phone.
               pl: "max(env(safe-area-inset-left, 0px), 4px)",
               pr: "max(env(safe-area-inset-right, 0px), 4px)",
+              "@media (max-height: 500px) and (min-width: 600px)": {
+                display: "flex", flexWrap: "wrap", alignItems: "center",
+                "& > [data-review-file-controls]": { flex: "1 0 auto" },
+                "& > [data-review-workbench]": { flex: "1 0 340px", minWidth: 0 },
+              },
             }}
           >
-            {!navigationInline && <Toolbar
+            {!navigationInline && <Toolbar data-review-file-controls
               variant="dense"
               sx={{
                 minHeight: 44,
@@ -1928,12 +1935,13 @@ export function ReviewApp({
                 </>}
               />
               <ReviewModeSwitcher mode={mode} onChange={activateReviewMode} />
-              <ReviewMoreActions>
+              <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={currentMachineId}
+                renderTrigger={({ disabled, open }) => <ReviewMoreActions>{(close) => <>
                 {navigationInline && <Box ref={setInlineActionsContainer} />}
                 {contextReturnSession && (
                   <Button
                     aria-label={`Back to session ${contextReturnSession.title}`}
-                    onClick={returnToSessionContext}
+                    onClick={() => { close(); returnToSessionContext(); }}
                     startIcon={<Undo />}
                     sx={{ minHeight: 44, textTransform: "none" }}
                   >
@@ -1946,14 +1954,14 @@ export function ReviewApp({
                   startIcon={<CloudOutlined />}
                   sx={{ minHeight: 44, textTransform: "none" }}
                   onClick={() => {
+                    close();
                     setCloseRequest((value) => value + 1);
                     mutateMobileReview(workspace.sessionId, "selectRemoteReview", { selected: true });
                   }}
                 >{syncedReview.remote_review ? `PR #${syncedReview.remote_review.number}` : "Remote PR"}</Button>}
-                <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={currentMachineId}
-                  renderTrigger={({ disabled, open }) => <Button aria-label="Open extensions" disabled={disabled} onClick={open}
-                    startIcon={<ExtensionOutlined />} sx={{ minHeight: 44, textTransform: "none" }}>Extensions</Button>} />
-              </ReviewMoreActions>
+                <Button aria-label="Open extensions" disabled={disabled} onClick={() => { close(); open(); }}
+                  startIcon={<ExtensionOutlined />} sx={{ minHeight: 44, textTransform: "none" }}>Extensions</Button>
+              </>}</ReviewMoreActions>} />
             </Stack>
           </Box>
         </Box>

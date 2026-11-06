@@ -6,13 +6,18 @@ import { Sheet } from "../../Sheet";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 
 /** Secondary tools keep their place without taking space from the reader. */
-export function ReviewMoreActions({ children }: { children: ReactNode }): React.JSX.Element {
+export function ReviewMoreActions({
+  children,
+}: {
+  children: (close: () => void) => ReactNode;
+}): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const surface = useSurfaceProfile();
+  const close = () => setOpen(false);
   if (surface.kind === "desktop") {
     return (
       <Stack direction="row" alignItems="center" sx={{ flexWrap: "wrap" }}>
-        {children}
+        {children(close)}
         <IconButton
           aria-label="Review settings"
           onClick={() => openAppSettings({ section: "code" })}
@@ -56,7 +61,7 @@ export function ReviewMoreActions({ children }: { children: ReactNode }): React.
               gap: 1,
             }}
           >
-            {children}
+            {children(close)}
           </Box>
           <Button
             startIcon={<SettingsOutlined />}

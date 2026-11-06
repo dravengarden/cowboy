@@ -32,6 +32,7 @@ import {
   useState,
 } from "react";
 import { isImeKeyEvent } from "../../imeKey";
+import { BOTTOM_NAV_PADDING } from "../bottomNavigation";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import {
   type CodeTreeEntry as FileTreeEntry,
@@ -67,8 +68,7 @@ const DIRECTORY_PREFETCH_CONCURRENCY = 3;
 const DIRECTORY_PREFETCH_LIMIT = 12;
 // Both navigator footers are in flow. Reserve the keyboard only above the
 // footer that already owns the safe area; never reserve a second action bar.
-const INLINE_NAV_HEIGHT =
-  "(48px + max(env(safe-area-inset-bottom, 0px), 12px))";
+const INLINE_NAV_HEIGHT = `(48px + ${BOTTOM_NAV_PADDING})`;
 const SIDEBAR_ACTIONS_RESERVE =
   "calc(max(env(safe-area-inset-bottom, 0px), 12px) + 64px)";
 

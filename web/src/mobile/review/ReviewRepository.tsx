@@ -346,7 +346,7 @@ export function ReviewRepository({
       pr: "env(safe-area-inset-right, 0px)",
     }}>
       <Box data-repository-change-target sx={{ px: 1.5, py: 0.75, flexShrink: 0 }}>
-        <Typography variant="caption" fontWeight={600} noWrap>{targetBranch}</Typography>
+        <Typography variant="caption" fontWeight={600} noWrap>{targetBranch}{targetPull ? ` · #${targetPull.number}` : ""}</Typography>
         <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
           {targetFacts.map((fact) => fact.label).join(" · ")}
         </Typography>
@@ -635,7 +635,7 @@ export function ReviewRepository({
           {machineChip}
           <Typography data-repository-project-path variant="caption" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>{projectPath}</Typography>
           <Stack direction="row" flexWrap="wrap" sx={{ gap: 1, "& .MuiChip-clickable": { minHeight: 44 } }}>{factChips}</Stack>
-          {targetPull && <PullChip pull={targetPull} onOpen={openPull ? () => openPull(targetPull) : undefined} />}
+          {targetPull && <PullChip pull={targetPull} onOpen={openPull ? () => { setDetailsOpen(false); openPull(targetPull); } : undefined} />}
         </Stack>
       </Sheet>
       <ReviewNavigationActions

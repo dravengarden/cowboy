@@ -21,6 +21,22 @@ function tabLabel(tab: ReviewTab): string {
   return basename(tab.path);
 }
 
+const stripSx = {
+  height: 44,
+  minHeight: 44,
+  maxHeight: 44,
+  pl: "env(safe-area-inset-left, 0px)",
+  pr: "env(safe-area-inset-right, 0px)",
+  overflowX: "auto",
+  overflowY: "hidden",
+  touchAction: "pan-x",
+  overscrollBehaviorY: "none",
+  scrollbarWidth: "none",
+  borderBottom: 1,
+  borderColor: "divider",
+  "&::-webkit-scrollbar": { display: "none" },
+} as const;
+
 export function ReviewTabStrip({
   tabs,
   activeKey,
@@ -119,19 +135,7 @@ export function ReviewTabStrip({
         direction="row"
         data-review-tab-strip
         data-mobile-pager-ignore
-        sx={{
-          height: 44,
-          minHeight: 44,
-          maxHeight: 44,
-          overflowX: "auto",
-          overflowY: "hidden",
-          touchAction: "pan-x",
-          overscrollBehaviorY: "none",
-          scrollbarWidth: "none",
-          borderBottom: 1,
-          borderColor: "divider",
-          "&::-webkit-scrollbar": { display: "none" },
-        }}
+        sx={stripSx}
       >
         {tabs.map((tab) => {
           const key = reviewTabKey(tab);

@@ -128,7 +128,9 @@ test("Code chrome uses Agent instead of a local settings sheet", () => {
       reviewAppSource.indexOf('aria-label="Code Review controls"'),
   );
   assert(reviewAppSource.includes("ChatBubbleOutline"));
-  assert(reviewAppSource.includes('pb: "max(env(safe-area-inset-bottom), 12px)"'));
+  assert(reviewAppSource.includes("pb: BOTTOM_NAV_PADDING"));
+  assert(appSource.includes("pb: navbarAtBottom ? BOTTOM_NAV_PADDING : 0"));
+  assert(fileTreeSource.includes("(48px + ${BOTTOM_NAV_PADDING})"));
   assert(reviewAppSource.indexOf("<ReviewModeSwitcher") > reviewAppSource.indexOf('aria-label="Code Review controls"'));
   assertEquals(reviewAppSource.includes("ArrowBackIosNew"), false);
   assertEquals(reviewSettingsSource.includes("SettingsSheet"), false);

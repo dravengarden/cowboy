@@ -31,6 +31,11 @@ labels, without adding a second navigation hierarchy.
   targets, and wrap controls rather than clipping them or relying on a
   horizontal swipe at a system-gesture edge. File tabs above the action row may
   scroll; the action row itself must not.
+- Preserve reading space in short landscape viewports by sharing horizontal
+  space between action groups. Keep next/previous and review marks direct;
+  measure the open document as well as the overview. Agent and Review share
+  the pager's established bottom navigation baseline rather than independently
+  changing its home-indicator spacing.
 - Search stays above the software keyboard. Do not automatically focus an
   input merely to open navigation. Preserve the existing viewport/keyboard
   owner instead of adding another viewport tracker for a feature.
