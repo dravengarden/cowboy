@@ -52,7 +52,7 @@ impl Receipt {
     pub fn commitment(&self) -> Result<String> {
         let mut prepared = self.clone();
         prepared.phase = Phase::Prepared;
-        Ok(crate::admin::hex_sha256(&serde_json::to_vec(&(
+        Ok(crate::digest::hex_sha256(&serde_json::to_vec(&(
             "cowboy-provider-grant-commit-v1",
             prepared,
         ))?))
@@ -135,7 +135,7 @@ impl Store {
             let receipt: Receipt = serde_json::from_str(&value)?;
             anyhow::ensure!(matches!(receipt.phase, Phase::Committed { .. })
                 && receipt.machine_id == machine
-                && receipt.recipient_fingerprint == crate::admin::hex_sha256(recipient.as_bytes()),
+                && receipt.recipient_fingerprint == crate::digest::hex_sha256(recipient.as_bytes()),
                 "Provider grant is not committed for this enrollment");
             let value: String = sqlx::query_scalar("SELECT value FROM provider_account_registries WHERE owner_user_id=$1")
                 .bind(owner).fetch_one(&mut *tx).await?;
@@ -204,7 +204,7 @@ impl Store {
             Ok(value) => value,
             Err(code) => return Ok(Outcome::Rejected(code)),
         };
-        let request_hash = crate::admin::hex_sha256(&serde_json::to_vec(input)?);
+        let request_hash = crate::digest::hex_sha256(&serde_json::to_vec(input)?);
         macro_rules! prepare { ($db:expr, $revoked:literal) => {{
             let mut tx = $db.pool.begin().await?;
             // Same owner-row lock as metadata mutation; PostgreSQL and SQLite
@@ -225,7 +225,7 @@ impl Store {
             if machine.rows_affected() != 1 { return Ok(Outcome::Rejected("machine_unavailable")); }
             let recipient: Option<String> = sqlx::query_scalar("SELECT encryption_public_key FROM machines WHERE id=$1")
                 .bind(&input.machine_id).fetch_one(&mut *tx).await?;
-            if recipient.as_ref().is_none_or(|key| crate::admin::hex_sha256(key.as_bytes()) != input.recipient_fingerprint) {
+            if recipient.as_ref().is_none_or(|key| crate::digest::hex_sha256(key.as_bytes()) != input.recipient_fingerprint) {
                 return Ok(Outcome::Rejected("machine_enrollment_changed"));
             }
             let value: String = sqlx::query_scalar("SELECT value FROM provider_account_registries WHERE owner_user_id=$1")

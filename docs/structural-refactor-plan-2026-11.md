@@ -472,6 +472,44 @@ derivation closure of every row (2,699–2,706 derivations) is identical before
 and after with the revision and store hashes masked, and the check set is
 unchanged. No variant was added or retired.
 
+### Phase 5 status (2026-11-06)
+
+5.1 landed as [`history/module-cycle-edges-2026-11.md`](history/module-cycle-edges-2026-11.md):
+126 edges inside the 37-module cycle, 46 type-only, 3 constant or
+type-and-constant, 68 behavioural and 9 for manual review. Most behavioural
+back-edges were small pure helpers above their callers, so the first ports are
+leaf moves inside the base crate, which change no `Cargo.toml` and no worker
+generation input: `crate::digest` (`hex_sha256`), `crate::credentials`
+(username and password rules, argon2id hashing, identifiers, session tokens,
+cookie parsing, secret-safe JSON decoding) and `crate::core_passkeys_contract`
+(the frozen legacy Passkey storage check). The old paths re-export them for the
+Controller crate. The cycle split into 15 modules (`store`, `core`,
+`persistence`, `managed_calls`, `session_*`, `scheduler`, `admin`,
+`product_auth`, `core_passkeys`, `plugin_storage`, `provider_service`,
+`machine_control`, `telemetry_binding`, `artifacts`) and 13 (Plugin activation,
+catalog and runtime, CLI, usage and provider info, telemetry Plugin), plus
+`otlp` ↔ `observability`; `oidc`, `passkey`, `client_auth*`, `core_security`,
+`agent_api` and `product_cli` left every cycle. The 15-module cluster is the
+5.4/5.5 store and Hub scope. Slices 5.3–5.7 add crates and so remain one
+worker-generation maintenance.
+
+5.2 landed the same day: the server and Machine crates list the base modules
+they name instead of `pub use cowboy::*` (Machine grouped by the base feature
+gates; the server under the always-on `full`). Within hours main added two
+base modules the server uses (`superagent`, `prompt_origin`), so the list now
+carries a note that a server module starting to use another base module adds
+it there. Controller `9e5f1d46d` runs the 5.1/5.2 state; the worker generation
+is unchanged.
+
+Sizing 5.3 before starting it: `Inbound` (295 lines, 129 type names, and a
+`crate::supervisor` dependency), `Outbound` (75 type names), `Envelope` and
+`SessionMeta` (an inherent impl, plus `agent_model`, `execution_environment`
+and `provider_account`) have about 950 references. A crate boundary forbids
+inherent impls on moved types, so their type graph moves down layer by layer
+first. With `Cargo.toml` edits blocking host-only Machine releases until a
+worker-generation maintenance, 5.3–5.7 run as one dedicated branch with its
+own maintenance window rather than piecemeal on main.
+
 7.3 landed on 2026-11-06 with one deviation: the 98 unreferenced releases
 moved to a single `components/registry-archive.json` rather than one file per
 version, so the Rust reader needs one `include_str!` and `build.rs` (a hashed
@@ -519,7 +557,7 @@ the time and conflict metrics come from CI timing and `git log`.
 
 | Metric | Baseline (2026-11-05) | Target (end of Q1 2027) |
 |---|---|---|
-| Largest module cycle in the base crate | 37 modules (`tools/module-edges-baseline.json`) | ≤ 6 modules |
+| Largest module cycle in the base crate | 37 modules (`tools/module-edges-baseline.json`); 15 on 2026-11-06 after the 5.1 leaf moves | ≤ 6 modules |
 | `cfg(feature = "full")` sites in `src/` | 220 | 0 |
 | Filtered release closures compile in the gate | no (`.#cowboy-machine` broken on baseline) | yes, every commit |
 | Files over 3,000 lines | 21 | 0 |

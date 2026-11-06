@@ -62,7 +62,7 @@ async fn cleanup_admission_contract(store: &Store, process_tree_exited: bool) {
         .consume_machine_enrollment(&enrollment, &format!("ssh-ed25519 {key}"), &key)
         .await
         .unwrap();
-    let fingerprint = crate::admin::hex_sha256(key.as_bytes());
+    let fingerprint = crate::digest::hex_sha256(key.as_bytes());
     let claim = store
         .claim_provider_login(
             OWNER,

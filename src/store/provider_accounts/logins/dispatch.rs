@@ -44,7 +44,7 @@ impl Store {
             anyhow::ensure!(machine.rows_affected() == 1, "machine_unavailable");
             let key: Option<String> = sqlx::query_scalar("SELECT encryption_public_key FROM machines WHERE id=$1")
                 .bind(&current.input.machine_id).fetch_one(&mut *tx).await?;
-            anyhow::ensure!(key.as_ref().is_some_and(|key| crate::admin::hex_sha256(key.as_bytes()) == scope.recipient_fingerprint), "machine_enrollment_changed");
+            anyhow::ensure!(key.as_ref().is_some_and(|key| crate::digest::hex_sha256(key.as_bytes()) == scope.recipient_fingerprint), "machine_enrollment_changed");
             current.dispatch_recipient_fingerprint = Some(scope.recipient_fingerprint.clone());
             current.dispatch_registry_revision = Some(scope.registry_revision);
             sqlx::query("UPDATE provider_login_operations SET value=$3 WHERE owner_user_id=$1 AND operation_id=$2")

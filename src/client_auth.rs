@@ -18,7 +18,7 @@ use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::admin::hex_sha256;
+use crate::digest::hex_sha256;
 
 pub const ACCESS_TOKEN_PREFIX: &str = "cow_access_";
 pub const AUTOMATION_ACCESS_TOKEN_PREFIX: &str = "cow_automation_";

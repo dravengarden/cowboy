@@ -24,7 +24,7 @@ async fn fixture(store: &Store) -> Evidence {
         .consume_machine_enrollment(&enrollment, &format!("ssh-ed25519 {key}"), &key)
         .await
         .unwrap();
-    grant.recipient_fingerprint = crate::admin::hex_sha256(key.as_bytes());
+    grant.recipient_fingerprint = crate::digest::hex_sha256(key.as_bytes());
     let StorageBackend::Sqlite(db) = &store.backend else {
         panic!("SQLite fixture")
     };

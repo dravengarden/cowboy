@@ -52,7 +52,7 @@ impl Store {
                 json.len() <= 8192,
                 "CoreSecurity authority exceeds its budget"
             );
-            let authority: Authority = crate::auth_plugins::decode_private_json(
+            let authority: Authority = crate::credentials::decode_private_json(
                 json.as_bytes(),
                 "CoreSecurity database authority",
             )?;

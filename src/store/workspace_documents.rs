@@ -14,7 +14,7 @@ impl Store {
             for (owner, value) in &rows {
                 let document: DraftDocument = serde_json::from_str(value)?;
                 if document.kind != DraftKind::Folder || document.deleted { continue; }
-                let id = format!("f-draft-{}", crate::admin::hex_sha256(&serde_json::to_vec(&(owner, &document.id))?));
+                let id = format!("f-draft-{}", crate::digest::hex_sha256(&serde_json::to_vec(&(owner, &document.id))?));
                 imports.insert((owner.clone(), document.id.clone()), id);
             }
             let mut position: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(position), 0) FROM session_folders").fetch_one(&mut *tx).await?;

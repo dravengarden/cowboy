@@ -35,7 +35,7 @@ async fn prepare(store: &Store, key: &str) -> Receipt {
                 account_id: created.account_id,
                 provider_id: "grok".into(),
                 machine_id: "machine-a".into(),
-                recipient_fingerprint: crate::admin::hex_sha256(key.as_bytes()),
+                recipient_fingerprint: crate::digest::hex_sha256(key.as_bytes()),
                 candidate_fingerprint: candidate_hash(&package("grok"), &bundle(&package("grok"))),
                 expected_generation: 0,
                 identity: NativeIdentity {

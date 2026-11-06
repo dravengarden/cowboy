@@ -66,7 +66,11 @@ pub mod core;
 #[cfg(feature = "full")]
 pub mod core_passkeys;
 #[cfg(feature = "full")]
+pub mod core_passkeys_contract;
+#[cfg(feature = "full")]
 pub mod core_security;
+#[cfg(feature = "full")]
+pub mod credentials;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 #[path = "provider/deepseek_cache.rs"]
 pub mod deepseek_cache;
@@ -75,6 +79,8 @@ pub mod deepseek_cache;
 pub mod deepseek_context;
 #[cfg(feature = "full")]
 pub mod diff_snapshot;
+#[cfg(feature = "full")]
+pub mod digest;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod durable_state;
 #[cfg(any(feature = "full", feature = "machine-host"))]

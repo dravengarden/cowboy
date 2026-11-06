@@ -39,7 +39,7 @@ async fn enrollment_fences_identity_binding(store: &Store, input: &Prepare) {
     );
     enroll(store, "machine-c", &key(9)).await;
     wrong.machine_id = "machine-c".into();
-    wrong.recipient_fingerprint = crate::admin::hex_sha256(key(9).as_bytes());
+    wrong.recipient_fingerprint = crate::digest::hex_sha256(key(9).as_bytes());
     store.revoke_machine("machine-c").await.unwrap();
     assert_eq!(
         store
@@ -91,7 +91,7 @@ async fn contract(store: &Store) {
         account_id: created.account_id,
         provider_id: "claude-code".into(),
         machine_id: "machine-a".into(),
-        recipient_fingerprint: crate::admin::hex_sha256(key(7).as_bytes()),
+        recipient_fingerprint: crate::digest::hex_sha256(key(7).as_bytes()),
         candidate_fingerprint: "b".repeat(64),
         expected_generation: 0,
         identity: NativeIdentity {
@@ -173,7 +173,7 @@ async fn disable_enable_fences_login(
     second.expected_revision = intent.registry_revision;
     second.machine_id = "machine-b".into();
     enroll(store, "machine-b", &key(8)).await;
-    second.recipient_fingerprint = crate::admin::hex_sha256(key(8).as_bytes());
+    second.recipient_fingerprint = crate::digest::hex_sha256(key(8).as_bytes());
     second.candidate_fingerprint = "f".repeat(64);
     let Outcome::Applied(pending) = store
         .prepare_provider_grant("owner", "login-b", &second)

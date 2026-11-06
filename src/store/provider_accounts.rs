@@ -351,7 +351,7 @@ impl Store {
         if input.expected_revision < 0 || !crate::managed_calls::valid_id(operation) {
             return Ok(MutationResult::Invalid("invalid_argument"));
         }
-        let hash = crate::admin::hex_sha256(&serde_json::to_vec(input)?);
+        let hash = crate::digest::hex_sha256(&serde_json::to_vec(input)?);
         macro_rules! write { ($db:expr, $cancel:literal, $cancel_grants:literal, $login_account:literal, $grant_account:literal) => {{
             let mut tx = $db.pool.begin().await?;
             // This write acquires the owner lock before any reads, on both DBs.
@@ -851,7 +851,7 @@ mod tests {
             account_id: receipt.account_id.clone(),
             session_id: target.session_id.clone(),
             machine_id: target.machine_id.clone().unwrap(),
-            recipient_fingerprint: crate::admin::hex_sha256(b"stop-fixture-key"),
+            recipient_fingerprint: crate::digest::hex_sha256(b"stop-fixture-key"),
         };
         set_stop_fixture_key(store, &evidence.machine_id, "stop-fixture-key").await;
         assert_stop_dispatch(store, &evidence).await;

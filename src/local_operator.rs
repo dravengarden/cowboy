@@ -143,7 +143,7 @@ fn enable(directory: &Path) -> Result<()> {
     private_directory(directory)?;
     let policy = Policy {
         schema: 1,
-        generation: crate::product_auth::new_session_token()?,
+        generation: crate::credentials::new_session_token()?,
     };
     let temporary = directory.join(format!("grant-{}.tmp", policy.generation));
     let result = (|| {

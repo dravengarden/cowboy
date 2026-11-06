@@ -60,8 +60,9 @@ impl Hub {
             expected: input.expected.clone(),
             change: input.change.clone(),
         };
-        let fingerprint =
-            crate::admin::hex_sha256(&serde_json::to_vec(&replay).map_err(|_| "invalid_argument")?);
+        let fingerprint = crate::digest::hex_sha256(
+            &serde_json::to_vec(&replay).map_err(|_| "invalid_argument")?,
+        );
         {
             let mut receipts = self.inner.review_default_receipts.lock();
             if let Some(previous) = receipts.get(operation) {

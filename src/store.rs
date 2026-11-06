@@ -27,7 +27,6 @@
 )]
 
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
 use std::io::Read as _;
 use std::time::Duration;
 
@@ -35,7 +34,6 @@ use anyhow::{Context as _, Result};
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt as _;
-use sha2::Digest as _;
 use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
@@ -96,7 +94,7 @@ fn valid_product_user_id(value: &str) -> bool {
 }
 
 fn normalized_product_username(username: &str) -> Result<String> {
-    crate::product_auth::normalize_username(username)
+    crate::credentials::normalize_username(username)
 }
 
 fn unique_constraint_error(
@@ -356,15 +354,7 @@ fn ensure_reset_provider(provider: &str) -> Result<()> {
     Ok(())
 }
 
-fn hex_sha256(value: &[u8]) -> String {
-    let digest = sha2::Sha256::digest(value);
-    digest
-        .iter()
-        .fold(String::with_capacity(64), |mut output, byte| {
-            write!(output, "{byte:02x}").expect("writing to a String cannot fail");
-            output
-        })
-}
+use crate::digest::hex_sha256;
 
 /// Strip NUL (`U+0000`) code points from every string (and object key) inside a
 /// JSON value, in place.
@@ -4502,7 +4492,7 @@ impl PostgresStorage {
         if claim.enforce && claim.principal_class != "system" {
             let waiter_id = format!(
                 "wait-{}",
-                crate::admin::hex_sha256(claim.client_id.as_bytes())
+                crate::digest::hex_sha256(claim.client_id.as_bytes())
             );
             sqlx::query(
                 "INSERT INTO capacity_waiters (waiter_id, client_id, user_id, principal_class, \

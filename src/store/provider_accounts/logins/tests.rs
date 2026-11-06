@@ -119,7 +119,7 @@ async fn native_logout_receipt_is_scoped_idempotent_and_survives_restart() {
         .claim_provider_login("login-owner", "logout-login", &input)
         .await
         .unwrap();
-    let fingerprint = crate::admin::hex_sha256(key.as_bytes());
+    let fingerprint = crate::digest::hex_sha256(key.as_bytes());
     store
         .with_provider_login_dispatch(
             "login-owner",
@@ -323,7 +323,7 @@ async fn fresh_dispatch_contract(
 ) -> DispatchScope {
     let dispatch_scope = DispatchScope {
         registry_revision: revision,
-        recipient_fingerprint: crate::admin::hex_sha256(key.as_bytes()),
+        recipient_fingerprint: crate::digest::hex_sha256(key.as_bytes()),
     };
     let calls = std::cell::Cell::new(0);
     store
@@ -436,7 +436,7 @@ async fn native_binding_contract(store: &Store, registration: Option<bool>) {
         fresh_dispatch_contract(store, &claim, &input, created.registry.revision, &key).await;
     let completion = NativeCompletion {
         machine_id: input.machine_id.clone(),
-        recipient_fingerprint: crate::admin::hex_sha256(key.as_bytes()),
+        recipient_fingerprint: crate::digest::hex_sha256(key.as_bytes()),
         profile: crate::provider_account::NativeProfileReceipt {
             account_id: input.account_id.clone(),
             provider_id: "claude-code".into(),
@@ -612,7 +612,7 @@ async fn changed_enrollment_cannot_complete_old_dispatch(
     let changed_key = "replacement-enrollment-fixture";
     replace_key(store, &completion.machine_id, changed_key).await;
     let mut changed = completion.clone();
-    changed.recipient_fingerprint = crate::admin::hex_sha256(changed_key.as_bytes());
+    changed.recipient_fingerprint = crate::digest::hex_sha256(changed_key.as_bytes());
     let error = store
         .record_native_login_completion("login-owner", "bind", &changed)
         .await
@@ -995,7 +995,7 @@ async fn sqlite_native_completion_is_exact_durable_evidence_not_a_grant() {
         .unwrap();
     let completion = NativeCompletion {
         machine_id: input.machine_id.clone(),
-        recipient_fingerprint: crate::admin::hex_sha256(key.as_bytes()),
+        recipient_fingerprint: crate::digest::hex_sha256(key.as_bytes()),
         profile: crate::provider_account::NativeProfileReceipt {
             account_id: input.account_id.clone(),
             provider_id: "claude-code".into(),
