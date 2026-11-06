@@ -27,6 +27,7 @@ export const SPLIT_SOURCES = {
     "./PendingPanel.tsx",
     "./ComposerSheet.tsx",
     "./composerImageSelection.tsx",
+    "./DraftMoveSurfaces.tsx",
   ],
   "mobile/review/ReviewApp.tsx": [
     "./mobile/review/ReviewApp.tsx",

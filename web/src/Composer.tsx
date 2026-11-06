@@ -5,10 +5,10 @@ import { SendDeliveryIcon } from "./SendDeliveryIcon";
 
 import type { DeliveryTarget } from "./currentTurnDelivery";
 
-import { DraftDestinationPicker } from "./DraftDestinationPicker";
+import { DraftMoveSurfaces } from "./DraftMoveSurfaces";
 
 import { lazy, type PointerEvent as ReactPointerEvent, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { alpha, Badge, Box, Button, Chip, CircularProgress, ClickAwayListener, DialogContentText, IconButton, Paper, Popper, Snackbar, Stack, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
+import { alpha, Badge, Box, Button, Chip, CircularProgress, ClickAwayListener, DialogContentText, IconButton, Paper, Popper, Stack, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
 import { AlternateEmail, AttachFile, CleaningServices, CloseFullscreen, Compress, DeleteOutline, EditNoteOutlined, KeyboardHide, OpenInFull, Schedule, Stop, Tune, VerticalAlignBottom } from "@mui/icons-material";
 import {
   type ComposerEditorHandle,
@@ -90,11 +90,10 @@ import {
 import { DESKTOP_FOCUS_CALLS_SHORTCUT, DESKTOP_FOCUS_PLAN_SHORTCUT, DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./desktop/commands/workspaceShortcuts";
 import { type Attachment } from "./attachments";
 
-import { cancelTurn, moveDraft, openSession, type QueuedMessage, resetSession, scheduleDraft, send, setSessionConfigOptions, pauseQueueConfirmed, submitPrompt, unscheduleDraft, useConnected, useStoreSelector } from "./store";
-import { setActiveSessionId } from "./controlPlane";
+import { cancelTurn, type QueuedMessage, resetSession, scheduleDraft, send, setSessionConfigOptions, pauseQueueConfirmed, submitPrompt, unscheduleDraft, useConnected, useStoreSelector } from "./store";
 import { ScheduleSheet } from "./ScheduleSheet";
 
-import { haptic, importantHaptic, navigationHaptic } from "./haptic";
+import { haptic, importantHaptic } from "./haptic";
 
 import { useNavbarAtBottom } from "./navbarSettings";
 import { useReadingSettings } from "./readingSettings";
@@ -701,9 +700,6 @@ export function ComposerWorkspace({
   // whose destination picker is open; `moveUndo` backs the post-move snackbar so
   // a mis-tapped destination is one tap to reverse.
   const [moveSrcId, setMoveSrcId] = useState<string | null>(null);
-  const [moveUndo, setMoveUndo] = useState<
-    { id: string; toId: string; toTitle: string } | null
-  >(null);
   const otherSessions = sessionState.destinations;
   // When the navbar sits at the bottom it owns the home-indicator safe area and
   // renders BELOW the composer, so the composer must drop its own bottom inset
@@ -2656,94 +2652,13 @@ export function ComposerWorkspace({
         }}
       />
       {
-        /* Move-draft destination picker + undo snackbar. Owned here (not in the
-          drafts panel) so the snackbar survives when moving the LAST draft
-          unmounts that panel. */
+        /* Owned here (not in the drafts panel) so the undo snackbar survives
+          when moving the LAST draft unmounts that panel. */
       }
-      {moveSrcId !== null && (
-        <DraftDestinationPicker
-          title="Move draft to…"
-          sourceId={sessionId}
-          onClose={(): void => setMoveSrcId(null)}
-          onPick={(destination): void => {
-            moveDraft(sessionId, moveSrcId, destination.id);
-            setMoveUndo({ id: moveSrcId, toId: destination.id, toTitle: destination.title });
-            setMoveSrcId(null);
-          }}
-        />
-      )}
-      <Snackbar
-        open={moveUndo !== null}
-        autoHideDuration={6000}
-        onClose={(_e, reason): void => {
-          // Keep it up until autohide / Undo — a stray tap (clickaway) shouldn't
-          // snatch the Undo away before the user can reach it.
-          if (reason !== "clickaway") setMoveUndo(null);
-        }}
-        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
-        // Match the app-level mobile snackbar: stay above the bottom navigation
-        // and composer actions while respecting the home-indicator safe area.
-        sx={{
-          bottom: {
-            xs: "calc(env(safe-area-inset-bottom, 0px) + 96px)",
-            sm: 24,
-          },
-          width: { xs: "calc(100% - 16px)", sm: "auto" },
-          maxWidth: { xs: "calc(100% - 16px)", sm: "100%" },
-          "& .MuiSnackbarContent-root": {
-            width: { xs: "100%", sm: "auto" },
-            minWidth: { xs: 0, sm: 288 },
-            color: "text.primary",
-            bgcolor: (theme) => alpha(
-              theme.palette.background.paper,
-              theme.palette.mode === "dark" ? 0.96 : 0.94,
-            ),
-            backgroundImage: "none",
-            border: 1,
-            borderColor: "divider",
-            boxShadow: (theme) => `0 12px 36px ${
-              alpha(
-                theme.palette.common.black,
-                theme.palette.mode === "dark" ? 0.42 : 0.18,
-              )
-            }`,
-            backdropFilter: "blur(24px) saturate(160%)",
-            WebkitBackdropFilter: "blur(24px) saturate(160%)",
-          },
-        }}
-        message={moveUndo ? `Moved to ${moveUndo.toTitle}` : ""}
-        action={
-          <Stack direction="row" spacing={0.25}>
-            <Button
-              color="primary"
-              size="small"
-              onClick={(): void => {
-                if (!moveUndo) return;
-                navigationHaptic();
-                globalThis.dispatchEvent(
-                  new CustomEvent("cowboy:transcript-save-viewport"),
-                );
-                openSession(moveUndo.toId);
-                setActiveSessionId(moveUndo.toId);
-                setMoveUndo(null);
-              }}
-              sx={{ textTransform: "none" }}
-            >
-              Open
-            </Button>
-            <Button
-              color="primary"
-              size="small"
-              onClick={(): void => {
-                if (moveUndo) moveDraft(moveUndo.toId, moveUndo.id, sessionId);
-                setMoveUndo(null);
-              }}
-              sx={{ textTransform: "none" }}
-            >
-              Undo
-            </Button>
-          </Stack>
-        }
+      <DraftMoveSurfaces
+        sessionId={sessionId}
+        moveSrcId={moveSrcId}
+        setMoveSrcId={setMoveSrcId}
       />
     </Box>
   );
