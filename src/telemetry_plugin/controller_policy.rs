@@ -1,7 +1,7 @@
 //! Shared startup validation. Inspection drops policies without activating them,
 //! creating authority, opening the Service store or consulting a Machine.
 use super::{background_policy::BackgroundPolicy, writer_admission::WriterAdmission};
-use crate::cli::ServeArgs;
+use crate::serve_args::ServeArgs;
 use anyhow::{Result, ensure};
 use serde::Serialize;
 use std::sync::Arc;

@@ -1,16 +1,17 @@
 import { Close, Search } from "@mui/icons-material";
 import {
   Box,
-  ButtonBase,
   CircularProgress,
   IconButton,
   InputAdornment,
-  TextField,
-  type TextFieldProps,
+  InputBase,
+  type InputBaseProps,
+  ToggleButton,
 } from "@mui/material";
 import type { ReviewSearchMode } from "./ReviewSearchResults";
+import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 
-/** One quiet search surface; filter paint is smaller than its touch target. */
+/** The composed search field owns one focus boundary. */
 export function ReviewFileSearchBar({
   query,
   mode,
@@ -30,10 +31,11 @@ export function ReviewFileSearchBar({
   keyboardReserve: string;
   showDocuments: boolean;
   onQuery: (query: string) => void;
-  onKeyDown: TextFieldProps["onKeyDown"];
+  onKeyDown: InputBaseProps["onKeyDown"];
   onMode: () => void;
   onDocuments?: (() => void) | undefined;
 }): React.JSX.Element {
+  const mobile = useSurfaceProfile().kind !== "desktop";
   const label = mode === "text" ? "Find text" : "Find a file";
   return (
     <Box
@@ -53,58 +55,55 @@ export function ReviewFileSearchBar({
           alignItems: "center",
           minWidth: 0,
           bgcolor: "action.hover",
-          borderRadius: "8px",
+          borderRadius: mobile ? "999px" : "8px",
           "&:has(input:focus-visible)": { outline: "1px solid", outlineColor: "primary.main" },
         }}
       >
-        <TextField
+        <InputBase
           value={query}
           onChange={(event) => onQuery(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={label}
-          size="small"
           disabled={disabled}
-          slotProps={{
-            htmlInput: {
-              "aria-label": label,
-              enterKeyHint: "go",
-              autoCapitalize: "off",
-              autoCorrect: "off",
-              spellCheck: false,
-            },
-            input: {
-              startAdornment: (
-                <InputAdornment position="start" sx={{ mr: 0.75, color: "text.secondary" }}>
-                  {searching ? (
-                    <CircularProgress size="1.25rem" aria-label="Searching" />
-                  ) : (
-                    <Search sx={{ fontSize: "1.25rem" }} />
-                  )}
-                </InputAdornment>
-              ),
-              endAdornment: query ? (
-                <InputAdornment position="end" sx={{ ml: 0 }}>
-                  <IconButton
-                    aria-label="Clear file search"
-                    onClick={() => onQuery("")}
-                    sx={{
-                      width: 44,
-                      height: 44,
-                      p: 0,
-                      "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
-                    }}
-                  >
-                    <Close />
-                  </IconButton>
-                </InputAdornment>
-              ) : undefined,
-            },
+          inputProps={{
+            "aria-label": label,
+            enterKeyHint: "go",
+            autoCapitalize: "off",
+            autoCorrect: "off",
+            spellCheck: false,
           }}
+          startAdornment={
+            <InputAdornment position="start" sx={{ mr: 0.75, color: "text.secondary" }}>
+              {searching ? (
+                <CircularProgress size="1.25rem" aria-label="Searching" />
+              ) : (
+                <Search sx={{ fontSize: "1.25rem" }} />
+              )}
+            </InputAdornment>
+          }
+          endAdornment={
+            query ? (
+              <InputAdornment position="end" sx={{ ml: 0 }}>
+                <IconButton
+                  aria-label="Clear file search"
+                  onClick={() => onQuery("")}
+                  sx={{
+                    minWidth: 48,
+                    minHeight: 48,
+                    p: 0,
+                    "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
+                  }}
+                >
+                  <Close />
+                </IconButton>
+              </InputAdornment>
+            ) : undefined
+          }
           sx={{
             flex: "1 1 0",
             minWidth: 0,
-            "& .MuiOutlinedInput-root": { minHeight: 44, pl: 1, pr: 0, borderRadius: "8px" },
-            "& .MuiOutlinedInput-notchedOutline": { border: 0 },
+            minHeight: 48,
+            pl: 1,
             "& input": {
               minWidth: 0,
               py: 1,
@@ -116,7 +115,7 @@ export function ReviewFileSearchBar({
         <Box
           role="group"
           aria-label="File search options"
-          sx={{ display: "flex", flexShrink: 0, gap: 0.25, px: 0.25 }}
+          sx={{ display: "flex", flexShrink: 0, gap: 0.25, px: 0.25, borderRadius: "inherit" }}
         >
           <SearchOption
             kind="text"
@@ -156,41 +155,27 @@ function SearchOption({
   children: string;
 }): React.JSX.Element {
   return (
-    <ButtonBase
+    <ToggleButton
       data-review-text-search={kind === "text" ? true : undefined}
       data-review-changed-documents={kind === "documents" ? true : undefined}
       aria-label={label}
-      aria-pressed={selected}
-      onClick={onClick}
-      disableRipple
+      value={kind}
+      selected={selected}
+      onChange={onClick}
+      color="primary"
       sx={{
-        minWidth: 44,
-        minHeight: 44,
-        borderRadius: "8px",
+        minWidth: 48,
+        minHeight: 48,
+        px: 0.75,
+        py: 0.5,
+        border: 0,
+        borderRadius: "inherit",
         fontSize: "0.8125rem",
-        color: selected ? "primary.main" : "text.secondary",
-        "&:focus-visible [data-review-search-option]": {
-          outline: "2px solid",
-          outlineColor: "primary.main",
-        },
+        textTransform: "none",
+        fontWeight: selected ? 600 : 400,
       }}
     >
-      <Box
-        component="span"
-        data-review-search-option
-        sx={{
-          minHeight: "1.75rem",
-          display: "flex",
-          alignItems: "center",
-          px: 0.75,
-          py: 0.5,
-          borderRadius: "6px",
-          bgcolor: selected ? "action.selected" : "transparent",
-          fontWeight: selected ? 600 : 400,
-        }}
-      >
-        {children}
-      </Box>
-    </ButtonBase>
+      {children}
+    </ToggleButton>
   );
 }

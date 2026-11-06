@@ -510,6 +510,24 @@ first. With `Cargo.toml` edits blocking host-only Machine releases until a
 worker-generation maintenance, 5.3–5.7 run as one dedicated branch with its
 own maintenance window rather than piecemeal on main.
 
+The type-graph layering then landed inside the base crate, without a
+`Cargo.toml` change. `crate::model` holds the session record and its plain
+neighbours (`SessionMeta`, `SessionOrigin`, `SessionAttention`, `Envelope`,
+`QueuedMessage`, `DraftSchedule`, `Delivery`, Provider update records), the
+hot-tail and history budgets with their pure trimming helpers, and the
+settings key registry, which now owns the admin setting keys; `core` and
+`admin` re-export every moved path. `store` no longer depends on `core`.
+`crate::serve_args` holds the `serve`/`serve-acp` arguments, so nothing below
+`cli` depends on it. The cycles are now the store cluster (8: `store`,
+`persistence`, `artifacts`, `core_passkeys`, `managed_calls`,
+`plugin_storage`, `provider_service`, `telemetry_binding`), the Plugin cluster
+(6) and the Hub (`core`, `scheduler`, `session_context`, `machine_control`):
+each fits inside one planned crate. The 25 modules the store cluster reaches
+outside itself reach neither the Hub nor the Plugin cluster, so they form the
+crate below `cowboy-store`; `agent_model` is among them and is a hashed worker
+input, which is one reason the crate moves stay a worker-generation
+maintenance.
+
 7.3 landed on 2026-11-06 with one deviation: the 98 unreferenced releases
 moved to a single `components/registry-archive.json` rather than one file per
 version, so the Rust reader needs one `include_str!` and `build.rs` (a hashed
@@ -557,7 +575,7 @@ the time and conflict metrics come from CI timing and `git log`.
 
 | Metric | Baseline (2026-11-05) | Target (end of Q1 2027) |
 |---|---|---|
-| Largest module cycle in the base crate | 37 modules (`tools/module-edges-baseline.json`); 15 on 2026-11-06 after the 5.1 leaf moves | ≤ 6 modules |
+| Largest module cycle in the base crate | 37 modules (`tools/module-edges-baseline.json`); 8 on 2026-11-06 after the 5.1 leaf moves and the in-crate 5.3 layering | ≤ 6 modules |
 | `cfg(feature = "full")` sites in `src/` | 220 | 0 |
 | Filtered release closures compile in the gate | no (`.#cowboy-machine` broken on baseline) | yes, every commit |
 | Files over 3,000 lines | 21 | 0 |

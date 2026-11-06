@@ -33,7 +33,15 @@ labels, without adding a second navigation hierarchy.
   shrink with them. Selected fills and button outlines cover the control, so
   its clickable extent remains clear. Verify taps in the padding as well as
   on the icon or label; a bounding-box measurement alone is insufficient.
-  Empty readers should use the available height for a balanced
+  Mobile navigation keeps Cowboy's rounded, quiet surfaces; MUI semantics do
+  not require default rectangular borders or hard separators. Preserve the
+  full touch target inside the rounded control, independently of glyph size.
+- A composed search field has one focus boundary. Do not layer a container
+  outline over an outlined input's focused border. In scrolling pickers,
+  settings and action sections retain their content height; long lists must
+  scroll instead of shrinking a section until its controls overlap other rows.
+  Offer navigation back to a default only when the current context differs.
+- Empty readers should use the available height for a balanced
   overview: explain the current scope, show known status and recent activity,
   and offer useful next actions when the workbench does not already provide
   them. Avoid duplicate file/history buttons beside persistent navigation.

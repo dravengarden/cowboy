@@ -9,7 +9,7 @@ use std::{future::Future, pin::Pin, sync::OnceLock};
 pub type LocalFuture<T> = Pin<Box<dyn Future<Output = T>>>;
 
 pub struct ControllerHooks {
-    pub serve: fn(crate::cli::ServeArgs) -> LocalFuture<anyhow::Result<()>>,
+    pub serve: fn(crate::serve_args::ServeArgs) -> LocalFuture<anyhow::Result<()>>,
     pub init_tracing: fn(),
     pub launch_extensions:
         fn(&crate::core::Hub, &crate::model::SessionMeta) -> crate::runtime_wire::SessionExtensions,
@@ -21,7 +21,7 @@ pub fn install(hooks: ControllerHooks) {
     let _ = HOOKS.set(hooks);
 }
 
-pub async fn serve(args: crate::cli::ServeArgs) -> anyhow::Result<()> {
+pub async fn serve(args: crate::serve_args::ServeArgs) -> anyhow::Result<()> {
     match HOOKS.get() {
         Some(hooks) => (hooks.serve)(args).await,
         None => anyhow::bail!(

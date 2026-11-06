@@ -32,6 +32,7 @@ import type { SessionMeta } from "../../protocol";
 import { ReviewModeSwitcher } from "./ReviewModeSwitcher";
 import { ReviewMoreActions } from "./ReviewMoreActions";
 import { ReviewContextButton } from "./ReviewContextButton";
+import { ReviewProjectCheckoutRow } from "./ReviewProjectCheckoutRow";
 import { SegmentedTabs } from "../../SegmentedTabs";
 
 import { newUuid } from "../../uuid";
@@ -2029,6 +2030,7 @@ export function ReviewApp({
         >
           <Stack
             ref={sessionListRef}
+            data-review-context-list
             spacing={1.5}
             sx={{
               // DetentSheet reserves 76px + safe-area for its generic floating
@@ -2272,42 +2274,14 @@ export function ReviewApp({
                   </Typography>
                 </ListItemButton>
                 {selectedContextProject.registeredWorkspace && (
-                  <ListItemButton
+                  <ReviewProjectCheckoutRow
+                    workspace={selectedContextProject.registeredWorkspace}
                     selected={projectCodeContext?.workspaceId ===
                         selectedContextProject.registeredWorkspace.id &&
                       projectCodeContext.machineId ===
                         selectedContextProject.machineId}
-                    onClick={() => openProjectTarget(selectedContextProject)}
-                    sx={{
-                      minHeight: 64,
-                      px: 1.25,
-                      borderRadius: 1.5,
-                    }}
-                  >
-                    <FolderOpenOutlined color="primary" sx={{ mr: 1.25 }} />
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Typography variant="body2" fontWeight={700} noWrap>
-                        Project code
-                      </Typography>
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        noWrap
-                      >
-                        Registered project checkout
-                      </Typography>
-                      <Typography
-                        variant="caption"
-                        color="text.disabled"
-                        sx={{ display: "block" }}
-                        noWrap
-                      >
-                        {selectedContextProject.registeredWorkspace
-                          .canonicalPath}
-                      </Typography>
-                    </Box>
-                    <ChevronRight color="disabled" fontSize="small" />
-                  </ListItemButton>
+                    onOpen={() => openProjectTarget(selectedContextProject)}
+                  />
                 )}
                 {selectedContextProject.worktrees.length > 0 && (
                   <Typography
@@ -2329,12 +2303,13 @@ export function ReviewApp({
                   return (
                     <Stack key={worktree.key} spacing={0.375}>
                       <ListItemButton
+                        data-review-worktree
                         selected={currentWorktree}
                         onClick={() => {
                           const latest = worktree.sessions[0];
                           if (latest) switchSession(latest);
                         }}
-                        sx={{ minHeight: 64, px: 1.25, borderRadius: 1.5 }}
+                        sx={{ minHeight: 48, px: 1.25, py: 0.75, borderRadius: 1.5 }}
                       >
                         <AccountTreeOutlined
                           color="primary"

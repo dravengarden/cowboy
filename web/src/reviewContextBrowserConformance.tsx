@@ -397,6 +397,17 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
     mutations,
     submits,
     refresh: () => socket?.publish({ type: "sessions", sessions }),
+    addWorktrees: (count: number) => {
+      for (let i = 0; i < count; i++) sessions.push({
+        ...sessions[0]!, id: `extra-${i}`, title: `Review task ${i + 1}`, cwd: `/runtime/extra-${i}`,
+        execution_binding: {
+          schema: 1, runtime: { machine_id: "ovh", cwd: `/runtime/extra-${i}` },
+          environment: { machine_id: "hawk", protocol: 1 },
+          workspace: { cwd: `/tasks/cowboy/task-${i + 1}` },
+        },
+      });
+      socket?.publish({ type: "sessions", sessions });
+    },
     sync: (state: string, value: unknown, version: number) => socket?.publish({ type: "sync_patch", state, value, version, confirmed: [], resync: true }),
     select: (id: string) => flushSync(() => setActiveSessionId(id)),
     cleanup: () => {

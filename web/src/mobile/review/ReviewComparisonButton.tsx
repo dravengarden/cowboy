@@ -1,5 +1,6 @@
 import { ExpandMore } from "@mui/icons-material";
 import { Button, Typography } from "@mui/material";
+import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 
 export function ReviewComparisonButton({
   label,
@@ -10,11 +11,13 @@ export function ReviewComparisonButton({
   disabled: boolean;
   onClick: () => void;
 }): React.JSX.Element {
+  const mobile = useSurfaceProfile().kind !== "desktop";
   const [scenario, ...reference] = label.split(" · ");
   return (
     <Button
       data-review-compare
-      variant="outlined"
+      variant={mobile ? "contained" : "outlined"}
+      disableElevation
       color="inherit"
       aria-haspopup="dialog"
       aria-label={`Compare: ${label}`}
@@ -32,6 +35,13 @@ export function ReviewComparisonButton({
         color: "text.secondary",
         fontSize: "0.8125rem",
         textTransform: "none",
+        ...(mobile
+          ? {
+              borderRadius: "999px",
+              bgcolor: "action.hover",
+              "&:hover": { bgcolor: "action.hover" },
+            }
+          : {}),
       }}
     >
       <Typography
