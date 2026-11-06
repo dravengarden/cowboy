@@ -36,13 +36,13 @@ export function MobileSheetContextDock({ context, onBack, onClose, actions = [] 
   }, []);
   const inlineActions = actions.length === 1 ? actions : [];
   return (
-    <Box ref={ref} data-mobile-sheet-footer-shield data-sheet-context-dock sx={{ width: "100%", maxWidth: 560, display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", gap: 0.75, pointerEvents: "none" }}>
-      <SheetContextSummary context={context} />
+    <Box ref={ref} data-mobile-sheet-footer-shield data-sheet-context-dock sx={{ width: "100%", maxWidth: 560, display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", alignItems: "center", gap: 0.75, pointerEvents: "none" }}>
       <FloatingActionIsland columns={`repeat(${(onBack ? 1 : 0) + inlineActions.length + 1}, 46px)`} maxWidth={(onBack ? 50 : 0) + inlineActions.length * 50 + 56} minHeight={56}>
         {onBack && <IslandGlyphButton label="Back" onActivate={onBack}><ArrowBackIosNewRounded fontSize="small" /></IslandGlyphButton>}
         {inlineActions.map(action => <IslandGlyphButton key={action.label} label={action.label} onActivate={action.onActivate}>{action.icon}</IslandGlyphButton>)}
         <IslandGlyphButton label="Close" onActivate={onClose}><Close fontSize="small" /></IslandGlyphButton>
       </FloatingActionIsland>
+      <SheetContextSummary context={context} />
         {actions.length > 1 && <Box data-context-actions role="toolbar" aria-label="Context actions" sx={{ gridColumn: "1 / -1", width: "100%", maxWidth: 560, minWidth: 0, display: "flex", overflowX: "auto", px: 1, pointerEvents: "auto", bgcolor: "background.paper", borderRadius: "1rem" }}>
           {actions.map(action => <ButtonBase key={action.label} onClick={action.onActivate} sx={{ minHeight: 44, flexShrink: 0, gap: 0.5, px: 1, fontSize: "0.8125rem", borderRadius: 1 }}>{action.icon}{action.label}</ButtonBase>)}
         </Box>}

@@ -1,4 +1,4 @@
-import { Box, ButtonBase, Typography } from "@mui/material";
+import { alpha, Box, ButtonBase, Typography } from "@mui/material";
 import ChevronRight from "@mui/icons-material/ChevronRight";
 import type { ReactNode } from "react";
 import type { SheetDockContext } from "./sheet-context-dock";
@@ -6,8 +6,8 @@ import type { SheetDockContext } from "./sheet-context-dock";
 /** A compact information surface, independently reusable beside navigation. */
 export function SheetContextSummary({ context }: { context: SheetDockContext }): ReactNode {
   return (
-    <Box data-sheet-context-summary sx={{ display: "block", textAlign: "left", width: "100%", maxWidth: 560, minWidth: 0, borderRadius: "1rem", bgcolor: "background.paper", pointerEvents: "auto", maxHeight: "min(24dvh, 7rem)", overflowY: "auto", overscrollBehavior: "contain", scrollbarWidth: "thin" }}>
-      <Box component={context.action ? ButtonBase : "div"} aria-label={context.action?.label} title={context.title} onClick={context.action?.onActivate} sx={{ display: "block", textAlign: "left", width: "100%", minWidth: 0, minHeight: context.action ? 44 : undefined, px: 1, py: 0.5 }}>
+    <Box data-sheet-context-summary sx={{ display: "block", textAlign: "left", width: "100%", maxWidth: 560, minWidth: 0, minHeight: 56, borderRadius: "28px", border: "1px solid", borderColor: theme => alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.18 : 0.62), bgcolor: "background.paper", backgroundImage: theme => `linear-gradient(180deg, ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.08 : 0.35)}, ${alpha(theme.palette.primary.main, 0.035)})`, boxShadow: theme => `0 10px 28px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.35 : 0.14)}, inset 0 1px 0 ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.2 : 0.8)}`, pointerEvents: "auto", maxHeight: "min(24dvh, 7rem)", overflowY: "auto", overscrollBehavior: "contain", scrollbarWidth: "thin" }}>
+      <Box component={context.action ? ButtonBase : "div"} aria-label={context.action?.label} title={context.title} onClick={context.action?.onActivate} sx={{ display: "block", textAlign: "left", width: "100%", minWidth: 0, minHeight: 54, flexShrink: 0, px: 1.5, py: 0.75 }}>
       <Box sx={{ display: "flex", width: "100%", alignItems: "center", textAlign: "left", gap: 0.25 }}>
         <Typography sx={{ minWidth: 0, flex: 1, overflowWrap: "anywhere", fontSize: "0.9375rem", lineHeight: 1.3, fontWeight: 600, display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden" }}>{context.title}</Typography>
         {context.action && <ChevronRight sx={{ fontSize: "1rem", flexShrink: 0, color: "text.secondary" }} />}
