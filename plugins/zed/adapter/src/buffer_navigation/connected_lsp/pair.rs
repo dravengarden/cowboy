@@ -108,7 +108,7 @@ pub(crate) async fn immutable_pair(parent: &Path, server: &Path) {
         json!({"type":"bufferNavigationSupport","api_version":1,"protocol":1})
     );
     exercise(&client, &root).await;
-    failed_open_fences_replacement(&client, &root).await;
+    failed_open_is_recovered_for_replacement(&client, &root).await;
     child.kill().await.unwrap();
     // The owning PID namespace, not this kill or local Released, owns final
     // descendant teardown. No native close ACK or recovery is claimed here.
@@ -128,7 +128,7 @@ async fn prepared_buffer(client: &Client, workspace: &Path, path: &str) -> Lease
     serde_json::from_value(response["lease"].clone()).unwrap()
 }
 
-async fn failed_open_fences_replacement(client: &Client, root: &Path) {
+async fn failed_open_is_recovered_for_replacement(client: &Client, root: &Path) {
     let workspace = root.join("open-failure-worktree");
     std::fs::create_dir(&workspace).unwrap();
     let text = "known🙂\n";
@@ -178,31 +178,23 @@ async fn failed_open_fences_replacement(client: &Client, root: &Path) {
     ] {
         assert_eq!(client.request(request).await["state"], "unknown");
     }
+    // The same server recorded that open as failed: the next acquisition
+    // resolves the fence without replaying it, and the original lease stays
+    // Unknown. The fixed path and a second owner of the known key both open.
     for path in ["oversized.txt", "known.txt"] {
         let replacement = prepared_buffer(client, &workspace, path).await;
-        let refused = client
+        let opened = client
             .exchange(Request::OpenBufferLease {
                 lease: replacement.clone(),
             })
             .await;
-        assert_eq!(refused["type"], "error");
-        assert!(
-            refused["message"]
-                .as_str()
-                .unwrap()
-                .contains("unresolved native open")
-        );
+        assert_eq!(opened["state"], "open", "{opened}");
         assert_eq!(
             client
-                .request(Request::QueryBufferLease {
-                    lease: replacement.clone()
-                })
+                .request(Request::ReleaseBufferLease { lease: replacement })
                 .await["state"],
-            "prepared"
+            "released"
         );
-        client
-            .request(Request::ReleaseBufferLease { lease: replacement })
-            .await;
     }
     read_and_release_known_buffer(client, known, text).await;
     assert_eq!(
@@ -213,7 +205,7 @@ async fn failed_open_fences_replacement(client: &Client, root: &Path) {
     );
     client.request(Request::BufferNavigationSupport {}).await;
     println!(
-        "immutable socket native-open failure: real input refusal, original Unknown without replay, changed-source/known-key replacement refusal, retained independent text read/release passed (not recovery)"
+        "immutable socket native-open failure: real input refusal, original Unknown without replay, same-process recovery of the failed open, changed-source/known-key replacement opens and independent text read/release passed"
     );
 }
 
