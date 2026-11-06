@@ -16,6 +16,7 @@ import {
   useSessionAuthority,
 } from "./backgroundTasks";
 import { useCallApproval } from "./callApproval";
+import { CallReadEpoch } from "./callReadEpoch";
 import { derive, pendingPermissions, type RenderItem } from "./derive";
 import {
   CALLS_PAGE,
@@ -172,6 +173,7 @@ function useAnchoredCalls(
 ): { calls: ManagedCallSummary[]; unresolved: ReadonlySet<string> } {
   const [known, setKnown] = useState<ReadonlyMap<string, ManagedCallSummary | null>>(new Map());
   const reading = useRef(new Set<string>());
+  const attempted = useRef(new CallReadEpoch());
   const session = useRef(sessionId);
   session.current = sessionId;
   const missing = useMemo(() => {
@@ -184,6 +186,9 @@ function useAnchoredCalls(
       const call = known.get(id);
       const settled = call === null || (call !== undefined && !callActive(call.state));
       if (settled || reading.current.has(id)) continue;
+      // Updating `known` reruns this effect. Only a new ledger observation
+      // should retry an active call, never its own fetch completion.
+      if (!attempted.current.claim(sessionId, observedAt, id)) continue;
       reading.current.add(id);
       void fetchAnchoredCall(sessionId, id).then((next) => {
         if (session.current === sessionId) setKnown((previous) => new Map(previous).set(id, next));

@@ -291,8 +291,8 @@ function offerHandoffUndo(id: string, receipt: ContextDelivery): void {
   if (!receipt.source_trashed || offeredUndo.has(receipt.operation)) return;
   offeredUndo.add(receipt.operation);
   // Lazily: Undo reaches back into the store that imports this module.
-  void import("./undoActions").then(({ recordUndo }) =>
-    recordUndo("Original moved to Trash", [{ kind: "restore_trash", sessions: [id] }])
+  void import("./undoHistory").then(({ addUndoEntry }) =>
+    addUndoEntry("Original moved to Trash", [{ kind: "restore_trash", sessions: [id] }])
   );
 }
 
