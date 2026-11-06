@@ -17,6 +17,11 @@ use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
 mod analysis;
 mod buffer_leases;
 mod buffer_navigation;
+mod constants;
+use constants::{
+    ADAPTER_VERSION, MAX_DIAGNOSTICS, MAX_DOCUMENT_SYMBOLS, MAX_INLAY_HINTS,
+    MAX_SEMANTIC_TOKEN_WORDS, ZED_REVISION, ZED_VERSION,
+};
 mod content_reads;
 #[cfg(test)]
 mod coordinate_queries;
@@ -35,14 +40,6 @@ mod sync_native;
 mod sync_owners;
 mod text_reads;
 mod trust;
-
-const ADAPTER_VERSION: u8 = 1;
-const ZED_VERSION: &str = "1.13.0";
-const ZED_REVISION: &str = "aaf5f57dd36c41cf2ed49b13bcb091d52d5aef45";
-const MAX_DIAGNOSTICS: usize = 1_000;
-const MAX_INLAY_HINTS: usize = 2_000;
-const MAX_SEMANTIC_TOKEN_WORDS: usize = 50_000;
-const MAX_DOCUMENT_SYMBOLS: usize = 2_000;
 
 #[derive(Parser)]
 struct Cli {
@@ -294,7 +291,7 @@ struct BufferLease {
     closing: bool,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum BufferOwner {
     Legacy(String),
     Owned(u64),
@@ -415,6 +412,7 @@ struct ZedRuntime {
     next_message_id: AtomicU32,
     next_lsp_request_id: AtomicU64,
     frontier: analysis::Frontier,
+    closes: native_close::Registry,
 }
 
 async fn verify_zed_server(path: &Path) -> Result<()> {
@@ -541,6 +539,7 @@ impl ZedRuntime {
             next_message_id: AtomicU32::new(2),
             next_lsp_request_id: AtomicU64::new(1),
             frontier: analysis::Frontier,
+            closes: crate::native_close::Registry::default(),
         })
     }
 

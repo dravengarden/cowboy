@@ -428,7 +428,7 @@ async fn native_close_refusal_keeps_release_uncertainty_without_partial_local_re
         [8]
     );
     assert!(task.await.unwrap().is_err());
-    release_unknown(&f, &nav, &["target"]).await;
+    release_unknown(&f, &nav, &["target"], &mut receiver).await;
     assert!(receiver.try_recv().is_err());
     let registry = f.buffers.navigations.lock().await;
     let saved = &registry.slots[&1].targets;
@@ -437,12 +437,36 @@ async fn native_close_refusal_keeps_release_uncertainty_without_partial_local_re
     assert_eq!(saved[0].key, (f.root.clone(), PathBuf::from("target")));
 }
 
-async fn release_unknown(f: &Fixture, nav: &NavigationRef, targets: &[&str]) {
+async fn release_unknown(
+    f: &Fixture,
+    nav: &NavigationRef,
+    targets: &[&str],
+    receiver: &mut tokio::sync::mpsc::Receiver<wire::CowboyBufferSyncEnvelope>,
+) {
     for action_kind in [Action::Release, Action::Execute, Action::Query] {
-        assert!(matches!(
-            state(f.request(action(nav, action_kind)).await.unwrap()),
-            State::ReleaseUnknown
-        ));
+        let response = if matches!(action_kind, Action::Release | Action::Query) {
+            let (response, ()) = tokio::join!(f.request(action(nav, action_kind)), async {
+                let envelope = receiver.recv().await.unwrap();
+                let Some(wire::cowboy_buffer_sync_envelope::Payload::CloseRequest(request)) =
+                    &envelope.payload
+                else {
+                    panic!("not close recovery query");
+                };
+                assert_eq!(
+                    request.action,
+                    wire::cowboy_close_buffers::Action::Query as i32
+                );
+                crate::native_close::tests::reply(
+                    &f.zed.sync,
+                    envelope,
+                    wire::cowboy_close_buffers_response::Outcome::Unknown,
+                );
+            });
+            response
+        } else {
+            f.request(action(nav, action_kind)).await
+        };
+        assert!(matches!(state(response.unwrap()), State::ReleaseUnknown));
     }
     let active = f.buffers.active.read().await;
     let source = &active[&(f.root.clone(), "source".into())];
@@ -479,12 +503,14 @@ async fn cancelled_group_close_keeps_all_original_pins_and_late_reply_cannot_fin
         panic!("not close")
     };
     assert_eq!(request.buffer_ids, [8, 9]);
+    let original = request.clone();
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
     let late = wire::CowboyBufferSyncEnvelope {
         responding_to: Some(effect.id),
         payload: Some(Payload::CloseResponse(wire::CowboyCloseBuffersResponse {
-            protocol: 1,
+            protocol: request.protocol,
+            operation_id: request.operation_id,
             instance: request.instance,
             outcome: Outcome::Closed as i32,
             buffer_ids: request.buffer_ids,
@@ -492,7 +518,52 @@ async fn cancelled_group_close_keeps_all_original_pins_and_late_reply_cannot_fin
         ..Default::default()
     };
     assert!(!f.zed.sync.response(effect.id, &late.encode_to_vec()));
-    release_unknown(&f, &nav, &["first", "second"]).await;
+    release_unknown(&f, &nav, &["first", "second"], &mut receiver).await;
+    assert!(receiver.try_recv().is_err());
+    // The original close excluded the shared source. Its other owner must
+    // remain until recovery drops the navigation pin, otherwise that drop
+    // would strand the native source without any local owner.
+    assert!(
+        f.request(Request::ReleaseBufferLease {
+            lease: f.lease.clone()
+        })
+        .await
+        .is_err()
+    );
+    assert!(receiver.try_recv().is_err());
+    let task = f.spawn(action(&nav, Action::Query));
+    let recovery = receiver.recv().await.unwrap();
+    let Some(Payload::CloseRequest(request)) = &recovery.payload else {
+        panic!("not original close query");
+    };
+    assert_eq!(
+        request.action,
+        wire::cowboy_close_buffers::Action::Query as i32
+    );
+    assert_eq!(request.operation_id, original.operation_id);
+    assert_eq!(request.instance, original.instance);
+    assert_eq!(request.buffer_ids, original.buffer_ids);
+    crate::native_close::tests::reply(&f.zed.sync, recovery, Outcome::Closed);
+    assert!(matches!(
+        state(task.await.unwrap().unwrap()),
+        State::Released
+    ));
+    let active = f.buffers.active.read().await;
+    assert_eq!(active.len(), 1);
+    let source = &active[&(f.root.clone(), "source".into())];
+    assert!(!source.lease_ids.contains(&BufferOwner::Navigation(1)));
+    assert!(!source.closing);
+    assert!(crate::sync_owners::ensure_admission(&f.buffers, &active).is_ok());
+    assert!(f.buffers.navigations.lock().await.slots.is_empty());
+    let retirement = receiver.recv().await.unwrap();
+    let Some(Payload::CloseRequest(request)) = retirement.payload else {
+        panic!("not receipt retirement");
+    };
+    assert_eq!(
+        request.action,
+        wire::cowboy_close_buffers::Action::Forget as i32
+    );
+    assert_eq!(request.operation_id, original.operation_id);
     assert!(receiver.try_recv().is_err());
     assert!(f.outbound.try_recv().is_err());
 }

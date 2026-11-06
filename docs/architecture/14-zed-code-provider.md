@@ -55,6 +55,15 @@ Unix-socket/state directory with a short path, separate from that home. The
 Machine removes only that owned temporary directory on teardown. No ordinary
 Zed settings, caches or credentials are inherited.
 
+On delegated Linux hosts the adapter and its readiness probe join separate
+owned cgroups in `pre_exec`, before either can fork. This closes the previous
+spawn-then-move race that could leave a native server in the Machine's parent
+group. The existing identity-bound containment guard owns descendant cleanup,
+including children that call `setsid`. Non-Linux or undelegated environments
+retain the process-group fallback; that fallback is not complete descendant
+accounting and cannot establish a language-server RSS/CPU budget. Resource
+budget admission remains separate from this lifecycle fix.
+
 Pre-migration bootstrap services retain their older separate directories:
 
 ```text

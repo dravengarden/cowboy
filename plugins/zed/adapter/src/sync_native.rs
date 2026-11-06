@@ -259,12 +259,7 @@ impl Transport {
     }
 
     pub(super) async fn exchange(&self, zed: &ZedRuntime, payload: Payload) -> Result<Payload> {
-        let id = zed
-            .next_message_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
-                (id > 0 && id < 1_000_000_000).then_some(id + 1)
-            })
-            .map_err(|_| anyhow::anyhow!("native request IDs exhausted"))?;
+        let id = Self::message_id(zed)?;
         let (sender, receiver) = oneshot::channel();
         {
             let mut pending = self.pending.lock().expect("native sync pending poisoned");
@@ -295,6 +290,32 @@ impl Transport {
         .await
         .context("native sync observation timed out")??;
         Ok(response)
+    }
+
+    fn message_id(zed: &ZedRuntime) -> Result<u32> {
+        zed.next_message_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+                (id > 0 && id < 1_000_000_000).then_some(id + 1)
+            })
+            .map_err(|_| anyhow::anyhow!("native request IDs exhausted"))
+    }
+
+    /// Receipt GC only, after a matching Closed observation. This cannot
+    /// remove native buffers and allocates no reply waiter. A full queue
+    /// leaves the retirement with its caller for a later attempt.
+    pub(super) fn forget_close(
+        &self,
+        zed: &ZedRuntime,
+        mut request: wire::CowboyCloseBuffers,
+    ) -> Result<()> {
+        request.action = wire::cowboy_close_buffers::Action::Forget as i32;
+        self.outbound
+            .try_send(wire::CowboyBufferSyncEnvelope {
+                id: Self::message_id(zed)?,
+                responding_to: None,
+                payload: Some(Payload::CloseRequest(request)),
+            })
+            .context("native close retirement queue unavailable")
     }
 
     pub async fn probe(&self, zed: &ZedRuntime) -> Result<[u8; 16]> {

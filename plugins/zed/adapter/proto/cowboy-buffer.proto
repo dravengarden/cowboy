@@ -88,13 +88,18 @@ message CowboyNavigationResponse {
 
 // Empty instance/IDs probe the exact process. Otherwise close the complete
 // sorted, unique, bounded set for the authenticated native peer in one update.
-// This is not a saved operation or replay grant. The adapter owns one dispatch;
-// an unobserved reply remains Unknown and must never fall back to `CloseBuffer`.
+// Protocol 1 has no recovery. Protocol 2 records an exact per-peer operation;
+// an unobserved reply is queried, never retried via upstream `CloseBuffer`.
 message CowboyCloseBuffers {
   uint64 project_id = 1;
   uint32 protocol = 2;
   bytes instance = 3;
   repeated uint64 buffer_ids = 4;
+  // Protocol 2 only: non-recycled, increasing per-peer operation identity.
+  // QUERY observes the original outcome; FORGET retires only its receipt.
+  uint64 operation_id = 5;
+  enum Action { CLOSE = 0; QUERY = 1; FORGET = 2; }
+  Action action = 6;
 }
 
 message CowboyCloseBuffersResponse {
@@ -105,9 +110,13 @@ message CowboyCloseBuffersResponse {
     SUPPORTED = 1;
     CLOSED = 2;
     REFUSED = 3;
+    UNKNOWN = 4;
+    FORGOTTEN = 5;
+    CAPACITY = 6;
   }
   Outcome outcome = 3;
   repeated uint64 buffer_ids = 4;
+  uint64 operation_id = 5;
 }
 
 // Which document version each language server's current diagnostics set for a

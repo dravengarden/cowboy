@@ -36,7 +36,7 @@ pub(super) async fn respond(
         }
         Request::OpenBufferLease { lease } => registry.open(lease, worktrees, buffers, zed).await,
         Request::ReleaseBufferLease { lease } => registry.release(lease, buffers, zed).await,
-        Request::QueryBufferLease { lease } => registry.query(lease),
+        Request::QueryBufferLease { lease } => registry.query_recovered(lease, buffers, zed).await,
         Request::ReadBufferLease { lease, request } => {
             registry.read(lease, request, worktrees, buffers, zed).await
         }
@@ -272,6 +272,30 @@ impl Registry {
         Ok(reply(lease, state))
     }
 
+    async fn query_recovered(
+        &mut self,
+        lease: LeaseRef,
+        buffers: &Buffers,
+        zed: Option<&Zed>,
+    ) -> Result<Response> {
+        let id = self.resolve(&lease)?;
+        if let Some(slot) = self.slots.get(&id)
+            && slot.state == Phase::Unknown
+            && let Some(zed) = zed
+        {
+            let keys =
+                std::collections::HashSet::from([(slot.worktree.clone(), slot.path.clone())]);
+            let mut active = buffers.active.write().await;
+            if super::native_close::recover(&keys, &BufferOwner::Owned(id), &mut active, zed)
+                .await
+                .unwrap_or(false)
+            {
+                self.slots.remove(&id);
+            }
+        }
+        self.query(lease)
+    }
+
     pub(super) async fn open(
         &mut self,
         lease: LeaseRef,
@@ -341,7 +365,7 @@ impl Registry {
             return Ok(reply(lease, LeaseState::Released));
         };
         match slot.state {
-            Phase::Unknown => return Ok(reply(lease, LeaseState::Unknown)),
+            Phase::Unknown => return self.query_recovered(lease, buffers, zed).await,
             Phase::Open => {
                 super::close_buffer_at(
                     slot.worktree.clone(),

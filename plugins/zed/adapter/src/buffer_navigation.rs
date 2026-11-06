@@ -286,6 +286,21 @@ impl Registry {
         zed: Option<&Zed>,
     ) -> Result<Response> {
         let id = self.resolve(&navigation)?;
+        if let Some(slot) = self.slots.get(&id)
+            && matches!(slot.phase, Phase::ReleaseUnknown)
+            && matches!(action, Action::Query | Action::Release)
+            && let Some(zed) = zed
+        {
+            let mut keys = std::collections::HashSet::from([slot.key.clone()]);
+            keys.extend(slot.targets.iter().map(|target| target.key.clone()));
+            let mut active = buffers.active.write().await;
+            if crate::native_close::recover(&keys, &BufferOwner::Navigation(id), &mut active, zed)
+                .await
+                .unwrap_or(false)
+            {
+                self.slots.remove(&id);
+            }
+        }
         if let Some(slot) = self.slots.get_mut(&id) {
             match action {
                 Action::Execute if matches!(slot.phase, Phase::Prepared) => {

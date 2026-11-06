@@ -39,7 +39,7 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.11.0";
+  version = "1.12.0";
   inherit src cargoDeps;
   patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ./server/acquisition-bounds.patch ./server/replacement-bounds.patch ./server/snapshot-lifetimes.patch ./server/remote-edits.patch ];
   postPatch = ''
