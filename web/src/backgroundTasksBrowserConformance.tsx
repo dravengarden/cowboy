@@ -445,8 +445,9 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
       check(details.right <= level.right, "T16 Details stays inside the sheet");
       const island = document.querySelector<HTMLElement>("[data-sheet-context-summary]")!.getBoundingClientRect();
       check(details.width >= 44 && details.height >= 44, "The floating details button retains its touch target");
-      const buttons = document.querySelector<HTMLElement>("[data-sheet-context-dock] > div:nth-child(2)")!.getBoundingClientRect();
-      check(island.right <= buttons.left && island.top < buttons.bottom && buttons.top < island.bottom, "Information and round controls share the same row");
+      const buttons = document.querySelector<HTMLElement>("[data-sheet-context-dock] > div:first-child")!.getBoundingClientRect();
+      check(buttons.right <= island.left && island.top < buttons.bottom && buttons.top < island.bottom, "Round navigation is on the left beside the information surface");
+      check(island.height >= 56 && getComputedStyle(document.querySelector("[data-sheet-context-summary]")!).boxShadow !== "none", "Summary shares the controls' minimum height and floating surface depth");
       check(chip.height <= 112, "The dock does not stack information over a second navigation row");
       const dock = document.querySelector<HTMLElement>("[data-sheet-context-dock]")!;
       const footer = dock.closest<HTMLElement>("[data-detent-sheet-footer]")!;
