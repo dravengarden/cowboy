@@ -165,6 +165,9 @@ pub struct CodeRuntimeHost {
     agent_admission: Mutex<()>,
     routes: Mutex<WorktreeRoutes>,
     engines: Mutex<BTreeMap<(String, String), Weak<RunningCodeRuntime>>>,
+    /// Old owners stay on their original incarnation after a leader exits.
+    /// Keep weak discovery for their still-owned descendant accounting.
+    retired_engines: Mutex<Vec<Weak<RunningCodeRuntime>>>,
     buffer_leases: buffer_leases::Routes,
     buffer_navigation: buffer_navigation::Operations,
     buffer_sync: buffer_sync::Operations,
@@ -351,10 +354,22 @@ impl CodeRuntimeHost {
                 engines.retain(|_, engine| engine.strong_count() > 0);
                 let key = (plan.plugin_id.clone(), plan.generation_digest.clone());
                 let generation = Some(plan.generation_digest.clone());
-                if let Some(engine) = engines.get(&key).and_then(Weak::upgrade) {
-                    return Ok((CodeTarget::Installed(engine), generation));
+                let previous = engines.get(&key).and_then(Weak::upgrade);
+                if let Some(engine) = &previous
+                    && engine.is_running()?
+                {
+                    return Ok((CodeTarget::Installed(Arc::clone(engine)), generation));
                 }
+                let mut retired = self.retired_engines.lock().await;
+                retired.retain(|runtime| runtime.strong_count() > 0);
+                ensure!(
+                    retired.len() < MAX_WORKTREE_ROUTES,
+                    "too many retained Code runtime incarnations"
+                );
                 let engine = Arc::new(RunningCodeRuntime::start(&plan).await?);
+                if let Some(previous) = previous {
+                    retired.push(Arc::downgrade(&previous));
+                }
                 engines.insert(key, Arc::downgrade(&engine));
                 Ok((CodeTarget::Installed(engine), generation))
             }
@@ -478,9 +493,11 @@ impl RunningCodeRuntime {
             return Ok(true);
         }
         // Retained unknown lease evidence must not keep an exited adapter's
-        // descendants alive. Consume only this runtime's original group owner,
-        // once; later observations and final Drop cannot signal it again.
-        self.process_group.lock().take();
+        // descendants alive. Retain the original group for resource accounting:
+        // a stop request is not proof that its descendants have already exited.
+        if let Some(tree) = self.process_group.lock().as_mut() {
+            tree.request_stop()?;
+        }
         Ok(false)
     }
 

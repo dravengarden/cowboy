@@ -7,9 +7,24 @@ use std::os::unix::process::CommandExt as _;
 pub(super) struct ProcessTree {
     _containment: Option<Containment>,
     _fallback: Option<PluginProcessGroup>,
+    stop_requested: bool,
 }
 
 impl ProcessTree {
+    pub(super) fn request_stop(&mut self) -> Result<()> {
+        if !self.stop_requested {
+            if let Some(containment) = &self._containment {
+                containment
+                    .signal_stop()
+                    .context("stopping original Code descendants")?;
+            } else {
+                self._fallback.take();
+            }
+            self.stop_requested = true;
+        }
+        Ok(())
+    }
+
     pub(super) fn resources(&self) -> Result<crate::cgroup::containment::ResourceSample> {
         self._containment
             .as_ref()
@@ -40,6 +55,7 @@ impl ProcessTree {
             Self {
                 _containment: containment,
                 _fallback: fallback,
+                stop_requested: false,
             },
         ))
     }
@@ -60,7 +76,7 @@ mod tests {
             ])
             .stdout(Stdio::piped())
             .kill_on_drop(true);
-        let (mut child, tree) = ProcessTree::spawn(&mut command).unwrap();
+        let (mut child, mut tree) = ProcessTree::spawn(&mut command).unwrap();
         let containment = tree
             ._containment
             .as_ref()
@@ -98,6 +114,19 @@ mod tests {
         .await
         .expect("original process tree must have real RSS/CPU accounting");
         assert!(sample.cpu_usage_usec > 0);
+        tree.request_stop().unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(sample) = tree.resources()
+                    && sample.processes == 0
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("stopped descendants remain accountable until observed empty");
         drop(tree);
         let status = tokio::time::timeout(Duration::from_secs(2), child.wait())
             .await

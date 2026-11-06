@@ -120,20 +120,28 @@ impl CodeRuntimeHost {
                 "legacy Code resources are unowned"
             );
         }
-        let runtimes: Vec<_> = self
+        let mut runtimes: Vec<_> = self
             .engines
             .lock()
             .await
             .values()
             .filter_map(Weak::upgrade)
             .collect();
+        runtimes.extend(
+            self.retired_engines
+                .lock()
+                .await
+                .iter()
+                .filter_map(Weak::upgrade),
+        );
+        runtimes.sort_by_key(Arc::as_ptr);
+        runtimes.dedup_by(|a, b| Arc::ptr_eq(a, b));
         tokio::task::spawn_blocking(move || {
             let mut samples = BTreeMap::new();
             for runtime in &runtimes {
-                ensure!(
-                    runtime.is_running()?,
-                    "Code runtime exited during observation"
-                );
+                // This requests cleanup after leader loss, but we still sample
+                // the original group: do not call stopped descendants zero.
+                let _ = runtime.is_running()?;
                 let sample = runtime
                     .process_group
                     .lock()
@@ -413,5 +421,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(opened["type"], "buffer");
+        let old = host
+            .engines
+            .lock()
+            .await
+            .values()
+            .next()
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        old.child.lock().start_kill().unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while old.child.lock().try_wait().unwrap().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            host.request_active(
+                "fixture-code",
+                &interactive,
+                Some("resources".into()),
+                || panic!("old owner must observe death first")
+            )
+            .await
+            .is_err()
+        );
+        host.request_active(
+            "fixture-code",
+            &interactive,
+            Some("resources".into()),
+            || Ok(CodeRuntimeSelection::Installed(plan)),
+        )
+        .await
+        .unwrap();
+        let observations = host.resource_observation().await.unwrap();
+        assert_eq!(
+            observations.samples.len(),
+            2,
+            "both original and replacement groups stay in accounting"
+        );
+        assert!(
+            observations
+                .samples
+                .contains_key(&(Arc::as_ptr(&old) as usize))
+        );
     }
 }

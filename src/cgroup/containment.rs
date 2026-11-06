@@ -120,6 +120,19 @@ impl Containment {
         }
     }
 
+    /// Request stop through the original opened group, retaining its descriptor
+    /// for accounting until the final owner is dropped. This is not exit proof.
+    pub fn signal_stop(&self) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            linux::kill(&self.directory)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(io::Error::other("native process containment unavailable"))
+        }
+    }
+
     pub async fn finish(self) -> io::Result<()> {
         self.identity.terminate().await
     }
