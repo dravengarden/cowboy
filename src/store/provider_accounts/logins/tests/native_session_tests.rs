@@ -12,14 +12,14 @@ async fn seed_owner(store: &Store) {
     }
 }
 
-fn session(completion: &NativeCompletion) -> crate::core::SessionMeta {
+fn session(completion: &NativeCompletion) -> crate::model::SessionMeta {
     let hub = crate::core::Hub::new();
     hub.create_local_session(
         "native-session".into(),
         "claude-code".into(),
         "/fixture".into(),
         "original".into(),
-        crate::core::SessionOrigin::Api,
+        crate::model::SessionOrigin::Api,
         false,
     );
     let mut meta = hub.session_info("native-session").unwrap().meta;
@@ -127,7 +127,7 @@ async fn replacement_login_preserves_pinned_session(
     store: &Store,
     completion: &NativeCompletion,
     hub: &crate::core::Hub,
-    meta: &crate::core::SessionMeta,
+    meta: &crate::model::SessionMeta,
 ) {
     let original = store
         .provider_login_receipt("login-owner", "bind")
@@ -211,7 +211,7 @@ async fn abandoned_replacement_falls_back(
     store: &Store,
     completion: &NativeCompletion,
     hub: &crate::core::Hub,
-    meta: &crate::core::SessionMeta,
+    meta: &crate::model::SessionMeta,
     input: &crate::store::provider_accounts::logins::Request,
 ) {
     // A cancelled replacement that never completed falls back to the previous
@@ -305,7 +305,7 @@ async fn stored_release(store: &Store, id: &str) -> (String, Option<i64>) {
 
 /// A named row's release write applies only on the login generation it was
 /// admitted with, so a concurrently committed transition is never overwritten.
-async fn named_release_write_keeps_its_login(store: &Store, meta: &crate::core::SessionMeta) {
+async fn named_release_write_keeps_its_login(store: &Store, meta: &crate::model::SessionMeta) {
     let generation = i64::try_from(meta.provider_auth_generation.unwrap()).unwrap();
     let mut moved = meta.clone();
     moved.provider_version = "carried-version".into();
@@ -345,7 +345,7 @@ async fn durable_binding_changes(
     store: &Store,
     completion: &NativeCompletion,
     hub: &crate::core::Hub,
-    meta: &crate::core::SessionMeta,
+    meta: &crate::model::SessionMeta,
 ) {
     // A cached Hub binding must not survive a conflicting durable edit. Check
     // both discovery and the final locked admission after discovery has raced.
@@ -444,7 +444,7 @@ async fn durable_binding_changes(
 async fn transport_contract(
     store: &Store,
     hub: &crate::core::Hub,
-    meta: &crate::core::SessionMeta,
+    meta: &crate::model::SessionMeta,
     admitted: bool,
 ) {
     use crate::runtime_wire::{CoreCommand, StartSession};
@@ -654,7 +654,7 @@ async fn projection_conflict(store: &Store, completion: &NativeCompletion) {
         "claude-code".into(),
         "/existing".into(),
         "existing session".into(),
-        crate::core::SessionOrigin::Api,
+        crate::model::SessionOrigin::Api,
         false,
     );
     let error = store
@@ -676,7 +676,7 @@ async fn projection_conflict(store: &Store, completion: &NativeCompletion) {
 async fn race_revocation(
     store: &Store,
     completion: &NativeCompletion,
-    mut meta: crate::core::SessionMeta,
+    mut meta: crate::model::SessionMeta,
 ) {
     meta.id = "racing-session".into();
     let hub = crate::core::Hub::new();

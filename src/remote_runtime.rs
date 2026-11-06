@@ -585,7 +585,7 @@ impl RemoteRuntime {
     pub fn managed_call_authority(
         &self,
         service: &str,
-        parent: &crate::core::SessionMeta,
+        parent: &crate::model::SessionMeta,
     ) -> Result<crate::managed_calls::authority::Authority> {
         anyhow::ensure!(self.connected(), "parent runtime is disconnected");
         // Match merge_worker_snapshots' lock order (workers, then resetting).
@@ -3154,7 +3154,7 @@ mod tests {
             "claude-code".into(),
             "/tmp".into(),
             "t".into(),
-            crate::core::SessionOrigin::Api,
+            crate::model::SessionOrigin::Api,
             false,
         );
         let snapshot = RuntimeEvent::Update {
@@ -3233,7 +3233,7 @@ mod tests {
                 execution_binding: Some(binding.clone()),
                 cwd: "/runtime/session".into(),
                 title: "test".into(),
-                origin: crate::core::SessionOrigin::Web,
+                origin: crate::model::SessionOrigin::Web,
                 system: false,
                 owner_user_id: None,
                 owner_username: None,
@@ -3316,7 +3316,7 @@ mod tests {
             "claude-code".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         hub.set_status("s", Status::Running, None);
@@ -3367,7 +3367,7 @@ mod tests {
             "claude-code".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let mut worker = snapshot("cycle");
@@ -3543,7 +3543,7 @@ mod tests {
                 provider.to_owned(),
                 "/tmp".to_owned(),
                 "test".to_owned(),
-                crate::core::SessionOrigin::Web,
+                crate::model::SessionOrigin::Web,
                 false,
             );
             hub.set_agent_session_id("s", "agent-1".to_owned());
@@ -3703,7 +3703,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (tx, mut rx) = mpsc::channel(4);
@@ -3785,7 +3785,7 @@ mod tests {
             execution_binding: None,
             cwd: "/tmp".to_owned(),
             title: "test".to_owned(),
-            origin: crate::core::SessionOrigin::Web,
+            origin: crate::model::SessionOrigin::Web,
             system: false,
             owner_user_id: None,
             owner_username: None,
@@ -3876,7 +3876,7 @@ mod tests {
             execution_binding: None,
             cwd: "/tmp".into(),
             title: "test".into(),
-            origin: crate::core::SessionOrigin::Web,
+            origin: crate::model::SessionOrigin::Web,
             system: false,
             owner_user_id: None,
             owner_username: None,
@@ -3928,7 +3928,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let failure = serde_json::json!({
@@ -4000,7 +4000,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let message = "Error running remote compact task: stream disconnected before completion: Transport error: network error: error decoding response body\n\n";
@@ -4104,7 +4104,7 @@ mod tests {
 
     #[tokio::test]
     async fn managed_call_authority_requires_connected_non_resetting_worker() {
-        let parent: crate::core::SessionMeta = serde_json::from_value(serde_json::json!({
+        let parent: crate::model::SessionMeta = serde_json::from_value(serde_json::json!({
             "id":"s", "provider":"codex", "machine_id":"hawk",
             "workspace_id":"project", "cwd":"/tmp", "title":"Parent", "status":"running"
         }))
@@ -4157,7 +4157,7 @@ mod tests {
                 "codex".to_owned(),
                 "/tmp".to_owned(),
                 "test".to_owned(),
-                crate::core::SessionOrigin::Web,
+                crate::model::SessionOrigin::Web,
                 false,
             );
             hub.set_status("s", Status::Exited, None);
@@ -4221,7 +4221,7 @@ mod tests {
             "claude-deepseek".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let detail = "API Error: 400 This model's maximum context length is 1048576 tokens. However, you requested 1048875 tokens";
@@ -4243,7 +4243,7 @@ mod tests {
             "claude-code".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         apply_event(
@@ -4322,7 +4322,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let runtime = RemoteRuntime::for_test(hub, Vec::new());
@@ -4382,7 +4382,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         hub.set_config_preference(
@@ -4466,7 +4466,7 @@ mod tests {
             "claude-code".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let mut worker = snapshot("s");
@@ -4653,7 +4653,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (scheduler, mut armed) = mpsc::channel(4);
@@ -4711,7 +4711,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (scheduler, mut armed) = mpsc::channel(4);
@@ -4750,7 +4750,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let runtime = RemoteRuntime::for_test(hub.clone(), vec![snapshot("s")]);
@@ -4802,7 +4802,7 @@ mod tests {
                 "codex".into(),
                 "/tmp".into(),
                 "test".into(),
-                crate::core::SessionOrigin::Web,
+                crate::model::SessionOrigin::Web,
                 false,
             );
             let runtime = RemoteRuntime::for_test(hub.clone(), vec![snapshot("s")]);
@@ -4937,7 +4937,7 @@ mod tests {
                 "codex".to_owned(),
                 "/tmp".to_owned(),
                 "test".to_owned(),
-                crate::core::SessionOrigin::Web,
+                crate::model::SessionOrigin::Web,
                 false,
             );
         }
@@ -5297,7 +5297,7 @@ mod tests {
             )),
             cwd: "/owned/managed/child/workspace".to_owned(),
             title: "child".to_owned(),
-            origin: crate::core::SessionOrigin::Api,
+            origin: crate::model::SessionOrigin::Api,
             system: false,
             owner_user_id: None,
             owner_username: None,
@@ -5428,7 +5428,7 @@ mod tests {
             "codex-deepseek".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let runtime = RemoteRuntime::for_test(hub, Vec::new());
@@ -5489,7 +5489,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let runtime = RemoteRuntime::for_test(hub, Vec::new());
@@ -5549,7 +5549,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
@@ -5618,7 +5618,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let runtime = RemoteRuntime::for_test(hub, Vec::new());
@@ -5653,7 +5653,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         handle_rejected_command(
@@ -5681,7 +5681,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (left, _right) = UnixStream::pair().expect("socket pair");
@@ -5789,7 +5789,7 @@ mod tests {
                 "claude-code".to_owned(),
                 "/tmp".to_owned(),
                 "test".to_owned(),
-                crate::core::SessionOrigin::Web,
+                crate::model::SessionOrigin::Web,
                 false,
             );
         }
@@ -5850,7 +5850,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (left, _right) = UnixStream::pair().expect("socket pair");
@@ -5979,7 +5979,7 @@ mod tests {
             "codex".into(),
             "/tmp".into(),
             "test".into(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (left, _right) = UnixStream::pair().unwrap();
@@ -6078,7 +6078,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
@@ -6118,7 +6118,7 @@ mod tests {
             "codex".into(),
             "/tmp".into(),
             "test".into(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
@@ -6158,7 +6158,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
@@ -6209,7 +6209,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
@@ -6257,7 +6257,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
@@ -6307,7 +6307,7 @@ mod tests {
             "codex".to_owned(),
             "/old/checkout".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         hub.set_agent_session_id("s", "codex-thread-1".to_owned());
@@ -6367,7 +6367,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         hub.set_agent_session_id("s", "agent-1".to_owned());
@@ -6397,7 +6397,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (left, _right) = UnixStream::pair().expect("socket pair");
@@ -6553,7 +6553,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (left, _right) = UnixStream::pair().expect("socket pair");
@@ -6589,7 +6589,7 @@ mod tests {
             "codex".to_owned(),
             "/tmp".to_owned(),
             "test".to_owned(),
-            crate::core::SessionOrigin::Web,
+            crate::model::SessionOrigin::Web,
             false,
         );
         let (left, _right) = UnixStream::pair().expect("socket pair");

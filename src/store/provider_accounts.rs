@@ -649,7 +649,7 @@ mod tests {
             "claude-code".into(),
             "/fixture".into(),
             "fixture".into(),
-            crate::core::SessionOrigin::Api,
+            crate::model::SessionOrigin::Api,
             false,
         );
         let mut meta = hub.session_info(id).unwrap().meta;
@@ -1526,7 +1526,7 @@ mod tests {
                 "claude-code".into(),
                 "/work".into(),
                 id.into(),
-                crate::core::SessionOrigin::Api,
+                crate::model::SessionOrigin::Api,
                 false,
             );
             let mut meta = hub.session_info(id).unwrap().meta;

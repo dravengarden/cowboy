@@ -2950,7 +2950,7 @@ mod tests {
             cwd: "/tmp".to_owned(),
             title: "test".to_owned(),
             status: Status::Busy,
-            origin: crate::core::SessionOrigin::Api,
+            origin: crate::model::SessionOrigin::Api,
             agent_session_id: None,
             paused: false,
             closing: false,

@@ -7,7 +7,7 @@ use super::{
     Conversation, Request,
     lifecycle::{Placement, Record, State},
 };
-use crate::{core::SessionMeta, store::Store};
+use crate::{model::SessionMeta, store::Store};
 
 /// The parent's policy decision recorded with an admitted call.
 #[derive(Clone, Debug, PartialEq, Eq)]

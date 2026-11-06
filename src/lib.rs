@@ -124,6 +124,8 @@ pub mod managed_config;
 #[cfg(feature = "full")]
 pub mod memory_observability;
 #[cfg(feature = "full")]
+pub mod model;
+#[cfg(feature = "full")]
 pub mod observability;
 #[cfg(feature = "full")]
 pub mod oidc;

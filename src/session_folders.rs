@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::merge_session_order;
+use crate::model::merge_session_order;
 
 pub mod defaults;
 use defaults::{DefaultKey, FolderDefaults, ResolvedDefaults};

@@ -501,7 +501,7 @@ mod tests {
             "codex".into(),
             "/work".into(),
             "title".into(),
-            crate::core::SessionOrigin::default(),
+            crate::model::SessionOrigin::default(),
             false,
         );
         hub.set_machine_lineage("session", Some("a".repeat(32).as_str()));
@@ -542,7 +542,7 @@ mod tests {
                 "codex".into(),
                 "/work".into(),
                 "title".into(),
-                crate::core::SessionOrigin::default(),
+                crate::model::SessionOrigin::default(),
                 false,
             )
         };

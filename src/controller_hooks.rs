@@ -12,7 +12,7 @@ pub struct ControllerHooks {
     pub serve: fn(crate::cli::ServeArgs) -> LocalFuture<anyhow::Result<()>>,
     pub init_tracing: fn(),
     pub launch_extensions:
-        fn(&crate::core::Hub, &crate::core::SessionMeta) -> crate::runtime_wire::SessionExtensions,
+        fn(&crate::core::Hub, &crate::model::SessionMeta) -> crate::runtime_wire::SessionExtensions,
 }
 
 static HOOKS: OnceLock<ControllerHooks> = OnceLock::new();
@@ -38,7 +38,7 @@ pub fn init_tracing() {
 
 pub fn launch_extensions(
     hub: &crate::core::Hub,
-    session: &crate::core::SessionMeta,
+    session: &crate::model::SessionMeta,
 ) -> crate::runtime_wire::SessionExtensions {
     match HOOKS.get() {
         Some(hooks) => (hooks.launch_extensions)(hub, session),

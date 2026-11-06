@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 
-use crate::core::{Envelope, Event};
+use crate::agent_model::Event;
+use crate::model::Envelope;
 
 /// Durable key carrying the originating client's message id beside the event.
 /// `Event` is internally tagged and ignores unknown keys, so a Controller that
@@ -354,6 +355,23 @@ fn is_pure_terminal_output_delta(update: &serde_json::Value) -> bool {
             .get("_meta")
             .and_then(serde_json::Value::as_object)
             .is_some_and(|meta| meta.keys().all(|key| key == "terminal_output_delta"))
+}
+
+/// Enforce the canonical in-memory hot-tail budget after restoring persisted
+/// events. Storage applies an approximate serialized-byte bound before rows
+/// cross the process boundary; this exact model-side pass accounts for decoded
+/// strings and keeps the newest event when it alone exceeds the budget.
+pub fn bound_restored_hot_log(log: &mut Vec<crate::model::Envelope>) -> bool {
+    // Older rows may predate canonical raw-output compaction. Normalize them
+    // before computing the in-process budget so a duplicated image/command
+    // result does not become the one oversized event retained after restart.
+    for envelope in log.iter_mut() {
+        compact_canonical_tool_output(envelope);
+    }
+    let mut log_bytes = log.iter().fold(0usize, |size, envelope| {
+        size.saturating_add(crate::model::estimated_envelope_bytes(envelope))
+    });
+    crate::model::trim_hot_log(log, &mut log_bytes, false, crate::model::HOT_TAIL_MAX_BYTES)
 }
 
 #[cfg(test)]
