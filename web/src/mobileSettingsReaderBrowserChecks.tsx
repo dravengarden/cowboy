@@ -33,6 +33,8 @@ export async function checkMobileSettingsReader(keep = false): Promise<void> {
     check(!dialog.textContent?.includes("Cowboy information and diagnostics"), "Detail drops the redundant description");
     check(content.getBoundingClientRect().top - dialog.getBoundingClientRect().top < 100, "Detail starts directly below the safe-area fade");
     check(footer.textContent === "About", "Current section stays visible in the bottom navigation");
+    const frost = getComputedStyle(footer.closest('[data-detent-sheet-footer]')!, "::before");
+    check(frost.backdropFilter === "blur(8px)" && frost.maskImage.includes("linear-gradient") && frost.pointerEvents === "none", "Footer frost fades progressively without intercepting touch");
     check(footer.scrollWidth <= footer.clientWidth, "Navigation fits the available width");
     const back = footer.querySelector<HTMLButtonElement>('[aria-label="Back to Settings from About"]')!;
     check(back.getBoundingClientRect().height >= 44, "Back retains its touch target");

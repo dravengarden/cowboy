@@ -135,6 +135,9 @@ Use the active theme background, never fixed white or a new blur layer. Cover
 readers without a top header opt into `readerTopBleed`; their scroller owns the
 safe-area padding so content can pass behind the status area while scrolling.
 Keep the gradient noninteractive and the first item clear at the scroll boundary.
+Floating sheet footers use the shared `readerBottomEdge` masked frost and theme
+gradient behind controls. Keep this single layer bounded to the footer, never
+on the scrolling body; title-only dock contexts have no empty information card.
 Other native vertical readers use app-shell `ScrollEdges` as their last child:
 settings, tool details, task panels, pickers, logs, approvals and preview panes.
 Only overflowing edges fade; the first/last item is unobscured at its boundary.

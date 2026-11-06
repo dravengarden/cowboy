@@ -19,9 +19,6 @@ export function MobileSettingsNavigation({ section, onBack, onClose }: {
       width: "100%", display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)",
       alignItems: "center", gap: 1, position: "relative", isolation: "isolate", pointerEvents: "none",
       "& .MuiIconButton-root": { padding: 0, "& .MuiSvgIcon-root": { fontSize: "clamp(16px, 1.5rem, 28px)" } },
-      "&::before": { content: '""', position: "absolute", zIndex: -1, pointerEvents: "none",
-        top: -24, left: 0, right: 0, bottom: "calc(-16px - env(safe-area-inset-bottom, 0px))",
-        background: theme => `linear-gradient(to bottom, ${alpha(theme.palette.background.default, 0)}, ${alpha(theme.palette.background.default, 0.94)} 24px, ${theme.palette.background.default} 48px)` },
     }}>
       <Box data-settings-navigation-actions sx={{ display: "flex", pointerEvents: "auto", borderRadius: "999px", bgcolor: "background.paper",
           border: "1px solid", borderColor: theme => alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.15 : 0.7),
