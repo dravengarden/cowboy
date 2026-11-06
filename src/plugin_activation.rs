@@ -102,7 +102,7 @@ struct HostPreflightDefault {
 /// Shared by the read-only CLI check and actual startup, before any Service
 /// identity, cache, database, host generation or authority marker is created.
 pub fn prepare_controller_hosts(
-    args: &crate::cli::ServeArgs,
+    args: &crate::serve_args::ServeArgs,
 ) -> Result<(
     PluginCatalog,
     crate::auth_plugins::ProductAuthentication,

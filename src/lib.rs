@@ -205,6 +205,8 @@ pub use cowboy_wire::runtime_wire;
 pub mod scheduler;
 #[cfg(feature = "full")]
 pub mod send_delivery;
+#[cfg(feature = "full")]
+pub mod serve_args;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::service_identity;
 #[cfg(feature = "full")]
