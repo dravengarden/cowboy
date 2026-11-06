@@ -188,6 +188,7 @@ import { mobileReviewMutators, type MobileReviewState } from "./mobileReviewStat
 export type { MobileReviewTabState, MobileReviewState } from "./mobileReviewState";
 import { applyEnvelope, mergeEvents, containsSeq } from "./storeTimeline";
 import { conn } from "./clientConnection";
+import { createReconnectScheduler } from "./reconnectScheduler";
 
 /// One staged message — a queued prompt or a draft. SERVER-AUTHORITATIVE: the
 /// daemon owns the per-session queue/drafts and the drain (next-on-turn-end), so
@@ -501,17 +502,14 @@ function retainTranscriptSessions(valid: ReadonlySet<string>): void {
 // The banner + version-probe + outage/reconnect-flash policy now live in `conn`
 // (the shared app-shell connection store). The store just reports socket
 // open/close into it and reads back the backoff delay. The only reconnect state
-// kept here is the single pending-attempt timer.
-let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+// kept here is the single pending attempt (reconnectScheduler.ts).
+const reconnect = createReconnectScheduler();
 let outageStartedAt: number | undefined;
 let reconnectAttempts = 0;
 let nextConnectReason = "initial";
 
 function clearReconnectTimer(): void {
-  // A cancelled retry must not keep presenting its countdown.
-  if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
-  reconnectTimer = undefined;
-  reconnectRetryAt = undefined;
+  reconnect.cancel();
 }
 
 /** Why the product socket is being abandoned. Only an explicit sign-out forgets
@@ -2080,18 +2078,15 @@ function logoutProductSession(): void {
 
 function scheduleReconnect(delay: number): void {
   if (productSessionAbandoned || productSessionPausedForAuth) return;
-  if (reconnectTimer !== undefined) return;
+  if (reconnect.pending) return;
   reportClientLog("info", "websocket_reconnect_scheduled", "Cowboy WebSocket reconnect scheduled", {
     delay_ms: delay,
     attempt: reconnectAttempts + 1,
   });
-  reconnectRetryAt = Date.now() + delay;
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = undefined;
-    reconnectRetryAt = undefined;
+  reconnect.schedule(delay, () => {
     nextConnectReason = "backoff";
     connect();
-  }, delay);
+  });
   publishSyncStatus();
 }
 
@@ -2599,7 +2594,6 @@ const replica = createReplica(syncDatabase, {
 let machinesSource: "none" | "replica" | "live" = "none";
 let retainedReplicaKey = "";
 let datasetFenced = false;
-let reconnectRetryAt: number | undefined;
 let outageFailures = 0;
 let lastLiveAt: number | undefined;
 
@@ -2998,7 +2992,7 @@ function syncStatusInput(): SyncStatusInput {
     socket: socket === undefined ? "none" : open ? "open" : "connecting",
     online: globalThis.navigator?.onLine ?? true,
     attempts: outageFailures,
-    ...(reconnectRetryAt !== undefined ? { retryAt: reconnectRetryAt } : {}),
+    ...(reconnect.retryAt !== undefined ? { retryAt: reconnect.retryAt } : {}),
     ...(capacity !== undefined ? { capacity: capacity.status } : {}),
     ...(capacity?.position !== undefined && capacity.position !== null ? { position: capacity.position } : {}),
     pausedForAuth: productSessionPausedForAuth,
