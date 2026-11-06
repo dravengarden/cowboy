@@ -5,7 +5,7 @@ import {
   assertNotEquals,
   assertRejects,
   assertStrictEquals,
-} from "@std/assert";
+} from "../../../tools/test-assert.ts";
 import { type CleanupHandle } from "./cleanup.ts";
 import { createOwnedCodeBuffers } from "./owner.ts";
 import { BufferClientError } from "./protocol.ts";

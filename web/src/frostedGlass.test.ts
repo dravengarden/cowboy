@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import {
   FROSTED_PILL_DROP_SHADOW_GEOMETRY,
   TURN_STATUS_PILL_MIN_HEIGHT,

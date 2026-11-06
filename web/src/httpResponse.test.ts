@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../../tools/test-assert.ts";
 import { expectHttpOk } from "./httpResponse.ts";
 
 test("HTTP failures keep the action, status and plaintext server reason", async () => {

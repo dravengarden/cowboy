@@ -13,6 +13,7 @@
 // Drawer.
 
 import CloseIcon from "@mui/icons-material/Close";
+import { MobileSheetContextDock, type SheetDockContext } from "./sheet-context-dock";
 import ArrowBackIosNewRounded from "@mui/icons-material/ArrowBackIosNewRounded";
 import {
   alpha,
@@ -176,6 +177,8 @@ function useReliableDismissTap(onClose: () => void): {
 }
 
 export interface BottomSheetProps {
+  readonly islandContext?: SheetDockContext | undefined;
+  readonly hideMobileTitle?: boolean;
   readonly open: boolean;
   readonly onClose: () => void;
   /** Heading shown at the top of the sheet/dialog. */
@@ -241,12 +244,14 @@ export function FloatingActionIsland(
     maxWidth,
     minHeight = 54,
     rim = "defined",
+    compact = false,
   }: {
     readonly children: ReactNode;
     readonly columns?: string;
     readonly maxWidth?: number | string;
     readonly minHeight?: number | string;
     readonly rim?: "defined" | "soft";
+    readonly compact?: boolean;
   },
 ): ReactNode {
   const softRim = rim === "soft";
@@ -267,14 +272,14 @@ export function FloatingActionIsland(
         maxWidth,
         minHeight,
         px: 0.5,
-        py: 0.375,
+        py: compact ? 0.125 : 0.375,
         display: "grid",
         gridTemplateColumns: columns,
         alignItems: "center",
-        gap: 0.5,
+        gap: compact ? 0 : 0.5,
         border: softRim ? 0 : 1,
         borderColor: (t) => alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.18 : 0.62),
-        borderRadius: 999,
+        borderRadius: compact ? "1.25rem" : 999,
         bgcolor: (t) => alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.48 : 0.42),
         backgroundImage: (t) =>
           [
@@ -286,6 +291,7 @@ export function FloatingActionIsland(
             } 0%, transparent 46%, ${alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.08 : 0.055)} 100%)`,
           ].join(", "),
         boxShadow: (t) => {
+          if (compact) return `0 4px 14px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.2 : 0.1)}`;
           const topHighlight = topHighlightOpacity(t.palette.mode === "dark");
           return [
             `0 14px 38px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.42 : 0.16)}`,
@@ -474,7 +480,7 @@ export function MobileSheetActionGroup(
   );
 }
 
-function IslandGlyphButton(
+export function IslandGlyphButton(
   { onActivate, label, children }: {
     readonly onActivate: () => void;
     readonly label: string;
@@ -639,6 +645,8 @@ export function BottomSheet(
     animateOnOpen = true,
     onBack,
     islandActions,
+    islandContext,
+    hideMobileTitle = false,
     denseHeader,
     fill = false,
   }: BottomSheetProps,
@@ -683,7 +691,7 @@ export function BottomSheet(
       footerOverlay={floatingActions}
       fillBody={fill && cover}
       grabber={denseHeader == null}
-      ariaLabel={typeof title === "string" ? title : undefined}
+      ariaLabel={islandContext?.title ?? (typeof title === "string" ? title : undefined)}
       // Dim the standalone status bar in lockstep with the scrim, and — since
       // surfaceColor is also what DetentSheet RESTORES the bar to on close —
       // make that resting colour the page's, not the sheet's. The status-bar
@@ -695,7 +703,7 @@ export function BottomSheet(
       // switchable from inside a sheet). Reactive, so a theme switch while the
       // sheet is open restores the new theme's colour. Inert when hosted.
       surfaceColor={theme.palette.background.default}
-      header={denseHeader != null ? denseHeader : title == null ? <Box sx={{ pb: 0.5 }} /> : (
+      header={islandContext || hideMobileTitle ? undefined : denseHeader != null ? denseHeader : title == null ? <Box sx={{ pb: 0.5 }} /> : (
         <Box
           sx={{
             display: "flex",
@@ -741,7 +749,9 @@ export function BottomSheet(
               </Box>
             )}
             {mobileDismiss === "footer"
-              ? onBack
+              ? islandContext
+                ? <MobileSheetContextDock context={islandContext} onBack={onBack} onClose={onClose} actions={islandActions} />
+                : onBack
                 ? <MobileSheetBackDismiss onBack={onBack} onClose={onClose} actions={islandActions} />
                 : <MobileSheetDismiss onClose={onClose} />
               : null}

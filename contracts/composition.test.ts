@@ -9,9 +9,7 @@ import {
 import { strictJson } from "./strict-json.ts";
 
 const fixture = JSON.parse(
-  await readFile(
-    new URL("../tests/fixtures/composition-v1.json", import.meta.url), "utf8",
-  ),
+  await readFile(new URL("../tests/fixtures/composition-v1.json", import.meta.url), "utf8"),
 );
 for (const vector of fixture.vectors) {
   test(`composition codec: ${vector.name}`, () => {
@@ -30,10 +28,7 @@ for (const vector of fixture.vectors) {
     } catch (caught) {
       error = (caught as Error).message;
     }
-    if (
-      (error === undefined) !== vector.decode ||
-      !vector.decode && error !== vector.error
-    ) {
+    if ((error === undefined) !== vector.decode || (!vector.decode && error !== vector.error)) {
       throw new Error(`codec mismatch: ${vector.name}: ${error}`);
     }
   });
@@ -63,10 +58,7 @@ test("strict JSON rejects byte/depth budgets and handles prototype keys as data"
     if (!failed) throw new Error("unbounded or invalid JSON accepted");
   }
   const object = strictJson('{"__proto__":{"owned":true}}', MAX_BYTES, 32);
-  if (
-    Object.getPrototypeOf(object) !== null ||
-    !Object.hasOwn(object as object, "__proto__")
-  ) {
+  if (Object.getPrototypeOf(object) !== null || !Object.hasOwn(object as object, "__proto__")) {
     throw new Error("prototype pollution");
   }
   if (strictJson('"\\ud83d\\ude80"', MAX_BYTES, 32) !== "🚀") {

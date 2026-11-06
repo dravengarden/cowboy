@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertNotEquals } from "@std/assert";
+import { assertEquals, assertNotEquals } from "../../../tools/test-assert.ts";
 import { nestedMarkerColor } from "./nestedMarkerColors.ts";
 
 test("nested shell emoji keep semantic colors across renders", () => {

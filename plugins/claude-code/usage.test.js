@@ -2,21 +2,16 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { test } from "bun:test";
-import {
-  fetchPrepaidCredits,
-  prepaidCredits,
-  spendCredits,
-} from "./collector/credits.js";
+import { fetchPrepaidCredits, prepaidCredits, spendCredits } from "./collector/credits.js";
 
 test("credit projections preserve zero and disabled, omit unknown money", () => {
-  equal(
-    prepaidCredits({ amount: 0, currency: null, auto_reload_settings: null }),
-    { balanceMinor: 0 },
-  );
-  equal(
-    spendCredits({ is_enabled: false, used_credits: 0, monthly_limit: null }),
-    { enabled: false, spentMinor: 0 },
-  );
+  equal(prepaidCredits({ amount: 0, currency: null, auto_reload_settings: null }), {
+    balanceMinor: 0,
+  });
+  equal(spendCredits({ is_enabled: false, used_credits: 0, monthly_limit: null }), {
+    enabled: false,
+    spentMinor: 0,
+  });
   equal(
     prepaidCredits({
       amount: 0,
@@ -50,32 +45,25 @@ test("balance lookup uses at most two reads and projects no account identifiers"
       ? { organization: { uuid: org } }
       : { amount: 123, currency: "USD", secret: "discard" };
   });
-  equal(paths, [
-    "/api/oauth/profile",
-    `/api/oauth/organizations/${org}/prepaid/credits`,
-  ]);
+  equal(paths, ["/api/oauth/profile", `/api/oauth/organizations/${org}/prepaid/credits`]);
   equal(result, { balanceMinor: 123, balanceCurrency: "USD" });
   let calls = 0;
-  await rejects(() =>
-    fetchPrepaidCredits(async () => {
-      calls++;
-      return { organization: { uuid: "../wrong" } };
-    }), "Claude credit balance is unavailable.");
+  await rejects(
+    () =>
+      fetchPrepaidCredits(async () => {
+        calls++;
+        return { organization: { uuid: "../wrong" } };
+      }),
+    "Claude credit balance is unavailable.",
+  );
   equal(calls, 1);
 });
 import { childEnvironment, collect, planName } from "./collector/index.js";
-import {
-  nativeJson,
-  quotaView,
-  REQUEST_ID,
-  USAGE_ARGS,
-} from "./collector/usage.js";
+import { nativeJson, quotaView, REQUEST_ID, USAGE_ARGS } from "./collector/usage.js";
 
 function equal(actual, expected) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(
-      `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
-    );
+    throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
   }
 }
 
@@ -93,8 +81,7 @@ const window = (utilization, resets_at = "2026-09-16T04:00:00Z") => ({
   utilization,
   resets_at,
 });
-const quota = (rate_limits) =>
-  quotaView({ rate_limits_available: true, rate_limits });
+const quota = (rate_limits) => quotaView({ rate_limits_available: true, rate_limits });
 
 test("native usage projects percentages, ISO resets, model windows and enabled extra usage", () => {
   const buckets = quota({
@@ -103,10 +90,13 @@ test("native usage projects percentages, ISO resets, model windows and enabled e
     seven_day_opus: window(55),
     seven_day_sonnet: null,
     seven_day_oauth_apps: window(null),
-    model_scoped: [{ display_name: "Opus", ...window(60) }, {
-      display_name: "Future",
-      ...window(100),
-    }],
+    model_scoped: [
+      { display_name: "Opus", ...window(60) },
+      {
+        display_name: "Future",
+        ...window(100),
+      },
+    ],
     extra_usage: {
       is_enabled: true,
       utilization: 12,
@@ -199,29 +189,24 @@ test("unknown quota stays unknown and malformed responses are transient failures
     },
   );
   equal(
-    quota({ five_hour: window(1, "0") }).rate_limits
-      .rateLimitsByLimitId["claude-five_hour"].primary,
+    quota({ five_hour: window(1, "0") }).rate_limits.rateLimitsByLimitId["claude-five_hour"]
+      .primary,
     { usedPercent: 1, windowDurationMins: 300 },
   );
-  for (
-    const rate_limits of [
-      null,
-      {},
-      { unknown_schema: [] },
-      { five_hour: "25%" },
-      { five_hour: window("25") },
-      { five_hour: window(-1) },
-      { five_hour: window(101) },
-      { five_hour: window(NaN) },
-      { model_scoped: {} },
-      { limits: {} },
-      { limits: ["weekly_scoped"] },
-    ]
-  ) {
-    await rejects(
-      () => quota(rate_limits),
-      "Claude Code usage is temporarily unavailable.",
-    );
+  for (const rate_limits of [
+    null,
+    {},
+    { unknown_schema: [] },
+    { five_hour: "25%" },
+    { five_hour: window("25") },
+    { five_hour: window(-1) },
+    { five_hour: window(101) },
+    { five_hour: window(NaN) },
+    { model_scoped: {} },
+    { limits: {} },
+    { limits: ["weekly_scoped"] },
+  ]) {
+    await rejects(() => quota(rate_limits), "Claude Code usage is temporarily unavailable.");
   }
 });
 
@@ -235,9 +220,9 @@ async function fixture(source, run) {
     const command = `${dir}/claude`;
     await writeFile(
       command,
-      `#!/bin/sh\nexec ${quote(process.execPath)} run --no-env-file ${
-        quote(`${dir}/fixture.mjs`)
-      } "$@"\n`,
+      `#!/bin/sh\nexec ${quote(process.execPath)} run --no-env-file ${quote(
+        `${dir}/fixture.mjs`,
+      )} "$@"\n`,
     );
     await chmod(command, 0o700);
     return await run({ command, env: {}, deadline: Date.now() + 3000 });
@@ -275,26 +260,26 @@ test("collector queries account quota without a user prompt and stops a lingerin
         throw new Error("Usage query must disable project effects and session persistence");
       }
       const input = await Bun.stdin.text();
-      if (input.trim() !== ${
-      JSON.stringify(JSON.stringify(request))
-    }) throw new Error("Unexpected prompt or command");
+      if (input.trim() !== ${JSON.stringify(
+        JSON.stringify(request),
+      )}) throw new Error("Unexpected prompt or command");
       console.log(JSON.stringify({type:"system", message:"ignored notification"}));
       console.log(JSON.stringify({type:"control_response", response:{request_id:"unrelated", subtype:"error"}}));
-      const bytes = new TextEncoder().encode(${
-      JSON.stringify(
-        JSON.stringify(reply({
-          subscription_type: "max",
-          rate_limits_available: true,
-          rate_limits: {
-            five_hour: window(40),
-            seven_day: window(70),
-            model_scoped: [{ display_name: "模型", ...window(5) }],
-          },
-          session: { total_cost_usd: 0 },
-          ignored_secret: "must-not-be-projected",
-        })) + "\r\n",
-      )
-    });
+      const bytes = new TextEncoder().encode(${JSON.stringify(
+        JSON.stringify(
+          reply({
+            subscription_type: "max",
+            rate_limits_available: true,
+            rate_limits: {
+              five_hour: window(40),
+              seven_day: window(70),
+              model_scoped: [{ display_name: "模型", ...window(5) }],
+            },
+            session: { total_cost_usd: 0 },
+            ignored_secret: "must-not-be-projected",
+          }),
+        ) + "\r\n",
+      )});
       for (const byte of bytes) await new Promise((done) => process.stdout.write(new Uint8Array([byte]), done));
       await new Promise(() => setInterval(() => {}, 1000));
     }
@@ -302,15 +287,8 @@ test("collector queries account quota without a user prompt and stops a lingerin
     async ({ command, env }) => {
       const result = await collect({ command, env, timeoutMs: 3000 });
       equal(result.account.account.planType, "max");
-      equal(
-        result.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary
-          .usedPercent,
-        40,
-      );
-      equal(
-        result.rate_limits.rateLimitsByLimitId["claude-model-模型"].limitName,
-        "模型",
-      );
+      equal(result.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary.usedPercent, 40);
+      equal(result.rate_limits.rateLimitsByLimitId["claude-model-模型"].limitName, "模型");
       equal(result.ignored_secret, undefined);
       equal(result.activity, undefined);
     },
@@ -326,19 +304,17 @@ test("collector joins reset grants to native quota after native credential refre
         console.log(JSON.stringify({loggedIn:true, subscriptionType:"max"}));
       } else {
         await Bun.stdin.text();
-        await Bun.write(${
-        JSON.stringify(join(directory, ".credentials.json"))
-      }, JSON.stringify({claudeAiOauth:{accessToken:"refreshed-fixture",scopes:["user:profile"],expiresAt:Date.now()+60000}}));
-        console.log(${
-        JSON.stringify(
+        await Bun.write(${JSON.stringify(
+          join(directory, ".credentials.json"),
+        )}, JSON.stringify({claudeAiOauth:{accessToken:"refreshed-fixture",scopes:["user:profile"],expiresAt:Date.now()+60000}}));
+        console.log(${JSON.stringify(
           JSON.stringify(
             reply({
               rate_limits_available: true,
               rate_limits: { five_hour: window(45) },
             }),
           ),
-        )
-      });
+        )});
       }
     `,
       async ({ command }) => {
@@ -366,21 +342,19 @@ test("collector joins reset grants to native quota after native credential refre
               cedar_ember: {
                 eligible: true,
                 next_grant_id: "launch",
-                grants: [{
-                  id: "launch",
-                  resets_left: 1,
-                  clears: ["five_hour"],
-                  usable_now: true,
-                }],
+                grants: [
+                  {
+                    id: "launch",
+                    resets_left: 1,
+                    clears: ["five_hour"],
+                    usable_now: true,
+                  },
+                ],
               },
             });
           },
         });
-        equal(
-          result.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary
-            .usedPercent,
-          45,
-        );
+        equal(result.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary.usedPercent, 45);
         equal(result.rate_limits.rateLimitResetCredits.availableCount, 1);
         equal(paths.length, 3);
         equal(result.rate_limits.usageCredits, {
@@ -389,31 +363,25 @@ test("collector joins reset grants to native quota after native credential refre
           autoReloadEnabled: false,
           balanceStatus: "available",
         });
-        equal(
-          result.rate_limits.rateLimitResetCredits.credits[0].id,
-          "launch:1",
-        );
+        equal(result.rate_limits.rateLimitResetCredits.credits[0].id, "launch:1");
         equal(JSON.stringify(result).includes("refreshed-fixture"), false);
-        for (
-          const fetchImpl of [
-            async () => {
-              throw new Error("secret-diagnostic");
-            },
-            async () => new Response("secret-diagnostic", { status: 401 }),
-            async () =>
-              Response.json({
-                cedar_ember: { eligible: true, grants: [{ id: "bad" }] },
-              }),
-          ]
-        ) {
+        for (const fetchImpl of [
+          async () => {
+            throw new Error("secret-diagnostic");
+          },
+          async () => new Response("secret-diagnostic", { status: 401 }),
+          async () =>
+            Response.json({
+              cedar_ember: { eligible: true, grants: [{ id: "bad" }] },
+            }),
+        ]) {
           const degraded = await collect({
             command,
             env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: directory },
             fetchImpl,
           });
           equal(
-            degraded.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary
-              .usedPercent,
+            degraded.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary.usedPercent,
             45,
           );
           equal(degraded.rate_limits.rateLimitResetCredits, undefined);
@@ -425,8 +393,7 @@ test("collector joins reset grants to native quota after native credential refre
           env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: join(directory, "missing") },
         });
         equal(
-          missingCredential.rate_limits.rateLimitsByLimitId["claude-five_hour"]
-            .primary.usedPercent,
+          missingCredential.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary.usedPercent,
           45,
         );
         equal(missingCredential.rate_limits.rateLimitResetCredits, undefined);
@@ -438,24 +405,16 @@ test("collector joins reset grants to native quota after native credential refre
 });
 
 test("native stream bounds timeout, output, malformed JSON, EOF and wrong response ids", async () => {
-  for (
-    const [source, message] of [
-      ["setInterval(() => {}, 1000);", "Claude Code usage timed out."],
-      [
-        'console.log("x".repeat(300000));',
-        "Claude Code usage is temporarily unavailable.",
-      ],
-      [
-        'console.log("not JSON secret-value");',
-        "Claude Code usage is temporarily unavailable.",
-      ],
-      [
-        'console.log(JSON.stringify({type:"control_response",response:{request_id:"wrong"}}));',
-        "Claude Code usage is temporarily unavailable.",
-      ],
-      ["", "Claude Code usage is temporarily unavailable."],
-    ]
-  ) {
+  for (const [source, message] of [
+    ["setInterval(() => {}, 1000);", "Claude Code usage timed out."],
+    ['console.log("x".repeat(300000));', "Claude Code usage is temporarily unavailable."],
+    ['console.log("not JSON secret-value");', "Claude Code usage is temporarily unavailable."],
+    [
+      'console.log(JSON.stringify({type:"control_response",response:{request_id:"wrong"}}));',
+      "Claude Code usage is temporarily unavailable.",
+    ],
+    ["", "Claude Code usage is temporarily unavailable."],
+  ]) {
     await fixture(source, (execution) =>
       rejects(
         () =>
@@ -464,34 +423,32 @@ test("native stream bounds timeout, output, malformed JSON, EOF and wrong respon
             deadline: Date.now() + 500,
           }),
         message,
-      ));
+      ),
+    );
   }
 });
 
 test("native control errors redact provider diagnostics and classify expired authentication", async () => {
-  for (
-    const [diagnostic, message] of [
-      ["401 secret-token", "Claude Code usage authentication required."],
-      [
-        "unknown request get_usage secret-token",
-        "Claude Code usage query is unsupported by this version.",
-      ],
-      ["429 secret-token", "Claude Code usage is temporarily unavailable."],
-    ]
-  ) {
+  for (const [diagnostic, message] of [
+    ["401 secret-token", "Claude Code usage authentication required."],
+    [
+      "unknown request get_usage secret-token",
+      "Claude Code usage query is unsupported by this version.",
+    ],
+    ["429 secret-token", "Claude Code usage is temporarily unavailable."],
+  ]) {
     await fixture(
-      `console.log(${
-        JSON.stringify(JSON.stringify({
+      `console.log(${JSON.stringify(
+        JSON.stringify({
           type: "control_response",
           response: {
             subtype: "error",
             request_id: REQUEST_ID,
             error: diagnostic,
           },
-        }))
-      });`,
-      (execution) =>
-        rejects(() => nativeJson(USAGE_ARGS, request, execution), message),
+        }),
+      )});`,
+      (execution) => rejects(() => nativeJson(USAGE_ARGS, request, execution), message),
     );
   }
 });
@@ -500,10 +457,7 @@ test("signed-out account status prevents quota requests", async () => {
   await fixture(
     "console.log(JSON.stringify({loggedIn:false})); process.exit(1);",
     ({ command, env }) =>
-      rejects(
-        () => collect({ command, env }),
-        "Claude Code usage authentication required.",
-      ),
+      rejects(() => collect({ command, env }), "Claude Code usage authentication required."),
   );
 });
 
@@ -517,9 +471,7 @@ test("collector child environment excludes inherited routing and credentials", (
     equal(env.DISABLE_TELEMETRY, "1");
     equal(env.DISABLE_ERROR_REPORTING, "1");
     equal(
-      Object.keys(env).filter((key) =>
-        /API_KEY|TOKEN|PROXY|BASE_URL/.test(key)
-      ),
+      Object.keys(env).filter((key) => /API_KEY|TOKEN|PROXY|BASE_URL/.test(key)),
       [],
     );
   } finally {
@@ -540,9 +492,7 @@ test("subscriber quota remains reachable when the parent disables nonessential t
         await Bun.stdin.text();
         const blocked = process.env[${JSON.stringify(key)}] === "1";
         console.log(JSON.stringify({type:"control_response", response:{
-          subtype:"success", request_id:${
-        JSON.stringify(REQUEST_ID)
-      }, response:{
+          subtype:"success", request_id:${JSON.stringify(REQUEST_ID)}, response:{
             rate_limits_available:true,
             rate_limits: blocked ? null : {five_hour:{utilization:4}}
           }
@@ -551,11 +501,7 @@ test("subscriber quota remains reachable when the parent disables nonessential t
     `,
       async ({ command }) => {
         const result = await collect({ command });
-        equal(
-          result.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary
-            .usedPercent,
-          4,
-        );
+        equal(result.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary.usedPercent, 4);
       },
     );
   } finally {

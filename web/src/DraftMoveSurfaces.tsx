@@ -1,4 +1,4 @@
-import { type Dispatch, type SetStateAction, useState } from "react";
+import { useState } from "react";
 import { alpha, Button, Snackbar, Stack } from "@mui/material";
 import { DraftDestinationPicker } from "./DraftDestinationPicker";
 import { moveDraft, openSession } from "./store";
@@ -10,11 +10,11 @@ import { navigationHaptic } from "./haptic";
 export function DraftMoveSurfaces({
   sessionId,
   moveSrcId,
-  setMoveSrcId,
+  closeMove,
 }: {
   sessionId: string;
   moveSrcId: string | null;
-  setMoveSrcId: Dispatch<SetStateAction<string | null>>;
+  closeMove: () => void;
 }): React.JSX.Element {
   const [moveUndo, setMoveUndo] = useState<
     { id: string; toId: string; toTitle: string } | null
@@ -25,11 +25,11 @@ export function DraftMoveSurfaces({
       <DraftDestinationPicker
         title="Move draft to…"
         sourceId={sessionId}
-        onClose={(): void => setMoveSrcId(null)}
+        onClose={closeMove}
         onPick={(destination): void => {
           moveDraft(sessionId, moveSrcId, destination.id);
           setMoveUndo({ id: moveSrcId, toId: destination.id, toTitle: destination.title });
-          setMoveSrcId(null);
+          closeMove();
         }}
       />
     )}

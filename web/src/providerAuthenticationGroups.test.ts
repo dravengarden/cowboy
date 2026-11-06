@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
 
 test("credential families remain one group when a future Provider joins", () => {

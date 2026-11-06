@@ -24,19 +24,13 @@ export const USAGE_ARGS = [
 ];
 
 function record(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value
-    : undefined;
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
 }
 
 /** Unknown native diagnostics may contain credentials; expose closed messages. */
 function nativeFailure(detail) {
   const message = typeof detail === "string" ? detail.toLowerCase() : "";
-  if (
-    /unauthorized|forbidden|not logged in|not signed in|\b40[13]\b/.test(
-      message,
-    )
-  ) {
+  if (/unauthorized|forbidden|not logged in|not signed in|\b40[13]\b/.test(message)) {
     return new Error("Claude Code usage authentication required.");
   }
   if (/unsupported|unknown.*request|method not found/.test(message)) {
@@ -94,9 +88,7 @@ export async function nativeJson(args, request, { command, env, deadline }) {
     if (request) {
       const writer = child.stdin.getWriter();
       try {
-        await writer.write(
-          new TextEncoder().encode(`${JSON.stringify(request)}\n`),
-        );
+        await writer.write(new TextEncoder().encode(`${JSON.stringify(request)}\n`));
         await writer.close();
       } finally {
         writer.releaseLock();
@@ -174,14 +166,16 @@ function quotaBucket(window, label, minutes) {
   if (window.utilization == null) return undefined;
   if (
     typeof window.utilization !== "number" ||
-    !Number.isFinite(window.utilization) || window.utilization < 0 ||
+    !Number.isFinite(window.utilization) ||
+    window.utilization < 0 ||
     window.utilization > 100
-  ) throw nativeFailure();
-  const reset = typeof window.resets_at === "string" &&
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
-        .test(window.resets_at)
-    ? Date.parse(window.resets_at)
-    : NaN;
+  )
+    throw nativeFailure();
+  const reset =
+    typeof window.resets_at === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(window.resets_at)
+      ? Date.parse(window.resets_at)
+      : NaN;
   return {
     ...(label ? { limitName: label } : {}),
     primary: {
@@ -221,9 +215,7 @@ function scopedModelWindows(rows) {
 
 /** get_usage reports 0–100 percentages and ISO timestamps. */
 export function quotaView(response) {
-  if (
-    !record(response) || typeof response.rate_limits_available !== "boolean"
-  ) {
+  if (!record(response) || typeof response.rate_limits_available !== "boolean") {
     throw nativeFailure();
   }
   if (!response.rate_limits_available) return {};
@@ -242,15 +234,10 @@ export function quotaView(response) {
       throw nativeFailure();
     }
   }
-  const scoped = [
-    ...(limits.model_scoped ?? []),
-    ...scopedModelWindows(limits.limits ?? []),
-  ];
+  const scoped = [...(limits.model_scoped ?? []), ...scopedModelWindows(limits.limits ?? [])];
   const models = [];
   for (const window of scoped.slice(0, 32)) {
-    const label = typeof window?.display_name === "string"
-      ? window.display_name.trim()
-      : "";
+    const label = typeof window?.display_name === "string" ? window.display_name.trim() : "";
     if (!label || label.length > 100 || /[\u0000-\u001f\u007f]/.test(label)) {
       continue;
     }
@@ -260,10 +247,7 @@ export function quotaView(response) {
   }
   const buckets = {};
   for (const [key, label, minutes] of WINDOWS) {
-    if (
-      label &&
-      models.some(([name]) => name.toLowerCase() === label.toLowerCase())
-    ) continue;
+    if (label && models.some(([name]) => name.toLowerCase() === label.toLowerCase())) continue;
     const bucket = quotaBucket(limits[key], label, minutes);
     if (bucket) buckets[`claude-${key}`] = bucket;
   }

@@ -13,8 +13,7 @@ function fixture({ startTurnDelay = null } = {}) {
   const steers = [];
   class Agent {
     client = {
-      extNotification: async (method, params) =>
-        notices.push({ method, params }),
+      extNotification: async (method, params) => notices.push({ method, params }),
     };
     foregroundWork = new Map();
     sessions = {
@@ -77,21 +76,13 @@ const steerTo = (cycle, priority = "now") => ({
 test("only a self-started cycle gets a name, announced at its start and end", () => {
   const { agent, cycles } = fixture();
   agent.startForeground("one", { turn: true });
-  assert.equal(
-    currentNativeCycle(agent, "one"),
-    undefined,
-    "a prompt turn is not a cycle",
-  );
+  assert.equal(currentNativeCycle(agent, "one"), undefined, "a prompt turn is not a cycle");
   agent.endForeground("one", agent.foregroundWork.get("one").owner);
   agent.startForeground("one", AUTONOMOUS);
   const first = currentNativeCycle(agent, "one");
   assert.match(first, /^native-/);
   agent.startForeground("one", AUTONOMOUS);
-  assert.equal(
-    currentNativeCycle(agent, "one"),
-    first,
-    "the same work keeps its name",
-  );
+  assert.equal(currentNativeCycle(agent, "one"), first, "the same work keeps its name");
   agent.endForeground("one", AUTONOMOUS);
   agent.startForeground("one", AUTONOMOUS);
   const second = currentNativeCycle(agent, "one");
@@ -109,11 +100,7 @@ test("a steer joins exactly the named cycle as a new turn with its priority", as
   });
   assert.equal(pushed.length, 1);
   assert.equal(pushed[0].priority, "next");
-  assert.equal(
-    agent.sessions.one.input.push,
-    push,
-    "the push override is gone",
-  );
+  assert.equal(agent.sessions.one.input.push, push, "the push override is gone");
   assert.equal(steers.length, 0, "the upstream refusal path is not used");
   // The turn took the work over: same cycle, and a second steer goes into
   // that turn through the ordinary path.
@@ -138,10 +125,7 @@ test("a stale, foreign or ended cycle is refused without reaching Claude", async
   assert.deepEqual(await agent.steer(steerTo(cycle)), refused);
   agent.sessions.one.queryClosed = true;
   agent.startForeground("one", AUTONOMOUS);
-  assert.deepEqual(
-    await agent.steer(steerTo(currentNativeCycle(agent, "one"))),
-    refused,
-  );
+  assert.deepEqual(await agent.steer(steerTo(currentNativeCycle(agent, "one"))), refused);
   assert.deepEqual(pushed, []);
   assert.deepEqual(steers, []);
 });
@@ -171,11 +155,7 @@ test("a cycle that ends while the turn is admitted never receives the message", 
   assert.deepEqual(await agent.steer(steerTo(cycle)), { outcome: "injected" });
   assert.notEqual(currentNativeCycle(agent, "one"), cycle);
   assert.equal(pushed.length, 1);
-  assert.equal(
-    pushed[0].priority,
-    undefined,
-    "queued behind, not into, the new cycle",
-  );
+  assert.equal(pushed[0].priority, undefined, "queued behind, not into, the new cycle");
 });
 
 test("a refusal before the turn is queued restores the input and delivers nothing", async () => {
@@ -186,10 +166,10 @@ test("a refusal before the turn is queued restores the input and delivers nothin
   });
   agent.startForeground("one", AUTONOMOUS);
   const push = agent.sessions.one.input.push;
-  assert.deepEqual(
-    await agent.steer(steerTo(currentNativeCycle(agent, "one"))),
-    { outcome: "promptRequired", reason: "noRunningTurn" },
-  );
+  assert.deepEqual(await agent.steer(steerTo(currentNativeCycle(agent, "one"))), {
+    outcome: "promptRequired",
+    reason: "noRunningTurn",
+  });
   assert.equal(agent.sessions.one.input.push, push);
   assert.deepEqual(pushed, []);
 });

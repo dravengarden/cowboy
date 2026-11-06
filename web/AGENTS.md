@@ -38,7 +38,7 @@ routinely breaks another.
 
 ## Editing discipline (project-specific)
 
-- **NEVER `dprint fmt` `src/App.tsx`** — it is a pre-existing 4-space outlier
+- **NEVER `biome format --write` `src/App.tsx`** — it is a pre-existing 4-space outlier
   (rest of `src/` is 2-space); a format would wholesale-reflow ~3700 lines.
   Match 4-space when editing it.
 - App-shell primitives are Cowboy-owned under `src/components/app-shell`.
@@ -49,7 +49,7 @@ routinely breaks another.
   Markdown/code renderer; never replace readable source with broken media.
 - Quality gate before commit: `bun run typecheck` + `bun run lint` +
   `bun run test` in `web/` (the cowboy web gate). Do not run a repo-wide
-  `dprint fmt`. Tests use `bun:test`; `test-preload.ts` supplies the browser
+  `biome format --write`. Tests use `bun:test`; `test-preload.ts` supplies the browser
   globals Bun lacks.
 - Browser UI conformance must use the real Cowboy theme through
   `src/browserProductTheme.tsx` (or `useThemeMode` when testing theme changes).
@@ -106,6 +106,23 @@ chase them. Do not hide or snapshot the editor, re-pin the rail, scale
 the peek, or freeze the session list to make a swipe cheaper.
 
 ## Desktop and mobile are separate products
+
+Mobile cover readers and inspectors use the shared `Sheet.islandContext` (or
+`MobileSheetContextDock` for direct DetentSheet owners) to place identity and
+status in the reusable `SheetContextSummary` beside the independent round
+navigation island. Place navigation on the left for left-handed access; match
+the summary's minimum height and floating surface treatment to the controls.
+Facts wrap across the available width; excess content scrolls
+within the bounded summary. The summary title opens Details; avoid stacking a
+full-width information card over a centered navigation island. Use an action rail when multiple
+commands are useful. Do not hide common information just to shrink the dock.
+Empty rails consume no space. Avoid a duplicate
+top title/status bar. Preserve specialized multi-action navigators such as Tool
+details; use `hideMobileTitle` to remove redundant generic titles. Forms,
+editors, confirmation cards and connectivity notices retain their own surfaces.
+Reader scroll clearance must consume `--cowboy-sheet-dock-clearance` with a
+legacy fallback so large text cannot cover the last item. Details navigation
+must preserve the mounted transcript and its reading position.
 
 - Mobile is touch-first: single-task focus, large targets, progressive
   disclosure, safe system-keyboard behaviour, and native gestures.

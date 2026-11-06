@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertStrictEquals } from "@std/assert";
+import { assertEquals, assertStrictEquals } from "../../tools/test-assert.ts";
 import type { Envelope } from "./protocol.ts";
 import {
   advanceTimelinePresentation,

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { compactTokens, contextModel, modelUsageSummary, sessionModelUsage } from "./modelUsage";
 
 test("model usage reads the worker's totals and ignores malformed rows", () => {

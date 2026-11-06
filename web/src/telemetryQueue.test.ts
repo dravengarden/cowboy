@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "../../tools/test-assert.ts";
 import {
   cleanTelemetryAttributes,
   cleanTelemetryMessage,

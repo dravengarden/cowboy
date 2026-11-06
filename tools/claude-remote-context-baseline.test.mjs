@@ -8,17 +8,11 @@ import {
   instructionFiles,
   nestedInstructions,
 } from "../plugins/claude-code/runtime/instructions.mjs";
-import {
-  UNTRUSTED_DOWNLOADS,
-  WorkspaceTools,
-} from "../plugins/claude-code/runtime/tools.mjs";
+import { UNTRUSTED_DOWNLOADS, WorkspaceTools } from "../plugins/claude-code/runtime/tools.mjs";
 import { unlabeledContext } from "../plugins/claude-code/runtime/context-mod.js";
 
 const baseline = JSON.parse(
-  readFileSync(
-    new URL("./claude_context_native_baseline.json", import.meta.url),
-    "utf8",
-  ),
+  readFileSync(new URL("./claude_context_native_baseline.json", import.meta.url), "utf8"),
 );
 
 // The probe's tree, under a fixed root (tools/claude_context_native_probe.py).
@@ -28,8 +22,7 @@ const FILES = {
   "CLAUDE.local.md": "ROOT_CLAUDE_LOCAL_MD\n",
   ".claude/CLAUDE.md": "DOT_CLAUDE_CLAUDE_MD\n",
   ".claude/rules/always.md": "RULE_ALWAYS\n",
-  ".claude/rules/scoped.md":
-    '---\npaths:\n  - "sub/**"\n---\nRULE_SCOPED_SUB\n',
+  ".claude/rules/scoped.md": '---\npaths:\n  - "sub/**"\n---\nRULE_SCOPED_SUB\n',
   "AGENTS.md": "ROOT_AGENTS_MD\n",
   "sub/CLAUDE.md": "NESTED_SUB_CLAUDE_MD\n",
   "sub/AGENTS.md": "NESTED_SUB_AGENTS_MD\n",
@@ -56,13 +49,15 @@ function io(files) {
   return {
     read: async (path) => tree[path],
     rules: async (directory) =>
-      Object.keys(tree).filter((path) => path.startsWith(directory + "/"))
+      Object.keys(tree)
+        .filter((path) => path.startsWith(directory + "/"))
         .sort(),
   };
 }
 
 const markers = (files) =>
-  files.flatMap(({ content }) => content.split("\n"))
+  files
+    .flatMap(({ content }) => content.split("\n"))
     .filter((line) => /^[A-Z0-9_]+$/.test(line) && line.includes("_"))
     .sort();
 
@@ -76,9 +71,10 @@ const STEPS = {
   "read ../other/f.txt": "/r/parent/other/f.txt",
 };
 
-for (
-  const [name, files] of [["discovery", FILES], ["agents_only", AGENTS_ONLY]]
-) {
+for (const [name, files] of [
+  ["discovery", FILES],
+  ["agents_only", AGENTS_ONLY],
+]) {
   test(`${name}: instruction files load and attach as natively`, async () => {
     const { read, rules } = io(files);
     const { files: initial, conditional } = await instructionFiles({
@@ -110,13 +106,15 @@ const replies = (answers) => ({
 });
 
 test("the Git section reads as native's inside a repository", async () => {
-  const git = await WorkspaceTools.prototype.gitStatus.call(replies({
-    "rev-parse --is-inside-work-tree": { exitCode: 0, output: "true\n" },
-    "branch --show-current": { exitCode: 0, output: "main\n" },
-    "rev-parse --verify --quiet refs/heads/main": { exitCode: 0, output: "x" },
-    "status --short": { exitCode: 0, output: "?? b.txt\n" },
-    "log --oneline -n 5": { exitCode: 0, output: "COMMIT first\n" },
-  }));
+  const git = await WorkspaceTools.prototype.gitStatus.call(
+    replies({
+      "rev-parse --is-inside-work-tree": { exitCode: 0, output: "true\n" },
+      "branch --show-current": { exitCode: 0, output: "main\n" },
+      "rev-parse --verify --quiet refs/heads/main": { exitCode: 0, output: "x" },
+      "status --short": { exitCode: 0, output: "?? b.txt\n" },
+      "log --oneline -n 5": { exitCode: 0, output: "COMMIT first\n" },
+    }),
+  );
   assert.deepEqual(git.split("\n"), baseline.git_repository.git_status_lines);
 });
 
@@ -124,10 +122,7 @@ test("outside a repository native has no Git section", async () => {
   const observed = baseline.no_repository;
   assert.equal(observed.runtime_is_repository, false);
   assert.equal(observed.git_status_header, false);
-  assert.equal(
-    await WorkspaceTools.prototype.gitStatus.call(replies({})),
-    undefined,
-  );
+  assert.equal(await WorkspaceTools.prototype.gitStatus.call(replies({})), undefined);
 });
 
 test("the environment block has native's lines", () => {
@@ -136,12 +131,10 @@ test("the environment block has native's lines", () => {
     new URL("../plugins/claude-code/runtime/tools.mjs", import.meta.url),
     "utf8",
   );
-  for (
-    const [name, observed] of [
-      ["git_repository", "true"],
-      ["no_repository", "false"],
-    ]
-  ) {
+  for (const [name, observed] of [
+    ["git_repository", "true"],
+    ["no_repository", "false"],
+  ]) {
     const lines = baseline[name].environment_lines;
     assert.deepEqual(lines, [
       "You have been invoked in the following environment: ",

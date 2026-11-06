@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { createClientConnection } from "./clientConnection";
 
 test("all update signals verify the loaded bundle, and a failed navigation cannot loop", async () => {

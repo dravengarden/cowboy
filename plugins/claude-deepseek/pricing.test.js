@@ -15,21 +15,9 @@ function close(actual, expected, message) {
 
 test("DeepSeek pricing normalizes current and compatibility model names", () => {
   equal(pricingInternals.modelFamily("deepseek-flash"), "flash", "flash");
-  equal(
-    pricingInternals.modelFamily("deepseek-flash[1m]"),
-    "flash",
-    "flash 1m",
-  );
-  equal(
-    pricingInternals.modelFamily("deepseek-v4-flash"),
-    "flash",
-    "retained flash alias",
-  );
-  equal(
-    pricingInternals.modelFamily("deepseek/deepseek-chat"),
-    "flash",
-    "alias",
-  );
+  equal(pricingInternals.modelFamily("deepseek-flash[1m]"), "flash", "flash 1m");
+  equal(pricingInternals.modelFamily("deepseek-v4-flash"), "flash", "retained flash alias");
+  equal(pricingInternals.modelFamily("deepseek/deepseek-chat"), "flash", "alias");
   equal(pricingInternals.modelFamily("deepseek-v4-pro[1m]"), "pro", "pro");
   equal(pricingInternals.modelFamily("future-model"), undefined, "unknown");
 });
@@ -95,15 +83,7 @@ test("DeepSeek pricing adds per-request Search and Fetch to every cost view", ()
   const summary = activity.cost.summary;
   equal(summary.searchRequests, 4, "summary searches");
   close(summary.serverToolCost, 0.03, "summary server tool cost");
-  equal(
-    summary.unknownModelRequests,
-    1,
-    "the Fetch API is not an unknown model",
-  );
+  equal(summary.unknownModelRequests, 1, "the Fetch API is not an unknown model");
   equal(activity.pricing.serverTools.searchCnyPerThousand, 5, "search price");
-  equal(
-    activity.cost.cacheProtection.summary.serverToolCost,
-    0,
-    "keepalives never search",
-  );
+  equal(activity.cost.cacheProtection.summary.serverToolCost, 0, "keepalives never search");
 });

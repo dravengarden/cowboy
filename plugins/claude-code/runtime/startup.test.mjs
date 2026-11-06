@@ -1,24 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import {
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import {
-  parseStartupSurvey,
-  STARTUP_SURVEY,
-  WorkspaceTools,
-} from "./tools.mjs";
+import { parseStartupSurvey, STARTUP_SURVEY, WorkspaceTools } from "./tools.mjs";
 
 // The executor's file and process methods over this machine. `refuse`
 // rejects a process start whose argv it matches, as a target without the
@@ -30,9 +17,7 @@ function localConnection(home, { refuse, path } = {}) {
     Object.assign(new Error(error.message), {
       remote: {
         code: -32000,
-        message: error.code === "ENOENT"
-          ? "No such file or directory (os error 2)"
-          : error.message,
+        message: error.code === "ENOENT" ? "No such file or directory (os error 2)" : error.message,
       },
     });
   return {
@@ -145,8 +130,7 @@ async function tree(t) {
   // A linked candidate is read through its link; a broken one is absent.
   await symlink(join(home, "notes.md"), join(home, ".claude", "CLAUDE.md"));
   await symlink(join(root, "missing"), join(cwd, "CLAUDE.md"));
-  const git = (...args) =>
-    execFileSync("git", ["-C", repository, ...args], { stdio: "ignore" });
+  const git = (...args) => execFileSync("git", ["-C", repository, ...args], { stdio: "ignore" });
   git("init", "-q", "-b", "main");
   git("config", "user.name", "Startup Test");
   git("config", "user.email", "startup@example.invalid");
@@ -158,7 +142,8 @@ async function tree(t) {
 test("a rejected sandbox keeps its diagnostic instead of blaming Bash", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "cowboy-startup-refused-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const diagnostic = "error building bubblewrap command: " +
+  const diagnostic =
+    "error building bubblewrap command: " +
     "app-server socket directory must be a user-owned directory with mode 0700";
   let starts = 0;
   const connection = {
@@ -170,38 +155,49 @@ test("a rejected sandbox keeps its diagnostic instead of blaming Bash", async (t
       }
       assert.equal(method, "process/read");
       return {
-        chunks: params.afterSeq === null
-          ? [{
-            seq: 1,
-            stream: "stderr",
-            chunk: Buffer.from(diagnostic + "\nprivate-startup-value\n")
-              .toString("base64"),
-          }]
-          : [],
+        chunks:
+          params.afterSeq === null
+            ? [
+                {
+                  seq: 1,
+                  stream: "stderr",
+                  chunk: Buffer.from(diagnostic + "\nprivate-startup-value\n").toString("base64"),
+                },
+              ]
+            : [],
         exited: true,
         closed: true,
         exitCode: 1,
       };
     },
   };
-  const tools = new WorkspaceTools(connection, {
-    workspace: { cwd: directory },
-    environment: { id: "refused" },
-    managed: { profile: "read_only_v1" },
-  }, join(directory, "state.json"));
+  const tools = new WorkspaceTools(
+    connection,
+    {
+      workspace: { cwd: directory },
+      environment: { id: "refused" },
+      managed: { profile: "read_only_v1" },
+    },
+    join(directory, "state.json"),
+  );
   await assert.rejects(tools.begin(), {
-    message: "Target Bash probe failed (exit 1): " +
+    message:
+      "Target Bash probe failed (exit 1): " +
       "execution sandbox requires a real user-owned app-server socket directory with mode 0700; symlinks are refused",
   });
   assert.equal(starts, 2, "survey and fallback probe; no unbounded retry");
 });
 
 test("unrecognized startup failures report status without private output", async () => {
-  const tools = new WorkspaceTools({ info: {} }, {
-    workspace: { cwd: "/fixture" },
-    environment: { id: "refused" },
-    managed: { profile: "read_only_v1" },
-  }, "/unused");
+  const tools = new WorkspaceTools(
+    { info: {} },
+    {
+      workspace: { cwd: "/fixture" },
+      environment: { id: "refused" },
+      managed: { profile: "read_only_v1" },
+    },
+    "/unused",
+  );
   tools.command = async () => ({
     exitCode: 127,
     output: "private-startup-value\n".repeat(1000),
@@ -223,11 +219,7 @@ async function discover(t, { home, cwd }, options) {
   await tools.load();
   // As launch.mjs: the walks start beside context() and share its survey.
   const contextStarted = tools.context();
-  const walks = Promise.all([
-    tools.projectHooks(),
-    tools.skillFiles(),
-    tools.mcpInputs(),
-  ]);
+  const walks = Promise.all([tools.projectHooks(), tools.skillFiles(), tools.mcpInputs()]);
   const context = await contextStarted;
   const [hooks, skills, mcp] = await walks;
   tools.endStartup();
@@ -260,13 +252,13 @@ test("the startup survey answers every walk as the per-walk queries do", async (
   );
   assert.match(surveyed.result.context.git, /Current branch: main/);
   assert.match(surveyed.result.context.git, /Git user: Startup Test/);
-  assert.deepEqual(
-    surveyed.result.skills.map((skill) => skill.name).sort(),
-    ["alpha", "beta", "deploy"],
-  );
+  assert.deepEqual(surveyed.result.skills.map((skill) => skill.name).sort(), [
+    "alpha",
+    "beta",
+    "deploy",
+  ]);
   assert.equal(surveyed.result.mcp.repositoryRoot, dirname(paths.cwd));
-  const count = (calls, method) =>
-    calls.filter((call) => call === method).length;
+  const count = (calls, method) => calls.filter((call) => call === method).length;
   // Only the broken link and the import are asked about individually.
   assert.ok(count(surveyed.calls, "fs/getMetadata") <= 2);
   assert.ok(
@@ -310,9 +302,7 @@ test("long Git answers render as the per-walk queries render them", async (t) =>
   // Every listed subject is complete (the newest commit is "tracked").
   for (let index = 1; index < 5; index++) {
     assert.ok(
-      surveyed.result.context.git.includes(
-        `${index} ${"subject 中文 ".repeat(100).trim()}`,
-      ),
+      surveyed.result.context.git.includes(`${index} ${"subject 中文 ".repeat(100).trim()}`),
     );
   }
 });
@@ -338,8 +328,8 @@ test("listed names with newlines answer through the per-walk queries", async (t)
   });
   assert.deepEqual(surveyed.result, queried.result);
   assert.ok(
-    surveyed.result.skills.some((skill) =>
-      skill.name === "alpha" && skill.content.includes("ALPHA")
+    surveyed.result.skills.some(
+      (skill) => skill.name === "alpha" && skill.content.includes("ALPHA"),
     ),
   );
 });
@@ -349,39 +339,26 @@ test("a target missing a survey utility answers through the per-walk queries", a
   // Every utility either path uses, except the survey's base64.
   const bin = join(paths.root, "bin");
   await mkdir(bin);
-  for (
-    const tool of [
-      "bash",
-      "sh",
-      "git",
-      "find",
-      "uname",
-      "head",
-      "tr",
-      "sed",
-      "wc",
-      "printenv",
-    ]
-  ) {
-    const resolved = execFileSync("bash", [
-      "-c",
-      'command -v "$1"',
-      "bash",
-      tool,
-    ], {
+  for (const tool of [
+    "bash",
+    "sh",
+    "git",
+    "find",
+    "uname",
+    "head",
+    "tr",
+    "sed",
+    "wc",
+    "printenv",
+  ]) {
+    const resolved = execFileSync("bash", ["-c", 'command -v "$1"', "bash", tool], {
       encoding: "utf8",
     }).trim();
     await symlink(resolved, join(bin, tool));
   }
   const status = (() => {
     try {
-      execFileSync(join(bin, "bash"), [
-        "-c",
-        STARTUP_SURVEY,
-        "bash",
-        "--",
-        "--",
-      ], {
+      execFileSync(join(bin, "bash"), ["-c", STARTUP_SURVEY, "bash", "--", "--"], {
         env: { PATH: bin },
         stdio: "ignore",
       });
@@ -442,18 +419,15 @@ test("a malformed survey falls back to the per-walk queries", () => {
     size: 12,
   });
   assert.equal(parsed.facts.has("/h/.claude/skills/s/SKILL.md"), false);
-  assert.deepEqual(parsed.skills.get("/h/.claude/skills"), [
-    "/h/.claude/skills/s/SKILL.md",
-  ]);
+  assert.deepEqual(parsed.skills.get("/h/.claude/skills"), ["/h/.claude/skills/s/SKILL.md"]);
   const refused = (output, expected = candidates) =>
     assert.equal(parseStartupSurvey(output, expected), undefined);
   // An absent answer for an overlong name is not trusted.
   const long = "/" + "x".repeat(300) + "/CLAUDE.md";
   assert.equal(
-    parseStartupSurvey(survey(head, toplevel, [...tail.slice(0, -1), "A"]), [
-      "/a",
+    parseStartupSurvey(survey(head, toplevel, [...tail.slice(0, -1), "A"]), ["/a", long]).facts.has(
       long,
-    ]).facts.has(long),
+    ),
     false,
   );
   // Output before the survey.
@@ -471,13 +445,7 @@ test("a malformed survey falls back to the per-walk queries", () => {
       ...tail.slice(4),
     ]),
   );
-  refused(
-    survey(head, toplevel, [
-      ...tail.slice(0, 4),
-      "not a listing",
-      ...tail.slice(4),
-    ]),
-  );
+  refused(survey(head, toplevel, [...tail.slice(0, 4), "not a listing", ...tail.slice(4)]));
   // Truncated output, a different candidate count or an unknown answer.
   refused([...head, ...toplevel, ...tail].join("\n"));
   refused(survey(head, toplevel, tail), ["/a"]);

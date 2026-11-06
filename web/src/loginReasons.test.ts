@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertNotEquals } from "@std/assert";
+import { assertEquals, assertNotEquals } from "../../tools/test-assert.ts";
 import { loginReasonText } from "./loginReasons";
 
 test("login readiness codes never reach people raw", () => {

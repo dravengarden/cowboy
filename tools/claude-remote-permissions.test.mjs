@@ -69,11 +69,14 @@ async function modFixture(check) {
       fetch: async (url, options) => {
         const path = url.slice("http://cowboy-execution".length);
         posts.push({ path, body: JSON.parse(options.body) });
-        return responses.get(path)?.() ??
-          (path === "/link"
-            ? { ok: true, status: 200, text: '{"symlink":false}' }
-            : undefined) ??
-          { ok: true, status: 200, text: '{"ready":true}' };
+        return (
+          responses.get(path)?.() ??
+          (path === "/link" ? { ok: true, status: 200, text: '{"symlink":false}' } : undefined) ?? {
+            ok: true,
+            status: 200,
+            text: '{"ready":true}',
+          }
+        );
       },
     },
   };
@@ -106,7 +109,10 @@ test("native permission decisions gate target calls before any effect", async (t
         input: { file_path: "/.cowboy-target-outside/target/a.txt" },
       },
     ]);
-    assert.deepEqual(posts.map(({ path }) => path), ["/tool"]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/tool"],
+    );
   });
   await t.test("deny never reaches the target", async () => {
     const { call, posts } = await modFixture(() => ({
@@ -135,13 +141,13 @@ test("native permission decisions gate target calls before any effect", async (t
       reason: "needs approval",
     }));
     let polls = 0;
-    responses.set(
-      "/permission",
-      () =>
-        ++polls < 3 ? { ok: true, status: 202, text: '{"pending":"t4"}' } : ok({
-          behavior: "allow",
-          updatedInput: { command: "echo amended" },
-        })(),
+    responses.set("/permission", () =>
+      ++polls < 3
+        ? { ok: true, status: 202, text: '{"pending":"t4"}' }
+        : ok({
+            behavior: "allow",
+            updatedInput: { command: "echo amended" },
+          })(),
     );
     await call({
       tool: "Bash",
@@ -149,12 +155,10 @@ test("native permission decisions gate target calls before any effect", async (t
       agentId: "child",
       command: "echo original",
     });
-    assert.deepEqual(posts.map(({ path }) => path), [
-      "/permission",
-      "/permission",
-      "/permission",
-      "/tool",
-    ]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/permission", "/permission", "/permission", "/tool"],
+    );
     assert.deepEqual(posts[0].body, {
       id: "t4",
       tool: "Bash",
@@ -168,17 +172,17 @@ test("native permission decisions gate target calls before any effect", async (t
     const { call, posts, responses } = await modFixture(() => ({
       decision: "ask",
     }));
-    responses.set(
-      "/permission",
-      ok({ behavior: "deny", message: "Not this file" }),
-    );
+    responses.set("/permission", ok({ behavior: "deny", message: "Not this file" }));
     const result = await call({
       tool: "Edit",
       tool_use_id: "t5",
       file_path: "a",
     });
     assert.equal(result.deny, "Not this file");
-    assert.deepEqual(posts.map(({ path }) => path), ["/permission"]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/permission"],
+    );
   });
   await t.test("an abandoned approval is withdrawn and never runs", async () => {
     const controller = new AbortController();
@@ -197,7 +201,10 @@ test("native permission decisions gate target calls before any effect", async (t
     );
     assert.match(result.deny, /cancelled/);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(posts.map(({ path }) => path), ["/permission", "/cancel"]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/permission", "/cancel"],
+    );
   });
 });
 
@@ -208,32 +215,23 @@ test("permission paths are judged as target paths", () => {
     targetHome: "/home/target",
   };
   const map = (value, outside = false) =>
-    permissionInput({ file_path: value, other: "/target/x" }, paths, outside)
-      .file_path;
+    permissionInput({ file_path: value, other: "/target/x" }, paths, outside).file_path;
   assert.equal(map("/target/a/b.txt"), "/runtime/a/b.txt");
   assert.equal(map("/target"), "/runtime");
   assert.equal(map("relative.txt"), "/runtime/relative.txt");
   assert.equal(map("./a/../b.txt"), "/runtime/b.txt");
   // Outside the target workspace, even where the runtime has its workspace.
   assert.equal(map("../escape.txt"), "/.cowboy-target-outside/escape.txt");
-  assert.equal(
-    map("/runtime/outside.txt"),
-    "/.cowboy-target-outside/runtime/outside.txt",
-  );
-  assert.equal(
-    map("/target-other/x"),
-    "/.cowboy-target-outside/target-other/x",
-  );
+  assert.equal(map("/runtime/outside.txt"), "/.cowboy-target-outside/runtime/outside.txt");
+  assert.equal(map("/target-other/x"), "/.cowboy-target-outside/target-other/x");
   assert.equal(map("~/notes"), "/.cowboy-target-outside/home/target/notes");
   assert.equal(map("/target/a", true), "/.cowboy-target-outside/target/a");
   assert.equal(
-    permissionInput({ file_path: "~/x" }, { ...paths, targetHome: null })
-      .file_path,
+    permissionInput({ file_path: "~/x" }, { ...paths, targetHome: null }).file_path,
     "/.cowboy-target-outside/~/x",
   );
   assert.equal(
-    permissionInput({ file_path: "/etc/x" }, { ...paths, targetCwd: "/" })
-      .file_path,
+    permissionInput({ file_path: "/etc/x" }, { ...paths, targetCwd: "/" }).file_path,
     "/runtime/etc/x",
   );
   assert.equal(
@@ -250,13 +248,11 @@ test("workspace-scoped write allowances follow the target's real path", async (t
   const scoped = ({ input }) => ({
     decision: input.file_path?.startsWith("/runtime") ? "allow" : "ask",
   });
-  for (
-    const [name, resolved, asked] of [
-      ["real path inside", { path: "/target/real.txt" }, false],
-      ["symlink outside", { path: "/etc/passwd" }, true],
-      ["unresolved", { path: null }, true],
-    ]
-  ) {
+  for (const [name, resolved, asked] of [
+    ["real path inside", { path: "/target/real.txt" }, false],
+    ["symlink outside", { path: "/etc/passwd" }, true],
+    ["unresolved", { path: null }, true],
+  ]) {
     await t.test(name, async () => {
       const { call, posts, responses } = await modFixture(scoped);
       responses.set("/resolve", ok(resolved));
@@ -290,7 +286,10 @@ test("workspace-scoped write allowances follow the target's real path", async (t
       result.deny,
       /Refusing to write \/target\/link\.txt: it is a symbolic link\. Write to the link's target path instead: \/elsewhere\/real\.txt/,
     );
-    assert.deepEqual(posts.map(({ path }) => path), ["/link", "/resolve"]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/link", "/resolve"],
+    );
   });
   await t.test("an uninspectable Write target asks", async () => {
     const { call, posts, responses } = await modFixture(() => ({
@@ -304,13 +303,16 @@ test("workspace-scoped write allowances follow the target's real path", async (t
       file_path: "a",
       content: "",
     });
-    assert.deepEqual(posts.map(({ path }) => path), ["/link", "/permission"]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/link", "/permission"],
+    );
   });
   await t.test("a rule naming the target path decides", async () => {
     const { call, posts } = await modFixture(({ input }) =>
       input.file_path === "/target/secret"
         ? { decision: "deny", reason: "Edit(/target/secret)", rule: "x" }
-        : { decision: "allow" }
+        : { decision: "allow" },
     );
     const result = await call({
       tool: "Edit",
@@ -323,7 +325,10 @@ test("workspace-scoped write allowances follow the target's real path", async (t
   await t.test("no target IO when the outside form is allowed too", async () => {
     const { call, posts } = await modFixture(() => ({ decision: "allow" }));
     await call({ tool: "Edit", tool_use_id: "e", file_path: "a.txt" });
-    assert.deepEqual(posts.map(({ path }) => path), ["/tool"]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/tool"],
+    );
   });
   await t.test("reads resolve like writes; outside paths need none", async () => {
     const { call, posts, responses } = await modFixture(scoped);
@@ -331,22 +336,22 @@ test("workspace-scoped write allowances follow the target's real path", async (t
     await call({ tool: "Read", tool_use_id: "r", file_path: "a.txt" });
     responses.set("/permission", ok({ behavior: "deny", message: "no" }));
     await call({ tool: "Read", tool_use_id: "o", file_path: "/etc/hosts" });
-    assert.deepEqual(posts.map(({ path }) => path), [
-      "/resolve",
-      "/tool",
-      "/permission",
-    ]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/resolve", "/tool", "/permission"],
+    );
   });
   await t.test("bypass keeps commands naming the runtime path", async () => {
     const { call, posts } = await modFixture(() => ({ decision: "allow" }));
     await call({ tool: "Bash", tool_use_id: "p", command: "ls /runtime" });
-    assert.deepEqual(posts.map(({ path }) => path), ["/tool"]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/tool"],
+    );
   });
   await t.test("a command allowed only inside the runtime workspace asks", async () => {
     const { call, posts, responses } = await modFixture(({ input }) => ({
-      decision: input.command.includes("/.cowboy-target-outside")
-        ? "ask"
-        : "allow",
+      decision: input.command.includes("/.cowboy-target-outside") ? "ask" : "allow",
     }));
     responses.set("/permission", ok({ behavior: "deny", message: "no" }));
     await call({
@@ -354,27 +359,34 @@ test("workspace-scoped write allowances follow the target's real path", async (t
       tool_use_id: "b",
       command: "mkdir /runtime/x",
     });
-    assert.deepEqual(posts.map(({ path }) => path), ["/permission"]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/permission"],
+    );
   });
 });
 
 function post(bridge, path, value) {
   return new Promise((resolve, reject) => {
-    const req = request({
-      socketPath: bridge.socketPath,
-      path,
-      method: "POST",
-      headers: { authorization: `Bearer ${bridge.token}` },
-    }, (res) => {
-      const chunks = [];
-      res.on("data", (data) => chunks.push(data));
-      res.on("end", () =>
-        resolve({
-          status: res.statusCode,
-          body: JSON.parse(Buffer.concat(chunks)),
-        }));
-      res.on("error", reject);
-    });
+    const req = request(
+      {
+        socketPath: bridge.socketPath,
+        path,
+        method: "POST",
+        headers: { authorization: `Bearer ${bridge.token}` },
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (data) => chunks.push(data));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode,
+            body: JSON.parse(Buffer.concat(chunks)),
+          }),
+        );
+        res.on("error", reject);
+      },
+    );
     req.on("error", reject);
     req.end(JSON.stringify(value));
   });
@@ -384,23 +396,26 @@ test("bridge observes one host approval per call and withdraws it on cancel", as
   const requests = [];
   const cancelled = [];
   const answers = new Map();
-  const bridge = await startModBridge({
-    nativeCall: async () => ({ result: {} }),
-    cancelCall: async () => [],
-  }, {
-    waitMs: 5,
-    permissions: {
-      request: (call) =>
-        new Promise((resolve) => {
-          requests.push(call);
-          answers.set(call.id, resolve);
-        }),
-      cancel: (id) => {
-        cancelled.push(id);
-        answers.get(id)({ behavior: "deny", message: "cancelled" });
+  const bridge = await startModBridge(
+    {
+      nativeCall: async () => ({ result: {} }),
+      cancelCall: async () => [],
+    },
+    {
+      waitMs: 5,
+      permissions: {
+        request: (call) =>
+          new Promise((resolve) => {
+            requests.push(call);
+            answers.set(call.id, resolve);
+          }),
+        cancel: (id) => {
+          cancelled.push(id);
+          answers.get(id)({ behavior: "deny", message: "cancelled" });
+        },
       },
     },
-  });
+  );
   t.after(() => bridge.close());
   const body = {
     id: "p1",
@@ -420,26 +435,21 @@ test("bridge observes one host approval per call and withdraws it on cancel", as
   assert.equal(requests.length, 2);
   await post(bridge, "/cancel", { id: "p1" });
   assert.deepEqual(cancelled, ["p1"]);
-  assert.match(
-    (await post(bridge, "/permission", body)).body.message,
-    /unavailable/,
-  );
-  for (
-    const invalid of [
-      { ...body, id: "bad", tool: "Agent" },
-      { ...body, id: "bad", reason: 3 },
-      { ...body, id: "bad", owner: "../x" },
-    ]
-  ) assert.equal((await post(bridge, "/permission", invalid)).status, 400);
+  assert.match((await post(bridge, "/permission", body)).body.message, /unavailable/);
+  for (const invalid of [
+    { ...body, id: "bad", tool: "Agent" },
+    { ...body, id: "bad", reason: 3 },
+    { ...body, id: "bad", owner: "../x" },
+  ])
+    assert.equal((await post(bridge, "/permission", invalid)).status, 400);
   // A hook decision withdraws only the prompt; the call stays admissible.
   const hooked = { ...body, id: "p2" };
   assert.equal((await post(bridge, "/permission", hooked)).status, 202);
   await post(bridge, "/withdraw", { id: "p2" });
   assert.deepEqual(cancelled, ["p1", "p2"]);
-  assert.deepEqual(
-    (await post(bridge, "/tool", { id: "p2", tool: "Bash", input: {} })).body,
-    { result: {} },
-  );
+  assert.deepEqual((await post(bridge, "/tool", { id: "p2", tool: "Bash", input: {} })).body, {
+    result: {},
+  });
 });
 
 test("bridge without an approval channel denies asks", async (t) => {
@@ -515,31 +525,21 @@ test("the broker asks the host in native shape and honors dontAsk", async () => 
   const before = sent.length;
   assert.match((await broker.request(call)).message, /don't ask mode/);
   assert.equal(sent.length, before);
+  assert.equal(permissionResult({ subtype: "error", error: "host gone" }).message, "host gone");
   assert.equal(
-    permissionResult({ subtype: "error", error: "host gone" }).message,
-    "host gone",
-  );
-  assert.equal(
-    permissionResult({ subtype: "success", response: { behavior: "maybe" } })
-      .behavior,
+    permissionResult({ subtype: "success", response: { behavior: "maybe" } }).behavior,
     "deny",
   );
   assert.equal(
-    permissionRequest({ id: "x", tool: "Write", input: { file_path: "f" } })
-      .description,
+    permissionRequest({ id: "x", tool: "Write", input: { file_path: "f" } }).description,
     "f",
   );
 });
 
 test("the selected mode governs instead of a forced bypass", () => {
+  assert.equal(startingPermissionMode(nativeArguments([], "/plugin")), "default");
   assert.equal(
-    startingPermissionMode(nativeArguments([], "/plugin")),
-    "default",
-  );
-  assert.equal(
-    startingPermissionMode(
-      nativeArguments(["--permission-mode=acceptEdits"], "/plugin"),
-    ),
+    startingPermissionMode(nativeArguments(["--permission-mode=acceptEdits"], "/plugin")),
     "acceptEdits",
   );
   assert.ok(!nativeArguments([], "/plugin").includes("bypassPermissions"));

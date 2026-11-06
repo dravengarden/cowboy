@@ -40,7 +40,7 @@ jobs:
 
       - name: Check website source
         run: |
-          bun x dprint check site/build.ts site/build_test.ts site/site.js
+          bun x --no-install biome format site/build.ts site/build_test.ts site/site.js
           bun run typecheck
           bun test ./site/build_test.ts
 

@@ -16,7 +16,7 @@ const themeMode = process.argv.slice(2)[2] ?? "light";
 const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "boot-snapshot": ["runBootSnapshotBrowserConformance", 4],
   "client-update": ["runClientUpdateFixture", 9],
-  "subscriptions": ["runSubscriptionsBrowserConformance", 131],
+  subscriptions: ["runSubscriptionsBrowserConformance", 131],
   "session-context": ["runSessionContextBrowserConformance", 110],
   "desktop-viewport": ["runDesktopViewportBrowserConformance", 9],
   "loading-progress": ["runLoadingProgressBrowserConformance", 10],
@@ -30,14 +30,15 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "managed-calls": ["runManagedCallsBrowserConformance", 20],
   "session-fold": ["runSessionFoldBrowserConformance", 7],
   "session-move": ["runSessionMoveBrowserConformance", 4],
+  "composer-surfaces": ["runComposerSurfacesBrowserConformance", 6],
   "sheet-keyboard": ["runCoverKeyboardBrowserConformance", 4],
   "tool-inspector": ["runToolInspectorBrowserConformance", 13],
   "workspace-picker": ["runWorkspacePickerBrowserConformance", 10],
   "project-placement": ["runProjectPlacementBrowserConformance", 13],
   "session-maintenance": ["runSessionMaintenanceBrowserConformance", 8],
   "dormant-session": ["runDormantSessionBrowserConformance", 29],
-  "elicitation": ["runElicitationBrowserConformance", 6],
-  "subagents": ["runSubagentsBrowserConformance", 7],
+  elicitation: ["runElicitationBrowserConformance", 6],
+  subagents: ["runSubagentsBrowserConformance", 7],
   "background-tasks": ["runBackgroundTasksBrowserConformance", 12],
 };
 const selected = ENTRIES[suite];
@@ -94,7 +95,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
 );
 try {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const result = await Promise.race([
+  const result = (await Promise.race([
     page.report,
     new Promise((_, reject) => {
       timer = setTimeout(
@@ -102,31 +103,33 @@ try {
         suite === "draft-documents" ? 180_000 : 90_000,
       );
     }),
-  ]).finally(() => clearTimeout(timer)) as {
+  ]).finally(() => clearTimeout(timer))) as {
     ok?: boolean;
     tests?: unknown[];
   } | null;
   if (
-    result?.ok !== true || !Array.isArray(result.tests) ||
+    result?.ok !== true ||
+    !Array.isArray(result.tests) ||
     result.tests.length !== expectedTests
   ) {
     throw new Error(`browser conformance failed: ${JSON.stringify(result)}`);
   }
-  console.log(JSON.stringify(
-    {
-      ok: true,
-      suite,
-      theme_mode: themeMode,
-      browser: page.browser,
-      endpoint,
-      fixture_sha256: page.digest,
-      isolation:
-        "disposable browser context / intercepted fictitious origin / no credentials",
-      tests: result.tests,
-    },
-    null,
-    2,
-  ));
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        suite,
+        theme_mode: themeMode,
+        browser: page.browser,
+        endpoint,
+        fixture_sha256: page.digest,
+        isolation: "disposable browser context / intercepted fictitious origin / no credentials",
+        tests: result.tests,
+      },
+      null,
+      2,
+    ),
+  );
 } finally {
   await page.close();
 }

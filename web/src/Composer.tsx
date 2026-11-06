@@ -1,6 +1,7 @@
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { DeliveryPicker } from "./DeliveryPicker";
 import { deliverySourceMatches, guardDeliveryChoice } from "./deliverySource.ts";
+import { type ScheduleTarget, useComposerModal } from "./composerSurfaces.ts";
 import { prefetchDeliveryOptions } from "./deliveryPolicy";
 import { SendDeliveryIcon } from "./SendDeliveryIcon";
 
@@ -106,7 +107,7 @@ import { useNetworkActionState } from "./NetworkActionFeedback";
 
 import { providerConfigOptionOrder, providerConfigOptionPresentations, providerConfigOptions } from "./providerConfigOptions";
 
-import type { AvailableCommand, ConfigOption, Delivery, DraftSchedule, Status } from "./protocol";
+import type { AvailableCommand, ConfigOption, Delivery, Status } from "./protocol";
 
 import { ConfirmSheet } from "./Sheet";
 
@@ -639,9 +640,8 @@ export function ComposerWorkspace({
   // inline chip row — there's room.
   const compact = useMediaQuery(theme.breakpoints.down("lg"));
   const mobileToolbarIds = useComposerToolbar();
-  const [mobileToolbarSettingsOpen, setMobileToolbarSettingsOpen] = useState(
-    false,
-  );
+  const surfaces = useComposerModal();
+  const mobileToolbarSettingsOpen = surfaces.modal.kind === "toolbarSettings";
   // A Queue/Draft edit is itself a complete composer. Mobile must expose one
   // writing focus at a time: leaving the new-message composer underneath the
   // active row editor creates two large, nearly identical cards above the
@@ -671,24 +671,22 @@ export function ComposerWorkspace({
   // Stopping a running turn is confirmed through a modal (Enter confirms, Esc
   // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
   // than cancelling on a single stray click/keypress.
-  const [cancelOpen, setCancelOpen] = useState(false);
+  const cancelOpen = surfaces.modal.kind === "stop";
   // Long-press and ordinary busy Send share the same picker.
   const [holding, setHolding] = useState(false);
-  const [clearComposerAnchor, setClearComposerAnchor] = useState<
-    HTMLElement | null
-  >(null);
+  const clearComposerAnchor = surfaces.modal.kind === "clear" ? surfaces.modal.anchor : null;
   useEffect(() => {
     if (clearComposerAnchor === null) return undefined;
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || isImeKeyEvent(event)) return;
       event.preventDefault();
       event.stopPropagation();
-      setClearComposerAnchor(null);
+      surfaces.close("clear");
     };
     globalThis.addEventListener("keydown", closeOnEscape, true);
     return (): void =>
       globalThis.removeEventListener("keydown", closeOnEscape, true);
-  }, [clearComposerAnchor]);
+  }, [clearComposerAnchor, surfaces.close]);
   // Send owns the picker anchor for pointer and keyboard activation alike.
   const queueBtnRef = useRef<HTMLButtonElement | null>(null);
   const mobileActionsRef = useRef<HTMLDivElement | null>(null);
@@ -706,7 +704,7 @@ export function ComposerWorkspace({
   // unmounting when the LAST draft leaves this session. `moveSrcId` = the draft
   // whose destination picker is open; `moveUndo` backs the post-move snackbar so
   // a mis-tapped destination is one tap to reverse.
-  const [moveSrcId, setMoveSrcId] = useState<string | null>(null);
+  const moveSrcId = surfaces.modal.kind === "move" ? surfaces.modal.sourceId : null;
   const otherSessions = sessionState.destinations;
   // When the navbar sits at the bottom it owns the home-indicator safe area and
   // renders BELOW the composer, so the composer must drop its own bottom inset
@@ -823,7 +821,7 @@ export function ComposerWorkspace({
       ),
     [provider, providerVersion, providerDigest, availableCommands],
   );
-  const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
+  const cmdConfirm = surfaces.modal.kind === "context" ? surfaces.modal.action : null;
   const contextClearedRef = useRef({
     sessionId,
     seq: timelineState.contextClearedSeq,
@@ -876,11 +874,11 @@ export function ComposerWorkspace({
     // post-close pass WebKit can resurrect a stale textarea first responder and
     // combine it with a lagging visualViewport keyboard measurement, leaving a
     // tall floating composer over a keyboard-free transcript.
-    setCmdConfirm(null);
+    surfaces.close("context");
     if (touchInput && action.kind === "reset") {
       setMobileInputResetBlocked(true);
       setComposeFs(false);
-      setClearComposerAnchor(null);
+      surfaces.close("clear");
       setImgSel(null);
       dismissMobileSoftwareKeyboard();
       releaseMobileComposerFocus();
@@ -1109,9 +1107,9 @@ export function ComposerWorkspace({
   // The schedule picker: `null` = closed; `{id}` present = editing an existing
   // scheduled draft (reschedule/cancel); `{id: undefined}` = scheduling the
   // composer's CURRENT content into a fresh draft.
-  const [scheduleTarget, setScheduleTarget] = useState<
-    { id: string | undefined; initial: DraftSchedule | null } | null
-  >(null);
+  const scheduleTarget = surfaces.modal.kind === "schedule" ? surfaces.modal.target : null;
+  const setScheduleTarget = (target: ScheduleTarget | null): void =>
+    target === null ? surfaces.close("schedule") : surfaces.open({ kind: "schedule", target });
   function commitSchedule(fireAtMs: number, delivery: Delivery): void {
     if (scheduleTarget?.id !== undefined) {
       void scheduleDraft(sessionId, {
@@ -1458,7 +1456,7 @@ export function ComposerWorkspace({
               onResumeKeyboardSurface={resumeMobileKeyboardSurface}
               // Only offer "move" when there's somewhere to move to.
               onMoveDraft={otherSessions.length > 0
-                ? (id: string): void => setMoveSrcId(id)
+                ? (id: string): void => surfaces.open({ kind: "move", sourceId: id })
                 : undefined}
               onScheduleDraft={(id: string): void =>
                 setScheduleTarget({
@@ -1498,7 +1496,7 @@ export function ComposerWorkspace({
               status={status}
               commands={(): AvailableCommand[] => availableCommands}
               onMoveDraft={otherSessions.length > 0
-                ? (id: string): void => setMoveSrcId(id)
+                ? (id: string): void => surfaces.open({ kind: "move", sourceId: id })
                 : undefined}
               onScheduleDraft={(id: string): void =>
                 setScheduleTarget({
@@ -2054,7 +2052,7 @@ export function ComposerWorkspace({
                         onPasteImages={pasteClipboardImages}
                         onCustomize={(): void => {
                           releaseMobileComposerFocus();
-                          setMobileToolbarSettingsOpen(true);
+                          surfaces.open({ kind: "toolbarSettings" });
                         }}
                       />
                     }
@@ -2161,7 +2159,7 @@ export function ComposerWorkspace({
                           aria-label="compact conversation"
                           disabled={agentActionsDisabled || compacting}
                           sx={{ ...TOOLBAR_ICON_BTN, p: 0.75 }}
-                          onClick={(): void => setCmdConfirm(compactAction)}
+                          onClick={(): void => surfaces.open({ kind: "context", action: compactAction })}
                         >
                           <CompactIcon
                             used={compactContext.used}
@@ -2222,7 +2220,7 @@ export function ComposerWorkspace({
                           aria-label="clear conversation"
                           disabled={agentActionsDisabled}
                           sx={TOOLBAR_ICON_BTN}
-                          onClick={(): void => setCmdConfirm(clearAction)}
+                          onClick={(): void => surfaces.open({ kind: "context", action: clearAction })}
                         >
                           <CleaningServices fontSize="small" />
                         </IconButton>
@@ -2392,7 +2390,7 @@ export function ComposerWorkspace({
                         onPointerDown={(event): void => event.preventDefault()}
                         onMouseDown={(event): void => event.preventDefault()}
                         onClick={(event): void =>
-                          setClearComposerAnchor(event.currentTarget)}
+                          surfaces.open({ kind: "clear", anchor: event.currentTarget })}
                       >
                         <DeleteOutline fontSize="small" />
                       </IconButton>
@@ -2403,7 +2401,7 @@ export function ComposerWorkspace({
               {touchInput && (
                 <ComposerToolbarSettings
                   open={mobileToolbarSettingsOpen}
-                  onClose={(): void => setMobileToolbarSettingsOpen(false)}
+                  onClose={(): void => surfaces.close("toolbarSettings")}
                 />
               )}
             </>
@@ -2434,7 +2432,7 @@ export function ComposerWorkspace({
         sx={{ zIndex: (theme) => theme.zIndex.modal }}
       >
         <ClickAwayListener
-          onClickAway={(): void => setClearComposerAnchor(null)}
+          onClickAway={(): void => surfaces.close("clear")}
         >
           <Paper
             role="dialog"
@@ -2464,7 +2462,7 @@ export function ComposerWorkspace({
                   color="inherit"
                   onPointerDown={(event): void => event.preventDefault()}
                   onMouseDown={(event): void => event.preventDefault()}
-                  onClick={(): void => setClearComposerAnchor(null)}
+                  onClick={(): void => surfaces.close("clear")}
                   sx={{ textTransform: "none" }}
                 >
                   Cancel
@@ -2478,7 +2476,7 @@ export function ComposerWorkspace({
                   onClick={(): void => {
                     importantHaptic();
                     clearComposer();
-                    setClearComposerAnchor(null);
+                    surfaces.close("clear");
                   }}
                   sx={{ textTransform: "none" }}
                 >
@@ -2518,7 +2516,7 @@ export function ComposerWorkspace({
         })}
         onStop={(): void => {
           setDeliveryAnchor(null);
-          setCancelOpen(true);
+          surfaces.open({ kind: "stop" });
         }}
       />
       {
@@ -2544,7 +2542,7 @@ export function ComposerWorkspace({
         provider={providerName(provider, providerVersion, providerDigest)}
         activeTurn={busy || starting}
         disableRestoreFocus={touchInput && cmdConfirm?.kind === "reset"}
-        onClose={(): void => setCmdConfirm(null)}
+        onClose={(): void => surfaces.close("context")}
         onConfirm={confirmSessionAction}
       />
       {
@@ -2625,11 +2623,11 @@ export function ComposerWorkspace({
       }
       <StopConfirmDialog
         open={cancelOpen}
-        onClose={(): void => setCancelOpen(false)}
+        onClose={(): void => surfaces.close("stop")}
         onConfirm={(): void => {
           importantHaptic();
           cancelTurn(sessionId);
-          setCancelOpen(false);
+          surfaces.close("stop");
         }}
       />
       {
@@ -2639,7 +2637,7 @@ export function ComposerWorkspace({
       <DraftMoveSurfaces
         sessionId={sessionId}
         moveSrcId={moveSrcId}
-        setMoveSrcId={setMoveSrcId}
+        closeMove={(): void => surfaces.close("move")}
       />
     </Box>
   );

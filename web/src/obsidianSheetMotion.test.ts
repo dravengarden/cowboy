@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 import {
   OBSIDIAN_SHEET_CLOSED_SCALE,
   OBSIDIAN_SHEET_INSET_PX,

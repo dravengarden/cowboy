@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../tools/test-assert.ts";
 import { needsMachineSetup, parseSetupMachines } from "./machineReady.ts";
 
 test("setup continues until a remote machine is enrolled", () => {

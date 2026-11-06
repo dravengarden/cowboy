@@ -49,9 +49,7 @@ export function render(
     lines.push(`// ${family.file}`);
     lines.push(`export const ${family.name} = {`);
     for (const fixture of family.fixtures) {
-      lines.push(
-        `  ${JSON.stringify(fixture.name)}: ${JSON.stringify(fixture.value)},`,
-      );
+      lines.push(`  ${JSON.stringify(fixture.name)}: ${JSON.stringify(fixture.value)},`);
     }
     lines.push(`} satisfies Record<string, ${family.type}>;`);
     lines.push("");
@@ -62,18 +60,14 @@ export function render(
 async function main(argv: string[]): Promise<number> {
   const families = [];
   for (const family of FAMILIES) {
-    const fixtures = JSON.parse(
-      await readFile(family.file, "utf8"),
-    ) as Fixture[];
+    const fixtures = JSON.parse(await readFile(family.file, "utf8")) as Fixture[];
     families.push({ ...family, fixtures });
   }
   const output = render(families);
   if (argv.includes("--check")) {
     const current = await readFile(OUTPUT, "utf8").catch(() => "");
     if (current !== output) {
-      console.error(
-        `${OUTPUT} is out of date; run bun tools/generate-protocol-fixtures.ts`,
-      );
+      console.error(`${OUTPUT} is out of date; run bun tools/generate-protocol-fixtures.ts`);
       return 1;
     }
     return 0;

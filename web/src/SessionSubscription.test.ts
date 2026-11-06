@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { subscriptionAllowed } from "./SessionSubscription";
 
 test("subscription selection rejects unavailable defaults and never falls back across providers", () => {

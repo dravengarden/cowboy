@@ -16,8 +16,7 @@ test("target image result retains media and target path without the native cache
   };
   const cached = {
     type: "text",
-    text:
-      "[Image: source: /runtime/projects/session/tool-results/mcp-cowboy_execution-blob-1.png]",
+    text: "[Image: source: /runtime/projects/session/tool-results/mcp-cowboy_execution-blob-1.png]",
   };
   const event = {
     origin: { kind: "tool", tool: "ReadFile" },
@@ -44,9 +43,7 @@ test("target image result retains media and target path without the native cache
   const textOnly = {
     ...event,
     message: {
-      content: [
-        { type: "tool_result", tool_use_id: "text", content: [cached] },
-      ],
+      content: [{ type: "tool_result", tool_use_id: "text", content: [cached] }],
     },
   };
   assert.deepEqual(targetImageResult(textOnly), textOnly);
@@ -59,9 +56,7 @@ test("native compaction keeps its summary without suggesting a runtime transcrip
     door: "compaction",
     origin: { kind: "engine" },
     message: {
-      content: [
-        { type: "text", text: summary },
-      ],
+      content: [{ type: "text", text: summary }],
     },
   };
   assert.equal(
@@ -119,36 +114,38 @@ test("native's own Read of a local copy names the target file", async () => {
 
 test("a denial of this module after the tool ran keeps the failure text alone", () => {
   const reasons = new Map();
-  const failure =
-    'Shell command failed for pattern "!`exit 3`": [stderr]\npartial';
+  const failure = 'Shell command failed for pattern "!`exit 3`": [stderr]\npartial';
   const row = (id, content, tool = "Skill") => ({
     door: "tool-result",
     origin: { kind: "tool", tool },
     message: {
       role: "user",
-      content: [{
-        type: "tool_result",
-        tool_use_id: id,
-        content,
-        is_error: true,
-      }],
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: id,
+          content,
+          is_error: true,
+        },
+      ],
     },
   });
-  const noted = (tool, reason, state = "ran") => [{
-    type: "text",
-    text: `${tool} ${state}, and a plugin withheld its result: ${reason}`,
-  }];
+  const noted = (tool, reason, state = "ran") => [
+    {
+      type: "text",
+      text: `${tool} ${state}, and a plugin withheld its result: ${reason}`,
+    },
+  ];
   rememberDenial({ tool_use_id: "a" }, { deny: failure }, reasons);
   assert.equal(
-    withheldResult(row("a", noted("Skill", failure)), reasons).message
-      .content[0].content,
+    withheldResult(row("a", noted("Skill", failure)), reasons).message.content[0].content,
     failure,
   );
   assert.equal(reasons.size, 0);
   rememberDenial({ tool_use_id: "b" }, { deny: "gone" }, reasons);
   assert.equal(
-    withheldResult(row("b", noted("Read", "gone", "started"), "Read"), reasons)
-      .message.content[0].content,
+    withheldResult(row("b", noted("Read", "gone", "started"), "Read"), reasons).message.content[0]
+      .content,
     "gone",
   );
   // Another plugin's denial, or one for another call, is not this module's.

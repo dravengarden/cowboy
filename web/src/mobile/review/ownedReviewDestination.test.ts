@@ -4,7 +4,7 @@ import {
   assertEquals,
   assertRejects,
   assertThrows,
-} from "@std/assert";
+} from "../../../../tools/test-assert.ts";
 import { captureContent, capturedIdentity } from "../../codeBuffers/content.ts";
 import {
   golden,

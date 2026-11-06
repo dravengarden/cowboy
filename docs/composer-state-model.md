@@ -99,6 +99,30 @@ iOS acceptance (web/AGENTS.md pitfall #69).
    acceptance before release; until it has been run, those two stay on
    `useState`.
 
+## Progress
+
+- 2026-11-06: steps 1 and the focus-free part of step 2 landed.
+  `web/src/composerSurfaces.ts` owns one modal slot for the schedule dialog,
+  the context (compact/clear) confirmation, the move-draft picker and the
+  mobile toolbar settings; a close names its surface, so a replaced dialog's
+  late close cannot dismiss its successor. The slot is still named
+  `ComposerModal`. The stop confirmation and the non-modal clear-draft popper
+  joined the same day; the picker and `composeFs` wait for physical iOS
+  acceptance.
+- `just cdp-browser-conformance <endpoint> composer-surfaces` drives these
+  surfaces in the real App (Desktop and touch layouts, in-page fake socket and
+  fetch): schedule open/dismiss, picker Stop replacing the picker with the stop
+  confirmation and sending `cancel`, the clear-draft popper (Escape keeps the
+  draft, confirm clears it), the clear-conversation confirmation, the mobile
+  toolbar options and the move-draft picker (the fake socket acknowledges
+  `add_draft` with a `sync_patch`; dismissing moves nothing, a destination
+  sends `move_draft`). Removing the picker's Stop transition, the popper's
+  Escape close, the move entry or the toolbar options close fails it (checked).
+  Synthetic Escape is not trusted input for the Desktop key dispatcher or the
+  move sheet, so those two are dismissed by backdrop or Close instead.
+  The older desktop-composer suite renders the toolbar alone and never mounted
+  `ComposerWorkspace`.
+
 ## Non-goals
 
 Changing what any surface does, merging the desktop and mobile composer paths,

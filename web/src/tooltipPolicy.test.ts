@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { tooltipListenerPolicy } from "./tooltipPolicy.ts";
 
 test("touch-only pointers cannot open sticky tooltips through synthetic hover", () => {

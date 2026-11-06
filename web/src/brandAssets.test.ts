@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 import { appIconAppearanceAsset } from "./appIcons.ts";
 
 const repoRoot = new URL("../../", import.meta.url);

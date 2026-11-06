@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "../../tools/test-assert.ts";
 import { canReplaceLogin, loginCompleted, loginFailure, loginLink, loginOptions, subscriptionLogin, type LoginOptions } from "./subscriptionLoginController";
 import { revocationProgress, validRevocationPending } from "./SubscriptionRevocation";
 import { rememberSubscriptionSignIn, restoreSubscriptionSignIn, SUBSCRIPTION_SIGN_IN_RETURN, subscriptionSignInLink } from "./subscriptionSignInLink";

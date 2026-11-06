@@ -57,13 +57,13 @@ export async function openFixturePage(
   } finally {
     await rm(temporary, { recursive: true });
   }
-  const digest = Array.from(
-    new Uint8Array(await crypto.subtle.digest("SHA-256", script)),
-  ).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", script)))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
   const token = crypto.randomUUID();
   const page = new TextEncoder().encode(html(token));
 
-  const version = await (await fetch(`${endpoint}/json/version`)).json() as {
+  const version = (await (await fetch(`${endpoint}/json/version`)).json()) as {
     Browser: string;
     webSocketDebuggerUrl: string;
   };
@@ -74,8 +74,7 @@ export async function openFixturePage(
   });
   let nextId = 0;
   const pending = new Map<number, PromiseWithResolvers<CdpParams>>();
-  const listeners:
-    ((method: string, params: CdpParams, session?: string) => void)[] = [];
+  const listeners: ((method: string, params: CdpParams, session?: string) => void)[] = [];
   socket.onmessage = (message) => {
     const data = JSON.parse(message.data as string);
     if (data.id !== undefined) {
@@ -107,9 +106,7 @@ export async function openFixturePage(
     disposeOnDetach: true,
   });
   const close = async (): Promise<void> => {
-    await raw("Target.disposeBrowserContext", { browserContextId }).catch(
-      () => {},
-    );
+    await raw("Target.disposeBrowserContext", { browserContextId }).catch(() => {});
     socket.close();
   };
   try {
@@ -123,8 +120,7 @@ export async function openFixturePage(
       targetId,
       flatten: true,
     });
-    const send = (method: string, params: object = {}) =>
-      raw(method, params, sessionId);
+    const send = (method: string, params: object = {}) => raw(method, params, sessionId);
     const report = Promise.withResolvers<CdpParams>();
     listeners.push((method, params, session) => {
       if (session !== sessionId || method !== "Fetch.requestPaused") return;

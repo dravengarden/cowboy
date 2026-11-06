@@ -5,7 +5,7 @@ import {
   assertRejects,
   assertStrictEquals,
   assertThrows,
-} from "@std/assert";
+} from "../../tools/test-assert.ts";
 import { ScopeClosedError } from "../../components/state-store/owned-scope.ts";
 import {
   createIdbPersistenceOwner,

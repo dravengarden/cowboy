@@ -48,9 +48,7 @@ try {
       if (!(error instanceof CompositionCheckError)) throw error;
       code = error.code;
     }
-    if (
-      code !== vector.error || result.success !== (vector.error === undefined)
-    ) {
+    if (code !== vector.error || result.success !== (vector.error === undefined)) {
       throw new Error(`link acceptance differs: ${vector.name}`);
     }
     if (vector.error) {
@@ -66,8 +64,7 @@ try {
       // stable tie ordering and reverse dependencies, not just acceptance.
       if (
         result.stderr.length ||
-        JSON.stringify(JSON.parse(decoder.decode(result.stdout))) !==
-          JSON.stringify(report)
+        JSON.stringify(JSON.parse(decoder.decode(result.stdout))) !== JSON.stringify(report)
       ) {
         throw new Error(`link report differs: ${vector.name}`);
       }

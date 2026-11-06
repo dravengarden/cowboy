@@ -40,11 +40,10 @@ test("next changes only immediate steering; callbacks and ordinary prompts retai
   });
   const push = agent.sessions.one.input.push;
   assert.deepEqual(await agent.steer(request("next")), { outcome: "injected" });
-  assert.deepEqual(messages.map((message) => message.priority), [
-    "next",
-    "later",
-    undefined,
-  ]);
+  assert.deepEqual(
+    messages.map((message) => message.priority),
+    ["next", "later", undefined],
+  );
   assert.ok(messages.every((message) => message.uuid === "original"));
   assert.equal(agent.sessions.one.input.push, push);
   await agent.steer(request("now"));

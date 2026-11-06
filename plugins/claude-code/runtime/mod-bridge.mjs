@@ -8,11 +8,14 @@ const MAX_FRAME = 16 * 1024 * 1024;
 
 // The session values native puts in a Bash command's environment.
 function shellSession(value) {
-  return value && typeof value === "object" && !Array.isArray(value) &&
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
     Object.keys(value).every((key) => ["sessionId", "effort"].includes(key)) &&
-    (value.sessionId === undefined ||
-      /^[a-zA-Z0-9-]{1,128}$/.test(value.sessionId)) &&
-    (value.effort === undefined || /^[a-z]{1,16}$/.test(value.effort));
+    (value.sessionId === undefined || /^[a-zA-Z0-9-]{1,128}$/.test(value.sessionId)) &&
+    (value.effort === undefined || /^[a-z]{1,16}$/.test(value.effort))
+  );
 }
 const BODY_KEYS = {
   "/tool": [
@@ -44,11 +47,17 @@ const BODY_KEYS = {
 // The session variables native gives a stdio MCP server, as the relay
 // received them.
 function mcpEnvironment(value) {
-  return value && typeof value === "object" && !Array.isArray(value) &&
-    Object.entries(value).every(([key, item]) =>
-      ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID"].includes(key) &&
-      typeof item === "string" && /^[a-zA-Z0-9-]{1,128}$/.test(item)
-    );
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([key, item]) =>
+        ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID"].includes(key) &&
+        typeof item === "string" &&
+        /^[a-zA-Z0-9-]{1,128}$/.test(item),
+    )
+  );
 }
 const MCP_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
@@ -69,14 +78,16 @@ function transcriptKey(path) {
 
 async function transcriptCopy(path, root) {
   if (
-    typeof path !== "string" || !root || !path.startsWith(root + "/") ||
-    !path.endsWith(".jsonl") || path.split("/").includes("..")
-  ) return undefined;
+    typeof path !== "string" ||
+    !root ||
+    !path.startsWith(root + "/") ||
+    !path.endsWith(".jsonl") ||
+    path.split("/").includes("..")
+  )
+    return undefined;
   try {
     const stat = await lstat(path);
-    return stat.isFile() && stat.size <= MAX_TRANSCRIPT
-      ? await readFile(path)
-      : undefined;
+    return stat.isFile() && stat.size <= MAX_TRANSCRIPT ? await readFile(path) : undefined;
   } catch {
     return undefined;
   }
@@ -120,7 +131,8 @@ export async function startModBridge(
     try {
       const supplied = Buffer.from(request.headers.authorization ?? "");
       if (
-        !active || supplied.length !== authorization.length ||
+        !active ||
+        supplied.length !== authorization.length ||
         !timingSafeEqual(supplied, authorization)
       ) {
         answer(403, { deny: "Execution endpoint unavailable" });
@@ -154,32 +166,24 @@ export async function startModBridge(
       const call = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       // /hook has required fields and independent optional ones.
       const hookKeys = ["command", "id", "input", "timeout"];
-      const hookOptional = [
-        "argv",
-        "owner",
-        "transcriptPath",
-        "agentTranscriptPath",
-      ];
+      const hookOptional = ["argv", "owner", "transcriptPath", "agentTranscriptPath"];
       if (
-        !call || typeof call !== "object" ||
+        !call ||
+        typeof call !== "object" ||
         (request.url === "/hook"
           ? !hookKeys.every((key) => key in call) ||
-            !Object.keys(call).every((key) =>
-              hookKeys.includes(key) || hookOptional.includes(key)
-            )
-          : !BODY_KEYS[request.url].includes(
-            Object.keys(call).sort().join(","),
-          ))
+            !Object.keys(call).every((key) => hookKeys.includes(key) || hookOptional.includes(key))
+          : !BODY_KEYS[request.url].includes(Object.keys(call).sort().join(",")))
       ) {
         answer(400, { deny: "Invalid execution call" });
         return;
       }
       if (request.url === "/link") {
         // Whether the target path itself is a symbolic link; null if unknown.
-        const symlink = typeof call.path === "string" &&
-            call.path.startsWith("/")
-          ? await tools.isSymlink(call.path).catch(() => null)
-          : null;
+        const symlink =
+          typeof call.path === "string" && call.path.startsWith("/")
+            ? await tools.isSymlink(call.path).catch(() => null)
+            : null;
         answer(200, { symlink });
         return;
       }
@@ -200,7 +204,8 @@ export async function startModBridge(
         }
         if (request.url === "/mcp-write") {
           if (
-            typeof call.data !== "string" || !call.data ||
+            typeof call.data !== "string" ||
+            !call.data ||
             !/^[A-Za-z0-9+/]*={0,2}$/.test(call.data)
           ) {
             answer(400, { deny: "Invalid execution call" });
@@ -210,9 +215,7 @@ export async function startModBridge(
           return;
         }
         if (request.url === "/mcp-read") {
-          if (
-            call.afterSeq !== null && !Number.isSafeInteger(call.afterSeq)
-          ) {
+          if (call.afterSeq !== null && !Number.isSafeInteger(call.afterSeq)) {
             answer(400, { deny: "Invalid execution call" });
             return;
           }
@@ -233,9 +236,10 @@ export async function startModBridge(
       }
       if (request.url === "/resolve") {
         // Target symlink resolution for workspace-scoped permission decisions.
-        const path = typeof call.path === "string" && call.path.startsWith("/")
-          ? await tools.realpath(call.path).catch(() => null)
-          : null;
+        const path =
+          typeof call.path === "string" && call.path.startsWith("/")
+            ? await tools.realpath(call.path).catch(() => null)
+            : null;
         answer(200, { path });
         return;
       }
@@ -249,15 +253,14 @@ export async function startModBridge(
         answer(200, { cancelled: true });
         return;
       }
-      if (
-        ["/agent", "/agent-complete", "/agent-resume"].includes(request.url)
-      ) {
+      if (["/agent", "/agent-complete", "/agent-resume"].includes(request.url)) {
         // Native agent lifecycle observations; the registry validates fields.
-        const registered = request.url === "/agent"
-          ? await tools.registerAgent(call).then(() => true)
-          : request.url === "/agent-resume"
-          ? await tools.resumeAgent(call.agentId)
-          : await tools.completeAgent(call);
+        const registered =
+          request.url === "/agent"
+            ? await tools.registerAgent(call).then(() => true)
+            : request.url === "/agent-resume"
+              ? await tools.resumeAgent(call.agentId)
+              : await tools.completeAgent(call);
         answer(200, { registered });
         return;
       }
@@ -265,27 +268,36 @@ export async function startModBridge(
       if (
         typeof call.id !== "string" ||
         !/^[a-zA-Z0-9_-]{1,256}$/.test(call.id) ||
-        (request.url === "/tool" && (!NATIVE_TOOLS.includes(call.tool) ||
-          !call.input || typeof call.input !== "object" ||
-          Array.isArray(call.input) ||
-          (call.owner !== undefined && !AGENT_ID.test(call.owner)) ||
-          (call.shell !== undefined && !shellSession(call.shell)))) ||
-        (request.url === "/hook" && (typeof call.command !== "string" ||
-          !call.input || typeof call.input !== "object" ||
-          Array.isArray(call.input) || !Number.isSafeInteger(call.timeout) ||
-          call.timeout < 1 || call.timeout > 3600 ||
-          (call.argv !== undefined && (!Array.isArray(call.argv) ||
-            !call.argv.length ||
-            !call.argv.every((value) => typeof value === "string"))) ||
-          (call.owner !== undefined && !AGENT_ID.test(call.owner))))
+        (request.url === "/tool" &&
+          (!NATIVE_TOOLS.includes(call.tool) ||
+            !call.input ||
+            typeof call.input !== "object" ||
+            Array.isArray(call.input) ||
+            (call.owner !== undefined && !AGENT_ID.test(call.owner)) ||
+            (call.shell !== undefined && !shellSession(call.shell)))) ||
+        (request.url === "/hook" &&
+          (typeof call.command !== "string" ||
+            !call.input ||
+            typeof call.input !== "object" ||
+            Array.isArray(call.input) ||
+            !Number.isSafeInteger(call.timeout) ||
+            call.timeout < 1 ||
+            call.timeout > 3600 ||
+            (call.argv !== undefined &&
+              (!Array.isArray(call.argv) ||
+                !call.argv.length ||
+                !call.argv.every((value) => typeof value === "string"))) ||
+            (call.owner !== undefined && !AGENT_ID.test(call.owner))))
       ) {
         answer(400, { deny: "Invalid execution call" });
         return;
       }
       if (request.url === "/permission") {
         if (
-          !NATIVE_TOOLS.includes(call.tool) || !call.input ||
-          typeof call.input !== "object" || Array.isArray(call.input) ||
+          !NATIVE_TOOLS.includes(call.tool) ||
+          !call.input ||
+          typeof call.input !== "object" ||
+          Array.isArray(call.input) ||
           (call.reason !== null && typeof call.reason !== "string") ||
           (call.owner !== undefined && !AGENT_ID.test(call.owner))
         ) {
@@ -306,27 +318,28 @@ export async function startModBridge(
             return;
           }
           approval = {};
-          approval.ready = Promise.resolve().then(() =>
-            permissions.request(call)
-          ).catch(() => ({
-            behavior: "deny",
-            message: "Approval failed; the tool did not run",
-          })).then((result) => {
-            approval.result = result;
-            // An abandoned caller never collects it.
-            setTimeout(() => {
-              if (approvals.get(call.id) === approval) {
-                approvals.delete(call.id);
-              }
-            }, 60000).unref();
-          });
+          approval.ready = Promise.resolve()
+            .then(() => permissions.request(call))
+            .catch(() => ({
+              behavior: "deny",
+              message: "Approval failed; the tool did not run",
+            }))
+            .then((result) => {
+              approval.result = result;
+              // An abandoned caller never collects it.
+              setTimeout(() => {
+                if (approvals.get(call.id) === approval) {
+                  approvals.delete(call.id);
+                }
+              }, 60000).unref();
+            });
           approvals.set(call.id, approval);
         }
         let timer;
         try {
           await Promise.race([
             approval.ready,
-            new Promise((resolve) => timer = setTimeout(resolve, waitMs)),
+            new Promise((resolve) => (timer = setTimeout(resolve, waitMs))),
           ]);
         } finally {
           clearTimeout(timer);
@@ -351,9 +364,7 @@ export async function startModBridge(
       if (request.url === "/task-wait") {
         // The runtime-local waiter behind a native background task that
         // stands for a target command; it never holds a Mods fetch.
-        if (
-          call.afterSeq !== null && !Number.isSafeInteger(call.afterSeq)
-        ) {
+        if (call.afterSeq !== null && !Number.isSafeInteger(call.afterSeq)) {
           answer(400, { deny: "Invalid execution call" });
           return;
         }
@@ -406,13 +417,9 @@ export async function startModBridge(
       // Admission and observation are separate: Mods HTTP has a fixed 30s
       // timeout. A long tool waits through read-only /result requests, never
       // a second /tool submission or another model turn.
-      if (
-        !polling &&
-        (admitted.has(call.id) || admitted.size >= 16384 || outstanding >= 32)
-      ) {
+      if (!polling && (admitted.has(call.id) || admitted.size >= 16384 || outstanding >= 32)) {
         answer(409, {
-          deny:
-            "Execution call already admitted or capacity reached; inspect state before retrying",
+          deny: "Execution call already admitted or capacity reached; inspect state before retrying",
         });
         return;
       }
@@ -427,69 +434,62 @@ export async function startModBridge(
         };
         // A target hook command shares admission, observation and
         // cancellation with tools; the session's mode completes its input.
-        operation.ready = Promise.resolve().then(() =>
-          request.url === "/hook"
-            ? Promise.all([
-              transcriptCopy(call.transcriptPath, transcriptRoot),
-              transcriptCopy(call.agentTranscriptPath, transcriptRoot),
-            ]).then(([transcript, agentTranscript]) =>
-              tools.runHook({
-                transcript: transcript &&
-                  {
-                    bytes: transcript,
-                    key: transcriptKey(call.transcriptPath),
-                  },
-                agentTranscript: agentTranscript && {
-                  bytes: agentTranscript,
-                  key: transcriptKey(call.agentTranscriptPath),
-                },
-                argv: call.argv,
-                command: call.command,
-                // The launcher's live mode, not one recorded at the last prompt.
-                input: JSON.stringify({
-                  ...call.input,
-                  ...(permissions?.mode
-                    ? { permission_mode: permissions.mode }
-                    : {}),
-                }),
-                timeoutMs: call.timeout * 1000,
-                call: owned,
-              })
-            ).then((hook) => ({ hook }))
-            : tools.nativeCall(call.tool, call.input, owned)
-        ).catch(() => ({
-          deny:
-            "Execution result unavailable; inspect state before repeating a mutation",
-        })).then((result) => {
-          let serialized = JSON.stringify(result);
-          const bytes = Buffer.byteLength(serialized ?? "");
-          if (
-            !serialized || bytes > MAX_FRAME ||
-            retainedBytes + bytes > 64 * 1024 * 1024
-          ) {
-            serialized = JSON.stringify({
-              deny:
-                "Target operation finished but its result exceeds the bridge limit; inspect state before repeating a mutation",
-            });
-          }
-          operation.bytes = Buffer.byteLength(serialized);
-          retainedBytes += operation.bytes;
-          operation.result = JSON.parse(serialized);
-          // Completed, unobserved results must not accumulate after a turn is
-          // interrupted. Admission identity remains spent for this process.
-          operation.expiry = setTimeout(
-            () => consume(call.id, operation),
-            60000,
-          );
-          operation.expiry.unref();
-          return true;
-        });
+        operation.ready = Promise.resolve()
+          .then(() =>
+            request.url === "/hook"
+              ? Promise.all([
+                  transcriptCopy(call.transcriptPath, transcriptRoot),
+                  transcriptCopy(call.agentTranscriptPath, transcriptRoot),
+                ])
+                  .then(([transcript, agentTranscript]) =>
+                    tools.runHook({
+                      transcript: transcript && {
+                        bytes: transcript,
+                        key: transcriptKey(call.transcriptPath),
+                      },
+                      agentTranscript: agentTranscript && {
+                        bytes: agentTranscript,
+                        key: transcriptKey(call.agentTranscriptPath),
+                      },
+                      argv: call.argv,
+                      command: call.command,
+                      // The launcher's live mode, not one recorded at the last prompt.
+                      input: JSON.stringify({
+                        ...call.input,
+                        ...(permissions?.mode ? { permission_mode: permissions.mode } : {}),
+                      }),
+                      timeoutMs: call.timeout * 1000,
+                      call: owned,
+                    }),
+                  )
+                  .then((hook) => ({ hook }))
+              : tools.nativeCall(call.tool, call.input, owned),
+          )
+          .catch(() => ({
+            deny: "Execution result unavailable; inspect state before repeating a mutation",
+          }))
+          .then((result) => {
+            let serialized = JSON.stringify(result);
+            const bytes = Buffer.byteLength(serialized ?? "");
+            if (!serialized || bytes > MAX_FRAME || retainedBytes + bytes > 64 * 1024 * 1024) {
+              serialized = JSON.stringify({
+                deny: "Target operation finished but its result exceeds the bridge limit; inspect state before repeating a mutation",
+              });
+            }
+            operation.bytes = Buffer.byteLength(serialized);
+            retainedBytes += operation.bytes;
+            operation.result = JSON.parse(serialized);
+            // Completed, unobserved results must not accumulate after a turn is
+            // interrupted. Admission identity remains spent for this process.
+            operation.expiry = setTimeout(() => consume(call.id, operation), 60000);
+            operation.expiry.unref();
+            return true;
+          });
       }
       const operation = admitted.get(call.id);
       if (!operation) {
         answer(409, {
-          deny:
-            "Result already observed, expired or unknown; inspect target state before retrying",
+          deny: "Result already observed, expired or unknown; inspect target state before retrying",
         });
         return;
       }
@@ -517,8 +517,7 @@ export async function startModBridge(
       }
     } catch {
       answer(500, {
-        deny:
-          "Execution result unavailable; inspect state before repeating a mutation",
+        deny: "Execution result unavailable; inspect state before repeating a mutation",
       });
     }
   });

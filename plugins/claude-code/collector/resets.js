@@ -27,12 +27,14 @@ export async function readCredential(directory) {
     const credential = (await file.json()).claudeAiOauth;
     if (
       typeof credential?.accessToken !== "string" ||
-      !credential.accessToken || /[\s\x00-\x1f]/.test(credential.accessToken) ||
+      !credential.accessToken ||
+      /[\s\x00-\x1f]/.test(credential.accessToken) ||
       !Array.isArray(credential.scopes) ||
       !credential.scopes.includes("user:profile") ||
       !Number.isFinite(credential.expiresAt) ||
       credential.expiresAt <= Date.now()
-    ) throw fail();
+    )
+      throw fail();
     return credential.accessToken;
   } catch {
     throw new ResetFailure("Claude Code usage authentication required.");
@@ -125,10 +127,13 @@ export function resetCredits(block, now = Date.now()) {
   const ids = new Set();
   for (const grant of block.grants ?? []) {
     if (
-      typeof grant?.id !== "string" || !ID.test(grant.id) ||
-      !Number.isSafeInteger(grant.resets_left) || grant.resets_left < 0 ||
+      typeof grant?.id !== "string" ||
+      !ID.test(grant.id) ||
+      !Number.isSafeInteger(grant.resets_left) ||
+      grant.resets_left < 0 ||
       !Array.isArray(grant.clears)
-    ) throw fail();
+    )
+      throw fail();
     const ends = grant.ends_at == null ? undefined : Date.parse(grant.ends_at);
     if (ends !== undefined && !Number.isFinite(ends)) throw fail();
     if (ids.has(grant.id)) {
@@ -137,12 +142,16 @@ export function resetCredits(block, now = Date.now()) {
     ids.add(grant.id);
     const held = grant.resets_left > 0 && (ends === undefined || ends > now);
     if (!held) continue;
-    const usable = held && block.eligible && grant.usable_now === true &&
-      grant.paused !== true && block.next_grant_id === grant.id &&
+    const usable =
+      held &&
+      block.eligible &&
+      grant.usable_now === true &&
+      grant.paused !== true &&
+      block.next_grant_id === grant.id &&
       (!block.cooldown_until || Date.parse(block.cooldown_until) <= now);
-    const labels = grant.clears.filter((limit) =>
-      typeof limit === "string" && Object.hasOwn(LABELS, limit)
-    ).map((limit) => LABELS[limit]);
+    const labels = grant.clears
+      .filter((limit) => typeof limit === "string" && Object.hasOwn(LABELS, limit))
+      .map((limit) => LABELS[limit]);
     grants.push({
       title: labels.join(" + ") || "Usage limit",
       remaining: grant.resets_left,
@@ -159,9 +168,7 @@ export function resetCredits(block, now = Date.now()) {
       // next reset from a multi-use grant after another request spent one.
       id: `${grant.id}:${grant.resets_left}`,
       status: "available",
-      title: `${
-        labels.join(" + ") || "Usage limit"
-      } reset (${grant.resets_left} left)`,
+      title: `${labels.join(" + ") || "Usage limit"} reset (${grant.resets_left} left)`,
       ...(ends === undefined ? {} : { expiresAt: ends / 1000 }),
     });
   }
@@ -174,22 +181,13 @@ export async function fetchResets(client) {
 }
 
 export async function consumeReset(client, request, deadline = Infinity) {
-  if (
-    typeof request.idempotency_key !== "string" ||
-    !REQUEST_ID.test(request.idempotency_key)
-  ) throw fail();
+  if (typeof request.idempotency_key !== "string" || !REQUEST_ID.test(request.idempotency_key))
+    throw fail();
   const credits = await fetchResets(client);
   const credit = credits?.credits.find((entry) => entry.status === "available");
   if (!credit) throw new ResetFailure("No Claude reset is currently usable.");
-  if (
-    request.expected_credit_id != null &&
-    request.expected_credit_id !== credit.id
-  ) {
-    throw new ResetFailure(
-      "Claude reset changed; refresh and confirm again.",
-      false,
-      credit.id,
-    );
+  if (request.expected_credit_id != null && request.expected_credit_id !== credit.id) {
+    throw new ResetFailure("Claude reset changed; refresh and confirm again.", false, credit.id);
   }
   const profile = await client("/api/oauth/profile");
   const org = profile.organization?.uuid;
@@ -215,10 +213,7 @@ export async function consumeReset(client, request, deadline = Infinity) {
       credit.id,
     );
   }
-  if (
-    result.reason === "stamp_indeterminate" ||
-    result.reason === "reset_unconfirmed"
-  ) {
+  if (result.reason === "stamp_indeterminate" || result.reason === "reset_unconfirmed") {
     throw new ResetFailure(
       "Claude reset outcome is unknown. Refresh usage before trying again.",
       true,
@@ -228,11 +223,7 @@ export async function consumeReset(client, request, deadline = Infinity) {
   if (result.result === "reset" || result.result === "already_used") {
     return { outcome: result.result, credit_id: credit.id };
   }
-  if (
-    ["not_limited", "cooldown", "ineligible"].includes(
-      result.result,
-    )
-  ) {
+  if (["not_limited", "cooldown", "ineligible"].includes(result.result)) {
     throw new ResetFailure(
       "Claude could not use this reset. Refresh usage and check availability.",
       false,

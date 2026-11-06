@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertEquals, assertStrictEquals } from "@std/assert";
+import { assert, assertEquals, assertStrictEquals } from "../../tools/test-assert.ts";
 import type { SessionMeta } from "./protocol.ts";
 import { jsonValueEqual, reuseUnchangedSessions } from "./sessionIdentity.ts";
 

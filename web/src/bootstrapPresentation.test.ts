@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { createBootstrapPresentation } from "./bootstrapPresentation.ts";
 
 type Frame = { type: string; value?: string };

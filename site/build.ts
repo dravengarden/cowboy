@@ -92,14 +92,9 @@ const PLUGIN_KINDS = {
   },
   memory_backend: { label: "Memory", translation: "memory" },
   call_profile: { label: "Agent calls", translation: "calls" },
-} satisfies Record<
-  PluginManifest["kind"],
-  { label: string; translation: string }
->;
+} satisfies Record<PluginManifest["kind"], { label: string; translation: string }>;
 
-const WEBSITE_PROVIDER_ACCENTS: Partial<
-  Record<string, { light: string; dark: string }>
-> = {
+const WEBSITE_PROVIDER_ACCENTS: Partial<Record<string, { light: string; dark: string }>> = {
   codex: { light: "#29252F", dark: "#F0ECF8" },
   grok: { light: "#44403C", dark: "#E8E4DC" },
 };
@@ -108,13 +103,7 @@ const NON_AGENT_PRESENTATION: Record<
   string,
   Omit<
     SitePlugin,
-    | "id"
-    | "version"
-    | "componentRelease"
-    | "publisher"
-    | "kind"
-    | "kindLabel"
-    | "sourcePath"
+    "id" | "version" | "componentRelease" | "publisher" | "kind" | "kindLabel" | "sourcePath"
   >
 > = {
   zed: {
@@ -146,49 +135,22 @@ const NON_AGENT_PRESENTATION: Record<
 const REQUIRED_ASSETS = [
   ["site/assets/cowboy-colorways-v10.svg", "assets/cowboy-colorways-v10.svg"],
   ["site/assets/cowboy-tab-icon-v10.svg", "assets/cowboy-tab-icon-v10.svg"],
-  [
-    "site/assets/cowboy-hero-devices-dark-v5.webp",
-    "assets/cowboy-hero-devices-dark.webp",
-  ],
-  [
-    "site/assets/cowboy-desktop-surface-dark-v3.webp",
-    "assets/cowboy-desktop-surface-dark.webp",
-  ],
+  ["site/assets/cowboy-hero-devices-dark-v5.webp", "assets/cowboy-hero-devices-dark.webp"],
+  ["site/assets/cowboy-desktop-surface-dark-v3.webp", "assets/cowboy-desktop-surface-dark.webp"],
   ["site/assets/cowboy-mobile-dark-v3.webp", "assets/cowboy-mobile-dark.webp"],
   ["site/assets/cowboy-hat-mark-v2.svg", "assets/cowboy-hat-mark.svg"],
-  [
-    "site/assets/cowboy-tab-icon-v10-16.png",
-    "assets/cowboy-tab-icon-v10-16.png",
-  ],
-  [
-    "site/assets/cowboy-tab-icon-v10-32.png",
-    "assets/cowboy-tab-icon-v10-32.png",
-  ],
+  ["site/assets/cowboy-tab-icon-v10-16.png", "assets/cowboy-tab-icon-v10-16.png"],
+  ["site/assets/cowboy-tab-icon-v10-32.png", "assets/cowboy-tab-icon-v10-32.png"],
   ["site/assets/cowboy-tab-icon-v10.ico", "assets/cowboy-tab-icon-v10.ico"],
   ["site/assets/cowboy-brand-icon-v10.png", "assets/cowboy-logo-512.png"],
-  [
-    "site/assets/cowboy-brand-icon-v10.png",
-    "assets/cowboy-brand-mark.png",
-  ],
-  [
-    "site/assets/cowboy-hero-devices-light-v4.webp",
-    "assets/cowboy-hero-devices-light.webp",
-  ],
-  [
-    "site/assets/cowboy-desktop-surface-light-v2.webp",
-    "assets/cowboy-desktop-surface-light.webp",
-  ],
-  [
-    "site/assets/cowboy-mobile-light-v2.webp",
-    "assets/cowboy-mobile-light.webp",
-  ],
+  ["site/assets/cowboy-brand-icon-v10.png", "assets/cowboy-brand-mark.png"],
+  ["site/assets/cowboy-hero-devices-light-v4.webp", "assets/cowboy-hero-devices-light.webp"],
+  ["site/assets/cowboy-desktop-surface-light-v2.webp", "assets/cowboy-desktop-surface-light.webp"],
+  ["site/assets/cowboy-mobile-light-v2.webp", "assets/cowboy-mobile-light.webp"],
 ] as const;
 
 const PUBLIC_SITE_FORBIDDEN_TEXT = [
-  [
-    "local filesystem path",
-    /\/(?:home|Users|srv|mnt|Volumes)\/[^\s"'<>]+/u,
-  ],
+  ["local filesystem path", /\/(?:home|Users|srv|mnt|Volumes)\/[^\s"'<>]+/u],
   [
     "private IPv4 address",
     /\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b/u,
@@ -196,13 +158,8 @@ const PUBLIC_SITE_FORBIDDEN_TEXT = [
   ["email address", /\b[\w.%+-]+@[\w.-]+\.[a-z]{2,}\b/iu],
 ] as const;
 
-export function assertPublicSiteContent(
-  label: string,
-  content: string | Uint8Array,
-): void {
-  const text = typeof content === "string"
-    ? content
-    : new TextDecoder().decode(content);
+export function assertPublicSiteContent(label: string, content: string | Uint8Array): void {
+  const text = typeof content === "string" ? content : new TextDecoder().decode(content);
 
   for (const [description, pattern] of PUBLIC_SITE_FORBIDDEN_TEXT) {
     if (pattern.test(text)) {
@@ -212,8 +169,9 @@ export function assertPublicSiteContent(
 }
 
 function assertGenericDemoMachineLabels(html: string): void {
-  const labels = [...html.matchAll(/data-demo-machine="([^"]+)"/gu)]
-    .map((match) => match[1].trim());
+  const labels = [...html.matchAll(/data-demo-machine="([^"]+)"/gu)].map((match) =>
+    match[1].trim(),
+  );
   const expected = [
     "Machine 01",
     "Machine 02",
@@ -224,9 +182,7 @@ function assertGenericDemoMachineLabels(html: string): void {
   ];
 
   if (labels.join("|") !== expected.join("|")) {
-    throw new Error(
-      "hero and topology must use exactly three generic demo Machine labels",
-    );
+    throw new Error("hero and topology must use exactly three generic demo Machine labels");
   }
 }
 
@@ -234,7 +190,7 @@ function joinPath(...parts: string[]): string {
   return parts
     .filter(Boolean)
     .map((part, index) =>
-      index === 0 ? part.replace(/\/+$/u, "") : part.replace(/^\/+|\/+$/gu, "")
+      index === 0 ? part.replace(/\/+$/u, "") : part.replace(/^\/+|\/+$/gu, ""),
     )
     .join("/");
 }
@@ -264,18 +220,14 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
   const identities = new Set<string>();
 
   for (const sourceRoot of PLUGIN_SOURCE_ROOTS) {
-    for (
-      const entry of await readdir(joinPath(root, sourceRoot), {
-        withFileTypes: true,
-      })
-    ) {
+    for (const entry of await readdir(joinPath(root, sourceRoot), {
+      withFileTypes: true,
+    })) {
       if (!entry.isDirectory()) continue;
       const sourcePath = joinPath(sourceRoot, entry.name);
       let manifest: PluginManifest;
       try {
-        manifest = await readJson<PluginManifest>(
-          joinPath(root, sourcePath, "plugin.json"),
-        );
+        manifest = await readJson<PluginManifest>(joinPath(root, sourcePath, "plugin.json"));
       } catch (error) {
         if ((error as { code?: string }).code === "ENOENT") continue;
         throw error;
@@ -292,9 +244,7 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
     manifests.map(async ({ manifest, sourcePath }) => {
       if (manifest.schema_version !== 1) {
         throw new Error(
-          `${manifest.id}: unsupported Plugin schema ${
-            String(manifest.schema_version)
-          }`,
+          `${manifest.id}: unsupported Plugin schema ${String(manifest.schema_version)}`,
         );
       }
       if (!Object.hasOwn(PLUGIN_KINDS, manifest.kind)) {
@@ -312,17 +262,14 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
       } as const;
 
       if (manifest.kind === "workspace_extension") {
-        const contract = await readJson<
-          {
-            id: string;
-            version: string;
-            display_name: string;
-            description: string;
-          }
-        >(joinPath(root, sourcePath, manifest.entrypoint));
-        if (
-          contract.id !== manifest.id || contract.version !== manifest.version
-        ) throw new Error(`${manifest.id}: extension identity mismatch`);
+        const contract = await readJson<{
+          id: string;
+          version: string;
+          display_name: string;
+          description: string;
+        }>(joinPath(root, sourcePath, manifest.entrypoint));
+        if (contract.id !== manifest.id || contract.version !== manifest.version)
+          throw new Error(`${manifest.id}: extension identity mismatch`);
         return {
           ...shared,
           name: contract.display_name,
@@ -336,23 +283,15 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
           markMode: "stroke" as const,
         };
       }
-      if (
-        manifest.kind === "memory_backend" || manifest.kind === "call_profile"
-      ) {
-        const contract = await readJson<
-          {
-            id: string;
-            version: string;
-            display_name: string;
-            description: string;
-          }
-        >(joinPath(root, sourcePath, manifest.entrypoint));
-        if (
-          contract.id !== manifest.id || contract.version !== manifest.version
-        ) {
-          throw new Error(
-            `${manifest.id}: session extension identity mismatch`,
-          );
+      if (manifest.kind === "memory_backend" || manifest.kind === "call_profile") {
+        const contract = await readJson<{
+          id: string;
+          version: string;
+          display_name: string;
+          description: string;
+        }>(joinPath(root, sourcePath, manifest.entrypoint));
+        if (contract.id !== manifest.id || contract.version !== manifest.version) {
+          throw new Error(`${manifest.id}: session extension identity mismatch`);
         }
         const memory = manifest.kind === "memory_backend";
         return {
@@ -373,9 +312,7 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
       if (manifest.kind !== "agent_provider") {
         const presentation = NON_AGENT_PRESENTATION[manifest.id];
         if (!presentation) {
-          throw new Error(
-            `${manifest.id}: missing website presentation metadata`,
-          );
+          throw new Error(`${manifest.id}: missing website presentation metadata`);
         }
         return { ...shared, ...presentation };
       }
@@ -383,12 +320,8 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
       const provider = await readJson<ProviderManifest>(
         joinPath(root, sourcePath, manifest.entrypoint),
       );
-      if (
-        provider.id !== manifest.id || provider.version !== manifest.version
-      ) {
-        throw new Error(
-          `${manifest.id}: Plugin and Provider identities diverge`,
-        );
+      if (provider.id !== manifest.id || provider.version !== manifest.version) {
+        throw new Error(`${manifest.id}: Plugin and Provider identities diverge`);
       }
 
       const display = provider.display;
@@ -418,10 +351,10 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
   );
 
   const order = new Map(PLUGIN_ORDER.map((id, index) => [id, index]));
-  plugins.sort((left, right) =>
-    (order.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
-      (order.get(right.id) ?? Number.MAX_SAFE_INTEGER) ||
-    left.id.localeCompare(right.id)
+  plugins.sort(
+    (left, right) =>
+      (order.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+        (order.get(right.id) ?? Number.MAX_SAFE_INTEGER) || left.id.localeCompare(right.id),
   );
   return plugins;
 }
@@ -434,61 +367,60 @@ function pluginMark(plugin: SitePlugin): string {
   if (gradient) {
     const id = `plugin-gradient-${plugin.id}`;
     paint = `url(#${id})`;
-    definitions = `<defs><linearGradient id="${escapeHtml(id)}" x1="${
-      String(gradient.x1_percent)
-    }%" y1="${String(gradient.y1_percent)}%" x2="${
-      String(gradient.x2_percent)
-    }%" y2="${String(gradient.y2_percent)}%">${
-      gradient.stops.map((stop) =>
-        `<stop offset="${String(stop.offset_percent)}%" stop-color="${
-          escapeHtml(assertHexColor(stop.color, `${plugin.id} gradient stop`))
-        }"></stop>`
-      ).join("")
-    }</linearGradient></defs>`;
+    definitions = `<defs><linearGradient id="${escapeHtml(id)}" x1="${String(
+      gradient.x1_percent,
+    )}%" y1="${String(gradient.y1_percent)}%" x2="${String(
+      gradient.x2_percent,
+    )}%" y2="${String(gradient.y2_percent)}%">${gradient.stops
+      .map(
+        (stop) =>
+          `<stop offset="${String(stop.offset_percent)}%" stop-color="${escapeHtml(
+            assertHexColor(stop.color, `${plugin.id} gradient stop`),
+          )}"></stop>`,
+      )
+      .join("")}</linearGradient></defs>`;
   }
 
-  const path = plugin.markMode === "stroke"
-    ? `<path d="${
-      escapeHtml(plugin.markPath)
-    }" fill="none" stroke="var(--plugin-accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>`
-    : `<path d="${escapeHtml(plugin.markPath)}" fill="${
-      escapeHtml(paint)
-    }"></path>`;
+  const path =
+    plugin.markMode === "stroke"
+      ? `<path d="${escapeHtml(
+          plugin.markPath,
+        )}" fill="none" stroke="var(--plugin-accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>`
+      : `<path d="${escapeHtml(plugin.markPath)}" fill="${escapeHtml(paint)}"></path>`;
 
-  return `<svg viewBox="${
-    escapeHtml(plugin.markViewBox)
-  }" role="img" aria-label="${
-    escapeHtml(plugin.name)
-  } mark">${definitions}${path}</svg>`;
+  return `<svg viewBox="${escapeHtml(plugin.markViewBox)}" role="img" aria-label="${escapeHtml(
+    plugin.name,
+  )} mark">${definitions}${path}</svg>`;
 }
 
 function pluginSourceUrl(plugin: SitePlugin): string {
-  return `https://github.com/dravengarden/cowboy/tree/main/${
-    plugin.sourcePath.split("/").map(encodeURIComponent).join("/")
-  }`;
+  return `https://github.com/dravengarden/cowboy/tree/main/${plugin.sourcePath
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")}`;
 }
 
 export function renderPluginCards(plugins: SitePlugin[]): string {
-  return plugins.map((plugin, index) => `
+  return plugins
+    .map(
+      (plugin, index) => `
             <article
               class="plugin-card reveal"
               data-plugin="${escapeHtml(plugin.id)}"
               data-kind="${escapeHtml(plugin.kind)}"
-              style="--plugin-accent-light: ${
-    escapeHtml(plugin.accentLight)
-  }; --plugin-accent-dark: ${
-    escapeHtml(plugin.accentDark)
-  }; --plugin-secondary: ${
-    escapeHtml(plugin.secondaryAccent)
-  }; --reveal-delay: ${String((index % 3) * 70)}ms"
+              style="--plugin-accent-light: ${escapeHtml(
+                plugin.accentLight,
+              )}; --plugin-accent-dark: ${escapeHtml(
+                plugin.accentDark,
+              )}; --plugin-secondary: ${escapeHtml(
+                plugin.secondaryAccent,
+              )}; --reveal-delay: ${String((index % 3) * 70)}ms"
             >
               <div class="plugin-card-topline">
                 <span data-i18n="plugins.kind.${
-    PLUGIN_KINDS[plugin.kind].translation
-  }">${escapeHtml(plugin.kindLabel)}</span>
-                <span class="plugin-version">v${
-    escapeHtml(plugin.version)
-  }</span>
+                  PLUGIN_KINDS[plugin.kind].translation
+                }">${escapeHtml(plugin.kindLabel)}</span>
+                <span class="plugin-version">v${escapeHtml(plugin.version)}</span>
               </div>
               <div class="plugin-identity">
                 <span class="plugin-mark">${pluginMark(plugin)}</span>
@@ -497,77 +429,65 @@ export function renderPluginCards(plugins: SitePlugin[]): string {
                   <small>${escapeHtml(plugin.vendor)}</small>
                 </span>
               </div>
-              <p data-i18n="plugins.summary.${escapeHtml(plugin.id)}">${
-    escapeHtml(plugin.summary)
-  }</p>
+              <p data-i18n="plugins.summary.${escapeHtml(plugin.id)}">${escapeHtml(
+                plugin.summary,
+              )}</p>
               <div class="plugin-card-footer">
-                <a href="${escapeHtml(pluginSourceUrl(plugin))}"><code>${
-    escapeHtml(plugin.id)
-  }</code></a>
-                <span><span data-i18n="plugins.component">component</span> ${
-    escapeHtml(plugin.componentRelease)
-  }</span>
+                <a href="${escapeHtml(pluginSourceUrl(plugin))}"><code>${escapeHtml(
+                  plugin.id,
+                )}</code></a>
+                <span><span data-i18n="plugins.component">component</span> ${escapeHtml(
+                  plugin.componentRelease,
+                )}</span>
               </div>
-            </article>`).join("");
+            </article>`,
+    )
+    .join("");
 }
 
 export function renderPluginCatalog(plugins: SitePlugin[]): string {
-  return JSON.stringify(
-    plugins.map((plugin) => ({
-      id: plugin.id,
-      name: plugin.name,
-      vendor: plugin.vendor,
-      summary: plugin.summary,
-      kind: plugin.kind,
-      version: plugin.version,
-      component_release: plugin.componentRelease,
-      publisher: plugin.publisher,
-      source_url: pluginSourceUrl(plugin),
-      accent: plugin.accentLight,
-      secondary_accent: plugin.secondaryAccent,
-    })),
-    null,
-    2,
-  ) + "\n";
+  return (
+    JSON.stringify(
+      plugins.map((plugin) => ({
+        id: plugin.id,
+        name: plugin.name,
+        vendor: plugin.vendor,
+        summary: plugin.summary,
+        kind: plugin.kind,
+        version: plugin.version,
+        component_release: plugin.componentRelease,
+        publisher: plugin.publisher,
+        source_url: pluginSourceUrl(plugin),
+        accent: plugin.accentLight,
+        secondary_accent: plugin.secondaryAccent,
+      })),
+      null,
+      2,
+    ) + "\n"
+  );
 }
 
 function validatedOutputPath(root: string, requested: string): string {
   const rootPath = resolve(root);
   const output = resolve(rootPath, requested);
 
-  if (
-    !requested.trim() || output === rootPath ||
-    !output.startsWith(`${rootPath}${sep}`)
-  ) {
+  if (!requested.trim() || output === rootPath || !output.startsWith(`${rootPath}${sep}`)) {
     throw new Error(`refusing unsafe website output path: ${output}`);
   }
   return output;
 }
 
-export async function buildSite(
-  root: string,
-  requestedOutput = "site-dist",
-): Promise<string> {
+export async function buildSite(root: string, requestedOutput = "site-dist"): Promise<string> {
   const output = validatedOutputPath(root, requestedOutput);
   const plugins = await loadSitePlugins(root);
-  const agentCount =
-    plugins.filter((plugin) => plugin.kind === "agent_provider").length;
-  const codeCount =
-    plugins.filter((plugin) => plugin.kind === "code_intelligence").length;
+  const agentCount = plugins.filter((plugin) => plugin.kind === "agent_provider").length;
+  const codeCount = plugins.filter((plugin) => plugin.kind === "code_intelligence").length;
   const template = await readFile(joinPath(root, "site/index.html"), "utf8");
-  const brandMark = await readFile(
-    joinPath(root, "site/assets/cowboy-wordmark-v2.svg"),
-    "utf8",
-  );
+  const brandMark = await readFile(joinPath(root, "site/assets/cowboy-wordmark-v2.svg"), "utf8");
   let brandIndex = 0;
   const html = template
-    .replaceAll(
-      "{{BRAND_MARK}}",
-      () =>
-        brandMark.replaceAll(
-          "curlseal-pigment",
-          `curlseal-pigment-${++brandIndex}`,
-        ),
+    .replaceAll("{{BRAND_MARK}}", () =>
+      brandMark.replaceAll("curlseal-pigment", `curlseal-pigment-${++brandIndex}`),
     )
     .replaceAll("{{PLUGIN_COUNT}}", String(plugins.length))
     .replaceAll("{{AGENT_PLUGIN_COUNT}}", String(agentCount))
@@ -575,12 +495,10 @@ export async function buildSite(
     .replace("{{PLUGIN_CARDS}}", renderPluginCards(plugins));
   const catalog = renderPluginCatalog(plugins);
   const staticFiles = await Promise.all(
-    ["styles.css", "site.js", "robots.txt", "sitemap.xml"].map(
-      async (file) => ({
-        file,
-        content: await readFile(joinPath(root, `site/${file}`), "utf8"),
-      }),
-    ),
+    ["styles.css", "site.js", "robots.txt", "sitemap.xml"].map(async (file) => ({
+      file,
+      content: await readFile(joinPath(root, `site/${file}`), "utf8"),
+    })),
   );
   const assets = await Promise.all(
     REQUIRED_ASSETS.map(async ([source, destination]) => ({
@@ -591,9 +509,7 @@ export async function buildSite(
   );
 
   if (/\{\{[A-Z_]+\}\}/u.test(html)) {
-    throw new Error(
-      "website template still contains an unresolved placeholder",
-    );
+    throw new Error("website template still contains an unresolved placeholder");
   }
 
   assertPublicSiteContent("rendered website", html);
@@ -613,10 +529,7 @@ export async function buildSite(
   await writeFile(joinPath(output, "index.html"), html);
   await writeFile(joinPath(output, "404.html"), html);
   await writeFile(joinPath(output, ".nojekyll"), "");
-  await writeFile(
-    joinPath(output, "plugins.json"),
-    catalog,
-  );
+  await writeFile(joinPath(output, "plugins.json"), catalog);
 
   for (const { file, content } of staticFiles) {
     await writeFile(joinPath(output, file), content);
@@ -636,9 +549,6 @@ function parseOutputArgument(args: string[]): string {
 
 if (import.meta.main) {
   const root = process.cwd();
-  const output = await buildSite(
-    root,
-    parseOutputArgument(process.argv.slice(2)),
-  );
+  const output = await buildSite(root, parseOutputArgument(process.argv.slice(2)));
   console.log(`Cowboy website built at ${output}`);
 }

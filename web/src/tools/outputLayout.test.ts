@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../tools/test-assert.ts";
 import { outputPrefersHorizontalScroll } from "./outputLayout.ts";
 
 test("terminal tables preserve their horizontal columns", () => {

@@ -5,7 +5,7 @@ import {
   assertRejects,
   assertStringIncludes,
   assertThrows,
-} from "@std/assert";
+} from "../../tools/test-assert.ts";
 import { createProviderAuthenticationOwner } from "./providerAuthenticationOwner.ts";
 import { createProviderDialogOwner } from "./providerDialogOwner.ts";
 import { createProviderUninstallOwner } from "./providerUninstallOwner.ts";

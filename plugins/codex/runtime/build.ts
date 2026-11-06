@@ -24,17 +24,15 @@ const baseUrl = (process.argv.slice(2)[0] ?? "").replace(/\/+$/, "");
 // arguments, credentials, homes or environment endpoint. Preserve only tools
 // and CA trust; a disposable home is assigned before package scripts run.
 const buildEnvironment: Record<string, string> = {};
-for (
-  const key of [
-    "PATH",
-    "SSL_CERT_FILE",
-    "SSL_CERT_DIR",
-    "NIX_SSL_CERT_FILE",
-    "TMPDIR",
-    "TMP",
-    "TEMP",
-  ]
-) {
+for (const key of [
+  "PATH",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NIX_SSL_CERT_FILE",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+]) {
   const value = process.env[key];
   if (value !== undefined) buildEnvironment[key] = value;
 }
@@ -42,12 +40,10 @@ if (!baseUrl.startsWith("https://") || baseUrl.includes("latest")) {
   throw new Error("Provider artifact base URL must be immutable HTTPS");
 }
 const source = JSON.parse(await readFile(`${root}/source.json`, "utf8"));
-const manifest = JSON.parse(
-  await readFile(`${pluginRoot}/provider.json`, "utf8"),
-);
+const manifest = JSON.parse(await readFile(`${pluginRoot}/provider.json`, "utf8"));
 const adapter = source.adapter;
-const dependency = manifest.runtime.dependencies.find((value: { id: string }) =>
-  value.id === "codex-acp"
+const dependency = manifest.runtime.dependencies.find(
+  (value: { id: string }) => value.id === "codex-acp",
 );
 if (source.schema_version !== 1 || adapter.version !== dependency?.version) {
   throw new Error("Codex adapter source does not match the Provider pin");
@@ -57,7 +53,8 @@ if (
   adapter.archive_url !==
     `https://codeload.github.com/agentclientprotocol/codex-acp/tar.gz/${adapter.revision}` ||
   adapter.patch !== "adapter.patch"
-) throw new Error("Invalid pinned Codex adapter source");
+)
+  throw new Error("Invalid pinned Codex adapter source");
 
 const output = `${repository}/dist/plugins/codex/runtime`;
 const cache = `${repository}/dist/plugins/.runtime-cache`;
@@ -68,13 +65,7 @@ try {
 } catch (error) {
   if (!((error as { code?: string }).code === "ENOENT")) throw error;
   const partial = `${archive}.${process.pid}.partial`;
-  await run("curl", [
-    "--fail",
-    "--location",
-    "--output",
-    partial,
-    adapter.archive_url,
-  ]);
+  await run("curl", ["--fail", "--location", "--output", partial, adapter.archive_url]);
   await verify(partial, adapter.archive_sha256);
   await rename(partial, archive);
 }
@@ -101,41 +92,35 @@ try {
   await mkdir(sourceRoot);
   await run("tar", ["-xzf", archive, "--strip-components=1", "-C", sourceRoot]);
   await verify(`${sourceRoot}/package-lock.json`, adapter.npm_lock_sha256);
-  await run("patch", [
-    "--batch",
-    "--fuzz=0",
-    "-p1",
-    "-i",
-    `${root}/adapter.patch`,
-  ], sourceRoot);
-  await run(
-    "npm",
-    ["ci", "--ignore-scripts", "--no-audit", "--no-fund"],
-    sourceRoot,
-  );
+  await run("patch", ["--batch", "--fuzz=0", "-p1", "-i", `${root}/adapter.patch`], sourceRoot);
+  await run("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], sourceRoot);
   await run("npm", ["run", "typecheck"], sourceRoot);
   await run("npm", ["test"], sourceRoot);
   await run("npm", ["run", "build"], sourceRoot);
 
   // Preserve the existing component's download verification, exact Node pins,
   // target matrix, archive checks, and unmodified native CLI artifacts.
-  await run(process.execPath, [
-    "run",
-    "--allow-read",
-    "--allow-write=dist",
-    "--allow-net",
-    "--allow-run",
-    "components/provider-runtime/build.ts",
-    "plugins/codex",
-    baseUrl,
-  ], repository);
+  await run(
+    process.execPath,
+    [
+      "run",
+      "--allow-read",
+      "--allow-write=dist",
+      "--allow-net",
+      "--allow-run",
+      "components/provider-runtime/build.ts",
+      "plugins/codex",
+      baseUrl,
+    ],
+    repository,
+  );
   const matrix = JSON.parse(await readFile(matrixPath, "utf8"));
   // The shared builder emits an upstream binding. It must not remain bindable
   // if any later source patch, target repack, or probe fails.
   await rm(matrixPath);
   for (const target of matrix) {
-    const component = target.components.find((value: { dependency: string }) =>
-      value.dependency === "codex-acp"
+    const component = target.components.find(
+      (value: { dependency: string }) => value.dependency === "codex-acp",
     );
     if (!component || component.version !== adapter.version) {
       throw new Error("Missing exact Codex adapter target");
@@ -149,14 +134,8 @@ try {
       `${sourceRoot}/dist/index.js`,
       `${targetRoot}/app/node_modules/@agentclientprotocol/codex-acp/dist/index.js`,
     );
-    await copyFile(
-      `${root}/launch.mjs`,
-      `${targetRoot}/app/cowboy-launch.mjs`,
-    );
-    await copyFile(
-      `${root}/execution-mcp.mjs`,
-      `${targetRoot}/app/execution-mcp.mjs`,
-    );
+    await copyFile(`${root}/launch.mjs`, `${targetRoot}/app/cowboy-launch.mjs`);
+    await copyFile(`${root}/execution-mcp.mjs`, `${targetRoot}/app/execution-mcp.mjs`);
     await cp(`${glue}/node_modules/ws`, `${targetRoot}/app/node_modules/ws`, {
       recursive: true,
     });
@@ -182,27 +161,16 @@ try {
       patch_sha256: await sha256(`${root}/adapter.patch`),
       launcher_sha256: await sha256(`${root}/launch.mjs`),
       memory_bridge_sha256: await sha256(`${targetRoot}/app/memory.mjs`),
-      mcp_process_bridge_sha256: await sha256(
-        `${targetRoot}/app/execution-mcp.mjs`,
-      ),
+      mcp_process_bridge_sha256: await sha256(`${targetRoot}/app/execution-mcp.mjs`),
       glue_lock_sha256: await sha256(`${root}/package-lock.json`),
       memory_client_sha256: await sha256(`${targetRoot}/app/matrix-client.mjs`),
-      execution_bridge_sha256: await sha256(
-        `${targetRoot}/app/cowboy-execution.mjs`,
-      ),
+      execution_bridge_sha256: await sha256(`${targetRoot}/app/cowboy-execution.mjs`),
       bundle_sha256: await sha256(`${sourceRoot}/dist/index.js`),
     };
-    await writeFile(
-      `${targetRoot}/codex-source.json`,
-      JSON.stringify(provenance, null, 2) + "\n",
-    );
-    await copyFile(
-      `${root}/adapter.patch`,
-      `${targetRoot}/codex-adapter.patch`,
-    );
-    const names = [...readdirSync(targetRoot, { withFileTypes: true })].map((
-      entry,
-    ) => entry.name)
+    await writeFile(`${targetRoot}/codex-source.json`, JSON.stringify(provenance, null, 2) + "\n");
+    await copyFile(`${root}/adapter.patch`, `${targetRoot}/codex-adapter.patch`);
+    const names = [...readdirSync(targetRoot, { withFileTypes: true })]
+      .map((entry) => entry.name)
       .sort();
     await run("tar", [
       "--sort=name",
@@ -228,10 +196,7 @@ try {
   }
   // Publish the binding only after every patched target was built successfully.
   const candidateMatrix = `${stage}/runtime-artifacts.json`;
-  await writeFile(
-    candidateMatrix,
-    JSON.stringify(matrix, null, 2) + "\n",
-  );
+  await writeFile(candidateMatrix, JSON.stringify(matrix, null, 2) + "\n");
   await rename(candidateMatrix, matrixPath);
   bindingComplete = true;
   console.log(
@@ -262,23 +227,19 @@ async function sha256(path: string): Promise<string> {
     stderr: "ignore",
   });
   const output = await new Response(child.stdout).text();
-  if (await child.exited !== 0) {
+  if ((await child.exited) !== 0) {
     throw new Error("Could not hash source artifact");
   }
   return output.split(/\s/)[0];
 }
 
 async function verify(path: string, expected: string): Promise<void> {
-  if (!/^[a-f0-9]{64}$/.test(expected) || await sha256(path) !== expected) {
+  if (!/^[a-f0-9]{64}$/.test(expected) || (await sha256(path)) !== expected) {
     throw new Error("Codex source artifact digest mismatch");
   }
 }
 
-async function run(
-  command: string,
-  args: string[],
-  cwd = repository,
-): Promise<void> {
+async function run(command: string, args: string[], cwd = repository): Promise<void> {
   const code = await Bun.spawn({
     cmd: [command, ...args],
     cwd,

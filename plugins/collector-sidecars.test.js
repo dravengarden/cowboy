@@ -24,13 +24,12 @@ function equal(actual, expected, message) {
   }
 }
 
-for (
-  const [provider, readLines] of [["Codex", codexLines], ["Grok", grokLines]]
-) {
+for (const [provider, readLines] of [
+  ["Codex", codexLines],
+  ["Grok", grokLines],
+]) {
   test(`${provider} collector reads fragmented UTF-8 JSON RPC without nonstandard stream globals`, async () => {
-    const bytes = new TextEncoder().encode(
-      '{"id":1,"result":"中文"}\r\n{"id":2}\n{"id":3}',
-    );
+    const bytes = new TextEncoder().encode('{"id":1,"result":"中文"}\r\n{"id":2}\n{"id":3}');
     const stream = new ReadableStream({
       start(controller) {
         for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
@@ -39,11 +38,7 @@ for (
     });
     const messages = [];
     for await (const line of readLines(stream)) messages.push(JSON.parse(line));
-    equal(
-      messages,
-      [{ id: 1, result: "中文" }, { id: 2 }, { id: 3 }],
-      "RPC messages",
-    );
+    equal(messages, [{ id: 1, result: "中文" }, { id: 2 }, { id: 3 }], "RPC messages");
   });
 }
 
@@ -85,12 +80,14 @@ test("DeepSeek collector groups shared account fingerprints without duplicating 
         balance_infos: [3],
       },
     ]),
-    [{
-      accountFingerprint: "same",
-      agents: ["claude", "codex"],
-      isAvailable: true,
-      balanceInfos: [1],
-    }],
+    [
+      {
+        accountFingerprint: "same",
+        agents: ["claude", "codex"],
+        isAvailable: true,
+        balanceInfos: [1],
+      },
+    ],
     "grouped balance account",
   );
 });
@@ -152,11 +149,7 @@ test("Grok reset selection and protobuf string encoding stay deterministic", () 
     "first",
     "nearest Grok credit",
   );
-  equal(
-    [...encodeStringField(10, "abc")],
-    [82, 3, 97, 98, 99],
-    "protobuf field",
-  );
+  equal([...encodeStringField(10, "abc")], [82, 3, 97, 98, 99], "protobuf field");
 });
 
 test("Anthropic collector projects only renderable account fields", () => {
@@ -183,8 +176,7 @@ test("Anthropic collector projects only renderable account fields", () => {
   // An unrecognised plan must still badge as a subscription rather than leak a
   // raw upstream identifier into the card.
   equal(
-    accountView({ subscriptionType: "some_future_tier" }).account.account
-      .planType,
+    accountView({ subscriptionType: "some_future_tier" }).account.account.planType,
     "subscription",
     "unknown Anthropic plan",
   );
@@ -213,11 +205,7 @@ test("Anthropic declares reset through its signed collector", () => {
     true,
     "top bar windows have account-wide labels",
   );
-  equal(
-    KNOWN_PLANS.has("max") && KNOWN_PLANS.has("pro"),
-    true,
-    "known Anthropic plans",
-  );
+  equal(KNOWN_PLANS.has("max") && KNOWN_PLANS.has("pro"), true, "known Anthropic plans");
 });
 
 function fakeCodex(responses) {
@@ -239,18 +227,17 @@ const expired = new Error(
 
 test("Codex collector refreshes an expired token once and retries", async () => {
   const rpc = fakeCodex({
-    "account/read": [{ account: { type: "chatgpt" } }, {
-      account: { type: "chatgpt", planType: "pro" },
-    }],
+    "account/read": [
+      { account: { type: "chatgpt" } },
+      {
+        account: { type: "chatgpt", planType: "pro" },
+      },
+    ],
     "account/rateLimits/read": [expired, { rateLimits: { primary: {} } }],
     "account/usage/read": [{}],
   });
   const result = await collectCodex(rpc);
-  equal(
-    result.account,
-    { account: { type: "chatgpt", planType: "pro" } },
-    "account",
-  );
+  equal(result.account, { account: { type: "chatgpt", planType: "pro" } }, "account");
   equal(
     rpc.calls.filter(([method]) => method === "account/read").map(([, p]) => p),
     [{ refreshToken: false }, { refreshToken: true }],

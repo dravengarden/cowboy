@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "../../../tools/test-assert.ts";
 
 const appUrl = new URL("./AdminApp.tsx", import.meta.url);
 const apiUrl = new URL("./adminApi.ts", import.meta.url);

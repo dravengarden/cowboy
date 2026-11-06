@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { directoryPrefetchTargets } from "./directoryPrefetch.ts";
 
 test("directory prefetch looks ahead one directory layer with a cap", () => {

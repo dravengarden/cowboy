@@ -9,39 +9,39 @@ import { pathToFileURL } from "node:url";
 
 function post(context, path, value) {
   return new Promise((resolve, reject) => {
-    const req = request({
-      socketPath: context.socketPath,
-      path,
-      method: "POST",
-      headers: { authorization: `Bearer ${context.bridgeToken}` },
-    }, (res) => {
-      const chunks = [];
-      res.on("data", (data) => chunks.push(data));
-      res.on("end", () => {
-        try {
-          const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          if (res.statusCode !== 200) reject(new Error(value.deny ?? "failed"));
-          else resolve(value);
-        } catch (error) {
-          reject(error);
-        }
-      });
-      res.on("error", reject);
-    });
+    const req = request(
+      {
+        socketPath: context.socketPath,
+        path,
+        method: "POST",
+        headers: { authorization: `Bearer ${context.bridgeToken}` },
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (data) => chunks.push(data));
+        res.on("end", () => {
+          try {
+            const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+            if (res.statusCode !== 200) reject(new Error(value.deny ?? "failed"));
+            else resolve(value);
+          } catch (error) {
+            reject(error);
+          }
+        });
+        res.on("error", reject);
+      },
+    );
     req.on("error", reject);
     req.end(JSON.stringify(value));
   });
 }
 
 // Relays one server until it closes; resolves with its exit status.
-export async function relay(
-  server,
-  { send, input, stdout, stderr, environment = process.env },
-) {
+export async function relay(server, { send, input, stdout, stderr, environment = process.env }) {
   // The session variables native set for this server reach the target one.
   const env = Object.fromEntries(
     ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID"].flatMap((name) =>
-      typeof environment[name] === "string" ? [[name, environment[name]]] : []
+      typeof environment[name] === "string" ? [[name, environment[name]]] : [],
     ),
   );
   const { id } = await send("/mcp-start", { server, env });
@@ -110,9 +110,7 @@ export async function relay(
   }
 }
 
-if (
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const context = JSON.parse(await readFile(process.argv[2], "utf8"));
   const send = (path, value) => post(context, path, value);
   // Native ends a server it closes; the target's ends with it.

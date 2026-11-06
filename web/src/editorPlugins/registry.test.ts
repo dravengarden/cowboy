@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "../../../tools/test-assert.ts";
 import type { EditorPort } from "../editorExtensions/contract.ts";
 import {
   EDITOR_PLUGIN_API,

@@ -9,23 +9,26 @@ import { pathToFileURL } from "node:url";
 
 function post(context, path, value) {
   return new Promise((resolve, reject) => {
-    const req = request({
-      socketPath: context.socketPath,
-      path,
-      method: "POST",
-      headers: { authorization: `Bearer ${context.bridgeToken}` },
-    }, (res) => {
-      const chunks = [];
-      res.on("data", (data) => chunks.push(data));
-      res.on("end", () => {
-        try {
-          resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-        } catch (error) {
-          reject(error);
-        }
-      });
-      res.on("error", reject);
-    });
+    const req = request(
+      {
+        socketPath: context.socketPath,
+        path,
+        method: "POST",
+        headers: { authorization: `Bearer ${context.bridgeToken}` },
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (data) => chunks.push(data));
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+          } catch (error) {
+            reject(error);
+          }
+        });
+        res.on("error", reject);
+      },
+    );
     req.on("error", reject);
     req.end(JSON.stringify(value));
   });
@@ -37,10 +40,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // TaskStop also stops this task, and natively a stopped task sends nothing.
 const forever = () => new Promise(() => setInterval(() => {}, 1 << 30));
 
-export async function waitFor(
-  id,
-  { post: send, pause = sleep, hold = forever },
-) {
+export async function waitFor(id, { post: send, pause = sleep, hold = forever }) {
   let afterSeq = null;
   let failures = 0;
   for (;;) {
@@ -65,12 +65,8 @@ export async function waitFor(
   }
 }
 
-if (
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
-) {
-  const context = JSON.parse(
-    await readFile(process.env.COWBOY_CLAUDE_CONTEXT, "utf8"),
-  );
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const context = JSON.parse(await readFile(process.env.COWBOY_CLAUDE_CONTEXT, "utf8"));
   const code = await waitFor(process.argv[2], {
     post: (path, value) => post(context, path, value),
   });

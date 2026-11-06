@@ -60,34 +60,28 @@ export function targetShellNotification(notification, tasks) {
   if (!task) return notification;
   return notification
     .replace(`<task-id>${id}</task-id>`, `<task-id>${task.jobId}</task-id>`)
-    .replace(
-      /<tool-use-id>[^<]*<\/tool-use-id>/,
-      `<tool-use-id>${task.toolUseId}</tool-use-id>`,
-    )
+    .replace(/<tool-use-id>[^<]*<\/tool-use-id>/, `<tool-use-id>${task.toolUseId}</tool-use-id>`)
     .replace(
       /<output-file>[^<]*<\/output-file>/,
       `<output-file>cowboy-task://${task.jobId}</output-file>`,
     )
     .replace(
       /<summary>Background command "[\s\S]*?" (completed|failed|was stopped)/,
-      (_match, outcome) =>
-        `<summary>Background command "${task.command}" ${outcome}`,
+      (_match, outcome) => `<summary>Background command "${task.command}" ${outcome}`,
     );
 }
 
 // Native task ids whose notification says native stopped them at their
 // background deadline; the target commands they stand for stop with them.
 export function deadlineTasks(text) {
-  return [
-    ...String(text).matchAll(
-      /<task-notification>[\s\S]*?<\/task-notification>/g,
-    ),
-  ].filter(([found]) =>
-    /<status>killed<\/status>/.test(found) &&
-    /was stopped after reaching its background time limit/.test(found)
-  ).map(([found]) => /<task-id>([^<]*)<\/task-id>/.exec(found)?.[1]).filter(
-    (id) => shellTasks.has(id),
-  );
+  return [...String(text).matchAll(/<task-notification>[\s\S]*?<\/task-notification>/g)]
+    .filter(
+      ([found]) =>
+        /<status>killed<\/status>/.test(found) &&
+        /was stopped after reaching its background time limit/.test(found),
+    )
+    .map(([found]) => /<task-id>([^<]*)<\/task-id>/.exec(found)?.[1])
+    .filter((id) => shellTasks.has(id));
 }
 
 // A target command native stopped at its deadline ends before the model
@@ -96,17 +90,17 @@ export function deadlineTasks(text) {
 async function stopAtDeadline($, event) {
   if (event.origin?.kind !== "task-notification") return [];
   const content = event.message?.content;
-  const text = typeof content === "string"
-    ? content
-    : Array.isArray(content)
-    ? content.map((block) => block.text ?? "").join("\n")
-    : "";
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.map((block) => block.text ?? "").join("\n")
+        : "";
   const unconfirmed = [];
   for (const nativeId of deadlineTasks(text)) {
     const jobId = shellTasks.get(nativeId).jobId;
     jobMirrors.delete(jobId);
-    const response = await bridgePost($, "/task-deadline", { id: jobId })
-      .catch(() => undefined);
+    const response = await bridgePost($, "/task-deadline", { id: jobId }).catch(() => undefined);
     let stopped = false;
     try {
       stopped = response?.ok && JSON.parse(response.text).stopped === true;
@@ -134,28 +128,28 @@ export function unconfirmedStop(event, jobs) {
     ...event,
     message: {
       ...event.message,
-      content: typeof content === "string"
-        ? note(content)
-        : content.map((block) =>
-          block.type === "text" ? { ...block, text: note(block.text) } : block
-        ),
+      content:
+        typeof content === "string"
+          ? note(content)
+          : content.map((block) =>
+              block.type === "text" ? { ...block, text: note(block.text) } : block,
+            ),
     },
   };
 }
 
 export function targetTaskNotificationText(text, outputs) {
-  return text.replace(
-    /<task-notification>[\s\S]*?<\/task-notification>/g,
-    (found) => {
-      const notification = targetShellNotification(found, shellTasks);
-      const id = /<task-id>([^<]*)<\/task-id>/.exec(notification)?.[1];
-      const file = outputs.get(id);
-      return file === undefined ? notification : notification.replace(
-        `<output-file>${file}</output-file>`,
-        `<output-file>cowboy-agent://${id}</output-file>`,
-      );
-    },
-  );
+  return text.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, (found) => {
+    const notification = targetShellNotification(found, shellTasks);
+    const id = /<task-id>([^<]*)<\/task-id>/.exec(notification)?.[1];
+    const file = outputs.get(id);
+    return file === undefined
+      ? notification
+      : notification.replace(
+          `<output-file>${file}</output-file>`,
+          `<output-file>cowboy-agent://${id}</output-file>`,
+        );
+  });
 }
 
 // Idle notifications append as prompts; one arriving during a turn is a
@@ -167,13 +161,12 @@ export function targetTaskNotification(event, outputs) {
     ...event,
     message: {
       ...event.message,
-      content: typeof event.message.content === "string"
-        ? project(event.message.content)
-        : event.message.content.map((block) =>
-          block.type === "text"
-            ? { ...block, text: project(block.text) }
-            : block
-        ),
+      content:
+        typeof event.message.content === "string"
+          ? project(event.message.content)
+          : event.message.content.map((block) =>
+              block.type === "text" ? { ...block, text: project(block.text) } : block,
+            ),
     },
   };
 }
@@ -199,8 +192,7 @@ export function targetPath(value, { targetCwd, targetHome }) {
 }
 
 export function insideWorkspace(path, targetCwd) {
-  return targetCwd === "/" || path === targetCwd ||
-    path.startsWith(targetCwd + "/");
+  return targetCwd === "/" || path === targetCwd || path.startsWith(targetCwd + "/");
 }
 
 // Native permission evaluation resolves working directories on the runtime.
@@ -214,9 +206,7 @@ export function permissionInput(input, paths, outside = false) {
     const path = targetPath(mapped[key], paths);
     if (path === null) mapped[key] = OUTSIDE + "/~" + mapped[key].slice(1);
     else if (!outside && insideWorkspace(path, paths.targetCwd)) {
-      const rest = paths.targetCwd === "/"
-        ? path
-        : path.slice(paths.targetCwd.length);
+      const rest = paths.targetCwd === "/" ? path : path.slice(paths.targetCwd.length);
       mapped[key] = paths.runtimeCwd + rest;
     } else mapped[key] = OUTSIDE + path;
   }
@@ -249,15 +239,12 @@ async function decide($, event, input) {
   if (tool === "Write" && typeof path === "string") {
     const link = await targetQuery($, "/link", { path });
     if (link.symlink !== false) {
-      const real = link.symlink === true
-        ? (await targetQuery($, "/resolve", { path })).path
-        : null;
+      const real = link.symlink === true ? (await targetQuery($, "/resolve", { path })).path : null;
       return link.symlink === true && typeof real === "string"
         ? {
-          decision: "deny",
-          reason:
-            `Refusing to write ${path}: it is a symbolic link. Write to the link's target path instead: ${real}.`,
-        }
+            decision: "deny",
+            reason: `Refusing to write ${path}: it is a symbolic link. Write to the link's target path instead: ${real}.`,
+          }
         : { decision: "ask", reason: `${path} could not be inspected.` };
     }
   }
@@ -266,7 +253,8 @@ async function decide($, event, input) {
   // the target's, was judged against the wrong project: ask only if native
   // would not also allow it with that path outside (e.g. outside bypass).
   if (
-    tool === "Bash" && typeof input.command === "string" &&
+    tool === "Bash" &&
+    typeof input.command === "string" &&
     !insideWorkspace(context.runtimeCwd, context.targetCwd) &&
     input.command.includes(context.runtimeCwd)
   ) {
@@ -274,9 +262,7 @@ async function decide($, event, input) {
       tool,
       input: {
         ...input,
-        command: input.command.split(context.runtimeCwd).join(
-          OUTSIDE + context.runtimeCwd,
-        ),
+        command: input.command.split(context.runtimeCwd).join(OUTSIDE + context.runtimeCwd),
       },
     });
     if (outside?.decision === "allow") return check;
@@ -285,9 +271,7 @@ async function decide($, event, input) {
       reason: "The command names a path outside the target workspace.",
     };
   }
-  if (
-    typeof path !== "string" || !insideWorkspace(path, context.targetCwd)
-  ) return check;
+  if (typeof path !== "string" || !insideWorkspace(path, context.targetCwd)) return check;
   // Allowed only because it is inside the workspace? Natively the path is
   // resolved through symlinks first; an outside destination loses that.
   const outside = await $.tool.check({
@@ -304,11 +288,12 @@ async function decide($, event, input) {
     tool,
     input: permissionInput({ ...input, [key]: real }, context),
   });
-  return resolved?.decision === "allow" ? check : {
-    decision: resolved?.decision === "deny" ? "deny" : "ask",
-    reason:
-      `${path} resolves through a symlink to ${real}, which is outside the allowed working directories.`,
-  };
+  return resolved?.decision === "allow"
+    ? check
+    : {
+        decision: resolved?.decision === "deny" ? "deny" : "ask",
+        reason: `${path} resolves through a symlink to ${real}, which is outside the allowed working directories.`,
+      };
 }
 
 // Native hook matchers: absent, empty or "*" match all; otherwise a
@@ -331,14 +316,13 @@ export function hookOutcome(event, tool, command, run) {
     if (event === "PermissionRequest") return {};
     return event === "PreToolUse"
       ? {
-        deny:
-          `PreToolUse:${tool} hook error: [${command}]: ${run.stderr.trim()}`,
-      }
+          deny: `PreToolUse:${tool} hook error: [${command}]: ${run.stderr.trim()}`,
+        }
       : {
-        context: [
-          `${event}:${tool} hook blocking error from command: "${command}": [${command}]: ${run.stderr}`,
-        ],
-      };
+          context: [
+            `${event}:${tool} hook blocking error from command: "${command}": [${command}]: ${run.stderr}`,
+          ],
+        };
   }
   if (run.exitCode !== 0) return {};
   let output;
@@ -356,25 +340,24 @@ export function hookOutcome(event, tool, command, run) {
     const decision = specific.decision;
     if (decision?.behavior === "deny") {
       return {
-        deny: typeof decision.message === "string"
-          ? decision.message
-          : "Permission denied by a project hook.",
+        deny:
+          typeof decision.message === "string"
+            ? decision.message
+            : "Permission denied by a project hook.",
         ...(decision.interrupt === true ? { stop: "" } : {}),
       };
     }
     if (decision?.behavior !== "allow") return {};
     return decision.updatedInput &&
-        typeof decision.updatedInput === "object" &&
-        !Array.isArray(decision.updatedInput)
+      typeof decision.updatedInput === "object" &&
+      !Array.isArray(decision.updatedInput)
       ? { allow: true, input: decision.updatedInput }
       : { allow: true };
   }
   const outcome = { context: [] };
   if (output.continue === false) outcome.stop = output.stopReason ?? "";
   if (typeof specific.additionalContext === "string") {
-    outcome.context.push(
-      `${event}:${tool} hook additional context: ${specific.additionalContext}`,
-    );
+    outcome.context.push(`${event}:${tool} hook additional context: ${specific.additionalContext}`);
   }
   if (event === "PostToolUse") {
     if (output.decision === "block") {
@@ -387,21 +370,20 @@ export function hookOutcome(event, tool, command, run) {
     return outcome;
   }
   if (event !== "PreToolUse") return outcome;
-  const decision = specific.permissionDecision ??
-    (output.decision === "block"
-      ? "deny"
-      : output.decision === "approve"
-      ? "allow"
-      : undefined);
+  const decision =
+    specific.permissionDecision ??
+    (output.decision === "block" ? "deny" : output.decision === "approve" ? "allow" : undefined);
   const reason = specific.permissionDecisionReason ?? output.reason ?? "";
   if (decision === "deny") {
     outcome.deny = `PreToolUse:${tool} hook error: ${reason}`;
   } else if (decision === "ask") outcome.ask = reason;
   else if (decision === "allow") outcome.allow = true;
   if (
-    specific.updatedInput && typeof specific.updatedInput === "object" &&
+    specific.updatedInput &&
+    typeof specific.updatedInput === "object" &&
     !Array.isArray(specific.updatedInput)
-  ) outcome.input = specific.updatedInput;
+  )
+    outcome.input = specific.updatedInput;
   return outcome;
 }
 
@@ -437,29 +419,30 @@ async function runTargetHook($, entry, input, owner, run) {
 // parallel (identical commands once) and folded as native folds them.
 async function toolHooks($, event, call, input, run, response, error) {
   const matching = (context.hooks.tool[event] ?? []).filter((group) =>
-    hookMatches(group.matcher, call.tool)
+    hookMatches(group.matcher, call.tool),
   );
   const unsupported = matching.find((group) => group.unsupported);
   // A permission hook that cannot run decides nothing: the prompt still asks.
   if (unsupported && event !== "PermissionRequest") {
     return {
       context: [],
-      deny:
-        `The project's ${event} ${unsupported.unsupported} for ${call.tool} cannot run in this execution environment, so the call did not run.`,
+      deny: `The project's ${event} ${unsupported.unsupported} for ${call.tool} cannot run in this execution environment, so the call did not run.`,
     };
   }
   const entries = [
     ...new Map(
-      matching.filter((group) => !group.unsupported).map((group) => {
-        const entry = context.hooks.commands[group.index];
-        return [entry.command, entry];
-      }),
+      matching
+        .filter((group) => !group.unsupported)
+        .map((group) => {
+          const entry = context.hooks.commands[group.index];
+          return [entry.command, entry];
+        }),
     ).values(),
   ];
   if (!entries.length) return { context: [] };
   let session;
   try {
-    session = hookBase.session_id ?? await $.session.id();
+    session = hookBase.session_id ?? (await $.session.id());
   } catch {
     session = undefined;
   }
@@ -468,9 +451,7 @@ async function toolHooks($, event, call, input, run, response, error) {
     ...(typeof session === "string" ? { session_id: session } : {}),
     cwd: context.targetCwd,
     ...(call.agentId === undefined ? {} : { agent_id: call.agentId }),
-    ...(subagentTypes.has(call.agentId)
-      ? { agent_type: subagentTypes.get(call.agentId) }
-      : {}),
+    ...(subagentTypes.has(call.agentId) ? { agent_type: subagentTypes.get(call.agentId) } : {}),
     hook_event_name: event,
     tool_name: call.tool,
     tool_input: input,
@@ -489,28 +470,30 @@ async function toolHooks($, event, call, input, run, response, error) {
   // Async hooks run in the background, as natively: they cannot decide, and
   // their additionalContext/systemMessage reach the model on its next turn.
   for (const entry of entries.filter((entry) => entry.async)) {
-    runOne(entry).then((result) => deliverAsync($, event, call, result))
+    runOne(entry)
+      .then((result) => deliverAsync($, event, call, result))
       .catch(() => {});
   }
   const runs = await Promise.all(
-    entries.filter((entry) => !entry.async).map(async (entry) => {
-      const result = await runOne(entry);
-      // A racing caller acts on each outcome as it arrives.
-      run.each?.(hookOutcome(event, call.tool, entry.command, result));
-      return { entry, result };
-    }),
+    entries
+      .filter((entry) => !entry.async)
+      .map(async (entry) => {
+        const result = await runOne(entry);
+        // A racing caller acts on each outcome as it arrives.
+        run.each?.(hookOutcome(event, call.tool, entry.command, result));
+        return { entry, result };
+      }),
   );
   // A guard that could not run must not let the call proceed unchecked.
   const unavailable = runs.find(({ result }) => result?.unavailable);
   if (event === "PreToolUse" && unavailable) {
     return {
       context: [],
-      deny:
-        `PreToolUse:${call.tool} hook could not run on the target, so the call did not run.`,
+      deny: `PreToolUse:${call.tool} hook could not run on the target, so the call did not run.`,
     };
   }
   const outcomes = runs.map(({ entry, result }) =>
-    hookOutcome(event, call.tool, entry.command, result)
+    hookOutcome(event, call.tool, entry.command, result),
   );
   const folded = { context: outcomes.flatMap((item) => item.context ?? []) };
   for (const key of ["deny", "ask", "allow", "input", "stop"]) {
@@ -547,10 +530,12 @@ async function deliverAsync($, event, call, run) {
   await $.session.append({
     message: {
       type: "user",
-      content: [{
-        type: "text",
-        text: `<system-reminder>\n${notes.join("\n")}\n</system-reminder>`,
-      }],
+      content: [
+        {
+          type: "text",
+          text: `<system-reminder>\n${notes.join("\n")}\n</system-reminder>`,
+        },
+      ],
     },
     ...(call.agentId === undefined ? {} : { agentId: call.agentId }),
   });
@@ -568,16 +553,17 @@ async function notifyOnEnd($, event, task, result, input = event, next) {
   let nativeId;
   if (
     typeof context.taskWait === "string" &&
-    /^[a-zA-Z0-9-]{1,128}$/.test(task.id) && typeof task.command === "string"
+    /^[a-zA-Z0-9-]{1,128}$/.test(task.id) &&
+    typeof task.command === "string"
   ) {
     const command = `${context.taskWait} ${task.id}`;
     // Native gives the task standing for it the command's own background
     // deadline: the requested timeout (as hooks and approvals amended it),
     // else 30 minutes.
-    const deadline = input.run_in_background === true &&
-        Number.isSafeInteger(input.timeout) && input.timeout > 0
-      ? { timeout: input.timeout }
-      : {};
+    const deadline =
+      input.run_in_background === true && Number.isSafeInteger(input.timeout) && input.timeout > 0
+        ? { timeout: input.timeout }
+        : {};
     mirrorCalls.add(command);
     try {
       let started;
@@ -654,9 +640,7 @@ async function shellSession($) {
     ...(typeof sessionId === "string" && /^[a-zA-Z0-9-]{1,128}$/.test(sessionId)
       ? { sessionId }
       : {}),
-    ...(typeof effort === "string" && /^[a-z]{1,16}$/.test(effort)
-      ? { effort }
-      : {}),
+    ...(typeof effort === "string" && /^[a-z]{1,16}$/.test(effort) ? { effort } : {}),
   };
 }
 
@@ -683,8 +667,7 @@ function permissionHooks($, event, input, run) {
   };
   toolHooks($, "PermissionRequest", event, input, hookRun).catch(() => {});
   return {
-    decision: () =>
-      decisions.find((item) => item.deny !== undefined) ?? decisions[0],
+    decision: () => decisions.find((item) => item.deny !== undefined) ?? decisions[0],
     settle: () => {
       if (done) return;
       done = true;
@@ -752,25 +735,22 @@ async function permit($, event, input, run, hook = {}) {
 // Native shows a check's denial reason as the tool result itself (2.1.287,
 // tools/claude_permissions_native_baseline.json).
 export function checkDenial(check) {
-  return typeof check?.reason === "string" && check.reason
-    ? check.reason
-    : "Permission denied.";
+  return typeof check?.reason === "string" && check.reason ? check.reason : "Permission denied.";
 }
 
 function hostAnswer(result, input) {
   if (result.behavior !== "allow") {
     return {
-      deny: typeof result.message === "string" && result.message
-        ? result.message
-        : "The user denied this tool use.",
+      deny:
+        typeof result.message === "string" && result.message
+          ? result.message
+          : "The user denied this tool use.",
     };
   }
   // The host may amend the call; native runs the updated input.
   const updated = result.updatedInput;
   return {
-    input: updated && typeof updated === "object" && !Array.isArray(updated)
-      ? updated
-      : input,
+    input: updated && typeof updated === "object" && !Array.isArray(updated) ? updated : input,
   };
 }
 
@@ -797,36 +777,28 @@ async function stopAgent($, event, next, agentId) {
 async function agent($, event, next) {
   if (event.agentId !== undefined) {
     return {
-      deny:
-        "Nested agents are not available in this execution environment; do the work directly.",
+      deny: "Nested agents are not available in this execution environment; do the work directly.",
     };
   }
   if (event.isolation !== undefined) {
     return {
-      deny:
-        "Worktree and remote agent isolation would run outside the bound workspace; omit isolation.",
+      deny: "Worktree and remote agent isolation would run outside the bound workspace; omit isolation.",
     };
   }
-  if (
-    event.subagent_type !== undefined &&
-    !agentTypes.includes(event.subagent_type)
-  ) {
+  if (event.subagent_type !== undefined && !agentTypes.includes(event.subagent_type)) {
     return {
       deny: `Use one of these agent types: ${agentTypes.join(", ")}.`,
     };
   }
   if (event.run_in_background === false) {
     return {
-      deny:
-        "Run the agent in the background; its completion notification delivers the result.",
+      deny: "Run the agent in the background; its completion notification delivers the result.",
     };
   }
   const result = await next(event);
   const task = result?.result;
-  if (
-    !task?.isAsync || typeof task.agentId !== "string" ||
-    typeof task.outputFile !== "string"
-  ) return result;
+  if (!task?.isAsync || typeof task.agentId !== "string" || typeof task.outputFile !== "string")
+    return result;
   const handle = "cowboy-agent://" + task.agentId;
   // Project the notification even if durable registration fails below.
   agentOutputs.set(task.agentId, task.outputFile);
@@ -837,12 +809,16 @@ async function agent($, event, next) {
     toolUseId: event.tool_use_id,
     owner: event.agentId ?? null,
     outputFile: task.outputFile,
-  }).then((response) => response.ok, () => false);
+  }).then(
+    (response) => response.ok,
+    () => false,
+  );
   agentRegistrations.set(task.agentId, registered);
   if (await registered) return projected;
   return {
     ...projected,
-    text: (projected.text ?? "") +
+    text:
+      (projected.text ?? "") +
       "\nIts final answer could not be recorded for a later Read; use its completion notification.",
   };
 }
@@ -853,9 +829,7 @@ function environment() {
 
 export function unlabeledContext(text) {
   const label = "tool.call hook additional context: ";
-  return typeof text === "string" && text.startsWith(label)
-    ? text.slice(label.length)
-    : text;
+  return typeof text === "string" && text.startsWith(label) ? text.slice(label.length) : text;
 }
 
 // Replaces native's `# gitStatus` section (the runtime's) with the target's,
@@ -868,15 +842,12 @@ export function targetSessionContext(text, git) {
     // Native had no Git context (its runtime directory is no repository):
     // the target's still goes where native puts it.
     const at = text.indexOf(trailer);
-    return git === null || at < 0
-      ? text
-      : `${text.slice(0, at)}\n${header}${git}${text.slice(at)}`;
+    return git === null || at < 0 ? text : `${text.slice(0, at)}\n${header}${git}${text.slice(at)}`;
   }
   let end = text.indexOf("\n# ", start + header.length);
   if (end < 0) end = text.indexOf(trailer, start);
   if (end < 0) end = text.length;
-  const rest = text.slice(0, start) + (git === null ? "" : header + git) +
-    text.slice(end);
+  const rest = text.slice(0, start) + (git === null ? "" : header + git) + text.slice(end);
   return /^# /m.test(rest) ? rest : null;
 }
 
@@ -889,8 +860,10 @@ function instructions(_$, event) {
       instructionFiles: [],
     };
   }
-  const claudeMd = event.blocks.find((block) => block.name === "claudeMd") ??
-    { name: "claudeMd", text: "" };
+  const claudeMd = event.blocks.find((block) => block.name === "claudeMd") ?? {
+    name: "claudeMd",
+    text: "",
+  };
   return {
     blocks: [
       claudeMd,
@@ -924,18 +897,18 @@ export async function nativeLocalRead($, event, next, answer) {
   }
   const named = JSON.parse(
     // A callback: the target path's own `$` sequences stay literal.
-    JSON.stringify(local ?? {}).replaceAll(
-      JSON.stringify(localRead).slice(1, -1),
-      () => JSON.stringify(localTarget).slice(1, -1),
+    JSON.stringify(local ?? {}).replaceAll(JSON.stringify(localRead).slice(1, -1), () =>
+      JSON.stringify(localTarget).slice(1, -1),
     ),
   );
   // A native failure comes back as its message, in the error's form.
   if (named.isError === true || typeof named.deny === "string") {
-    const message = typeof named.deny === "string"
-      ? named.deny
-      : typeof named.result === "string"
-      ? named.result
-      : "Target image could not be read";
+    const message =
+      typeof named.deny === "string"
+        ? named.deny
+        : typeof named.result === "string"
+          ? named.result
+          : "Target image could not be read";
     return rememberDenial(event, {
       deny: message.replace(/^Error: /, ""),
     });
@@ -980,23 +953,21 @@ export function targetSkillText(text, skills) {
   // One pass, longest first: a skill named like the start of another's name
   // never claims its directory, and a mapped path is not mapped again.
   const directories = new Map(
-    skills.entries.filter((entry) => entry.mirrorDirectory).map((entry) => [
-      entry.mirrorDirectory,
-      entry.targetDirectory,
-    ]),
+    skills.entries
+      .filter((entry) => entry.mirrorDirectory)
+      .map((entry) => [entry.mirrorDirectory, entry.targetDirectory]),
   );
   const result = directories.size
     ? text.replace(
-      new RegExp(
-        [...directories.keys()].sort((left, right) =>
-          right.length - left.length
-        ).map((path) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(
-          "|",
+        new RegExp(
+          [...directories.keys()]
+            .sort((left, right) => right.length - left.length)
+            .map((path) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join("|"),
+          "g",
         ),
-        "g",
-      ),
-      (path) => directories.get(path),
-    )
+        (path) => directories.get(path),
+      )
     : text;
   return result.replaceAll(skills.prefix, "");
 }
@@ -1012,26 +983,27 @@ export function targetSkillListing(text, skills) {
   // name differs from its directory's is listed as `<directory> (<name>)`
   // (2.1.296); the directory is the name it is called by.
   const named = (item) =>
-    (item.includes(": ") ? item.slice(0, item.indexOf(": ")) : item.trimEnd())
-      .replace(/ \([^)\n]*\)$/, "");
+    (item.includes(": ") ? item.slice(0, item.indexOf(": ")) : item.trimEnd()).replace(
+      / \([^)\n]*\)$/,
+      "",
+    );
   const own = new Map(skills.entries.map((entry) => [entry.name, entry]));
-  const rank = (entry) =>
-    entry.kind === "command" ? 2 : entry.scope === "user" ? 0 : 1;
-  const target = items.filter((item) => named(item).startsWith(skills.prefix))
+  const rank = (entry) => (entry.kind === "command" ? 2 : entry.scope === "user" ? 0 : 1);
+  const target = items
+    .filter((item) => named(item).startsWith(skills.prefix))
     .map((item) => ({
       item: targetSkillText(item, skills),
       entry: own.get(named(item).slice(skills.prefix.length)),
-    })).filter(({ entry }) => entry).sort((left, right) =>
-      rank(left.entry) - rank(right.entry) ||
-      (left.entry.name < right.entry.name
-        ? -1
-        : left.entry.name > right.entry.name
-        ? 1
-        : 0)
+    }))
+    .filter(({ entry }) => entry)
+    .sort(
+      (left, right) =>
+        rank(left.entry) - rank(right.entry) ||
+        (left.entry.name < right.entry.name ? -1 : left.entry.name > right.entry.name ? 1 : 0),
     );
   const shadowed = new Set(target.map(({ entry }) => entry.name));
-  const rest = items.filter((item) =>
-    !named(item).startsWith(skills.prefix) && !shadowed.has(named(item))
+  const rest = items.filter(
+    (item) => !named(item).startsWith(skills.prefix) && !shadowed.has(named(item)),
   );
   return [head, ...target.map(({ item }) => item), ...rest].join("\n- ");
 }
@@ -1073,9 +1045,7 @@ const WITHHELD = [
 const denials = new Map();
 
 export function rememberDenial(event, answer, reasons = denials) {
-  if (
-    typeof answer?.deny !== "string" || typeof event?.tool_use_id !== "string"
-  ) return answer;
+  if (typeof answer?.deny !== "string" || typeof event?.tool_use_id !== "string") return answer;
   if (reasons.size >= 1024) reasons.delete(reasons.keys().next().value);
   reasons.set(event.tool_use_id, answer.deny);
   return answer;
@@ -1092,19 +1062,19 @@ export function withheldResult(event, reasons = denials) {
     }
     const reason = reasons.get(block.tool_use_id);
     reasons.delete(block.tool_use_id);
-    const text = typeof block.content === "string"
-      ? block.content
-      : Array.isArray(block.content) && block.content.length === 1 &&
-          block.content[0]?.type === "text"
-      ? block.content[0].text
-      : undefined;
+    const text =
+      typeof block.content === "string"
+        ? block.content
+        : Array.isArray(block.content) &&
+            block.content.length === 1 &&
+            block.content[0]?.type === "text"
+          ? block.content[0].text
+          : undefined;
     if (!WITHHELD.some((note) => text === tool + note + reason)) return block;
     changed = true;
     return { ...block, content: reason };
   });
-  return changed
-    ? { ...event, message: { ...event.message, content: blocks } }
-    : event;
+  return changed ? { ...event, message: { ...event.message, content: blocks } } : event;
 }
 let skillShellCount = 0;
 
@@ -1126,8 +1096,7 @@ async function skillShell($, command, raw, entry, call = {}) {
   }
   const id = `${context.nonce}-skill-${++skillShellCount}`;
   const abandoned = () =>
-    call.signal?.aborted ||
-    (call.owner !== undefined && stoppedAgents.has(call.owner));
+    call.signal?.aborted || (call.owner !== undefined && stoppedAgents.has(call.owner));
   const abandon = () => bridgePost($, "/cancel", { id }).catch(() => {});
   if (abandoned()) return { failure: "Tool call was cancelled" };
   call.signal?.addEventListener("abort", abandon, { once: true });
@@ -1160,8 +1129,7 @@ async function skillShell($, command, raw, entry, call = {}) {
       if (result.task || result.running) {
         abandon();
         return {
-          failure:
-            `Shell command failed for pattern "${raw}": [stderr]\nThe command did not complete within the Bash timeout.`,
+          failure: `Shell command failed for pattern "${raw}": [stderr]\nThe command did not complete within the Bash timeout.`,
         };
       }
       if (typeof result.deny === "string") {
@@ -1173,8 +1141,7 @@ async function skillShell($, command, raw, entry, call = {}) {
         };
       }
       return {
-        text: [result.result?.stdout, result.result?.stderr].filter(Boolean)
-          .join("\n"),
+        text: [result.result?.stdout, result.result?.stderr].filter(Boolean).join("\n"),
       };
     }
   } finally {
@@ -1184,16 +1151,10 @@ async function skillShell($, command, raw, entry, call = {}) {
 
 // A target skill's text with its marked shell commands run on the target.
 export async function targetSkillShell(text, marker, run) {
-  const fenced = new RegExp(
-    "```" + marker + "!\\s*\\n?([\\s\\S]*?)\\n?```",
-    "g",
-  );
+  const fenced = new RegExp("```" + marker + "!\\s*\\n?([\\s\\S]*?)\\n?```", "g");
   const inline = new RegExp("(?<=^|\\s)!" + marker + "`([^`]+)`", "gm");
   const unmarked = (value) =>
-    value.replaceAll("```" + marker + "!", "```!").replaceAll(
-      "!" + marker + "`",
-      "!`",
-    );
+    value.replaceAll("```" + marker + "!", "```!").replaceAll("!" + marker + "`", "!`");
   let result = text;
   for (const match of [...text.matchAll(fenced), ...text.matchAll(inline)]) {
     const command = match[1].trim();
@@ -1207,20 +1168,16 @@ export async function targetSkillShell(text, marker, run) {
 
 async function skillPrompt($, event, next) {
   const skills = context?.skills;
-  const entry = typeof event.skill === "string" && skills &&
-      event.skill.startsWith(skills.prefix)
-    ? skills.entries.find((item) =>
-      item.name === event.skill.slice(skills.prefix.length)
-    )
-    : undefined;
+  const entry =
+    typeof event.skill === "string" && skills && event.skill.startsWith(skills.prefix)
+      ? skills.entries.find((item) => item.name === event.skill.slice(skills.prefix.length))
+      : undefined;
   if (!entry) return next(event);
   // A user's typed command has no Skill call; its expansion's own signal
   // cancels it.
   const call = skillCalls.get(event.skill) ?? { signal: next.signal };
-  const expanded = await targetSkillShell(
-    event.text,
-    skills.marker,
-    (command, raw) => skillShell($, command, raw, entry, call),
+  const expanded = await targetSkillShell(event.text, skills.marker, (command, raw) =>
+    skillShell($, command, raw, entry, call),
   );
   if (expanded.failure !== undefined) {
     call.failure = expanded.failure;
@@ -1231,44 +1188,52 @@ async function skillPrompt($, event, next) {
 
 // The target's MCP servers as launch.mjs describes them (mcp.mjs).
 export function validMcp(mcp) {
-  return Boolean(mcp) && Array.isArray(mcp.servers) &&
-    mcp.servers.every((server) =>
-      typeof server?.name === "string" &&
-      server.prefix === "mcp__" + server.name + "__" &&
-      ["target", "runtime"].includes(server.placement)
-    ) && Array.isArray(mcp.omitted) &&
-    mcp.omitted.every((server) =>
-      typeof server?.name === "string" && typeof server.reason === "string"
-    );
+  return (
+    Boolean(mcp) &&
+    Array.isArray(mcp.servers) &&
+    mcp.servers.every(
+      (server) =>
+        typeof server?.name === "string" &&
+        server.prefix === "mcp__" + server.name + "__" &&
+        ["target", "runtime"].includes(server.placement),
+    ) &&
+    Array.isArray(mcp.omitted) &&
+    mcp.omitted.every(
+      (server) => typeof server?.name === "string" && typeof server.reason === "string",
+    )
+  );
 }
 
 // The target's skills as launch.mjs describes them (skills.mjs).
 export function validSkills(skills) {
   const strings = (value) =>
     Array.isArray(value) && value.every((item) => typeof item === "string");
-  return Boolean(skills) && skills.prefix === "cowboy-target:" &&
+  return (
+    Boolean(skills) &&
+    skills.prefix === "cowboy-target:" &&
     Array.isArray(skills.entries) &&
-    (skills.entries.length === 0 ||
-      /^cowboy[a-f0-9]{32}$/.test(skills.marker)) &&
-    skills.entries.every((entry) =>
-      typeof entry?.name === "string" && entry.name !== "" &&
-      ["user", "project"].includes(entry.scope) &&
-      strings(entry.allowedTools) &&
-      (entry.kind === "command" ||
-        (entry.kind === "skill" &&
-          [entry.mirrorDirectory, entry.targetDirectory].every((path) =>
-            typeof path === "string" && path.startsWith("/") &&
-            !path.endsWith("/")
-          )))
+    (skills.entries.length === 0 || /^cowboy[a-f0-9]{32}$/.test(skills.marker)) &&
+    skills.entries.every(
+      (entry) =>
+        typeof entry?.name === "string" &&
+        entry.name !== "" &&
+        ["user", "project"].includes(entry.scope) &&
+        strings(entry.allowedTools) &&
+        (entry.kind === "command" ||
+          (entry.kind === "skill" &&
+            [entry.mirrorDirectory, entry.targetDirectory].every(
+              (path) => typeof path === "string" && path.startsWith("/") && !path.endsWith("/"),
+            ))),
     ) &&
     Array.isArray(skills.omitted) &&
-    skills.omitted.every((entry) =>
-      typeof entry?.name === "string" && typeof entry.reason === "string"
-    ) && strings(skills.bundled) &&
-    Boolean(skills.unavailable) && typeof skills.unavailable === "object" &&
-    Object.values(skills.unavailable).every((reason) =>
-      typeof reason === "string"
-    );
+    skills.omitted.every(
+      (entry) => typeof entry?.name === "string" && typeof entry.reason === "string",
+    ) &&
+    strings(skills.bundled) &&
+    Boolean(skills.unavailable) &&
+    typeof skills.unavailable === "object" &&
+    Object.values(skills.unavailable).every((reason) => typeof reason === "string")
+  );
 }
 
 // Strings of a native message about the target's skills, renamed. A stored
@@ -1276,11 +1241,11 @@ export function validSkills(skills) {
 function targetSkillValue(value, skills) {
   if (typeof value === "string") {
     const listing =
-      /^(<system-reminder>\n)?(The following skills are available for use with the Skill tool:[\s\S]*?)(\n<\/system-reminder>\n*)?$/
-        .exec(value);
+      /^(<system-reminder>\n)?(The following skills are available for use with the Skill tool:[\s\S]*?)(\n<\/system-reminder>\n*)?$/.exec(
+        value,
+      );
     return listing
-      ? (listing[1] ?? "") + targetSkillListing(listing[2], skills) +
-        (listing[3] ?? "")
+      ? (listing[1] ?? "") + targetSkillListing(listing[2], skills) + (listing[3] ?? "")
       : targetSkillText(value, skills);
   }
   if (Array.isArray(value)) {
@@ -1288,9 +1253,7 @@ function targetSkillValue(value, skills) {
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map((
-        [key, item],
-      ) => [key, targetSkillValue(item, skills)]),
+      Object.entries(value).map(([key, item]) => [key, targetSkillValue(item, skills)]),
     );
   }
   return value;
@@ -1300,9 +1263,7 @@ function targetSkillValue(value, skills) {
 // works here, or a refusal that says why.
 async function skillCall($, event, next) {
   const skills = context.skills;
-  const requested = typeof event.skill === "string"
-    ? event.skill.replace(/^\//, "")
-    : event.skill;
+  const requested = typeof event.skill === "string" ? event.skill.replace(/^\//, "") : event.skill;
   const target = skills.entries.some((entry) => entry.name === requested);
   if (!target && Object.hasOwn(skills.unavailable, requested)) {
     return {
@@ -1314,8 +1275,7 @@ async function skillCall($, event, next) {
   const omitted = skills.omitted.find((entry) => entry.name === requested);
   if (!target && omitted) {
     return {
-      deny:
-        `The ${requested} skill is unavailable in this execution session: ${omitted.reason}.`,
+      deny: `The ${requested} skill is unavailable in this execution session: ${omitted.reason}.`,
     };
   }
   const skill = target ? skills.prefix + requested : event.skill;
@@ -1327,10 +1287,8 @@ async function skillCall($, event, next) {
   let result;
   try {
     await previous;
-    if (
-      call.signal?.aborted ||
-      (call.owner !== undefined && stoppedAgents.has(call.owner))
-    ) return { deny: "Tool call was cancelled" };
+    if (call.signal?.aborted || (call.owner !== undefined && stoppedAgents.has(call.owner)))
+      return { deny: "Tool call was cancelled" };
     skillCalls.set(skill, call);
     result = await next({ ...event, skill });
   } finally {
@@ -1359,15 +1317,14 @@ const SKILL_ATTACHMENTS = [
 function targetCommandNames(value, skills) {
   return typeof value === "string"
     ? value.replace(
-      /<(command-message|command-name)>([^<]*)<\/\1>/g,
-      (_tag, name, text) =>
-        `<${name}>${targetSkillText(text, skills)}</${name}>`,
-    )
+        /<(command-message|command-name)>([^<]*)<\/\1>/g,
+        (_tag, name, text) => `<${name}>${targetSkillText(text, skills)}</${name}>`,
+      )
     : Array.isArray(value)
-    ? value.map((item) => targetCommandNames(item, skills))
-    : typeof value?.text === "string"
-    ? { ...value, text: targetCommandNames(value.text, skills) }
-    : value;
+      ? value.map((item) => targetCommandNames(item, skills))
+      : typeof value?.text === "string"
+        ? { ...value, text: targetCommandNames(value.text, skills) }
+        : value;
 }
 
 // A message about the target's skills as it enters the session: the Skill
@@ -1379,20 +1336,22 @@ export function targetSkillAppend(event, skills) {
   if (
     !skills?.entries.length ||
     !(Array.isArray(message?.content) || typeof message?.content === "string")
-  ) return event;
-  const project = (event.origin?.kind === "tool" &&
+  )
+    return event;
+  const project =
+    (event.origin?.kind === "tool" &&
       event.origin.tool === "Skill" &&
       ["tool-result", "tool-message"].includes(event.door)) ||
-      (event.door === "attachment" && SKILL_ATTACHMENTS.includes(message.name))
-    ? targetSkillValue
-    : event.door === "command"
-    ? targetCommandNames
-    : undefined;
+    (event.door === "attachment" && SKILL_ATTACHMENTS.includes(message.name))
+      ? targetSkillValue
+      : event.door === "command"
+        ? targetCommandNames
+        : undefined;
   return project
     ? {
-      ...event,
-      message: { ...message, content: project(message.content, skills) },
-    }
+        ...event,
+        message: { ...message, content: project(message.content, skills) },
+      }
     : event;
 }
 
@@ -1420,38 +1379,46 @@ export function targetLoopback(url) {
   }
   // A trailing dot names the same host; an IPv4-mapped address the same IP.
   host = host.replace(/\.$/, "").replace(/^::ffff:/, "");
-  return host === "localhost" || host.endsWith(".localhost") ||
-    host === "::1" || host === "0.0.0.0" || host === "::" ||
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "::1" ||
+    host === "0.0.0.0" ||
+    host === "::" ||
     /^127\.\d+\.\d+\.\d+$/.test(host) ||
-    /^7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host);
+    /^7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host)
+  );
 }
 
 export function targetImageResult(event) {
   if (
     event.origin?.kind !== "tool" ||
-    !["Read", "ReadFile", "mcp__cowboy_execution__read"].includes(
-      event.origin.tool,
-    )
-  ) return event;
+    !["Read", "ReadFile", "mcp__cowboy_execution__read"].includes(event.origin.tool)
+  )
+    return event;
   return {
     ...event,
     message: {
       ...event.message,
       content: event.message.content.map((block) => {
         if (
-          block.type !== "tool_result" || !Array.isArray(block.content) ||
+          block.type !== "tool_result" ||
+          !Array.isArray(block.content) ||
           !block.content.some((item) => item.type === "image")
-        ) return block;
+        )
+          return block;
         // Native MCP image persistence appends an OVH cache path. The facade
         // already supplies the real target path. Keep the original media and
         // target caption, removing only this generated native locator before
         // it enters the durable transcript (including resume/compaction).
         return {
           ...block,
-          content: block.content.filter((item) =>
-            item.type !== "text" ||
-            !/^\[Image: source: .*\/tool-results\/mcp-cowboy_execution-blob-[^\n]+\]$/
-              .test(item.text)
+          content: block.content.filter(
+            (item) =>
+              item.type !== "text" ||
+              !/^\[Image: source: .*\/tool-results\/mcp-cowboy_execution-blob-[^\n]+\]$/.test(
+                item.text,
+              ),
           ),
         };
       }),
@@ -1470,13 +1437,13 @@ export function targetCompactionResult(event) {
       content: event.message.content.map((block) =>
         block.type === "text"
           ? {
-            ...block,
-            text: block.text.replace(
-              /\nIf you need specific details from before compaction \(like exact code snippets, error messages, or content you generated\), read the full transcript at: [^\n]+\.jsonl\n/g,
-              "\n",
-            ),
-          }
-          : block
+              ...block,
+              text: block.text.replace(
+                /\nIf you need specific details from before compaction \(like exact code snippets, error messages, or content you generated\), read the full transcript at: [^\n]+\.jsonl\n/g,
+                "\n",
+              ),
+            }
+          : block,
       ),
     },
   };
@@ -1487,9 +1454,7 @@ export function register(on) {
   // Those snapshots describe the runtime filesystem, never the target. Drop
   // their model-facing attachment on every render, including a cold resume;
   // the native summary stays and explicit Read can reacquire target content.
-  on("prompt.attachment", { type: "file" }, () => ({ text: null })).catch(
-    () => ({ text: null }),
-  );
+  on("prompt.attachment", { type: "file" }, () => ({ text: null })).catch(() => ({ text: null }));
   // Target tools keep native's own descriptions, as in a local session.
   on("tool.describe", (_$, event, next) => next(event));
 
@@ -1497,19 +1462,19 @@ export function register(on) {
   // session already decided; it is never put to the user again.
   on("tool.check", (_$, event, next) =>
     mirrorCalls.has(
-        event.tool === "Bash"
-          ? event.input?.command
-          : event.tool === "TaskStop"
+      event.tool === "Bash"
+        ? event.input?.command
+        : event.tool === "TaskStop"
           ? event.input?.task_id
           : undefined,
-      )
+    )
       ? { decision: "allow" }
-      : next(event));
+      : next(event),
+  );
   on("tool.call", async ($, event, next) => {
     if (event.tool === "WebFetch" && targetLoopback(event.url)) {
       return {
-        deny:
-          "WebFetch runs where this session runs, not on the target machine, so it cannot reach the target's localhost. Fetch the URL on the target with Bash (for example curl) instead.",
+        deny: "WebFetch runs where this session runs, not on the target machine, so it cannot reach the target's localhost. Fetch the URL on the target with Bash (for example curl) instead.",
       };
     }
     if (RUNTIME_TOOLS.includes(event.tool)) return next(event);
@@ -1517,10 +1482,9 @@ export function register(on) {
     // process runs on the target behind its relay (mcp.mjs).
     if (
       typeof event.tool === "string" &&
-      context?.mcp.servers.some((server) =>
-        event.tool.startsWith(server.prefix)
-      )
-    ) return next(event);
+      context?.mcp.servers.some((server) => event.tool.startsWith(server.prefix))
+    )
+      return next(event);
     if (event.tool === "Skill") {
       return context ? skillCall($, event, next) : { deny: unavailable };
     }
@@ -1529,7 +1493,8 @@ export function register(on) {
     if (
       event.agentId === undefined &&
       mirrorCalls.has(event.tool === "Bash" ? event.command : event.task_id)
-    ) return next(event);
+    )
+      return next(event);
     if (
       context?.memory &&
       [
@@ -1540,10 +1505,9 @@ export function register(on) {
         "memory_read",
         "memory_execute",
         "memory_receipt",
-      ].some((
-        name,
-      ) => event.tool === "mcp__matrix__" + name)
-    ) return next(event);
+      ].some((name) => event.tool === "mcp__matrix__" + name)
+    )
+      return next(event);
     if (!context) return { deny: unavailable };
     // Native agents keep their native lifecycle; their own tool calls arrive
     // here with agentId and use the same target routing below.
@@ -1555,8 +1519,7 @@ export function register(on) {
     if (event.tool === "SendMessage") {
       if (!agentOutputs.has(event.to) || event.notify_when_idle === true) {
         return {
-          deny:
-            "SendMessage can only continue this session's background agents by agentId.",
+          deny: "SendMessage can only continue this session's background agents by agentId.",
         };
       }
       // The continued round can complete quickly; its completion waits for
@@ -1569,9 +1532,7 @@ export function register(on) {
         const result = await next(event);
         if (result?.isError !== true) {
           stoppedAgents.delete(event.to);
-          await bridgePost($, "/agent-resume", { agentId: event.to }).catch(
-            () => {},
-          );
+          await bridgePost($, "/agent-resume", { agentId: event.to }).catch(() => {});
         }
         return result;
       } finally {
@@ -1602,17 +1563,12 @@ export function register(on) {
     signal?.addEventListener("abort", abandon, { once: true });
     try {
       // A PostToolUse review that cannot run after the effect refuses first.
-      const unsupported = ["PostToolUse", "PostToolUseFailure"].flatMap((
-        name,
-      ) =>
-        (context.hooks.tool[name] ?? []).map((group) => ({ ...group, name }))
-      ).find((group) =>
-        group.unsupported && hookMatches(group.matcher, event.tool)
-      );
+      const unsupported = ["PostToolUse", "PostToolUseFailure"]
+        .flatMap((name) => (context.hooks.tool[name] ?? []).map((group) => ({ ...group, name })))
+        .find((group) => group.unsupported && hookMatches(group.matcher, event.tool));
       if (unsupported) {
         return {
-          deny:
-            `The project's ${unsupported.name} ${unsupported.unsupported} for ${event.tool} cannot run in this execution environment, so the call did not run.`,
+          deny: `The project's ${unsupported.name} ${unsupported.unsupported} for ${event.tool} cannot run in this execution environment, so the call did not run.`,
         };
       }
       // Natively a PreToolUse continue:false still runs the tool, then ends
@@ -1623,13 +1579,7 @@ export function register(on) {
         return { deny: "Tool call was cancelled" };
       }
       if (pre.deny) return { deny: pre.deny };
-      const permitted = await permit(
-        $,
-        event,
-        pre.input ?? requested,
-        run,
-        pre,
-      );
+      const permitted = await permit($, event, pre.input ?? requested, run, pre);
       if (permitted.deny) return permitted;
       const input = permitted.input;
       let path = "/tool";
@@ -1648,8 +1598,7 @@ export function register(on) {
         }
         if (!response.ok) {
           return {
-            deny:
-              "Execution result unavailable. Inspect state before repeating a mutation.",
+            deny: "Execution result unavailable. Inspect state before repeating a mutation.",
           };
         }
         let result = JSON.parse(response.text);
@@ -1675,47 +1624,28 @@ export function register(on) {
             if (pre.stop !== undefined) $.turn.abort().catch(() => {});
             // PreToolUse context still reaches the model after a failure.
             const notes = [...pre.context, ...failure.context];
-            return notes.length
-              ? { deny: [result.deny, ...notes].join("\n\n") }
-              : result;
+            return notes.length ? { deny: [result.deny, ...notes].join("\n\n") } : result;
           }
-          const { task, instructions: nested, running: _running, ...answered } =
-            result;
+          const { task, instructions: nested, running: _running, ...answered } = result;
           if (task) {
-            answered.result = await notifyOnEnd(
-              $,
-              event,
-              task,
-              answered.result,
-              input,
-              next,
-            );
+            answered.result = await notifyOnEnd($, event, task, answered.result, input, next);
           }
           if (event.tool === "TaskStop") {
             await stopMirror($, input.task_id ?? input.shell_id);
           }
           result = answered;
-          const post = await toolHooks(
-            $,
-            "PostToolUse",
-            event,
-            input,
-            run,
-            result.result,
-          );
+          const post = await toolHooks($, "PostToolUse", event, input, run, result.result);
           // Nested instruction files follow the result, as natively.
           const reminders = [
             ...pre.context,
             ...(result.context ?? []),
             ...(Array.isArray(nested)
-              ? nested.map((file) =>
-                `Contents of ${file.path}:\n\n${file.content}`
-              )
+              ? nested.map((file) => `Contents of ${file.path}:\n\n${file.content}`)
               : nested?.unavailable
-              ? [
-                "The project's instruction files (CLAUDE.md and rules) for this file's directories could not be loaded from the target. Read them before relying on this file.",
-              ]
-              : []),
+                ? [
+                    "The project's instruction files (CLAUDE.md and rules) for this file's directories could not be loaded from the target. Read them before relying on this file.",
+                  ]
+                : []),
             ...post.context,
           ];
           // Natively the tool still ran; continue:false then ends the turn.
@@ -1733,38 +1663,33 @@ export function register(on) {
       signal?.removeEventListener("abort", abandon);
     }
   }).catch(() => ({
-    deny:
-      "Execution interception failed. Local execution is disabled; inspect target state before retrying.",
+    deny: "Execution interception failed. Local execution is disabled; inspect target state before retrying.",
   }));
 
   // Attachments about this machine's files are left out; those naming the
   // target's skills use their native names.
-  on(
-    "prompt.attachment",
-    (_$, event, next) =>
-      RUNTIME_ATTACHMENTS.has(event.type) ? { text: null } : next({
-        ...event,
-        text: event.type === "skill_listing"
-          ? targetSkillListing(event.text, context?.skills)
-          : SKILL_ATTACHMENTS.includes(event.type)
-          ? targetSkillText(event.text, context?.skills)
-          : event.text,
-      }),
+  on("prompt.attachment", (_$, event, next) =>
+    RUNTIME_ATTACHMENTS.has(event.type)
+      ? { text: null }
+      : next({
+          ...event,
+          text:
+            event.type === "skill_listing"
+              ? targetSkillListing(event.text, context?.skills)
+              : SKILL_ATTACHMENTS.includes(event.type)
+                ? targetSkillText(event.text, context?.skills)
+                : event.text,
+        }),
   ).catch(() => ({ text: null }));
   // A target skill whose commands could not run is not shown half-expanded.
   on("skill.prompt", skillPrompt).catch(() => ({
-    text:
-      "This skill could not be loaded from the target. Inspect the target before retrying it.",
+    text: "This skill could not be loaded from the target. Inspect the target before retrying it.",
   }));
-  on("prompt.attachment", { type: "environment" }, environment).catch(
-    environment,
-  );
+  on("prompt.attachment", { type: "environment" }, environment).catch(environment);
   // This module's tool.call context stands for native's own reminders (hook
   // output, nested instruction files): it reads without the chain's label.
-  on(
-    "prompt.attachment",
-    { origin: { kind: "plugin" } },
-    (_$, event, next) => next({ ...event, text: unlabeledContext(event.text) }),
+  on("prompt.attachment", { origin: { kind: "plugin" } }, (_$, event, next) =>
+    next({ ...event, text: unlabeledContext(event.text) }),
   );
   // The target Git snapshot is supplied by prompt.context above. Drop the
   // runtime's section while retaining any other native session context.
@@ -1773,60 +1698,33 @@ export function register(on) {
   })).catch(() => ({ text: null }));
   on("prompt.context", instructions).catch(instructions);
   on("prompt.section", { name: "env_info" }, environment).catch(environment);
-  on(
-    "session.append",
-    { door: "tool-result" },
-    (_$, event, next) => next(targetImageResult(withheldResult(event))),
+  on("session.append", { door: "tool-result" }, (_$, event, next) =>
+    next(targetImageResult(withheldResult(event))),
   );
-  on(
-    "session.append",
-    (_$, event, next) => next(targetSkillAppend(event, context?.skills)),
-  );
-  on(
-    "session.append",
-    { door: "compaction" },
-    (_$, event, next) => next(targetCompactionResult(event)),
+  on("session.append", (_$, event, next) => next(targetSkillAppend(event, context?.skills)));
+  on("session.append", { door: "compaction" }, (_$, event, next) =>
+    next(targetCompactionResult(event)),
   );
   // Native completion notifications enter as prompts. Projecting before the
   // append keeps the runtime locator out of history, resume and compaction.
-  on(
-    "session.append",
-    { door: "prompt" },
-    async ($, event, next) => {
-      const unconfirmed = await stopAtDeadline($, event);
-      return next(
-        unconfirmedStop(
-          targetTaskNotification(event, agentOutputs),
-          unconfirmed,
-        ),
-      );
-    },
-  );
-  on(
-    "session.append",
-    { door: "delivery" },
-    async ($, event, next) => {
-      const unconfirmed = await stopAtDeadline($, event);
-      return next(
-        unconfirmedStop(
-          targetTaskNotification(event, agentOutputs),
-          unconfirmed,
-        ),
-      );
-    },
-  );
+  on("session.append", { door: "prompt" }, async ($, event, next) => {
+    const unconfirmed = await stopAtDeadline($, event);
+    return next(unconfirmedStop(targetTaskNotification(event, agentOutputs), unconfirmed));
+  });
+  on("session.append", { door: "delivery" }, async ($, event, next) => {
+    const unconfirmed = await stopAtDeadline($, event);
+    return next(unconfirmedStop(targetTaskNotification(event, agentOutputs), unconfirmed));
+  });
   // The model reads queued notifications through this render, including
   // re-renders after resume; the stored row above is projected separately.
-  on(
-    "prompt.attachment",
-    { type: "queued_command" },
-    (_$, event, next) =>
-      next({
-        ...event,
-        text: typeof event.text === "string"
+  on("prompt.attachment", { type: "queued_command" }, (_$, event, next) =>
+    next({
+      ...event,
+      text:
+        typeof event.text === "string"
           ? targetTaskNotificationText(event.text, agentOutputs)
           : event.text,
-      }),
+    }),
   );
   // Every classic event carries native's base hook input, hooks or not.
   on("classic.SessionStart", (_$, event, next) => {
@@ -1845,8 +1743,10 @@ export function register(on) {
   on("classic.SubagentStart", (_$, event, next) => {
     if (
       typeof event?.agent_id === "string" &&
-      typeof event.agent_type === "string" && subagentTypes.size < 4096
-    ) subagentTypes.set(event.agent_id, event.agent_type);
+      typeof event.agent_type === "string" &&
+      subagentTypes.size < 4096
+    )
+      subagentTypes.set(event.agent_id, event.agent_type);
     return next(event);
   });
   on("turn.complete", async ($, event, next) => {
@@ -1871,34 +1771,44 @@ export function register(on) {
     const path = await $.env.get("COWBOY_CLAUDE_CONTEXT");
     const loaded = JSON.parse(await $.fs.read(path));
     if (
-      loaded.schema !== 1 || !/^[a-f0-9]{32}$/.test(loaded.nonce) ||
-      !/^\/tmp\/cowboy-claude-mod-[^/]+\/bridge\.sock$/.test(
-        loaded.socketPath,
-      ) ||
+      loaded.schema !== 1 ||
+      !/^[a-f0-9]{32}$/.test(loaded.nonce) ||
+      !/^\/tmp\/cowboy-claude-mod-[^/]+\/bridge\.sock$/.test(loaded.socketPath) ||
       !/^[a-f0-9]{64}$/.test(loaded.bridgeToken) ||
-      !loaded.descriptions || typeof loaded.descriptions !== "object" ||
-      !loaded.agents || typeof loaded.agents !== "object" ||
-      ![loaded.targetCwd, loaded.runtimeCwd].every((value) =>
-        typeof value === "string" && value.startsWith("/") &&
-        (value === "/" || !value.endsWith("/"))
+      !loaded.descriptions ||
+      typeof loaded.descriptions !== "object" ||
+      !loaded.agents ||
+      typeof loaded.agents !== "object" ||
+      ![loaded.targetCwd, loaded.runtimeCwd].every(
+        (value) =>
+          typeof value === "string" &&
+          value.startsWith("/") &&
+          (value === "/" || !value.endsWith("/")),
       ) ||
-      !loaded.hooks || !Array.isArray(loaded.hooks.commands) ||
-      !loaded.hooks.tool || typeof loaded.hooks.tool !== "object" ||
-      !(loaded.targetHome === null ||
-        (typeof loaded.targetHome === "string" &&
-          loaded.targetHome.startsWith("/"))) ||
+      !loaded.hooks ||
+      !Array.isArray(loaded.hooks.commands) ||
+      !loaded.hooks.tool ||
+      typeof loaded.hooks.tool !== "object" ||
+      !(
+        loaded.targetHome === null ||
+        (typeof loaded.targetHome === "string" && loaded.targetHome.startsWith("/"))
+      ) ||
       typeof loaded.environment !== "string" ||
       loaded.environment.length > 262144 ||
-      !(loaded.git === null ||
-        (typeof loaded.git === "string" && loaded.git.length <= 262144)) ||
+      !(loaded.git === null || (typeof loaded.git === "string" && loaded.git.length <= 262144)) ||
       !Array.isArray(loaded.instructionFiles) ||
-      !loaded.instructionFiles.every((file) =>
-        typeof file?.path === "string" && file.path.startsWith("/") &&
-        ["user", "project", "local"].includes(file.kind) &&
-        typeof file.content === "string" &&
-        (file.parent === undefined || typeof file.parent === "string")
-      ) || !validSkills(loaded.skills) || !validMcp(loaded.mcp)
-    ) throw new Error("Invalid bound execution context");
+      !loaded.instructionFiles.every(
+        (file) =>
+          typeof file?.path === "string" &&
+          file.path.startsWith("/") &&
+          ["user", "project", "local"].includes(file.kind) &&
+          typeof file.content === "string" &&
+          (file.parent === undefined || typeof file.parent === "string"),
+      ) ||
+      !validSkills(loaded.skills) ||
+      !validMcp(loaded.mcp)
+    )
+      throw new Error("Invalid bound execution context");
     context = Object.freeze(loaded);
     // A resumed session may continue an agent registered by an earlier process.
     for (const [id, file] of Object.entries(loaded.agents)) {

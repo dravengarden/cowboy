@@ -1,16 +1,7 @@
 // The existing Agent Plugin owns its native integration. All upstream binaries
 // and npm dependencies still pass the shared immutable runtime builder.
 import { readdirSync } from "node:fs";
-import {
-  chmod,
-  copyFile,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,28 +19,15 @@ if (!base.startsWith("https://") || base.includes("latest")) {
 }
 const output = `${repository}/dist/plugins/claude-code/runtime`;
 const matrixPath = `${output}/runtime-artifacts.json`;
-const manifest = JSON.parse(
-  await readFile(`${root}/../provider.json`, "utf8"),
-);
+const manifest = JSON.parse(await readFile(`${root}/../provider.json`, "utf8"));
 if (
-  manifest.runtime.dependencies.find((item: { id: string }) =>
-    item.id === "anthropic-claude-code"
-  )?.version !== "2.1.314"
+  manifest.runtime.dependencies.find((item: { id: string }) => item.id === "anthropic-claude-code")
+    ?.version !== "2.1.314"
 ) {
-  throw new Error(
-    "Claude execution requires the accepted exact native version",
-  );
+  throw new Error("Claude execution requires the accepted exact native version");
 }
 const environment: Record<string, string> = {};
-for (
-  const name of [
-    "PATH",
-    "SSL_CERT_FILE",
-    "SSL_CERT_DIR",
-    "NIX_SSL_CERT_FILE",
-    "TMPDIR",
-  ]
-) {
+for (const name of ["PATH", "SSL_CERT_FILE", "SSL_CERT_DIR", "NIX_SSL_CERT_FILE", "TMPDIR"]) {
   const value = process.env[name];
   if (value !== undefined) environment[name] = value;
 }
@@ -59,25 +37,24 @@ environment.XDG_CONFIG_HOME = `${stage}/home/.config`;
 await mkdir(environment.HOME);
 let complete = false;
 try {
-  await run(process.execPath, [
-    "run",
-    "--allow-read",
-    "--allow-write=dist",
-    "--allow-net",
-    "--allow-run",
-    "components/provider-runtime/build.ts",
-    "plugins/claude-code",
-    base,
-  ], repository);
+  await run(
+    process.execPath,
+    [
+      "run",
+      "--allow-read",
+      "--allow-write=dist",
+      "--allow-net",
+      "--allow-run",
+      "components/provider-runtime/build.ts",
+      "plugins/claude-code",
+      base,
+    ],
+    repository,
+  );
   // The native MCP relay (relay/): a static Linux executable. Other targets
   // keep the Node relay, which launch.mjs selects when it is absent.
   const relayBuild = JSON.parse(
-    await output_of("nix", [
-      "build",
-      "--no-link",
-      "--json",
-      ".#cowboy-mcp-relay-portable",
-    ]),
+    await output_of("nix", ["build", "--no-link", "--json", ".#cowboy-mcp-relay-portable"]),
   );
   const relay = `${relayBuild[0].outputs.out}/bin/cowboy-mcp-relay`;
   const matrix = JSON.parse(await readFile(matrixPath, "utf8"));
@@ -125,9 +102,7 @@ try {
       `${repository}/components/memory-client/index.mjs`,
       `${destination}/app/matrix-client.mjs`,
     );
-    digests["matrix-client.mjs"] = await sha256(
-      `${destination}/app/matrix-client.mjs`,
-    );
+    digests["matrix-client.mjs"] = await sha256(`${destination}/app/matrix-client.mjs`);
     // Where the host ships jemalloc (Ubuntu's libjemalloc2 on OVH), the two
     // resident Node processes return freed native memory within a second
     // instead of keeping glibc's fragmented peak. launch.mjs removes the
@@ -173,9 +148,8 @@ try {
         2,
       ) + "\n",
     );
-    const names = [...readdirSync(destination, { withFileTypes: true })].map((
-      entry,
-    ) => entry.name)
+    const names = [...readdirSync(destination, { withFileTypes: true })]
+      .map((entry) => entry.name)
       .sort();
     await run("tar", [
       "--sort=name",
@@ -193,8 +167,8 @@ try {
     await run("gzip", ["-n", "-9", "-f", `${destination}.tar`]);
     await rename(`${destination}.tar.gz`, archive);
     const digest = await sha256(archive);
-    const component = target.components.find((item: { dependency: string }) =>
-      item.dependency === "claude-agent-acp"
+    const component = target.components.find(
+      (item: { dependency: string }) => item.dependency === "claude-agent-acp",
     );
     if (!component) throw new Error("Claude adapter component missing");
     component.artifact_digest = `sha256:${digest}`;
@@ -235,12 +209,10 @@ async function output_of(command: string, args: string[]) {
     stderr: "inherit",
   });
   const text = await new Response(child.stdout).text();
-  if (await child.exited !== 0) throw new Error(`${command} failed`);
+  if ((await child.exited) !== 0) throw new Error(`${command} failed`);
   return text;
 }
 async function sha256(path: string) {
-  const digest = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", await readFile(path)),
-  );
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await readFile(path)));
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

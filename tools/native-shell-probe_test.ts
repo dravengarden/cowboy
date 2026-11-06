@@ -1,9 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-const source = await readFile(
-  new URL("./native-shell-probe.js", import.meta.url),
-  "utf8",
-);
+const source = await readFile(new URL("./native-shell-probe.js", import.meta.url), "utf8");
 const probe = new Function(
   "window",
   "location",
@@ -65,10 +62,7 @@ function fixture() {
         if (name === "unknown") {
           return Promise.reject(new Error("unknown capability"));
         }
-        assert(
-          name === "webauthn" && args.action === "capabilities",
-          "no credential ceremony",
-        );
+        assert(name === "webauthn" && args.action === "capabilities", "no credential ceremony");
         return Promise.resolve({ ok: true, available: false });
       },
     }),
@@ -82,10 +76,7 @@ function fixture() {
             }
             return Promise.resolve(null);
           }
-          assert(
-            name === "plugin:opener|open_url",
-            "unexpected native command",
-          );
+          assert(name === "plugin:opener|open_url", "unexpected native command");
           if (context.missingOpener) return Promise.reject("Command not found");
           if (args?.url === "app-settings:" && context.allowSettings) {
             return Promise.resolve(null);
@@ -103,10 +94,7 @@ function fixture() {
       {
         readyState: context.ready,
         querySelector(selector: string) {
-          assert(
-            selector === "form h1",
-            "probe must only inspect the login heading",
-          );
+          assert(selector === "form h1", "probe must only inspect the login heading");
           return {
             textContent: context.heading,
             getBoundingClientRect: () => ({ height: context.headingHeight }),
@@ -116,18 +104,12 @@ function fixture() {
       (url: string, options: RequestInit) => {
         requests.push([url, options]);
         assert(remote, "basic shell acceptance must not make an auth request");
-        assert(
-          url === "/api/auth/status" && options.method === "GET",
-          "read-only status only",
-        );
+        assert(url === "/api/auth/status" && options.method === "GET", "read-only status only");
         assert(
           options.credentials === "omit" && options.redirect === "error",
           "no credentials or redirects",
         );
-        assert(
-          options.cache === "no-store" && !options.body,
-          "no cached status or login body",
-        );
+        assert(options.cache === "no-store" && !options.body, "no cached status or login body");
         return Promise.resolve({
           status: context.httpStatus,
           headers: new Headers({ "content-type": context.contentType }),
@@ -143,10 +125,7 @@ test("basic shell probe does not claim a remote page or request authentication",
   const test = fixture();
   test.context.origin = "tauri://localhost";
   const report = await test.run(false);
-  assert(
-    report.tests.length === 7 && report.phase === "shell",
-    "basic probe contract",
-  );
+  assert(report.tests.length === 7 && report.phase === "shell", "basic probe contract");
   assert(test.requests.length === 0, "unexpected network call");
 });
 
@@ -166,29 +145,26 @@ test("remote probe exercises positive IPC and checks only public logged-out stat
 });
 
 test("local loader, foreign origin and wrong port cannot pass remote acceptance", async () => {
-  for (
-    const origin of [
-      "tauri://localhost",
-      "https://foreign.invalid",
-      "https://cowboy.stormbird.xyz:444",
-    ]
-  ) {
+  for (const origin of [
+    "tauri://localhost",
+    "https://foreign.invalid",
+    "https://cowboy.stormbird.xyz:444",
+  ]) {
     const test = fixture();
     test.context.origin = origin;
     await rejects(() => test.run(true), "remote Cowboy origin");
-    assert(
-      test.requests.length === 0 && test.invocations.length === 0,
-      "wrong-origin effects",
-    );
+    assert(test.requests.length === 0 && test.invocations.length === 0, "wrong-origin effects");
   }
 });
 
 test("remote navigation alone cannot pass without rendered login UI", async () => {
-  for (
-    const change of [{ ready: "loading" }, { heading: "Cowboy" }, {
+  for (const change of [
+    { ready: "loading" },
+    { heading: "Cowboy" },
+    {
       headingHeight: 0,
-    }]
-  ) {
+    },
+  ]) {
     const test = fixture();
     Object.assign(test.context, change);
     await rejects(
@@ -210,11 +186,13 @@ test("remote probe rejects an authenticated or auth-disabled server response", a
 });
 
 test("HTML, unsuccessful or incompatible status responses are not login acceptance", async () => {
-  for (
-    const change of [{ contentType: "text/html" }, { httpStatus: 503 }, {
+  for (const change of [
+    { contentType: "text/html" },
+    { httpStatus: 503 },
+    {
       auth: {},
-    }]
-  ) {
+    },
+  ]) {
     const test = fixture();
     Object.assign(test.context, change);
     await rejects(

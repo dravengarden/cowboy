@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { machineCapacityLabel } from "./machineCapacity.ts";
 
 test("capacity shows live Agent sessions and marks a full Machine", () => {

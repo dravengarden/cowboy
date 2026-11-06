@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { sortableTargetIndex } from "./sortableGeometry.ts";
 
 // A folder header (40px) between taller session rows (64px), 4px gaps.
