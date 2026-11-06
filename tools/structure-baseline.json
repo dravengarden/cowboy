@@ -23,7 +23,7 @@
     "src/acp_bridge.rs": 2539,
     "src/code_review.rs": 1609,
     "src/core.rs": 5150,
-    "src/machine_control.rs": 1889,
+    "src/machine_control.rs": 1823,
     "src/oidc.rs": 2278,
     "src/provider_service.rs": 1594,
     "src/remote_runtime.rs": 3238,
