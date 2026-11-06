@@ -3,6 +3,59 @@
 use super::*;
 use serde_json::json;
 
+#[tokio::test]
+async fn exited_generation_can_restart_without_retargeting_another_old_lease() {
+    let root = PrivateRuntimeDirectory::create().unwrap();
+    let host = CodeRuntimeHost::default();
+    let a = root.0.join("a");
+    let b = root.0.join("b");
+    fs::create_dir_all(&a).unwrap();
+    fs::create_dir_all(&b).unwrap();
+    let open_a = json!({"type":"openBuffer","worktree":a,"path":"file.rs","leaseId":"agent-a"});
+    let open_b = json!({"type":"openBuffer","worktree":b,"path":"file.rs","leaseId":"agent-b"});
+    on(&host, &root.0, "same", &open_a).await.unwrap();
+    on(&host, &root.0, "same", &open_b).await.unwrap();
+    let old = host
+        .engines
+        .lock()
+        .await
+        .values()
+        .next()
+        .unwrap()
+        .upgrade()
+        .unwrap();
+    old.child.lock().start_kill().unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while old.child.lock().try_wait().unwrap().is_none() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        on(&host, &root.0, "same", &open_a).await.is_err(),
+        "original route reports its loss first"
+    );
+    assert!(
+        on(&host, &root.0, "same", &open_a).await.is_ok(),
+        "an explicit reopen must not select the exited runtime again"
+    );
+    assert!(
+        on(&host, &root.0, "same", &open_b).await.is_err(),
+        "another old owner must not silently move to the replacement"
+    );
+    let new = host
+        .engines
+        .lock()
+        .await
+        .values()
+        .next()
+        .unwrap()
+        .upgrade()
+        .unwrap();
+    assert!(!Arc::ptr_eq(&old, &new));
+}
+
 #[test]
 fn malformed_confirmations_cannot_release_a_reserved_route() {
     let mut route = WorktreeRoute::default();

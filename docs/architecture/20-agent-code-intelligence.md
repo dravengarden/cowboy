@@ -187,7 +187,11 @@ Machine admission path additionally measures native process count, RSS and CPU
 before automatic warming, as specified in [19](19-code-review-engine.md#resource-budgets).
 It requires the containing Machine implementation; the earlier installed path
 had only Controller counts. These are admission thresholds, not hard resource
-limits. Navigation and synchronization Unknowns keep their own fences.
+limits. An exited adapter can be replaced for an explicit new open, even when
+old leases retain its original incarnation. Those leases are never retargeted;
+the old process group remains measurable until its last owner releases it.
+A stop request is not evidence of zero descendants. Navigation and
+synchronization Unknowns keep their own fences.
 Holdings are process-local:
 after a Controller restart the next `code.diagnostics` read of a held file
 re-tracks it (an open file is also held under the agent owner, within its share),
