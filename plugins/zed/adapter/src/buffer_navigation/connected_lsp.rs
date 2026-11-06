@@ -14,15 +14,11 @@ const A: &str = "// a🙂z\npub fn target() {}\n";
 const B: &str = "// b🙂q\npub struct Target;\n";
 
 pub(crate) fn configure(root: &Path) {
-    let executable = std::env::current_exe().unwrap();
-    let fixture = executable
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples/navigation_lsp")
-        .canonicalize()
-        .expect("build the test-only LSP example first");
+    let fixture = std::fs::canonicalize(
+        std::env::var_os("COWBOY_TEST_NAVIGATION_LSP")
+            .expect("the conformance recipe must supply its exact built LSP fixture"),
+    )
+    .expect("build the test-only LSP example first");
     assert!(fixture.is_file());
     let directory = root.join("config/zed");
     std::fs::create_dir(&directory).unwrap();

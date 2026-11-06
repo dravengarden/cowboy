@@ -7,10 +7,79 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 struct Controller(Child);
+
+#[tokio::test]
+async fn project_check_http_rejects_old_epochs_and_retries_definite_refusals() {
+    let mut fixture = Fixture::new().await;
+    sqlx::query("INSERT INTO machines(id,display_name,connection_mode,platform,architecture) VALUES ('local','Local fixture','outbound_wss','linux','x86_64')")
+        .execute(&fixture.store).await.unwrap();
+    sqlx::query("UPDATE sessions SET machine_id='local'")
+        .execute(&fixture.store)
+        .await
+        .unwrap();
+    let (_controller, base) = fixture.start().await;
+    let url = format!("{base}/api/code/sessions/source/checks");
+    let stale = fixture
+        .request(reqwest::Method::POST, &url)
+        .json(&json!({"check":"lint", "operation":"test-request", "epoch":"old"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), 409);
+    assert_eq!(
+        stale.json::<Value>().await.unwrap()["status"],
+        "epoch_changed"
+    );
+    let checks = fixture.get(&url).await;
+    assert_eq!(checks["runnable"], false);
+    for _ in 0..2 {
+        let refused = fixture
+            .request(reqwest::Method::POST, &url)
+            .json(&json!({"check":"lint", "operation":"test-request", "epoch":checks["epoch"]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), 503);
+        assert_eq!(refused.json::<Value>().await.unwrap()["status"], "refused");
+    }
+}
+
 impl Drop for Controller {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
+    }
+}
+
+#[tokio::test]
+async fn project_check_http_rejects_viewer_and_foreign_operator() {
+    for (role, foreign, expected) in [("viewer", false, 403), ("operator", true, 404)] {
+        let mut fixture = Fixture::new().await;
+        sqlx::query("UPDATE settings SET value=?1 WHERE key='cowboy.permissions'")
+            .bind(json!({"default_role":role, "grants":[]}).to_string())
+            .execute(&fixture.store)
+            .await
+            .unwrap();
+        if foreign {
+            sqlx::query("INSERT INTO users(id,username,password_algo,password_hash) VALUES ('foreign-owner','foreign-owner','fixture','unused')")
+                .execute(&fixture.store).await.unwrap();
+            sqlx::query("UPDATE sessions SET owner_user_id='foreign-owner'")
+                .execute(&fixture.store)
+                .await
+                .unwrap();
+        }
+        let (_controller, base) = fixture.start().await;
+        let response = fixture
+            .request(
+                reqwest::Method::POST,
+                &format!("{base}/api/code/sessions/source/checks"),
+            )
+            .json(&json!({"check":"lint", "operation":"must-not-start", "epoch":"old"}))
+            .send()
+            .await
+            .unwrap();
+        // Authorization must reject before even reaching the epoch handler.
+        assert_eq!(response.status().as_u16(), expected, "{role}");
     }
 }
 

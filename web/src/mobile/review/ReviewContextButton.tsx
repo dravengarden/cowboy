@@ -3,6 +3,8 @@ import { Box, ButtonBase, Typography } from "@mui/material";
 import type { ReactNode } from "react";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 
+const shortLandscape = "@media (max-height: 480px) and (min-width: 600px)";
+
 export function ReviewContextButton({
   label,
   title,
@@ -41,6 +43,14 @@ export function ReviewContextButton({
           alignItems: "stretch",
           textAlign: "left",
           ...(mobile ? { px: 1, py: 0.5, borderRadius: "8px" } : {}),
+          ...(mobile ? {
+            [shortLandscape]: {
+              display: "grid",
+              gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+              columnGap: 1,
+              py: 0,
+            },
+          } : {}),
         }}
       >
         <Typography variant="body2" noWrap sx={{ fontSize: "0.875rem", fontWeight: 500 }}>
@@ -76,7 +86,7 @@ export function ReviewContextButton({
             variant="caption"
             noWrap
             title={branch}
-            sx={{ color: "text.secondary", fontSize: "0.75rem", lineHeight: 1.4 }}
+            sx={{ color: "text.secondary", fontSize: "0.75rem", lineHeight: 1.4, [shortLandscape]: { gridColumn: "1 / -1" } }}
           >
             {branch}
             {changes ? ` · ${changes} uncommitted` : ""}

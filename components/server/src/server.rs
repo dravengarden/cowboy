@@ -720,14 +720,14 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         device_access: Arc::new(crate::client_auth::DeviceAccessSessions::default()),
         capacity_runtime: Arc::new(ActiveCapacityRuntime::default()),
     });
-    let web_push_task = tokio::spawn(notifications::run(
-        Arc::clone(&state),
-        state.shutdown.clone(),
-    ));
+    let web_push_task = spawn_notifications(&state);
     let dispatcher_task = spawn_dispatcher(&state, dispatch_rx);
+    let code_holdings_task = tokio::spawn(agent_api::maintain_holdings(Arc::clone(&state)));
 
     let runtime_router = Arc::clone(&state.runtime_router);
     let result = serve_axum(args.bind, args.data_dir.clone(), state, shutdown_tx).await;
+    code_holdings_task.abort();
+    let _ = code_holdings_task.await;
     // Persistence closes below; events consumed after this point would be
     // acknowledged but never stored.
     runtime_router.disconnect_all();

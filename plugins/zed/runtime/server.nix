@@ -39,7 +39,7 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.10.0";
+  version = "1.11.0";
   inherit src cargoDeps;
   patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ./server/acquisition-bounds.patch ./server/replacement-bounds.patch ./server/snapshot-lifetimes.patch ./server/remote-edits.patch ];
   postPatch = ''
@@ -115,6 +115,17 @@ in platform.buildRustPackage {
         CowboyOpenAttempt,
         CowboyOpenTarget,'
     substituteInPlace crates/project/src/lsp_store.rs \
+      --replace-fail '                version: 0,
+                    snapshot: initial_snapshot.clone(),' '                version: 1,
+                    snapshot: initial_snapshot.clone(),' \
+      --replace-fail '                        adapter.language_id(&language.name()),
+                            0,
+                            initial_snapshot.text(),' '                        adapter.language_id(&language.name()),
+                            1,
+                            initial_snapshot.text(),' \
+      --replace-fail '                                version: 0,
+                                    snapshot: buffer.text_snapshot(),' '                                version: 1,
+                                    snapshot: buffer.text_snapshot(),' \
       --replace-fail 'pub struct LspStore {' 'mod cowboy_navigation;
     mod cowboy_frontier;
     pub struct LspStore {
@@ -148,7 +159,7 @@ in platform.buildRustPackage {
 
             let edits_since_save' '        let snapshot = self.buffer_snapshot_for_lsp_version(buffer, server_id, version, cx)?;
             let cowboy_evidence = (
-                version.is_some(),
+                cowboy_frontier::tracked_version(self, buffer, server_id, version, cx),
                 snapshot.version().clone(),
                 diagnostics.iter().any(|(new, entry)| *new && entry.diagnostic.is_disk_based),
                 diagnostics.iter().any(|(new, _)| !*new),

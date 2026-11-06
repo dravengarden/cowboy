@@ -14,6 +14,7 @@ export function ReviewDocumentControls({
   onLoadMore,
   limited,
   diff,
+  children,
 }: {
   counts: { added: number; removed: number } | undefined;
   hunkCount: number;
@@ -26,6 +27,7 @@ export function ReviewDocumentControls({
   onLoadMore: () => void;
   limited: boolean;
   diff: boolean;
+  children?: React.ReactNode;
 }): React.JSX.Element {
   return (
     <Stack
@@ -40,9 +42,11 @@ export function ReviewDocumentControls({
         flexWrap: "wrap",
         borderTop: 1,
         borderColor: "divider",
+        "&:empty": { display: "none" },
         "& .MuiIconButton-root, & .MuiButton-root": { minWidth: 44, minHeight: 44 },
       }}
     >
+      {children}
       {counts && (
         <>
           <Typography variant="caption" color="success.main">
