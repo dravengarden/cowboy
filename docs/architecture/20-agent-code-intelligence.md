@@ -192,6 +192,17 @@ old leases retain its original incarnation. Those leases are never retargeted;
 the old process group remains measurable until its last owner releases it.
 A stop request is not evidence of zero descendants. Navigation and
 synchronization Unknowns keep their own fences.
+
+Hawk activated this admission and runtime replacement implementation from
+`35d9effa0fd9477a58e05e43bbfc75cc7f99a57c` on 2026-11-06. Controller transaction
+`1793969604518101125-35d9effa0fd9` and Machine transaction
+`1793969644803941790-35d9effa0fd9` both reported `succeeded` / `committed`;
+the Machine retained `worker-4f248c87703274b63cd9`. A production agent read of
+`machines/cmd/cowboy-release-activate/main.go` returned `acquired: true` and
+gopls `document_current` after activation. This accepts successful admission,
+not saturation behavior: the latter is covered by delegated-cgroup tests of
+RSS/process/CPU refusal, interactive access and original/replacement accounting.
+
 Holdings are process-local:
 after a Controller restart the next `code.diagnostics` read of a held file
 re-tracks it (an open file is also held under the agent owner, within its share),
