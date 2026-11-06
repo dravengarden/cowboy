@@ -2,27 +2,10 @@
 use super::*;
 
 fn current_boot() -> Option<String> {
-    #[cfg(target_os = "macos")]
-    let value = {
-        // A LaunchAgent can restart within one login, so its PID or start
-        // time is not proof that the host rebooted. Use the kernel's boot
-        // session identity, just as Linux uses boot_id.
-        let output = std::process::Command::new("/usr/sbin/sysctl")
-            .args(["-n", "kern.bootsessionuuid"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        String::from_utf8(output.stdout).ok()?
-    };
-    #[cfg(not(target_os = "macos"))]
-    let value = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
-    let value = value.trim();
-    uuid::Uuid::parse_str(value).ok()?;
-    Some(value.to_owned())
+    crate::boot_identity::current()
+        .ok()
+        .flatten()
+        .map(|boot| boot.to_string())
 }
 
 pub(super) fn record_boot(directory: &Path) -> Result<()> {

@@ -15,13 +15,7 @@ const BOOT_V1: &str = "cowboy-native-login-boot-v1\n";
 mod stops;
 
 fn current_boot_id() -> Option<uuid::Uuid> {
-    #[cfg(target_os = "linux")]
-    {
-        let value = fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
-        canonical_boot_id(value.trim())
-    }
-    #[cfg(not(target_os = "linux"))]
-    None
+    crate::boot_identity::current().ok().flatten()
 }
 
 fn canonical_boot_id(value: &str) -> Option<uuid::Uuid> {
@@ -640,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn startup_recovers_previous_boot_but_retains_same_boot_native_login() {
         let dir = tempfile::tempdir().unwrap();
         let store = MachinePluginStore::new(dir.path(), Platform::Linux, "x86_64".into()).unwrap();

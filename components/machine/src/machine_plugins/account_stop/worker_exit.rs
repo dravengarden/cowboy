@@ -562,18 +562,7 @@ impl MachinePluginStore {
 }
 
 fn current_boot() -> Result<Option<uuid::Uuid>> {
-    #[cfg(target_os = "linux")]
-    {
-        let boot: uuid::Uuid = fs::read_to_string("/proc/sys/kernel/random/boot_id")?
-            .trim()
-            .parse()?;
-        ensure!(!boot.is_nil(), "invalid kernel boot identity");
-        Ok(Some(boot))
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        Ok(None)
-    }
+    crate::boot_identity::current()
 }
 
 #[cfg(test)]
