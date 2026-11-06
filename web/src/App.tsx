@@ -2729,7 +2729,7 @@ function SessionInfoShell(
             cover={navbarAtBottom}
             open
             onClose={onClose}
-            title="Session info" islandContext={navbarAtBottom ? { title: session.title || "Session info", status: session.status } : undefined}
+            title="Session info" islandContext={navbarAtBottom ? { title: session.title || "Session info", status: session.status, facts: [{ label: "Provider", value: session.provider }, { label: "Workspace", value: session.cwd }] } : undefined}
         >
             {body}
         </Sheet>

@@ -244,12 +244,14 @@ export function FloatingActionIsland(
     maxWidth,
     minHeight = 54,
     rim = "defined",
+    compact = false,
   }: {
     readonly children: ReactNode;
     readonly columns?: string;
     readonly maxWidth?: number | string;
     readonly minHeight?: number | string;
     readonly rim?: "defined" | "soft";
+    readonly compact?: boolean;
   },
 ): ReactNode {
   const softRim = rim === "soft";
@@ -270,14 +272,14 @@ export function FloatingActionIsland(
         maxWidth,
         minHeight,
         px: 0.5,
-        py: 0.375,
+        py: compact ? 0.125 : 0.375,
         display: "grid",
         gridTemplateColumns: columns,
         alignItems: "center",
-        gap: 0.5,
+        gap: compact ? 0 : 0.5,
         border: softRim ? 0 : 1,
         borderColor: (t) => alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.18 : 0.62),
-        borderRadius: 999,
+        borderRadius: compact ? "1.25rem" : 999,
         bgcolor: (t) => alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.48 : 0.42),
         backgroundImage: (t) =>
           [
@@ -289,6 +291,7 @@ export function FloatingActionIsland(
             } 0%, transparent 46%, ${alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.08 : 0.055)} 100%)`,
           ].join(", "),
         boxShadow: (t) => {
+          if (compact) return `0 4px 14px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.2 : 0.1)}`;
           const topHighlight = topHighlightOpacity(t.palette.mode === "dark");
           return [
             `0 14px 38px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.42 : 0.16)}`,

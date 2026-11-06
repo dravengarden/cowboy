@@ -24,7 +24,6 @@ import {
 } from "@mui/material";
 import {
   KeyboardArrowDown,
-  InfoOutlined,
   MyLocation,
   StopCircleOutlined,
 } from "@mui/icons-material";
@@ -56,6 +55,7 @@ import { Sheet } from "./Sheet";
 import { SubagentDetail, SubagentStopConfirm } from "./SubagentCard";
 import { TaskChip } from "./TaskRow";
 import { taskDockContext } from "./taskDockContext";
+import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import {
   type BackgroundTasks,
   requestTaskStop,
@@ -368,6 +368,7 @@ export function BackgroundTasksInspector({
   onOpenTool?: ((toolKey: string) => void) | undefined;
 }): React.JSX.Element | null {
   const state = useInspectorState();
+  const { data: accounts } = useSubscriptionAccounts();
   const open = state.sessionId === sessionId;
   const { tasks, byKey } = background;
   noteRuns(tasks);
@@ -733,8 +734,7 @@ export function BackgroundTasksInspector({
       open
       onClose={close}
       title={mobileTitle}
-      islandContext={taskDockContext(level === "list" ? null : selected)}
-      islandActions={level !== "list" && selected?.call ? [{ label: level === "detail" ? "Back to transcript" : "Details", icon: <InfoOutlined />, onActivate: showMobileDetails }] : undefined}
+      islandContext={{ ...taskDockContext(level === "list" ? null : selected, Date.now(), accounts), action: level !== "list" && selected?.call ? { label: level === "detail" ? "Back to transcript" : "Details", onActivate: showMobileDetails } : undefined }}
       onBack={level === "list"
         ? undefined
         : (): void => globalThis.history?.back()}

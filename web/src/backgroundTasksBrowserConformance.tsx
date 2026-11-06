@@ -5,6 +5,7 @@
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Box, CssBaseline, Stack } from "@mui/material";
+import { MobileSheetContextDock } from "@cowboy/app-shell";
 import {
   buildTaskSummaries,
   CALLS_DOCK_LEGACY_KEY,
@@ -97,6 +98,7 @@ function call(overrides: Partial<ManagedCallSummary> = {}): ManagedCallSummary {
     labels: { title: "auth fallback" },
     placement: { parent_session_id: "s", machine_id: "hawk", workspace_id: "w" },
     child_session_id: "call-child",
+    configuration: { model: "gpt-6.1-sol", reasoning_effort: "max", permission_mode: "read-only" },
     state: "running",
     created_at_ms: Date.now() - 100_000,
     updated_at_ms: Date.now(),
@@ -436,15 +438,20 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
       const level = document.querySelector<HTMLElement>("[data-mobile-task-level='conversation']")!.getBoundingClientRect();
       const chip = document.querySelector<HTMLElement>("[data-sheet-context-dock]")!
         .getBoundingClientRect();
-      const details = document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.getBoundingClientRect();
+      const details = document.querySelector<HTMLElement>("[data-sheet-context-dock] [data-context-action='Details']")!.getBoundingClientRect();
       const transcript = document.querySelector<HTMLElement>("[data-call-transcript]")!.getBoundingClientRect();
       check(chip.left - level.left >= 12, `T16 the state chip keeps the gutter (${String(chip.left - level.left)}px)`);
       check(details.right <= level.right, "T16 Details stays inside the sheet");
+      const island = document.querySelector<HTMLElement>("[data-sheet-context-dock] > div")!.getBoundingClientRect();
+      check(details.width > island.width * 0.6, "The identity and details target owns most of the dock width");
+      check(chip.height <= 84, "Identity and supporting information remain compact");
+      check(Boolean(document.querySelector("[data-context-facts]")), "Execution facts stay visible beside navigation");
+      check(document.querySelector("[data-context-facts]")?.textContent?.includes("gpt-6.1-sol"), "The model is visible without opening Details");
       check(Math.abs(transcript.bottom - level.bottom) < 1, "T16 the transcript reaches the island");
     }
     await observe?.();
     const conversationNode = document.querySelector("[data-call-transcript]");
-    document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.click();
+    document.querySelector<HTMLElement>("[data-sheet-context-dock] [data-context-action='Details']")!.click();
     await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "call details open separately");
     check(history.length > historyBefore, "each level is a history entry");
     history.back();
@@ -607,6 +614,19 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     setAcknowledgementTransport(null);
     closeBackgroundTasks();
     passed.push("A notification link leaves a failure unseen until Mark as seen");
+    const activated: string[] = [];
+    render(<Box sx={{ width: 320 }}><MobileSheetContextDock
+      context={{ title: "Reader", facts: [{ label: "Model", value: "A very long recorded model name that remains available by horizontal scrolling" }] }}
+      onClose={() => activated.push("close")}
+      actions={["Latest", "Open session"].map(label => ({ label, icon: <span>↗</span>, onActivate: () => activated.push(label) }))}
+    /></Box>);
+    const rail = document.querySelector<HTMLElement>("[data-context-facts]")!;
+    check(rail.scrollWidth > rail.clientWidth, "Long facts scroll within their own rail");
+    check(document.querySelector<HTMLElement>("[data-sheet-context-dock]")!.scrollWidth <= 320, "Information and actions do not widen the dock");
+    document.querySelectorAll<HTMLButtonElement>("[data-context-actions] button").forEach(button => button.click());
+    check(activated.join(",") === "Latest,Open session", "Multiple contextual actions remain directly available");
+    render(<MobileSheetContextDock context={{ title: "Reader" }} onClose={() => {}} />);
+    check(!document.querySelector("[data-context-facts], [data-context-actions]"), "Empty supporting rails take no space");
   } finally {
     document.documentElement.style.fontSize = "";
     globalThis.fetch = originalFetch;

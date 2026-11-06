@@ -1809,7 +1809,7 @@ export function ManagedChildNotice(
         <Sheet
           open={detailsOpen}
           onClose={(): void => setDetailsOpen(false)}
-          title="Details" islandContext={desktop ? undefined : { title: displayTitle(call), status: callStateLabel(call) }}
+          title="Details" islandContext={desktop ? undefined : { title: displayTitle(call), status: callStateLabel(call), facts: callExecutionParameters(call).filter(fact => fact.value !== "Not recorded") }}
           {...(desktop ? { desktopMaxWidth: 560 } : { forceSheet: true })}
           cover
           portal
