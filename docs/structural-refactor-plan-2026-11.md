@@ -435,7 +435,7 @@ lifecycle or connection-level test that 1.5/1.6 name first.
 |---|---|
 | 3.2 | `SettingsShell.tsx` and `ToolDetailsBrowser.tsx` extracted (Phase 0 batch) |
 | 3.3 | `SessionList.tsx` extracted; `App` 2,406 → 2,191 lines through `useSessionFocusLifecycle`, `useDesktopSplitters` and `useMobileDrawerSurface`, each called where its effects ran so hook order is unchanged |
-| 3.4 | `PendingPanel.tsx` and `ComposerSheet.tsx` extracted; `Composer.tsx` 4,911 → 3,292 lines. `ComposerWorkspace` itself (2,524 lines) is not yet split, and physical iOS composer acceptance was not run |
+| 3.4 | `PendingPanel.tsx` and `ComposerSheet.tsx` extracted; `Composer.tsx` 4,911 → 3,292 lines. `ComposerWorkspace` 2,524 → 2,314 lines: the inline-image selection (`composerImageSelection.tsx`) and the move-draft surfaces (`DraftMoveSurfaces.tsx`) left with the state only they read. The remaining state (delivery picker anchor, full-screen compose, stop and session-action confirmations) is read by handlers, effects and several JSX regions at once, so further cuts need a redesigned state model rather than moves; the desktop toolbar subtree alone reads 49 locals. Physical iOS composer acceptance was not run |
 | 3.5 | `TranscriptItems.tsx` and `TranscriptPlaceholders.tsx` extracted; `Transcript.tsx` 5,042 → 3,117 lines with the scroll contract kept in place. `DocumentView` left `ReviewApp` |
 
 Every slice ran the browser suites named for it in Firefox and Chromium, in
@@ -449,7 +449,7 @@ App's own splitter and drawer bindings have no dedicated browser fixture.
 
 | Slice | Outcome |
 |---|---|
-| 4.1 | Not started. The queue, transport and socket code in `store.ts` form one call cycle (queue → send → socket → handle → queue), and `setState` publishes connection status, so a module split needs the injected transport and clock the slice names first; moving code across that cycle would only add an import cycle |
+| 4.1 | The pure parts left first: timeline reducers (`storeTimeline.ts`), mobile Review sync state (`mobileReviewState.ts`) and session derivation (`sessionDerivation.ts`); `store.ts` 6,105 → 5,785 lines. The rest is one call cycle (queue → send → socket → handle → queue), `setState` publishes connection status, and opening a socket first awaits the IndexedDB dataset, so a unit-level transport seam needs a fake socket, dataset and clock together; the browser fixtures already substitute `WebSocket` for these traces. That harness is the next step |
 | 4.2 | The `impl Hub` file layout is split by concern without changing ownership or lock order: `core/hub_queue.rs` (send queue, drafts, dispatch), `core/hub_sync.rs`, `core/hub_provider_pins.rs` and `core/hub_config.rs`; core.rs's inline tests moved to files. `core.rs` falls from 8,037 to 5,150 measured lines. Separating queue policy from its effects is still open |
 | 4.3 | Not started (Machine code: a Machine maintenance boundary) |
 

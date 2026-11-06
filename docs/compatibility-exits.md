@@ -23,6 +23,19 @@ maintenance boundary. Its proof is that every Machine registry entry reports a
 protocol at or above the new floor and the retained worker generation
 (`worker-generation.txt`) is at or above the release that introduced it.
 
+**Controller-side floors (2026-11-05).** Without touching the pinned wire
+constants, the Controller now refuses older peers itself:
+`MACHINE_PROTOCOL_FLOOR = 37` in `server/machine_handshake.rs` and
+`BROKER_PROTOCOL_FLOOR = 5` in `src/remote_runtime.rs`. Measured that day:
+Hawk, Falcon and OVH run Machine releases speaking 41 and the MacBook Air's
+bootstrap build (2026-11-01) at least 40; every retained worker pin since
+2026-10-19 speaks runtime 5, and every live worker on the four hosts started
+in November. A host rolled back to a Machine release older than 2026-10-22 is
+refused. Controller code that branches on a Machine protocol at or below 37
+now only sees "connected" or "not connected"; each such branch is removed
+individually, because `machine_supports` is also false for a disconnected
+Machine. Machine-side tolerance of older Controllers is unchanged.
+
 Boundary legend: **M** Machine/worker-generation maintenance, **C** ordinary
 Controller release, **W** ordinary Web release.
 

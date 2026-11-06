@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// Why a session's queue head stays queued, or that it may be dispatched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DrainDecision {
+    Dispatch,
+    Trashed,
+    NotReady,
+    Paused,
+    Empty,
+    ContextHold,
+    Editing,
+}
+
 impl Hub {
     pub(super) fn next_qid(&self) -> String {
         format!("q{}", self.inner.next_qid.fetch_add(1, Ordering::Relaxed))
@@ -136,6 +148,61 @@ impl Hub {
         true
     }
 
+    /// The drain policy: whether the queue head may be dispatched now, or why
+    /// it stays queued. Pure over the session; the context check runs only
+    /// when every earlier condition passed, in the same order as before.
+    pub(super) fn drain_decision(
+        s: &Session,
+        allow_revive: bool,
+        manual: bool,
+        context_allows: impl FnOnce(Option<&str>) -> bool,
+    ) -> DrainDecision {
+        // A trashed session holds its queue until it is restored.
+        if s.meta.trashed_at_ms.is_some() {
+            return DrainDecision::Trashed;
+        }
+        if !Self::ready(s, allow_revive) {
+            return DrainDecision::NotReady;
+        }
+        // The user MANUALLY paused the drain (the ⏸ toggle) → hold the queue
+        // after the running turn finishes. A manual send still
+        // overrides (the user can force a specific message through).
+        if !manual && s.meta.paused {
+            return DrainDecision::Paused;
+        }
+        let Some(head) = s.queue.first() else {
+            return DrainDecision::Empty;
+        };
+        if !context_allows(head.cmid.as_deref()) {
+            return DrainDecision::ContextHold;
+        }
+        // ANY message being edited pauses the WHOLE auto-drain — not just when
+        // the head is the one open (the old `== head` check let the head fire
+        // out from under you while you edited message #2). The hold lifts on
+        // Save/Cancel (set_queue_editing(None)). A MANUAL "send now" still
+        // overrides (the user explicitly chose to send), so the queue is never
+        // permanently trapped.
+        if !manual && s.editing.is_some() {
+            return DrainDecision::Editing;
+        }
+        DrainDecision::Dispatch
+    }
+
+    /// The drain policy for one session as the drain would evaluate it now.
+    #[cfg(test)]
+    pub(super) fn drain_decision_for(
+        &self,
+        session_id: &str,
+        allow_revive: bool,
+        manual: bool,
+    ) -> Option<DrainDecision> {
+        let sessions = self.inner.sessions.lock();
+        let s = sessions.get(session_id)?;
+        Some(Self::drain_decision(s, allow_revive, manual, |cmid| {
+            self.context_allows_dispatch(session_id, cmid)
+        }))
+    }
+
     pub(super) fn ready(s: &Session, allow_revive: bool) -> bool {
         let can = if allow_revive {
             matches!(
@@ -162,29 +229,10 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            // A trashed session holds its queue until it is restored.
-            if s.meta.trashed_at_ms.is_some() || !Self::ready(s, allow_revive) {
-                return;
-            }
-            // The user MANUALLY paused the drain (the ⏸ toggle) → hold the queue
-            // after the running turn finishes. A manual send still
-            // overrides (the user can force a specific message through).
-            if !manual && s.meta.paused {
-                return;
-            }
-            if s.queue.is_empty() {
-                return;
-            }
-            if !self.context_allows_dispatch(session_id, s.queue[0].cmid.as_deref()) {
-                return;
-            }
-            // ANY message being edited pauses the WHOLE auto-drain — not just when
-            // the head is the one open (the old `== head` check let the head fire
-            // out from under you while you edited message #2). The hold lifts on
-            // Save/Cancel (set_queue_editing(None)). A MANUAL "send now" still
-            // overrides (the user explicitly chose to send), so the queue is never
-            // permanently trapped.
-            if !manual && s.editing.is_some() {
+            let decision = Self::drain_decision(s, allow_revive, manual, |cmid| {
+                self.context_allows_dispatch(session_id, cmid)
+            });
+            if decision != DrainDecision::Dispatch {
                 return;
             }
             let head = s.queue.remove(0);
@@ -1459,3 +1507,6 @@ impl Hub {
         self.broadcast_sessions();
     }
 }
+
+#[cfg(test)]
+mod drain_policy_tests;

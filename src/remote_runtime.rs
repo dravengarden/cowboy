@@ -22,12 +22,14 @@ use tokio::sync::{mpsc, oneshot};
 use crate::core::{Event, Hub, Status, config_option_accepts};
 
 pub mod account_stop;
+mod broker_protocol;
 mod native_admission;
 mod startup_watch;
 use crate::runtime_wire::{
-    CoreCommand, Frame, FrameReader, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole,
-    RuntimeEvent, StartSession, WorkerSnapshot, WorkerState, read_frame, write_frame,
+    CoreCommand, Frame, FrameReader, PROTOCOL_VERSION, PeerRole, RuntimeEvent, StartSession,
+    WorkerSnapshot, WorkerState, read_frame, write_frame,
 };
+use broker_protocol::{BROKER_PROTOCOL_FLOOR, validate_protocol};
 
 const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
@@ -1401,7 +1403,7 @@ async fn connect_once(
         &mut writer,
         &Frame::Hello {
             role: PeerRole::Core,
-            min_protocol: MIN_PROTOCOL_VERSION,
+            min_protocol: BROKER_PROTOCOL_FLOOR,
             max_protocol: PROTOCOL_VERSION,
             build: env!("CARGO_PKG_VERSION").to_owned(),
             session_id: None,
@@ -1438,7 +1440,7 @@ async fn connect_once_stream(
         &mut writer,
         &Frame::Hello {
             role: PeerRole::Core,
-            min_protocol: MIN_PROTOCOL_VERSION,
+            min_protocol: BROKER_PROTOCOL_FLOOR,
             max_protocol: PROTOCOL_VERSION,
             build: env!("CARGO_PKG_VERSION").to_owned(),
             session_id: None,
@@ -1460,14 +1462,6 @@ async fn connect_once_stream(
         Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
         None => anyhow::bail!("Machine broker closed during handshake"),
     }
-}
-
-fn validate_protocol(protocol: u16) -> Result<()> {
-    anyhow::ensure!(
-        (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&protocol),
-        "Machine broker selected an unsupported runtime protocol"
-    );
-    Ok(())
 }
 
 /// Let surviving workers converge around every new broker connection, not only
@@ -4713,11 +4707,15 @@ mod tests {
     fn runtime_handshake_rejects_protocol_outside_offered_range() {
         assert!(validate_protocol(0).is_err());
         assert!(validate_protocol(PROTOCOL_VERSION + 1).is_err());
-        for protocol in MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION {
+        assert!(validate_protocol(BROKER_PROTOCOL_FLOOR - 1).is_err());
+        for protocol in BROKER_PROTOCOL_FLOOR..=PROTOCOL_VERSION {
             validate_protocol(protocol).unwrap();
         }
         let mut session = snapshot("protocol").launch.unwrap();
-        assert_eq!(session.minimum_protocol(), MIN_PROTOCOL_VERSION);
+        assert_eq!(
+            session.minimum_protocol(),
+            crate::runtime_wire::MIN_PROTOCOL_VERSION
+        );
         session.provider_account_id = uuid::Uuid::new_v4().to_string().try_into().unwrap();
         assert_eq!(
             session.minimum_protocol(),
@@ -4733,7 +4731,7 @@ mod tests {
                 assert!(matches!(
                     read_frame(&mut peer).await.unwrap(),
                     Some(Frame::Hello {
-                        min_protocol: MIN_PROTOCOL_VERSION,
+                        min_protocol: BROKER_PROTOCOL_FLOOR,
                         max_protocol: PROTOCOL_VERSION,
                         ..
                     })
@@ -4750,7 +4748,7 @@ mod tests {
                 .unwrap();
             });
             let connection = connect_once_stream(client).await;
-            if (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&protocol) {
+            if (BROKER_PROTOCOL_FLOOR..=PROTOCOL_VERSION).contains(&protocol) {
                 assert_eq!(connection.unwrap().3, protocol);
             } else {
                 assert!(connection.is_err());

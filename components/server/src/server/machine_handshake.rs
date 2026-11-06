@@ -12,6 +12,14 @@ pub(super) struct MachineHandshake {
     pub(super) connection_mode: &'static str,
 }
 
+/// The oldest Machine protocol this Controller admits. The wire crate's
+/// `MIN_MACHINE_PROTOCOL_VERSION` stays 1 because it is pinned to the retained
+/// worker; the Controller raises its own floor instead. Measured 2026-11-05:
+/// every enrolled Machine runs a release speaking 40 or 41, and every
+/// rollback generation since 2026-10-22 speaks at least 37
+/// (docs/compatibility-exits.md).
+pub(super) const MACHINE_PROTOCOL_FLOOR: u16 = 37;
+
 /// Challenge a connecting Machine and verify its signed hello against the
 /// enrolled key. Returns the verified hello with its challenge id.
 pub(super) async fn verified_machine_hello(
@@ -141,7 +149,7 @@ pub(super) async fn machine_handshake(
         }
     }
     let Some(protocol) = crate::machine_protocol::negotiate(
-        crate::machine_protocol::MIN_MACHINE_PROTOCOL_VERSION,
+        MACHINE_PROTOCOL_FLOOR,
         crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
         hello.min_protocol,
         hello.max_protocol,
@@ -229,4 +237,34 @@ pub(super) fn runtime_reconciliation_covers_machine_retry_and_snapshot_settlemen
         RUNTIME_RECONCILIATION_GRACE
             > std::time::Duration::from_secs(CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS)
     );
+}
+
+#[cfg(test)]
+mod floor_tests {
+    use super::MACHINE_PROTOCOL_FLOOR;
+    use crate::machine_protocol::{
+        MACHINE_PROTOCOL_VERSION, MIN_MACHINE_PROTOCOL_VERSION, negotiate,
+    };
+
+    #[test]
+    fn the_controller_refuses_machines_below_its_measured_floor() {
+        assert!(
+            (MIN_MACHINE_PROTOCOL_VERSION..=MACHINE_PROTOCOL_VERSION)
+                .contains(&MACHINE_PROTOCOL_FLOOR)
+        );
+        let admit = |machine_max| {
+            negotiate(
+                MACHINE_PROTOCOL_FLOOR,
+                MACHINE_PROTOCOL_VERSION,
+                1,
+                machine_max,
+            )
+        };
+        assert_eq!(admit(MACHINE_PROTOCOL_FLOOR - 1), None);
+        assert_eq!(admit(MACHINE_PROTOCOL_FLOOR), Some(MACHINE_PROTOCOL_FLOOR));
+        assert_eq!(
+            admit(MACHINE_PROTOCOL_VERSION),
+            Some(MACHINE_PROTOCOL_VERSION)
+        );
+    }
 }
