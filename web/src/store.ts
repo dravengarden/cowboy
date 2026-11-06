@@ -508,10 +508,10 @@ let reconnectAttempts = 0;
 let nextConnectReason = "initial";
 
 function clearReconnectTimer(): void {
-  if (reconnectTimer !== undefined) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = undefined;
-  }
+  // A cancelled retry must not keep presenting its countdown.
+  if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
+  reconnectRetryAt = undefined;
 }
 
 /** Why the product socket is being abandoned. Only an explicit sign-out forgets

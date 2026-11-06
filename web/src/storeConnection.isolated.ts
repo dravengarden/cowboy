@@ -153,6 +153,19 @@ test("capacity admission presents waiting with the queue position", async () => 
   });
   await until(() => store.getSyncStatus().phase === "waiting");
   expect(store.getSyncStatus().position).toBe(3);
+  socket.receive({ type: "client_capacity", capacity: { status: "active", channel_limit: 4 } });
   socket.receive({ type: "bootstrap_complete" });
   await until(() => store.getSyncStatus().phase === "live");
+});
+
+test("a user retry during backoff clears the pending retry countdown", async () => {
+  const live = FakeSocket.all.at(-1)!;
+  live.drop();
+  await until(() => store.getSyncStatus().retryAt !== undefined);
+  const before = FakeSocket.all.length;
+  store.retrySyncNow();
+  await until(() => FakeSocket.all.length === before + 1);
+  // The scheduled retry was cancelled; presenting its countdown would claim a
+  // retry that never comes.
+  expect(store.getSyncStatus().retryAt).toBeUndefined();
 });
