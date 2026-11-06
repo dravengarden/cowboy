@@ -618,9 +618,9 @@ export async function runSessionContextBrowserConformance(
         Boolean(container.querySelector("[data-context-advanced]"))
       );
       check(
-        container.querySelector("[data-context-advanced]")?.textContent
+        container.querySelector("[data-fork-configuration]")?.textContent
           ?.includes("Inherit current model & reasoning") === true,
-        `${mode}: advanced preset defaults to current model and reasoning`,
+        `${mode}: visible preset defaults to current model and reasoning`,
       );
       button("Fewer options").click();
       container.querySelector<HTMLElement>(
@@ -1014,6 +1014,38 @@ export async function runSessionContextBrowserConformance(
       !writes.slice(beforeFork).some((write) => write.url.endsWith("/context")),
       "fork: the source's context and agent stay unchanged",
     );
+    flushSync(() => root.render(null));
+    Socket.active.at(-1)?.publish({
+      type: "config_options", session_id: sessions[0]!.id,
+      options: [
+        { id: "model", name: "Model", currentValue: "opus", options: [{ value: "opus", name: "Opus" }] },
+        { id: "effort", name: "Reasoning", currentValue: "high", options: [{ value: "high", name: "High" }, { value: "max", name: "Max" }] },
+        { id: "fast", name: "Fast mode", currentValue: false, options: [{ value: false, name: "Off" }, { value: true, name: "On" }] },
+      ],
+    });
+    flushSync(() => root.render(<Fixture desktop />));
+    await openForm();
+    const forkOption = (id: string) => container.querySelector<HTMLSelectElement>(`[data-fork-option="${id}"]`);
+    check(forkOption("model") && forkOption("effort") && !forkOption("fast"), "fork: model and reasoning are visible before expanding");
+    await observe?.("fork-core");
+    const beforeDraft = writes.length;
+    const selectOption = (id: string, value: string) => {
+      const input = forkOption(id)!;
+      input.value = value;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    selectOption("effort", "max");
+    button("More options").click();
+    await until(() => Boolean(forkOption("fast")));
+    selectOption("fast", "true");
+    await until(() => continueRun().disabled);
+    check(writes.length === beforeDraft, "fork: configuration edits stay local");
+    await observe?.("fork-advanced");
+    forkRun().click();
+    await until(() => writes.length > beforeDraft);
+    const configuredFork = writes.at(-1)!;
+    check(configuredFork.url.endsWith("/fork") && (configuredFork.body.config as Record<string, unknown>).effort === "max" && (configuredFork.body.config as Record<string, unknown>).fast === true,
+      "fork: native copy receives reasoning and boolean overrides together");
     flushSync(() => root.render(null));
     flushSync(() => root.render(<Fixture desktop />));
     await openForm();
