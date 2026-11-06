@@ -72,8 +72,14 @@ test("early release is idempotent and failures stay visible without preventing o
   assertStrictEquals(release(), failed);
   await assertRejects(() => failed);
   const done = scope.dispose();
-  await assertRejects(() => done, (error: unknown) =>
-    error instanceof AggregateError && error.errors.length === 1);
+  await assertRejects(
+    () => done,
+    (error: unknown) => {
+      if (!(error instanceof AggregateError)) return false;
+      assertEquals(error.errors.length, 1);
+      return true;
+    },
+  );
   assertEquals(attempts, 1);
   assertEquals(otherReleased, true);
   assertEquals(scope.snapshot(), {

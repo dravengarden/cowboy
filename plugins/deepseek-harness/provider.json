@@ -33,8 +33,8 @@
   "configuration_presets": [
     {
       "id": "deepseek-flash-max",
-      "name": "Flash \u00b7 Max",
-      "detail": "DeepSeek-V4.1-Flash \u00b7 Max reasoning",
+      "name": "Flash · Max",
+      "detail": "DeepSeek-V4.1-Flash · Max reasoning",
       "is_default": true,
       "values": {
         "model": "[\"deepseek-official\",\"deepseek-flash\"]",
@@ -61,7 +61,7 @@
         "Working"
       ],
       "interval_ms": 4200,
-      "suffix": "\u2026",
+      "suffix": "…",
       "effect": "shimmer"
     },
     "accessible_label": "DeepSeek Harness is working"

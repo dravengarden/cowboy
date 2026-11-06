@@ -83,6 +83,20 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Scoped release 3.82.0 replaces the packaged plugin-api, app-shell and state-store
+tests' external assertion imports with Node built-ins. It versions those packages,
+state-store's dependent packages and the plugin-api consumers without changing
+native pins. It removes the temporary root `@std/assert` dependency; package
+closure validation remains strict and historical release records stay unchanged.
+
+Scoped release 3.81.0 records app-shell 1.1.36 for the already-committed
+reader edge and dock changes (`b1234031`..`c9c226a3`); no Plugin depends on that
+component, so the worker registry input stays at 3.79.0. The plugin-api and
+state-store tests keep their recorded bytes (`@std/assert`), so neither package
+nor its consumers change. Claude Code 3.20.28, Claude DeepSeek 3.1.52, Codex
+3.5.22 and Grok 3.1.53 version the Biome reformatting of their sources
+(`9bb295d9`) without a component release. Native pins are unchanged.
+
 Scoped release 3.80.0 records app-shell 1.1.35 for the already-committed
 sheet change `3f6fd69f` (no grab pills); no Plugin depends on that component,
 so the worker registry input stays at 3.79.0. Native pins are unchanged.

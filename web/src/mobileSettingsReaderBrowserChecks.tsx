@@ -36,6 +36,9 @@ export async function checkMobileSettingsReader(keep = false): Promise<void> {
     check(footer.scrollWidth <= footer.clientWidth, "Navigation fits the available width");
     const back = footer.querySelector<HTMLButtonElement>('[aria-label="Back to Settings from About"]')!;
     check(back.getBoundingClientRect().height >= 44, "Back retains its touch target");
+    check(back.getBoundingClientRect().width === 44, "Back remains an independent round action");
+    const title = footer.querySelector<HTMLElement>('[title="About"]')!;
+    check(Math.abs(title.getBoundingClientRect().left + title.getBoundingClientRect().width / 2 - (footer.getBoundingClientRect().left + footer.getBoundingClientRect().width / 2)) < 1, "Section identity is centered independently of the buttons");
     const scroller = dialog.querySelector<HTMLElement>("[data-scroll-edges]")!;
     scroller.scrollTop = scroller.scrollHeight;
     await wait();

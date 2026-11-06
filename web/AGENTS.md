@@ -143,9 +143,10 @@ Editing focus suspends the fade; do not decorate textarea/CodeMirror internals o
 image-pan canvases. Those retain their cursor and image-safe-area contracts.
 Full-screen headerless sheets put safe-area clearance inside their scrolling
 body. Never stack a second mask on a Transcript or the Sessions rail.
-Mobile Settings details start with their useful content. Keep the section name
-with Back and Close in the left-aligned floating navigation; descriptions belong
-in the Settings index, not in a persistent heading above each detail page.
+Mobile Settings details start with their useful content. The bottom navigation
+uses a round Back action on the left, a separate centered section name, and a
+quiet Close action on the right over a theme-aware gradient; do not enclose the
+title and controls in a large capsule. Descriptions belong in the Settings index.
 
 - Mobile is touch-first: single-task focus, large targets, progressive
   disclosure, safe system-keyboard behaviour, and native gestures.
