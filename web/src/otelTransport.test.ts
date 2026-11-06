@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 import { OTLP_MAX_BODY, OtlpTransport } from "./otelTransport.ts";
 
 const success = () =>

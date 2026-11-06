@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "../../../tools/test-assert.ts";
 import { BufferClientError } from "./protocol.ts";
 import { ID, OTHER, wire } from "./fixture.ts";
 import { NAV_ID, navigationWire } from "./navigationFixture.ts";

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 
 test("the keyboard-free height is learned at startup, never from a focused, shrunken viewport", async () => {
   const globals = globalThis as unknown as Record<string, unknown>;

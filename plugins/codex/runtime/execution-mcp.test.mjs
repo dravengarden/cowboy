@@ -11,41 +11,26 @@ test("only ephemeral native MCP handles acquire a per-process namespace", () => 
     method: "process/start",
     params: { processId: "mcp-stdio-1", argv: ["cowboy", "mcp"] },
   };
-  assert.equal(
-    first(structuredClone(frame), true).params.processId,
-    "first-mcp-stdio-1",
-  );
-  assert.equal(
-    second(structuredClone(frame), true).params.processId,
-    "second-mcp-stdio-1",
-  );
+  assert.equal(first(structuredClone(frame), true).params.processId, "first-mcp-stdio-1");
+  assert.equal(second(structuredClone(frame), true).params.processId, "second-mcp-stdio-1");
   for (const method of ["process/output", "process/closed", "process/exited"]) {
     const reply = {
       method,
       params: { processId: "first-mcp-stdio-1", seq: 7 },
     };
-    assert.equal(
-      first(structuredClone(reply), false).params.processId,
-      "mcp-stdio-1",
-    );
-    assert.equal(
-      second(structuredClone(reply), false).params.processId,
-      "first-mcp-stdio-1",
-    );
+    assert.equal(first(structuredClone(reply), false).params.processId, "mcp-stdio-1");
+    assert.equal(second(structuredClone(reply), false).params.processId, "first-mcp-stdio-1");
   }
-  assert.deepEqual(
-    first({ result: { processId: "first-mcp-stdio-1" } }, false),
-    { result: { processId: "mcp-stdio-1" } },
-  );
-  for (
-    const id of [
-      "background-1",
-      "12345",
-      "mcp-stdio-0",
-      "mcp-stdio-other",
-      "other-mcp-stdio-1",
-    ]
-  ) {
+  assert.deepEqual(first({ result: { processId: "first-mcp-stdio-1" } }, false), {
+    result: { processId: "mcp-stdio-1" },
+  });
+  for (const id of [
+    "background-1",
+    "12345",
+    "mcp-stdio-0",
+    "mcp-stdio-other",
+    "other-mcp-stdio-1",
+  ]) {
     const request = { method: "process/read", params: { processId: id } };
     assert.deepEqual(first(structuredClone(request), true), request);
     assert.deepEqual(first(structuredClone(request), false), request);
@@ -101,9 +86,7 @@ test("authenticated relay retains handles through reconnect and forwards ordinar
     for (const socket of targetSockets) socket.terminate();
     upstream.close();
   });
-  async function connect(
-    headers = { Authorization: `Bearer ${relay.descriptor.bearer_token}` },
-  ) {
+  async function connect(headers = { Authorization: `Bearer ${relay.descriptor.bearer_token}` }) {
     const socket = new WebSocket(relay.descriptor.endpoint, { headers });
     clients.add(socket);
     await once(socket, "open");
@@ -123,7 +106,7 @@ test("authenticated relay retains handles through reconnect and forwards ordinar
   const output = new Promise((resolve) =>
     first.on("message", () => {
       if (messages.length === 2) resolve();
-    })
+    }),
   );
   first.send(
     JSON.stringify({

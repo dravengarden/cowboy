@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../tools/test-assert.ts";
 import { readWebClipboard, supportsWebClipboardRead } from "./webClipboard.ts";
 
 test("web clipboard read is offered when the browser exposes the API", () => {

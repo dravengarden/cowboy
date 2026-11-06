@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertThrows } from "@std/assert";
+import { assert, assertThrows } from "./test-assert.ts";
 import {
   validateCodeAdapterRuntime,
   validateIndependentPluginVersion,

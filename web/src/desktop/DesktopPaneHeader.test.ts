@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert } from "@std/assert";
+import { assert } from "../../../tools/test-assert.ts";
 
 const workspaceSource = await readFile(
   new URL("./DesktopWorkspace.tsx", import.meta.url), "utf8",

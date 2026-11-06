@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../../tools/test-assert.ts";
 
 test("setup page never asks for a machine id", async () => {
   const source = await readFile(

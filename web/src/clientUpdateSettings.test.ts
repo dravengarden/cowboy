@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { updateDelayFromStorage } from "./clientUpdateSettings.ts";
 
 test("update countdown defaults to three and preserves zero and custom seconds", () => {

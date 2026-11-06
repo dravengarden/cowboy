@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { normalizeReviewMode } from "./reviewMode.ts";
 
 test("review mode accepts only the two local surface states", () => {

@@ -24,13 +24,16 @@ const MAX_SERVERS = 64;
 // when it spawns the command; no credential crosses into the Provider runtime.
 export function withCowboyMcp(entries, enabled) {
   if (!enabled) return entries;
-  return [...entries.filter((entry) => entry.name !== "cowboy"), {
-    name: "cowboy",
-    scope: "session",
-    placement: "target",
-    argv: ["cowboy", "mcp"],
-    env: {},
-  }];
+  return [
+    ...entries.filter((entry) => entry.name !== "cowboy"),
+    {
+      name: "cowboy",
+      scope: "session",
+      placement: "target",
+      argv: ["cowboy", "mcp"],
+      env: {},
+    },
+  ];
 }
 
 // Native's expansion of `${VAR}` and `${VAR:-default}`; a variable that is
@@ -40,9 +43,7 @@ export function expandVariables(value, environment) {
     return value.replace(
       /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g,
       (whole, name, fallback) =>
-        Object.hasOwn(environment, name)
-          ? environment[name]
-          : fallback ?? whole,
+        Object.hasOwn(environment, name) ? environment[name] : (fallback ?? whole),
     );
   }
   if (Array.isArray(value)) {
@@ -50,9 +51,7 @@ export function expandVariables(value, environment) {
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map((
-        [key, item],
-      ) => [key, expandVariables(item, environment)]),
+      Object.entries(value).map(([key, item]) => [key, expandVariables(item, environment)]),
     );
   }
   return value;
@@ -66,11 +65,7 @@ export function projectKey(cwd, repositoryRoot) {
 // The directories whose `.mcp.json` native reads, root first.
 export function projectConfigDirectories(cwd) {
   const directories = [];
-  for (
-    let directory = cwd;
-    directory !== "/";
-    directory = posix.dirname(directory)
-  ) {
+  for (let directory = cwd; directory !== "/"; directory = posix.dirname(directory)) {
     directories.unshift(directory);
   }
   return directories;
@@ -79,9 +74,7 @@ export function projectConfigDirectories(cwd) {
 function parse(text) {
   try {
     const value = JSON.parse(text);
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? value
-      : undefined;
+    return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
   } catch {
     return undefined;
   }
@@ -89,9 +82,9 @@ function parse(text) {
 
 function servers(value) {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? Object.entries(value).filter(([, server]) =>
-      server && typeof server === "object" && !Array.isArray(server)
-    )
+    ? Object.entries(value).filter(
+        ([, server]) => server && typeof server === "object" && !Array.isArray(server),
+      )
     : [];
 }
 
@@ -106,29 +99,28 @@ export function loopbackUrl(url) {
   }
   // A trailing dot names the same host; an IPv4-mapped address the same IP.
   host = host.replace(/\.$/, "").replace(/^::ffff:/, "");
-  return host === "localhost" || host.endsWith(".localhost") ||
-    host === "::1" || host === "0.0.0.0" || host === "::" ||
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "::1" ||
+    host === "0.0.0.0" ||
+    host === "::" ||
     /^127\.\d+\.\d+\.\d+$/.test(host) ||
-    /^7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host);
+    /^7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host)
+  );
 }
 
 // The servers native would load, in its precedence, with where each runs.
 // `userConfig` is ~/.claude.json's text, `projectConfigs` the `.mcp.json`
 // texts root first. Returns entries ready for native's --mcp-config and the
 // servers this session cannot offer, with why.
-export function targetMcpServers(
-  { userConfig, projectConfigs, cwd, repositoryRoot, environment },
-) {
+export function targetMcpServers({ userConfig, projectConfigs, cwd, repositoryRoot, environment }) {
   const user = parse(userConfig ?? "") ?? {};
   const local = user.projects?.[projectKey(cwd, repositoryRoot)] ?? {};
   const disabledProject = new Set(
-    Array.isArray(local.disabledMcpjsonServers)
-      ? local.disabledMcpjsonServers
-      : [],
+    Array.isArray(local.disabledMcpjsonServers) ? local.disabledMcpjsonServers : [],
   );
-  const disabled = new Set(
-    Array.isArray(local.disabledMcpServers) ? local.disabledMcpServers : [],
-  );
+  const disabled = new Set(Array.isArray(local.disabledMcpServers) ? local.disabledMcpServers : []);
   const merged = new Map();
   for (const [name, server] of servers(user.mcpServers)) {
     merged.set(name, { scope: "user", server });
@@ -160,15 +152,18 @@ export function targetMcpServers(
     const type = expanded.type ?? (expanded.url ? "http" : "stdio");
     if (type === "stdio") {
       if (
-        typeof expanded.command !== "string" || !expanded.command ||
-        !(expanded.args === undefined ||
-          (Array.isArray(expanded.args) &&
-            expanded.args.every((item) => typeof item === "string"))) ||
-        !(expanded.env === undefined ||
-          (expanded.env && typeof expanded.env === "object" &&
-            Object.values(expanded.env).every((item) =>
-              typeof item === "string"
-            )))
+        typeof expanded.command !== "string" ||
+        !expanded.command ||
+        !(
+          expanded.args === undefined ||
+          (Array.isArray(expanded.args) && expanded.args.every((item) => typeof item === "string"))
+        ) ||
+        !(
+          expanded.env === undefined ||
+          (expanded.env &&
+            typeof expanded.env === "object" &&
+            Object.values(expanded.env).every((item) => typeof item === "string"))
+        )
       ) {
         omit("its stdio configuration is invalid");
         continue;
@@ -194,9 +189,7 @@ export function targetMcpServers(
     }
     // Native would expand what the target left unresolved from the
     // runtime's own environment (its credentials, its localhost).
-    if (
-      JSON.stringify([expanded.url, expanded.headers ?? null]).includes("${")
-    ) {
+    if (JSON.stringify([expanded.url, expanded.headers ?? null]).includes("${")) {
       omit("it names environment variables the target does not set");
       continue;
     }
@@ -214,9 +207,7 @@ export function targetMcpServers(
         ...(expanded.headers && typeof expanded.headers === "object"
           ? { headers: expanded.headers }
           : {}),
-        ...(expanded.oauth && typeof expanded.oauth === "object"
-          ? { oauth: expanded.oauth }
-          : {}),
+        ...(expanded.oauth && typeof expanded.oauth === "object" ? { oauth: expanded.oauth } : {}),
       },
     });
   }
@@ -225,16 +216,18 @@ export function targetMcpServers(
 
 // Native's --mcp-config servers: target stdio servers through the relay.
 export function nativeMcpServers(entries, relay) {
-  return Object.fromEntries(entries.map((entry) => [
-    entry.name,
-    entry.placement === "target"
-      ? {
-        type: "stdio",
-        command: relay.command,
-        args: [...relay.args, entry.name],
-      }
-      : entry.config,
-  ]));
+  return Object.fromEntries(
+    entries.map((entry) => [
+      entry.name,
+      entry.placement === "target"
+        ? {
+            type: "stdio",
+            command: relay.command,
+            args: [...relay.args, entry.name],
+          }
+        : entry.config,
+    ]),
+  );
 }
 
 // The tool-name prefix native gives a server's tools.

@@ -31,41 +31,34 @@ export const BUNDLED_SKILLS = [
 ];
 // Bundled skills native lists that cannot work against the target.
 export const UNAVAILABLE_BUNDLED = {
-  "claude-api":
-    "its reference files are on the machine running this session, not on the target",
+  "claude-api": "its reference files are on the machine running this session, not on the target",
   dataviz:
     "its reference files and validators are on the machine running this session, not on the target",
   "plugin-authoring":
     "its reference files are on the machine running this session, not on the target",
   "fewer-permission-prompts":
     "it scans session transcripts, which are kept on the machine running this session",
-  loop:
-    "it schedules prompts with the Cron tools, which this session does not have",
-  "workflow-authoring":
-    "it writes scripts for the Workflow tool, which this session does not have",
+  loop: "it schedules prompts with the Cron tools, which this session does not have",
+  "workflow-authoring": "it writes scripts for the Workflow tool, which this session does not have",
 };
 
 // The directories native would search, in its order of precedence.
 export function skillRoots(cwd, home, repositoryRoot) {
   const projects = [];
-  for (let directory = cwd;; directory = posix.dirname(directory)) {
+  for (let directory = cwd; ; directory = posix.dirname(directory)) {
     if (directory === home) break;
     projects.push(directory);
     if (directory === repositoryRoot || directory === "/") break;
   }
   const at = (scope, kind, directory) => ({ scope, kind, directory });
   return [
-    ...(home
-      ? [at("user", "skill", posix.join(home, ".claude", "skills"))]
-      : []),
+    ...(home ? [at("user", "skill", posix.join(home, ".claude", "skills"))] : []),
     ...projects.map((directory) =>
-      at("project", "skill", posix.join(directory, ".claude", "skills"))
+      at("project", "skill", posix.join(directory, ".claude", "skills")),
     ),
-    ...(home
-      ? [at("user", "command", posix.join(home, ".claude", "commands"))]
-      : []),
+    ...(home ? [at("user", "command", posix.join(home, ".claude", "commands"))] : []),
     ...projects.map((directory) =>
-      at("project", "command", posix.join(directory, ".claude", "commands"))
+      at("project", "command", posix.join(directory, ".claude", "commands")),
     ),
   ];
 }
@@ -76,11 +69,15 @@ export function skillName(root, path) {
   const parts = path.slice(root.directory.length + 1).split("/");
   // A command's name joins its path with colons, so its parts have none.
   if (
-    parts.some((part) =>
-      !part || part.startsWith(".") || /[\u0000-\u001f\u007f]/.test(part) ||
-      (root.kind === "command" && part.includes(":"))
+    parts.some(
+      (part) =>
+        !part ||
+        part.startsWith(".") ||
+        /[\u0000-\u001f\u007f]/.test(part) ||
+        (root.kind === "command" && part.includes(":")),
     )
-  ) return undefined;
+  )
+    return undefined;
   if (root.kind === "skill") {
     return parts.length === 2 && parts[1] === "SKILL.md" ? parts[0] : undefined;
   }
@@ -116,10 +113,8 @@ export function skillFrontmatter(text) {
     }
     const line = indented.slice(fields.indent.length);
     const unindentedItem = listed && /^-(\s|$)/.test(line);
-    if (
-      /^\S/.test(line) && !unindentedItem &&
-      !/^[A-Za-z_][\w-]*\s*:(\s|$)/.test(line)
-    ) fields.hooks = true;
+    if (/^\S/.test(line) && !unindentedItem && !/^[A-Za-z_][\w-]*\s*:(\s|$)/.test(line))
+      fields.hooks = true;
     const key = /^([A-Za-z_][\w-]*)\s*:\s*(.*?)\s*$/.exec(line);
     if (key) {
       list = null;
@@ -145,9 +140,7 @@ export function skillFrontmatter(text) {
 // Rules of an allowed-tools string or flow list: commas or spaces outside
 // parentheses separate them.
 function toolRules(value) {
-  const body = value.startsWith("[") && value.endsWith("]")
-    ? value.slice(1, -1)
-    : value;
+  const body = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
   const rules = [];
   let current = "";
   let depth = 0;
@@ -177,13 +170,13 @@ export function targetSkills(found) {
     const reason = fields.hooks
       ? "it may declare hooks, which would run on the machine running this session"
       : fields.shell !== undefined && fields.shell !== "bash"
-      ? `it runs its commands in ${fields.shell}`
-      : Buffer.byteLength(file.content) > MAX_SKILL_FILE
-      ? "its file exceeds 1 MiB"
-      : entries.length >= MAX_SKILLS ||
-          total + Buffer.byteLength(file.content) > MAX_SKILL_BYTES
-      ? "the session's skill limit was reached"
-      : undefined;
+        ? `it runs its commands in ${fields.shell}`
+        : Buffer.byteLength(file.content) > MAX_SKILL_FILE
+          ? "its file exceeds 1 MiB"
+          : entries.length >= MAX_SKILLS ||
+              total + Buffer.byteLength(file.content) > MAX_SKILL_BYTES
+            ? "the session's skill limit was reached"
+            : undefined;
     if (reason) {
       omitted.push({ name: file.name, reason });
       continue;
@@ -207,20 +200,19 @@ export function targetSkills(found) {
 function inlineCommands(text) {
   const masked = text.replace(/`[^`\n]+`/g, (span, at) => {
     const before = text[at - 1];
-    return before === "!" || before === "`"
-      ? span
-      : "`" + " ".repeat(span.length - 2) + "`";
+    return before === "!" || before === "`" ? span : "`" + " ".repeat(span.length - 2) + "`";
   });
-  return [...masked.matchAll(/(?<=^|\s)!`[^`]+`/gm)].map((match) =>
-    match.index
-  );
+  return [...masked.matchAll(/(?<=^|\s)!`[^`]+`/gm)].map((match) => match.index);
 }
 
 // The description native gives a local skill or command without one: the
 // first non-empty line, without heading marks, cut at 100 characters
 // (measured on 2.1.287). A plugin's is not listed without one.
 export function derivedDescription(body, kind) {
-  const line = body.split(/\r?\n/).map((item) => item.trim()).find(Boolean)
+  const line = body
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .find(Boolean)
     ?.replace(/^#+\s*/, "");
   if (!line) return kind === "skill" ? "Skill" : "Custom command";
   return line.length > 100 ? line.slice(0, 97) + "..." : line;
@@ -237,25 +229,19 @@ export function mirrorContent(entry, marker, cwd) {
     text = text.replaceAll("${CLAUDE_SKILL_DIR}", () => directory);
   }
   const original = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(text)?.[0] ?? "";
-  let body = text.slice(original.length).replaceAll(
-    "${CLAUDE_PROJECT_DIR}",
-    () => cwd,
-  );
+  let body = text.slice(original.length).replaceAll("${CLAUDE_PROJECT_DIR}", () => cwd);
   // Native lists a plugin's skill only with a description: give it the one
   // native would derive for the local file.
   const fields = skillFrontmatter(text);
-  const description = fields.indent + "description: " +
-    JSON.stringify(derivedDescription(body, entry.kind));
+  const description =
+    fields.indent + "description: " + JSON.stringify(derivedDescription(body, entry.kind));
   const front = !original
     ? `---\n${description}\n---\n`
     : fields.description === ""
-    ? original.replace(
-      /^[ \t]*description:[^\n]*$/m,
-      () => description,
-    )
-    : fields.description !== undefined
-    ? original
-    : original.replace(/\r?\n---(\r?\n|$)$/, (end) => `\n${description}${end}`);
+      ? original.replace(/^[ \t]*description:[^\n]*$/m, () => description)
+      : fields.description !== undefined
+        ? original
+        : original.replace(/\r?\n---(\r?\n|$)$/, (end) => `\n${description}${end}`);
   const inserts = [
     ...[...body.matchAll(/```!/g)].map((match) => match.index + 3),
     ...inlineCommands(body).map((at) => at + 1),
@@ -274,18 +260,16 @@ export async function writeSkillPlugin(root, skills, marker, cwd) {
   );
   const entries = [];
   for (const entry of skills.entries) {
-    const parts = entry.kind === "skill"
-      ? ["skills", entry.name, "SKILL.md"]
-      : [
-        "commands",
-        ...entry.name.split(":").slice(0, -1),
-        entry.name.split(":").at(-1) + ".md",
-      ];
+    const parts =
+      entry.kind === "skill"
+        ? ["skills", entry.name, "SKILL.md"]
+        : ["commands", ...entry.name.split(":").slice(0, -1), entry.name.split(":").at(-1) + ".md"];
     const file = join(root, ...parts);
     if (
       !file.startsWith(root + "/") ||
       parts.some((part) => !part || part === "." || part === "..")
-    ) throw new Error("Invalid target skill name");
+    )
+      throw new Error("Invalid target skill name");
     await mkdir(join(file, ".."), { recursive: true });
     const content = mirrorContent(entry, marker, cwd);
     await writeFile(file, content, { flag: "wx" });
@@ -295,9 +279,9 @@ export async function writeSkillPlugin(root, skills, marker, cwd) {
       scope: entry.scope,
       ...(entry.kind === "skill"
         ? {
-          mirrorDirectory: join(root, "skills", entry.name),
-          targetDirectory: posix.dirname(entry.path),
-        }
+            mirrorDirectory: join(root, "skills", entry.name),
+            targetDirectory: posix.dirname(entry.path),
+          }
         : {}),
       // As native reads them: with the skill's directory placeholder named.
       allowedTools: skillFrontmatter(content).allowedTools,

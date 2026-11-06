@@ -21,10 +21,7 @@ test("the agent-calls prompt routes reviews through Cowboy", () => {
 
 test("the installed Review Plugin owns guidance while legacy sessions retain their fallback", () => {
   const { guidance } = JSON.parse(
-    readFileSync(
-      new URL("../../review/contract.json", import.meta.url),
-      "utf8",
-    ),
+    readFileSync(new URL("../../review/contract.json", import.meta.url), "utf8"),
   );
   const prompt = agentCallsPrompt({
     schema: 1,
@@ -32,10 +29,7 @@ test("the installed Review Plugin owns guidance while legacy sessions retain the
   });
   assert.equal(
     prompt,
-    guidance.replaceAll("{{peer_command}}", "codex").replaceAll(
-      "{{peer}}",
-      "Codex",
-    ),
+    guidance.replaceAll("{{peer_command}}", "codex").replaceAll("{{peer}}", "Codex"),
   );
   assert.match(prompt, /optional/);
   assert.match(prompt, /at most once per task/);
@@ -47,8 +41,5 @@ test("the installed Review Plugin owns guidance while legacy sessions retain the
   assert.match(prompt, /review_selection/);
   assert.ok(prompt.length < 900, prompt.length);
   assert.equal(agentCallsPrompt(null), AGENT_CALLS_PROMPT);
-  assert.equal(
-    agentCallsPrompt({ schema: 1, calls: null }),
-    AGENT_CALLS_PROMPT,
-  );
+  assert.equal(agentCallsPrompt({ schema: 1, calls: null }), AGENT_CALLS_PROMPT);
 });

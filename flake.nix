@@ -331,7 +331,7 @@
           "components/state-sync"
           "components/state-sync-idb"
         ];
-        depsHash = "sha256-YW82drFh+3plT/fOezH6OokDZfvwEfA83ILB7HePufs=";
+        depsHash = "sha256-P6HtIlwz41gV8PZ6jLxBzihQJRMr6wsqY/dZt5x7mAo=";
       }).overrideAttrs (previous: {
         # A Web release cannot be built from a commit that grows a structure
         # offender or breaks a web unit test (both also run in just check,
@@ -1088,7 +1088,7 @@
           # Ephemeral, socket-only database for the PostgreSQL contract gate.
           # This is a developer/test dependency, not a Controller runtime input.
           (lib.getBin postgresql)
-        ] ++ [ bun pkgs.dprint cowboy-nodejs ];
+        ] ++ [ bun cowboy-nodejs ];
 
         shellHook = ''
           echo "cowboy dev shell — rust + optional sccache + bun"

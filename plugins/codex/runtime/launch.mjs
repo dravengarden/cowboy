@@ -43,12 +43,9 @@ export const AGENT_CALLS_PROMPT = [
 // The agent-calls instructions as a native `-c` option, unless the user's
 // own config or Cowboy's options already set developer instructions: those
 // are never replaced.
-export function agentCallsConfiguration(
-  configuration,
-  userConfig,
-  prompt = AGENT_CALLS_PROMPT,
-) {
-  const own = /^\s*developer_instructions\s*=/m.test(userConfig ?? "") ||
+export function agentCallsConfiguration(configuration, userConfig, prompt = AGENT_CALLS_PROMPT) {
+  const own =
+    /^\s*developer_instructions\s*=/m.test(userConfig ?? "") ||
     configuration.some((value) => value.startsWith("developer_instructions="));
   return own ? [] : ["-c", `developer_instructions=${JSON.stringify(prompt)}`];
 }
@@ -65,8 +62,7 @@ export function agentCallsPrompt(extensions) {
 export { agentApiConfiguration } from "./memory.mjs";
 
 function userCodexConfig() {
-  const home = process.env.CODEX_HOME ??
-    join(process.env.HOME ?? "", ".codex");
+  const home = process.env.CODEX_HOME ?? join(process.env.HOME ?? "", ".codex");
   try {
     return readFileSync(join(home, "config.toml"), "utf8");
   } catch {
@@ -86,8 +82,8 @@ export const API_KEY_AUTH_REQUEST = JSON.stringify({ methodId: "api-key" });
 const API_KEY_VARIABLES = ["CODEX_API_KEY", "OPENAI_API_KEY"];
 
 export function defaultAuthRequest(environment) {
-  const hasKey = API_KEY_VARIABLES.some((name) =>
-    typeof environment[name] === "string" && environment[name].trim() !== ""
+  const hasKey = API_KEY_VARIABLES.some(
+    (name) => typeof environment[name] === "string" && environment[name].trim() !== "",
   );
   const declared = environment.DEFAULT_AUTH_REQUEST;
   if (declared === undefined || declared === "") {
@@ -99,10 +95,7 @@ export function defaultAuthRequest(environment) {
   } catch {
     throw new Error("Invalid default Codex authentication request");
   }
-  if (
-    request?.methodId === "api-key" && !hasKey &&
-    !request?._meta?.["api-key"]?.apiKey
-  ) {
+  if (request?.methodId === "api-key" && !hasKey && !request?._meta?.["api-key"]?.apiKey) {
     return undefined;
   }
   return declared;
@@ -170,15 +163,12 @@ export function managedMcpOverrides(listing) {
 }
 
 async function managedMain(args, profile) {
-  const { configuration, arguments: forwarded } = splitConfigurationArguments(
-    args,
-  );
+  const { configuration, arguments: forwarded } = splitConfigurationArguments(args);
   const codex = process.env.CODEX_PATH ?? "";
   if (!isAbsolute(codex)) {
     throw new Error("Managed Codex requires an exact Machine-bound CLI");
   }
-  const home = process.env.CODEX_HOME ??
-    join(process.env.HOME ?? "", ".codex");
+  const home = process.env.CODEX_HOME ?? join(process.env.HOME ?? "", ".codex");
   const violations = managedRuleViolations([
     join(home, "rules"),
     join(process.cwd(), ".codex", "rules"),
@@ -188,11 +178,11 @@ async function managedMain(args, profile) {
       "Managed read-only Codex refuses ExecPolicy allow rules that bypass its sandbox",
     );
   }
-  const listing = spawnSync(
-    codex,
-    [...configuration, "mcp", "list", "--json"],
-    { cwd: process.cwd(), encoding: "utf8", timeout: 30_000 },
-  );
+  const listing = spawnSync(codex, [...configuration, "mcp", "list", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 30_000,
+  });
   if (listing.status !== 0) {
     throw new Error("Managed profile could not enumerate MCP servers");
   }
@@ -213,10 +203,7 @@ async function managedMain(args, profile) {
     delete process.env.COWBOY_PRIVATE_CODEX_BRIDGE;
   }
   const upstream = fileURLToPath(
-    new URL(
-      "./node_modules/@agentclientprotocol/codex-acp/dist/index.js",
-      import.meta.url,
-    ),
+    new URL("./node_modules/@agentclientprotocol/codex-acp/dist/index.js", import.meta.url),
   );
   process.argv = [process.execPath, upstream, ...forwarded];
   await import(upstream);
@@ -224,10 +211,7 @@ async function managedMain(args, profile) {
 
 export async function main(args) {
   if (args[0] === MANAGED_PROFILE_FLAG || args[0] === IMAGE_PROFILE_FLAG) {
-    await managedMain(
-      args.slice(1),
-      args[0] === IMAGE_PROFILE_FLAG ? "image-v1" : "read-only-v1",
-    );
+    await managedMain(args.slice(1), args[0] === IMAGE_PROFILE_FLAG ? "image-v1" : "read-only-v1");
     return;
   }
   // An inherited marker must never put an ordinary session into managed mode.
@@ -236,23 +220,17 @@ export async function main(args) {
     await memoryNative(args);
     return;
   }
-  const { configuration, arguments: forwarded } = splitConfigurationArguments(
-    args,
-  );
+  const { configuration, arguments: forwarded } = splitConfigurationArguments(args);
   if (configuration.length && !isAbsolute(process.env.CODEX_PATH ?? "")) {
     throw new Error("Configured Codex requires an exact Machine-bound CLI");
   }
-  const inspection = forwarded.length === 1 &&
-    ["--version", "-V", "--help", "-h"].includes(forwarded[0]);
+  const inspection =
+    forwarded.length === 1 && ["--version", "-V", "--help", "-h"].includes(forwarded[0]);
   // The client passes these to the exact native CLI it launches.
   const extensions = inspection ? null : await sessionExtensions();
   if (!inspection && isAbsolute(process.env.CODEX_PATH ?? "")) {
     configuration.push(
-      ...agentCallsConfiguration(
-        configuration,
-        userCodexConfig(),
-        agentCallsPrompt(extensions),
-      ),
+      ...agentCallsConfiguration(configuration, userCodexConfig(), agentCallsPrompt(extensions)),
     );
   }
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
@@ -261,38 +239,32 @@ export async function main(args) {
     process.env.COWBOY_EXECUTION_DESCRIPTOR || process.env.COWBOY_CALL_CONTEXT,
   );
   // The bridge reads the same configuration again when it starts native.
-  const memory = inspection
-    ? null
-    : await memoryConfiguration("codex", { extensions });
+  const memory = inspection ? null : await memoryConfiguration("codex", { extensions });
   if (!inspection && (cowboyMcp || memory)) {
     if (!isAbsolute(process.env.CODEX_PATH ?? "")) {
       throw new Error("Remote execution requires an exact Machine-bound CLI");
     }
     process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE = process.env.CODEX_PATH;
     process.env.COWBOY_PRIVATE_CODEX_BRIDGE = fileURLToPath(import.meta.url);
-    applyAwaitedMcpServers(injectedMcpServerNames({
-      cowboy: cowboyMcp,
-      memory,
-      listServers: () =>
-        nativeMcpServerNames(process.env.CODEX_PATH, configuration),
-    }));
+    applyAwaitedMcpServers(
+      injectedMcpServerNames({
+        cowboy: cowboyMcp,
+        memory,
+        listServers: () => nativeMcpServerNames(process.env.CODEX_PATH, configuration),
+      }),
+    );
   } else {
     delete process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE;
     delete process.env.COWBOY_PRIVATE_CODEX_BRIDGE;
     applyAwaitedMcpServers([]);
   }
   const upstream = fileURLToPath(
-    new URL(
-      "./node_modules/@agentclientprotocol/codex-acp/dist/index.js",
-      import.meta.url,
-    ),
+    new URL("./node_modules/@agentclientprotocol/codex-acp/dist/index.js", import.meta.url),
   );
   process.argv = [process.execPath, upstream, ...forwarded];
   await import(upstream);
 }
 
-if (
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main(process.argv.slice(2));
 }

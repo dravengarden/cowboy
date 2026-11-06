@@ -5,7 +5,7 @@ import {
   assertEquals,
   assertNotEquals,
   assertStringIncludes,
-} from "@std/assert";
+} from "../../../../tools/test-assert.ts";
 import {
   belongsToDirectorySubtree,
   directoryListingContains,

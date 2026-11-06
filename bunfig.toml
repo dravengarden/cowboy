@@ -1,5 +1,2 @@
 [run]
 bun = true
-
-[install.scopes]
-"@jsr" = "https://npm.jsr.io"

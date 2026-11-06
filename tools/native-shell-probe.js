@@ -8,23 +8,16 @@ async function probeCowboyNativeShell(remote) {
     tests.push(name);
   };
   if (remote) {
-    check(
-      "remote Cowboy origin",
-      location.origin === "https://cowboy.stormbird.xyz",
-    );
+    check("remote Cowboy origin", location.origin === "https://cowboy.stormbird.xyz");
     check("remote document ready", document.readyState === "complete");
     const heading = document.querySelector("form h1");
     check(
       "remote sign-in UI rendered",
-      heading?.textContent?.trim() === "Sign in" &&
-        heading.getBoundingClientRect().height > 0,
+      heading?.textContent?.trim() === "Sign in" && heading.getBoundingClientRect().height > 0,
     );
   }
   check("native keyboard shell", window.__cowboyNativeShell === true);
-  check(
-    "Tauri IPC present",
-    typeof window.__TAURI__?.core?.invoke === "function",
-  );
+  check("Tauri IPC present", typeof window.__TAURI__?.core?.invoke === "function");
   check(
     "native tweaks present",
     typeof window.__cowboySelectionHaptic === "function" &&
@@ -34,8 +27,7 @@ async function probeCowboyNativeShell(remote) {
   const host = window.__COWBOY_NATIVE_PLUGIN_HOST;
   check(
     "immutable Plugin ABI coexists",
-    host?.version === "1.0.0" && Object.isFrozen(host) &&
-      Object.isFrozen(host.capabilities),
+    host?.version === "1.0.0" && Object.isFrozen(host) && Object.isFrozen(host.capabilities),
   );
   let denied = false;
   try {
@@ -48,10 +40,7 @@ async function probeCowboyNativeShell(remote) {
     action: "capabilities",
     rp_id: "cowboy.stormbird.xyz",
   });
-  check(
-    "unentitled shell fails closed",
-    passkeys.ok === true && passkeys.available === false,
-  );
+  check("unentitled shell fails closed", passkeys.ok === true && passkeys.available === false);
   async function openerDenied(url) {
     try {
       await window.__TAURI__.core.invoke("plugin:opener|open_url", { url });
@@ -76,8 +65,7 @@ async function probeCowboyNativeShell(remote) {
     });
     check(
       "read-only auth status is JSON",
-      response.status === 200 &&
-        response.headers.get("content-type")?.includes("application/json"),
+      response.status === 200 && response.headers.get("content-type")?.includes("application/json"),
     );
     const status = await response.json();
     check(
@@ -91,10 +79,7 @@ async function probeCowboyNativeShell(remote) {
     // IPC merely existing while all remote commands are disabled.
     await window.__TAURI__.core.invoke("plugin:haptics|selection_feedback");
     check("remote haptics IPC allowed", true);
-    check(
-      "remote cannot open app settings",
-      await openerDenied("app-settings:"),
-    );
+    check("remote cannot open app settings", await openerDenied("app-settings:"));
   }
   return {
     tests,

@@ -38,7 +38,8 @@ export function installNativeCycles(Agent) {
   if (
     [startForeground, endForeground, steer, startTurn].some(
       (method) => typeof method !== "function",
-    ) || typeof proto.runsAutonomousCycle !== "function"
+    ) ||
+    typeof proto.runsAutonomousCycle !== "function"
   ) {
     return false;
   }
@@ -68,7 +69,9 @@ export function installNativeCycles(Agent) {
     // Checked synchronously with the decision below: a cycle that ended or
     // was replaced is never joined, and the message stays with the caller.
     if (
-      typeof cycle !== "string" || !session || session.queryClosed ||
+      typeof cycle !== "string" ||
+      !session ||
+      session.queryClosed ||
       currentNativeCycle(this, sessionId) !== cycle
     ) {
       return NO_RUNNING_TURN;
@@ -82,11 +85,12 @@ export function installNativeCycles(Agent) {
     if (!input || typeof input.push !== "function") return NO_RUNNING_TURN;
     // Deliver into the running cycle rather than behind it, as a steer does
     // for a running turn; an open question keeps upstream's `later`.
-    const priority = (session.openUserInputs?.size ?? 0) > 0
-      ? "later"
-      : request._meta.steering.priority === "next"
-      ? "next"
-      : "now";
+    const priority =
+      (session.openUserInputs?.size ?? 0) > 0
+        ? "later"
+        : request._meta.steering.priority === "next"
+          ? "next"
+          : "now";
     const push = input.push;
     const agent = this;
     let pending = true;
@@ -99,9 +103,7 @@ export function installNativeCycles(Agent) {
         // jumps into a different cycle.
         return push.call(
           this,
-          currentNativeCycle(agent, sessionId) === cycle
-            ? { ...message, priority }
-            : message,
+          currentNativeCycle(agent, sessionId) === cycle ? { ...message, priority } : message,
         );
       }
       return push.call(this, message);

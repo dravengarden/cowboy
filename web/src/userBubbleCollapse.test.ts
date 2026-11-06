@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import {
   USER_BUBBLE_COLLAPSE_BUFFER_PX,
   USER_BUBBLE_COLLAPSE_PX,

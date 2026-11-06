@@ -1,16 +1,10 @@
 // JSON.parse alone loses duplicate object keys. No JSON5, external references,
 // invalid Unicode, unbounded nesting, or unbounded input at this trust boundary.
-export function strictJson(
-  raw: string,
-  maxBytes: number,
-  maxDepth: number,
-): unknown {
+export function strictJson(raw: string, maxBytes: number, maxDepth: number): unknown {
   const fail = (): never => {
     throw new Error("invalid_json");
   };
-  if (
-    raw.length > maxBytes || new TextEncoder().encode(raw).length > maxBytes
-  ) fail();
+  if (raw.length > maxBytes || new TextEncoder().encode(raw).length > maxBytes) fail();
   let pos = 0;
   const space = (): void => {
     while (/[ \r\n\t]/.test(raw[pos] ?? "x")) pos++;
@@ -73,15 +67,17 @@ export function strictJson(
       return fail();
     }
     const literal =
-      /^(?:null|true|false|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/
-        .exec(raw.slice(pos));
+      /^(?:null|true|false|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/.exec(
+        raw.slice(pos),
+      );
     if (!literal) return fail();
     pos += literal[0].length;
     const decoded: unknown = JSON.parse(literal[0]);
     if (
       typeof decoded === "number" &&
       (!Number.isFinite(decoded) || Math.abs(decoded) > Number.MAX_SAFE_INTEGER)
-    ) fail();
+    )
+      fail();
     return decoded;
   };
   const result = value(0);

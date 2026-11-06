@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 import type { ClientSnapshot, Mutation } from "@cowboy/state-sync";
 import { replicatedStore } from "@cowboy/state-sync";
 import { createIdbPersistenceOwner } from "../../components/state-sync-idb/index.ts";

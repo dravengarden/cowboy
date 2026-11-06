@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { createServiceWorkerUpdateCheck } from "./serviceWorkerUpdates";
 
 // Exercise the production lifecycle wiring without mounting the app or

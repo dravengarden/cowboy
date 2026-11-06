@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { STALL_TICK_MS, stallDetector } from "./mainThreadStalls.ts";
 
 test("a late visible tick reports its stall; on-time and hidden ticks do not", () => {

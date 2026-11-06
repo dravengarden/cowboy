@@ -6,25 +6,11 @@ import { constants as fsConstants, mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import {
-  access,
-  copyFile,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readdir,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { access, copyFile, lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import {
-  bindingKey,
-  DESCRIPTIONS,
-  NATIVE_TOOLS,
-  WorkspaceTools,
-} from "./tools.mjs";
+import { bindingKey, DESCRIPTIONS, NATIVE_TOOLS, WorkspaceTools } from "./tools.mjs";
 import { startModBridge } from "./mod-bridge.mjs";
 import {
   MANAGED_PROFILE_ENV,
@@ -36,12 +22,7 @@ import {
   parseRound,
   structuredMessage,
 } from "./managed.mjs";
-import {
-  mcpToolPrefix,
-  nativeMcpServers,
-  targetMcpServers,
-  withCowboyMcp,
-} from "./mcp.mjs";
+import { mcpToolPrefix, nativeMcpServers, targetMcpServers, withCowboyMcp } from "./mcp.mjs";
 import {
   BUNDLED_SKILLS,
   SKILL_PLUGIN,
@@ -80,12 +61,13 @@ const nodeArgv = [process.execPath, ...NODE_FLAGS];
 
 // The packaged native MCP relay and task waiter (relay/, Linux only): it
 // speaks the Node helpers' bridge protocol in a few pages instead of a V8 heap.
-const NATIVE_RELAY = fileURLToPath(
-  new URL("../bin/cowboy-mcp-relay", import.meta.url),
-);
+const NATIVE_RELAY = fileURLToPath(new URL("../bin/cowboy-mcp-relay", import.meta.url));
 
 async function executable(path) {
-  return await access(path, fsConstants.X_OK).then(() => true, () => false);
+  return await access(path, fsConstants.X_OK).then(
+    () => true,
+    () => false,
+  );
 }
 
 // The command native runs, with a job identity appended, for a background
@@ -157,9 +139,9 @@ export function advertiseCurrentTurn(Agent) {
 const launched = performance.now();
 let trace;
 export function startupPhase(name) {
-  const line = `[cowboy-claude] phase=${name} totalMs=${
-    Math.round(performance.now() - launched)
-  }\n`;
+  const line = `[cowboy-claude] phase=${name} totalMs=${Math.round(
+    performance.now() - launched,
+  )}\n`;
   const path = process.env[STARTUP_TRACE];
   if (!path) return void process.stderr.write(line);
   // Best effort: a lost milestone never affects the session.
@@ -190,10 +172,8 @@ export function startupTrace(output = process.stderr) {
       while ((newline = pending.indexOf("\n")) >= 0) {
         const line = pending.slice(0, newline);
         pending = pending.slice(newline + 1);
-        if (
-          /^\[cowboy-claude\] phase=[a-z-]{1,40} totalMs=\d{1,9}$/.test(line) &&
-          relayed++ < 32
-        ) output.write(line + "\n");
+        if (/^\[cowboy-claude\] phase=[a-z-]{1,40} totalMs=\d{1,9}$/.test(line) && relayed++ < 32)
+          output.write(line + "\n");
       }
       if (pending.length > 256) socket.destroy();
     });
@@ -201,10 +181,7 @@ export function startupTrace(output = process.stderr) {
   server.on("error", () => {});
   server.listen(path);
   server.unref();
-  process.once(
-    "exit",
-    () => rmSync(directory, { recursive: true, force: true }),
-  );
+  process.once("exit", () => rmSync(directory, { recursive: true, force: true }));
   return { path, server };
 }
 // A runtime killed by its unit (SIGKILL) cannot remove its private socket
@@ -228,16 +205,13 @@ export async function sweepStaleRuntimeDirectories(
       const socket = /^cowboy-claude-mod-[A-Za-z0-9]{6}$/.test(name)
         ? "bridge.sock"
         : /^cowboy-claude-trace-[A-Za-z0-9]{6}$/.test(name)
-        ? "s"
-        : undefined;
+          ? "s"
+          : undefined;
       if (!socket) continue;
       const directory = join(root, name);
       try {
         const info = await lstat(directory);
-        if (
-          !info.isDirectory() || info.uid !== uid ||
-          now - info.mtimeMs < olderThanMs
-        ) continue;
+        if (!info.isDirectory() || info.uid !== uid || now - info.mtimeMs < olderThanMs) continue;
         if (await accepts(join(directory, socket))) continue;
         await rm(directory, { recursive: true, force: true });
         removed++;
@@ -259,10 +233,7 @@ function accepts(path) {
     connection.once("connect", () => settle(true));
     // Refused or missing: nothing listens. Any other error keeps the
     // directory, since it may still belong to a live runtime.
-    connection.once(
-      "error",
-      (error) => settle(!["ECONNREFUSED", "ENOENT"].includes(error.code)),
-    );
+    connection.once("error", (error) => settle(!["ECONNREFUSED", "ENOENT"].includes(error.code)));
     connection.setTimeout(2000, () => settle(true));
   });
 }
@@ -302,17 +273,17 @@ export const NATIVE_PASSTHROUGH = [
 ];
 
 // Native's default tool set (2.1.287) has no Glob or Grep: searches use Bash.
-const ADVERTISED_TOOLS = NATIVE_TOOLS.filter((tool) =>
-  !["Glob", "Grep"].includes(tool)
-);
+const ADVERTISED_TOOLS = NATIVE_TOOLS.filter((tool) => !["Glob", "Grep"].includes(tool));
 
 // Client completion frames name the native runtime-home output file. Replace
 // only the exact locator registered for that agent with its handle.
 export function targetTaskFrame(frame, agents) {
-  const agent = frame.type === "system" && typeof frame.task_id === "string" &&
-      Object.hasOwn(agents, frame.task_id)
-    ? agents[frame.task_id]
-    : undefined;
+  const agent =
+    frame.type === "system" &&
+    typeof frame.task_id === "string" &&
+    Object.hasOwn(agents, frame.task_id)
+      ? agents[frame.task_id]
+      : undefined;
   return agent && frame.output_file === agent.outputFile
     ? { ...frame, output_file: "cowboy-agent://" + frame.task_id }
     : frame;
@@ -329,9 +300,10 @@ export function startingPermissionMode(argv) {
 // facade asks only after native rules and mode answered "ask". Suggestions
 // stay empty: a persistent rule could not reach native's own rule store.
 export function permissionRequest({ id, tool, input, reason, owner }) {
-  const description = tool === "Bash"
-    ? input.command
-    : input.file_path ?? input.notebook_path ?? input.path ?? input.pattern;
+  const description =
+    tool === "Bash"
+      ? input.command
+      : (input.file_path ?? input.notebook_path ?? input.path ?? input.pattern);
   return {
     subtype: "can_use_tool",
     tool_name: tool,
@@ -352,9 +324,10 @@ export function permissionResult(response) {
   }
   return {
     behavior: "deny",
-    message: typeof response?.error === "string"
-      ? response.error
-      : "Approval failed; the tool did not run",
+    message:
+      typeof response?.error === "string"
+        ? response.error
+        : "Approval failed; the tool did not run",
   };
 }
 
@@ -391,7 +364,7 @@ export class PermissionBroker {
         this.settle(requestId, {
           behavior: "deny",
           message: "Approval could not be requested; the tool did not run",
-        })
+        }),
       );
     });
   }
@@ -408,8 +381,7 @@ export class PermissionBroker {
   cancel(id) {
     for (const [requestId, entry] of this.pending) {
       if (entry.id !== id) continue;
-      this.send({ type: "control_cancel_request", request_id: requestId })
-        .catch(() => {});
+      this.send({ type: "control_cancel_request", request_id: requestId }).catch(() => {});
       this.settle(requestId, {
         behavior: "deny",
         message: "Tool call was cancelled",
@@ -444,9 +416,9 @@ export function hookPrefixScript(node, proxy, commands) {
   const runtime = [node].flat().map(shellQuote).join(" ");
   const registered = [...new Set(commands)];
   const route = registered.length
-    ? `  case "$1" in\n    ${
-      registered.map(shellQuote).join("|")
-    })\n      exec ${runtime} ${shellQuote(proxy)} "$1"\n      ;;\n  esac\n`
+    ? `  case "$1" in\n    ${registered
+        .map(shellQuote)
+        .join("|")})\n      exec ${runtime} ${shellQuote(proxy)} "$1"\n      ;;\n  esac\n`
     : "";
   return `#!/bin/sh\nif [ "$#" -eq 1 ]; then\n${route}  exec /bin/sh -c "$1"\nfi\nexec "$@"\n`;
 }
@@ -456,64 +428,62 @@ export function projectHookSettings(hooks) {
   const tool = {};
   const settings = {};
   for (const [event, groups] of Object.entries(hooks)) {
-    settings[event] = groups.filter((group) =>
-      group && typeof group === "object" && Array.isArray(group.hooks)
-    ).map((group) => ({
-      ...group,
-      hooks: group.hooks.map((hook) => {
-        // Native never fires these for target tools the facade answers.
-        const toolEvent = [
-          "PreToolUse",
-          "PostToolUse",
-          "PostToolUseFailure",
-          "PermissionRequest",
-        ].includes(event);
-        const command = hook?.type === "command" &&
-          typeof hook.command === "string";
-        // The adapter cannot reproduce these around a target tool; it refuses
-        // a matching call instead of skipping the project's review.
-        const unsupported = !command
-          ? `${String(hook?.type ?? "unknown")} hook`
-          : hook.if !== undefined
-          ? "hook with an if condition"
-          : hook.asyncRewake === true
-          ? "asyncRewake hook"
-          : undefined;
-        if (toolEvent && unsupported) {
-          (tool[event] ??= []).push({ matcher: group.matcher, unsupported });
-        }
-        if (!command) return hook;
-        // Exec form bypasses the shell prefix natively; hand native an
-        // equivalent shell-form string the prefix routes, run as argv.
-        const argv = Array.isArray(hook.args) &&
-            hook.args.every((value) => typeof value === "string")
-          ? [hook.command, ...hook.args]
-          : undefined;
-        const shellCommand = argv
-          ? argv.map(shellQuote).join(" ")
-          : hook.command;
-        // Native enforces each hook's own timeout by ending the proxy; this
-        // is the target's backstop (natively, 600 s; async hooks unbounded).
-        const timeout = Number.isSafeInteger(hook.timeout) &&
-            hook.timeout > 0 && hook.timeout <= 3600
-          ? hook.timeout
-          : hook.async === true
-          ? 3600
-          : 600;
-        const index = commands.push({
-          command: shellCommand,
-          timeout,
-          ...(argv ? { argv } : {}),
-          ...(hook.async === true ? { async: true } : {}),
-        }) - 1;
-        if (toolEvent && !unsupported) {
-          (tool[event] ??= []).push({ matcher: group.matcher, index });
-        }
-        if (!argv) return hook;
-        const { args: _args, ...shellForm } = hook;
-        return { ...shellForm, command: shellCommand };
-      }),
-    }));
+    settings[event] = groups
+      .filter((group) => group && typeof group === "object" && Array.isArray(group.hooks))
+      .map((group) => ({
+        ...group,
+        hooks: group.hooks.map((hook) => {
+          // Native never fires these for target tools the facade answers.
+          const toolEvent = [
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "PermissionRequest",
+          ].includes(event);
+          const command = hook?.type === "command" && typeof hook.command === "string";
+          // The adapter cannot reproduce these around a target tool; it refuses
+          // a matching call instead of skipping the project's review.
+          const unsupported = !command
+            ? `${String(hook?.type ?? "unknown")} hook`
+            : hook.if !== undefined
+              ? "hook with an if condition"
+              : hook.asyncRewake === true
+                ? "asyncRewake hook"
+                : undefined;
+          if (toolEvent && unsupported) {
+            (tool[event] ??= []).push({ matcher: group.matcher, unsupported });
+          }
+          if (!command) return hook;
+          // Exec form bypasses the shell prefix natively; hand native an
+          // equivalent shell-form string the prefix routes, run as argv.
+          const argv =
+            Array.isArray(hook.args) && hook.args.every((value) => typeof value === "string")
+              ? [hook.command, ...hook.args]
+              : undefined;
+          const shellCommand = argv ? argv.map(shellQuote).join(" ") : hook.command;
+          // Native enforces each hook's own timeout by ending the proxy; this
+          // is the target's backstop (natively, 600 s; async hooks unbounded).
+          const timeout =
+            Number.isSafeInteger(hook.timeout) && hook.timeout > 0 && hook.timeout <= 3600
+              ? hook.timeout
+              : hook.async === true
+                ? 3600
+                : 600;
+          const index =
+            commands.push({
+              command: shellCommand,
+              timeout,
+              ...(argv ? { argv } : {}),
+              ...(hook.async === true ? { async: true } : {}),
+            }) - 1;
+          if (toolEvent && !unsupported) {
+            (tool[event] ??= []).push({ matcher: group.matcher, index });
+          }
+          if (!argv) return hook;
+          const { args: _args, ...shellForm } = hook;
+          return { ...shellForm, command: shellCommand };
+        }),
+      }));
   }
   return { settings: { hooks: settings }, commands, tool };
 }
@@ -583,9 +553,7 @@ export function nativeArguments(
   // intentionally empty --setting-sources= value.
   args = args.flatMap((argument) => {
     const equals = argument.startsWith("--") ? argument.indexOf("=") : -1;
-    return equals < 0
-      ? [argument]
-      : [argument.slice(0, equals), argument.slice(equals + 1)];
+    return equals < 0 ? [argument] : [argument.slice(0, equals), argument.slice(equals + 1)];
   });
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
@@ -595,9 +563,7 @@ export function nativeArguments(
         throw new Error("Invalid native option");
       }
       if (argument === "--permission-mode" && value === "plan") {
-        throw new Error(
-          "Native plan files are unavailable in an execution session",
-        );
+        throw new Error("Native plan files are unavailable in an execution session");
       }
       if (argument === "--permission-prompt-tool" && value !== "stdio") {
         throw new Error("Execution permissions require the native SDK channel");
@@ -620,17 +586,12 @@ export function nativeArguments(
           "--fork-session",
           "--allow-dangerously-skip-permissions",
           "--dangerously-skip-permissions",
-        ].includes(
-          argument,
-        )
-      ) forwarded.push(argument);
+        ].includes(argument)
+      )
+        forwarded.push(argument);
     } else {
-      const option = /^--[a-zA-Z0-9-]+$/.test(argument)
-        ? argument
-        : "unsupported argument";
-      const error = new Error(
-        `Native option is unavailable in an execution session: ${option}`,
-      );
+      const option = /^--[a-zA-Z0-9-]+$/.test(argument) ? argument : "unsupported argument";
+      const error = new Error(`Native option is unavailable in an execution session: ${option}`);
       error.cowboyDiagnostic = error.message;
       throw error;
     }
@@ -653,9 +614,7 @@ export function nativeArguments(
     plugin,
     ...(skillPlugin ? ["--plugin-dir", skillPlugin] : []),
     ...(memoryConfig ? ["--mcp-config", memoryConfig] : []),
-    ...(memoryConfig && memoryTools.length
-      ? ["--allowedTools", memoryTools.join(",")]
-      : []),
+    ...(memoryConfig && memoryTools.length ? ["--allowedTools", memoryTools.join(",")] : []),
     ...(hookSettings ? ["--settings", hookSettings] : []),
     ...forwarded,
   ];
@@ -692,19 +651,17 @@ const LOCAL_COMMANDS = ["compact", "cost", "context", "status", "help"];
 export function exposedCommand(name, skills) {
   if (name.startsWith(skills.prefix)) {
     const target = name.slice(skills.prefix.length);
-    return skills.entries.some((entry) => entry.name === target)
-      ? target
-      : undefined;
+    return skills.entries.some((entry) => entry.name === target) ? target : undefined;
   }
   // A target skill shadows the bundled one of its name, even one that
   // cannot run here.
+  if ([...skills.entries, ...skills.omitted].some((entry) => entry.name === name)) return undefined;
   if (
-    [...skills.entries, ...skills.omitted].some((entry) => entry.name === name)
-  ) return undefined;
-  if (
-    !/^[a-z][a-z0-9-]*$/i.test(name) || LOCAL_COMMANDS.includes(name) ||
+    !/^[a-z][a-z0-9-]*$/i.test(name) ||
+    LOCAL_COMMANDS.includes(name) ||
     skills.bundled.includes(name)
-  ) return name;
+  )
+    return name;
   return undefined;
 }
 
@@ -712,10 +669,8 @@ export function exposedCommand(name, skills) {
 export function skillAllowlist(skills) {
   return [
     ...skills.entries.map((entry) => skills.prefix + entry.name),
-    ...skills.bundled.filter((name) =>
-      ![...skills.entries, ...skills.omitted].some((entry) =>
-        entry.name === name
-      )
+    ...skills.bundled.filter(
+      (name) => ![...skills.entries, ...skills.omitted].some((entry) => entry.name === name),
     ),
   ];
 }
@@ -754,14 +709,17 @@ export function initializeRequest(frame, allowlist = []) {
 export function allowedControl(request) {
   if (request.subtype === "apply_flag_settings") {
     const settings = request.settings;
-    return settings && typeof settings === "object" &&
+    return (
+      settings &&
+      typeof settings === "object" &&
       !Array.isArray(settings) &&
-      Object.entries(settings).every(([name, value]) =>
-        (name === "effortLevel" &&
-          (value === null ||
-            (typeof value === "string" && value.length <= 24))) ||
-        (name === "fastMode" && typeof value === "boolean")
-      );
+      Object.entries(settings).every(
+        ([name, value]) =>
+          (name === "effortLevel" &&
+            (value === null || (typeof value === "string" && value.length <= 24))) ||
+          (name === "fastMode" && typeof value === "boolean"),
+      )
+    );
   }
   return new Set([
     "interrupt",
@@ -783,15 +741,7 @@ export function allowedControl(request) {
   ]).has(request.subtype);
 }
 
-async function bridge(
-  child,
-  tools,
-  context,
-  memory,
-  broker,
-  managed,
-  moduleReady,
-) {
+async function bridge(child, tools, context, memory, broker, managed, moduleReady) {
   let resolveReady, rejectReady;
   const ready = new Promise((resolve, reject) => {
     resolveReady = resolve;
@@ -812,7 +762,7 @@ async function bridge(
   const interruptCancel = () => {
     let cancelling;
     const cancel = () =>
-      cancelling ??= tools.cancelForeground().then(
+      (cancelling ??= tools.cancelForeground().then(
         (pending) =>
           pending.length
             ? "Target cancellation is pending; retained task handles: " +
@@ -820,33 +770,35 @@ async function bridge(
             : undefined,
         () =>
           "Target cancellation could not be saved; inspect target tasks before retrying commands",
-      );
+      ));
     // An unresponsive native process must not keep target work alive.
     setTimeout(cancel, 5000).unref();
     return cancel;
   };
   broker.send = (frame) => send(process.stdout, frame);
   broker.onResult = (result) => {
-    const mode = result.behavior === "allow"
-      ? result.updatedPermissions?.find((update) =>
-        update.type === "setMode" && update.destination === "session" &&
-        update.mode !== "plan"
-      )?.mode
-      : undefined;
+    const mode =
+      result.behavior === "allow"
+        ? result.updatedPermissions?.find(
+            (update) =>
+              update.type === "setMode" &&
+              update.destination === "session" &&
+              update.mode !== "plan",
+          )?.mode
+        : undefined;
     const request = mode
       ? { subtype: "set_permission_mode", mode }
       : result.behavior === "deny" && result.interrupt === true
-      ? { subtype: "interrupt" }
-      : undefined;
+        ? { subtype: "interrupt" }
+        : undefined;
     if (!request) return;
     const id = "cowboy-internal-" + randomUUID();
-    if (mode) internal.set(id, () => broker.mode = mode);
+    if (mode) internal.set(id, () => (broker.mode = mode));
     else {
       const cancel = interruptCancel();
       internal.set(id, () => cancel());
     }
-    send(child.stdin, { type: "control_request", request_id: id, request })
-      .catch(() => {});
+    send(child.stdin, { type: "control_request", request_id: id, request }).catch(() => {});
   };
   // Readiness crosses the Machine link to the target. A transient overlay
   // stall of 30-60 s is routine on cross-border links; it must delay startup,
@@ -860,9 +812,7 @@ async function bridge(
   const cleanCommands = (frame) => {
     const result = structuredClone(frame);
     const exposed = (name) =>
-      typeof name === "string"
-        ? exposedCommand(name, context.skills)
-        : undefined;
+      typeof name === "string" ? exposedCommand(name, context.skills) : undefined;
     for (const value of [result, result.response?.response]) {
       if (Array.isArray(value?.commands)) {
         value.commands = value.commands.flatMap((command) => {
@@ -892,10 +842,7 @@ async function bridge(
   };
   const input = (async () => {
     for await (const frame of frames(process.stdin)) {
-      if (
-        frame.type === "control_request" &&
-        frame.request.subtype === "initialize"
-      ) {
+      if (frame.type === "control_request" && frame.request.subtype === "initialize") {
         if (initial) throw new Error("Duplicate native initialization");
         initial = initializeRequest(frame, skillAllowlist(context.skills));
         await send(child.stdin, initial);
@@ -905,24 +852,18 @@ async function bridge(
       if (broker.respond(frame)) continue;
       if (frame.type === "control_request") {
         const subtype = frame.request.subtype;
-        if (
-          subtype === "set_permission_mode" && frame.request.mode === "plan"
-        ) {
+        if (subtype === "set_permission_mode" && frame.request.mode === "plan") {
           await send(process.stdout, {
             type: "control_response",
             response: {
               subtype: "error",
               request_id: frame.request_id,
-              error:
-                "Native plan files are not supported in an execution session",
+              error: "Native plan files are not supported in an execution session",
             },
           });
           continue;
         }
-        if (
-          !allowedControl(frame.request) ||
-          (managed && managedControlRefused(frame.request))
-        ) {
+        if (!allowedControl(frame.request) || (managed && managedControlRefused(frame.request))) {
           await send(process.stdout, {
             type: "control_response",
             response: {
@@ -944,17 +885,17 @@ async function bridge(
       // helpers. Ordinary text, /compact and harmless local status remain native.
       if (frame.type === "user") {
         const content = frame.message?.content;
-        const prompt = typeof content === "string"
-          ? content
-          : Array.isArray(content)
-          ? content.filter((item) => item.type === "text").map((item) =>
-            item.text
-          ).join("\n")
-          : "";
+        const prompt =
+          typeof content === "string"
+            ? content
+            : Array.isArray(content)
+              ? content
+                  .filter((item) => item.type === "text")
+                  .map((item) => item.text)
+                  .join("\n")
+              : "";
         if (managed && managedCommandRefused(prompt)) {
-          const error = new Error(
-            "A managed call instruction cannot be a native command",
-          );
+          const error = new Error("A managed call instruction cannot be a native command");
           error.cowboyDiagnostic = error.message;
           throw error;
         }
@@ -962,8 +903,7 @@ async function bridge(
         // A target skill's command reaches native under its plugin name.
         const typed = /^\s*\/(\S+)/.exec(prompt)?.[1];
         if (command !== undefined && command !== typed) {
-          const rename = (text) =>
-            text.replace(/^(\s*\/)\S+/, (_match, slash) => slash + command);
+          const rename = (text) => text.replace(/^(\s*\/)\S+/, (_match, slash) => slash + command);
           const content = frame.message.content;
           if (typeof content === "string") {
             frame.message.content = rename(content);
@@ -981,9 +921,7 @@ async function bridge(
             const content = frame.message.content;
             frame.message.content = [
               { type: "text", text: recalled },
-              ...(typeof content === "string"
-                ? [{ type: "text", text: content }]
-                : content),
+              ...(typeof content === "string" ? [{ type: "text", text: content }] : content),
             ];
           }
         }
@@ -995,7 +933,8 @@ async function bridge(
   const output = (async () => {
     for await (const frame of frames(child.stdout)) {
       if (
-        stage === "initialize" && frame.type === "control_response" &&
+        stage === "initialize" &&
+        frame.type === "control_response" &&
         frame.response.request_id === initial?.request_id
       ) {
         if (frame.response.subtype !== "success") {
@@ -1027,20 +966,19 @@ async function bridge(
         // by its previous process. Only one that made no model request may
         // precede readiness; it never reaches the client.
         if (
-          frame.origin?.kind === "task-notification" && !frame.is_error &&
-          frame.num_turns === 0 && frame.duration_api_ms === 0
-        ) continue;
-        if (
-          frame.is_error || frame.local_command !== "cost" ||
-          frame.duration_api_ms !== 0
-        ) throw new Error("Claude readiness command failed");
+          frame.origin?.kind === "task-notification" &&
+          !frame.is_error &&
+          frame.num_turns === 0 &&
+          frame.duration_api_ms === 0
+        )
+          continue;
+        if (frame.is_error || frame.local_command !== "cost" || frame.duration_api_ms !== 0)
+          throw new Error("Claude readiness command failed");
         // Native awaits session.start before it runs the command, so the
         // module has reported this process's context by now, or never will.
         // Its report is the receipt; asking initialize again adds nothing.
         if (!moduleReady()) {
-          const error = new Error(
-            "Claude execution module is missing or disabled",
-          );
+          const error = new Error("Claude execution module is missing or disabled");
           error.cowboyDiagnostic = error.message;
           throw error;
         }
@@ -1049,18 +987,19 @@ async function bridge(
       }
       if (stage === "ready") {
         if (
-          frame.type === "assistant" && frame.parent_tool_use_id == null &&
+          frame.type === "assistant" &&
+          frame.parent_tool_use_id == null &&
           frame.message?.model !== "<synthetic>"
-        ) lastAssistant = frame;
+        )
+          lastAssistant = frame;
         // Native validated the round's schema; deliver its result as the
         // turn's final message before the turn ends.
         if (managed?.schema && frame.type === "result") {
           const structured = structuredMessage(frame, lastAssistant);
           if (structured) await send(process.stdout, structured);
         }
-        const responseId = frame.type === "control_response"
-          ? frame.response.request_id
-          : undefined;
+        const responseId =
+          frame.type === "control_response" ? frame.response.request_id : undefined;
         if (internal.has(responseId)) {
           const settle = internal.get(responseId);
           internal.delete(responseId);
@@ -1075,13 +1014,12 @@ async function bridge(
         }
         // Each turn's init reports native's current permission mode.
         if (
-          frame.type === "system" && frame.subtype === "init" &&
+          frame.type === "system" &&
+          frame.subtype === "init" &&
           typeof frame.permissionMode === "string"
-        ) broker.mode = frame.permissionMode;
-        if (
-          frame.type === "control_response" &&
-          pendingInterrupts.has(frame.response.request_id)
-        ) {
+        )
+          broker.mode = frame.permissionMode;
+        if (frame.type === "control_response" && pendingInterrupts.has(frame.response.request_id)) {
           const cancel = pendingInterrupts.get(frame.response.request_id);
           pendingInterrupts.delete(frame.response.request_id);
           const error = await cancel();
@@ -1102,24 +1040,15 @@ async function bridge(
         if (memory && frame.type === "result" && !frame.local_command) {
           await memory.finish();
         }
-        await send(
-          process.stdout,
-          cleanCommands(targetTaskFrame(frame, tools.state.agents)),
-        );
+        await send(process.stdout, cleanCommands(targetTaskFrame(frame, tools.state.agents)));
       } else if (frame.type === "control_request") {
-        throw new Error(
-          "Unexpected native request during execution initialization",
-        );
+        throw new Error("Unexpected native request during execution initialization");
       }
     }
     throw new Error("Native Claude ended");
   })();
   try {
-    await Promise.race([
-      input,
-      output,
-      ready.then(() => new Promise(() => {})),
-    ]);
+    await Promise.race([input, output, ready.then(() => new Promise(() => {}))]);
   } finally {
     clearTimeout(timeout);
     rejectReady(new Error("Native Claude ended"));
@@ -1137,9 +1066,7 @@ async function native(args) {
   if (!descriptorPath) {
     // Only a target keeper can enforce the read-only profile.
     if (managedProfile) {
-      const error = new Error(
-        "A managed Claude call requires a read-only execution environment",
-      );
+      const error = new Error("A managed Claude call requires a read-only execution environment");
       error.cowboyDiagnostic = error.message;
       throw error;
     }
@@ -1152,7 +1079,7 @@ async function native(args) {
   );
   await mkdir(root, { mode: 0o700, recursive: true });
   const stat = await lstat(root);
-  if (!stat.isDirectory() || (stat.mode & 0o077)) {
+  if (!stat.isDirectory() || stat.mode & 0o077) {
     throw new Error("Invalid private execution directory");
   }
   const stage = await mkdtemp(join(root, "native-"));
@@ -1161,7 +1088,7 @@ async function native(args) {
     // The endpoint serves one connection; a restarted session can arrive
     // while the previous process's connection is still being torn down.
     // Retry soon at first, within the same ~10 s budget as before.
-    for (let attempt = 0, waited = 0;; attempt++) {
+    for (let attempt = 0, waited = 0; ; attempt++) {
       try {
         connection = await Connection.open(descriptor);
         startupPhase("execution-connected");
@@ -1174,11 +1101,7 @@ async function native(args) {
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
-    tools = new WorkspaceTools(
-      connection,
-      descriptor.binding,
-      join(root, "state.json"),
-    );
+    tools = new WorkspaceTools(connection, descriptor.binding, join(root, "state.json"));
     tools.useFileBuffers(descriptor.file_buffers);
     await tools.load();
     // The binding, the launch profile and the target's keeper must agree.
@@ -1187,32 +1110,23 @@ async function native(args) {
       if (!managedProfile) {
         throw new Error("A managed child must launch in its managed profile");
       }
-      const { roundPath } = managedConstraint(
-        descriptor.binding,
-        connection.managed,
-      );
+      const { roundPath } = managedConstraint(descriptor.binding, connection.managed);
       const round = parseRound(await tools.bytes(roundPath));
       managed = { schema: round.output_schema };
     }
     extensions = await sessionExtensions();
-    memoryConfigured = managed
-      ? null
-      : await memoryConfiguration("claude", { extensions });
+    memoryConfigured = managed ? null : await memoryConfiguration("claude", { extensions });
     // A reserved name leaves the session without memory, like any other fault.
     if (memoryConfigured?.server === "cowboy") memoryConfigured = null;
-    memory = managed
-      ? null
-      : await MatrixClient.open(memoryConfigured, descriptor);
+    memory = managed ? null : await MatrixClient.open(memoryConfigured, descriptor);
     if (memory) {
       const nativeCall = tools.nativeCall.bind(tools);
       tools.nativeCall = async (tool, input, call) => {
         const result = await nativeCall(tool, input, call);
         memory.add(
           "tool",
-          JSON.stringify(
-            { tool, input, result },
-            (key, value) =>
-              ["data", "base64"].includes(key) ? undefined : value,
+          JSON.stringify({ tool, input, result }, (key, value) =>
+            ["data", "base64"].includes(key) ? undefined : value,
           ),
         );
         return result;
@@ -1226,11 +1140,7 @@ async function native(args) {
     const contextStarted = tools.context();
     const started = managed
       ? [Promise.resolve({}), Promise.resolve([]), Promise.resolve(undefined)]
-      : [
-        tools.projectHooks(),
-        tools.skillFiles(),
-        tools.mcpInputs(),
-      ];
+      : [tools.projectHooks(), tools.skillFiles(), tools.mcpInputs()];
     for (const result of started) result.catch(() => {});
     const [projectHooksStarted, skillFilesStarted, mcpInputsStarted] = started;
     const context = await contextStarted;
@@ -1239,10 +1149,7 @@ async function native(args) {
     modBridge = await startModBridge(tools, {
       permissions: broker,
       onReady: () => startupPhase("module-ready"),
-      transcriptRoot: join(
-        process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
-        "projects",
-      ),
+      transcriptRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects"),
     });
     context.socketPath = modBridge.socketPath;
     context.bridgeToken = modBridge.token;
@@ -1272,38 +1179,34 @@ async function native(args) {
     );
     // The target's skills, as a private plugin native loads (skills.mjs).
     const skills = targetSkills(await skillFilesStarted);
-    const skillPlugin = skills.entries.length
-      ? join(stage, "target-skills")
-      : undefined;
+    const skillPlugin = skills.entries.length ? join(stage, "target-skills") : undefined;
     context.skills = skillPlugin
       ? await writeSkillPlugin(
-        skillPlugin,
-        skills,
-        "cowboy" + randomUUID().replaceAll("-", ""),
-        context.targetCwd,
-      )
+          skillPlugin,
+          skills,
+          "cowboy" + randomUUID().replaceAll("-", ""),
+          context.targetCwd,
+        )
       : {
-        prefix: SKILL_PLUGIN + ":",
-        entries: [],
-        omitted: skills.omitted,
-        bundled: BUNDLED_SKILLS,
-        unavailable: UNAVAILABLE_BUNDLED,
-      };
+          prefix: SKILL_PLUGIN + ":",
+          entries: [],
+          omitted: skills.omitted,
+          bundled: BUNDLED_SKILLS,
+          unavailable: UNAVAILABLE_BUNDLED,
+        };
     // The target's MCP servers (mcp.mjs): stdio ones run on the target
     // through mcp-proxy.mjs, remote ones are reached from here.
     await tools.stopMcpServers();
-    const mcp = managed
-      ? { entries: [], omitted: [] }
-      : targetMcpServers(await mcpInputsStarted);
+    const mcp = managed ? { entries: [], omitted: [] } : targetMcpServers(await mcpInputsStarted);
     tools.endStartup();
     startupPhase("target-discovery");
-    const mcpEntries = withCowboyMcp(mcp.entries, !managed).filter((entry) =>
-      !(memory?.tools && entry.name === memoryConfigured.server)
+    const mcpEntries = withCowboyMcp(mcp.entries, !managed).filter(
+      (entry) => !(memory?.tools && entry.name === memoryConfigured.server),
     );
     tools.mcpServers = new Map(
-      mcpEntries.filter((entry) => entry.placement === "target").map((
-        entry,
-      ) => [entry.name, entry]),
+      mcpEntries
+        .filter((entry) => entry.placement === "target")
+        .map((entry) => [entry.name, entry]),
     );
     context.mcp = {
       servers: mcpEntries.map((entry) => ({
@@ -1313,9 +1216,7 @@ async function native(args) {
       })),
       omitted: mcp.omitted,
     };
-    const memoryConfig = memory || mcpEntries.length
-      ? join(stage, "mcp.json")
-      : undefined;
+    const memoryConfig = memory || mcpEntries.length ? join(stage, "mcp.json") : undefined;
     let hookSettings;
     let hookPrefix;
     if (Object.keys(projectHooks).length) {
@@ -1356,13 +1257,8 @@ async function native(args) {
         memoryConfig,
         JSON.stringify({
           mcpServers: {
-            ...nativeMcpServers(
-              mcpEntries,
-              await mcpRelay(stage, contextPath),
-            ),
-            ...(memory?.tools
-              ? { [memoryConfigured.server]: memory.mcp() }
-              : {}),
+            ...nativeMcpServers(mcpEntries, await mcpRelay(stage, contextPath)),
+            ...(memory?.tools ? { [memoryConfigured.server]: memory.mcp() } : {}),
           },
         }),
         { mode: 0o600, flag: "wx" },
@@ -1403,11 +1299,7 @@ async function native(args) {
     // A managed child cannot call; every ordinary session learns to.
     const nativeArgv = managed
       ? managedNativeArguments(ordinaryArgv, managed.schema)
-      : [
-        ...ordinaryArgv,
-        "--append-system-prompt",
-        agentCallsPrompt(extensions),
-      ];
+      : [...ordinaryArgv, "--append-system-prompt", agentCallsPrompt(extensions)];
     broker.mode = startingPermissionMode(nativeArgv);
     startupPhase("native-spawn");
     child = spawn(executable, nativeArgv, {
@@ -1421,15 +1313,7 @@ async function native(args) {
       child.once("error", reject);
       child.once("exit", (code) => resolve(code ?? 1));
     });
-    bridge(
-      child,
-      tools,
-      context,
-      memory,
-      broker,
-      managed,
-      modBridge.moduleReady,
-    ).catch((error) => {
+    bridge(child, tools, context, memory, broker, managed, modBridge.moduleReady).catch((error) => {
       process.stderr.write(
         (error.cowboyDiagnostic ??
           "Cowboy Claude execution initialization or transport failed; local fallback is disabled") +
@@ -1486,13 +1370,12 @@ export async function main(args) {
   args = selected.args;
   delete process.env[MANAGED_PROFILE_ENV];
   if (selected.managed) process.env[MANAGED_PROFILE_ENV] = "read-only-v1";
-  const inspection = args.length === 1 &&
-    ["--version", "-V", "--help", "-h"].includes(args[0]);
+  const inspection = args.length === 1 && ["--version", "-V", "--help", "-h"].includes(args[0]);
   if (
     !inspection &&
     (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
       process.env.COWBOY_CALL_CONTEXT ||
-      await memoryConfiguration("claude"))
+      (await memoryConfiguration("claude")))
   ) {
     if (!isAbsolute(process.env.CLAUDE_CODE_EXECUTABLE ?? "")) {
       throw new Error("Missing exact Claude executable");
@@ -1514,28 +1397,20 @@ export async function main(args) {
     }
   }
   const upstream = fileURLToPath(
-    new URL(
-      "./node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
-      import.meta.url,
-    ),
+    new URL("./node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js", import.meta.url),
   );
   process.argv = [process.execPath, upstream, ...args];
-  const { ClaudeAcpAgent } = await import(
-    new URL("./acp-agent.js", pathToFileURL(upstream))
-  );
+  const { ClaudeAcpAgent } = await import(new URL("./acp-agent.js", pathToFileURL(upstream)));
   advertiseCurrentTurn(ClaudeAcpAgent);
   await import(upstream);
 }
 
-if (
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2)).catch((error) => {
     process.stderr.write(
       (error.cowboyDiagnostic ??
         "Cowboy Claude execution binding failed; local fallback is disabled" +
-          ` (${String(error?.message ?? error).slice(0, 500)})`) +
-        "\n",
+          ` (${String(error?.message ?? error).slice(0, 500)})`) + "\n",
     );
     process.exitCode = 1;
     process.stdin.destroy();

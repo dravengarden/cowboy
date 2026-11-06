@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertNotStrictEquals } from "@std/assert";
+import { assertEquals, assertNotStrictEquals } from "../../tools/test-assert.ts";
 import type { ConfigOption } from "./protocol";
 import {
   providerConfigOptionDisabled,

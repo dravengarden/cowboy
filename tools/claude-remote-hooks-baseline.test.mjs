@@ -5,16 +5,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import {
-  hookMatches,
-  hookOutcome,
-} from "../plugins/claude-code/runtime/context-mod.js";
+import { hookMatches, hookOutcome } from "../plugins/claude-code/runtime/context-mod.js";
 
 const baseline = JSON.parse(
-  readFileSync(
-    new URL("./claude_hooks_native_baseline.json", import.meta.url),
-    "utf8",
-  ),
+  readFileSync(new URL("./claude_hooks_native_baseline.json", import.meta.url), "utf8"),
 );
 const cases = baseline.tool_hooks;
 
@@ -32,14 +26,8 @@ const specific = (event, fields) =>
 const shell = (text) => "cat > /dev/null; " + text;
 const printed = "cat > /dev/null; cat <ROOT>/out0.json";
 const HOOKS = {
-  pre_exit2: [
-    shell("echo PRE_BLOCK_STDERR >&2; exit 2"),
-    run(2, "", "PRE_BLOCK_STDERR\n"),
-  ],
-  pre_exit1: [
-    shell("echo PRE_FAIL_STDERR >&2; exit 1"),
-    run(1, "", "PRE_FAIL_STDERR\n"),
-  ],
+  pre_exit2: [shell("echo PRE_BLOCK_STDERR >&2; exit 2"), run(2, "", "PRE_BLOCK_STDERR\n")],
+  pre_exit1: [shell("echo PRE_FAIL_STDERR >&2; exit 1"), run(1, "", "PRE_FAIL_STDERR\n")],
   pre_deny: [
     printed,
     specific("PreToolUse", {
@@ -61,44 +49,17 @@ const HOOKS = {
       permissionDecisionReason: "PRE_ASK_REASON",
     }),
   ],
-  pre_legacy_block: [
-    printed,
-    json({ decision: "block", reason: "LEGACY_BLOCK_REASON" }),
-  ],
-  pre_context: [
-    printed,
-    specific("PreToolUse", { additionalContext: "PRE_CONTEXT" }),
-  ],
+  pre_legacy_block: [printed, json({ decision: "block", reason: "LEGACY_BLOCK_REASON" })],
+  pre_context: [printed, specific("PreToolUse", { additionalContext: "PRE_CONTEXT" })],
   pre_stop: [printed, json({ continue: false, stopReason: "PRE_STOP_REASON" })],
-  pre_plain_stdout: [
-    shell("echo PRE_PLAIN_STDOUT"),
-    run(0, "PRE_PLAIN_STDOUT\n"),
-  ],
-  post_exit2: [
-    shell("echo POST_FEEDBACK >&2; exit 2"),
-    run(2, "", "POST_FEEDBACK\n"),
-  ],
-  post_block: [
-    printed,
-    json({ decision: "block", reason: "POST_BLOCK_REASON" }),
-  ],
-  post_context: [
-    printed,
-    specific("PostToolUse", { additionalContext: "POST_CONTEXT" }),
-  ],
-  post_stop: [
-    printed,
-    json({ continue: false, stopReason: "POST_STOP_REASON" }),
-  ],
+  pre_plain_stdout: [shell("echo PRE_PLAIN_STDOUT"), run(0, "PRE_PLAIN_STDOUT\n")],
+  post_exit2: [shell("echo POST_FEEDBACK >&2; exit 2"), run(2, "", "POST_FEEDBACK\n")],
+  post_block: [printed, json({ decision: "block", reason: "POST_BLOCK_REASON" })],
+  post_context: [printed, specific("PostToolUse", { additionalContext: "POST_CONTEXT" })],
+  post_stop: [printed, json({ continue: false, stopReason: "POST_STOP_REASON" })],
   post_exit1: [shell("echo POST_FAIL >&2; exit 1"), run(1, "", "POST_FAIL\n")],
-  failure_exit2: [
-    shell("echo FAIL_FEEDBACK >&2; exit 2"),
-    run(2, "", "FAIL_FEEDBACK\n"),
-  ],
-  failure_stop: [
-    printed,
-    json({ continue: false, stopReason: "FAIL_STOP_REASON" }),
-  ],
+  failure_exit2: [shell("echo FAIL_FEEDBACK >&2; exit 2"), run(2, "", "FAIL_FEEDBACK\n")],
+  failure_stop: [printed, json({ continue: false, stopReason: "FAIL_STOP_REASON" })],
 };
 
 const resultOf = (observed) =>
@@ -145,11 +106,7 @@ test("a failure hook's continue:false does not end the turn natively", () => {
 test("matchers select hooks as native selects them", () => {
   for (const [name, observed] of Object.entries(cases)) {
     if (!name.startsWith("match_")) continue;
-    assert.equal(
-      hookMatches(observed.matcher, "Bash"),
-      observed.ran === null,
-      name,
-    );
+    assert.equal(hookMatches(observed.matcher, "Bash"), observed.ran === null, name);
   }
 });
 
@@ -158,10 +115,7 @@ test("a non-zero Bash exit is a tool error natively, and only failure hooks run"
   assert.equal(failed.is_error, true);
   assert.match(failed.content, /^Exit code 3/);
   assert.equal(cases.bash_nonzero_post.hook_stdin, null);
-  assert.equal(
-    cases.bash_nonzero_failure.hook_stdin.hook_event_name,
-    "PostToolUseFailure",
-  );
+  assert.equal(cases.bash_nonzero_failure.hook_stdin.hook_event_name, "PostToolUseFailure");
   assert.ok(
     JSON.stringify(cases.pre_context_then_fail.model_tail).includes(
       "PreToolUse:Bash hook additional context: PRE_CONTEXT",
@@ -177,11 +131,7 @@ test("PermissionRequest hooks race the host prompt as natively", () => {
   }
   assert.equal(cases.permreq_fast_allow_slow_deny.ran, "original");
   assert.equal(cases.permreq_fast_deny_slow_allow.ran, null);
-  assert.ok(
-    resultOf(cases.permreq_fast_deny_slow_allow).content.startsWith(
-      "DENY_0",
-    ),
-  );
+  assert.ok(resultOf(cases.permreq_fast_deny_slow_allow).content.startsWith("DENY_0"));
   assert.equal(cases.permreq_none.hook_stdin.tool_use_id, undefined);
   assert.ok("permission_suggestions" in cases.permreq_none.hook_stdin);
 });
@@ -196,10 +146,7 @@ test("a shell prefix gets shell-form hooks as one argument; exec form bypasses i
     "Stop",
   ]);
   // Facade (Mod-answered) Read calls never reach settings tool hooks.
-  assert.equal(
-    plain.hooks_ran.filter((name) => name === "PreToolUse").length,
-    1,
-  );
+  assert.equal(plain.hooks_ran.filter((name) => name === "PreToolUse").length, 1);
   const entries = prefixed.prefix_invocations;
   assert.ok(entries.length > 0);
   assert.ok(entries.every((entry) => entry.startsWith("argc=1\n")));

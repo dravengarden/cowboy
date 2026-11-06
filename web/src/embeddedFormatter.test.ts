@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "../../tools/test-assert.ts";
 import { formatEmbeddedSource } from "./embeddedFormatter.ts";
 
 test("TypeScript embedded payload is parser-formatted", async () => {

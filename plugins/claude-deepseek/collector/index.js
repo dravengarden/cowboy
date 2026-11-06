@@ -15,17 +15,14 @@ async function fetchAccount(url, fallbackAgent) {
     signal: AbortSignal.timeout(4_000),
   });
   if (!response.ok) {
-    throw new Error(
-      `${fallbackAgent} balance adapter returned HTTP ${response.status}`,
-    );
+    throw new Error(`${fallbackAgent} balance adapter returned HTTP ${response.status}`);
   }
   const account = await response.json();
   if (!account || typeof account !== "object" || Array.isArray(account)) {
     throw new Error(`${fallbackAgent} balance adapter returned invalid JSON`);
   }
-  account.agent = typeof account.agent === "string" && account.agent !== ""
-    ? account.agent
-    : fallbackAgent;
+  account.agent =
+    typeof account.agent === "string" && account.agent !== "" ? account.agent : fallbackAgent;
   if (lanes.length > 0 && !lanes.includes(account.agent)) {
     throw new Error("balance adapter returned an unknown agent lane");
   }
@@ -58,12 +55,7 @@ export function group(accounts) {
   return [...grouped.values()];
 }
 
-export function collectorTargets(
-  exactTargets,
-  configuredUrls,
-  lanes,
-  accountId,
-) {
+export function collectorTargets(exactTargets, configuredUrls, lanes, accountId) {
   if (exactTargets) {
     const parsed = JSON.parse(exactTargets);
     if (!Array.isArray(parsed)) {
@@ -72,9 +64,12 @@ export function collectorTargets(
     const ids = new Set();
     return parsed.map((target) => {
       if (
-        !target || typeof target !== "object" ||
-        typeof target.id !== "string" || !lanes.includes(target.id) ||
-        typeof target.url !== "string" || !target.url.startsWith("http://") ||
+        !target ||
+        typeof target !== "object" ||
+        typeof target.id !== "string" ||
+        !lanes.includes(target.id) ||
+        typeof target.url !== "string" ||
+        !target.url.startsWith("http://") ||
         ids.has(target.id)
       ) {
         unavailable("invalid balance adapter target");
@@ -95,18 +90,14 @@ async function main() {
     const input = await Bun.stdin.text();
     const request = input.trim() === "" ? {} : JSON.parse(input);
     if (request.operation === "decorate_activity") {
-      console.log(
-        JSON.stringify({ activity: decorateActivity(request.activity) }),
-      );
+      console.log(JSON.stringify({ activity: decorateActivity(request.activity) }));
       return;
     }
     if (request.operation !== undefined && request.operation !== "collect") {
       unavailable("unsupported collector operation");
     }
     const exactTargets = process.env.COWBOY_PLUGIN_SIDECAR_TARGETS;
-    const envKey = `COWBOY_PROVIDER_INFO_${
-      accountId.toUpperCase().replaceAll("-", "_")
-    }_URLS`;
+    const envKey = `COWBOY_PROVIDER_INFO_${accountId.toUpperCase().replaceAll("-", "_")}_URLS`;
     const targets = collectorTargets(
       exactTargets,
       process.env[envKey] ?? process.env.COWBOY_PROVIDER_INFO_URLS ?? "",
@@ -118,16 +109,12 @@ async function main() {
       targets.map((target) => fetchAccount(target.url, target.id)),
     );
     const accounts = results.flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : []
+      result.status === "fulfilled" ? [result.value] : [],
     );
     const errors = results.flatMap((result) =>
       result.status === "rejected"
-        ? [
-          result.reason instanceof Error
-            ? result.reason.message
-            : String(result.reason),
-        ]
-        : []
+        ? [result.reason instanceof Error ? result.reason.message : String(result.reason)]
+        : [],
     );
     if (accounts.length === 0) {
       unavailable(errors.at(-1) ?? "no balance adapter configured");
@@ -143,18 +130,18 @@ async function main() {
       account.isAvailable = views[0].isAvailable;
       account.balanceInfos = views[0].balanceInfos;
     }
-    console.log(JSON.stringify({
-      provider: accountId,
-      status: views.some((value) => value.isAvailable)
-        ? "available"
-        : "exhausted",
-      source: "DeepSeek",
-      observed_at_ms: Date.now(),
-      account,
-      ...(request.activity && typeof request.activity === "object"
-        ? { activity: decorateActivity(request.activity) }
-        : {}),
-    }));
+    console.log(
+      JSON.stringify({
+        provider: accountId,
+        status: views.some((value) => value.isAvailable) ? "available" : "exhausted",
+        source: "DeepSeek",
+        observed_at_ms: Date.now(),
+        account,
+        ...(request.activity && typeof request.activity === "object"
+          ? { activity: decorateActivity(request.activity) }
+          : {}),
+      }),
+    );
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

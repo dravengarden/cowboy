@@ -18,23 +18,19 @@ export { callGuidance, memoryConfiguration, sessionExtensions };
 
 // Core MCP uses the parent's gateway on the execution target. Native Codex
 // owns environment placement; no runtime-host command or copied credential.
-export function agentApiConfiguration(
-  { environmentId, cwd, callContext, servers = [] } = {},
-) {
+export function agentApiConfiguration({ environmentId, cwd, callContext, servers = [] } = {}) {
   if (!environmentId && !callContext) return [];
   if (environmentId && (typeof cwd !== "string" || !cwd.startsWith("/"))) {
     throw new Error("Remote Cowboy MCP requires its target working directory");
   }
   const name = agentApiServerName(servers);
-  const configuration = name === "cowboy"
-    ? []
-    : ["-c", "mcp_servers.cowboy.enabled=false"];
+  const configuration = name === "cowboy" ? [] : ["-c", "mcp_servers.cowboy.enabled=false"];
   // An executor MCP needs an explicit target cwd. The empty context slot makes
   // native send an env object; the keeper replaces it with its own wiring.
   const placement = environmentId
-    ? `environment_id=${JSON.stringify(environmentId)},cwd=${
-      JSON.stringify(cwd)
-    },env={COWBOY_CALL_CONTEXT=""}`
+    ? `environment_id=${JSON.stringify(environmentId)},cwd=${JSON.stringify(
+        cwd,
+      )},env={COWBOY_CALL_CONTEXT=""}`
     : 'env_vars=["COWBOY_CALL_CONTEXT"]';
   return [
     ...configuration,
@@ -58,19 +54,16 @@ export function agentApiServerName(servers = []) {
 /** The names of the servers natively configured for this launch, by asking
  * native itself; credentials and config files stay where they belong. */
 export function nativeMcpServerNames(executable, configuration) {
-  const listing = spawnSync(
-    executable,
-    [...configuration, "mcp", "list", "--json"],
-    { encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 },
-  );
+  const listing = spawnSync(executable, [...configuration, "mcp", "list", "--json"], {
+    encoding: "utf8",
+    timeout: 10_000,
+    maxBuffer: 1024 * 1024,
+  });
   if (listing.status !== 0) {
     throw new Error("Cowboy MCP could not enumerate native server names");
   }
   const entries = JSON.parse(listing.stdout);
-  if (
-    !Array.isArray(entries) ||
-    entries.some((entry) => typeof entry?.name !== "string")
-  ) {
+  if (!Array.isArray(entries) || entries.some((entry) => typeof entry?.name !== "string")) {
     throw new Error("Cowboy MCP received an invalid native server list");
   }
   return entries.map((entry) => entry.name);
@@ -109,10 +102,7 @@ export function codexObservation(message) {
     ];
   }
   if (item?.type === "fileChange") {
-    return [
-      "tool",
-      JSON.stringify({ status: item.status, changes: item.changes }),
-    ];
+    return ["tool", JSON.stringify({ status: item.status, changes: item.changes })];
   }
   return null;
 }
@@ -144,9 +134,7 @@ export async function memoryNative(args) {
   const execution = await import("./cowboy-execution.mjs");
   const original = process.env.COWBOY_EXECUTION_DESCRIPTOR;
   const descriptor = process.env.COWBOY_EXECUTION_DESCRIPTOR
-    ? await execution.readExecutionDescriptor(
-      process.env.COWBOY_EXECUTION_DESCRIPTOR,
-    )
+    ? await execution.readExecutionDescriptor(process.env.COWBOY_EXECUTION_DESCRIPTOR)
     : undefined;
   if (!descriptor) return await runNative(args, execution);
   const relay = await namespaceMcpProcesses(descriptor);
@@ -166,37 +154,27 @@ export async function memoryNative(args) {
 
 async function runNative(args, execution, descriptor) {
   const config = await memoryConfiguration("codex");
-  const configuration = JSON.parse(
-    process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS ?? "[]",
-  );
+  const configuration = JSON.parse(process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS ?? "[]");
   let servers = [];
   if (descriptor || process.env.COWBOY_CALL_CONTEXT) {
     // Retain only server names from native's bounded reply.
-    servers = nativeMcpServerNames(
-      process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE,
-      configuration,
-    );
+    servers = nativeMcpServerNames(process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE, configuration);
     if (config?.tools) servers.push(config.server);
   }
-  configuration.push(...agentApiConfiguration({
-    environmentId: descriptor?.binding.environment.id,
-    cwd: descriptor?.binding.workspace.cwd,
-    callContext: process.env.COWBOY_CALL_CONTEXT,
-    servers,
-  }));
+  configuration.push(
+    ...agentApiConfiguration({
+      environmentId: descriptor?.binding.environment.id,
+      cwd: descriptor?.binding.workspace.cwd,
+      callContext: process.env.COWBOY_CALL_CONTEXT,
+      servers,
+    }),
+  );
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   // A reserved name or any other unusable memory leaves the session without it.
-  const memory = config?.server === "cowboy"
-    ? null
-    : await MatrixClient.open(config, descriptor);
+  const memory = config?.server === "cowboy" ? null : await MatrixClient.open(config, descriptor);
   if (!memory) return await execution.main(args);
   const mcp = memory.mcp();
-  configuration.push(
-    "-c",
-    "memories.generate_memories=false",
-    "-c",
-    "memories.use_memories=false",
-  );
+  configuration.push("-c", "memories.generate_memories=false", "-c", "memories.use_memories=false");
   // The backend's MCP tools are exposed only when the session enables them.
   if (memory.tools) {
     const server = "mcp_servers." + config.server;
@@ -204,27 +182,29 @@ async function runNative(args, execution, descriptor) {
       "-c",
       server + ".url=" + JSON.stringify(mcp.url),
       "-c",
-      server +
-        '.env_http_headers={Authorization="COWBOY_MATRIX_AUTHORIZATION"}',
+      server + '.env_http_headers={Authorization="COWBOY_MATRIX_AUTHORIZATION"}',
       "-c",
-      server + '.http_headers={"X-Matrix-Binding"=' +
-        JSON.stringify(mcp.headers["X-Matrix-Binding"]) + "}",
+      server +
+        '.http_headers={"X-Matrix-Binding"=' +
+        JSON.stringify(mcp.headers["X-Matrix-Binding"]) +
+        "}",
       // Only the tools the installed backend declares are exposed.
       "-c",
       server + ".enabled_tools=" + JSON.stringify(config.tools),
     );
   }
-  const child = spawn(process.execPath, [
-    fileURLToPath(new URL("./cowboy-execution.mjs", import.meta.url)),
-    ...args,
-  ], {
-    env: {
-      ...process.env,
-      COWBOY_PRIVATE_CODEX_ARGUMENTS: JSON.stringify(configuration),
-      COWBOY_MATRIX_AUTHORIZATION: mcp.headers.Authorization,
+  const child = spawn(
+    process.execPath,
+    [fileURLToPath(new URL("./cowboy-execution.mjs", import.meta.url)), ...args],
+    {
+      env: {
+        ...process.env,
+        COWBOY_PRIVATE_CODEX_ARGUMENTS: JSON.stringify(configuration),
+        COWBOY_MATRIX_AUTHORIZATION: mcp.headers.Authorization,
+      },
+      stdio: ["pipe", "pipe", "inherit"],
     },
-    stdio: ["pipe", "pipe", "inherit"],
-  });
+  );
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => child.kill(signal));
   }
@@ -234,11 +214,7 @@ async function runNative(args, execution, descriptor) {
   });
   const input = (async () => {
     for await (const message of frames(process.stdin)) {
-      if (
-        ["thread/start", "thread/resume", "thread/fork"].includes(
-          message.method,
-        )
-      ) {
+      if (["thread/start", "thread/resume", "thread/fork"].includes(message.method)) {
         message.params ??= {};
         message.params.config = {
           ...message.params.config,
@@ -248,16 +224,20 @@ async function runNative(args, execution, descriptor) {
       }
       if (message.method === "turn/start") {
         const inputs = message.params?.input ?? [];
-        const query = inputs.filter((item) => item.type === "text").map((
-          item,
-        ) => item.text).join("\n");
+        const query = inputs
+          .filter((item) => item.type === "text")
+          .map((item) => item.text)
+          .join("\n");
         const context = await memory.begin(query);
         if (context) {
-          message.params.input = [{
-            type: "text",
-            text: context,
-            text_elements: [],
-          }, ...inputs];
+          message.params.input = [
+            {
+              type: "text",
+              text: context,
+              text_elements: [],
+            },
+            ...inputs,
+          ];
         }
       }
       await send(child.stdin, message);
@@ -273,9 +253,7 @@ async function runNative(args, execution, descriptor) {
     }
   })();
   Promise.all([input, output]).catch(() => {
-    process.stderr.write(
-      "Matrix session delivery failed; inspect its private queue\n",
-    );
+    process.stderr.write("Matrix session delivery failed; inspect its private queue\n");
     child.kill("SIGTERM");
   });
   try {

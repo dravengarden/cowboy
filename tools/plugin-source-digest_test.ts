@@ -7,7 +7,7 @@ import {
   assertEquals,
   assertNotEquals,
   assertRejects,
-} from "@std/assert";
+} from "./test-assert.ts";
 import {
   filesDigest,
   repositorySourceFiles,

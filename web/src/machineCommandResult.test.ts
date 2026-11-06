@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { machineCommandResultPresentation } from "./machineCommandResult.ts";
 import { readAppSource } from "./appSource.test.ts";
 

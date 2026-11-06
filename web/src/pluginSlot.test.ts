@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 
 const passwordHost = await readFile(
   new URL("../../examples/authentication/password/host.json", import.meta.url), "utf8",

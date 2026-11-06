@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert } from "@std/assert";
+import { assert } from "../../tools/test-assert.ts";
 
 test("local delivery failures are reported before callers can swallow them", async () => {
   const source = await readFile(

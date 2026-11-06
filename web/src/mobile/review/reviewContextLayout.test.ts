@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "../../../../tools/test-assert.ts";
 import { readReviewAppSource } from "../../appSource.test.ts";
 
 const source = await readReviewAppSource();

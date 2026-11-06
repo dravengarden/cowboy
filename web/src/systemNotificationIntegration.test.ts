@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 
 const serviceWorker = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
 const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");

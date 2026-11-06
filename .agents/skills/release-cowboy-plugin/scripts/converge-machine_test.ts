@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { convergeArguments, parseInvocation } from "./converge-machine.ts";
 
 test("a dry run is the default and --apply is the only way to submit", () => {

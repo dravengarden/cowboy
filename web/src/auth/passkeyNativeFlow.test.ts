@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../../../tools/test-assert.ts";
 import { authApi } from "./authApi.ts";
 import { registerPasskey, verifyPasskey } from "./passkeyFlow.ts";
 import { currentPasskeyTransports } from "./passkeyTransport.ts";

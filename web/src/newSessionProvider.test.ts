@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { defaultNewSessionProvider } from "./newSessionProvider.ts";
 
 test("new sessions prefer standard Claude Code when it is available", () => {

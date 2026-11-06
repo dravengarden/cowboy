@@ -15,12 +15,7 @@ const MAX_ROUND_BYTES = 256 * 1024;
 // for an absent user, web access from the runtime and skills are removed;
 // the keeper refuses target writes even if one were reached.
 export const MANAGED_TOOLS = ["Bash", "Read", "Glob", "Grep"];
-export const MANAGED_PASSTHROUGH = [
-  "TaskCreate",
-  "TaskGet",
-  "TaskList",
-  "TaskUpdate",
-];
+export const MANAGED_PASSTHROUGH = ["TaskCreate", "TaskGet", "TaskList", "TaskUpdate"];
 export const MANAGED_DISALLOWED = [
   "Write",
   "Edit",
@@ -39,9 +34,7 @@ export const MANAGED_DISALLOWED = [
 // present. Any other spelling of a managed profile is refused.
 export function managedArguments(args) {
   const rest = args.filter((argument) => argument !== MANAGED_PROFILE_FLAG);
-  if (
-    rest.some((argument) => argument.startsWith("--cowboy-managed-profile"))
-  ) {
+  if (rest.some((argument) => argument.startsWith("--cowboy-managed-profile"))) {
     throw new Error("Unsupported Cowboy managed profile");
   }
   return { managed: rest.length !== args.length, args: rest };
@@ -53,13 +46,12 @@ export function managedConstraint(binding, announced) {
   if (
     binding?.managed?.profile !== PROFILE ||
     typeof binding.managed.parent_session_id !== "string" ||
-    announced?.schema !== 1 || announced.profile !== PROFILE ||
+    announced?.schema !== 1 ||
+    announced.profile !== PROFILE ||
     typeof announced.roundPath !== "string" ||
     !isAbsolute(announced.roundPath)
   ) {
-    throw new Error(
-      "A managed Claude call requires its read-only execution environment",
-    );
+    throw new Error("A managed Claude call requires its read-only execution environment");
   }
   return { roundPath: announced.roundPath };
 }
@@ -71,7 +63,8 @@ export function parseRound(bytes) {
   }
   const round = JSON.parse(bytes.toString("utf8"));
   if (
-    round?.schema !== 1 || typeof round.call_id !== "string" ||
+    round?.schema !== 1 ||
+    typeof round.call_id !== "string" ||
     (round.output_schema !== undefined &&
       (round.output_schema === null ||
         typeof round.output_schema !== "object" ||
@@ -85,15 +78,8 @@ export function parseRound(bytes) {
 // Native argv for a managed turn. Approval prompts would wait for nobody:
 // the listed read tools are allowed and everything else is denied.
 export function managedNativeArguments(argv, schema) {
-  const replaced = new Set([
-    "--permission-mode",
-    "--json-schema",
-    "--allowedTools",
-  ]);
-  const flags = new Set([
-    "--allow-dangerously-skip-permissions",
-    "--dangerously-skip-permissions",
-  ]);
+  const replaced = new Set(["--permission-mode", "--json-schema", "--allowedTools"]);
+  const flags = new Set(["--allow-dangerously-skip-permissions", "--dangerously-skip-permissions"]);
   const kept = [];
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
@@ -104,7 +90,9 @@ export function managedNativeArguments(argv, schema) {
       index++;
     } else if (argument === "--disallowedTools") {
       const disallowed = new Set([
-        ...String(argv[++index] ?? "").split(",").filter(Boolean),
+        ...String(argv[++index] ?? "")
+          .split(",")
+          .filter(Boolean),
         ...MANAGED_DISALLOWED,
       ]);
       kept.push(argument, [...disallowed].join(","));
@@ -125,7 +113,8 @@ export function managedNativeArguments(argv, schema) {
 // Cowboy as one final top-level message carrying exactly that JSON.
 export function structuredMessage(result, lastAssistant) {
   if (
-    result?.type !== "result" || result.subtype !== "success" ||
+    result?.type !== "result" ||
+    result.subtype !== "success" ||
     result.structured_output === undefined
   ) {
     return undefined;
@@ -144,10 +133,12 @@ export function structuredMessage(result, lastAssistant) {
         typeof message.model === "string" && message.model !== "<synthetic>"
           ? message.model
           : "claude",
-      content: [{
-        type: "text",
-        text: JSON.stringify(result.structured_output),
-      }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(result.structured_output),
+        },
+      ],
       stop_reason: "end_turn",
       stop_sequence: null,
       ...(message.usage ? { usage: message.usage } : {}),

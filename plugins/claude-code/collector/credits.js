@@ -1,12 +1,8 @@
 // Read-only subscription credit projections. Never derive a balance from spend.
 const currencyCode = (value) =>
-  typeof value === "string" && /^[a-z]{3}$/i.test(value)
-    ? value.toUpperCase()
-    : undefined;
+  typeof value === "string" && /^[a-z]{3}$/i.test(value) ? value.toUpperCase() : undefined;
 const amount = (value) =>
-  typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? value
-    : undefined;
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 
 export function spendCredits(value) {
   if (!value || typeof value.is_enabled !== "boolean") return undefined;
@@ -33,9 +29,7 @@ export function prepaidCredits(value) {
     balanceMinor: balance,
     ...(currency ? { balanceCurrency: currency } : {}),
     ...(typeof enabled === "boolean" ? { autoReloadEnabled: enabled } : {}),
-    ...(Number.isSafeInteger(expiry) && expiry > 0
-      ? { expiryPolicyMonths: expiry }
-      : {}),
+    ...(Number.isSafeInteger(expiry) && expiry > 0 ? { expiryPolicyMonths: expiry } : {}),
   };
 }
 
@@ -45,7 +39,5 @@ export async function fetchPrepaidCredits(client) {
   if (typeof org !== "string" || !/^[0-9a-f-]{36}$/.test(org)) {
     throw new Error("Claude credit balance is unavailable.");
   }
-  return prepaidCredits(
-    await client(`/api/oauth/organizations/${org}/prepaid/credits`),
-  );
+  return prepaidCredits(await client(`/api/oauth/organizations/${org}/prepaid/credits`));
 }

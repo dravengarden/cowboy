@@ -18,8 +18,7 @@ const tree = {
   "/w/parent/project/CLAUDE.local.md": "ROOT_CLAUDE_LOCAL_MD\n",
   "/w/parent/project/.claude/CLAUDE.md": "DOT_CLAUDE_CLAUDE_MD\n",
   "/w/parent/project/.claude/rules/always.md": "RULE_ALWAYS\n",
-  "/w/parent/project/.claude/rules/scoped.md":
-    '---\npaths:\n  - "sub/**"\n---\nRULE_SCOPED_SUB\n',
+  "/w/parent/project/.claude/rules/scoped.md": '---\npaths:\n  - "sub/**"\n---\nRULE_SCOPED_SUB\n',
   "/w/parent/project/AGENTS.md": "ROOT_AGENTS_MD\n",
   "/w/parent/project/sub/CLAUDE.md": "NESTED_SUB_CLAUDE_MD\n",
   "/w/parent/project/sub/AGENTS.md": "NESTED_SUB_AGENTS_MD\n",
@@ -29,7 +28,8 @@ const tree = {
 const io = {
   read: async (path) => tree[path],
   rules: async (directory) =>
-    Object.keys(tree).filter((path) => path.startsWith(directory + "/"))
+    Object.keys(tree)
+      .filter((path) => path.startsWith(directory + "/"))
       .sort(),
 };
 
@@ -45,19 +45,16 @@ test("instruction files follow native's discovery and order", async () => {
       ["/home/u/.claude/CLAUDE.md", "user", undefined],
       ["/w/parent/CLAUDE.md", "project", undefined],
       ["/w/parent/project/CLAUDE.md", "project", undefined],
-      [
-        "/w/parent/project/docs/imported.md",
-        "project",
-        "/w/parent/project/CLAUDE.md",
-      ],
+      ["/w/parent/project/docs/imported.md", "project", "/w/parent/project/CLAUDE.md"],
       ["/w/parent/project/.claude/CLAUDE.md", "project", undefined],
       ["/w/parent/project/.claude/rules/always.md", "project", undefined],
       ["/w/parent/project/CLAUDE.local.md", "local", undefined],
     ],
   );
-  assert.deepEqual(conditional.map((rule) => rule.path), [
-    "/w/parent/project/.claude/rules/scoped.md",
-  ]);
+  assert.deepEqual(
+    conditional.map((rule) => rule.path),
+    ["/w/parent/project/.claude/rules/scoped.md"],
+  );
 });
 
 test("a Read brings nested files and matching rules once, as natively", async () => {
@@ -128,10 +125,7 @@ test("native's Git section describes the target", async () => {
     "As you answer the user's questions, you can use the following context:\n# gitStatus\nThis is the git status at the start of the conversation. Target.\n\nClaude Code attached this context automatically; it isn't part of the user's message.",
   );
   assert.equal(targetSessionContext(native, null), null);
-  const withEmail = native.replace(
-    "# gitStatus",
-    "# userEmail\nu@example.com\n# gitStatus",
-  );
+  const withEmail = native.replace("# gitStatus", "# userEmail\nu@example.com\n# gitStatus");
   assert.equal(
     targetSessionContext(withEmail, null),
     "As you answer the user's questions, you can use the following context:\n# userEmail\nu@example.com\n\n\nClaude Code attached this context automatically; it isn't part of the user's message.",
@@ -153,8 +147,7 @@ test("the module's tool context reads without the chain's label", async () => {
 
 test("rule globs keep braces, classes and quoted commas", () => {
   assert.deepEqual(
-    ruleScope("---\npaths: [\"src/**/*.{ts,tsx}\", 'docs/[ab]*.md']\n---\nX")
-      .paths,
+    ruleScope("---\npaths: [\"src/**/*.{ts,tsx}\", 'docs/[ab]*.md']\n---\nX").paths,
     ["src/**/*.{ts,tsx}", "docs/[ab]*.md"],
   );
   assert.ok(globMatches("src/**/*.{ts,tsx}", "src/a/b.tsx"));
@@ -178,10 +171,10 @@ test("a nested file's imports follow it, once", async () => {
     conditional: [],
     attached,
   });
-  assert.deepEqual(nested.map((file) => file.path), [
-    "/p/sub/CLAUDE.md",
-    "/p/shared.md",
-  ]);
+  assert.deepEqual(
+    nested.map((file) => file.path),
+    ["/p/sub/CLAUDE.md", "/p/shared.md"],
+  );
 });
 
 test("the target's Git section is added when native had none", async () => {
@@ -199,8 +192,7 @@ test("the target's Git section is added when native had none", async () => {
 
 test("the user's scoped rules match project-relative paths", async () => {
   const files = {
-    "/home/u/.claude/rules/ts.md":
-      '---\npaths: ["src/**"]\n---\nUSER_TS_RULE\n',
+    "/home/u/.claude/rules/ts.md": '---\npaths: ["src/**"]\n---\nUSER_TS_RULE\n',
   };
   const { conditional } = await instructionFiles({
     cwd: "/work/p",
@@ -216,21 +208,21 @@ test("the user's scoped rules match project-relative paths", async () => {
     conditional,
     attached: new Set(),
   });
-  assert.deepEqual(nested.map((file) => file.content), ["USER_TS_RULE\n"]);
+  assert.deepEqual(
+    nested.map((file) => file.content),
+    ["USER_TS_RULE\n"],
+  );
 });
 
 test("multi-line flow sequences and comments in rule paths", () => {
   assert.deepEqual(
-    ruleScope(
-      '---\npaths: [\n  "src/**",  # sources\n  "lib/*.ts"\n]\nother: x\n---\nX',
-    ).paths,
+    ruleScope('---\npaths: [\n  "src/**",  # sources\n  "lib/*.ts"\n]\nother: x\n---\nX').paths,
     ["src/**", "lib/*.ts"],
   );
-  assert.deepEqual(
-    ruleScope('---\npaths:\n  - "a/**" # tail comment\n  - "b#c/*"\n---\nX')
-      .paths,
-    ["a/**", "b#c/*"],
-  );
+  assert.deepEqual(ruleScope('---\npaths:\n  - "a/**" # tail comment\n  - "b#c/*"\n---\nX').paths, [
+    "a/**",
+    "b#c/*",
+  ]);
 });
 
 test("a failed nested read leaves its files for a later Read", async () => {
@@ -245,23 +237,22 @@ test("a failed nested read leaves its files for a later Read", async () => {
   await assert.rejects(nestedInstructions(args));
   assert.equal(attached.size, 0);
   broken = false;
-  assert.deepEqual((await nestedInstructions(args)).map((file) => file.path), [
-    "/p/s/CLAUDE.md",
-    "/p/s/imp.md",
-  ]);
+  assert.deepEqual(
+    (await nestedInstructions(args)).map((file) => file.path),
+    ["/p/s/CLAUDE.md", "/p/s/imp.md"],
+  );
 });
 
 test("a quoted character class does not close a flow sequence", () => {
-  assert.deepEqual(
-    ruleScope('---\npaths: [\n  "src/[ab]/*.ts",\n  "lib/**"\n]\n---\nX').paths,
-    ["src/[ab]/*.ts", "lib/**"],
-  );
+  assert.deepEqual(ruleScope('---\npaths: [\n  "src/[ab]/*.ts",\n  "lib/**"\n]\n---\nX').paths, [
+    "src/[ab]/*.ts",
+    "lib/**",
+  ]);
 });
 
 test("a user rule under a home that contains the project is collected once", async () => {
   const files = {
-    "/home/u/.claude/rules/p.md":
-      '---\npaths: ["projects/**"]\n---\nUSER_RULE\n',
+    "/home/u/.claude/rules/p.md": '---\npaths: ["projects/**"]\n---\nUSER_RULE\n',
   };
   const { conditional } = await instructionFiles({
     cwd: "/home/u/projects/app",
@@ -270,9 +261,10 @@ test("a user rule under a home that contains the project is collected once", asy
     rules: async (directory) =>
       Object.keys(files).filter((path) => path.startsWith(directory + "/")),
   });
-  assert.deepEqual(conditional.map((rule) => rule.root), [
-    "/home/u/projects/app",
-  ]);
+  assert.deepEqual(
+    conditional.map((rule) => rule.root),
+    ["/home/u/projects/app"],
+  );
   const nested = await nestedInstructions({
     cwd: "/home/u/projects/app",
     path: "/home/u/projects/app/README.md",

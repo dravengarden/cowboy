@@ -7,18 +7,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { NATIVE_TOOLS } from "../plugins/claude-code/runtime/tools.mjs";
-import {
-  FORBIDDEN_TOOLS,
-  NATIVE_PASSTHROUGH,
-} from "../plugins/claude-code/runtime/launch.mjs";
+import { FORBIDDEN_TOOLS, NATIVE_PASSTHROUGH } from "../plugins/claude-code/runtime/launch.mjs";
 
 const inventory = Object.keys(
-  JSON.parse(
-    readFileSync(
-      new URL("./claude_tools_native_baseline.json", import.meta.url),
-      "utf8",
-    ),
-  ).default_tools,
+  JSON.parse(readFileSync(new URL("./claude_tools_native_baseline.json", import.meta.url), "utf8"))
+    .default_tools,
 );
 
 // Native tools the plugin neither routes, runs on the runtime nor disallows:
@@ -32,7 +25,10 @@ test("every native tool has a disposition", () => {
     ...FORBIDDEN_TOOLS,
     ...NOT_OFFERED,
   ]);
-  assert.deepEqual(inventory.filter((tool) => !classified.has(tool)), []);
+  assert.deepEqual(
+    inventory.filter((tool) => !classified.has(tool)),
+    [],
+  );
 });
 
 test("every tool the plugin offers exists natively", () => {
@@ -48,12 +44,7 @@ test("every tool the plugin offers exists natively", () => {
 });
 
 test("dispositions do not overlap and name no stale tool", () => {
-  const lists = [
-    NATIVE_TOOLS,
-    NATIVE_PASSTHROUGH,
-    FORBIDDEN_TOOLS,
-    NOT_OFFERED,
-  ];
+  const lists = [NATIVE_TOOLS, NATIVE_PASSTHROUGH, FORBIDDEN_TOOLS, NOT_OFFERED];
   const all = lists.flat();
   assert.equal(new Set(all).size, all.length);
   for (const tool of [...FORBIDDEN_TOOLS, ...NOT_OFFERED]) {

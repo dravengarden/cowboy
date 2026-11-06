@@ -13,8 +13,8 @@ export function mcpProcessIds(prefix = `cowboy-mcp-${randomUUID()}-`) {
     const container = frame.method?.startsWith("process/")
       ? frame.params
       : !outbound
-      ? frame.result
-      : null;
+        ? frame.result
+        : null;
     const id = container?.processId;
     if (typeof id !== "string") return frame;
     if (outbound && native.test(id)) container.processId = prefix + id;
@@ -36,8 +36,7 @@ export async function namespaceMcpProcesses(descriptor) {
     maxPayload: 32 * 1024 * 1024,
     perMessageDeflate: false,
     verifyClient: ({ req }) =>
-      req.url === "/" && !req.headers.origin &&
-      req.headers.authorization === `Bearer ${token}`,
+      req.url === "/" && !req.headers.origin && req.headers.authorization === `Bearer ${token}`,
   });
   server.on("connection", (incoming) => {
     // A reconnect replaces only this transport. Never stop target jobs or
@@ -72,13 +71,10 @@ export async function namespaceMcpProcesses(descriptor) {
     const source = createWebSocketStream(incoming, options);
     const sink = createWebSocketStream(target, options);
     streams.push(source, sink);
-    for (
-      const [from, to, outbound] of [[source, sink, true], [
-        sink,
-        source,
-        false,
-      ]]
-    ) {
+    for (const [from, to, outbound] of [
+      [source, sink, true],
+      [sink, source, false],
+    ]) {
       const transform = new Transform({
         objectMode: true,
         highWaterMark: 1,
@@ -88,10 +84,7 @@ export async function namespaceMcpProcesses(descriptor) {
             const previous = frame.params?.processId ?? frame.result?.processId;
             rewrite(frame, outbound);
             const current = frame.params?.processId ?? frame.result?.processId;
-            done(
-              null,
-              previous === current ? bytes.toString() : JSON.stringify(frame),
-            );
+            done(null, previous === current ? bytes.toString() : JSON.stringify(frame));
           } catch {
             done(new Error("Invalid execution frame"));
           }

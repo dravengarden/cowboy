@@ -35,11 +35,7 @@ async function input() {
 }
 
 class ResetFailure extends Error {
-  constructor(
-    message,
-    callMayHaveReachedProvider = false,
-    creditId = undefined,
-  ) {
+  constructor(message, callMayHaveReachedProvider = false, creditId = undefined) {
     super(message);
     this.callMayHaveReachedProvider = callMayHaveReachedProvider;
     this.creditId = creditId;
@@ -55,8 +51,11 @@ class AcpRpc {
   }
 
   static async start() {
-    const command = process.env.COWBOY_PLUGIN_COMMAND_GROK ??
-      process.env.COWBOY_ACP_GROK_CMD ?? process.argv.slice(2)[0] ?? "grok";
+    const command =
+      process.env.COWBOY_PLUGIN_COMMAND_GROK ??
+      process.env.COWBOY_ACP_GROK_CMD ??
+      process.argv.slice(2)[0] ??
+      "grok";
     const env = { GROK_FOLDER_TRUST: "0" };
     for (const key of CHILD_ENV_KEYS) {
       const value = process.env[key];
@@ -93,9 +92,7 @@ class AcpRpc {
   async request(method, params) {
     const id = this.nextId++;
     await this.writer.write(
-      encoder.encode(
-        `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`,
-      ),
+      encoder.encode(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`),
     );
     for (;;) {
       const next = await this.lines.next();
@@ -131,9 +128,11 @@ export function credentialFromJson(document) {
   for (const value of values) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     if (
-      value.auth_mode === "oidc" && typeof value.key === "string" &&
+      value.auth_mode === "oidc" &&
+      typeof value.key === "string" &&
       value.key.trim() !== "" &&
-      typeof value.user_id === "string" && value.user_id.trim() !== ""
+      typeof value.user_id === "string" &&
+      value.user_id.trim() !== ""
     ) {
       return { key: value.key.trim(), userId: value.user_id.trim() };
     }
@@ -152,9 +151,7 @@ async function loadCredential() {
   for (const path of paths) {
     if (!path) continue;
     try {
-      const credential = credentialFromJson(
-        JSON.parse(await Bun.file(path).text()),
-      );
+      const credential = credentialFromJson(JSON.parse(await Bun.file(path).text()));
       if (credential) return credential;
     } catch {
       // Try the next declared credential source.
@@ -196,11 +193,9 @@ export function activePlan(document) {
   };
   return Array.isArray(document?.subscriptions)
     ? document.subscriptions
-      .filter((value) =>
-        value?.status === "SUBSCRIPTION_STATUS_ACTIVE" && labels[value.tier]
-      )
-      .map((value) => labels[value.tier])
-      .sort((left, right) => right[0] - left[0])[0]?.[1]
+        .filter((value) => value?.status === "SUBSCRIPTION_STATUS_ACTIVE" && labels[value.tier])
+        .map((value) => labels[value.tier])
+        .sort((left, right) => right[0] - left[0])[0]?.[1]
     : undefined;
 }
 
@@ -218,11 +213,7 @@ function encodeVarint(value) {
 
 export function encodeStringField(number, value) {
   const bytes = encoder.encode(value);
-  return new Uint8Array([
-    ...encodeVarint(number * 8 + 2),
-    ...encodeVarint(bytes.length),
-    ...bytes,
-  ]);
+  return new Uint8Array([...encodeVarint(number * 8 + 2), ...encodeVarint(bytes.length), ...bytes]);
 }
 
 function frameMessage(message) {
@@ -276,9 +267,7 @@ function decodeFields(bytes) {
 }
 
 function timestamp(bytes) {
-  return decodeFields(bytes).find((field) =>
-    field.number === 1 && field.wire === 0
-  )?.value;
+  return decodeFields(bytes).find((field) => field.number === 1 && field.wire === 0)?.value;
 }
 
 export function resetTokens(message) {
@@ -286,27 +275,16 @@ export function resetTokens(message) {
     .filter((field) => field.number === 10 && field.wire === 2)
     .map((field) => {
       const fields = decodeFields(field.value);
-      const idField = fields.find((value) =>
-        value.number === 10 && value.wire === 2
-      );
+      const idField = fields.find((value) => value.number === 10 && value.wire === 2);
       if (!idField) throw new Error("reset token has no id");
       return {
         id: decoder.decode(idField.value),
-        grantedAt: fields.find((value) =>
-            value.number === 20 && value.wire === 2
-          )
-          ? timestamp(
-            fields.find((value) => value.number === 20 && value.wire === 2)
-              .value,
-          )
+        grantedAt: fields.find((value) => value.number === 20 && value.wire === 2)
+          ? timestamp(fields.find((value) => value.number === 20 && value.wire === 2).value)
           : undefined,
-        expiresAt:
-          fields.find((value) => value.number === 30 && value.wire === 2)
-            ? timestamp(
-              fields.find((value) => value.number === 30 && value.wire === 2)
-                .value,
-            )
-            : undefined,
+        expiresAt: fields.find((value) => value.number === 30 && value.wire === 2)
+          ? timestamp(fields.find((value) => value.number === 30 && value.wire === 2).value)
+          : undefined,
       };
     });
 }
@@ -320,8 +298,7 @@ function decodeGrpcWeb(body) {
       throw new Error("truncated gRPC-web envelope");
     }
     const flags = body[offset];
-    const length = new DataView(body.buffer, body.byteOffset + offset + 1, 4)
-      .getUint32(0, false);
+    const length = new DataView(body.buffer, body.byteOffset + offset + 1, 4).getUint32(0, false);
     offset += 5;
     const payload = body.slice(offset, offset + length);
     if (payload.length !== length) {
@@ -329,9 +306,7 @@ function decodeGrpcWeb(body) {
     }
     if (flags === 0) message = payload;
     else if (flags === 0x80) {
-      const match = decoder.decode(payload).match(
-        /(?:^|\r?\n)grpc-status:\s*(\d+)/i,
-      );
+      const match = decoder.decode(payload).match(/(?:^|\r?\n)grpc-status:\s*(\d+)/i);
       status = match ? Number(match[1]) : undefined;
     } else throw new Error(`unsupported gRPC-web flags ${flags}`);
     offset += length;
@@ -361,25 +336,20 @@ async function accountMetadata() {
       headers: authHeaders(credential),
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
-    }).then((response) => boundedBytes(response, "xAI subscriptions"))
+    })
+      .then((response) => boundedBytes(response, "xAI subscriptions"))
       .then((bytes) => activePlan(JSON.parse(decoder.decode(bytes)))),
-    grpcWeb(credential, "/prod_mc_billing.ConsumerUiSvc/GetRemainingResets")
-      .then(resetTokens),
+    grpcWeb(credential, "/prod_mc_billing.ConsumerUiSvc/GetRemainingResets").then(resetTokens),
   ]);
   return {
-    ...(planResult.status === "fulfilled" && planResult.value
-      ? { plan: planResult.value }
-      : {}),
-    ...(resetsResult.status === "fulfilled"
-      ? { resets: resetsResult.value }
-      : {}),
+    ...(planResult.status === "fulfilled" && planResult.value ? { plan: planResult.value } : {}),
+    ...(resetsResult.status === "fulfilled" ? { resets: resetsResult.value } : {}),
   };
 }
 
 function attachMetadata(billing, metadata) {
   const tier = billing?.subscription_tier ?? billing?.subscriptionTier;
-  const plan = metadata.plan ??
-    (typeof tier === "string" && tier.trim() ? tier : undefined);
+  const plan = metadata.plan ?? (typeof tier === "string" && tier.trim() ? tier : undefined);
   if (Array.isArray(metadata.resets)) {
     billing.rateLimitResetCredits = {
       availableCount: metadata.resets.length,
@@ -398,12 +368,13 @@ function attachMetadata(billing, metadata) {
 export function nearestCredit(credits) {
   return [...credits]
     .filter((credit) => typeof credit.id === "string")
-    .sort((left, right) =>
-      (left.expiresAt ?? Number.MAX_SAFE_INTEGER) -
-        (right.expiresAt ?? Number.MAX_SAFE_INTEGER) ||
-      (left.grantedAt ?? Number.MAX_SAFE_INTEGER) -
-        (right.grantedAt ?? Number.MAX_SAFE_INTEGER) ||
-      left.id.localeCompare(right.id)
+    .sort(
+      (left, right) =>
+        (left.expiresAt ?? Number.MAX_SAFE_INTEGER) -
+          (right.expiresAt ?? Number.MAX_SAFE_INTEGER) ||
+        (left.grantedAt ?? Number.MAX_SAFE_INTEGER) -
+          (right.grantedAt ?? Number.MAX_SAFE_INTEGER) ||
+        left.id.localeCompare(right.id),
     )[0];
 }
 
@@ -428,13 +399,8 @@ async function reset(rpc, request) {
     throw new ResetFailure("official Grok OIDC credential is unavailable");
   }
   const credits = resetTokens(
-    await grpcWeb(
-      credential,
-      "/prod_mc_billing.ConsumerUiSvc/GetRemainingResets",
-    ),
-  ).filter((credit) =>
-    credit.expiresAt === undefined || credit.expiresAt > Date.now() / 1000
-  );
+    await grpcWeb(credential, "/prod_mc_billing.ConsumerUiSvc/GetRemainingResets"),
+  ).filter((credit) => credit.expiresAt === undefined || credit.expiresAt > Date.now() / 1000);
   const credit = nearestCredit(credits);
   if (!credit) throw new ResetFailure("no available reset");
   if (request.expected_credit_id && request.expected_credit_id !== credit.id) {
@@ -454,16 +420,10 @@ async function reset(rpc, request) {
       ),
     ).length;
   } catch (error) {
-    throw new ResetFailure(
-      error instanceof Error ? error.message : String(error),
-      true,
-      credit.id,
-    );
+    throw new ResetFailure(error instanceof Error ? error.message : String(error), true, credit.id);
   }
   return {
-    outcome: `consumed; ${remaining} reset${
-      remaining === 1 ? "" : "s"
-    } remaining`,
+    outcome: `consumed; ${remaining} reset${remaining === 1 ? "" : "s"} remaining`,
     credit_id: credit.id,
   };
 }
@@ -474,24 +434,24 @@ async function main() {
   try {
     request = await input();
     rpc = await AcpRpc.start();
-    const result = request.operation === "consume_reset"
-      ? await reset(rpc, request)
-      : await collect(rpc);
+    const result =
+      request.operation === "consume_reset" ? await reset(rpc, request) : await collect(rpc);
     console.log(JSON.stringify(result));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (request?.operation === "consume_reset") {
-      console.log(JSON.stringify({
-        error: {
-          message,
-          call_may_have_reached_provider: error instanceof ResetFailure
-            ? error.callMayHaveReachedProvider
-            : false,
-          ...(error instanceof ResetFailure && error.creditId
-            ? { credit_id: error.creditId }
-            : {}),
-        },
-      }));
+      console.log(
+        JSON.stringify({
+          error: {
+            message,
+            call_may_have_reached_provider:
+              error instanceof ResetFailure ? error.callMayHaveReachedProvider : false,
+            ...(error instanceof ResetFailure && error.creditId
+              ? { credit_id: error.creditId }
+              : {}),
+          },
+        }),
+      );
     } else {
       console.error(message);
       process.exitCode = 1;

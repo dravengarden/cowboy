@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../tools/test-assert.ts";
 import { topBarRegionHints } from "./topBarRegionHints";
 
 const topBar = (id: string, shortcut: string, when?: () => boolean) => ({

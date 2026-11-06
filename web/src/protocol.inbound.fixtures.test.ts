@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { inboundFixtures } from "./protocol.inbound.fixtures.ts";
 
 // contracts/protocol/inbound.json is what src/protocol_contract.rs parses.

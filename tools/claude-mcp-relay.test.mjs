@@ -49,10 +49,7 @@ async function bridge(t, route) {
   await new Promise((resolve) => server.listen(socketPath, resolve));
   t.after(() => server.close());
   const context = join(directory, "context.json");
-  await writeFile(
-    context,
-    JSON.stringify({ socketPath, bridgeToken: "secret" }),
-  );
+  await writeFile(context, JSON.stringify({ socketPath, bridgeToken: "secret" }));
   return { context, posts };
 }
 
@@ -67,8 +64,8 @@ function start(argv, context, server = "db") {
     stdio: ["pipe", "pipe", "pipe"],
   });
   const output = { stdout: "", stderr: "" };
-  child.stdout.on("data", (data) => output.stdout += data);
-  child.stderr.on("data", (data) => output.stderr += data);
+  child.stdout.on("data", (data) => (output.stdout += data));
+  child.stderr.on("data", (data) => (output.stderr += data));
   const exit = new Promise((resolve) => child.once("exit", resolve));
   return { child, output, exit };
 }
@@ -78,7 +75,7 @@ const encode = (text) => Buffer.from(text).toString("base64");
 for (const [name, argv] of relays) {
   test(`${name} relay carries stdio both ways and ends the target server`, async (t) => {
     let wrote;
-    const written = new Promise((resolve) => wrote = resolve);
+    const written = new Promise((resolve) => (wrote = resolve));
     const { context, posts } = await bridge(t, async (path) => {
       if (path === "/mcp-start") return [200, { id: "p1" }];
       if (path === "/mcp-write") {
@@ -88,20 +85,26 @@ for (const [name, argv] of relays) {
       if (path === "/mcp-read") {
         const reads = posts.filter(([url]) => url === "/mcp-read").length;
         if (reads === 1) {
-          return [200, {
-            chunks: [{ stream: "stdout", data: encode("out\n") }],
-            afterSeq: 1,
-            closed: false,
-          }];
+          return [
+            200,
+            {
+              chunks: [{ stream: "stdout", data: encode("out\n") }],
+              afterSeq: 1,
+              closed: false,
+            },
+          ];
         }
         // The target answers only after native's message reached it.
         await written;
-        return [200, {
-          chunks: [{ stream: "stderr", data: encode("err\n") }],
-          afterSeq: 2,
-          closed: true,
-          exitCode: 3,
-        }];
+        return [
+          200,
+          {
+            chunks: [{ stream: "stderr", data: encode("err\n") }],
+            afterSeq: 2,
+            closed: true,
+            exitCode: 3,
+          },
+        ];
       }
       return [200, { stopped: true }];
     });
@@ -119,7 +122,10 @@ for (const [name, argv] of relays) {
     });
     assert.deepEqual(
       posts.filter(([path]) => path === "/mcp-read").map(([, value]) => value),
-      [{ id: "p1", afterSeq: null }, { id: "p1", afterSeq: 1 }],
+      [
+        { id: "p1", afterSeq: null },
+        { id: "p1", afterSeq: 1 },
+      ],
     );
     // The stop that follows the close may race the exit; it is never sent twice.
     assert.ok(posts.filter(([path]) => path === "/mcp-stop").length <= 1);
@@ -127,7 +133,7 @@ for (const [name, argv] of relays) {
 
   test(`${name} relay stops the target when native closes stdin`, async (t) => {
     let stopped;
-    const stop = new Promise((resolve) => stopped = resolve);
+    const stop = new Promise((resolve) => (stopped = resolve));
     const { context, posts } = await bridge(t, async (path) => {
       if (path === "/mcp-start") return [200, { id: "p2" }];
       if (path === "/mcp-stop") {
@@ -151,7 +157,7 @@ for (const [name, argv] of relays) {
 
   test(`${name} relay ends the target on SIGTERM`, async (t) => {
     let reading;
-    const read = new Promise((resolve) => reading = resolve);
+    const read = new Promise((resolve) => (reading = resolve));
     const { context, posts } = await bridge(t, async (path) => {
       if (path === "/mcp-start") return [200, { id: "p3" }];
       if (path === "/mcp-read") {
@@ -164,17 +170,14 @@ for (const [name, argv] of relays) {
     await read;
     relay.child.kill("SIGTERM");
     assert.equal(await relay.exit, 143);
-    assert.deepEqual(posts.find(([path]) => path === "/mcp-stop"), [
-      "/mcp-stop",
-      { id: "p3" },
-    ]);
+    assert.deepEqual(
+      posts.find(([path]) => path === "/mcp-stop"),
+      ["/mcp-stop", { id: "p3" }],
+    );
   });
 
   test(`${name} relay reports a refused start`, async (t) => {
-    const { context } = await bridge(
-      t,
-      async () => [400, { deny: "Invalid execution call" }],
-    );
+    const { context } = await bridge(t, async () => [400, { deny: "Invalid execution call" }]);
     const relay = start(argv, context);
     assert.equal(await relay.exit, 1);
     assert.match(
@@ -200,10 +203,13 @@ for (const [name, argv] of waiters) {
     });
     const waiter = wait(argv, context, "job-1");
     assert.equal(await waiter.exit, 3);
-    assert.deepEqual(posts.map(([, call]) => call), [
-      { id: "job-1", afterSeq: null },
-      { id: "job-1", afterSeq: 4 },
-    ]);
+    assert.deepEqual(
+      posts.map(([, call]) => call),
+      [
+        { id: "job-1", afterSeq: null },
+        { id: "job-1", afterSeq: 4 },
+      ],
+    );
   });
 
   test(`${name} task waiter outlives a stopped command`, async (t) => {

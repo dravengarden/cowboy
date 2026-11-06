@@ -6,7 +6,10 @@
     "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     "utf8Bytes": 3
   },
-  "position": { "row": 0, "column": 1 },
+  "position": {
+    "row": 0,
+    "column": 1
+  },
   "query": "definition",
   "state": "retained",
   "locations": [
@@ -16,8 +19,14 @@
         "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         "utf8Bytes": 3
       },
-      "start": { "row": 0, "column": 0 },
-      "end": { "row": 0, "column": 3 }
+      "start": {
+        "row": 0,
+        "column": 0
+      },
+      "end": {
+        "row": 0,
+        "column": 3
+      }
     }
   ],
   "destinations": [],

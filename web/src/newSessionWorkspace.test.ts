@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace.ts";
 import { continuationOf, resolveActiveSession } from "./sessionSelection.ts";
 import type { SessionMeta } from "./protocol.ts";

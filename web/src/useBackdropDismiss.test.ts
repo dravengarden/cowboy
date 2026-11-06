@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { shouldBlockBackdropClick } from "./backdropDismiss.ts";
 
 const guard = { x: 320, y: 640, expiresAt: 1_700 };

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../tools/test-assert.ts";
 import type { Attachment } from "../attachments.ts";
 import { getDraft, setDraft, subscribeDraftRestore } from "../draftStore.ts";
 import { handOffSettledAttachments } from "./draftHandOff.ts";

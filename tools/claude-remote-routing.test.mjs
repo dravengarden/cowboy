@@ -41,9 +41,7 @@ test("unknown file mutations preserve read authority and never replay on cold lo
   for (const entry of cases) {
     for (const applied of [false, true]) {
       await t.test(`${entry.name}: effect ${applied ? "applied" : "not admitted"}`, async (t) => {
-        const directory = await mkdtemp(
-          join(tmpdir(), "cowboy-unknown-write-"),
-        );
+        const directory = await mkdtemp(join(tmpdir(), "cowboy-unknown-write-"));
         t.after(() => rm(directory, { recursive: true, force: true }));
         const state = join(directory, "state.json");
         const binding = {
@@ -74,30 +72,19 @@ test("unknown file mutations preserve read authority and never replay on cold lo
             }
             if (loseReply) {
               this.closed = true;
-              throw new Error(
-                "Execution unavailable or result unknown; no replay",
-              );
+              throw new Error("Execution unavailable or result unknown; no replay");
             }
             return {};
           },
         };
         const tools = new WorkspaceTools(connection, binding, state);
         await tools.load();
-        assert.equal(
-          (await tools.nativeCall("Read", { file_path: "file" })).deny,
-          undefined,
-        );
+        assert.equal((await tools.nativeCall("Read", { file_path: "file" })).deny, undefined);
         const stamp = tools.state.reads["/target/file"];
-        assert.match(
-          (await tools.nativeCall(entry.name, entry.args)).deny,
-          /result unknown/,
-        );
+        assert.match((await tools.nativeCall(entry.name, entry.args)).deny, /result unknown/);
         const observed = Buffer.from(bytes);
         assert.equal(submitted, 1);
-        assert.equal(
-          JSON.parse(await readFile(state)).reads["/target/file"],
-          stamp,
-        );
+        assert.equal(JSON.parse(await readFile(state)).reads["/target/file"], stamp);
         connection.closed = false;
         loseReply = false;
         const resumed = new WorkspaceTools(connection, binding, state);
@@ -112,10 +99,7 @@ test("unknown file mutations preserve read authority and never replay on cold lo
           assert.equal(submitted, 1);
           assert.deepEqual(bytes, observed);
         }
-        assert.equal(
-          (await resumed.nativeCall("Read", { file_path: "file" })).deny,
-          undefined,
-        );
+        assert.equal((await resumed.nativeCall("Read", { file_path: "file" })).deny, undefined);
         assert.equal(submitted, 1);
         if (applied && entry.name === "NotebookEdit") {
           assert.equal(JSON.parse(bytes).cells.length, 1);
@@ -165,10 +149,7 @@ test("lost start acknowledgement retains the original job for recovery without r
   assert.deepEqual(await interrupt, [id]);
   assert.match((await running).deny, /result unknown/);
   assert.ok(live.has(id));
-  assert.equal(
-    JSON.parse(await readFile(state, "utf8")).jobs[id].cancelRequested,
-    true,
-  );
+  assert.equal(JSON.parse(await readFile(state, "utf8")).jobs[id].cancelRequested, true);
 
   const recovered = {
     async call(method, params) {
@@ -229,10 +210,7 @@ test("TaskStop intent survives a lost terminate response and cold resume", async
   await tools.save();
   const stop = await tools.nativeCall("TaskStop", { task_id: "background" });
   assert.match(stop.deny, /unavailable/);
-  assert.equal(
-    JSON.parse(await readFile(state)).jobs.background.cancelRequested,
-    true,
-  );
+  assert.equal(JSON.parse(await readFile(state)).jobs.background.cancelRequested, true);
   assert.equal(live, true);
   const recovered = {
     async call(method, params) {
@@ -253,7 +231,10 @@ test("TaskStop intent survives a lost terminate response and cold resume", async
   assert.equal(resumed.state.jobs.background.cancelRequested, false);
   assert.equal(resumed.state.jobs.background.afterSeq, 7);
   assert.equal(resumed.state.jobs.peer.cancelRequested, undefined);
-  assert.equal(calls.some((call) => call.method === "process/start"), false);
+  assert.equal(
+    calls.some((call) => call.method === "process/start"),
+    false,
+  );
 });
 
 test("timed out private utility retains cancellation across transport loss", async (t) => {
@@ -286,10 +267,7 @@ test("timed out private utility retains cancellation across transport loss", asy
   await tools.load();
   await assert.rejects(tools.command(["utility"], 0), /unavailable/);
   assert.ok(started);
-  assert.equal(
-    JSON.parse(await readFile(state)).jobs[started].cancelRequested,
-    true,
-  );
+  assert.equal(JSON.parse(await readFile(state)).jobs[started].cancelRequested, true);
   const recovered = {
     async call(method, params) {
       calls.push(method);
@@ -309,10 +287,14 @@ test("TaskStop reports pending until the target confirms closure and retains its
   const directory = await mkdtemp(join(tmpdir(), "cowboy-pending-stop-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const connection = {};
-  const tools = new WorkspaceTools(connection, {
-    workspace: { cwd: "/target with space" },
-    environment: { id: "pending-stop-fixture" },
-  }, join(directory, "state.json"));
+  const tools = new WorkspaceTools(
+    connection,
+    {
+      workspace: { cwd: "/target with space" },
+      environment: { id: "pending-stop-fixture" },
+    },
+    join(directory, "state.json"),
+  );
   await tools.load();
   tools.state.jobs.pending = { afterSeq: null, exited: false };
   t.after(() => clearTimeout(tools.cancelTimer));
@@ -336,10 +318,7 @@ test("TaskStop reports pending until the target confirms closure and retains its
   try {
     Date.now = () => clock;
     const stop = await tools.nativeCall("TaskStop", { task_id: "pending" });
-    assert.equal(
-      stop.result.message,
-      "Termination requested; inspect its output handle.",
-    );
+    assert.equal(stop.result.message, "Termination requested; inspect its output handle.");
     assert.equal(stop.result.task_id, "pending");
     assert.equal(tools.state.jobs.pending.closed, false);
     assert.equal(clock, 10001); // One non-consuming cancellation observation.
@@ -351,10 +330,7 @@ test("TaskStop reports pending until the target confirms closure and retains its
     assert.match(output.result.file.content, /Exit code: 143/);
     assert.equal(tools.state.jobs.pending.closed, true);
     assert.equal(tools.state.jobs.pending.cancelRequested, false);
-    assert.equal(
-      methods.filter((method) => method === "process/terminate").length,
-      1,
-    );
+    assert.equal(methods.filter((method) => method === "process/terminate").length, 1);
     assert.equal(methods.includes("process/start"), false);
   } finally {
     Date.now = original;
@@ -382,10 +358,14 @@ test("unknown admission and delayed exit retain cancellation until confirmed", a
       };
     },
   };
-  const tools = new WorkspaceTools(connection, {
-    workspace: { cwd: "/target" },
-    environment: { id: "admission-fixture" },
-  }, join(directory, "state.json"));
+  const tools = new WorkspaceTools(
+    connection,
+    {
+      workspace: { cwd: "/target" },
+      environment: { id: "admission-fixture" },
+    },
+    join(directory, "state.json"),
+  );
   t.after(() => clearTimeout(tools.cancelTimer));
   tools.state.jobs.original = {
     afterSeq: null,
@@ -410,12 +390,16 @@ test("failed cancellation persistence does not send terminate or lose prior stat
   t.after(() => rm(directory, { recursive: true, force: true }));
   const state = join(directory, "state.json");
   const calls = [];
-  const tools = new WorkspaceTools({
-    call: async (method) => calls.push(method),
-  }, {
-    workspace: { cwd: "/target" },
-    environment: { id: "save-fixture" },
-  }, state);
+  const tools = new WorkspaceTools(
+    {
+      call: async (method) => calls.push(method),
+    },
+    {
+      workspace: { cwd: "/target" },
+      environment: { id: "save-fixture" },
+    },
+    state,
+  );
   tools.state.jobs.original = { afterSeq: null, exited: false };
   tools.foreground.add("original");
   await mkdir(state);
@@ -439,10 +423,14 @@ test("in-flight output commits and rollback preserve newer cancellation intent",
       },
     };
     const state = join(directory, "state.json");
-    const tools = new WorkspaceTools(connection, {
-      workspace: { cwd: "/target" },
-      environment: { id: "output-fixture" },
-    }, state);
+    const tools = new WorkspaceTools(
+      connection,
+      {
+        workspace: { cwd: "/target" },
+        environment: { id: "output-fixture" },
+      },
+      state,
+    );
     tools.state.jobs.original = { afterSeq: null, exited: false };
     tools.foreground.add("original");
     const reading = tools.collectOutput("original", 0);
@@ -468,9 +456,13 @@ test("in-flight output commits and rollback preserve newer cancellation intent",
 const notLink = { ok: true, status: 200, text: '{"symlink":false}' };
 
 let fixtureId = 0;
-async function routingFixture(
-  { memory = false, agents = {}, entries = [], omitted = [], taskWait } = {},
-) {
+async function routingFixture({
+  memory = false,
+  agents = {},
+  entries = [],
+  omitted = [],
+  taskWait,
+} = {}) {
   // Each loaded native Mod has private state. Give every fixture its own module.
   const { register } = await import(
     `../plugins/claude-code/runtime/context-mod.js?fixture=${++fixtureId}`
@@ -479,7 +471,7 @@ async function routingFixture(
   register((name, matcher, handler) => {
     const hook = { handler: handler ?? matcher };
     hooks.set(name, hook);
-    return { catch: (fallback) => hook.fallback = fallback };
+    return { catch: (fallback) => (hook.fallback = fallback) };
   });
   const context = {
     schema: 1,
@@ -497,11 +489,13 @@ async function routingFixture(
     hooks: { commands: [], tool: {} },
     ...(taskWait ? { taskWait } : {}),
     mcp: {
-      servers: [{
-        name: "targetdb",
-        prefix: "mcp__targetdb__",
-        placement: "target",
-      }],
+      servers: [
+        {
+          name: "targetdb",
+          prefix: "mcp__targetdb__",
+          placement: "target",
+        },
+      ],
       omitted: [],
     },
     skills: {
@@ -561,8 +555,7 @@ test("every remote tool crosses the authenticated bridge without native executio
   assert.deepEqual(Object.keys(inputs).sort(), [...NATIVE_TOOLS].sort());
   for (const tool of NATIVE_TOOLS) {
     await t.test(tool, async () => {
-      const { hook, api, calls, native, next, context } =
-        await routingFixture();
+      const { hook, api, calls, native, next, context } = await routingFixture();
       const response = { result: { fixture: tool } };
       api.http.fetch = async (url, options) => {
         if (url.endsWith("/link")) return notLink;
@@ -581,10 +574,7 @@ test("every remote tool crosses the authenticated bridge without native executio
       assert.equal(calls.length, 1);
       assert.equal(calls[0].url, "http://cowboy-execution/tool");
       assert.equal(calls[0].options.socketPath, context.socketPath);
-      assert.equal(
-        calls[0].options.headers.Authorization,
-        "Bearer " + context.bridgeToken,
-      );
+      assert.equal(calls[0].options.headers.Authorization, "Bearer " + context.bridgeToken);
       assert.deepEqual(JSON.parse(calls[0].options.body), {
         id: "original-call",
         tool,
@@ -607,22 +597,27 @@ test("pending mutations observe the same identity without another tool submissio
     return {
       ok: true,
       status: pending ? 202 : 200,
-      text: JSON.stringify(
-        pending ? { pending: "write-once" } : { result: {} },
-      ),
+      text: JSON.stringify(pending ? { pending: "write-once" } : { result: {} }),
     };
   };
-  await hook.handler(api, {
-    tool: "Write",
-    tool_use_id: "write-once",
-    file_path: "target.txt",
-    content: "once",
-  }, next);
-  assert.deepEqual(calls.map(({ url }) => url), [
-    "http://cowboy-execution/tool",
-    "http://cowboy-execution/result",
-    "http://cowboy-execution/result",
-  ]);
+  await hook.handler(
+    api,
+    {
+      tool: "Write",
+      tool_use_id: "write-once",
+      file_path: "target.txt",
+      content: "once",
+    },
+    next,
+  );
+  assert.deepEqual(
+    calls.map(({ url }) => url),
+    [
+      "http://cowboy-execution/tool",
+      "http://cowboy-execution/result",
+      "http://cowboy-execution/result",
+    ],
+  );
   for (const call of calls.slice(1)) {
     assert.deepEqual(JSON.parse(call.options.body), { id: "write-once" });
   }
@@ -630,20 +625,24 @@ test("pending mutations observe the same identity without another tool submissio
 });
 
 test("bridge failures deny instead of invoking the native fallback", async (t) => {
-  for (
-    const [name, fetch] of [
-      ["HTTP failure", () => ({ ok: false, status: 503 })],
-      ["broken socket", () => {
+  for (const [name, fetch] of [
+    ["HTTP failure", () => ({ ok: false, status: 503 })],
+    [
+      "broken socket",
+      () => {
         throw new Error("socket closed");
-      }],
-      ["invalid JSON", () => ({ ok: true, status: 200, text: "broken" })],
-      ["foreign identity", () => ({
+      },
+    ],
+    ["invalid JSON", () => ({ ok: true, status: 200, text: "broken" })],
+    [
+      "foreign identity",
+      () => ({
         ok: true,
         status: 202,
         text: '{"pending":"another-call"}',
-      })],
-    ]
-  ) {
+      }),
+    ],
+  ]) {
     await t.test(name, async () => {
       const { hook, api, native, next } = await routingFixture();
       api.http.fetch = fetch;
@@ -666,15 +665,9 @@ test("bridge failures deny instead of invoking the native fallback", async (t) =
 test("only questions, todos and enrolled exact memory tools pass through", async () => {
   for (const memory of [false, true]) {
     const { hook, api, calls, native, next } = await routingFixture({ memory });
-    const memoryTools = [
-      "search",
-      "get",
-      "put",
-      "forget",
-      "read",
-      "execute",
-      "receipt",
-    ].map((name) => "mcp__matrix__memory_" + name);
+    const memoryTools = ["search", "get", "put", "forget", "read", "execute", "receipt"].map(
+      (name) => "mcp__matrix__memory_" + name,
+    );
     const allowed = [
       "AskUserQuestion",
       "TaskCreate",
@@ -693,20 +686,15 @@ test("only questions, todos and enrolled exact memory tools pass through", async
       });
     }
     assert.equal(native.length, allowed.length);
-    for (
-      const tool of [
-        "FutureNativeTool",
-        "mcp__foreign__read",
-        "mcp__targetdbx__query",
-        "mcp__matrix__memory_get_extra",
-        "mcp__matrix__memory_execute_extra",
-        ...(memory ? [] : memoryTools),
-      ]
-    ) {
-      assert.equal(
-        typeof (await hook.handler(api, { tool }, next)).deny,
-        "string",
-      );
+    for (const tool of [
+      "FutureNativeTool",
+      "mcp__foreign__read",
+      "mcp__targetdbx__query",
+      "mcp__matrix__memory_get_extra",
+      "mcp__matrix__memory_execute_extra",
+      ...(memory ? [] : memoryTools),
+    ]) {
+      assert.equal(typeof (await hook.handler(api, { tool }, next)).deny, "string");
     }
     assert.equal(native.length, allowed.length);
     assert.equal(calls.length, 0);
@@ -714,34 +702,32 @@ test("only questions, todos and enrolled exact memory tools pass through", async
 });
 
 test("WebFetch of the machine's own names is refused, other URLs run natively", async () => {
-  const { targetLoopback } = await import(
-    "../plugins/claude-code/runtime/context-mod.js"
-  );
-  for (
-    const url of [
-      "http://localhost:3000/",
-      "https://app.localhost/x",
-      "http://127.0.0.1:8080",
-      "http://127.1.2.3/",
-      "http://[::1]:5173/",
-      "http://0.0.0.0:9000/",
-    ]
-  ) assert.equal(targetLoopback(url), true, url);
-  for (
-    const url of ["https://example.com/", "http://10.0.0.5/", "not a url"]
-  ) assert.equal(targetLoopback(url), false, url);
+  const { targetLoopback } = await import("../plugins/claude-code/runtime/context-mod.js");
+  for (const url of [
+    "http://localhost:3000/",
+    "https://app.localhost/x",
+    "http://127.0.0.1:8080",
+    "http://127.1.2.3/",
+    "http://[::1]:5173/",
+    "http://0.0.0.0:9000/",
+  ])
+    assert.equal(targetLoopback(url), true, url);
+  for (const url of ["https://example.com/", "http://10.0.0.5/", "not a url"])
+    assert.equal(targetLoopback(url), false, url);
 });
 
 test("Skill names the target's skills natively and refuses ones that cannot work here", async () => {
   const { hook, api, native } = await routingFixture({
-    entries: [{
-      name: "proj",
-      kind: "skill",
-      scope: "project",
-      mirrorDirectory: "/stage/target-skills/skills/proj",
-      targetDirectory: "/target/.claude/skills/proj",
-      allowedTools: [],
-    }],
+    entries: [
+      {
+        name: "proj",
+        kind: "skill",
+        scope: "project",
+        mirrorDirectory: "/stage/target-skills/skills/proj",
+        targetDirectory: "/target/.claude/skills/proj",
+        allowedTools: [],
+      },
+    ],
     omitted: [{ name: "hooked", reason: "its hooks would run here" }],
   });
   const next = (event) => {
@@ -754,11 +740,7 @@ test("Skill names the target's skills natively and refuses ones that cannot work
   // Native keeps the skill's messages only with its own, unchanged result;
   // names are projected as messages are appended.
   assert.deepEqual(
-    await hook.handler(
-      api,
-      { tool: "Skill", skill: "proj", tool_use_id: "t1" },
-      next,
-    ),
+    await hook.handler(api, { tool: "Skill", skill: "proj", tool_use_id: "t1" }, next),
     {
       result: { success: true, commandName: "cowboy-target:proj" },
       text: "Launching skill: cowboy-target:proj",
@@ -776,14 +758,16 @@ test("Skill names the target's skills natively and refuses ones that cannot work
 
 test("Skill calls of one skill take turns, so its expansion has one call", async () => {
   const { hook, api } = await routingFixture({
-    entries: [{
-      name: "proj",
-      kind: "skill",
-      scope: "project",
-      mirrorDirectory: "/stage/target-skills/skills/proj",
-      targetDirectory: "/target/.claude/skills/proj",
-      allowedTools: [],
-    }],
+    entries: [
+      {
+        name: "proj",
+        kind: "skill",
+        scope: "project",
+        mirrorDirectory: "/stage/target-skills/skills/proj",
+        targetDirectory: "/target/.claude/skills/proj",
+        allowedTools: [],
+      },
+    ],
   });
   const started = [];
   const finish = Promise.withResolvers();
@@ -792,16 +776,8 @@ test("Skill calls of one skill take turns, so its expansion has one call", async
     if (started.length === 1) await finish.promise;
     return { result: { success: true, commandName: event.skill } };
   };
-  const first = hook.handler(
-    api,
-    { tool: "Skill", skill: "proj", agentId: "a1" },
-    next,
-  );
-  const second = hook.handler(
-    api,
-    { tool: "Skill", skill: "proj", agentId: "a2" },
-    next,
-  );
+  const first = hook.handler(api, { tool: "Skill", skill: "proj", agentId: "a1" }, next);
+  const second = hook.handler(api, { tool: "Skill", skill: "proj", agentId: "a2" }, next);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(started, ["a1"]);
   finish.resolve();
@@ -812,14 +788,16 @@ test("Skill calls of one skill take turns, so its expansion has one call", async
 test("a skill's commands run on the target; one left running fails the skill", async () => {
   const marker = "cowboy" + "c".repeat(32);
   const { hooks, api, calls } = await routingFixture({
-    entries: [{
-      name: "proj",
-      kind: "skill",
-      scope: "project",
-      mirrorDirectory: "/stage/target-skills/skills/proj",
-      targetDirectory: "/target/.claude/skills/proj",
-      allowedTools: [],
-    }],
+    entries: [
+      {
+        name: "proj",
+        kind: "skill",
+        scope: "project",
+        mirrorDirectory: "/stage/target-skills/skills/proj",
+        targetDirectory: "/target/.claude/skills/proj",
+        allowedTools: [],
+      },
+    ],
   });
   const replies = [
     { result: { stdout: "out", stderr: "" } },
@@ -834,21 +812,27 @@ test("a skill's commands run on the target; one left running fails the skill", a
   const prompt = hooks.get("skill.prompt").handler;
   const next = (event) => ({ text: event.text });
   assert.deepEqual(
-    await prompt(api, {
-      skill: "cowboy-target:proj",
-      text:
-        `Base directory for this skill: /stage/target-skills/skills/proj\n\nA !${marker}\`echo out\``,
-    }, next),
+    await prompt(
+      api,
+      {
+        skill: "cowboy-target:proj",
+        text: `Base directory for this skill: /stage/target-skills/skills/proj\n\nA !${marker}\`echo out\``,
+      },
+      next,
+    ),
     {
-      text:
-        "Base directory for this skill: /target/.claude/skills/proj\n\nA out",
+      text: "Base directory for this skill: /target/.claude/skills/proj\n\nA out",
     },
   );
   assert.deepEqual(calls[0].body.input, { command: "echo out" });
-  const failed = await prompt(api, {
-    skill: "cowboy-target:proj",
-    text: `B !${marker}\`yes\``,
-  }, next);
+  const failed = await prompt(
+    api,
+    {
+      skill: "cowboy-target:proj",
+      text: `B !${marker}\`yes\``,
+    },
+    next,
+  );
   assert.match(failed.text, /^Shell command failed for pattern "!`yes`"/);
   assert.ok(calls.some((call) => call.url.endsWith("/cancel")));
 });
@@ -856,13 +840,10 @@ test("a skill's commands run on the target; one left running fails the skill", a
 test("target tools keep native's descriptions", async () => {
   const { hooks, api } = await routingFixture();
   const describe = hooks.get("tool.describe").handler;
-  for (
-    const tool of ["Bash", "Read", "Write", "Edit", "NotebookEdit", "TaskStop"]
-  ) {
-    assert.deepEqual(
-      await describe(api, { tool }, (event) => ({ described: event.tool })),
-      { described: tool },
-    );
+  for (const tool of ["Bash", "Read", "Write", "Edit", "NotebookEdit", "TaskStop"]) {
+    assert.deepEqual(await describe(api, { tool }, (event) => ({ described: event.tool })), {
+      described: tool,
+    });
   }
 });
 
@@ -880,35 +861,36 @@ test("a background command's waiter is the agent's own call, the main session's 
     api.http.fetch = async (url) =>
       url.endsWith("/tool")
         ? {
-          ok: true,
-          status: 200,
-          text: JSON.stringify({
-            result: {
-              stdout:
-                "Command running in background with ID: job-1. You will be notified when it completes. ",
-            },
-            task: { id: "job-1", command: "make long" },
-          }),
-        }
+            ok: true,
+            status: 200,
+            text: JSON.stringify({
+              result: {
+                stdout:
+                  "Command running in background with ID: job-1. You will be notified when it completes. ",
+              },
+              task: { id: "job-1", command: "make long" },
+            }),
+          }
         : { ok: true, status: 200, text: "{}" };
     const nextCalls = [];
     const next = async (event) => {
       nextCalls.push(event);
       return { result: { backgroundTaskId: "bagent" } };
     };
-    const result = await hook.handler(api, {
-      tool: "Bash",
-      tool_use_id: "toolu_1",
-      command: "make long",
-      run_in_background: true,
-      timeout: 5000,
-      description: "long",
-      ...(agentId ? { agentId } : {}),
-    }, next);
-    assert.match(
-      result.result.stdout,
-      /You will be notified when it completes/,
+    const result = await hook.handler(
+      api,
+      {
+        tool: "Bash",
+        tool_use_id: "toolu_1",
+        command: "make long",
+        run_in_background: true,
+        timeout: 5000,
+        description: "long",
+        ...(agentId ? { agentId } : {}),
+      },
+      next,
     );
+    assert.match(result.result.stdout, /You will be notified when it completes/);
     const waiter = {
       command: "'/node' '/stage/task-wait.mjs' job-1",
       run_in_background: true,
@@ -916,12 +898,14 @@ test("a background command's waiter is the agent's own call, the main session's 
     };
     if (agentId) {
       assert.equal(pluginCalls.length, 0);
-      assert.deepEqual(nextCalls, [{
-        tool: "Bash",
-        tool_use_id: "toolu_1",
-        agentId,
-        ...waiter,
-      }]);
+      assert.deepEqual(nextCalls, [
+        {
+          tool: "Bash",
+          tool_use_id: "toolu_1",
+          agentId,
+          ...waiter,
+        },
+      ]);
     } else {
       assert.equal(nextCalls.length, 0);
       assert.deepEqual(pluginCalls, [{ tool: "Bash", ...waiter }]);

@@ -1,14 +1,6 @@
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { test } from "bun:test";
 import {
   assertPublicSiteContent,
@@ -18,8 +10,7 @@ import {
   type SitePlugin,
 } from "./build.ts";
 
-const ROOT = decodeURIComponent(new URL("..", import.meta.url).pathname)
-  .replace(/\/$/u, "");
+const ROOT = decodeURIComponent(new URL("..", import.meta.url).pathname).replace(/\/$/u, "");
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -27,9 +18,7 @@ function assert(condition: unknown, message: string): asserts condition {
 
 function assertEquals<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
-    throw new Error(
-      `${message}: expected ${String(expected)}, got ${String(actual)}`,
-    );
+    throw new Error(`${message}: expected ${String(expected)}, got ${String(actual)}`);
   }
 }
 
@@ -43,28 +32,19 @@ test("website catalog follows every first-party Plugin manifest", async () => {
   }> = [];
 
   for (const source of ["plugins", "examples/telemetry"]) {
-    for (
-      const entry of await readdir(`${ROOT}/${source}`, { withFileTypes: true })
-    ) {
+    for (const entry of await readdir(`${ROOT}/${source}`, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       try {
-        manifests.push(JSON.parse(
-          await readFile(
-            `${ROOT}/${source}/${entry.name}/plugin.json`,
-            "utf8",
-          ),
-        ));
+        manifests.push(
+          JSON.parse(await readFile(`${ROOT}/${source}/${entry.name}/plugin.json`, "utf8")),
+        );
       } catch (error) {
         if (!((error as { code?: string }).code === "ENOENT")) throw error;
       }
     }
   }
 
-  assertEquals(
-    plugins.length,
-    manifests.length,
-    "every first-party Plugin should appear",
-  );
+  assertEquals(plugins.length, manifests.length, "every first-party Plugin should appear");
   assertEquals(
     plugins.filter((plugin) => plugin.kind === "agent_provider").length,
     manifests.filter((manifest) => manifest.kind === "agent_provider").length,
@@ -72,14 +52,12 @@ test("website catalog follows every first-party Plugin manifest", async () => {
   );
   assertEquals(
     plugins.filter((plugin) => plugin.kind === "code_intelligence").length,
-    manifests.filter((manifest) => manifest.kind === "code_intelligence")
-      .length,
+    manifests.filter((manifest) => manifest.kind === "code_intelligence").length,
     "code-intelligence Plugin count",
   );
   assertEquals(
     plugins.filter((plugin) => plugin.kind === "telemetry_backend").length,
-    manifests.filter((manifest) => manifest.kind === "telemetry_backend")
-      .length,
+    manifests.filter((manifest) => manifest.kind === "telemetry_backend").length,
     "telemetry Plugin count",
   );
 
@@ -109,8 +87,14 @@ test("website catalog follows every first-party Plugin manifest", async () => {
   assertEquals(codex.accentDark, "#F0ECF8", "Codex dark website accent");
 
   assertEquals(
-    [...plugins].map((plugin) => plugin.id).sort().join(","),
-    manifests.map((manifest) => manifest.id).sort().join(","),
+    [...plugins]
+      .map((plugin) => plugin.id)
+      .sort()
+      .join(","),
+    manifests
+      .map((manifest) => manifest.id)
+      .sort()
+      .join(","),
     "website and source Plugin identities",
   );
 
@@ -127,30 +111,15 @@ test("website catalog follows every first-party Plugin manifest", async () => {
 });
 
 test("website telemetry has its own category and canonical source link", async () => {
-  const plugin = (await loadSitePlugins(ROOT)).find((plugin) =>
-    plugin.id === "victoria"
-  );
+  const plugin = (await loadSitePlugins(ROOT)).find((plugin) => plugin.id === "victoria");
   assert(plugin, "Victoria must appear in the public catalog");
   assertEquals(plugin.kind, "telemetry_backend", "Victoria capability");
   assertEquals(plugin.kindLabel, "Telemetry", "Victoria category label");
-  assertEquals(
-    plugin.sourcePath,
-    "examples/telemetry/victoria",
-    "canonical example source",
-  );
+  assertEquals(plugin.sourcePath, "examples/telemetry/victoria", "canonical example source");
   const html = renderPluginCards([plugin]);
-  assert(
-    html.includes('data-kind="telemetry_backend"'),
-    "telemetry filter identity",
-  );
-  assert(
-    html.includes('data-i18n="plugins.kind.telemetry"'),
-    "telemetry translation key",
-  );
-  assert(
-    !html.includes('data-i18n="plugins.kind.code"'),
-    "telemetry is not code intelligence",
-  );
+  assert(html.includes('data-kind="telemetry_backend"'), "telemetry filter identity");
+  assert(html.includes('data-i18n="plugins.kind.telemetry"'), "telemetry translation key");
+  assert(!html.includes('data-i18n="plugins.kind.code"'), "telemetry is not code intelligence");
   assert(
     html.includes(
       'href="https://github.com/dravengarden/cowboy/tree/main/examples/telemetry/victoria"',
@@ -158,8 +127,7 @@ test("website telemetry has its own category and canonical source link", async (
     "card links directly to its actual source",
   );
   assert(
-    html.includes("Opt-in OTLP export") &&
-      html.includes("rotating files by default"),
+    html.includes("Opt-in OTLP export") && html.includes("rotating files by default"),
     "external export stays opt-in and diagnostics default to local files",
   );
   for (const backend of ["VictoriaLogs", "VictoriaMetrics", "VictoriaTraces"]) {
@@ -172,40 +140,29 @@ test("website explains telemetry activation, routing, and privacy", async () => 
   const start = html.indexOf('<aside class="telemetry-guide');
   assert(start >= 0, "telemetry has a discoverable explanation");
   const guide = html.slice(start, html.indexOf("</aside>", start));
-  for (
-    const phrase of [
-      'id="telemetry"',
-      "private JSONL files under /tmp",
-      "8 MiB per file, up to 8 files",
-      "VictoriaLogs",
-      "VictoriaMetrics",
-      "VictoriaTraces",
-      "exact version and digest",
-      "private telemetry.json",
-      "Installation alone sends nothing",
-      "standard OTLP/HTTP protobuf",
-      "does not install the three database services",
-      "Each signal can be disabled independently",
-      "older local files are not replayed",
-      "examples/telemetry/victoria/README.md",
-    ]
-  ) {
-    assert(
-      guide.includes(phrase),
-      `telemetry explanation must include ${phrase}`,
-    );
+  for (const phrase of [
+    'id="telemetry"',
+    "private JSONL files under /tmp",
+    "8 MiB per file, up to 8 files",
+    "VictoriaLogs",
+    "VictoriaMetrics",
+    "VictoriaTraces",
+    "exact version and digest",
+    "private telemetry.json",
+    "Installation alone sends nothing",
+    "standard OTLP/HTTP protobuf",
+    "does not install the three database services",
+    "Each signal can be disabled independently",
+    "older local files are not replayed",
+    "examples/telemetry/victoria/README.md",
+  ]) {
+    assert(guide.includes(phrase), `telemetry explanation must include ${phrase}`);
   }
 });
 
 test("linked Victoria guide uses the real generic installation route", async () => {
-  const guide = await readFile(
-    `${ROOT}/examples/telemetry/victoria/README.md`,
-    "utf8",
-  );
-  const server = await readFile(
-    `${ROOT}/components/server/src/server/routes.rs`,
-    "utf8",
-  );
+  const guide = await readFile(`${ROOT}/examples/telemetry/victoria/README.md`, "utf8");
+  const server = await readFile(`${ROOT}/components/server/src/server/routes.rs`, "utf8");
   assert(
     guide.includes("POST /api/machines/{machine_id}/plugins/victoria`"),
     "document the implemented installation route",
@@ -215,14 +172,12 @@ test("linked Victoria guide uses the real generic installation route", async () 
     "do not send an installation request to the SPA fallback",
   );
   assert(
-    /"\/api\/machines\/\{id\}\/plugins\/\{provider_id\}",\s*post\(api_machine_plugin_install\)/u
-      .test(server),
+    /"\/api\/machines\/\{id\}\/plugins\/\{provider_id\}",\s*post\(api_machine_plugin_install\)/u.test(
+      server,
+    ),
     "documentation must follow the actual Product API",
   );
-  assert(
-    guide.includes("returns HTTP 204"),
-    "HTML fallback is not installation acceptance",
-  );
+  assert(guide.includes("returns HTTP 204"), "HTML fallback is not installation acceptance");
 });
 
 for (const failure of ["duplicate", "unknown kind"] as const) {
@@ -233,21 +188,13 @@ for (const failure of ["duplicate", "unknown kind"] as const) {
       await mkdir(`${temporary}/examples/telemetry/victoria`, {
         recursive: true,
       });
-      const zed = JSON.parse(
-        await readFile(`${ROOT}/plugins/zed/plugin.json`, "utf8"),
-      );
+      const zed = JSON.parse(await readFile(`${ROOT}/plugins/zed/plugin.json`, "utf8"));
       const victoria = JSON.parse(
-        await readFile(
-          `${ROOT}/examples/telemetry/victoria/plugin.json`,
-          "utf8",
-        ),
+        await readFile(`${ROOT}/examples/telemetry/victoria/plugin.json`, "utf8"),
       );
       if (failure === "duplicate") victoria.id = zed.id;
       else victoria.kind = "future_kind";
-      await writeFile(
-        `${temporary}/plugins/zed/plugin.json`,
-        JSON.stringify(zed),
-      );
+      await writeFile(`${temporary}/plugins/zed/plugin.json`, JSON.stringify(zed));
       await writeFile(
         `${temporary}/examples/telemetry/victoria/plugin.json`,
         JSON.stringify(victoria),
@@ -256,11 +203,13 @@ for (const failure of ["duplicate", "unknown kind"] as const) {
       try {
         await loadSitePlugins(temporary);
       } catch (error) {
-        rejected = error instanceof Error && error.message.includes(
-          failure === "duplicate"
-            ? "duplicate website Plugin identity"
-            : "unsupported website Plugin kind",
-        );
+        rejected =
+          error instanceof Error &&
+          error.message.includes(
+            failure === "duplicate"
+              ? "duplicate website Plugin identity"
+              : "unsupported website Plugin kind",
+          );
       }
       assert(rejected, `${failure} must not produce a misleading catalog`);
     } finally {
@@ -270,22 +219,14 @@ for (const failure of ["duplicate", "unknown kind"] as const) {
 }
 
 test("website deployment watches telemetry Plugin updates", async () => {
-  const workflow = await readFile(
-    `${ROOT}/.github/workflows/website.yml`,
-    "utf8",
-  );
-  for (
-    const source of [
-      "plugins/*/plugin.json",
-      "plugins/*/provider.json",
-      "examples/telemetry/*/plugin.json",
-      "examples/telemetry/*/telemetry.json",
-    ]
-  ) {
-    assert(
-      workflow.includes(`- "${source}"`),
-      `Pages must rebuild when ${source} changes`,
-    );
+  const workflow = await readFile(`${ROOT}/.github/workflows/website.yml`, "utf8");
+  for (const source of [
+    "plugins/*/plugin.json",
+    "plugins/*/provider.json",
+    "examples/telemetry/*/plugin.json",
+    "examples/telemetry/*/telemetry.json",
+  ]) {
+    assert(workflow.includes(`- "${source}"`), `Pages must rebuild when ${source} changes`);
   }
 });
 
@@ -310,30 +251,19 @@ test("website Plugin cards escape manifest presentation text", () => {
   };
 
   const html = renderPluginCards([plugin]);
-  assert(
-    !html.includes("Sample <script>"),
-    "raw HTML must not reach Plugin cards",
-  );
-  assert(
-    html.includes("Sample &lt;script&gt;"),
-    "Plugin name should be escaped",
-  );
+  assert(!html.includes("Sample <script>"), "raw HTML must not reach Plugin cards");
+  assert(html.includes("Sample &lt;script&gt;"), "Plugin name should be escaped");
   assert(html.includes("Test &amp; Co."), "Plugin vendor should be escaped");
-  assert(
-    html.includes("Safe &quot;summary&quot;"),
-    "Plugin summary should be escaped",
-  );
+  assert(html.includes("Safe &quot;summary&quot;"), "Plugin summary should be escaped");
 });
 
 test("website privacy guard rejects deployment-specific content", () => {
-  for (
-    const sample of [
-      "/home/example/project",
-      "/mnt/work/project",
-      "10.23.45.67",
-      "owner@example.com",
-    ]
-  ) {
+  for (const sample of [
+    "/home/example/project",
+    "/mnt/work/project",
+    "10.23.45.67",
+    "owner@example.com",
+  ]) {
     let rejected = false;
     try {
       assertPublicSiteContent("test fixture", sample);
@@ -353,10 +283,7 @@ test("repository landing pages use only privacy-safe product artwork", async () 
   const readme = await readFile(ROOT + "/README.md", "utf8");
   const readmeZhCn = await readFile(ROOT + "/README.zh-CN.md", "utf8");
   const contributing = await readFile(ROOT + "/CONTRIBUTING.md", "utf8");
-  const architecture = await readFile(
-    ROOT + "/docs/architecture/multi-machine.svg",
-    "utf8",
-  );
+  const architecture = await readFile(ROOT + "/docs/architecture/multi-machine.svg", "utf8");
 
   assertPublicSiteContent("README.md", readme);
   assertPublicSiteContent("README.zh-CN.md", readmeZhCn);
@@ -381,21 +308,16 @@ test("repository landing pages use only privacy-safe product artwork", async () 
       !readme.includes("docs/screenshots/"),
     "repository landing page should use the abstract public artwork instead of private product captures",
   );
-  for (
-    const asset of [
-      "site/assets/cowboy-readme-mark-v10.svg",
-      "site/assets/cowboy-remote-topology-light-v3.webp",
-      "site/assets/cowboy-remote-topology-dark-v4.webp",
-      "site/assets/cowboy-desktop-surface-light-v2.webp",
-      "site/assets/cowboy-desktop-surface-dark-v3.webp",
-      "site/assets/cowboy-mobile-light-v2.webp",
-      "site/assets/cowboy-mobile-dark-v3.webp",
-    ]
-  ) {
-    assert(
-      readmeZhCn.includes(asset),
-      `Chinese repository landing page should share ${asset}`,
-    );
+  for (const asset of [
+    "site/assets/cowboy-readme-mark-v10.svg",
+    "site/assets/cowboy-remote-topology-light-v3.webp",
+    "site/assets/cowboy-remote-topology-dark-v4.webp",
+    "site/assets/cowboy-desktop-surface-light-v2.webp",
+    "site/assets/cowboy-desktop-surface-dark-v3.webp",
+    "site/assets/cowboy-mobile-light-v2.webp",
+    "site/assets/cowboy-mobile-dark-v3.webp",
+  ]) {
+    assert(readmeZhCn.includes(asset), `Chinese repository landing page should share ${asset}`);
   }
   const productSurfaces = readme.slice(
     readme.indexOf("## Product surfaces"),
@@ -407,33 +329,26 @@ test("repository landing pages use only privacy-safe product artwork", async () 
       !productSurfaces.includes("<table>"),
     "product surfaces should stay readable as a single column on narrow GitHub layouts",
   );
-  for (
-    const section of [
-      "## Why Cowboy",
-      "## Quick start",
-      "## Architecture",
-      "## Plugin ecosystem",
-      "## Safety and ownership",
-      "## Project status",
-      "## Contributing",
-    ]
-  ) {
-    assert(
-      readme.includes(section),
-      `repository landing page should include ${section}`,
-    );
+  for (const section of [
+    "## Why Cowboy",
+    "## Quick start",
+    "## Architecture",
+    "## Plugin ecosystem",
+    "## Safety and ownership",
+    "## Project status",
+    "## Contributing",
+  ]) {
+    assert(readme.includes(section), `repository landing page should include ${section}`);
   }
-  for (
-    const section of [
-      "## 为什么选择 Cowboy",
-      "## 快速开始",
-      "## 架构",
-      "## 插件生态",
-      "## 安全与所有权",
-      "## 项目状态",
-      "## 参与贡献",
-    ]
-  ) {
+  for (const section of [
+    "## 为什么选择 Cowboy",
+    "## 快速开始",
+    "## 架构",
+    "## 插件生态",
+    "## 安全与所有权",
+    "## 项目状态",
+    "## 参与贡献",
+  ]) {
     assert(
       readmeZhCn.includes(section),
       `Chinese repository landing page should include ${section}`,
@@ -457,53 +372,33 @@ test("website build produces a complete self-contained Pages artifact", async ()
     await buildSite(ROOT, output);
     const html = await readFile(`${output}/index.html`, "utf8");
     const notFound = await readFile(`${output}/404.html`, "utf8");
-    const catalog = JSON.parse(
-      await readFile(`${output}/plugins.json`, "utf8"),
-    ) as Array<{ id: string; kind: string; source_url: string }>;
+    const catalog = JSON.parse(await readFile(`${output}/plugins.json`, "utf8")) as Array<{
+      id: string;
+      kind: string;
+      source_url: string;
+    }>;
     const styles = await readFile(`${output}/styles.css`, "utf8");
     const script = await readFile(`${output}/site.js`, "utf8");
 
-    assertEquals(
-      notFound,
-      html,
-      "404 fallback should keep the single-page site usable",
-    );
+    assertEquals(notFound, html, "404 fallback should keep the single-page site usable");
     assertEquals(
       catalog.length,
       (await loadSitePlugins(ROOT)).length,
       "published Plugin catalog count",
     );
     assert(
-      catalog.some((plugin) =>
-        plugin.id === "victoria" && plugin.kind === "telemetry_backend"
-      ),
+      catalog.some((plugin) => plugin.id === "victoria" && plugin.kind === "telemetry_backend"),
       "published JSON must include Victoria as telemetry",
     );
-    assert(
-      html.includes(`All ${catalog.length}</button>`),
-      "all-filter count includes telemetry",
-    );
+    assert(html.includes(`All ${catalog.length}</button>`), "all-filter count includes telemetry");
     assert(
       html.includes('data-filter="telemetry_backend"'),
       "telemetry must have a selectable filter",
     );
-    assert(
-      !/\{\{[A-Z_]+\}\}/u.test(html),
-      "all template placeholders should resolve",
-    );
-    assertEquals(
-      (html.match(/<h1[ >]/gu) ?? []).length,
-      1,
-      "document h1 count",
-    );
-    assert(
-      html.includes('href="#main"'),
-      "document should include a skip link",
-    );
-    assert(
-      html.includes('id="plugin-filter-status"'),
-      "Plugin filter should announce results",
-    );
+    assert(!/\{\{[A-Z_]+\}\}/u.test(html), "all template placeholders should resolve");
+    assertEquals((html.match(/<h1[ >]/gu) ?? []).length, 1, "document h1 count");
+    assert(html.includes('href="#main"'), "document should include a skip link");
+    assert(html.includes('id="plugin-filter-status"'), "Plugin filter should announce results");
     assert(
       html.includes('src="assets/cowboy-hero-devices-light.webp"'),
       "hero should use one privacy-safe Desktop and Phone composition",
@@ -552,12 +447,8 @@ test("website build produces a complete self-contained Pages artifact", async ()
     assert(
       html.includes('class="menu-icon-bars"') &&
         html.includes('class="menu-icon-close"') &&
-        styles.includes(
-          '.nav-toggle[aria-expanded="true"] .menu-icon-close',
-        ) &&
-        styles.includes(
-          '.nav-toggle[aria-expanded="true"] .menu-icon-bars',
-        ) &&
+        styles.includes('.nav-toggle[aria-expanded="true"] .menu-icon-close') &&
+        styles.includes('.nav-toggle[aria-expanded="true"] .menu-icon-bars') &&
         !styles.includes("menu-icon-top") &&
         !styles.includes("menu-icon-bottom"),
       "mobile navigation should swap complete centered menu and close glyphs instead of rotating clipped line fragments",
@@ -586,15 +477,12 @@ test("website build produces a complete self-contained Pages artifact", async ()
       "English should remain the default while the complete site supports Chinese",
     );
     const translationKeys = new Set(
-      [...html.matchAll(
-        /data-i18n(?:-(?:aria-label|alt|content))?="([^"]+)"/gu,
-      )].map((match) => match[1]),
+      [...html.matchAll(/data-i18n(?:-(?:aria-label|alt|content))?="([^"]+)"/gu)].map(
+        (match) => match[1],
+      ),
     );
     for (const key of translationKeys) {
-      assert(
-        script.includes(`"${key}":`),
-        `Chinese translation should cover ${key}`,
-      );
+      assert(script.includes(`"${key}":`), `Chinese translation should cover ${key}`);
     }
     for (const machine of ["01", "02", "03"]) {
       assert(
@@ -640,9 +528,7 @@ test("website build produces a complete self-contained Pages artifact", async ()
     );
     assert(
       html.includes('<article data-demo-machine="Machine 03">') &&
-        html.includes(
-          '<small class="topology-machine-platform">Linux · server</small>',
-        ) &&
+        html.includes('<small class="topology-machine-platform">Linux · server</small>') &&
         html.includes('class="topology-machine-agents"') &&
         !html.includes('data-i18n="topology.connectNext"'),
       "architecture topology should depict three generic macOS and Linux Machines without a fake action",
@@ -667,12 +553,8 @@ test("website build produces a complete self-contained Pages artifact", async ()
     );
     assert(
       (html.match(/class="lifecycle-icon-surface"/gu) ?? []).length === 2 &&
-        html.includes(
-          'class="lifecycle-icon lifecycle-sign" aria-hidden="true"',
-        ) &&
-        html.includes(
-          'class="lifecycle-icon lifecycle-run" aria-hidden="true"',
-        ) &&
+        html.includes('class="lifecycle-icon lifecycle-sign" aria-hidden="true"') &&
+        html.includes('class="lifecycle-icon lifecycle-run" aria-hidden="true"') &&
         styles.includes(".lifecycle-icon > svg") &&
         !styles.includes(".lifecycle-sign::after") &&
         !styles.includes(".lifecycle-run::after"),
@@ -682,9 +564,7 @@ test("website build produces a complete self-contained Pages artifact", async ()
       styles.includes("--codex-accent: #29252f") &&
         styles.includes("--codex-accent: #f0ecf8") &&
         styles.includes("--node-accent: var(--codex-accent)") &&
-        styles.includes(
-          ".control-agent-codex {\n  color: var(--codex-accent);",
-        ) &&
+        styles.includes(".control-agent-codex {\n  color: var(--codex-accent);") &&
         !styles.includes("#4f6bed"),
       "every named Codex surface should use the neutral OpenAI palette instead of blue",
     );
@@ -711,9 +591,7 @@ test("website build produces a complete self-contained Pages artifact", async ()
     );
     assert(
       html.includes("Self-hosted remote Agent IDE") &&
-        html.includes(
-          'One workspace.</span></em><br><span data-i18n="hero.hosted">Self-hosted.',
-        ) &&
+        html.includes('One workspace.</span></em><br><span data-i18n="hero.hosted">Self-hosted.') &&
         html.includes("Self-host Cowboy on your infrastructure") &&
         script.includes('"hero.hosted":') &&
         script.includes('"hero.ownership":'),
@@ -731,17 +609,12 @@ test("website build produces a complete self-contained Pages artifact", async ()
       "the floating return-to-top control should reveal after scrolling and avoid mobile browser chrome",
     );
     assert(
-      html.includes(
-        'href="assets/cowboy-tab-icon-v10.svg" type="image/svg+xml" sizes="any"',
-      ) &&
-        html.includes(
-          'href="assets/cowboy-tab-icon-v10.ico" sizes="16x16 32x32 48x48"',
-        ),
+      html.includes('href="assets/cowboy-tab-icon-v10.svg" type="image/svg+xml" sizes="any"') &&
+        html.includes('href="assets/cowboy-tab-icon-v10.ico" sizes="16x16 32x32 48x48"'),
       "browser tabs use transparent scalable marks with explicit raster fallbacks",
     );
     assert(
-      !html.includes("cowboy-desktop.webp") &&
-        !html.includes("cowboy-ios-agent.webp"),
+      !html.includes("cowboy-desktop.webp") && !html.includes("cowboy-ios-agent.webp"),
       "published HTML should not expose real product captures",
     );
     assert(
@@ -757,35 +630,28 @@ test("website build produces a complete self-contained Pages artifact", async ()
         html.indexOf("document.documentElement.style.backgroundColor") <
           html.indexOf('<link rel="stylesheet"') &&
         script.includes("root.style.backgroundColor = canvas") &&
-        script.includes(
-          'document.body?.style.setProperty("background-color", canvas)',
-        ) &&
+        script.includes('document.body?.style.setProperty("background-color", canvas)') &&
         styles.includes(
           ".site-header {\n    background: var(--canvas);\n    backdrop-filter: none;",
         ),
       "selected theme should color the browser edge before and after first paint",
     );
 
-    for (
-      const asset of [
-        "cowboy-hero-devices-light.webp",
-        "cowboy-brand-mark.png",
-        "cowboy-tab-icon-v10-16.png",
-        "cowboy-tab-icon-v10-32.png",
-        "cowboy-tab-icon-v10.ico",
-        "cowboy-desktop-surface-light.webp",
-        "cowboy-mobile-light.webp",
-      ]
-    ) {
+    for (const asset of [
+      "cowboy-hero-devices-light.webp",
+      "cowboy-brand-mark.png",
+      "cowboy-tab-icon-v10-16.png",
+      "cowboy-tab-icon-v10-32.png",
+      "cowboy-tab-icon-v10.ico",
+      "cowboy-desktop-surface-light.webp",
+      "cowboy-mobile-light.webp",
+    ]) {
       const info = await stat(`${output}/assets/${asset}`);
       assert(info.size < 100_000, `${asset} should remain lightweight`);
     }
 
     for (const plugin of catalog) {
-      assert(
-        html.includes(`data-plugin="${plugin.id}"`),
-        `${plugin.id} card should be rendered`,
-      );
+      assert(html.includes(`data-plugin="${plugin.id}"`), `${plugin.id} card should be rendered`);
       assert(
         html.includes(`href="${plugin.source_url}"`),
         `${plugin.id} source link matches the public catalog`,
@@ -811,8 +677,8 @@ test("website build cannot remove a directory outside the repository", async () 
   try {
     await buildSite(ROOT, "../outside-cowboy-site");
   } catch (error) {
-    rejected = error instanceof Error &&
-      error.message.includes("refusing unsafe website output path");
+    rejected =
+      error instanceof Error && error.message.includes("refusing unsafe website output path");
   }
 
   assert(rejected, "an output path outside the repository should be rejected");

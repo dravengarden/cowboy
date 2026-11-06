@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 import { SHELL_COMMENT_PATTERN } from "./shellLanguage.ts";
 
 function comment(source: string): string | undefined {
