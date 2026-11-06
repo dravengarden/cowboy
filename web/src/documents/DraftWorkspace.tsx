@@ -50,7 +50,7 @@ import {
   FolderPickerShell,
   SESSION_FOLDER_SHEET_HOST,
 } from "../SessionFolderUi";
-import { ConfirmSheet } from "../Sheet";
+import { DraftTrashConfirmation } from "./DraftTrashConfirmation";
 import { DraftDestinationPicker } from "../DraftDestinationPicker";
 import { buildSessionTree, displayedSessionOrder } from "../sessionTree";
 import { setActiveSessionId } from "../controlPlane";
@@ -346,16 +346,15 @@ function DraftWorkspaceBody(
             ),
           ];
           const index = items.indexOf(document.activeElement as HTMLElement);
-          const next =
-            (key === "ArrowDown" || desktop && key === "j")
-              ? index + 1
-              : (key === "ArrowUp" || desktop && key === "k")
-              ? index - 1
-              : key === "Home"
-              ? 0
-              : (key === "End" || desktop && key === "G")
-              ? items.length - 1
-              : -1;
+          const next = (key === "ArrowDown" || desktop && key === "j")
+            ? index + 1
+            : (key === "ArrowUp" || desktop && key === "k")
+            ? index - 1
+            : key === "Home"
+            ? 0
+            : (key === "End" || desktop && key === "G")
+            ? items.length - 1
+            : -1;
           if (next >= 0 && next < items.length) {
             event.preventDefault();
             items[next]?.focus();
@@ -610,7 +609,10 @@ function DraftWorkspaceBody(
             elevation={0}
             sx={{ borderBottom: 1, borderColor: "divider" }}
           >
-            <Toolbar variant="dense" sx={{ gap: 1, minHeight: desktopSize(44) }}>
+            <Toolbar
+              variant="dense"
+              sx={{ gap: 1, minHeight: desktopSize(44) }}
+            >
               {!inlineSidebar && (
                 <IconButton
                   aria-label="Open draft library"
@@ -841,43 +843,25 @@ function DraftWorkspaceBody(
         />
       )}
       {deleting && (
-        <ConfirmSheet
-          open
-          title={`Move “${deleting.title}” to Trash?`}
+        <DraftTrashConfirmation
+          busy={busy}
+          title={deleting.title}
           onClose={() => setDeleting(null)}
-          actions={
-            <>
-              <Button
-                color="inherit"
-                onClick={() => setDeleting(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                color="error"
-                disabled={busy}
-                onClick={() =>
-                  attempt(async () => {
-                    const entry = deleting;
-                    await change(entry, { type: "trash" });
-                    setDeleting(null);
-                    if (id === entry.id) await navigate(null);
-                    recordUndo(`"${entry.title || "Draft"}" moved to Trash`, [
-                      { kind: "restore_draft", id: entry.id },
-                    ]);
-                  })}
-              >
-                Move to Trash
-              </Button>
-            </>
-          }
+          onConfirm={() =>
+            attempt(async () => {
+              const entry = deleting;
+              await change(entry, { type: "trash" });
+              setDeleting(null);
+              if (id === entry.id) await navigate(null);
+              recordUndo(`"${entry.title || "Draft"}" moved to Trash`, [
+                { kind: "restore_draft", id: entry.id },
+              ]);
+            })}
         >
-          <Typography>
-            {deleting.kind === "folder"
-              ? "Move any contents out of this folder first."
-              : "You can restore this draft from Trash."}
-          </Typography>
-        </ConfirmSheet>
+          {deleting.kind === "folder"
+            ? "Move any contents out of this folder first."
+            : "You can restore this draft from Trash."}
+        </DraftTrashConfirmation>
       )}
       {destination && (
         <DraftDestinationPicker

@@ -953,9 +953,7 @@ export function SessionList({
                 onNewInFolder?.(folder ? folder.id : session ? tree.folderOf.get(session.id) ?? null : null);
                 return;
             case "trash": {
-                // A folder always confirms. An idle session goes to Trash with
-                // Undo (a working one confirms first), so the cursor moves on to
-                // the neighbouring row once this one leaves the list.
+                // Both folders and sessions confirm before moving to Trash.
                 if (folder) {
                     setDeleteFolder(folder);
                     return;

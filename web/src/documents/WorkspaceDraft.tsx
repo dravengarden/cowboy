@@ -1,11 +1,9 @@
 import {
-  Button,
   IconButton,
   List,
   ListItemButton,
   ListItemText,
   Stack,
-  Typography,
 } from "@mui/material";
 import {
   DescriptionOutlined,
@@ -18,9 +16,9 @@ import type { SxProps, Theme } from "@mui/material";
 import type { Sortable } from "../useSortable";
 import { ReliableListItemButton } from "../ReliableListItemButton";
 import { FolderNameShell, FolderPickerShell } from "../SessionFolderUi";
-import { useConfirmEnter } from "../Kbd";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
-import { ConfirmSheet, Sheet } from "../Sheet";
+import { Sheet } from "../Sheet";
+import { DraftTrashConfirmation } from "./DraftTrashConfirmation";
 import { useStoreSelector } from "../store";
 import {
   DraftDestinationModal,
@@ -184,10 +182,6 @@ export function WorkspaceDraftActions(
         ]);
       }
     });
-  useConfirmEnter(
-    desktop && action === "trash",
-    () => change({ type: "trash" }),
-  );
   if (action === "menu") {
     return (
       <Sheet open onClose={onClose} title={request.draft.title}>
@@ -278,25 +272,13 @@ export function WorkspaceDraftActions(
     );
   }
   return (
-    <ConfirmSheet
-      open
+    <DraftTrashConfirmation
+      busy={busy}
       onClose={busy ? () => {} : onClose}
-      title={`Move “${request.draft.title}” to Trash?`}
-      actions={
-        <>
-          <Button onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button
-            color="error"
-            variant="contained"
-            disabled={busy}
-            onClick={() => change({ type: "trash" })}
-          >
-            Move to Trash
-          </Button>
-        </>
-      }
+      title={request.draft.title}
+      onConfirm={() => change({ type: "trash" })}
     >
-      <Typography>The document can be restored from Trash.</Typography>
-    </ConfirmSheet>
+      The document can be restored from Trash.
+    </DraftTrashConfirmation>
   );
 }
