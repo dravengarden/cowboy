@@ -103,8 +103,8 @@ require the exact successful build receipt and published SideStore version.
   `docs/structural-refactor-plan-2026-11.md`.
 - **Module layering ratchet** (same recipe): no Rust module may join or enlarge
   a dependency cycle, and no new edge may be added between two modules of the
-  same cycle (`tools/module-edges-baseline.json`; the base crate's 37-module
-  cycle is being taken apart). Depend on a narrower module or move the shared
+  same cycle (`tools/module-edges-baseline.json`; the base crate's former
+  37-module cycle is down to 15 and 13 modules and is being taken apart). Depend on a narrower module or move the shared
   type into a contract module instead. Run `bun tools/check-module-layers.ts
   --update` after a change that removes edges.
 - **Reboot convergence is a core requirement**: after any Machine (Hawk, OVH,
