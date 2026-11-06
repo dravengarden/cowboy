@@ -21,6 +21,22 @@ function tabLabel(tab: ReviewTab): string {
   return basename(tab.path);
 }
 
+const stripSx = {
+  height: 44,
+  minHeight: 44,
+  maxHeight: 44,
+  pl: "env(safe-area-inset-left, 0px)",
+  pr: "env(safe-area-inset-right, 0px)",
+  overflowX: "auto",
+  overflowY: "hidden",
+  touchAction: "pan-x",
+  overscrollBehaviorY: "none",
+  scrollbarWidth: "none",
+  borderBottom: 1,
+  borderColor: "divider",
+  "&::-webkit-scrollbar": { display: "none" },
+} as const;
+
 export function ReviewTabStrip({
   tabs,
   activeKey,
@@ -119,19 +135,7 @@ export function ReviewTabStrip({
         direction="row"
         data-review-tab-strip
         data-mobile-pager-ignore
-        sx={{
-          height: 42,
-          minHeight: 42,
-          maxHeight: 42,
-          overflowX: "auto",
-          overflowY: "hidden",
-          touchAction: "pan-x",
-          overscrollBehaviorY: "none",
-          scrollbarWidth: "none",
-          borderBottom: 1,
-          borderColor: "divider",
-          "&::-webkit-scrollbar": { display: "none" },
-        }}
+        sx={stripSx}
       >
         {tabs.map((tab) => {
           const key = reviewTabKey(tab);
@@ -237,9 +241,9 @@ export function ReviewTabStrip({
                 gap: 0.5,
                 minWidth: 92,
                 maxWidth: 190,
-                height: 42,
-                minHeight: 42,
-                maxHeight: 42,
+                height: 44,
+                minHeight: 44,
+                maxHeight: 44,
                 boxSizing: "border-box",
                 pl: 1.5,
                 pr: 0.25,
@@ -274,10 +278,10 @@ export function ReviewTabStrip({
                   }}
                   onPointerDown={(event) => event.stopPropagation()}
                   sx={{
-                    width: 32,
-                    height: 32,
-                    minWidth: 32,
-                    minHeight: 32,
+                    width: 44,
+                    height: 44,
+                    minWidth: 44,
+                    minHeight: 44,
                     p: 0,
                     flexShrink: 0,
                   }}
@@ -291,7 +295,7 @@ export function ReviewTabStrip({
         <Box
           aria-hidden
           data-mobile-pager-allow
-          sx={{ flex: "1 0 72px", minHeight: 42 }}
+          sx={{ flex: "1 0 72px", minHeight: 44 }}
         />
       </Stack>
       <Menu

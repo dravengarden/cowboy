@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import DevicesRounded from "@mui/icons-material/DevicesRounded";
 import { Alert, Box, Button, Stack, Typography } from "@mui/material";
 import { useEffect, useState, useSyncExternalStore } from "react";
@@ -146,7 +147,7 @@ export function ProductActiveCapacityGuard(): React.JSX.Element | null {
         <Stack spacing={2} sx={{ px: 2, py: 1.5, maxHeight: "70vh", overflowY: "auto" }}>
           <Alert severity={urgent ? "error" : "warning"}>{content.detail}</Alert>
           <ProductSessionCapacityPanel />
-        </Stack>
+        <ScrollEdges /></Stack>
       </ConfirmSheet>
     </>
   );

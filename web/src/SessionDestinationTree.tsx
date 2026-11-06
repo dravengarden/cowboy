@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ScrollEdges } from "@cowboy/app-shell";
 import {
   Box,
   Chip,
@@ -539,7 +540,7 @@ export function SessionDestinationTree(
               </HintTooltip>
             );
           })}
-        </List>
+        </List><ScrollEdges />
         {!choosable && (
           <Typography role="status" color="text.secondary" sx={{ p: 2 }}>
             {needle ? "No matching Sessions" : "No other Sessions yet."}

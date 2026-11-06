@@ -13,7 +13,7 @@
     },
     "components/app-shell": {
       "name": "@cowboy/app-shell",
-      "version": "1.1.36",
+      "version": "1.1.37",
       "peerDependencies": {
         "@emotion/react": "^11.13.0",
         "@emotion/styled": "^11.13.0",
@@ -48,15 +48,15 @@
       "name": "@cowboy/state-sync",
       "version": "1.5.2",
       "peerDependencies": {
-        "@cowboy/state-store": "2.1.1",
+        "@cowboy/state-store": "2.1.2",
       },
     },
     "components/state-sync-idb": {
       "name": "@cowboy/state-sync-idb",
       "version": "1.8.3",
       "peerDependencies": {
-        "@cowboy/state-store": "2.1.1",
-        "@cowboy/state-sync": "1.5.1",
+        "@cowboy/state-store": "2.1.2",
+        "@cowboy/state-sync": "1.5.2",
       },
     },
     "web": {

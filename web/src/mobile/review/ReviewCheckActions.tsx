@@ -41,12 +41,13 @@ export function ReviewCheckActions({ sessionId }: { sessionId: string }): React.
     }
   };
   return (
-    <Box sx={{ px: 1, py: 0.5 }}>
+    <Box sx={{ px: 1, py: 0.5, flexShrink: 0, maxHeight: "min(192px, 35dvh)", overflowY: "auto" }}>
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
         {checks.declared.map((check) => (
           <Button
             key={check.id}
-            size="small"
+            data-review-check-action={check.id}
+            sx={{ minHeight: 44, minWidth: 44 }}
             disabled={
               pending ||
               checks.runs.some((run) => run.check === check.id && run.state === "running")

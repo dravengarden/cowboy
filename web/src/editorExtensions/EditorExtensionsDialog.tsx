@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import {
   Alert,
   Box,
@@ -506,7 +507,7 @@ function ExtensionWorkbench(
               )}
             </Stack>
           )}
-      </Box>
+      <ScrollEdges /></Box>
     </Sheet>
   );
 }

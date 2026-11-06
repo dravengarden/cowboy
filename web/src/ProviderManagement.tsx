@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { desktopSize } from "./surface/desktopSize";
 import {
   Alert,
@@ -79,7 +80,6 @@ import { ConfirmSheet } from "./Sheet";
 import { createPluginInstallRequest } from "./pluginInstallation.ts";
 import { PluginLifecycleHistory } from "./PluginLifecycleHistory.tsx";
 import { ProviderAuthenticationProgress } from "./ProviderAuthenticationProgress.tsx";
-
 interface ProviderMachine {
   id: string;
   display_name: string;
@@ -1502,7 +1502,7 @@ function ProviderManagement(
                         </Typography>
                       ))}
                     </Stack>
-                  </Paper>
+                  <ScrollEdges /></Paper>
                 )
                 : null}
               <Typography variant="body2" fontWeight={700}>

@@ -66,7 +66,8 @@ import { Box, Paper } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { markDetentSheetOpen, useIsTopDetentSheet } from "./detent-sheet-open.ts";
 import { haptic as fireHaptic } from "./haptics.ts";
-
+import { ScrollEdges } from "./scroll-edges.tsx";
+import { readerTopEdge } from "./reader-top-edge.ts";
 // The sheet sizes to its content but never taller than this fraction of the
 // viewport, so a strip of dimmed page always stays beyond it (it reads as a
 // sheet, not a full-page modal).
@@ -790,16 +791,15 @@ export function DetentSheet(
         // `position: fixed` overlay and makes a nested picker follow the parent's
         // scroll offset (often completely off-screen).
         WebkitOverflowScrolling: "touch",
-        // No horizontal padding: the sheet doesn't impose a side gutter on its
-        // content, so an edge-to-edge body (a full-width list, a chart) works.
-        // Consumers that want a text gutter add their own px (BottomSheet does).
-        pt: isTop ? SAFE_TOP : 0,
+        // Full-bleed readers put their safe-area clearance inside the scroller.
+        pt: isCover && readerTopBleed && !fillBody ? `calc(${SAFE_TOP} + 20px)` : isTop ? SAFE_TOP : 0,
+        scrollPaddingTop: isCover && readerTopBleed ? `calc(${SAFE_TOP} + 20px)` : "16px",
         // A filled body's own scroller passes under the floating footer and
         // reserves that clearance itself.
         pb: fillBody ? 0 : bodyPb,
       }}
     >
-      {contentReady ? children : null}
+      {contentReady ? children : null}{!fillBody && <ScrollEdges top={!readerTopBleed} bottom={!footerOverlay} />}
     </Box>
   );
 
@@ -931,7 +931,8 @@ export function DetentSheet(
             }
           }}
           sx={{
-            position: "fixed",
+            position: "fixed", "--cowboy-reader-sticky-top": "0px",
+            ...(isCover && readerTopBleed && !fillBody ? { "--cowboy-reader-sticky-top": `calc(${SAFE_TOP} + 20px)`, "&::after": (theme) => readerTopEdge(theme, SAFE_TOP)["&::after"] } : {}),
             left: 0,
             right: 0,
             // A bottom COVER lifts above the on-screen keyboard via `--kb-inset` (set

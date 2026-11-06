@@ -93,7 +93,7 @@ export function Collapsible({
           data-fold-toolbar
           sx={{
             position: overflows && open ? "sticky" : "relative",
-            top: 0,
+            top: overflows && open ? "var(--cowboy-reader-sticky-top, 0px)" : 0,
             zIndex: 3,
             display: "flex",
             alignItems: "center",

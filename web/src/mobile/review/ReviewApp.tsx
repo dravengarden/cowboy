@@ -1,6 +1,5 @@
-import { AccountTreeOutlined, ArrowBack, ArrowForward, ChatBubbleOutline, CloudOutlined, CheckCircle, CheckCircleOutline, ChevronLeft, ChevronRight, Close, DifferenceOutlined, FolderOpenOutlined, FolderOutlined, FormatListBulleted, KeyboardArrowDown, Undo, VisibilityOutlined, WrapText } from "@mui/icons-material";
-import { Alert, Badge, Box, Button, ButtonBase, Divider, IconButton, ListItemButton, ListItemText, Popover, Stack, Toolbar, Typography } from "@mui/material";
-import { alpha, type SxProps, type Theme } from "@mui/material/styles";
+import { AccountTreeOutlined, ArrowBack, ArrowForward, ChatBubbleOutline, CloudOutlined, CheckCircle, CheckCircleOutline, ChevronLeft, ChevronRight, Close, DifferenceOutlined, ExtensionOutlined, FolderOpenOutlined, FolderOutlined, FormatListBulleted, Undo, VisibilityOutlined, WrapText } from "@mui/icons-material";
+import { Alert, Badge, Box, Button, Divider, IconButton, ListItemButton, ListItemText, Popover, Stack, Toolbar, Typography } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   setActiveSessionId,
@@ -30,7 +29,9 @@ import {
   useStoreSelector,
 } from "../../store";
 import type { SessionMeta } from "../../protocol";
-import { COARSE_POINTER_ROOT_CLASS } from "../../platform";
+import { ReviewModeSwitcher } from "./ReviewModeSwitcher";
+import { ReviewMoreActions } from "./ReviewMoreActions";
+import { ReviewContextButton } from "./ReviewContextButton";
 import { SegmentedTabs } from "../../SegmentedTabs";
 
 import { newUuid } from "../../uuid";
@@ -63,6 +64,7 @@ import { resolveReviewLink } from "./reviewLinkTarget";
 import type { ReviewMode } from "./reviewMode";
 import { setReviewLanguageCapabilities, updateReviewSettings, useReviewSettings } from "./reviewSettings";
 import { openMobileProduct } from "../appPagerMotion";
+import { BOTTOM_NAV_PADDING } from "../bottomNavigation";
 import { appendDraftText } from "../../draftStore";
 
 import { type ReviewQuestion, reviewExplainPrompt, reviewExplainSessions, reviewExplainTitle } from "./reviewLineSelection";
@@ -103,143 +105,6 @@ import {
 import { HintTooltip } from "../../HintTooltip";
 import { DocumentView, type ReviewTarget, type SymbolPoint, type SymbolRestoreRequest } from "./DocumentView";
 export { DocumentView } from "./DocumentView";
-
-function ReviewModeSwitcher({
-  mode,
-  onChange,
-}: {
-  mode: ReviewMode;
-  onChange: (mode: ReviewMode) => void;
-}): React.JSX.Element {
-  // Paint-only selected fill. A sliding thumb with its own transform and
-  // drop shadow sits inside the Review peek's compositor layer, so iOS
-  // reassembles that nested tile on every swipe frame
-  // (docs/mobile-spatial-presentation.md).
-  const markTouchActivation = (
-    event: React.PointerEvent<HTMLButtonElement>,
-  ): void => {
-    if (event.pointerType === "touch") {
-      event.currentTarget.dataset.touchActivated = "true";
-    } else if (event.pointerType === "mouse") {
-      delete event.currentTarget.dataset.touchActivated;
-    }
-  };
-  const clearMouseActivation = (
-    event: React.PointerEvent<HTMLButtonElement>,
-  ): void => {
-    if (event.pointerType === "mouse") {
-      delete event.currentTarget.dataset.touchActivated;
-    }
-  };
-  const selectedFill = (theme: Theme): string =>
-    alpha(
-      theme.palette.primary.main,
-      theme.palette.mode === "dark" ? 0.24 : 0.13,
-    );
-  const selectedChip = {
-    bgcolor: selectedFill,
-    color: "primary.main",
-  };
-  const modeButtonSx: SxProps<Theme> = {
-    width: 36,
-    height: 32,
-    borderRadius: "16px",
-    bgcolor: "transparent",
-    color: "text.secondary",
-    transform: "none",
-    // Theme ButtonBase kills hover paint on coarse pointers
-    // (`backgroundColor: transparent`). That rule is more specific than a
-    // plain `[aria-pressed='true']` fill, so iOS sticky hover erased the
-    // selected chip and left a stale circle on the previous mode.
-    "&&[aria-pressed='true']": selectedChip,
-    [`html.${COARSE_POINTER_ROOT_CLASS} &&[aria-pressed='true']`]: selectedChip,
-    [`html.${COARSE_POINTER_ROOT_CLASS} &&[aria-pressed='true']:hover`]:
-      selectedChip,
-    [`html.${COARSE_POINTER_ROOT_CLASS} &&[aria-pressed='true'].Mui-focusVisible`]:
-      selectedChip,
-    "@media (hover: none), (pointer: coarse), (any-pointer: coarse)": {
-      "&&[aria-pressed='true'], &&[aria-pressed='true']:hover, &&[aria-pressed='true'].Mui-focusVisible":
-        selectedChip,
-    },
-    "&[data-touch-activated='true'][aria-pressed='false']:hover, &[data-touch-activated='true'][aria-pressed='false'].Mui-focusVisible":
-      {
-        bgcolor: "transparent",
-        color: "text.secondary",
-      },
-    "&[data-touch-activated='true'][aria-pressed='true']:hover, &[data-touch-activated='true'][aria-pressed='true'].Mui-focusVisible":
-      selectedChip,
-    "&[data-touch-activated='true']:active": {
-      bgcolor: "action.selected",
-    },
-  };
-  return (
-    <Box
-      data-mobile-review-mode-switcher
-      role="group"
-      aria-label="Switch between Git changes and Worktree files"
-      sx={{
-        display: "flex",
-        alignItems: "center",
-        flex: "0 0 auto",
-        boxSizing: "border-box",
-        height: 40,
-        p: "3px",
-        gap: "2px",
-        borderRadius: "20px",
-        border: 1,
-        borderColor: (theme) => alpha(theme.palette.text.primary, 0.1),
-        bgcolor: (theme) => alpha(theme.palette.text.primary, 0.04),
-        transform: "none",
-        willChange: "auto",
-        WebkitTapHighlightColor: "transparent",
-        "& .MuiSvgIcon-root": {
-          // Root-relative geometry keeps both mode glyphs in step with the
-          // global font-size setting instead of freezing them at 17px.
-          fontSize: "1.125rem",
-        },
-      }}
-    >
-      <ButtonBase
-        disableRipple
-        aria-label="Git changes"
-        aria-pressed={mode === "git"}
-        onPointerDown={markTouchActivation}
-        onPointerEnter={clearMouseActivation}
-        onKeyDown={(event): void => {
-          delete event.currentTarget.dataset.touchActivated;
-        }}
-        onClick={(event): void => {
-          onChange("git");
-          if (event.currentTarget.dataset.touchActivated === "true") {
-            event.currentTarget.blur();
-          }
-        }}
-        sx={modeButtonSx}
-      >
-        <DifferenceOutlined />
-      </ButtonBase>
-      <ButtonBase
-        disableRipple
-        aria-label="Worktree files"
-        aria-pressed={mode === "files"}
-        onPointerDown={markTouchActivation}
-        onPointerEnter={clearMouseActivation}
-        onKeyDown={(event): void => {
-          delete event.currentTarget.dataset.touchActivated;
-        }}
-        onClick={(event): void => {
-          onChange("files");
-          if (event.currentTarget.dataset.touchActivated === "true") {
-            event.currentTarget.blur();
-          }
-        }}
-        sx={modeButtonSx}
-      >
-        <AccountTreeOutlined />
-      </ButtonBase>
-    </Box>
-  );
-}
 
 function sessionStatusColor(status: SessionMeta["status"]): string {
   switch (status) {
@@ -1631,155 +1496,21 @@ export function ReviewApp({
           pt: "var(--cowboy-system-top-clearance)",
         }}
       >
-        <Stack
-          direction="row"
-          alignItems="center"
-          sx={{
-            minHeight: 52,
-            pl: 1.5,
-            pr: 1.5,
-            borderBottom: 1,
-            borderColor: "divider",
-          }}
-        >
-          <ButtonBase
-            data-review-context-button
-            aria-label={projectCodeContext
-              ? `Open context. Current ${contextLabel.toLowerCase()} ${projectCodeContext.project}`
-              : `Switch session. Current session ${currentSession?.title ?? "none"}`}
-            onClick={openContextSwitcher}
-            sx={{ flex: 1, minWidth: 0, minHeight: 48, display: "flex", flexDirection: "column", alignItems: "stretch", textAlign: "left" }}
-          >
-            <Typography
-              variant="body2"
-              fontFamily="var(--cowboy-font-mono)"
-              noWrap
-            >
-              {commitTarget
-                ? commitTarget.path ?? commitTarget.commit.subject
-                : target.kind === "changes"
-                ? mode === "files"
-                  ? contextLabel
-                  : "Changes"
-                : target.path}
+        {(target.kind !== "changes" || commitTarget) && (
+          <Box data-review-document-title sx={{ pl: "max(env(safe-area-inset-left, 0px), 12px)", pr: "max(env(safe-area-inset-right, 0px), 12px)", py: 0.75, flexShrink: 0, borderBottom: 1, borderColor: "divider",
+            "@media (max-height: 500px) and (min-width: 600px)": { display: "flex", alignItems: "center", gap: 2, "& > :first-child": { flex: 1 }, "& > *": { minWidth: 0 } },
+          }}>
+            <Typography variant="caption" noWrap sx={{ display: "block", fontFamily: "var(--cowboy-font-mono)" }}>
+              {commitTarget ? commitTarget.path ?? commitTarget.commit.subject : target.kind !== "changes" ? target.path : ""}
             </Typography>
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: 0.625,
-                minWidth: 0,
-                maxWidth: "100%",
-                p: 0,
-                border: 0,
-                bgcolor: "transparent",
-                color: "text.secondary",
-                font: "inherit",
-                textAlign: "left",
-                cursor: "pointer",
-                WebkitTapHighlightColor: "transparent",
-                "&:active": { color: "primary.main" },
-              }}
-            >
-              <Box
-                aria-hidden
-                sx={{
-                  width: 6,
-                  height: 6,
-                  flex: "0 0 auto",
-                  borderRadius: "50%",
-                  bgcolor: projectCodeContext
-                    ? "primary.main"
-                    : currentSession
-                    ? sessionStatusColor(currentSession.status)
-                    : "text.disabled",
-                }}
-              />
-              <Typography variant="caption" noWrap>
-                {commitTarget
-                  ? `Commit · ${commitTarget.commit.oid.slice(0, 8)} · `
-                  : target.kind === "diff"
-                  ? target.comparison
-                    ? `Compared with ${
-                      target.comparison.replace(/^refs\/(heads|remotes)\//, "")
-                    } · `
-                    : target.scope === "staged"
-                    ? "Staged · "
-                    : target.scope === "unstaged"
-                    ? "Unstaged · "
-                    : "Conflict · "
-                  : ""}
-                {projectCodeContext
-                  ? `${contextLabel} · ${projectCodeContext.project}`
-                  : currentProject ? `${contextLabel} · ${currentProject}`
-                  : (workspace ? "Loading session…" : "Choose project or session")}
-                {!navigationInline && repositoryContext?.branch
-                  ? ` · ${repositoryContext.branch}`
-                  : ""}
-              </Typography>
-              <KeyboardArrowDown
-                aria-hidden
-                sx={{ fontSize: "0.9rem", flex: "0 0 auto" }}
-              />
-            </Box>
-          </ButtonBase>
-          {contextReturnSession && (
-            <IconButton
-              aria-label={`Back to session ${contextReturnSession.title}`}
-              onClick={returnToSessionContext}
-              sx={{ ml: 0.25 }}
-            >
-              <Undo />
-            </IconButton>
-          )}
-          {mode === "files" &&
-            (navigationHistory.length > 0 ||
-              navigationForwardHistory.length > 0) &&
-            (
-              <Stack
-                direction="row"
-                role="group"
-                aria-label="Code navigation history"
-              >
-                <IconButton
-                  aria-label="Back to previous code location"
-                  disabled={navigationHistory.length === 0}
-                  onClick={navigateBack}
-                >
-                  <ArrowBack />
-                </IconButton>
-                <IconButton
-                  aria-label="Forward to next code location"
-                  disabled={navigationForwardHistory.length === 0}
-                  onClick={navigateForward}
-                >
-                  <ArrowForward />
-                </IconButton>
-              </Stack>
-            )}
-          {target.kind === "diff" && (
-            <IconButton
-              aria-label={targetIsReviewed
-                ? "Mark unreviewed"
-                : "Mark reviewed"}
-              color={targetIsReviewed ? "success" : "default"}
-              disabled={!currentRevision}
-              onClick={toggleReviewed}
-            >
-              {targetIsReviewed ? <CheckCircle /> : <CheckCircleOutline />}
-            </IconButton>
-          )}
-          {!projectCodeContext && workspace?.sessionId &&
-            typeof syncedReview.remote_selected === "boolean" && <HintTooltip title={syncedReview.remote_review ? `Remote PR #${syncedReview.remote_review.number}` : "Remote PR"}><IconButton
-            aria-label={syncedReview.remote_review ? `Review remote PR #${syncedReview.remote_review.number}` : "Associate remote PR"}
-            onClick={() => {
-              setCloseRequest((value) => value + 1);
-              mutateMobileReview(workspace.sessionId, "selectRemoteReview", { selected: true });
-            }}
-          ><CloudOutlined /></IconButton></HintTooltip>}
-          <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={currentMachineId} />
-          <ReviewModeSwitcher mode={mode} onChange={activateReviewMode} />
-        </Stack>
+            {(target.kind === "diff" || commitTarget) && <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+              {commitTarget ? `Commit · ${commitTarget.commit.oid.slice(0, 8)}`
+                : target.kind === "diff" && (target.comparison
+                  ? `Compared with ${target.comparison.replace(/^refs\/(heads|remotes)\//, "")}`
+                  : target.scope === "staged" ? "Staged" : target.scope === "unstaged" ? "Unstaged" : "Conflict")}
+            </Typography>}
+          </Box>
+        )}
         {!workspace
           ? (
             <Stack
@@ -1926,9 +1657,7 @@ export function ReviewApp({
             borderTop: 1,
             borderColor: "divider",
             bgcolor: "background.default",
-            boxShadow: (theme) => theme.palette.mode === "dark"
-              ? "0 -1px 24px rgba(0,0,0,0.5)"
-              : "0 -1px 24px rgba(0,0,0,0.07)",
+
           }}
         >
           {!navigationInline && <ReviewTabStrip
@@ -1986,36 +1715,66 @@ export function ReviewApp({
             component="nav"
             aria-label="Code Review controls"
             sx={{
-              pb: "max(calc(env(safe-area-inset-bottom) - 18px), 12px)",
-              // Match Agent's bottom AppBar: safe-area on the chrome, then the
-              // Toolbar's default 16px gutter so Open Agent lines up with the
-              // Sessions hamburger.
-              pl: "env(safe-area-inset-left, 0px)",
-              pr: "env(safe-area-inset-right, 0px)",
+              pb: BOTTOM_NAV_PADDING,
+              // Keep the pager's bottom baseline while leaving room for the
+              // context selector and 44px actions on a narrow phone.
+              pl: "max(env(safe-area-inset-left, 0px), 4px)",
+              pr: "max(env(safe-area-inset-right, 0px), 4px)",
+              "@media (max-height: 500px) and (min-width: 600px)": {
+                display: "flex", flexWrap: "wrap", alignItems: "center",
+                "& > [data-review-file-controls]": { flex: "1 0 auto" },
+                "& > [data-review-workbench]": { flex: "1 0 340px", minWidth: 0 },
+              },
             }}
           >
-            <Toolbar
+            {!navigationInline && <Toolbar data-review-file-controls
               variant="dense"
               sx={{
                 minHeight: 44,
-                px: 2,
-                gap: 0.5,
+                px: 1,
+                gap: 0.25,
+                flexWrap: "wrap",
+                "& .MuiIconButton-root": { width: 44, height: 44 },
                 "@media (min-width: 600px)": { minHeight: 44 },
               }}
             >
-              <HintTooltip title="Agent">
+              {mode === "files" &&
+                (navigationHistory.length > 0 ||
+                  navigationForwardHistory.length > 0) &&
+                (
+                  <Stack
+                    direction="row"
+                    role="group"
+                    aria-label="Code navigation history"
+                  >
+                    <IconButton
+                      aria-label="Back to previous code location"
+                      disabled={navigationHistory.length === 0}
+                      onClick={navigateBack}
+                    >
+                      <ArrowBack />
+                    </IconButton>
+                    <IconButton
+                      aria-label="Forward to next code location"
+                      disabled={navigationForwardHistory.length === 0}
+                      onClick={navigateForward}
+                    >
+                      <ArrowForward />
+                    </IconButton>
+                  </Stack>
+                )}
+              {target.kind === "diff" && (
                 <IconButton
-                  data-mobile-open-agent="true"
-                  aria-label="Open Agent"
-                  onClick={() => {
-                    navigationHaptic();
-                    openMobileProduct("agent");
-                  }}
-                  sx={{ width: 44, height: 44, color: "text.secondary" }}
+                  aria-label={targetIsReviewed
+                    ? "Mark unreviewed"
+                    : "Mark reviewed"}
+                  color={targetIsReviewed ? "success" : "default"}
+                  disabled={!currentRevision}
+                  onClick={toggleReviewed}
                 >
-                  <ChatBubbleOutline />
+                  {targetIsReviewed ? <CheckCircle /> : <CheckCircleOutline />}
                 </IconButton>
-              </HintTooltip>
+              )}
               {target.kind === "source" &&
                   isMarkdownReviewPath(target.path) && markdownPreview
                 ? (
@@ -2100,9 +1859,7 @@ export function ReviewApp({
                   <FormatListBulleted />
                 </IconButton>
               )}
-              {navigationInline ? (
-                <Box ref={setInlineActionsContainer} sx={{ display: "flex", alignItems: "center" }} />
-              ) : <IconButton
+              <IconButton
                 data-mobile-review-sidebar="true"
                 aria-label={drawerOpen
                   ? `Close ${
@@ -2143,8 +1900,69 @@ export function ReviewApp({
                     </Badge>
                   )
                   : <AccountTreeOutlined />}
-              </IconButton>}
-            </Toolbar>
+              </IconButton>
+            </Toolbar>}
+            <Stack data-review-workbench direction="row" alignItems="center" spacing={0.5}
+              sx={{ px: 1, minHeight: 48, flexWrap: "wrap", "& .MuiIconButton-root": { width: 44, height: 44 } }}>
+              <HintTooltip title="Agent">
+                <IconButton
+                  data-mobile-open-agent="true"
+                  aria-label="Open Agent"
+                  onClick={() => {
+                    navigationHaptic();
+                    openMobileProduct("agent");
+                  }}
+                  sx={{ width: 44, height: 44, color: "text.secondary" }}
+                >
+                  <ChatBubbleOutline />
+                </IconButton>
+              </HintTooltip>
+              <ReviewContextButton
+                label={projectCodeContext
+              ? `Open context. Current ${contextLabel.toLowerCase()} ${projectCodeContext.project}`
+              : `Switch session. Current session ${currentSession?.title ?? "none"}`}
+                title={projectCodeContext?.project ?? currentSession?.title ?? currentProject ?? "Choose context"}
+                statusColor={projectCodeContext ? "primary.main" : currentSession ? sessionStatusColor(currentSession.status) : "text.disabled"}
+                onOpen={openContextSwitcher}
+                subtitle={<>
+                {projectCodeContext
+                  ? `${contextLabel} · ${projectCodeContext.project}`
+                  : currentProject ? `${contextLabel} · ${currentProject}`
+                  : (workspace ? "Loading session…" : "Choose project or session")}
+                {!navigationInline && repositoryContext?.branch
+                  ? ` · ${repositoryContext.branch}`
+                  : ""}
+                </>}
+              />
+              <ReviewModeSwitcher mode={mode} onChange={activateReviewMode} />
+              <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={currentMachineId}
+                renderTrigger={({ disabled, open }) => <ReviewMoreActions>{(close) => <>
+                {navigationInline && <Box ref={setInlineActionsContainer} />}
+                {contextReturnSession && (
+                  <Button
+                    aria-label={`Back to session ${contextReturnSession.title}`}
+                    onClick={() => { close(); returnToSessionContext(); }}
+                    startIcon={<Undo />}
+                    sx={{ minHeight: 44, textTransform: "none" }}
+                  >
+                    Back to {contextReturnSession.title}
+                  </Button>
+                )}
+                {!projectCodeContext && workspace?.sessionId &&
+                  typeof syncedReview.remote_selected === "boolean" && <Button
+                  aria-label={syncedReview.remote_review ? `Review remote PR #${syncedReview.remote_review.number}` : "Associate remote PR"}
+                  startIcon={<CloudOutlined />}
+                  sx={{ minHeight: 44, textTransform: "none" }}
+                  onClick={() => {
+                    close();
+                    setCloseRequest((value) => value + 1);
+                    mutateMobileReview(workspace.sessionId, "selectRemoteReview", { selected: true });
+                  }}
+                >{syncedReview.remote_review ? `PR #${syncedReview.remote_review.number}` : "Remote PR"}</Button>}
+                <Button aria-label="Open extensions" disabled={disabled} onClick={() => { close(); open(); }}
+                  startIcon={<ExtensionOutlined />} sx={{ minHeight: 44, textTransform: "none" }}>Extensions</Button>
+              </>}</ReviewMoreActions>} />
+            </Stack>
           </Box>
         </Box>
         <Popover
