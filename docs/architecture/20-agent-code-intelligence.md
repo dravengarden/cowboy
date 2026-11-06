@@ -271,6 +271,15 @@ launch a backend before the automatic acquisition budget. Reads through an
 already configured legacy socket retain their existing behavior; this does not
 launch a process or confer new buffer ownership.
 
+Hawk activated the cold-read guard from
+`a408035c6cb1fbf174d006c1ad1efab900f091f4`, transaction
+`1793981545889231556-a408035c6cb1` (`succeeded` / `committed`). Starting with
+no installed Zed processes, two missing-file production observations returned
+`not_open`, kept `tracked: 0`, and started no Zed process. A subsequent real
+Go file acquired successfully and returned gopls `document_current`. The
+Controller and both existing worker PIDs remained unchanged, the Machine
+reconnected ready, and health and public SPA checks passed.
+
 ### Baselines, attribution, matching
 
 - Baselines are immutable, content-matched captures at a read or pre-write
