@@ -25,7 +25,6 @@ import {
 import {
   KeyboardArrowDown,
   MyLocation,
-  OpenInNew,
   StopCircleOutlined,
 } from "@mui/icons-material";
 import {
@@ -55,6 +54,8 @@ import { callConversationId } from "./managedCalls";
 import { Sheet } from "./Sheet";
 import { SubagentDetail, SubagentStopConfirm } from "./SubagentCard";
 import { TaskChip } from "./TaskRow";
+import { taskDockContext } from "./taskDockContext";
+import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import {
   type BackgroundTasks,
   requestTaskStop,
@@ -196,7 +197,6 @@ function TaskDetail({
   sessionId,
   desktop,
   resumed,
-  onOpenConversation,
   onAnswerApproval,
   onOpenOrigin,
 }: {
@@ -204,7 +204,6 @@ function TaskDetail({
   sessionId: string;
   desktop: boolean;
   resumed: boolean;
-  onOpenConversation: (task: TaskSummary) => void;
   onAnswerApproval: () => void;
   /** The MCP tool card that started this Call, when one is loaded. */
   onOpenOrigin?: (() => void) | undefined;
@@ -221,9 +220,7 @@ function TaskDetail({
         {/* Mobile names the task in the sheet's title already. */}
         <Typography
           variant="subtitle1"
-          sx={{ fontWeight: 750, flex: 1, minWidth: 0, ...(desktop ? {} : { visibility: "hidden" }) }}
-          noWrap
-          aria-hidden={!desktop}
+          sx={{ fontWeight: 750, flex: 1, minWidth: 0, overflowWrap: "anywhere" }}
         >
           {task.title}
         </Typography>
@@ -279,19 +276,7 @@ function TaskDetail({
               </Button>
             </Box>
           )}
-          {!desktop && (
-            <Box>
-              <Button
-                size="small"
-                startIcon={<OpenInNew />}
-                data-task-open-conversation
-                onClick={(): void => onOpenConversation(task)}
-                sx={{ textTransform: "none" }}
-              >
-                Back to transcript
-              </Button>
-            </Box>
-          )}
+
           <CallDetailView
             parent={sessionId}
             call={task.call}
@@ -383,6 +368,7 @@ export function BackgroundTasksInspector({
   onOpenTool?: ((toolKey: string) => void) | undefined;
 }): React.JSX.Element | null {
   const state = useInspectorState();
+  const { data: accounts } = useSubscriptionAccounts();
   const open = state.sessionId === sessionId;
   const { tasks, byKey } = background;
   noteRuns(tasks);
@@ -573,7 +559,6 @@ export function BackgroundTasksInspector({
         sessionId={sessionId}
         desktop={desktop}
         resumed={resumedChildren.has(selected.key)}
-        onOpenConversation={openConversation}
         onAnswerApproval={answerApproval}
         onOpenOrigin={originTool && onOpenTool
           ? (): void => {
@@ -737,15 +722,23 @@ export function BackgroundTasksInspector({
   }
 
   const mobileTitle = level === "list" || !selected ? "Background tasks" : selected.title;
+  const showMobileDetails = (): void => {
+    if (!selected) return;
+    if (level === "detail") { globalThis.history?.back(); return; }
+    setLevel("detail");
+    globalThis.history?.pushState({ cowboyTasks: 3 }, "", taskHash(selected.key));
+    depth.current = 3;
+  };
   return (
     <Sheet
       open
       onClose={close}
       title={mobileTitle}
+      islandContext={{ ...taskDockContext(level === "list" ? null : selected, Date.now(), accounts), action: level !== "list" && selected?.call ? { label: level === "detail" ? "Back to transcript" : "Details", onActivate: showMobileDetails } : undefined }}
       onBack={level === "list"
         ? undefined
         : (): void => globalThis.history?.back()}
-      fill={level === "conversation"}
+      fill={level !== "list" && Boolean(selected?.call)}
       forceSheet
       cover
       portal
@@ -756,10 +749,10 @@ export function BackgroundTasksInspector({
         sx={{
           // A conversation's transcript passes under the floating island and
           // reserves that clearance itself; padding here stopped it short.
-          pb: level === "conversation" ? 0 : "calc(16px + env(safe-area-inset-bottom, 0px))",
+          pb: selected?.call && level !== "list" ? 0 : "calc(16px + env(safe-area-inset-bottom, 0px))",
           color: "text.primary",
           typography: "body2",
-          ...(level === "conversation" ? { flex: 1, display: "flex", minHeight: 0, minWidth: 0 } : {}),
+          ...(selected?.call && level !== "list" ? { flex: 1, display: "flex", minHeight: 0, minWidth: 0 } : {}),
         }}
       >
         {level === "list" || !selected
@@ -769,41 +762,13 @@ export function BackgroundTasksInspector({
               {legacySwitch}
             </Stack>
           )
-          : level === "conversation" && selected.call
+          : selected.call
           ? (
-            // minWidth: an unbreakable transcript line must scroll in its block,
-            // not widen the row past the screen (it pushed the chip to the edge
-            // and Details off-screen). The fill body has no gutter, so the state
-            // row carries the sheet's own px.
-            <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
-              <Stack
-                direction="row"
-                alignItems="center"
-                spacing={1}
-                sx={{ px: 2, pb: 1, borderBottom: 1, borderColor: "divider", minWidth: 0 }}
-              >
-                <TaskChip task={selected} />
-                <Typography variant="caption" color="text.secondary" sx={{ flex: 1, minWidth: 0 }}>
-                  {selected.subtitle}
-                </Typography>
-                <Button
-                  size="small"
-                  data-task-open-details
-                  onClick={(): void => {
-                    setLevel("detail");
-                    globalThis.history?.pushState({ cowboyTasks: 3 }, "", taskHash(selected.key));
-                    depth.current = 3;
-                  }}
-                  sx={{ minHeight: 44, textTransform: "none" }}
-                >
-                  Details
-                </Button>
-              </Stack>
-              <CallConversation call={selected.call} desktop={false} onDetails={(): void => {
-                setLevel("detail");
-                globalThis.history?.pushState({ cowboyTasks: 3 }, "", taskHash(selected.key));
-                depth.current = 3;
-              }} />
+            <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", position: "relative" }}>
+              <Box inert={level !== "conversation"} sx={{ flex: 1, minWidth: 0, display: "flex", visibility: level === "conversation" ? "visible" : "hidden" }}>
+                <CallConversation call={selected.call} desktop={false} onDetails={showMobileDetails} />
+              </Box>
+              {level === "detail" && <Box sx={{ position: "absolute", inset: 0, overflowY: "auto", px: 2, pb: "var(--cowboy-sheet-dock-clearance, 76px)" }}>{detail}</Box>}
             </Box>
           )
           : detail}
