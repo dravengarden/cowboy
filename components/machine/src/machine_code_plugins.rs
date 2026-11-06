@@ -1,6 +1,8 @@
 //! Machine-owned code runtimes. A worktree keeps its exact generation until
 //! its last buffer/worktree lease closes; other worktrees can use a newer
-//! generation concurrently. Legacy sockets participate in the same routing.
+//! generation concurrently, and an idle worktree follows a newly activated
+//! generation when it is next ensured or opened. Legacy sockets participate in
+//! the same routing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, DirBuilder};
@@ -62,6 +64,8 @@ impl CodeTarget {
 #[derive(Default)]
 struct WorktreeRoute {
     target: Option<CodeTarget>,
+    /// Installed generation of `target`; `None` for a legacy socket.
+    generation: Option<String>,
     worktree_leases: u64,
     buffers: BTreeSet<(String, String)>,
     owned_buffers: BTreeSet<buffer_leases::LeaseRef>,
@@ -151,10 +155,23 @@ impl CodeRuntimeHost {
             .count()
     }
 
+    #[cfg(test)]
     pub async fn request(
         &self,
         plugin_id: &str,
         payload: &Value,
+        select: impl FnOnce() -> Result<CodeRuntimeSelection>,
+    ) -> Result<Value> {
+        self.request_active(plugin_id, payload, None, select).await
+    }
+
+    /// `active` is the Plugin's currently active generation digest, read
+    /// cheaply; `select` verifies and plans it only when a route needs it.
+    pub async fn request_active(
+        &self,
+        plugin_id: &str,
+        payload: &Value,
+        active: Option<String>,
         select: impl FnOnce() -> Result<CodeRuntimeSelection>,
     ) -> Result<Value> {
         // Private synchronization is never a generic Code RPC. Only the
@@ -186,7 +203,7 @@ impl CodeRuntimeHost {
             None => None,
         };
         let Some(worktree) = request_worktree(payload)? else {
-            let target = self.target(select()?).await?;
+            let (target, _) = self.target(select()?).await?;
             return exchange(target.socket(), payload).await;
         };
         let route = {
@@ -208,8 +225,21 @@ impl CodeRuntimeHost {
         };
         let retained_route = Arc::clone(&route);
         let mut route = route.lock().await;
-        if route.target.is_none() {
-            route.target = Some(self.target(select()?).await?);
+        // An idle route holds nothing in its runtime, so when its worktree is
+        // (re)established it follows a newly activated generation instead of
+        // staying on the one it first started with.
+        let follow = route.target.is_some()
+            && route.is_idle()
+            && matches!(
+                payload["type"].as_str(),
+                Some("ensureWorktree" | "openWorktree")
+            )
+            && active.is_some()
+            && route.generation != active;
+        if route.target.is_none() || follow {
+            let (target, generation) = self.target(select()?).await?;
+            route.target = Some(target);
+            route.generation = generation;
         }
         let target = route
             .target
@@ -239,19 +269,23 @@ impl CodeRuntimeHost {
         Ok(response)
     }
 
-    async fn target(&self, selection: CodeRuntimeSelection) -> Result<CodeTarget> {
+    async fn target(
+        &self,
+        selection: CodeRuntimeSelection,
+    ) -> Result<(CodeTarget, Option<String>)> {
         match selection {
-            CodeRuntimeSelection::Legacy(socket) => Ok(CodeTarget::Legacy(socket)),
+            CodeRuntimeSelection::Legacy(socket) => Ok((CodeTarget::Legacy(socket), None)),
             CodeRuntimeSelection::Installed(plan) => {
                 let mut engines = self.engines.lock().await;
                 engines.retain(|_, engine| engine.strong_count() > 0);
                 let key = (plan.plugin_id.clone(), plan.generation_digest.clone());
+                let generation = Some(plan.generation_digest.clone());
                 if let Some(engine) = engines.get(&key).and_then(Weak::upgrade) {
-                    return Ok(CodeTarget::Installed(engine));
+                    return Ok((CodeTarget::Installed(engine), generation));
                 }
                 let engine = Arc::new(RunningCodeRuntime::start(&plan).await?);
                 engines.insert(key, Arc::downgrade(&engine));
-                Ok(CodeTarget::Installed(engine))
+                Ok((CodeTarget::Installed(engine), generation))
             }
         }
     }
@@ -835,6 +869,69 @@ mod tests {
             .parse()
             .unwrap();
         assert_process_stopped(pid).await;
+    }
+
+    async fn on(
+        host: &CodeRuntimeHost,
+        root: &Path,
+        active: &str,
+        payload: &Value,
+    ) -> Result<Value> {
+        let plan = fixture_plan(root, active);
+        host.request_active(
+            "fixture-code",
+            payload,
+            Some(active.to_owned()),
+            move || Ok(CodeRuntimeSelection::Installed(plan)),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn an_idle_worktree_follows_a_newly_activated_generation() {
+        let root = PrivateRuntimeDirectory::create().unwrap();
+        let host = CodeRuntimeHost::default();
+        let ensure = json!({"type": "ensureWorktree", "path": root.0, "trusted": true});
+        assert_eq!(
+            on(&host, &root.0, "a", &ensure).await.unwrap()["generation"],
+            "generation-a"
+        );
+        // Unchanged activation keeps the running runtime without re-selecting.
+        let same = host
+            .request_active("fixture-code", &ensure, Some("a".into()), || {
+                panic!("re-selected an unchanged generation")
+            })
+            .await
+            .unwrap();
+        assert_eq!(same["generation"], "generation-a");
+        // Nothing is held: the route follows the newly activated generation.
+        assert_eq!(
+            on(&host, &root.0, "b", &ensure).await.unwrap()["generation"],
+            "generation-b"
+        );
+        // A worktree lease pins the route until it closes.
+        let open = json!({"type": "openWorktree", "path": root.0, "trusted": true});
+        assert_eq!(
+            on(&host, &root.0, "b", &open).await.unwrap()["generation"],
+            "generation-b"
+        );
+        let pinned = host
+            .request_active("fixture-code", &ensure, Some("c".into()), || {
+                panic!("a leased worktree switched generation")
+            })
+            .await
+            .unwrap();
+        assert_eq!(pinned["generation"], "generation-b");
+        let close = json!({"type": "closeWorktree", "path": root.0});
+        host.request_active("fixture-code", &close, Some("c".into()), || {
+            panic!("selected")
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            on(&host, &root.0, "c", &ensure).await.unwrap()["generation"],
+            "generation-c"
+        );
     }
 
     #[tokio::test]
