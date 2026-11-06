@@ -17,9 +17,7 @@ export function configurationEquivalence(options) {
       [KEY]: {
         schema: 1,
         value: option.currentValue,
-        equivalent_values: FABLE.filter((value) =>
-          value !== option.currentValue
-        ),
+        equivalent_values: FABLE.filter((value) => value !== option.currentValue),
       },
     };
   }
