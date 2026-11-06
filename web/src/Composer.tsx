@@ -671,24 +671,22 @@ export function ComposerWorkspace({
   // Stopping a running turn is confirmed through a modal (Enter confirms, Esc
   // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
   // than cancelling on a single stray click/keypress.
-  const [cancelOpen, setCancelOpen] = useState(false);
+  const cancelOpen = surfaces.modal.kind === "stop";
   // Long-press and ordinary busy Send share the same picker.
   const [holding, setHolding] = useState(false);
-  const [clearComposerAnchor, setClearComposerAnchor] = useState<
-    HTMLElement | null
-  >(null);
+  const clearComposerAnchor = surfaces.modal.kind === "clear" ? surfaces.modal.anchor : null;
   useEffect(() => {
     if (clearComposerAnchor === null) return undefined;
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || isImeKeyEvent(event)) return;
       event.preventDefault();
       event.stopPropagation();
-      setClearComposerAnchor(null);
+      surfaces.close("clear");
     };
     globalThis.addEventListener("keydown", closeOnEscape, true);
     return (): void =>
       globalThis.removeEventListener("keydown", closeOnEscape, true);
-  }, [clearComposerAnchor]);
+  }, [clearComposerAnchor, surfaces.close]);
   // Send owns the picker anchor for pointer and keyboard activation alike.
   const queueBtnRef = useRef<HTMLButtonElement | null>(null);
   const mobileActionsRef = useRef<HTMLDivElement | null>(null);
@@ -880,7 +878,7 @@ export function ComposerWorkspace({
     if (touchInput && action.kind === "reset") {
       setMobileInputResetBlocked(true);
       setComposeFs(false);
-      setClearComposerAnchor(null);
+      surfaces.close("clear");
       setImgSel(null);
       dismissMobileSoftwareKeyboard();
       releaseMobileComposerFocus();
@@ -2392,7 +2390,7 @@ export function ComposerWorkspace({
                         onPointerDown={(event): void => event.preventDefault()}
                         onMouseDown={(event): void => event.preventDefault()}
                         onClick={(event): void =>
-                          setClearComposerAnchor(event.currentTarget)}
+                          surfaces.open({ kind: "clear", anchor: event.currentTarget })}
                       >
                         <DeleteOutline fontSize="small" />
                       </IconButton>
@@ -2434,7 +2432,7 @@ export function ComposerWorkspace({
         sx={{ zIndex: (theme) => theme.zIndex.modal }}
       >
         <ClickAwayListener
-          onClickAway={(): void => setClearComposerAnchor(null)}
+          onClickAway={(): void => surfaces.close("clear")}
         >
           <Paper
             role="dialog"
@@ -2464,7 +2462,7 @@ export function ComposerWorkspace({
                   color="inherit"
                   onPointerDown={(event): void => event.preventDefault()}
                   onMouseDown={(event): void => event.preventDefault()}
-                  onClick={(): void => setClearComposerAnchor(null)}
+                  onClick={(): void => surfaces.close("clear")}
                   sx={{ textTransform: "none" }}
                 >
                   Cancel
@@ -2478,7 +2476,7 @@ export function ComposerWorkspace({
                   onClick={(): void => {
                     importantHaptic();
                     clearComposer();
-                    setClearComposerAnchor(null);
+                    surfaces.close("clear");
                   }}
                   sx={{ textTransform: "none" }}
                 >
@@ -2518,7 +2516,7 @@ export function ComposerWorkspace({
         })}
         onStop={(): void => {
           setDeliveryAnchor(null);
-          setCancelOpen(true);
+          surfaces.open({ kind: "stop" });
         }}
       />
       {
@@ -2625,11 +2623,11 @@ export function ComposerWorkspace({
       }
       <StopConfirmDialog
         open={cancelOpen}
-        onClose={(): void => setCancelOpen(false)}
+        onClose={(): void => surfaces.close("stop")}
         onConfirm={(): void => {
           importantHaptic();
           cancelTurn(sessionId);
-          setCancelOpen(false);
+          surfaces.close("stop");
         }}
       />
       {

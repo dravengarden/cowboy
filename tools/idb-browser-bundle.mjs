@@ -18,6 +18,7 @@ if (
   suite !== "workspace-picker" && suite !== "project-placement" &&
   suite !== "sign-in" && suite !== "desktop-composer" &&
   suite !== "session-move" && suite !== "session-fold" &&
+  suite !== "composer-surfaces" &&
   suite !== "draft-documents" && suite !== "keyboard-acceptance" &&
   suite !== "editor-plugin-sandbox" && suite !== "tool-inspector" &&
   suite !== "managed-calls" && suite !== "session-maintenance" &&
@@ -56,6 +57,7 @@ await build({
         suite === "sheet-keyboard" || suite === "workspace-picker" ||
         suite === "project-placement" || suite === "desktop-composer" ||
         suite === "session-move" || suite === "session-fold" ||
+        suite === "composer-surfaces" ||
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
         suite === "tool-inspector" || suite === "managed-calls" ||
         suite === "session-maintenance" || suite === "dormant-session" ||
@@ -105,6 +107,7 @@ await build({
         suite === "review-destination" || suite === "review-recovery" ||
         suite === "workspace-extensions" || suite === "desktop-composer" ||
         suite === "session-move" || suite === "session-fold" ||
+        suite === "composer-surfaces" ||
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
         suite === "tool-inspector" || suite === "managed-calls" ||
         suite === "dormant-session" || suite === "info-metrics" ||
@@ -163,6 +166,8 @@ await build({
           ? "../web/src/sessionFoldBrowserConformance.tsx"
           : suite === "session-move"
           ? "../web/src/sessionMoveBrowserConformance.tsx"
+          : suite === "composer-surfaces"
+          ? "../web/src/composerSurfacesBrowserConformance.tsx"
           : suite === "desktop-composer"
           ? "../web/src/desktopComposerBrowserConformance.tsx"
           : suite === "sign-in"

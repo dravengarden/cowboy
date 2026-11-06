@@ -1,4 +1,4 @@
-// The composer's modal surfaces share one slot: opening one replaces whatever
+// The composer's transient surfaces share one slot: opening one replaces whatever
 // was open, so no handler has to remember to close the others. The full-screen
 // editor and the delivery picker are not in the slot yet (their transitions
 // move focus synchronously; see docs/composer-state-model.md).
@@ -19,7 +19,10 @@ export type ComposerModal =
   | { kind: "schedule"; target: ScheduleTarget }
   | { kind: "context"; action: SessionAction }
   | { kind: "move"; sourceId: string }
-  | { kind: "toolbarSettings" };
+  | { kind: "toolbarSettings" }
+  | { kind: "stop" }
+  /** Deliberately a non-modal Popper: it leaves the iOS first responder alone. */
+  | { kind: "clear"; anchor: HTMLElement };
 
 export type ComposerModalEvent =
   | { type: "open"; modal: Exclude<ComposerModal, { kind: "none" }> }

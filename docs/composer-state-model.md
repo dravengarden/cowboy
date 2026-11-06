@@ -106,8 +106,17 @@ iOS acceptance (web/AGENTS.md pitfall #69).
   the context (compact/clear) confirmation, the move-draft picker and the
   mobile toolbar settings; a close names its surface, so a replaced dialog's
   late close cannot dismiss its successor. The slot is still named
-  `ComposerModal` and holds four kinds; the stop confirmation and the clear
-  popper join next, the picker and `composeFs` after physical iOS acceptance.
+  `ComposerModal`. The stop confirmation and the non-modal clear-draft popper
+  joined the same day; the picker and `composeFs` wait for physical iOS
+  acceptance.
+- `just cdp-browser-conformance <endpoint> composer-surfaces` drives these
+  surfaces in the real App (Desktop and touch layouts, in-page fake socket and
+  fetch): schedule open/dismiss, picker Stop replacing the picker with the stop
+  confirmation and sending `cancel`, the clear-draft popper (Escape keeps the
+  draft, confirm clears it) and the clear-conversation confirmation. Removing
+  the picker's Stop transition or the popper's Escape close fails it (checked).
+  The older desktop-composer suite renders the toolbar alone and never mounted
+  `ComposerWorkspace`.
 
 ## Non-goals
 
