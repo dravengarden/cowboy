@@ -493,6 +493,23 @@ catalog and runtime, CLI, usage and provider info, telemetry Plugin), plus
 5.4/5.5 store and Hub scope. Slices 5.3–5.7 add crates and so remain one
 worker-generation maintenance.
 
+5.2 landed the same day: the server and Machine crates list the base modules
+they name instead of `pub use cowboy::*` (Machine grouped by the base feature
+gates; the server under the always-on `full`). Within hours main added two
+base modules the server uses (`superagent`, `prompt_origin`), so the list now
+carries a note that a server module starting to use another base module adds
+it there. Controller `9e5f1d46d` runs the 5.1/5.2 state; the worker generation
+is unchanged.
+
+Sizing 5.3 before starting it: `Inbound` (295 lines, 129 type names, and a
+`crate::supervisor` dependency), `Outbound` (75 type names), `Envelope` and
+`SessionMeta` (an inherent impl, plus `agent_model`, `execution_environment`
+and `provider_account`) have about 950 references. A crate boundary forbids
+inherent impls on moved types, so their type graph moves down layer by layer
+first. With `Cargo.toml` edits blocking host-only Machine releases until a
+worker-generation maintenance, 5.3–5.7 run as one dedicated branch with its
+own maintenance window rather than piecemeal on main.
+
 7.3 landed on 2026-11-06 with one deviation: the 98 unreferenced releases
 moved to a single `components/registry-archive.json` rather than one file per
 version, so the Rust reader needs one `include_str!` and `build.rs` (a hashed
