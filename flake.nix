@@ -339,6 +339,7 @@
         buildPhase = previous.buildPhase + ''
           (cd .. && bun tools/check-structure.ts)
           bun test src
+          bun test ./src/storeConnection.isolated.ts
         '';
         installPhase = previous.installPhase + ''
           test "${service-worker-generation}" -gt 2108
