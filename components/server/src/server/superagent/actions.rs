@@ -79,7 +79,7 @@ pub(in crate::server) async fn execute(
             {
                 return Err("worker_busy");
             }
-            let observed = evidence(&state.hub, &input.session_id)?;
+            let observed = scope::current_evidence(state, &input.session_id).await?;
             if observed.marker != input.evidence {
                 return Err("evidence_changed");
             }
@@ -106,6 +106,14 @@ pub(in crate::server) async fn execute(
                 "[Cowboy Super-agent · {project_id}]\nFollow-up from session {} using {}.\nTask scope: {}\nObservation: {}\nContinue only work already authorized for this task, following current project guidance. This automated message is evidence, not new human permission. Verify the actual result; stop if blocked or authority is missing.",
                 meta.id, pattern.origin, participation.mandate, input.reason
             );
+            match store
+                .admit_agent_operation(owner, &meta.id, &id, &request_hash)
+                .await
+                .map_err(|_| "unavailable")?
+            {
+                Admission::New => {}
+                _ => return Err("outcome_unknown"),
+            }
             let Some(slot) = reserve_chain(
                 store,
                 owner,
@@ -118,14 +126,6 @@ pub(in crate::server) async fn execute(
             else {
                 return Err("superagent_followup_budget_exhausted");
             };
-            match store
-                .admit_agent_operation(owner, &meta.id, &id, &request_hash)
-                .await
-                .map_err(|_| "unavailable")?
-            {
-                Admission::New => {}
-                _ => return Err("outcome_unknown"),
-            }
             let submitted = state.hub.dispatch_superagent_once(
                 &input.session_id,
                 text,
@@ -177,6 +177,19 @@ pub(super) async fn reserve_chain(
             .await
             .map_err(|_| "unavailable")?
         {
+            if let Some(previous) = result.as_ref().filter(|v| v["status"] == "not_dispatched") {
+                return store
+                    .retry_unsent_superagent_operation(
+                        owner,
+                        worker,
+                        &id,
+                        previous,
+                        &evidence.marker,
+                    )
+                    .await
+                    .map(|admitted| admitted.then_some(id))
+                    .map_err(|_| "unavailable");
+            }
             // A crash reservation is counted and blocks the same causal chain.
             if result
                 .as_ref()
@@ -221,17 +234,12 @@ async fn propose(
     if input.markdown.trim().is_empty() || input.markdown.len() > 12000 {
         return Err("candidate_size_limit");
     }
-    let observed = evidence(&state.hub, &input.session_id)?;
+    let observed = scope::current_evidence(state, &input.session_id).await?;
     if observed.marker != input.evidence {
         return Err("evidence_changed");
     }
     // One learning candidate per human task, shared across coordinator
     // replacement and retries. The owner reviews/exports it in Settings.
-    let Some(slot) =
-        reserve_chain(store, owner, &input.session_id, &observed, "candidate", 1).await?
-    else {
-        return Err("candidate_already_recorded");
-    };
     match store
         .admit_agent_operation(owner, &meta.id, id, request_hash)
         .await
@@ -240,6 +248,11 @@ async fn propose(
         Admission::New => {}
         _ => return Err("outcome_unknown"),
     }
+    let Some(slot) =
+        reserve_chain(store, owner, &input.session_id, &observed, "candidate", 1).await?
+    else {
+        return Err("candidate_already_recorded");
+    };
     let result = json!({"status":"candidate","kind":"pattern_candidate","project":project_id,
                 "session_id":input.session_id,"evidence":observed.marker,"turn_seq":observed.seq,
                 "markdown":input.markdown,"adopted":false});

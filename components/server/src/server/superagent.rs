@@ -10,7 +10,9 @@ mod actions;
 mod dispatch;
 pub(super) use dispatch::dispatch;
 mod scope;
-use scope::{Evidence, evidence, live, same_machine, target, visible};
+#[cfg(test)]
+use scope::evidence;
+use scope::{Evidence, live, same_machine, target, visible};
 #[cfg(test)]
 mod tests;
 mod wake;
@@ -45,11 +47,23 @@ pub(super) async fn restricted(state: &AppState, meta: &SessionMeta) -> Result<b
     let Some(owner) = meta.owner_user_id.as_deref() else {
         return Ok(false);
     };
-    Ok(settings(state, owner)
-        .await?
-        .1
-        .coordinator(&meta.id)
-        .is_some())
+    let projects = state
+        .store
+        .as_ref()
+        .ok_or("unavailable")?
+        .superagent_projects(owner)
+        .await
+        .map_err(|_| "unavailable")?;
+    let projects = projects.as_object().ok_or("invalid_superagent_bindings")?;
+    if projects
+        .values()
+        .any(|p| p["coordinator"].as_str().is_none())
+    {
+        return Err("invalid_superagent_bindings");
+    }
+    Ok(projects
+        .values()
+        .any(|p| p["coordinator"].as_str() == Some(&meta.id)))
 }
 
 pub(super) async fn validate_change(
@@ -57,9 +71,11 @@ pub(super) async fn validate_change(
     owner: &str,
     value: &Value,
 ) -> Result<(), &'static str> {
-    let (_, old) = settings(state, owner).await?;
-    let config = old.patched(value)?;
+    let (old, config) = editing_settings(state, owner, value).await?;
     for project in config.projects.values() {
+        if state.hub.is_managed_child(&project.coordinator) {
+            return Err("managed_child_not_eligible");
+        }
         if project.mode == Mode::Off
             && old.coordinator(&project.coordinator).is_some()
             && !config.sessions.keys().any(|id| {
@@ -85,6 +101,9 @@ pub(super) async fn validate_change(
         }
     }
     for (id, participation) in &config.sessions {
+        if state.hub.is_managed_child(id) {
+            return Err("managed_child_not_eligible");
+        }
         if config
             .effective(id)
             .is_some_and(|(_, _, mode)| mode == Mode::Off)
@@ -118,8 +137,7 @@ pub(super) async fn validate_editor(
     actor: &SessionMeta,
     value: &Value,
 ) -> Result<(), &'static str> {
-    let (_, before) = settings(state, owner).await?;
-    let after = before.patched(value)?;
+    let (before, after) = editing_settings(state, owner, value).await?;
     scope::editable(
         &state.hub,
         &state.colocated_machines,
@@ -127,6 +145,34 @@ pub(super) async fn validate_editor(
         &before,
         &after,
     )
+}
+
+async fn editing_settings(
+    state: &AppState,
+    owner: &str,
+    changes: &Value,
+) -> Result<(Settings, Settings), &'static str> {
+    let prefs = state
+        .store
+        .as_ref()
+        .ok_or("unavailable")?
+        .preferences(owner, crate::superagent::SCOPE)
+        .await
+        .map_err(|_| "unavailable")?
+        .ok_or("unavailable")?;
+    let current = &prefs.values["configuration"];
+    let after = Settings::patch_value(current, changes)?;
+    let mut bindings = current.clone();
+    // Keep every old binding for permission and busy-unbind checks, even when
+    // source decoding is broken. A replacement still touches all coordinators.
+    let before = match serde_json::from_value::<Settings>(bindings.clone()) {
+        Ok(before) => before,
+        Err(_) => {
+            bindings["sources"] = json!([]);
+            serde_json::from_value(bindings).map_err(|_| "invalid_superagent_bindings")?
+        }
+    };
+    Ok((before, after))
 }
 
 fn model_ready(
@@ -202,7 +248,7 @@ pub(super) async fn read(
         "superagent.context" => {
             let id = args["session_id"].as_str().ok_or("invalid_argument")?;
             let (participation, _, mode) = target(&state.hub, owner, meta, &config, id)?;
-            let evidence = evidence(&state.hub, id)?;
+            let evidence = scope::current_evidence(state, id).await?;
             target(&state.hub, owner, meta, &config, id)?;
             json!({"session_id":id,"evidence":evidence.marker,"turn_seq":evidence.seq,
                 "mode":mode,"mandate":participation.mandate,"catalog_digest":catalog.digest,
@@ -231,24 +277,50 @@ fn page(text: &str, args: &Value) -> Result<Value, &'static str> {
     )
 }
 
+#[derive(Default, Deserialize)]
+pub(super) struct ActivityQuery {
+    before: Option<String>,
+}
+
 pub(super) async fn activity(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
+    Query(query): Query<ActivityQuery>,
 ) -> Response {
+    let cursor: (i64, String, String) = match query.before {
+        Some(value) => match serde_json::from_str(&value) {
+            Ok(cursor) => cursor,
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        },
+        None => (i64::MAX, String::new(), String::new()),
+    };
     let result = match state.store.as_ref() {
         Some(store) => {
             store
-                .superagent_activity(&auth.principal.user_id, i64::MAX)
+                .superagent_activity(&auth.principal.user_id, &cursor)
                 .await
         }
         None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     match result {
-        Ok(rows) => (
-            [(header::CACHE_CONTROL, "no-store")],
-            Json(json!({"activity":rows})),
-        )
-            .into_response(),
+        Ok(rows) => {
+            let next = (rows.len() == 100)
+                .then(|| rows.last())
+                .flatten()
+                .map(|row| {
+                    serde_json::to_string(&(
+                        row["created_at_ms"].as_i64().unwrap(),
+                        row["operation"].as_str().unwrap(),
+                        row["session_id"].as_str().unwrap(),
+                    ))
+                    .unwrap()
+                });
+            (
+                [(header::CACHE_CONTROL, "no-store")],
+                Json(json!({"activity":rows,"next":next})),
+            )
+                .into_response()
+        }
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }

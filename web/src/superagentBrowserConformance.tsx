@@ -60,25 +60,25 @@ export function superagentBrowserFixture() {
     changes: { configuration: SuperagentConfig };
   }[] = [];
   const receipts = new Map<string, unknown>();
-  const preferences = () => ({
+  const preferences = (compact = false) => ({
     scope: "superagent",
     revision,
-    values: { configuration: config },
+    values: { configuration: compact ? { ...config, sources: [] } : config },
   });
   return {
     fetch(url: string, init?: RequestInit): Promise<Response> | undefined {
-      if (url === "/api/preferences/superagent") {
+      if (url.split("?")[0] === "/api/preferences/superagent") {
         return Promise.resolve(
           Response.json({
             dataset: {
               dataset_id: "calls-fixture",
               user_id: "call-account-fixture",
             },
-            preferences: preferences(),
+            preferences: preferences(url.includes("compact=true")),
           }),
         );
       }
-      if (url === "/api/preferences" && init?.method === "PUT") {
+      if (url.split("?")[0] === "/api/preferences" && init?.method === "PUT") {
         const input = JSON.parse(String(init.body));
         if (input.scope !== "superagent") return undefined;
         writes.push(input);
@@ -95,9 +95,12 @@ export function superagentBrowserFixture() {
             ),
           );
         }
-        config = input.changes.configuration;
+        config = { ...config, ...input.changes.configuration };
         revision++;
-        const result = { status: "committed", preferences: preferences() };
+        const result = {
+          status: "committed",
+          preferences: preferences(url.includes("compact=true")),
+        };
         receipts.set(input.operation, result);
         if (loseNextResponse) {
           loseNextResponse = false;

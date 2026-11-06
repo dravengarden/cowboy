@@ -67,6 +67,11 @@ impl Hub {
                     && !s.meta.paused
                     && !s.meta.closing
                     && !s.meta.system
+                    && !s
+                        .meta
+                        .execution_binding
+                        .as_ref()
+                        .is_some_and(|b| b.managed().is_some())
                     && s.meta.trashed_at_ms.is_none()
                     && s.meta.attention.is_empty()
                     && s.queue.is_empty()
@@ -112,6 +117,9 @@ impl Hub {
         cmid: String,
         context: crate::superagent::DispatchContext,
     ) -> bool {
+        if self.is_managed_child(session_id) || self.is_managed_child(context.peer()) {
+            return false;
+        }
         let dispatch = self.inner.dispatch_tx.lock();
         let Some(tx) = dispatch.as_ref() else {
             return false;
@@ -208,6 +216,41 @@ mod tests {
             evidence: "fixture".into(),
             follow_up: false,
         }
+    }
+
+    #[tokio::test]
+    async fn superagent_cannot_dispatch_to_a_managed_child() {
+        let hub = fixture();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        hub.set_dispatch_tx(tx);
+        let binding = crate::execution_environment::ManagedChildV1 {
+            schema: 1,
+            phase: "managed_child".into(),
+            session_id: "worker".into(),
+            parent_session_id: "parent".into(),
+            machine_id: "hawk".into(),
+            workspace_id: "project".into(),
+            cwd: "/owned/child".into(),
+            profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+        };
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("worker")
+            .unwrap()
+            .meta
+            .execution_binding = Some(crate::execution_environment::ExecutionBinding::from_record(
+            serde_json::to_value(binding).unwrap(),
+        ));
+        assert!(hub.is_managed_child("worker"));
+        assert!(!hub.dispatch_superagent_once(
+            "worker",
+            "follow".into(),
+            "cowboy-superagent:child".into(),
+            context()
+        ));
+        assert!(rx.try_recv().is_err());
+        assert!(!hub.session_has_in_flight_prompt("worker"));
     }
 
     #[tokio::test]

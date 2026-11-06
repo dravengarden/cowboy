@@ -38,7 +38,7 @@ interface Update {
   operation: string;
   scope: "superagent";
   expected_revision: number;
-  changes: { configuration: SuperagentConfig };
+  changes: { configuration: Partial<SuperagentConfig> };
 }
 
 function saveError(code: unknown): string {
@@ -95,7 +95,7 @@ export function parsePatternBundle(text: string): PatternSource[] {
   return sources;
 }
 
-export function useSuperagentSettings() {
+export function useSuperagentSettings(compact = false) {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -106,7 +106,7 @@ export function useSuperagentSettings() {
   current.current = snapshot;
   const load = useCallback(async () => {
     try {
-      const response = await fetch("/api/preferences/superagent", {
+      const response = await fetch(`/api/preferences/superagent${compact ? "?compact=true" : ""}`, {
         cache: "no-store",
         signal: productSessionSignal(),
       });
@@ -122,7 +122,7 @@ export function useSuperagentSettings() {
     } catch (cause) {
       if (alive.current) setError(String(cause));
     }
-  }, []);
+  }, [compact]);
   useEffect(() => {
     alive.current = true;
     void load();
@@ -141,12 +141,13 @@ export function useSuperagentSettings() {
   const commit = async (input: Update) => {
     const observed = current.current;
     if (writing.current || !observed) return;
+    if (Object.keys(input.changes.configuration).length === 0) return;
     writing.current = true;
     setSaving(true);
     setPending(input);
     setError(undefined);
     try {
-      const response = await fetch("/api/preferences", {
+      const response = await fetch(`/api/preferences${compact ? "?compact=true" : ""}`, {
         method: "PUT",
         signal: productSessionSignal(),
         headers: {
@@ -186,7 +187,17 @@ export function useSuperagentSettings() {
             operation: crypto.randomUUID(),
             scope: "superagent",
             expected_revision: snapshot.preferences.revision,
-            changes: { configuration },
+            changes: {
+              configuration: Object.fromEntries(
+                Object.entries(configuration).filter(
+                  ([key, value]) =>
+                    JSON.stringify(value) !==
+                    JSON.stringify(
+                      snapshot.preferences.values.configuration[key as keyof SuperagentConfig],
+                    ),
+                ),
+              ),
+            },
           })
         : Promise.resolve(),
     retry: () => {

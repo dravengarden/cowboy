@@ -13,6 +13,9 @@ pub(super) fn visible(
     owner: &str,
     id: &str,
 ) -> Result<SessionMeta, &'static str> {
+    if hub.is_managed_child(id) {
+        return Err("managed_child_not_eligible");
+    }
     hub.session_info(id)
         .map(|i| i.meta)
         .filter(|m| {
@@ -81,23 +84,87 @@ pub(super) fn editable(
     Ok(())
 }
 
+fn human_prompt(e: &crate::core::Envelope) -> bool {
+    crate::prompt_origin::origin_from_cmid(e.cmid.as_deref()).is_human()
+        && matches!(&e.event, crate::core::Event::Update { update }
+            if update["sessionUpdate"] == "user_message_chunk"
+            && crate::prompt_origin::is_human_prompt_update(update))
+}
+
+pub(super) async fn current_evidence(state: &AppState, id: &str) -> Result<Evidence, &'static str> {
+    history_evidence(&state.hub, state.store.as_ref(), id).await
+}
+
+pub(super) async fn history_evidence(
+    hub: &crate::core::Hub,
+    store: Option<&crate::store::Store>,
+    id: &str,
+) -> Result<Evidence, &'static str> {
+    let info = hub.session_info(id).ok_or("not_found")?;
+    let (mut log, _) = hub.snapshot(id).ok_or("not_found")?;
+    if !log.iter().any(human_prompt) {
+        let store = store.ok_or("unavailable")?;
+        let mut before = log.first().map_or(info.event_count, |e| e.seq);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let (page, next, done) =
+                tokio::time::timeout_at(deadline, store.history_page(id, before, 200))
+                    .await
+                    .map_err(|_| "causal_history_scan_timeout")?
+                    .map_err(|_| "causal_history_unavailable")?;
+            if !log
+                .iter()
+                .any(|e| matches!(e.event, crate::core::Event::TurnEnd { .. }))
+                && let Some(end) = page
+                    .iter()
+                    .rev()
+                    .find(|e| matches!(e.event, crate::core::Event::TurnEnd { .. }))
+            {
+                log.insert(0, end.clone());
+            }
+            if let Some(human) = page.iter().rev().find(|e| human_prompt(e)) {
+                log.insert(0, human.clone());
+                break;
+            }
+            if done {
+                return Err("causal_history_unavailable");
+            }
+            let next = next
+                .filter(|next| *next < before)
+                .ok_or("causal_history_unavailable")?;
+            before = next;
+        }
+    }
+    let current = hub.session_info(id).ok_or("not_found")?;
+    if current.event_count != info.event_count
+        || current.meta.agent_session_id != info.meta.agent_session_id
+    {
+        return Err("evidence_changed");
+    }
+    evidence_from_log(&info, id, &log)
+}
+
+#[cfg(test)]
 pub(super) fn evidence(hub: &crate::core::Hub, id: &str) -> Result<Evidence, &'static str> {
     let info = hub.session_info(id).ok_or("not_found")?;
+    let (log, _) = hub.snapshot(id).ok_or("not_found")?;
+    evidence_from_log(&info, id, &log)
+}
+
+fn evidence_from_log(
+    info: &crate::core::SessionInfo,
+    id: &str,
+    log: &[crate::core::Envelope],
+) -> Result<Evidence, &'static str> {
     let native = info
         .meta
         .agent_session_id
         .as_ref()
         .ok_or("native_session_unknown")?;
-    let (log, _) = hub.snapshot(id).ok_or("not_found")?;
     let human = log
         .iter()
         .rev()
-        .find(|e| {
-            crate::prompt_origin::origin_from_cmid(e.cmid.as_deref()).is_human()
-                && matches!(&e.event,
-        crate::core::Event::Update { update } if update["sessionUpdate"] == "user_message_chunk"
-            && crate::prompt_origin::is_human_prompt_update(update))
-        })
+        .find(|e| human_prompt(e))
         .ok_or("causal_history_unavailable")?;
     let end = log
         .iter()

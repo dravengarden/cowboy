@@ -28,7 +28,7 @@ const modes = [
 ] as const;
 
 export function SessionSuperagentSettings({ sessionId }: { sessionId: string }): React.JSX.Element {
-  const settings = useSuperagentSettings();
+  const settings = useSuperagentSettings(true);
   const config = settings.config;
   const participation = config?.sessions[sessionId];
   const [draftMandate, setDraftMandate] = useState<string>();
@@ -241,7 +241,7 @@ export function SuperagentSettings(): React.JSX.Element {
           {settings.error ?? importError}
         </Alert>
       )}
-      <SuperagentActivity config={config} />
+      <SuperagentActivity />
     </Stack>
   );
 }
@@ -416,6 +416,7 @@ function ProjectPolicy({
 }
 
 interface Activity {
+  session_id: string;
   operation: string;
   created_at_ms: number;
   result: {
@@ -426,34 +427,54 @@ interface Activity {
     markdown?: string;
   } | null;
 }
-function SuperagentActivity({ config }: { config: SuperagentConfig }): React.JSX.Element {
+function SuperagentActivity(): React.JSX.Element {
   const [activity, setActivity] = useState<Activity[]>([]);
+  const [next, setNext] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const loadingRef = useRef(false);
   const [error, setError] = useState<string>();
-  const load = async () => {
+  const load = async (more = false) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setLoading(true);
     try {
-      const response = await fetch("/api/superagent/activity", {
-        cache: "no-store",
-        signal: productSessionSignal(),
-      });
+      const response = await fetch(
+        "/api/superagent/activity" + (more && next ? `?before=${encodeURIComponent(next)}` : ""),
+        {
+          cache: "no-store",
+          signal: productSessionSignal(),
+        },
+      );
       if (!response.ok) throw new Error("Could not load supervision activity.");
-      setActivity((await response.json()).activity);
+      const result = await response.json();
+      setActivity((old) => (more ? [...old, ...result.activity] : result.activity));
+      setNext(result.next ?? null);
       setError(undefined);
     } catch (cause) {
       setError(String(cause));
+    } finally {
+      loadingRef.current = false;
+      setLoading(false);
     }
   };
   return (
     <Stack spacing={1}>
-      <Button onClick={() => void load()}>Load recent activity and pattern candidates</Button>
+      <Button disabled={loading} onClick={() => void load()}>
+        Load recent activity and pattern candidates
+      </Button>
+      {next && (
+        <Button disabled={loading} onClick={() => void load(true)}>
+          Load older activity and candidates
+        </Button>
+      )}
       {error && <Alert severity="error">{error}</Alert>}
       {activity
-        .filter(
-          (item) =>
-            !item.operation.startsWith("sa-request-") &&
-            (!item.result?.project || config.projects[item.result.project]),
-        )
+        .filter((item) => !item.operation.startsWith("sa-request-"))
         .map((item) => (
-          <Box key={item.operation} sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
+          <Box
+            key={`${item.session_id}/${item.operation}`}
+            sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}
+          >
             <Typography variant="body2">
               {item.result?.project} · {item.result?.kind ?? "Reserved operation"} ·{" "}
               {item.result?.status ?? "Outcome unknown"}

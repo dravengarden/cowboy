@@ -84,7 +84,7 @@ async fn wake(
         return Err("session_busy_or_held");
     }
     model_ready(state, &coordinator, project.preset)?;
-    let observed = evidence(&state.hub, id)?;
+    let observed = scope::current_evidence(state, id).await?;
     quota_ready(state, owner, &coordinator).await?;
     let Some(operation) = actions::reserve_chain(
         state.store.as_ref().ok_or("unavailable")?,

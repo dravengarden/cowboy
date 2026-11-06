@@ -402,6 +402,10 @@ impl Hub {
             .as_deref()
             .filter(|id| id.starts_with("cowboy-superagent:"))
         {
+            self.record_session_error(
+                session_id,
+                &format!("Super-agent delivery returned without replay: {id}"),
+            );
             self.abandon_superagent_prompt(session_id, id);
             return;
         }

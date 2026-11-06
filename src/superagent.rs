@@ -98,10 +98,21 @@ pub struct Participation {
 
 impl Settings {
     pub fn patched(&self, changes: &serde_json::Value) -> Result<Self, &'static str> {
+        Self::patch_value(&serde_json::to_value(self).unwrap(), changes)
+    }
+
+    /// Replace damaged library fields before decoding, so owners can repair an import.
+    pub fn patch_value(
+        current: &serde_json::Value,
+        changes: &serde_json::Value,
+    ) -> Result<Self, &'static str> {
         if !patch_shape(changes) {
             return Err("invalid_superagent_settings");
         }
-        let mut next = serde_json::to_value(self).unwrap();
+        let mut next = current.clone();
+        if !next.is_object() {
+            return Err("invalid_superagent_settings");
+        }
         for (key, value) in changes["configuration"].as_object().unwrap() {
             next[key] = value.clone();
         }

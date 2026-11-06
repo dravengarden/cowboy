@@ -23,7 +23,11 @@ async fn admitted(state: &AppState, context: &DispatchContext) -> Result<(), &'s
     if !context.follow_up {
         wake::quota_ready(state, &context.owner, &coordinator).await?;
     }
-    if evidence(&state.hub, &context.worker)?.marker != context.evidence {
+    if scope::current_evidence(state, &context.worker)
+        .await?
+        .marker
+        != context.evidence
+    {
         return Err("evidence_changed");
     }
     let owner = state
@@ -92,7 +96,7 @@ pub(in crate::server) async fn dispatch(state: Arc<AppState>, req: crate::core::
     if result.is_err() {
         state.hub.abandon_superagent_prompt(&req.session_id, cmid);
     }
-    let outcome = json!({"kind":"delivery","status":if result.is_ok(){"sent"}else{"not_sent"},
+    let outcome = json!({"kind":"delivery","status":if result.is_ok(){"handed_off"}else{"not_sent"},
         "session_id":context.worker,"coordinator":context.coordinator,"evidence":context.evidence,
         "reason":result.err(),"completion":"Native task completion requires fresh evidence."});
     if let Err(error) = store

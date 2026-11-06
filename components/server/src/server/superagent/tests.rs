@@ -1,5 +1,63 @@
 use super::*;
 
+#[tokio::test]
+async fn superagent_long_turn_recovers_human_anchor_from_durable_history() {
+    use crate::core::{Envelope, Event};
+    let hub = crate::core::Hub::new();
+    let owner = "a".repeat(32);
+    let meta = add_session(&hub, "worker", &owner, "hawk");
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::store::Store::connect("sqlite::memory:", dir.path().into())
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    store
+        .insert_user(&crate::store::ProductUser {
+            id: owner,
+            username: "reader".into(),
+            password_algo: "argon2id".into(),
+            password_hash: "unused-fixture".into(),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            disabled_at_ms: None,
+        })
+        .await
+        .unwrap();
+    store.insert_session(&meta).await.unwrap();
+    let mut rows = Vec::new();
+    let progress = "progress".repeat(1024);
+    for n in 0..450 {
+        let event = if n == 449 {
+            Event::TurnEnd {
+                stop_reason: "end_turn".into(),
+                usage: None,
+            }
+        } else {
+            Event::Update {
+                update: json!({"sessionUpdate":if n==0 {"user_message_chunk"} else {"agent_message_chunk"},"content":{"type":"text","text":if n==0 {"task"} else {&progress}}}),
+            }
+        };
+        hub.push("worker", event.clone());
+        let (tail, _) = hub.snapshot("worker").unwrap();
+        rows.push(Envelope {
+            session_id: "worker".into(),
+            seq: tail.last().unwrap().seq,
+            event,
+            cmid: None,
+        });
+    }
+    store
+        .upsert_event_batch(&rows, &std::collections::HashMap::new())
+        .await
+        .unwrap();
+    assert!(evidence(&hub, "worker").is_err());
+    let recovered = scope::history_evidence(&hub, Some(&store), "worker")
+        .await
+        .unwrap();
+    assert_eq!(recovered.seq, rows.last().unwrap().seq);
+    assert!(recovered.text.len() < 80 * (progress.len() + 100));
+}
+
 fn add_session(hub: &crate::core::Hub, id: &str, owner: &str, machine: &str) -> SessionMeta {
     hub.create_session(crate::core::SessionRegistration {
         id: id.into(),
@@ -285,14 +343,14 @@ async fn superagent_config_and_unknown_reservation_survive_reopen() {
     );
     assert!(
         store
-            .superagent_activity("other-owner", i64::MAX)
+            .superagent_activity("other-owner", &(i64::MAX, String::new(), String::new()))
             .await
             .unwrap()
             .is_empty()
     );
     assert_eq!(
         store
-            .superagent_activity("owner", i64::MAX)
+            .superagent_activity("owner", &(i64::MAX, String::new(), String::new()))
             .await
             .unwrap()
             .len(),

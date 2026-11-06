@@ -104,13 +104,31 @@ pub(super) async fn update_value(
     }
 }
 
+#[derive(Default, Deserialize)]
+pub(super) struct Projection {
+    #[serde(default)]
+    compact: bool,
+}
+
+fn project_superagent(value: &mut Value, compact: bool) {
+    if compact {
+        for key in ["preferences", "current"] {
+            if value[key]["scope"] == crate::superagent::SCOPE {
+                value[key]["values"]["configuration"]["sources"] = json!([]);
+            }
+        }
+    }
+}
+
 pub(super) async fn read(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
     Path(scope): Path<String>,
+    Query(projection): Query<Projection>,
 ) -> Response {
     match read_value(&state, &auth.principal.user_id, &scope).await {
         Ok(mut value) => {
+            project_superagent(&mut value, projection.compact);
             value["dataset"] =
                 serde_json::to_value(sync_dataset::descriptor(&state.service_id, &auth.principal))
                     .unwrap();
@@ -138,6 +156,7 @@ pub(super) async fn update(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
     headers: HeaderMap,
+    Query(projection): Query<Projection>,
     Json(input): Json<Update>,
 ) -> Response {
     // Bind the write to the identity that read the editor, even after a cookie switch.
@@ -165,15 +184,18 @@ pub(super) async fn update(
     )
     .await
     {
-        Ok(value) => (
-            if value.get("error").is_some() {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::OK
-            },
-            Json(value),
-        )
-            .into_response(),
+        Ok(mut value) => {
+            project_superagent(&mut value, projection.compact);
+            (
+                if value.get("error").is_some() {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::OK
+                },
+                Json(value),
+            )
+                .into_response()
+        }
         Err(code) => (
             if code == "outcome_unknown" || code == "unavailable" {
                 StatusCode::SERVICE_UNAVAILABLE

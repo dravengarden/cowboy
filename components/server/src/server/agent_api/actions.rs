@@ -492,6 +492,9 @@ async fn execute(
     let operation = operation
         .filter(|id| crate::managed_calls::valid_id(id))
         .ok_or("invalid_operation")?;
+    if operation.starts_with("sa-") {
+        return Err("reserved_operation_prefix");
+    }
     match action {
         "superagent.follow_up" | "superagent.propose" => Ok(success(
             super::super::superagent::execute(state, meta, action, args, operation).await?,

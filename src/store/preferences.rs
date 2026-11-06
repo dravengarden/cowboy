@@ -196,8 +196,7 @@ impl Store {
             let mut next: Preferences = value.map(|v| serde_json::from_str(&v)).transpose()?.unwrap_or_else(|| defaults(&change.scope).unwrap());
             if next.revision != change.expected_revision { return Ok(PreferenceResult::Conflict(next)); }
             if change.scope == crate::superagent::SCOPE {
-                let current: crate::superagent::Settings = serde_json::from_value(next.values["configuration"].clone())?;
-                match current.patched(&change.changes) {
+                match crate::superagent::Settings::patch_value(&next.values["configuration"], &change.changes) {
                     Ok(configuration) => next.values["configuration"] = serde_json::to_value(configuration)?,
                     Err(code) => return Ok(PreferenceResult::Invalid(code)),
                 }
