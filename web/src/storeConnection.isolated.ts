@@ -34,6 +34,16 @@ class FakeSocket extends EventTarget {
   close(): void {
     this.readyState = FakeSocket.CLOSED;
   }
+  /** The server accepts the upgrade with the product sync subprotocol. */
+  accept(): void {
+    this.readyState = FakeSocket.OPEN;
+    this.protocol = realDatabase.PRODUCT_SYNC_SUBPROTOCOL;
+    this.onopen?.(new Event("open"));
+  }
+  /** The server sends one Outbound frame. */
+  receive(frame: unknown): void {
+    this.onmessage?.({ data: JSON.stringify(frame) } as MessageEvent);
+  }
   /** The server ends this socket. */
   drop(code = 1006): void {
     this.readyState = FakeSocket.CLOSED;
@@ -67,6 +77,7 @@ globals.location = { protocol: "https:", host: "cowboy.test" };
 // UI modules the store reaches probe the DOM at import; install the document
 // only after the import so they take their non-browser paths.
 const store = await import("./store.ts");
+globals.window = globalThis;
 globals.requestAnimationFrame = (callback: FrameRequestCallback): number =>
   setTimeout(() => callback(performance.now()), 16) as unknown as number;
 globals.cancelAnimationFrame = (handle: number): void => clearTimeout(handle);
@@ -120,4 +131,28 @@ test("losing the current socket reconnects after the first backoff, not before",
   expect(FakeSocket.all.length).toBe(before);
   await until(() => FakeSocket.all.length === before + 1, 3000);
   expect(new URL(FakeSocket.all.at(-1)!.url).searchParams.get("dataset")).toBe(dataset.dataset_id);
+});
+
+test("an open socket is live only after bootstrap completes", async () => {
+  const socket = FakeSocket.all.at(-1)!;
+  socket.accept();
+  expect(store.getSyncStatus().phase).not.toBe("live");
+  socket.receive({ type: "bootstrap_complete" });
+  await until(() => store.getSyncStatus().phase === "live");
+});
+
+test("capacity admission presents waiting with the queue position", async () => {
+  const before = FakeSocket.all.length;
+  store.retrySyncNow();
+  await until(() => FakeSocket.all.length === before + 1);
+  const socket = FakeSocket.all.at(-1)!;
+  socket.accept();
+  socket.receive({
+    type: "client_capacity",
+    capacity: { status: "waiting", position: 3, channel_limit: 4 },
+  });
+  await until(() => store.getSyncStatus().phase === "waiting");
+  expect(store.getSyncStatus().position).toBe(3);
+  socket.receive({ type: "bootstrap_complete" });
+  await until(() => store.getSyncStatus().phase === "live");
 });
