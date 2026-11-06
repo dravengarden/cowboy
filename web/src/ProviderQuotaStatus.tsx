@@ -162,7 +162,7 @@ export function ProviderQuotaStatusRow({
         minWidth: 0,
         boxSizing: "border-box",
         px: desktop ? 1 : 1.5,
-        minHeight: desktop ? desktopSize(32) : mobileComposerPanelHeaderMinHeight,
+        minHeight: desktop ? desktopSize(28) : mobileComposerPanelHeaderMinHeight,
         ...(desktop && { borderBottom: 1, borderColor: "divider" }),
       }}
     >
