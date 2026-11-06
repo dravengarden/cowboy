@@ -18,6 +18,7 @@ use super::super::{AppState, CodeReadScope};
 use super::only_keys;
 use crate::core::SessionMeta;
 
+mod acquire;
 mod diagnostics;
 
 /// Smaller than Review's bound: replies pass the 256 KiB broker limit.

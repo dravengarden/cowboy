@@ -156,6 +156,18 @@ Until then agents receive only observations that already exist safely
 (buffers a Code pane holds, structure tags, `check@1` results), or
 `unavailable`.
 
+**Agent acquisition (implemented, Controller with Zed 1.24.0).** The owner
+chose the session's "Project language servers" switch as the acquisition
+authority (2026-11-06). `code.diagnostics` opens a file of the session's own
+worktree that no Code pane holds under one deterministic legacy owner per
+session (`cowboy-agent-<session>`), so a retry or Controller restart re-adopts
+rather than leaks. Agent holdings are a bounded share below interactive use:
+4 per session, 8 per Machine, at most 2 agent-warmed worktrees per Machine;
+they are released after 5 minutes idle or when the switch is off. Gates 1 and
+2 hold for opens (target-confined admission, same-process recovery). Gate 4 is
+met by counts only: language-server RSS/CPU are not measured, and navigation
+and synchronization Unknowns keep their own fences.
+
 ### Baselines, attribution, matching
 
 - Baselines are immutable, content-matched captures at a read or pre-write
@@ -186,7 +198,7 @@ immediately.
 | --- | --- |
 | `code.search(query, {regex?, case_sensitive?, path?, limit?})` | bounded content matches with lines (core; implemented) |
 | `code.outline(path)`, `code.symbols(query, {limit?})` | syntax structure (tree-sitter tags; implemented, `heuristic`); language-engine refinement later |
-| `code.diagnostics(paths)` | implemented for files a Code pane already holds: diagnostics and counts with a per-file state from per-server analysis-frontier evidence (`document_current`, `stale`, otherwise `last_observed`), or `not_open`/`restricted`/`refused`/`unavailable`; acquires nothing. Baseline comparison comes with P2 |
+| `code.diagnostics(paths)` | implemented: diagnostics and counts with a per-file state from per-server analysis-frontier evidence (`document_current`, `stale`, otherwise `last_observed`), or `not_open`/`restricted`/`refused`/`unavailable`. A file no Code pane holds is acquired for the agent (`acquired: true`, see Acquisition) and waited on for up to 4 s. Baseline comparison comes with P2 |
 | `code.summary()` | observed-scope counts with coverage |
 | `code.definition/references/implementations(locator)`, `code.hover(locator)` | after owned-navigation acceptance only |
 
