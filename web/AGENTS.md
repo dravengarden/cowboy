@@ -107,6 +107,11 @@ the peek, or freeze the session list to make a swipe cheaper.
 
 ## Desktop and mobile are separate products
 
+Follow [Cowboy's core UX principles](../docs/ux-principles.md). Efficiency is
+the deciding criterion: Mobile puts frequent control near the bottom without
+covering reading content; Desktop keeps useful commands visible and uses its
+keyboard grammar. The Code Review bottom workbench follows this contract.
+
 Mobile cover readers and inspectors use the shared `Sheet.islandContext` (or
 `MobileSheetContextDock` for direct DetentSheet owners) to place identity and
 status in the reusable `SheetContextSummary` beside the independent round

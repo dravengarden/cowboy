@@ -65,11 +65,10 @@ const MEMORY_MAX_AGE_MS = 5 * 60_000;
 const MEMORY_MAX_PAGES = 128;
 const DIRECTORY_PREFETCH_CONCURRENCY = 3;
 const DIRECTORY_PREFETCH_LIMIT = 12;
-// The Code Review bottom bar below an inline navigator: its 44px toolbar plus
-// the bottom padding ReviewApp gives it.
+// Both navigator footers are in flow. Reserve the keyboard only above the
+// footer that already owns the safe area; never reserve a second action bar.
 const INLINE_NAV_HEIGHT =
-  "(44px + max(calc(env(safe-area-inset-bottom, 0px) - 18px), 12px))";
-// The sidebar's floating action island: its offset, 46px row and glass rim.
+  "(48px + max(env(safe-area-inset-bottom, 0px), 12px))";
 const SIDEBAR_ACTIONS_RESERVE =
   "calc(max(env(safe-area-inset-bottom, 0px), 12px) + 64px)";
 
@@ -647,7 +646,7 @@ export function ReviewFileTree({
         // the on-screen keyboard up it rides the keyboard's top edge instead.
         pb: embedded
           ? `max(8px, calc(var(--kb-inset, 0px) + 8px - ${INLINE_NAV_HEIGHT}))`
-          : `max(${SIDEBAR_ACTIONS_RESERVE}, calc(var(--kb-inset, 0px) + 8px))`,
+          : `max(8px, calc(var(--kb-inset, 0px) + 8px - ${SIDEBAR_ACTIONS_RESERVE}))`,
         borderTop: 1,
         borderColor: "divider",
       }}
@@ -725,7 +724,7 @@ export function ReviewFileTree({
         label="Text"
         onClick={() =>
           setSearchMode((mode) => mode === "text" ? "files" : "text")}
-        sx={{ height: 36, borderRadius: 999, flex: "0 0 auto" }}
+        sx={{ height: 44, borderRadius: 999, flex: "0 0 auto" }}
       />
       {documentChanges && (
         <Chip
@@ -739,7 +738,7 @@ export function ReviewFileTree({
             setQuery("");
             setShowDocuments((value) => !value);
           }}
-          sx={{ height: 36, borderRadius: 999, flex: "0 0 auto" }}
+          sx={{ height: 44, borderRadius: 999, flex: "0 0 auto" }}
         />
       )}
     </Stack>

@@ -318,7 +318,7 @@
     "web/src/mobile/review/RemoteReviewApp.tsx::PullRequest": 314,
     "web/src/mobile/review/RemoteReviewApp.tsx::RemoteReviewApp": 193,
     "web/src/mobile/review/ReviewApp.tsx::ReviewApp": 2254,
-    "web/src/mobile/review/ReviewChanges.tsx::GitTreeRows": 162,
+    "web/src/mobile/review/ReviewChangeRows.tsx::GitTreeRows": 162,
     "web/src/mobile/review/ReviewChanges.tsx::ReviewChanges": 562,
     "web/src/mobile/review/ReviewCommit.tsx::ReviewCommit": 221,
     "web/src/mobile/review/ReviewDrawerShell.tsx::ReviewDrawerShell": 222,

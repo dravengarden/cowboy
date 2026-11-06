@@ -1424,75 +1424,6 @@ export function DocumentView({
           </Button>
         </Box>
       )}
-      {(truncated || counts || nextCursor || loadMoreError) && (
-        <Stack
-          direction="row"
-          spacing={1}
-          alignItems="center"
-          sx={{ px: 1.5, py: 0.75, borderBottom: 1, borderColor: "divider" }}
-        >
-          {counts && (
-            <>
-              <Typography variant="caption" color="success.main">
-                +{counts.added}
-              </Typography>
-              <Typography variant="caption" color="error.main">
-                −{counts.removed}
-              </Typography>
-            </>
-          )}
-          {hunks.length > 0 && (
-            <>
-              <Box sx={{ flex: 1 }} />
-              <IconButton
-                size="small"
-                aria-label="Previous hunk"
-                disabled={hunkIndex <= 0}
-                onClick={() => setHunkIndex((value) => value - 1)}
-              >
-                <KeyboardArrowUp fontSize="small" />
-              </IconButton>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ minWidth: 36, textAlign: "center" }}
-              >
-                {hunkIndex + 1}/{hunks.length}
-              </Typography>
-              <IconButton
-                size="small"
-                aria-label="Next hunk"
-                disabled={hunkIndex >= hunks.length - 1}
-                onClick={() => setHunkIndex((value) => value + 1)}
-              >
-                <KeyboardArrowDown fontSize="small" />
-              </IconButton>
-            </>
-          )}
-          {nextCursor && (
-            <Button
-              size="small"
-              variant="outlined"
-              disabled={loadingMore}
-              onClick={loadMore}
-              startIcon={loadingMore
-                ? <CircularProgress size={12} />
-                : undefined}
-            >
-              {loadMoreError ? "Retry" : "Load more"}
-            </Button>
-          )}
-          {limited && !nextCursor && (
-            <Chip
-              size="small"
-              color="warning"
-              label={target.kind === "diff"
-                ? "Preview limited to 16 MB"
-                : "Preview limited to 32 MB"}
-            />
-          )}
-        </Stack>
-      )}
       {usingOwned && !mediaPreview && !markdownPreview &&
         previewKind !== "mermaid" && (isPatch
           ? <ReviewDiffCodeStatus diff={diff} intelligence={owned} />
@@ -1744,6 +1675,75 @@ export function DocumentView({
             </Popover>
           )}
       </Box>
+      {(truncated || counts || nextCursor || loadMoreError) && (
+        <Stack data-review-document-controls
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ px: 1.5, flexShrink: 0, minHeight: 48, flexWrap: "wrap", borderTop: 1, borderColor: "divider", "& .MuiIconButton-root, & .MuiButton-root": { minWidth: 44, minHeight: 44 } }}
+        >
+          {counts && (
+            <>
+              <Typography variant="caption" color="success.main">
+                +{counts.added}
+              </Typography>
+              <Typography variant="caption" color="error.main">
+                −{counts.removed}
+              </Typography>
+            </>
+          )}
+          {hunks.length > 0 && (
+            <>
+              <Box sx={{ flex: 1 }} />
+              <IconButton
+                size="small"
+                aria-label="Previous hunk"
+                disabled={hunkIndex <= 0}
+                onClick={() => setHunkIndex((value) => value - 1)}
+              >
+                <KeyboardArrowUp fontSize="small" />
+              </IconButton>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ minWidth: 36, textAlign: "center" }}
+              >
+                {hunkIndex + 1}/{hunks.length}
+              </Typography>
+              <IconButton
+                size="small"
+                aria-label="Next hunk"
+                disabled={hunkIndex >= hunks.length - 1}
+                onClick={() => setHunkIndex((value) => value + 1)}
+              >
+                <KeyboardArrowDown fontSize="small" />
+              </IconButton>
+            </>
+          )}
+          {nextCursor && (
+            <Button
+              size="small"
+              variant="outlined"
+              disabled={loadingMore}
+              onClick={loadMore}
+              startIcon={loadingMore
+                ? <CircularProgress size={12} />
+                : undefined}
+            >
+              {loadMoreError ? "Retry" : "Load more"}
+            </Button>
+          )}
+          {limited && !nextCursor && (
+            <Chip
+              size="small"
+              color="warning"
+              label={target.kind === "diff"
+                ? "Preview limited to 16 MB"
+                : "Preview limited to 32 MB"}
+            />
+          )}
+        </Stack>
+      )}
     </Stack>
   );
 }

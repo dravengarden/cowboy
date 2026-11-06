@@ -29,6 +29,7 @@
     "site/site.js",
     "tools/cdp-browser-conformance.ts",
     "tools/cdp-fixture.ts",
+    "tools/review-workbench-acceptance.ts",
     "tools/cdp-keyboard-acceptance.ts",
     "tools/check-native-shell.ts",
     "tools/check-native-shell_test.ts",
