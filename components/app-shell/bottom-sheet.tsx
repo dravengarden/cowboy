@@ -179,6 +179,7 @@ function useReliableDismissTap(onClose: () => void): {
 export interface BottomSheetProps {
   readonly islandContext?: SheetDockContext | undefined;
   readonly hideMobileTitle?: boolean;
+  readonly readerTopBleed?: boolean;
   readonly open: boolean;
   readonly onClose: () => void;
   /** Heading shown at the top of the sheet/dialog. */
@@ -647,6 +648,7 @@ export function BottomSheet(
     islandActions,
     islandContext,
     hideMobileTitle = false,
+    readerTopBleed = false,
     denseHeader,
     fill = false,
   }: BottomSheetProps,
@@ -690,7 +692,8 @@ export function BottomSheet(
       animateOnOpen={animateOnOpen}
       footerOverlay={floatingActions}
       fillBody={fill && cover}
-      grabber={denseHeader == null}
+      readerTopBleed={readerTopBleed}
+      grabber={denseHeader == null && !readerTopBleed}
       ariaLabel={islandContext?.title ?? (typeof title === "string" ? title : undefined)}
       // Dim the standalone status bar in lockstep with the scrim, and — since
       // surfaceColor is also what DetentSheet RESTORES the bar to on close —

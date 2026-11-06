@@ -78,6 +78,7 @@ import {
     mobilePresentationMovingRootSx,
 } from "./mobilePresentationMotion";
 import { frostedChrome, frostedStatusChrome } from "./frostedGlass";
+import { readerTopEdge } from "./readerTopEdge";
 import { clampComposerColWidth, composerColWidthStore, DESKTOP_COMPACT_WIDTH_QUERY, DESKTOP_CONVERSATION_MIN, DESKTOP_PROMPT_MIN, clampPromptRatio, collapsedSessionsPromptRatioStore, dragCollapses } from "./desktopLayout";
 
 import { useNavbarAtBottom } from "./navbarSettings";
@@ -1282,7 +1283,7 @@ export function App({
                             overflow: "hidden",
                             bgcolor: "background.default",
                             pointerEvents: "auto",
-                            pt: "var(--cowboy-system-top-clearance)",
+                            position: "relative", ...readerTopEdge(theme, "var(--cowboy-system-top-clearance, 0px)"),
                             pl: "env(safe-area-inset-left, 0px)",
                             "@media (min-width: 768px)": {
                                 width:
@@ -1624,14 +1625,9 @@ export function App({
                         }}
                     />
                 )}
-                {/* Top system-chrome material. Bottom-mode Transcript uses the real
-                    safe-area inset plus the iPad-PWA floor only: its
-                    continuous scrolling content can pass beneath this quiet,
-                    theme-aware glass. The iPad floor is the same 24px clearance as
-                    titles/sheets, so it is one band, not a second pad stacked on
-                    the frost. The material is a dedicated drawer follower, so it
-                    moves off with the Agent page instead of blurring the revealed
-                    Sessions rail. Top mode (desktop): a solid, full navbar-height
+                {/* Mobile Transcript owns its paint-only safe-area gradient;
+                    keep this follower unpainted there to avoid doubling the veil.
+                    Top mode (desktop): a solid, full navbar-height
                     slab behind the transparent top AppBar, so Desktop keeps its
                     dense, stable chrome. Height tracks the measured
                     --navbar-h. pointer-events:none so taps reach the (lifted) navbar.
@@ -1661,7 +1657,7 @@ export function App({
                         // bleeds through as a bright band under the status bar.
                         transition: "opacity 200ms ease",
                         ...(navbarAtBottom
-                            ? frostedStatusChrome(t)
+                            ? (mobile ? {} : frostedStatusChrome(t))
                             : { backgroundColor: t.palette.background.default }),
                         // Desktop: a hairline delineates the navbar. In LIGHT mode the
                         // old `0 1px 24px` down-shadow smeared a gray cloud across the
