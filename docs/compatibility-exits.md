@@ -120,7 +120,9 @@ boundaries and stay.
   value): named-account login, cancellation, registration, readiness, usage
   collection, Provider auth scope, reconnect grant reconciliation and the
   runtime encryption key, plus the remote-wipe, temporary-credential,
-  worker-tree and account-transition `ensure!` gates. `MACHINE_PROTOCOL_FLOOR`
+  worker-tree and account-transition `ensure!` gates, and the managed-call,
+  managed-image, managed-environment and Agent control gates (28–33).
+  `MACHINE_PROTOCOL_FLOOR`
   makes them unreachable.
 
 - 2026-11-05: the protocol-v4 `GET /api/machines/{id}/providers` inventory
