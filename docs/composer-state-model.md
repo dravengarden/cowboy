@@ -99,6 +99,16 @@ iOS acceptance (web/AGENTS.md pitfall #69).
    acceptance before release; until it has been run, those two stay on
    `useState`.
 
+## Progress
+
+- 2026-11-06: steps 1 and the focus-free part of step 2 landed.
+  `web/src/composerSurfaces.ts` owns one modal slot for the schedule dialog,
+  the context (compact/clear) confirmation, the move-draft picker and the
+  mobile toolbar settings; a close names its surface, so a replaced dialog's
+  late close cannot dismiss its successor. The slot is still named
+  `ComposerModal` and holds four kinds; the stop confirmation and the clear
+  popper join next, the picker and `composeFs` after physical iOS acceptance.
+
 ## Non-goals
 
 Changing what any surface does, merging the desktop and mobile composer paths,
