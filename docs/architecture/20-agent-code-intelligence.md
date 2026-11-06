@@ -221,7 +221,7 @@ immediately.
 | `code.search(query, {regex?, case_sensitive?, path?, limit?})` | bounded content matches with lines (core; implemented) |
 | `code.outline(path)`, `code.symbols(query, {limit?})` | syntax structure (tree-sitter tags; implemented, `heuristic`); language-engine refinement later |
 | `code.diagnostics(paths)` | implemented: diagnostics and counts with a per-file state from per-server analysis-frontier evidence (`document_current`, `stale`, otherwise `last_observed`), or `not_open`/`restricted`/`refused`/`unavailable`. A file no Code pane holds is acquired for the agent (`acquired: true`, see Acquisition) and waited on for up to 4 s. Baseline comparison comes with P2 |
-| `code.summary()` | observed-scope counts with coverage |
+| `code.summary()` | implemented: passive counts over this session's tracked files (`coverage: agent_observed_files`), without acquisition or idle-time refresh. No usable observations means `counts: null`/`unobserved`; `partial` counts exclude unavailable files. Counts are never project totals, and Controller restart discards the tracked set until files are read again |
 | `code.definition/references/implementations(locator)`, `code.hover(locator)` | after owned-navigation acceptance only |
 
 Locators are an exact UTF-16 position or an opaque versioned symbol handle

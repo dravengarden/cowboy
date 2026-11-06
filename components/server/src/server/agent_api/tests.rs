@@ -425,7 +425,9 @@ impl Host for FakeHost {
             "session.usage" | "session.history" | "sessions.history" | "sessions.usage"
             | "sessions.events" | "sessions.message" | "sessions.queue" | "sessions.drafts"
             | "usage.list" | "usage.read" | "code.search" | "code.outline" | "code.symbols"
-            | "code.diagnostics" | "code.checks" => Ok(json!({"op":op,"args":args})),
+            | "code.diagnostics" | "code.summary" | "code.checks" => {
+                Ok(json!({"op":op,"args":args}))
+            }
             _ => Err("unknown_operation".into()),
         }
     }
@@ -612,6 +614,7 @@ async fn code_search_takes_the_query_positionally_or_in_one_object() {
           (await cowboy.code.symbols("Point", {limit:5})).args,
           (await cowboy.code.diagnostics(["src/lib.rs"])).args,
           (await cowboy.code.checks()).args,
+          (await cowboy.code.summary()).args,
         ];
         "#,
         false,
@@ -626,7 +629,7 @@ async fn code_search_takes_the_query_positionally_or_in_one_object() {
         value["value"],
         json!([{"query":"alpha","path":"src","limit":3},{"query":"beta","regex":true},
             {"path":"src/lib.rs"},{"path":"src/main.rs"},{"query":"Point","limit":5},
-            {"paths":["src/lib.rs"]},{}])
+            {"paths":["src/lib.rs"]},{},{}])
     );
 }
 

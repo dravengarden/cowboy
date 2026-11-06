@@ -106,6 +106,23 @@ pub(super) async fn read(
     observed: &SessionReadScope,
     paths: Vec<String>,
 ) -> Value {
+    read_with_acquisition(state, observed, paths, true).await
+}
+
+pub(super) async fn read_existing(
+    state: &AppState,
+    observed: &SessionReadScope,
+    paths: Vec<String>,
+) -> Value {
+    read_with_acquisition(state, observed, paths, false).await
+}
+
+async fn read_with_acquisition(
+    state: &AppState,
+    observed: &SessionReadScope,
+    paths: Vec<String>,
+    acquire: bool,
+) -> Value {
     let allowed = state
         .hub
         .language_servers_allowed(observed.session().session_id());
@@ -115,7 +132,11 @@ pub(super) async fn read(
             files.push(json!({"path":path,"state":"restricted"}));
             continue;
         }
-        let (reply, acquired) = observe(state, observed, &path).await;
+        let (reply, acquired) = if acquire {
+            observe(state, observed, &path).await
+        } else {
+            (observe_open_buffer(state, observed, &path).await, false)
+        };
         files.push(match reply {
             Ok(ZedAdapterResponse::BufferLanguage {
                 diagnostics,
@@ -165,6 +186,15 @@ pub(super) async fn read(
             }
             Err(_) => json!({"path":path,"state":"unavailable"}),
         });
+    }
+    // Revocation during an asynchronous query discards its observation too.
+    if !state
+        .hub
+        .language_servers_allowed(observed.session().session_id())
+    {
+        for file in &mut files {
+            *file = json!({"path":file["path"],"state":"restricted"});
+        }
     }
     json!({
         "coverage": "open_buffers",
