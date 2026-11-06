@@ -1,6 +1,8 @@
-//! `cowboy.code.diagnostics`: the language engine's last observation of
-//! buffers a Code pane already holds. It acquires nothing, so a file no one has
-//! open answers `not_open`; it never claims a clean file. A file is
+//! `cowboy.code.diagnostics`: the language engine's observation of a file of
+//! this session's worktree. A file no Code pane holds is acquired for the
+//! session's agent when its "Project language servers" switch is on and the
+//! agent share allows (`acquire`), and reported `"acquired": true`; otherwise
+//! it answers `not_open`. It never claims a clean file. A file is
 //! `document_current` only when every language server running for it reports
 //! analysing exactly the text shown, `stale` when one analysed an older
 //! version, and otherwise `last_observed`. None of these covers the project's
@@ -14,6 +16,36 @@ use crate::machine_control::SessionReadScope;
 
 const MAX_SERVERS: usize = 32;
 const MAX_NAME_CHARS: usize = 128;
+
+/// How long a newly acquired file may wait for its servers' first analysis.
+const ANALYSIS_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Read a file a Code pane holds; otherwise acquire it for this session's
+/// agent and wait, briefly, for evidence that its servers analysed it.
+async fn observe(
+    state: &AppState,
+    observed: &SessionReadScope,
+    path: &str,
+) -> (anyhow::Result<ZedAdapterResponse>, bool) {
+    let first = observe_open_buffer(state, observed, path).await;
+    if !matches!(&first, Err(error) if error.to_string().contains("not open")) {
+        return (first, false);
+    }
+    let session = observed.session().session_id();
+    if let Err(reason) = super::acquire::acquire(state, session, path).await {
+        return (Err(anyhow::anyhow!("not open: {reason}")), false);
+    }
+    let deadline = tokio::time::Instant::now() + ANALYSIS_WAIT;
+    loop {
+        let reply = observe_open_buffer(state, observed, path).await;
+        let analysed = matches!(&reply, Ok(ZedAdapterResponse::BufferLanguage { analysis: Some(servers), .. })
+            if !servers.is_empty() && servers.iter().all(|server| server.state != AnalysisState::Unknown));
+        if analysed || reply.is_err() || tokio::time::Instant::now() >= deadline {
+            return (reply, true);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
 
 /// One file's freshness from its per-server evidence.
 fn file_state(analysis: Option<&[ServerAnalysis]>) -> &'static str {
@@ -77,7 +109,8 @@ pub(super) async fn read(
             files.push(json!({"path":path,"state":"restricted"}));
             continue;
         }
-        files.push(match observe_open_buffer(state, observed, &path).await {
+        let (reply, acquired) = observe(state, observed, &path).await;
+        files.push(match reply {
             Ok(ZedAdapterResponse::BufferLanguage {
                 diagnostics,
                 analysis,
@@ -109,6 +142,9 @@ pub(super) async fn read(
                     .collect();
                 let mut file = json!({"path":path,"state":file_state(analysis.as_deref()),
                     "counts":counts,"diagnostics":listed,"truncated":truncated});
+                if acquired {
+                    file["acquired"] = json!(true);
+                }
                 if let Some(analysis) = &analysis {
                     file["analysis"] = json!(servers(analysis));
                 }
