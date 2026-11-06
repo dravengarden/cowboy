@@ -58,14 +58,10 @@ async fn observe(
         login.dispatch_recipient_fingerprint.as_ref() == Some(&fingerprint),
         "machine enrollment changed"
     );
-    let (connection, protocol) = state
+    let (connection, _) = state
         .machine_control
         .connection_protocol(&target.machine_id)
         .context("machine offline")?;
-    anyhow::ensure!(
-        protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION,
-        "account protocol unavailable"
-    );
     let observation = state
         .machine_control
         .query_login_stop(

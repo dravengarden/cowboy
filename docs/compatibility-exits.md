@@ -119,7 +119,9 @@ boundaries and stay.
   connected Machine's negotiated one (`connection_protocol`, the handshake
   value): named-account login, cancellation, registration, readiness, usage
   collection, Provider auth scope, reconnect grant reconciliation and the
-  runtime encryption key. `MACHINE_PROTOCOL_FLOOR` makes them unreachable.
+  runtime encryption key, plus the remote-wipe, temporary-credential,
+  worker-tree and account-transition `ensure!` gates. `MACHINE_PROTOCOL_FLOOR`
+  makes them unreachable.
 
 - 2026-11-05: the protocol-v4 `GET /api/machines/{id}/providers` inventory
   adapter. Every client in the repository reads `/plugins`.
