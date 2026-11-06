@@ -1,7 +1,7 @@
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { DeliveryPicker } from "./DeliveryPicker";
 import { deliverySourceMatches, guardDeliveryChoice } from "./deliverySource.ts";
-import { type ScheduleTarget, useComposerModal } from "./composerSurfaces.ts";
+import { type ScheduleTarget, useComposerSurfaces } from "./composerSurfaces.ts";
 import { prefetchDeliveryOptions } from "./deliveryPolicy";
 import { SendDeliveryIcon } from "./SendDeliveryIcon";
 
@@ -435,9 +435,8 @@ export function ComposerWorkspace({
   // be sent yet, but it is still user-owned staged content and must remain
   // removable from the utility rail.
   const clearable = text.trim().length > 0 || attachments.length > 0;
-  const [deliveryAnchor, setDeliveryAnchor] = useState<HTMLElement | null>(
-    null,
-  );
+  const surfaces = useComposerSurfaces();
+  const deliveryAnchor = surfaces.modal.kind === "delivery" ? surfaces.modal.anchor : null;
   const deliverySource = useRef<
     {
       session: string;
@@ -456,14 +455,14 @@ export function ComposerWorkspace({
       attachments,
       selection: editorRef.current?.getSelection(),
     };
-    setDeliveryAnchor(anchor);
+    surfaces.open({ kind: "delivery", anchor });
     if (!desktop) dismissMobileSoftwareKeyboard();
     return true;
-  }, [attachments, desktop, sendable, sessionId, text]);
+  }, [attachments, desktop, sendable, sessionId, surfaces.open, text]);
   const closeDeliveryPicker = (): void => {
     const source = deliverySource.current;
     flushSync(() => {
-      setDeliveryAnchor(null);
+      surfaces.close("delivery");
     });
     if (source?.session !== sessionId) return;
     resumeMobileKeyboardSurface();
@@ -480,10 +479,10 @@ export function ComposerWorkspace({
     guardDeliveryChoice({
       isCurrent: deliverySourceCurrent,
       closeStale: closeDeliveryPicker,
-      dismiss: () => setDeliveryAnchor(null),
+      dismiss: () => surfaces.close("delivery"),
     }, run);
   useEffect(() => {
-    setDeliveryAnchor(null);
+    surfaces.close("delivery");
     deliverySource.current = null;
   }, [sessionId]);
   // Sending during startup is QUEUEING, not an error: the session is not
@@ -504,7 +503,7 @@ export function ComposerWorkspace({
   // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
   // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
   // inline expand instead (composeFs is never set true there).
-  const [composeFs, setComposeFs] = useState(false);
+  const composeFs = surfaces.fullscreen;
   const dismissAfterMobileDelivery = useCallback((): void => {
     if (desktop) return;
 
@@ -588,7 +587,7 @@ export function ComposerWorkspace({
       .then((succeeded) => {
         if (submitted && succeeded) {
           dismissAfterMobileDelivery();
-          setComposeFs(false);
+          surfaces.setFullscreen(false);
           onSubmitted?.();
         }
       });
@@ -640,7 +639,6 @@ export function ComposerWorkspace({
   // inline chip row — there's room.
   const compact = useMediaQuery(theme.breakpoints.down("lg"));
   const mobileToolbarIds = useComposerToolbar();
-  const surfaces = useComposerModal();
   const mobileToolbarSettingsOpen = surfaces.modal.kind === "toolbarSettings";
   // A Queue/Draft edit is itself a complete composer. Mobile must expose one
   // writing focus at a time: leaving the new-message composer underneath the
@@ -877,8 +875,7 @@ export function ComposerWorkspace({
     surfaces.close("context");
     if (touchInput && action.kind === "reset") {
       setMobileInputResetBlocked(true);
-      setComposeFs(false);
-      surfaces.close("clear");
+      surfaces.contextReset();
       setImgSel(null);
       dismissMobileSoftwareKeyboard();
       releaseMobileComposerFocus();
@@ -1089,7 +1086,7 @@ export function ComposerWorkspace({
     if (confirmation === null) return;
     void confirmation.then(() => {
       dismissAfterMobileDelivery();
-      setComposeFs(false);
+      surfaces.setFullscreen(false);
     }).catch(() => undefined);
   }
   useEffect(() => (): void => {
@@ -1933,7 +1930,7 @@ export function ComposerWorkspace({
                     // retains both its keyboard transaction and caret/range.
                     const selection = editorRef.current?.getSelection();
                     beginMobileEditorFocusTransfer();
-                    flushSync(() => setComposeFs(true));
+                    flushSync(() => surfaces.setFullscreen(true));
                     if (selection) {
                       editorRef.current?.focusSelection(selection);
                     } else editorRef.current?.focusEnd();
@@ -2498,7 +2495,7 @@ export function ComposerWorkspace({
         paused={paused}
         queueCount={queue.length}
         onClose={closeDeliveryPicker}
-        onNextTurn={deliveryChoice(() => submitWithFeedback(() => setComposeFs(false)))}
+        onNextTurn={deliveryChoice(() => submitWithFeedback(() => surfaces.setFullscreen(false)))}
         onQueueFront={deliveryChoice(jumpToFront)}
         onSteer={deliveryChoice(addToCurrentTurn)}
         onSendAndPause={deliveryChoice(() => {
@@ -2510,12 +2507,12 @@ export function ComposerWorkspace({
             if (confirmation === null) return;
             await confirmation;
             dismissAfterMobileDelivery();
-            setComposeFs(false);
+            surfaces.setFullscreen(false);
             onSubmitted?.();
           });
         })}
         onStop={(): void => {
-          setDeliveryAnchor(null);
+          // Replaces the picker in the slot.
           surfaces.open({ kind: "stop" });
         }}
       />
@@ -2566,11 +2563,11 @@ export function ComposerWorkspace({
           // the edit overlay) so inline text carries in; markdown stays literal.
           value={text}
           onChange={setText}
-          onSubmit={(): void => requestDelivery(() => setComposeFs(false))}
+          onSubmit={(): void => requestDelivery(() => surfaces.setFullscreen(false))}
           sendButtonRef={queueBtnRef}
           onSaveDraft={(): void => {
             saveDraft();
-            setComposeFs(false);
+            surfaces.setFullscreen(false);
           }}
           onSchedule={(): void =>
             setScheduleTarget({ id: undefined, initial: null })}
@@ -2589,7 +2586,7 @@ export function ComposerWorkspace({
             // transaction. A delayed effect or focusEnd() loses the user's caret.
             const selection = editorRef.current?.getSelection();
             beginMobileEditorFocusTransfer();
-            flushSync(() => setComposeFs(false));
+            flushSync(() => surfaces.setFullscreen(false));
             if (selection) editorRef.current?.focusSelection(selection);
             else editorRef.current?.focusEnd();
           }}

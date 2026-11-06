@@ -306,6 +306,7 @@ export interface DetentSheetProps {
   /** The body does not scroll; its child fills it and owns its own scroller
    *  (an embedded transcript). Only meaningful with `cover`. Default false. */
   readonly fillBody?: boolean | undefined;
+  readonly readerTopBleed?: boolean | undefined;
   /** Reserve the drag strip's breathing room above the header. The strip has
    * no visible pill (the whole bar drags); without it a dense, draggable title
    * row sits flush at the edge. Default true. */
@@ -380,6 +381,7 @@ export function DetentSheet(
     haptic = true,
     animateOnOpen = true,
     fillBody = false,
+    readerTopBleed = false,
     grabber = true,
   }: DetentSheetProps,
 ): ReactNode {
@@ -946,14 +948,11 @@ export function DetentSheet(
             // Otherwise: content-driven height, capped so a scrim strip always shows.
             ...(isCover
               ? {
-                // Shrink by the keyboard inset so the sheet fills exactly the area
-                // ABOVE the keyboard (paired with bottom:--kb-inset above). 0px
-                // fallback → full 100dvh when the keyboard is down.
+                // Keyboard shrinks the viewport; reader content owns its top inset.
                 height: `calc(${COVER_HEIGHT} - var(--kb-inset, 0px))`,
                 maxHeight: `calc(${COVER_HEIGHT} - var(--kb-inset, 0px))`,
-                // The glass bleeds to the very top; the content (grab handle + rows)
-                // is pushed below the notch / Dynamic Island by the safe-area inset.
-                pt: SAFE_TOP,
+                pt: readerTopBleed ? 0 : SAFE_TOP,
+                "--cowboy-reader-top-inset": readerTopBleed ? SAFE_TOP : "0px",
               }
               : { maxHeight: `${String(MAX_FRACTION * 100)}vh` }),
             zIndex: z + 1,

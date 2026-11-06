@@ -125,6 +125,11 @@ editors, confirmation cards and connectivity notices retain their own surfaces.
 Reader scroll clearance must consume `--cowboy-sheet-dock-clearance` with a
 legacy fallback so large text cannot cover the last item. Details navigation
 must preserve the mounted transcript and its reading position.
+All transcripts and the Mobile Sessions rail share `readerTopEdge.ts` for their top gradient.
+Use the active theme background, never fixed white or a new blur layer. Cover
+readers without a top header opt into `readerTopBleed`; their scroller owns the
+safe-area padding so content can pass behind the status area while scrolling.
+Keep the gradient noninteractive and the first item clear at the scroll boundary.
 
 - Mobile is touch-first: single-task focus, large targets, progressive
   disclosure, safe system-keyboard behaviour, and native gestures.
