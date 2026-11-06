@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals, assertFalse } from "@std/assert";
+import { assert, assertEquals, assertFalse } from "../../tools/test-assert.ts";
 import {
   type AnnouncementMemory,
   legacyRecordsAnnouncement,

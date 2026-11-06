@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "./test-assert.ts";
 
 const runtimeBuilder = await readFile(
   new URL("../components/provider-runtime/build.ts", import.meta.url), "utf8",

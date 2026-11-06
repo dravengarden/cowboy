@@ -31,8 +31,8 @@ const marker = "cowboy" + "c".repeat(32);
 
 test("skills are searched as native does: user, then the project up to its repository root", () => {
   assert.deepEqual(
-    skillRoots("/w/repo/sub", "/home/u", "/w/repo").map((root) =>
-      `${root.scope}:${root.kind}:${root.directory}`
+    skillRoots("/w/repo/sub", "/home/u", "/w/repo").map(
+      (root) => `${root.scope}:${root.kind}:${root.directory}`,
     ),
     [
       "user:skill:/home/u/.claude/skills",
@@ -54,9 +54,9 @@ test("skills are searched as native does: user, then the project up to its repos
     ],
   );
   assert.deepEqual(
-    skillRoots("/srv/x", "/home/u", undefined).filter((root) =>
-      root.scope === "project" && root.kind === "skill"
-    ).map((root) => root.directory),
+    skillRoots("/srv/x", "/home/u", undefined)
+      .filter((root) => root.scope === "project" && root.kind === "skill")
+      .map((root) => root.directory),
     ["/srv/x/.claude/skills", "/srv/.claude/skills", "/.claude/skills"],
   );
 });
@@ -64,27 +64,15 @@ test("skills are searched as native does: user, then the project up to its repos
 test("skill and command names follow native naming", () => {
   const skills = { kind: "skill", directory: "/p/.claude/skills" };
   const commands = { kind: "command", directory: "/p/.claude/commands" };
-  assert.equal(
-    skillName(skills, "/p/.claude/skills/review/SKILL.md"),
-    "review",
-  );
+  assert.equal(skillName(skills, "/p/.claude/skills/review/SKILL.md"), "review");
   assert.equal(skillName(skills, "/p/.claude/skills/a/b/SKILL.md"), undefined);
-  assert.equal(
-    skillName(skills, "/p/.claude/skills/.hidden/SKILL.md"),
-    undefined,
-  );
-  assert.equal(
-    skillName(commands, "/p/.claude/commands/grp/inner.md"),
-    "grp:inner",
-  );
+  assert.equal(skillName(skills, "/p/.claude/skills/.hidden/SKILL.md"), undefined);
+  assert.equal(skillName(commands, "/p/.claude/commands/grp/inner.md"), "grp:inner");
   assert.equal(skillName(commands, "/p/.claude/commands/top.md"), "top");
   assert.equal(skillName(commands, "/p/.claude/commands/top.txt"), undefined);
   assert.equal(skillName(commands, "/other/top.md"), undefined);
   // A colon would read as a path separator in the plugin's layout.
-  assert.equal(
-    skillName(commands, "/p/.claude/commands/safe:..:..:escaped.md"),
-    undefined,
-  );
+  assert.equal(skillName(commands, "/p/.claude/commands/safe:..:..:escaped.md"), undefined);
   assert.equal(skillName(commands, "/p/.claude/commands/a:b/c.md"), undefined);
 });
 
@@ -101,50 +89,43 @@ test("precedence keeps the first of a name; skills native cannot run here are li
     file("project", "skill", "shared", "PROJECT"),
     file("project", "skill", "hooked", "---\nhooks:\n  Stop: []\n---\nX"),
     file("project", "skill", "ps", "---\nshell: powershell\n---\nX"),
-    file(
-      "project",
-      "skill",
-      "tools",
-      "---\nallowed-tools: Bash(git status:*), Read\n---\nX",
-    ),
+    file("project", "skill", "tools", "---\nallowed-tools: Bash(git status:*), Read\n---\nX"),
     file("user", "command", "shared", "COMMAND"),
   ]);
-  assert.deepEqual(entries.map((entry) => [entry.name, entry.content]), [
-    ["shared", "USER"],
-    ["tools", "---\nallowed-tools: Bash(git status:*), Read\n---\nX"],
-  ]);
+  assert.deepEqual(
+    entries.map((entry) => [entry.name, entry.content]),
+    [
+      ["shared", "USER"],
+      ["tools", "---\nallowed-tools: Bash(git status:*), Read\n---\nX"],
+    ],
+  );
   assert.deepEqual(entries[1].allowedTools, ["Bash(git status:*)", "Read"]);
-  assert.deepEqual(omitted.map((entry) => entry.name), ["hooked", "ps"]);
+  assert.deepEqual(
+    omitted.map((entry) => entry.name),
+    ["hooked", "ps"],
+  );
   // Hooks under any key form native's YAML reading accepts are refused.
-  for (
-    const front of [
-      '"hooks":\n  Stop: []',
-      "'hooks': {}",
-      '"ho\\u006fks": {}',
-      "<<: {hooks: {}}",
-      "? hooks\n: {}",
-      "{hooks: {}}",
-      "Hooks: {}",
-    ]
-  ) {
+  for (const front of [
+    '"hooks":\n  Stop: []',
+    "'hooks': {}",
+    '"ho\\u006fks": {}',
+    "<<: {hooks: {}}",
+    "? hooks\n: {}",
+    "{hooks: {}}",
+    "Hooks: {}",
+  ]) {
     assert.ok(skillFrontmatter(`---\n${front}\n---\nX`).hooks, front);
   }
-  assert.ok(
-    !skillFrontmatter("---\ndescription: Configure hooks: safely\n---\n").hooks,
-  );
+  assert.ok(!skillFrontmatter("---\ndescription: Configure hooks: safely\n---\n").hooks);
   // An unindented list belongs to its key.
-  const unindented = skillFrontmatter(
-    "---\nallowed-tools:\n- Bash(git status:*)\n- Read\n---\n",
-  );
+  const unindented = skillFrontmatter("---\nallowed-tools:\n- Bash(git status:*)\n- Read\n---\n");
   assert.deepEqual(
     [unindented.hooks, unindented.allowedTools],
     [false, ["Bash(git status:*)", "Read"]],
   );
   assert.ok(skillFrontmatter("---\n- hooks\n---\n").hooks);
   // Top-level keys may share an indentation.
-  const shifted = skillFrontmatter(
-    "---\n  description: d\n  allowed-tools:\n    - Read\n---\n",
-  );
+  const shifted = skillFrontmatter("---\n  description: d\n  allowed-tools:\n    - Read\n---\n");
   assert.deepEqual(
     [shifted.hooks, shifted.description, shifted.allowedTools],
     [false, "d", ["Read"]],
@@ -164,19 +145,14 @@ test("precedence keeps the first of a name; skills native cannot run here are li
   assert.ok(skillFrontmatter("---\n  name: n\nhooks: {}\n---\n").hooks);
   // A comment grants nothing.
   assert.deepEqual(
-    skillFrontmatter(
-      "---\nallowed-tools: Read # Bash must ask\nother:\n  - x\n---\n",
-    ).allowedTools,
+    skillFrontmatter("---\nallowed-tools: Read # Bash must ask\nother:\n  - x\n---\n").allowedTools,
     ["Read"],
   );
+  assert.deepEqual(skillFrontmatter("---\nallowed-tools:\n  - Read  # Bash\n---\n").allowedTools, [
+    "Read",
+  ]);
   assert.deepEqual(
-    skillFrontmatter("---\nallowed-tools:\n  - Read  # Bash\n---\n")
-      .allowedTools,
-    ["Read"],
-  );
-  assert.deepEqual(
-    skillFrontmatter("---\nallowed-tools:\n  - Bash(npm test)\n  - Edit\n---\n")
-      .allowedTools,
+    skillFrontmatter("---\nallowed-tools:\n  - Bash(npm test)\n  - Edit\n---\n").allowedTools,
     ["Bash(npm test)", "Edit"],
   );
 });
@@ -246,10 +222,7 @@ test("the mirror names target directories and marks shell commands native would 
     ),
     '---\ndescription: "x"\n---\nx',
   );
-  assert.equal(
-    derivedDescription("L".repeat(150), "skill"),
-    "L".repeat(97) + "...",
-  );
+  assert.equal(derivedDescription("L".repeat(150), "skill"), "L".repeat(97) + "...");
   assert.equal(derivedDescription("", "command"), "Custom command");
   // Commands have no skill directory.
   assert.equal(
@@ -296,19 +269,11 @@ test("the private plugin holds skills and commands under native's plugin layout"
     '---\ndescription: "G"\n---\nG',
   );
   assert.deepEqual(
-    JSON.parse(
-      await readFile(join(plugin, ".claude-plugin", "plugin.json"), "utf8"),
-    ),
+    JSON.parse(await readFile(join(plugin, ".claude-plugin", "plugin.json"), "utf8")),
     { name: "cowboy-target", version: "1.0.0" },
   );
-  assert.equal(
-    skills.entries[0].mirrorDirectory,
-    join(plugin, "skills", "review"),
-  );
-  assert.equal(
-    skills.entries[0].targetDirectory,
-    "/home/u/.claude/skills/review",
-  );
+  assert.equal(skills.entries[0].mirrorDirectory, join(plugin, "skills", "review"));
+  assert.equal(skills.entries[0].targetDirectory, "/home/u/.claude/skills/review");
   assert.ok(validSkills(skills));
   assert.ok(!validSkills({ ...skills, marker: "guessable" }));
 });
@@ -362,10 +327,7 @@ test("mirror directories map whole, the longest name first", () => {
     ],
   };
   assert.equal(
-    targetSkillText(
-      "/stage/skills/foo-bar/x and /stage/skills/foo/y",
-      nested,
-    ),
+    targetSkillText("/stage/skills/foo-bar/x and /stage/skills/foo/y", nested),
     "/p/.claude/skills/foo-bar/x and /home/u/.claude/skills/foo/y",
   );
 });
@@ -410,10 +372,7 @@ test("the skill listing shows target skills by native name and order", () => {
   const projected = targetSkillListing(listing, skills);
   assert.equal(targetSkillListing(projected, skills), projected);
   assert.equal(
-    targetSkillListing(
-      "The following skills:\n\n- init: bundled\n- cowboy-target:proj",
-      skills,
-    ),
+    targetSkillListing("The following skills:\n\n- init: bundled\n- cowboy-target:proj", skills),
     "The following skills:\n\n- proj\n- init: bundled",
   );
   assert.equal(
@@ -423,9 +382,7 @@ test("the skill listing shows target skills by native name and order", () => {
     ),
     "Base directory for this skill: /t/.claude/skills/proj\n\nLaunching skill: proj",
   );
-  for (
-    const type of ["file", "directory", "nested_memory", "edited_text_file"]
-  ) {
+  for (const type of ["file", "directory", "nested_memory", "edited_text_file"]) {
     assert.ok(RUNTIME_ATTACHMENTS.has(type), type);
   }
   for (const type of ["skill_listing", "todo_reminder", "task_status"]) {
@@ -441,10 +398,7 @@ test("commands are shown and typed by the names a local session uses", () => {
   assert.equal(exposedCommand("init", skills), "init");
   assert.equal(exposedCommand("compact", skills), "compact");
   assert.equal(exposedCommand("doctor", skills), undefined);
-  assert.equal(
-    exposedCommand("mcp__matrix__prompt", skills),
-    "mcp__matrix__prompt",
-  );
+  assert.equal(exposedCommand("mcp__matrix__prompt", skills), "mcp__matrix__prompt");
   assert.deepEqual(skillAllowlist(skills), [
     "cowboy-target:proj",
     "cowboy-target:simplify",
@@ -474,27 +428,23 @@ test("skill commands run on the target in order and fail the skill as natively",
       ? { failure: `Shell command failed for pattern "${raw}":` }
       : { text: `out:${command}` };
   };
-  const text =
-    `A !${marker}\`echo 1\` B\n\`\`\`${marker}!\necho 2\n\`\`\`\nC !${marker}\`$1\``;
+  const text = `A !${marker}\`echo 1\` B\n\`\`\`${marker}!\necho 2\n\`\`\`\nC !${marker}\`$1\``;
   assert.deepEqual(await targetSkillShell(text, marker, run), {
     text: "A out:echo 1 B\nout:echo 2\nC out:$1",
   });
-  assert.deepEqual(runs.map(([command]) => command), [
-    "echo 2",
-    "echo 1",
-    "$1",
-  ]);
-  assert.equal(runs[1][1], "!`echo 1`");
   assert.deepEqual(
-    await targetSkillShell(`x !${marker}\`false\` y`, marker, run),
-    { failure: 'Shell command failed for pattern "!`false`":' },
+    runs.map(([command]) => command),
+    ["echo 2", "echo 1", "$1"],
   );
+  assert.equal(runs[1][1], "!`echo 1`");
+  assert.deepEqual(await targetSkillShell(`x !${marker}\`false\` y`, marker, run), {
+    failure: 'Shell command failed for pattern "!`false`":',
+  });
   // Text without this session's marker is never run.
   runs.length = 0;
-  assert.deepEqual(
-    await targetSkillShell("plain !`echo no`", marker, run),
-    { text: "plain !`echo no`" },
-  );
+  assert.deepEqual(await targetSkillShell("plain !`echo no`", marker, run), {
+    text: "plain !`echo no`",
+  });
   assert.equal(runs.length, 0);
 });
 
@@ -525,8 +475,7 @@ test("messages about target skills enter the session under native names", () => 
         },
         {
           type: "text",
-          text:
-            "Base directory for this skill: /stage/target-skills/skills/proj\n\nX",
+          text: "Base directory for this skill: /stage/target-skills/skills/proj\n\nX",
         },
       ],
     },
@@ -543,11 +492,12 @@ test("messages about target skills enter the session under native names", () => 
     door: "attachment",
     message: {
       name: "skill_listing",
-      content: [{
-        type: "text",
-        text:
-          "<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n- cowboy-target:grp:inner: grouped\n- cowboy-target:proj: project skill\n- simplify: bundled\n</system-reminder>",
-      }],
+      content: [
+        {
+          type: "text",
+          text: "<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n- cowboy-target:grp:inner: grouped\n- cowboy-target:proj: project skill\n- simplify: bundled\n</system-reminder>",
+        },
+      ],
     },
   };
   assert.equal(
@@ -565,11 +515,12 @@ test("messages about target skills enter the session under native names", () => 
     door: "command",
     origin: { kind: "unclassified" },
     message: {
-      content: [{
-        type: "text",
-        text:
-          "<command-message>cowboy-target:grp:inner</command-message>\n<command-name>/cowboy-target:grp:inner</command-name>\n<command-args>keep cowboy-target:x</command-args>",
-      }],
+      content: [
+        {
+          type: "text",
+          text: "<command-message>cowboy-target:grp:inner</command-message>\n<command-name>/cowboy-target:grp:inner</command-name>\n<command-args>keep cowboy-target:x</command-args>",
+        },
+      ],
     },
   };
   assert.equal(
@@ -585,21 +536,19 @@ test("a skill's rules name its target directory, as native reads them", async (t
   t.after(() => rm(root, { recursive: true, force: true }));
   const skills = await writeSkillPlugin(
     join(root, "plugin"),
-    targetSkills([{
-      scope: "project",
-      kind: "skill",
-      name: "run",
-      path: "/t/.claude/skills/run/SKILL.md",
-      content:
-        "---\nallowed-tools: Bash(${CLAUDE_SKILL_DIR}/run.sh)\n---\n!`${CLAUDE_SKILL_DIR}/run.sh`",
-    }]),
+    targetSkills([
+      {
+        scope: "project",
+        kind: "skill",
+        name: "run",
+        path: "/t/.claude/skills/run/SKILL.md",
+        content:
+          "---\nallowed-tools: Bash(${CLAUDE_SKILL_DIR}/run.sh)\n---\n!`${CLAUDE_SKILL_DIR}/run.sh`",
+      },
+    ]),
     marker,
     "/t",
   );
-  assert.deepEqual(skills.entries[0].allowedTools, [
-    "Bash(/t/.claude/skills/run/run.sh)",
-  ]);
-  assert.ok(
-    skillAllows("/t/.claude/skills/run/run.sh", skills.entries[0].allowedTools),
-  );
+  assert.deepEqual(skills.entries[0].allowedTools, ["Bash(/t/.claude/skills/run/run.sh)"]);
+  assert.ok(skillAllows("/t/.claude/skills/run/run.sh", skills.entries[0].allowedTools));
 });

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import {
   CREATED_SESSION_LISTING_GRACE_MS,
   listedOrJustCreatedSessions,

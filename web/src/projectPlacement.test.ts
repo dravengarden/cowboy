@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { projectChoices, type ProjectPolicies } from "./projectPlacement.ts";
 import type { MachineSummary } from "./protocol.ts";
 import { workspaceBranch, workspaceTree } from "./workspaceHierarchy.ts";

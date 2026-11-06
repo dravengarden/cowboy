@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../tools/test-assert.ts";
 import type { SessionMeta, Status } from "../protocol.ts";
 import type { SessionFoldersValue } from "../sessionFolders.ts";
 import { buildSessionTree } from "../sessionTree.ts";

@@ -7,21 +7,25 @@ import { startModBridge } from "./mod-bridge.mjs";
 
 function post(bridge, path, value, token = bridge.token) {
   return new Promise((resolve, reject) => {
-    const req = request({
-      socketPath: bridge.socketPath,
-      path,
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-    }, (res) => {
-      const chunks = [];
-      res.on("data", (data) => chunks.push(data));
-      res.on("end", () =>
-        resolve({
-          status: res.statusCode,
-          body: JSON.parse(Buffer.concat(chunks)),
-        }));
-      res.on("error", reject);
-    });
+    const req = request(
+      {
+        socketPath: bridge.socketPath,
+        path,
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (data) => chunks.push(data));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode,
+            body: JSON.parse(Buffer.concat(chunks)),
+          }),
+        );
+        res.on("error", reject);
+      },
+    );
     req.on("error", reject);
     req.end(JSON.stringify(value));
   });
@@ -33,7 +37,7 @@ test("private socket authenticates before dispatch and refuses duplicate effects
   const bridge = await startModBridge({
     async nativeCall(name, input) {
       calls.push({ name, input });
-      return await new Promise((resolve) => finish = resolve);
+      return await new Promise((resolve) => (finish = resolve));
     },
   });
   t.after(() => bridge.close());
@@ -41,10 +45,7 @@ test("private socket authenticates before dispatch and refuses duplicate effects
   assert.equal((await lstat(bridge.socketPath)).mode & 0o777, 0o600);
   const call = { id: "toolu_once", tool: "Bash", input: { command: "effect" } };
   assert.equal((await post(bridge, "/tool", call, "wrong")).status, 403);
-  assert.equal(
-    (await post(bridge, "/tool", { ...call, tool: "Agent" })).status,
-    400,
-  );
+  assert.equal((await post(bridge, "/tool", { ...call, tool: "Agent" })).status, 400);
   assert.equal((await post(bridge, "/ready", {})).body.ready, true);
   assert.equal(calls.length, 0);
   const pending = post(bridge, "/tool", call);
@@ -84,12 +85,15 @@ test("a failed target result is denied and its admitted identity cannot replay",
 test("long operations are observed under one identity without repeating admission", async (t) => {
   let finish;
   let effects = 0;
-  const bridge = await startModBridge({
-    nativeCall() {
-      effects++;
-      return new Promise((resolve) => finish = resolve);
+  const bridge = await startModBridge(
+    {
+      nativeCall() {
+        effects++;
+        return new Promise((resolve) => (finish = resolve));
+      },
     },
-  }, { waitMs: 5 });
+    { waitMs: 5 },
+  );
   t.after(() => bridge.close());
   const call = {
     id: "toolu_long",
@@ -103,10 +107,7 @@ test("long operations are observed under one identity without repeating admissio
   assert.equal((await post(bridge, "/tool", call)).status, 409);
   assert.equal((await post(bridge, "/result", { id: call.id })).status, 202);
   finish({ result: { stdout: "done", stderr: "", interrupted: false } });
-  assert.equal(
-    (await post(bridge, "/result", { id: call.id })).body.result.stdout,
-    "done",
-  );
+  assert.equal((await post(bridge, "/result", { id: call.id })).body.result.stdout, "done");
   assert.equal((await post(bridge, "/result", { id: call.id })).status, 409);
   assert.equal(effects, 1);
 });

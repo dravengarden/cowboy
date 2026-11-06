@@ -5,30 +5,50 @@ import { build } from "../web/node_modules/vite/dist/node/index.js";
 const outDir = process.argv[2];
 const suite = process.argv[3] ?? "idb";
 if (
-  suite !== "desktop-viewport" && suite !== "desktop-perf" && suite !== "idb" &&
+  suite !== "desktop-viewport" &&
+  suite !== "desktop-perf" &&
+  suite !== "idb" &&
   suite !== "idb-outbox" &&
   suite !== "provider-ui" &&
-  suite !== "provider-management" && suite !== "plugin-lifecycle" &&
-  suite !== "settings-recovery" && suite !== "code-buffers" &&
-  suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
-  suite !== "code-buffer-sync" && suite !== "review-code" &&
-  suite !== "review-document-refresh" && suite !== "review-diff" &&
-  suite !== "review-destination" && suite !== "review-recovery" &&
-  suite !== "workspace-extensions" && suite !== "sheet-keyboard" &&
-  suite !== "workspace-picker" && suite !== "project-placement" &&
-  suite !== "sign-in" && suite !== "desktop-composer" &&
-  suite !== "session-move" && suite !== "session-fold" &&
+  suite !== "provider-management" &&
+  suite !== "plugin-lifecycle" &&
+  suite !== "settings-recovery" &&
+  suite !== "code-buffers" &&
+  suite !== "code-buffer-context" &&
+  suite !== "code-buffer-cleanup" &&
+  suite !== "code-buffer-sync" &&
+  suite !== "review-code" &&
+  suite !== "review-document-refresh" &&
+  suite !== "review-diff" &&
+  suite !== "review-destination" &&
+  suite !== "review-recovery" &&
+  suite !== "workspace-extensions" &&
+  suite !== "sheet-keyboard" &&
+  suite !== "workspace-picker" &&
+  suite !== "project-placement" &&
+  suite !== "sign-in" &&
+  suite !== "desktop-composer" &&
+  suite !== "session-move" &&
+  suite !== "session-fold" &&
   suite !== "composer-surfaces" &&
-  suite !== "draft-documents" && suite !== "keyboard-acceptance" &&
-  suite !== "editor-plugin-sandbox" && suite !== "tool-inspector" &&
-  suite !== "managed-calls" && suite !== "session-maintenance" &&
-  suite !== "dormant-session" && suite !== "about-layout" &&
-  suite !== "info-metrics" && suite !== "review-context" &&
+  suite !== "draft-documents" &&
+  suite !== "keyboard-acceptance" &&
+  suite !== "editor-plugin-sandbox" &&
+  suite !== "tool-inspector" &&
+  suite !== "managed-calls" &&
+  suite !== "session-maintenance" &&
+  suite !== "dormant-session" &&
+  suite !== "about-layout" &&
+  suite !== "info-metrics" &&
+  suite !== "review-context" &&
   suite !== "review-compare" &&
   suite !== "loading-progress" &&
-  suite !== "subscriptions" && suite !== "client-update" &&
-  suite !== "session-context" && suite !== "boot-snapshot" &&
-  suite !== "elicitation" && suite !== "subagents" &&
+  suite !== "subscriptions" &&
+  suite !== "client-update" &&
+  suite !== "session-context" &&
+  suite !== "boot-snapshot" &&
+  suite !== "elicitation" &&
+  suite !== "subagents" &&
   suite !== "background-tasks"
 ) {
   throw new Error("unknown suite");
@@ -46,27 +66,45 @@ await build({
   publicDir: false,
   define: {
     "process.env.NODE_ENV": JSON.stringify(
-      suite === "desktop-viewport" || suite === "provider-ui" ||
+      suite === "desktop-viewport" ||
+        suite === "provider-ui" ||
         suite === "provider-management" ||
-        suite === "plugin-lifecycle" || suite === "settings-recovery" ||
-        suite === "code-buffers" || suite === "code-buffer-context" ||
-        suite === "code-buffer-cleanup" || suite === "code-buffer-sync" ||
-        suite === "review-code" || suite === "review-document-refresh" ||
-        suite === "review-diff" || suite === "review-destination" ||
-        suite === "review-recovery" || suite === "workspace-extensions" ||
-        suite === "sheet-keyboard" || suite === "workspace-picker" ||
-        suite === "project-placement" || suite === "desktop-composer" ||
-        suite === "session-move" || suite === "session-fold" ||
+        suite === "plugin-lifecycle" ||
+        suite === "settings-recovery" ||
+        suite === "code-buffers" ||
+        suite === "code-buffer-context" ||
+        suite === "code-buffer-cleanup" ||
+        suite === "code-buffer-sync" ||
+        suite === "review-code" ||
+        suite === "review-document-refresh" ||
+        suite === "review-diff" ||
+        suite === "review-destination" ||
+        suite === "review-recovery" ||
+        suite === "workspace-extensions" ||
+        suite === "sheet-keyboard" ||
+        suite === "workspace-picker" ||
+        suite === "project-placement" ||
+        suite === "desktop-composer" ||
+        suite === "session-move" ||
+        suite === "session-fold" ||
         suite === "composer-surfaces" ||
-        suite === "draft-documents" || suite === "keyboard-acceptance" ||
-        suite === "tool-inspector" || suite === "managed-calls" ||
-        suite === "session-maintenance" || suite === "dormant-session" ||
-        suite === "about-layout" || suite === "info-metrics" ||
-        suite === "loading-progress" || suite === "review-context" ||
+        suite === "draft-documents" ||
+        suite === "keyboard-acceptance" ||
+        suite === "tool-inspector" ||
+        suite === "managed-calls" ||
+        suite === "session-maintenance" ||
+        suite === "dormant-session" ||
+        suite === "about-layout" ||
+        suite === "info-metrics" ||
+        suite === "loading-progress" ||
+        suite === "review-context" ||
         suite === "review-compare" ||
-        suite === "subscriptions" || suite === "client-update" ||
-        suite === "session-context" || suite === "elicitation" ||
-        suite === "subagents" || suite === "background-tasks"
+        suite === "subscriptions" ||
+        suite === "client-update" ||
+        suite === "session-context" ||
+        suite === "elicitation" ||
+        suite === "subagents" ||
+        suite === "background-tasks"
         ? "development"
         : "production",
     ),
@@ -84,15 +122,16 @@ await build({
       "@emotion/styled",
     ],
     alias: {
-      "@cowboy/provider-ui":
-        new URL("../components/provider-ui/src/index.ts", import.meta.url)
-          .pathname,
-      "@cowboy/provider-authoring":
-        new URL("../components/provider-authoring/index.ts", import.meta.url)
-          .pathname,
-      "@cowboy/state-store/scope":
-        new URL("../components/state-store/owned-scope.ts", import.meta.url)
-          .pathname,
+      "@cowboy/provider-ui": new URL("../components/provider-ui/src/index.ts", import.meta.url)
+        .pathname,
+      "@cowboy/provider-authoring": new URL(
+        "../components/provider-authoring/index.ts",
+        import.meta.url,
+      ).pathname,
+      "@cowboy/state-store/scope": new URL(
+        "../components/state-store/owned-scope.ts",
+        import.meta.url,
+      ).pathname,
     },
   },
   build: {
@@ -101,21 +140,32 @@ await build({
     minify: false,
     // CodeMirror's language loaders otherwise extract shared static chunks.
     // Keep the isolated runner's one served/hashed artifact, not an open file server.
-    ...(suite === "desktop-viewport" || suite === "desktop-perf" ||
-        suite === "review-diff" ||
-        suite === "review-document-refresh" ||
-        suite === "review-destination" || suite === "review-recovery" ||
-        suite === "workspace-extensions" || suite === "desktop-composer" ||
-        suite === "session-move" || suite === "session-fold" ||
-        suite === "composer-surfaces" ||
-        suite === "draft-documents" || suite === "keyboard-acceptance" ||
-        suite === "tool-inspector" || suite === "managed-calls" ||
-        suite === "dormant-session" || suite === "info-metrics" ||
-        suite === "review-context" || suite === "loading-progress" ||
-        suite === "review-compare" ||
-        suite === "client-update" || suite === "subscriptions" ||
-        suite === "session-context" || suite === "elicitation" ||
-        suite === "subagents" || suite === "background-tasks"
+    ...(suite === "desktop-viewport" ||
+    suite === "desktop-perf" ||
+    suite === "review-diff" ||
+    suite === "review-document-refresh" ||
+    suite === "review-destination" ||
+    suite === "review-recovery" ||
+    suite === "workspace-extensions" ||
+    suite === "desktop-composer" ||
+    suite === "session-move" ||
+    suite === "session-fold" ||
+    suite === "composer-surfaces" ||
+    suite === "draft-documents" ||
+    suite === "keyboard-acceptance" ||
+    suite === "tool-inspector" ||
+    suite === "managed-calls" ||
+    suite === "dormant-session" ||
+    suite === "info-metrics" ||
+    suite === "review-context" ||
+    suite === "loading-progress" ||
+    suite === "review-compare" ||
+    suite === "client-update" ||
+    suite === "subscriptions" ||
+    suite === "session-context" ||
+    suite === "elicitation" ||
+    suite === "subagents" ||
+    suite === "background-tasks"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
@@ -123,95 +173,107 @@ await build({
         suite === "session-context"
           ? "../web/src/sessionContextBrowserConformance.tsx"
           : suite === "elicitation"
-          ? "../web/src/elicitationBrowserConformance.tsx"
-          : suite === "subagents"
-          ? "../web/src/subagentsBrowserConformance.tsx"
-          : suite === "background-tasks"
-          ? "../web/src/backgroundTasksBrowserConformance.tsx"
-          : suite === "boot-snapshot"
-          ? "../web/src/bootSnapshotBrowserConformance.ts"
-          : suite === "client-update"
-          ? "../web/src/clientUpdateBrowserFixture.tsx"
-          : suite === "desktop-viewport"
-          ? "../web/src/desktopViewportBrowserConformance.tsx"
-          : suite === "desktop-perf"
-          ? "../web/src/desktopPerfBrowserFixture.tsx"
-          : suite === "loading-progress"
-          ? "../web/src/loadingProgressBrowserConformance.tsx"
-          : suite === "review-context"
-          ? "../web/src/reviewContextBrowserConformance.tsx"
-          : suite === "review-compare"
-          ? "../web/src/reviewContextBrowserConformance.tsx"
-          : suite === "info-metrics"
-          ? "../web/src/infoMetricsBrowserConformance.tsx"
-          : suite === "dormant-session"
-          ? "../web/src/dormantSessionBrowserConformance.tsx"
-          : suite === "subscriptions"
-          ? "../web/src/subscriptionsBrowserConformance.tsx"
-          : suite === "about-layout"
-          ? "../web/src/aboutLayoutBrowserConformance.tsx"
-          : suite === "session-maintenance"
-          ? "../web/src/sessionMaintenanceBrowserConformance.tsx"
-          : suite === "editor-plugin-sandbox"
-          ? "../web/src/editorPlugins/editorPluginSandboxBrowserConformance.ts"
-          : suite === "tool-inspector"
-          ? "../web/src/toolInspectorBrowserConformance.tsx"
-          : suite === "managed-calls"
-          ? "../web/src/managedCallsBrowserConformance.tsx"
-          : suite === "keyboard-acceptance"
-          ? "../web/src/desktop/keyboardAcceptanceFixture.tsx"
-          : suite === "draft-documents"
-          ? "../web/src/draftDocumentsBrowserConformance.tsx"
-          : suite === "session-fold"
-          ? "../web/src/sessionFoldBrowserConformance.tsx"
-          : suite === "session-move"
-          ? "../web/src/sessionMoveBrowserConformance.tsx"
-          : suite === "composer-surfaces"
-          ? "../web/src/composerSurfacesBrowserConformance.tsx"
-          : suite === "desktop-composer"
-          ? "../web/src/desktopComposerBrowserConformance.tsx"
-          : suite === "sign-in"
-          ? "../web/src/auth/signInBrowserConformance.tsx"
-          : suite === "project-placement"
-          ? "../web/src/projectPlacementBrowserConformance.tsx"
-          : suite === "workspace-picker"
-          ? "../web/src/workspacePickerBrowserConformance.tsx"
-          : suite === "sheet-keyboard"
-          ? "../web/src/coverKeyboardBrowserConformance.tsx"
-          : suite === "workspace-extensions"
-          ? "../web/src/extensions/WorkspaceExtensionsBrowserConformance.tsx"
-          : suite === "provider-ui"
-          ? "../web/src/providerUiBrowserConformance.ts"
-          : suite === "provider-management"
-          ? "../web/src/providerManagementBrowserConformance.ts"
-          : suite === "plugin-lifecycle"
-          ? "../web/src/pluginLifecycleBrowserConformance.ts"
-          : suite === "settings-recovery"
-          ? "../web/src/settingsRecoveryBrowserConformance.ts"
-          : suite === "code-buffers"
-          ? "../web/src/codeBufferBrowserConformance.ts"
-          : suite === "code-buffer-context"
-          ? "../web/src/codeBufferContextBrowserConformance.ts"
-          : suite === "code-buffer-cleanup"
-          ? "../web/src/codeBufferCleanupBrowserConformance.tsx"
-          : suite === "code-buffer-sync"
-          ? "../web/src/codeBufferSynchronizationBrowserConformance.tsx"
-          : suite === "review-code"
-          ? "../web/src/reviewCodeBrowserConformance.tsx"
-          : suite === "review-document-refresh"
-          ? "../web/src/reviewDocumentRefreshBrowserConformance.tsx"
-          : suite === "review-diff"
-          ? "../web/src/reviewDiffBrowserConformance.tsx"
-          : suite === "review-destination"
-          ? "../web/src/reviewDestinationBrowserConformance.tsx"
-          : suite === "review-recovery"
-          ? "../web/src/reviewRecoveryBrowserConformance.tsx"
-          : suite === "idb-outbox"
-          ? "../web/src/idbOutboxBrowserConformance.ts"
-          : "../web/src/idbBrowserConformance.ts",
+            ? "../web/src/elicitationBrowserConformance.tsx"
+            : suite === "subagents"
+              ? "../web/src/subagentsBrowserConformance.tsx"
+              : suite === "background-tasks"
+                ? "../web/src/backgroundTasksBrowserConformance.tsx"
+                : suite === "boot-snapshot"
+                  ? "../web/src/bootSnapshotBrowserConformance.ts"
+                  : suite === "client-update"
+                    ? "../web/src/clientUpdateBrowserFixture.tsx"
+                    : suite === "desktop-viewport"
+                      ? "../web/src/desktopViewportBrowserConformance.tsx"
+                      : suite === "desktop-perf"
+                        ? "../web/src/desktopPerfBrowserFixture.tsx"
+                        : suite === "loading-progress"
+                          ? "../web/src/loadingProgressBrowserConformance.tsx"
+                          : suite === "review-context"
+                            ? "../web/src/reviewContextBrowserConformance.tsx"
+                            : suite === "review-compare"
+                              ? "../web/src/reviewContextBrowserConformance.tsx"
+                              : suite === "info-metrics"
+                                ? "../web/src/infoMetricsBrowserConformance.tsx"
+                                : suite === "dormant-session"
+                                  ? "../web/src/dormantSessionBrowserConformance.tsx"
+                                  : suite === "subscriptions"
+                                    ? "../web/src/subscriptionsBrowserConformance.tsx"
+                                    : suite === "about-layout"
+                                      ? "../web/src/aboutLayoutBrowserConformance.tsx"
+                                      : suite === "session-maintenance"
+                                        ? "../web/src/sessionMaintenanceBrowserConformance.tsx"
+                                        : suite === "editor-plugin-sandbox"
+                                          ? "../web/src/editorPlugins/editorPluginSandboxBrowserConformance.ts"
+                                          : suite === "tool-inspector"
+                                            ? "../web/src/toolInspectorBrowserConformance.tsx"
+                                            : suite === "managed-calls"
+                                              ? "../web/src/managedCallsBrowserConformance.tsx"
+                                              : suite === "keyboard-acceptance"
+                                                ? "../web/src/desktop/keyboardAcceptanceFixture.tsx"
+                                                : suite === "draft-documents"
+                                                  ? "../web/src/draftDocumentsBrowserConformance.tsx"
+                                                  : suite === "session-fold"
+                                                    ? "../web/src/sessionFoldBrowserConformance.tsx"
+                                                    : suite === "session-move"
+                                                      ? "../web/src/sessionMoveBrowserConformance.tsx"
+                                                      : suite === "composer-surfaces"
+                                                        ? "../web/src/composerSurfacesBrowserConformance.tsx"
+                                                        : suite === "desktop-composer"
+                                                          ? "../web/src/desktopComposerBrowserConformance.tsx"
+                                                          : suite === "sign-in"
+                                                            ? "../web/src/auth/signInBrowserConformance.tsx"
+                                                            : suite === "project-placement"
+                                                              ? "../web/src/projectPlacementBrowserConformance.tsx"
+                                                              : suite === "workspace-picker"
+                                                                ? "../web/src/workspacePickerBrowserConformance.tsx"
+                                                                : suite === "sheet-keyboard"
+                                                                  ? "../web/src/coverKeyboardBrowserConformance.tsx"
+                                                                  : suite === "workspace-extensions"
+                                                                    ? "../web/src/extensions/WorkspaceExtensionsBrowserConformance.tsx"
+                                                                    : suite === "provider-ui"
+                                                                      ? "../web/src/providerUiBrowserConformance.ts"
+                                                                      : suite ===
+                                                                          "provider-management"
+                                                                        ? "../web/src/providerManagementBrowserConformance.ts"
+                                                                        : suite ===
+                                                                            "plugin-lifecycle"
+                                                                          ? "../web/src/pluginLifecycleBrowserConformance.ts"
+                                                                          : suite ===
+                                                                              "settings-recovery"
+                                                                            ? "../web/src/settingsRecoveryBrowserConformance.ts"
+                                                                            : suite ===
+                                                                                "code-buffers"
+                                                                              ? "../web/src/codeBufferBrowserConformance.ts"
+                                                                              : suite ===
+                                                                                  "code-buffer-context"
+                                                                                ? "../web/src/codeBufferContextBrowserConformance.ts"
+                                                                                : suite ===
+                                                                                    "code-buffer-cleanup"
+                                                                                  ? "../web/src/codeBufferCleanupBrowserConformance.tsx"
+                                                                                  : suite ===
+                                                                                      "code-buffer-sync"
+                                                                                    ? "../web/src/codeBufferSynchronizationBrowserConformance.tsx"
+                                                                                    : suite ===
+                                                                                        "review-code"
+                                                                                      ? "../web/src/reviewCodeBrowserConformance.tsx"
+                                                                                      : suite ===
+                                                                                          "review-document-refresh"
+                                                                                        ? "../web/src/reviewDocumentRefreshBrowserConformance.tsx"
+                                                                                        : suite ===
+                                                                                            "review-diff"
+                                                                                          ? "../web/src/reviewDiffBrowserConformance.tsx"
+                                                                                          : suite ===
+                                                                                              "review-destination"
+                                                                                            ? "../web/src/reviewDestinationBrowserConformance.tsx"
+                                                                                            : suite ===
+                                                                                                "review-recovery"
+                                                                                              ? "../web/src/reviewRecoveryBrowserConformance.tsx"
+                                                                                              : suite ===
+                                                                                                  "idb-outbox"
+                                                                                                ? "../web/src/idbOutboxBrowserConformance.ts"
+                                                                                                : "../web/src/idbBrowserConformance.ts",
         import.meta.url,
-      )
-        .pathname,
+      ).pathname,
       formats: ["es"],
       fileName: () => "fixture.js",
     },

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PrismLight } from "react-syntax-highlighter";

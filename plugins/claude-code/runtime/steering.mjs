@@ -17,8 +17,8 @@ export function installSteeringPriority(Agent) {
     }
     if (priority === "now") return await steer.call(this, request);
     if (
-      session?.needsSignOutRespawn && (session.queryClosed ||
-        !(session.turnQueue ?? []).some((turn) => !turn.settled))
+      session?.needsSignOutRespawn &&
+      (session.queryClosed || !(session.turnQueue ?? []).some((turn) => !turn.settled))
     ) {
       throw new Error("The captured steering session is unavailable");
     }

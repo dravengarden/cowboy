@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../../tools/test-assert.ts";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 

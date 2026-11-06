@@ -18,18 +18,14 @@ import {
 import { targetMcpServers } from "../plugins/claude-code/runtime/mcp.mjs";
 
 const baseline = JSON.parse(
-  readFileSync(
-    new URL("./claude_native_behavior_baseline.json", import.meta.url),
-    "utf8",
-  ),
+  readFileSync(new URL("./claude_native_behavior_baseline.json", import.meta.url), "utf8"),
 );
 
 // Native ids and runtime paths vary per run.
 const shape = (text) =>
-  text.replace(/\(ID: [^)]+\)|with ID: \S+?\./g, "<ID>").replace(
-    /written to: \S+?\. /g,
-    "written to: <FILE>. ",
-  );
+  text
+    .replace(/\(ID: [^)]+\)|with ID: \S+?\./g, "<ID>")
+    .replace(/written to: \S+?\. /g, "written to: <FILE>. ");
 
 test("background command results read as native's", () => {
   const { explicit_result: explicit, moved_result: moved } = baseline.bash;
@@ -45,18 +41,20 @@ test("background command results read as native's", () => {
 
 test("native's deadline notification is recognized and projected", () => {
   // The baseline marks its temporary root as <ROOT>; a real path has none.
-  const note = baseline.bash.deadline_notification.replaceAll(
-    "<ROOT>",
-    "/root",
-  );
+  const note = baseline.bash.deadline_notification.replaceAll("<ROOT>", "/root");
   assert.match(note, /<status>killed<\/status>/);
   assert.match(note, /was stopped after reaching its background time limit/);
   const id = /<task-id>([^<]*)<\/task-id>/.exec(note)[1];
-  const tasks = new Map([[id, {
-    jobId: "job-1",
-    toolUseId: "toolu_target",
-    command: "make long",
-  }]]);
+  const tasks = new Map([
+    [
+      id,
+      {
+        jobId: "job-1",
+        toolUseId: "toolu_target",
+        command: "make long",
+      },
+    ],
+  ]);
   const projected = targetShellNotification(note, tasks);
   assert.match(
     projected,
@@ -68,10 +66,7 @@ test("native's deadline notification is recognized and projected", () => {
 });
 
 test("target commands get native's stdin: none, and no terminal", async () => {
-  assert.equal(
-    baseline.bash.stdin,
-    "in-notty\nout-notty\nread-status:1\n/dev/null",
-  );
+  assert.equal(baseline.bash.stdin, "in-notty\nout-notty\nread-status:1\n/dev/null");
   const started = [];
   const tools = new WorkspaceTools(
     {
@@ -102,10 +97,7 @@ test("MCP scopes, precedence and expansion follow native's", () => {
     dup: "dup-local",
   });
   assert.ok(!mcp.tools.some((name) => name.startsWith("mcp__hidden__")));
-  assert.deepEqual(
-    mcp.servers.find(([name]) => name === "off").slice(0, 2),
-    ["off", "disabled"],
-  );
+  assert.deepEqual(mcp.servers.find(([name]) => name === "off").slice(0, 2), ["off", "disabled"]);
   const server = (name) => ({
     command: "python3",
     args: ["server.py", name, "${FIXTURE:-dflt}", "${UNSET_FIXTURE:-d2}"],
@@ -129,20 +121,20 @@ test("MCP scopes, precedence and expansion follow native's", () => {
         },
       },
     }),
-    projectConfigs: [JSON.stringify({
-      mcpServers: {
-        projsrv: server("projsrv"),
-        dup: server("dup-project"),
-        hidden: server("hidden"),
-      },
-    })],
+    projectConfigs: [
+      JSON.stringify({
+        mcpServers: {
+          projsrv: server("projsrv"),
+          dup: server("dup-project"),
+          hidden: server("hidden"),
+        },
+      }),
+    ],
     cwd: "/p/sub",
     repositoryRoot: "/p",
     environment: { FIXTURE: "fx" },
   });
-  const byName = Object.fromEntries(
-    entries.map((entry) => [entry.name, entry]),
-  );
+  const byName = Object.fromEntries(entries.map((entry) => [entry.name, entry]));
   for (const [name, result] of Object.entries(mcp.calls)) {
     assert.equal(byName[name].argv[2], result.server, name);
     assert.deepEqual(byName[name].argv.slice(3), result.argv, name);

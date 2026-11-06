@@ -1,13 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
@@ -41,13 +33,13 @@ test("range reads keep whole-file conflict stamps without transferring the file"
     const script = 2;
     assert.deepEqual(argv.slice(1, script + 1), ["read-range", "--"]);
     await writeFile(target, files.get("/target with space/file"));
-    const output = execFileSync(argv[0], [
-      ...argv.slice(1, script + 1),
-      target,
-      ...argv.slice(script + 2),
-    ], {
-      encoding: "utf8",
-    });
+    const output = execFileSync(
+      argv[0],
+      [...argv.slice(1, script + 1), target, ...argv.slice(script + 2)],
+      {
+        encoding: "utf8",
+      },
+    );
     transferred += Buffer.byteLength(output);
     return { exitCode: 0, closed: true, output };
   };
@@ -61,10 +53,10 @@ test("range reads keep whole-file conflict stamps without transferring the file"
     assert.equal(result.result.file.startLine, offset);
     assert.equal(result.result.file.totalLines, 8193);
   }
-  assert.deepEqual(calls.map((call) => call.method), [
-    "fs/getMetadata",
-    "fs/getMetadata",
-  ]);
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ["fs/getMetadata", "fs/getMetadata"],
+  );
   assert.ok(transferred < 4096);
   assert.equal((await readFile(state, "utf8")).includes(source), false);
   const resumed = new WorkspaceTools(connection, binding, state);
@@ -76,10 +68,7 @@ test("range reads keep whole-file conflict stamps without transferring the file"
     content: "lost",
   });
   assert.match(refused.deny, /modified since read/);
-  assert.equal(
-    files.get("/target with space/file").toString(),
-    original + "external",
-  );
+  assert.equal(files.get("/target with space/file").toString(), original + "external");
   files.set("/target with space/file", Buffer.from(original));
   const edited = await resumed.nativeCall("Edit", {
     file_path: "file",
@@ -88,9 +77,7 @@ test("range reads keep whole-file conflict stamps without transferring the file"
     replace_all: true,
   });
   assert.equal(edited.deny, undefined);
-  assert.ok(
-    files.get("/target with space/file").toString().startsWith("changed\n"),
-  );
+  assert.ok(files.get("/target with space/file").toString().startsWith("changed\n"));
 });
 
 test("range helper handles empty files, CRLF, Unicode, missing and nonregular files", async (t) => {
@@ -98,19 +85,16 @@ test("range helper handles empty files, CRLF, Unicode, missing and nonregular fi
   t.after(() => rm(directory, { recursive: true, force: true }));
   const target = join(directory, "file");
   const run = (path, offset = 1, limit = 10) =>
-    JSON.parse(execFileSync(
-      fileHelper,
-      ["read-range", "--", path, String(offset), String(limit)],
-      { encoding: "utf8" },
-    ));
+    JSON.parse(
+      execFileSync(fileHelper, ["read-range", "--", path, String(offset), String(limit)], {
+        encoding: "utf8",
+      }),
+    );
   await writeFile(target, "");
   assert.equal(run(target).numLines, 1);
   assert.equal(run(target, 2).numLines, 0);
   await writeFile(target, "中文\r\nsecond\n");
-  assert.equal(
-    Buffer.from(run(target, 1, 1).dataBase64, "base64").toString(),
-    "中文\r",
-  );
+  assert.equal(Buffer.from(run(target, 1, 1).dataBase64, "base64").toString(), "中文\r");
   assert.match(run(join(directory, "missing")).error, /failed/);
   assert.match(run(directory).error, /failed/);
   // Encoding-sensitive reads use the full reader so its warning is preserved.
@@ -121,10 +105,7 @@ test("range helper handles empty files, CRLF, Unicode, missing and nonregular fi
   await writeFile(target, Buffer.from([255, 254, 65, 0]));
   assert.equal(run(target).fallback, true);
   // A racing write is exercised deterministically in the Rust helper tests.
-  await writeFile(
-    target,
-    Buffer.concat([Buffer.from("%PDF"), Buffer.alloc(64)]),
-  );
+  await writeFile(target, Buffer.concat([Buffer.from("%PDF"), Buffer.alloc(64)]));
   assert.equal(run(target).fallback, true);
 });
 
@@ -141,10 +122,7 @@ test("range results fail closed without granting edit authority", async (t) => {
       size: 10,
     }),
   });
-  assert.match(
-    (await tools.nativeCall("Read", { file_path: "file" })).deny,
-    /Invalid/,
-  );
+  assert.match((await tools.nativeCall("Read", { file_path: "file" })).deny, /Invalid/);
   assert.deepEqual(tools.state.reads, {});
 });
 
@@ -155,14 +133,11 @@ test("small files retain two native RPCs without a utility startup", async (t) =
     throw new Error("Short Read must not start a utility");
   };
   files.set("/target with space/file", Buffer.from("short\n"));
-  assert.equal(
-    (await tools.nativeCall("Read", { file_path: "file" })).deny,
-    undefined,
+  assert.equal((await tools.nativeCall("Read", { file_path: "file" })).deny, undefined);
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ["fs/getMetadata", "fs/readFile"],
   );
-  assert.deepEqual(calls.map((call) => call.method), [
-    "fs/getMetadata",
-    "fs/readFile",
-  ]);
 });
 
 test("retained range helpers fall back to a fresh correctly decoded UTF-16 read", async (t) => {
@@ -186,10 +161,7 @@ test("retained range helpers fall back to a fresh correctly decoded UTF-16 read"
   assert.equal(read.result.file.content, "line\nline");
   assert.equal(read.context, undefined);
   assert.equal(calls.filter((call) => call.method === "fs/readFile").length, 1);
-  files.set(
-    "/target with space/file",
-    Buffer.concat([original, Buffer.from("changed")]),
-  );
+  files.set("/target with space/file", Buffer.concat([original, Buffer.from("changed")]));
   const edit = await tools.nativeCall("Edit", {
     file_path: "file",
     old_string: "line",
@@ -208,17 +180,16 @@ test("an undelivered Read leaves the file unread, which natively may be written"
     error.code = "EIO";
     throw error;
   };
-  assert.match(
-    (await tools.nativeCall("Read", { file_path: "file" })).deny,
-    /saved/,
-  );
+  assert.match((await tools.nativeCall("Read", { file_path: "file" })).deny, /saved/);
   assert.deepEqual(tools.state.reads, {});
   tools.save = save;
   assert.equal(
-    (await tools.nativeCall("Write", {
-      file_path: "file",
-      content: "written",
-    })).deny,
+    (
+      await tools.nativeCall("Write", {
+        file_path: "file",
+        content: "written",
+      })
+    ).deny,
     undefined,
   );
   assert.equal(files.get("/target with space/file").toString(), "written");
@@ -235,10 +206,12 @@ test("bounded read stamps expire, leaving the file unread as natively", async (t
   assert.equal(tools.state.reads["/target with space/old"], undefined);
   files.set("/target with space/old", Buffer.from("original"));
   assert.equal(
-    (await tools.nativeCall("Write", {
-      file_path: "old",
-      content: "written",
-    })).deny,
+    (
+      await tools.nativeCall("Write", {
+        file_path: "old",
+        content: "written",
+      })
+    ).deny,
     undefined,
   );
   assert.equal(files.get("/target with space/old").toString(), "written");
@@ -250,10 +223,7 @@ test("failed atomic state replacement removes only its owned temporary file", as
   const unrelated = state + ".keep";
   await writeFile(unrelated, "keep");
   await assert.rejects(tools.save());
-  assert.deepEqual((await readdir(join(state, ".."))).sort(), [
-    "state.json",
-    "state.json.keep",
-  ]);
+  assert.deepEqual((await readdir(join(state, ".."))).sort(), ["state.json", "state.json.keep"]);
   assert.equal(await readFile(unrelated, "utf8"), "keep");
 });
 
@@ -361,10 +331,7 @@ test("a quiet command waits on notifications instead of polling every second", a
   };
   const started = Date.now();
   assert.equal((await tools.collectOutput("quiet", 120000)).exitCode, 0);
-  assert.ok(
-    Date.now() - started < 5000,
-    "the exit notification did not end the wait",
-  );
+  assert.ok(Date.now() - started < 5000, "the exit notification did not end the wait");
   // Three bounded reads, then two notification-driven reads that never wait.
   assert.deepEqual(waits, [1000, 1000, 1000, 0, 0]);
 });
@@ -501,8 +468,7 @@ test("a cancellation the executor has long not known ends instead of polling for
   assert.equal(tools.state.jobs[id].cancelRequested, true);
   known = false;
   await tools.reconcileCancellation(id);
-  tools.state.jobs[id].unknownSince = Date.now() -
-    UNKNOWN_PROCESS_SETTLED_MS - 1;
+  tools.state.jobs[id].unknownSince = Date.now() - UNKNOWN_PROCESS_SETTLED_MS - 1;
   calls.length = 0;
   await tools.reconcileCancellation(id);
   assert.equal(tools.state.jobs[id], undefined);
@@ -630,17 +596,23 @@ test("a changed file is refused until read again, including after cold resume", 
   assert.equal(files.get("/target with space/file").toString(), "external\n");
   await resumed.call("read", { file_path: "file" });
   assert.equal(
-    (await resumed.call("edit", {
-      file_path: "file",
-      old_string: "external",
-      new_string: "after",
-    })).isError,
+    (
+      await resumed.call("edit", {
+        file_path: "file",
+        old_string: "external",
+        new_string: "after",
+      })
+    ).isError,
     false,
   );
-  const foreign = new WorkspaceTools(connection, {
-    ...binding,
-    environment: { id: "foreign" },
-  }, state);
+  const foreign = new WorkspaceTools(
+    connection,
+    {
+      ...binding,
+      environment: { id: "foreign" },
+    },
+    state,
+  );
   await assert.rejects(foreign.load(), /another execution environment/);
 });
 
@@ -648,24 +620,25 @@ test("quoted paths, CRLF, Unicode and literal replacement strings retain their b
   const { tools, files } = await fixture(t);
   const path = "child/quoted '\" $() 中文.txt";
   assert.equal(
-    (await tools.call("write", {
-      file_path: path,
-      content: "\uFEFFfirst\r\nsecond\r\n",
-    })).isError,
+    (
+      await tools.call("write", {
+        file_path: path,
+        content: "\uFEFFfirst\r\nsecond\r\n",
+      })
+    ).isError,
     false,
   );
   assert.equal(
-    (await tools.call("edit", {
-      file_path: path,
-      old_string: "first\nsecond\n",
-      new_string: "🐎 $& $` $'\nnext\n",
-    })).isError,
+    (
+      await tools.call("edit", {
+        file_path: path,
+        old_string: "first\nsecond\n",
+        new_string: "🐎 $& $` $'\nnext\n",
+      })
+    ).isError,
     false,
   );
-  assert.equal(
-    files.get("/target with space/" + path).toString(),
-    "\uFEFF🐎 $& $` $'\r\nnext\r\n",
-  );
+  assert.equal(files.get("/target with space/" + path).toString(), "\uFEFF🐎 $& $` $'\r\nnext\r\n");
 });
 
 test("native file results expose target paths and exact diffs, including EOF changes", async (t) => {
@@ -680,13 +653,15 @@ test("native file results expose target paths and exact diffs, including EOF cha
     old_string: "before",
     new_string: "after\n",
   });
-  assert.deepEqual(edit.result.structuredPatch, [{
-    oldStart: 1,
-    oldLines: 1,
-    newStart: 1,
-    newLines: 1,
-    lines: ["-before", "\\ No newline at end of file", "+after"],
-  }]);
+  assert.deepEqual(edit.result.structuredPatch, [
+    {
+      oldStart: 1,
+      oldLines: 1,
+      newStart: 1,
+      newLines: 1,
+      lines: ["-before", "\\ No newline at end of file", "+after"],
+    },
+  ]);
   files.set("/target with space/file", Buffer.from("external"));
   const refused = await tools.nativeCall("Write", {
     file_path: "file",
@@ -708,13 +683,16 @@ test("native Read task handles retain output cursors across cold resume", async 
     assert.equal(method, "process/read");
     cursors.push(params.afterSeq);
     return {
-      chunks: params.afterSeq === null
-        ? [{
-          seq: 1,
-          stream: "stdout",
-          chunk: Buffer.from("done").toString("base64"),
-        }]
-        : [],
+      chunks:
+        params.afterSeq === null
+          ? [
+              {
+                seq: 1,
+                stream: "stdout",
+                chunk: Buffer.from("done").toString("base64"),
+              },
+            ]
+          : [],
       closed: true,
       exited: true,
       exitCode: 0,
@@ -751,13 +729,16 @@ test("a finished background command's output outlives the executor forgetting it
       });
     }
     return {
-      chunks: params.afterSeq === null
-        ? [{
-          seq: 1,
-          stream: "stdout",
-          chunk: Buffer.from("built\n").toString("base64"),
-        }]
-        : [],
+      chunks:
+        params.afterSeq === null
+          ? [
+              {
+                seq: 1,
+                stream: "stdout",
+                chunk: Buffer.from("built\n").toString("base64"),
+              },
+            ]
+          : [],
       closed: true,
       exited: true,
       exitCode: 0,
@@ -797,19 +778,13 @@ test("task output keeps split UTF-8 separate per stream across cold resume", asy
     {
       chunks: [
         chunk("stdout", stdout.subarray(0, 2)),
-        chunk(
-          "stderr",
-          Buffer.concat([Buffer.alloc(65534, 120), stderr.subarray(0, 2)]),
-        ),
+        chunk("stderr", Buffer.concat([Buffer.alloc(65534, 120), stderr.subarray(0, 2)])),
       ],
       closed: false,
       exited: false,
     },
     {
-      chunks: [
-        chunk("stdout", stdout.subarray(2)),
-        chunk("stderr", stderr.subarray(2)),
-      ],
+      chunks: [chunk("stdout", stdout.subarray(2)), chunk("stderr", stderr.subarray(2))],
       closed: true,
       exited: true,
       exitCode: 0,
@@ -839,23 +814,26 @@ test("interleaved output and terminal incomplete UTF-8 do not corrupt other stre
   const { tools, connection } = await fixture(t);
   tools.state.jobs.job = { afterSeq: null, exited: false };
   connection.call = async (_method, params) => ({
-    chunks: params.afterSeq !== null ? [] : [
-      {
-        seq: 1,
-        stream: "stdout",
-        chunk: Buffer.from([0xe4, 0xb8]).toString("base64"),
-      },
-      {
-        seq: 2,
-        stream: "stderr",
-        chunk: Buffer.from("error").toString("base64"),
-      },
-      {
-        seq: 3,
-        stream: "stdout",
-        chunk: Buffer.from([0xad, 0xf0, 0x9f]).toString("base64"),
-      },
-    ],
+    chunks:
+      params.afterSeq !== null
+        ? []
+        : [
+            {
+              seq: 1,
+              stream: "stdout",
+              chunk: Buffer.from([0xe4, 0xb8]).toString("base64"),
+            },
+            {
+              seq: 2,
+              stream: "stderr",
+              chunk: Buffer.from("error").toString("base64"),
+            },
+            {
+              seq: 3,
+              stream: "stdout",
+              chunk: Buffer.from([0xad, 0xf0, 0x9f]).toString("base64"),
+            },
+          ],
     exited: true,
     closed: true,
     exitCode: 1,
@@ -870,13 +848,16 @@ test("failed output state commit preserves the cursor for retry", async (t) => {
   connection.call = async (_method, params) => {
     cursors.push(params.afterSeq);
     return {
-      chunks: params.afterSeq === null
-        ? [{
-          seq: 1,
-          stream: "stdout",
-          chunk: Buffer.from("retained").toString("base64"),
-        }]
-        : [],
+      chunks:
+        params.afterSeq === null
+          ? [
+              {
+                seq: 1,
+                stream: "stdout",
+                chunk: Buffer.from("retained").toString("base64"),
+              },
+            ]
+          : [],
       exited: true,
       closed: true,
       exitCode: 0,
@@ -893,30 +874,26 @@ test("failed output state commit preserves the cursor for retry", async (t) => {
 
 test("byte-split output preserves BOMs and native invalid UTF-8 replacement", async (t) => {
   const { tools, connection } = await fixture(t);
-  for (
-    const bytes of [
-      Buffer.from("\ufeff中文🐎\0end"),
-      Buffer.from([0xe0, 0x80, 0x80, 0xff, 0xed, 0xa0, 0x80]),
-      Buffer.from([0xf0, 0x90, 0x80]),
-    ]
-  ) {
+  for (const bytes of [
+    Buffer.from("\ufeff中文🐎\0end"),
+    Buffer.from([0xe0, 0x80, 0x80, 0xff, 0xed, 0xa0, 0x80]),
+    Buffer.from([0xf0, 0x90, 0x80]),
+  ]) {
     tools.state.jobs.job = { afterSeq: null, exited: false };
     connection.call = async (_method, params) => ({
-      chunks: params.afterSeq !== null
-        ? []
-        : Array.from(bytes, (byte, index) => ({
-          seq: index + 1,
-          stream: "stdout",
-          chunk: Buffer.from([byte]).toString("base64"),
-        })),
+      chunks:
+        params.afterSeq !== null
+          ? []
+          : Array.from(bytes, (byte, index) => ({
+              seq: index + 1,
+              stream: "stdout",
+              chunk: Buffer.from([byte]).toString("base64"),
+            })),
       exited: true,
       closed: true,
       exitCode: 0,
     });
-    assert.equal(
-      (await tools.collect("job", 1000)).output,
-      bytes.toString("utf8"),
-    );
+    assert.equal((await tools.collect("job", 1000)).output, bytes.toString("utf8"));
   }
 });
 
@@ -925,27 +902,28 @@ test("ambiguous edits and foreign task ids have no effects", async (t) => {
   files.set("/target with space/file", Buffer.from("one one"));
   await tools.call("read", { file_path: "file" });
   assert.equal(
-    (await tools.call("edit", {
-      file_path: "file",
-      old_string: "one",
-      new_string: "two",
-    })).isError,
+    (
+      await tools.call("edit", {
+        file_path: "file",
+        old_string: "one",
+        new_string: "two",
+      })
+    ).isError,
     true,
   );
   assert.equal(files.get("/target with space/file").toString(), "one one");
   const before = calls.length;
-  assert.equal(
-    (await tools.call("taskstop", { task_id: "foreign" })).isError,
-    true,
-  );
+  assert.equal((await tools.call("taskstop", { task_id: "foreign" })).isError, true);
   assert.equal(calls.length, before);
   assert.equal(
-    (await tools.call("edit", {
-      file_path: "file",
-      old_string: "one",
-      new_string: "two",
-      replace_all: true,
-    })).isError,
+    (
+      await tools.call("edit", {
+        file_path: "file",
+        old_string: "one",
+        new_string: "two",
+        replace_all: true,
+      })
+    ).isError,
     false,
   );
   assert.equal(files.get("/target with space/file").toString(), "two two");
@@ -966,25 +944,15 @@ test("tilde paths use executor home and share read stamps with absolute target p
   });
   assert.equal(edit.deny, undefined);
   assert.equal(files.get("/target home/file").toString(), "after");
-  assert.ok(
-    calls.every((call) =>
-      fileURLToPath(call.params.path).startsWith("/target home")
-    ),
-  );
+  assert.ok(calls.every((call) => fileURLToPath(call.params.path).startsWith("/target home")));
   connection.info = {};
   assert.throws(() => tools.path("~/file"), /Target home is unavailable/);
-  assert.throws(
-    () => tools.path("~another/file"),
-    /relative or absolute target path/,
-  );
+  assert.throws(() => tools.path("~another/file"), /relative or absolute target path/);
 });
 
 test("Write refuses a previously read binary image without changing it", async (t) => {
   const { tools, files, calls } = await fixture(t);
-  files.set(
-    "/target with space/pixel",
-    Buffer.from("89504e470d0a1a0a0001020304", "hex"),
-  );
+  files.set("/target with space/pixel", Buffer.from("89504e470d0a1a0a0001020304", "hex"));
   // Native's own Read reads the local copy; this Read records the stamp.
   const read = await tools.nativeCall("Read", { file_path: "pixel" });
   assert.equal(read.result.type, "local_read");
@@ -994,14 +962,8 @@ test("Write refuses a previously read binary image without changing it", async (
     content: "replacement\n",
   });
   assert.match(result.deny, /File has NUL bytes/);
-  assert.equal(
-    files.get("/target with space/pixel").toString("hex"),
-    "89504e470d0a1a0a0001020304",
-  );
-  assert.equal(
-    calls.filter((call) => call.method === "fs/writeFile").length,
-    0,
-  );
+  assert.equal(files.get("/target with space/pixel").toString("hex"), "89504e470d0a1a0a0001020304");
+  assert.equal(calls.filter((call) => call.method === "fs/writeFile").length, 0);
 });
 
 test("failed post-write state commit requires a fresh Read before another edit", async (t) => {
@@ -1029,11 +991,13 @@ test("failed post-write state commit requires a fresh Read before another edit",
   assert.equal(files.get("/target with space/file").toString(), "after");
   await tools.nativeCall("Read", { file_path: "file" });
   assert.equal(
-    (await tools.nativeCall("Edit", {
-      file_path: "file",
-      old_string: "after",
-      new_string: "confirmed",
-    })).deny,
+    (
+      await tools.nativeCall("Edit", {
+        file_path: "file",
+        old_string: "after",
+        new_string: "confirmed",
+      })
+    ).deny,
     undefined,
   );
 });
@@ -1071,11 +1035,13 @@ test("read images as binary content and preserve notebook metadata", async (t) =
   );
   await tools.call("read", { file_path: "book.ipynb" });
   assert.equal(
-    (await tools.call("notebookedit", {
-      notebook_path: "book.ipynb",
-      cell_id: "cell",
-      new_source: "print('中文')\n",
-    })).isError,
+    (
+      await tools.call("notebookedit", {
+        notebook_path: "book.ipynb",
+        cell_id: "cell",
+        new_source: "print('中文')\n",
+      })
+    ).isError,
     false,
   );
   const notebook = JSON.parse(files.get("/target with space/book.ipynb"));
@@ -1106,16 +1072,13 @@ test("a NotebookEdit still requires a Read, as natively", async (t) => {
     cell_id: "a",
     new_source: "x",
   });
-  assert.equal(
-    refused.deny,
-    "File has not been read yet. Read it first before writing to it.",
-  );
+  assert.equal(refused.deny, "File has not been read yet. Read it first before writing to it.");
   assert.equal(files.get("/target with space/book.ipynb").toString(), notebook);
 });
 
 function deferred() {
   let resolve;
-  const promise = new Promise((done) => resolve = done);
+  const promise = new Promise((done) => (resolve = done));
   return { promise, resolve };
 }
 
@@ -1202,74 +1165,70 @@ test("independent reads proceed while same-file edits wait for their read", {
   assert.equal(files.get("/target with space/a").toString(), "after");
 });
 
-test(
-  "TaskStop terminates a collecting Bash without blocking independent files",
-  {
-    timeout: 2000,
-  },
-  async (t) => {
-    const { tools, files, connection } = await fixture(t);
-    tools.shell = "/bin/bash";
-    files.set("/target with space/file", Buffer.from("available"));
-    const collecting = deferred();
-    const terminated = deferred();
-    const original = connection.call.bind(connection);
-    let task;
-    const cursors = [];
-    connection.call = async (method, params) => {
-      if (method === "process/start") {
-        task = params.processId;
-        return { processId: task };
-      }
-      if (method === "process/terminate") {
-        assert.equal(params.processId, task);
-        terminated.resolve();
-        return {};
-      }
-      if (method === "process/read") {
-        cursors.push({
-          afterSeq: params.afterSeq,
-          observation: params.maxBytes === 1,
-        });
-        collecting.resolve();
-        await terminated.promise;
-        return {
-          chunks: params.afterSeq === null
-            ? [{
-              seq: 1,
-              stream: "stdout",
-              chunk: Buffer.from("done").toString("base64"),
-            }]
+test("TaskStop terminates a collecting Bash without blocking independent files", {
+  timeout: 2000,
+}, async (t) => {
+  const { tools, files, connection } = await fixture(t);
+  tools.shell = "/bin/bash";
+  files.set("/target with space/file", Buffer.from("available"));
+  const collecting = deferred();
+  const terminated = deferred();
+  const original = connection.call.bind(connection);
+  let task;
+  const cursors = [];
+  connection.call = async (method, params) => {
+    if (method === "process/start") {
+      task = params.processId;
+      return { processId: task };
+    }
+    if (method === "process/terminate") {
+      assert.equal(params.processId, task);
+      terminated.resolve();
+      return {};
+    }
+    if (method === "process/read") {
+      cursors.push({
+        afterSeq: params.afterSeq,
+        observation: params.maxBytes === 1,
+      });
+      collecting.resolve();
+      await terminated.promise;
+      return {
+        chunks:
+          params.afterSeq === null
+            ? [
+                {
+                  seq: 1,
+                  stream: "stdout",
+                  chunk: Buffer.from("done").toString("base64"),
+                },
+              ]
             : [],
-          exited: true,
-          closed: true,
-          exitCode: 143,
-        };
-      }
-      return original(method, params);
-    };
-    const bash = tools.call("bash", { command: "sleep 120" });
-    await collecting.promise;
-    assert.equal(
-      (await tools.call("read", { file_path: "file" })).isError,
-      false,
-    );
-    const stop = tools.call("taskstop", { task_id: task });
-    const [finished, stopped] = await Promise.all([bash, stop]);
-    // As natively, the killed foreground command is a non-zero exit error.
-    assert.equal(finished.isError, true);
-    assert.equal(stopped.isError, false);
-    assert.equal(finished.content[0].text, "Exit code 143\ndone");
-    assert.equal(JSON.parse(stopped.content[0].text).output, "");
-    assert.deepEqual(
-      cursors.filter((read) => !read.observation).map((read) => read.afterSeq),
-      // The Bash drains its closed process; TaskStop then reads the end.
-      [null, 1, 1],
-    );
-    assert.equal(cursors.filter((read) => read.observation).length, 1);
-    assert.equal(tools.operations.size, 0);
-  },
-);
+        exited: true,
+        closed: true,
+        exitCode: 143,
+      };
+    }
+    return original(method, params);
+  };
+  const bash = tools.call("bash", { command: "sleep 120" });
+  await collecting.promise;
+  assert.equal((await tools.call("read", { file_path: "file" })).isError, false);
+  const stop = tools.call("taskstop", { task_id: task });
+  const [finished, stopped] = await Promise.all([bash, stop]);
+  // As natively, the killed foreground command is a non-zero exit error.
+  assert.equal(finished.isError, true);
+  assert.equal(stopped.isError, false);
+  assert.equal(finished.content[0].text, "Exit code 143\ndone");
+  assert.equal(JSON.parse(stopped.content[0].text).output, "");
+  assert.deepEqual(
+    cursors.filter((read) => !read.observation).map((read) => read.afterSeq),
+    // The Bash drains its closed process; TaskStop then reads the end.
+    [null, 1, 1],
+  );
+  assert.equal(cursors.filter((read) => read.observation).length, 1);
+  assert.equal(tools.operations.size, 0);
+});
 
 test("a closed process is drained across reads, not cut at the first", async (t) => {
   const { tools, connection } = await fixture(t);
@@ -1279,13 +1238,16 @@ test("a closed process is drained across reads, not cut at the first", async (t)
   connection.call = async (_method, params) => {
     const next = params.afterSeq ?? 0;
     return {
-      chunks: next < pages.length
-        ? [{
-          seq: next + 1,
-          stream: "stdout",
-          chunk: Buffer.from(pages[next]).toString("base64"),
-        }]
-        : [],
+      chunks:
+        next < pages.length
+          ? [
+              {
+                seq: next + 1,
+                stream: "stdout",
+                chunk: Buffer.from(pages[next]).toString("base64"),
+              },
+            ]
+          : [],
       exited: true,
       closed: true,
       exitCode: 0,
@@ -1307,13 +1269,16 @@ test("a stop during an output read survives the read's cursor update", async (t)
     reading.resolve();
     await release.promise;
     return {
-      chunks: params.afterSeq === null
-        ? [{
-          seq: 1,
-          stream: "stdout",
-          chunk: Buffer.from("x").toString("base64"),
-        }]
-        : [],
+      chunks:
+        params.afterSeq === null
+          ? [
+              {
+                seq: 1,
+                stream: "stdout",
+                chunk: Buffer.from("x").toString("base64"),
+              },
+            ]
+          : [],
       exited: false,
       closed: false,
     };
@@ -1328,10 +1293,7 @@ test("a stop during an output read survives the read's cursor update", async (t)
 });
 
 test("text files keep their encoding and line endings, as natively", () => {
-  const utf16 = Buffer.concat([
-    Buffer.from([0xff, 0xfe]),
-    Buffer.from("a\r\nb\r\n", "utf16le"),
-  ]);
+  const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("a\r\nb\r\n", "utf16le")]);
   const file = textFile(utf16);
   assert.deepEqual(file, {
     text: "a\nb\n",
@@ -1342,10 +1304,7 @@ test("text files keep their encoding and line endings, as natively", () => {
   });
   assert.deepEqual(
     textBytes("a\nc\n", file),
-    Buffer.concat([
-      Buffer.from([0xff, 0xfe]),
-      Buffer.from("a\r\nc\r\n", "utf16le"),
-    ]),
+    Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("a\r\nc\r\n", "utf16le")]),
   );
   const bom = textFile(Buffer.from("\ufeffx\n"));
   assert.equal(bom.text, "x\n");
@@ -1367,18 +1326,22 @@ test("a file that is not UTF-8 is not saved as UTF-8, as natively", async (t) =>
   assert.equal(read.result.file.content, "caf\ufffd old");
   assert.match(read.context[0], /Edit and Write will refuse it/);
   assert.match(
-    (await tools.nativeCall("Edit", {
-      file_path: "latin1",
-      old_string: "old",
-      new_string: "new",
-    })).deny,
+    (
+      await tools.nativeCall("Edit", {
+        file_path: "latin1",
+        old_string: "old",
+        new_string: "new",
+      })
+    ).deny,
     /^File is not valid UTF-8: .* nothing was written\. /,
   );
   assert.match(
-    (await tools.nativeCall("Write", {
-      file_path: "latin1",
-      content: "caf\ufffd new",
-    })).deny,
+    (
+      await tools.nativeCall("Write", {
+        file_path: "latin1",
+        content: "caf\ufffd new",
+      })
+    ).deny,
     /^File is not valid UTF-8:/,
   );
   assert.deepEqual(files.get("/target with space/latin1"), latin1);
@@ -1421,12 +1384,10 @@ test("NUL reads warn without contaminating content and refuse both mutations", a
   const read = await tools.nativeCall("Read", { file_path: "nul.txt" });
   assert.equal(read.result.file.content, original.toString());
   assert.match(read.context[0], /NUL bytes in its first 8 KB/);
-  for (
-    const [name, input] of [
-      ["Edit", { old_string: "old", new_string: "new" }],
-      ["Write", { content: "new UTF-8 text" }],
-    ]
-  ) {
+  for (const [name, input] of [
+    ["Edit", { old_string: "old", new_string: "new" }],
+    ["Write", { content: "new UTF-8 text" }],
+  ]) {
     const result = await tools.nativeCall(name, {
       file_path: "nul.txt",
       ...input,
@@ -1440,26 +1401,20 @@ test("allow_large reads as usual and says that it raises no limit here", async (
   const { tools, files } = await fixture(t);
   files.set("/target with space/small", Buffer.from("flag\n"));
   assert.equal(
-    (await tools.nativeCall("Read", { file_path: "small", allow_large: true }))
-      .result.file.content,
+    (await tools.nativeCall("Read", { file_path: "small", allow_large: true })).result.file.content,
     "flag\n",
   );
   assert.equal(
-    (await tools.nativeCall("Read", { file_path: "small", allow_large: "yes" }))
-      .deny,
+    (await tools.nativeCall("Read", { file_path: "small", allow_large: "yes" })).deny,
     "Invalid allow_large",
   );
-  files.set(
-    "/target with space/wide",
-    Buffer.from("x".repeat(70 * 1024) + "\n"),
-  );
+  files.set("/target with space/wide", Buffer.from("x".repeat(70 * 1024) + "\n"));
   assert.equal(
     (await tools.nativeCall("Read", { file_path: "wide" })).deny,
     "Selected lines exceed output limit; request a smaller range",
   );
   assert.equal(
-    (await tools.nativeCall("Read", { file_path: "wide", allow_large: true }))
-      .deny,
+    (await tools.nativeCall("Read", { file_path: "wide", allow_large: true })).deny,
     "Selected lines exceed output limit; request a smaller range. allow_large is not available where this read runs; read it in parts with offset and limit.",
   );
 });
@@ -1474,17 +1429,16 @@ test("edits follow native's rules for empty strings, unread files and directorie
   });
   assert.equal(unread.result.contentNotInModelContext, true);
   assert.equal(unread.result.filePath, "unread");
-  assert.equal(
-    files.get("/target with space/unread").toString(),
-    "new\r\nkept\r\n",
-  );
+  assert.equal(files.get("/target with space/unread").toString(), "new\r\nkept\r\n");
   files.set("/target with space/full", Buffer.from("text\n"));
   assert.equal(
-    (await tools.nativeCall("Edit", {
-      file_path: "full",
-      old_string: "",
-      new_string: "x",
-    })).deny,
+    (
+      await tools.nativeCall("Edit", {
+        file_path: "full",
+        old_string: "",
+        new_string: "x",
+      })
+    ).deny,
     "Cannot create new file - file already exists.",
   );
   await tools.nativeCall("Edit", {
@@ -1508,11 +1462,13 @@ test("edit strings are taken as given, as natively", async (t) => {
   const { tools, files } = await fixture(t);
   files.set("/target with space/crlf", Buffer.from("old\r\nrest\r\n"));
   assert.equal(
-    (await tools.nativeCall("Edit", {
-      file_path: "crlf",
-      old_string: "old\r\nrest",
-      new_string: "new",
-    })).deny,
+    (
+      await tools.nativeCall("Edit", {
+        file_path: "crlf",
+        old_string: "old\r\nrest",
+        new_string: "new",
+      })
+    ).deny,
     "String to replace not found in file.\nString: old\r\nrest",
   );
   files.set("/target with space/lf", Buffer.from("lf old\nend\n"));
@@ -1521,10 +1477,7 @@ test("edit strings are taken as given, as natively", async (t) => {
     old_string: "lf old",
     new_string: "lf new\r\nadded",
   });
-  assert.equal(
-    files.get("/target with space/lf").toString(),
-    "lf new\r\nadded\nend\n",
-  );
+  assert.equal(files.get("/target with space/lf").toString(), "lf new\r\nadded\nend\n");
 });
 
 test("a lost write to an unread file is not applied twice on retry", async (t) => {
@@ -1547,10 +1500,7 @@ test("a lost write to an unread file is not applied twice on retry", async (t) =
     });
   assert.match((await edit()).deny, /result is unknown/);
   assert.match((await edit()).deny, /modified since read/);
-  assert.equal(
-    files.get("/target with space/once").toString(),
-    "anchor appended\n",
-  );
+  assert.equal(files.get("/target with space/once").toString(), "anchor appended\n");
 });
 
 test("a range Read of a CRLF file shows LF text that a later Edit matches", async (t) => {
@@ -1570,11 +1520,11 @@ test("a range Read of a CRLF file shows LF text that a later Edit matches", asyn
     return {
       exitCode: 0,
       closed: true,
-      output: execFileSync(argv[0], [
-        ...argv.slice(1, script + 1),
-        target,
-        ...argv.slice(script + 2),
-      ], { encoding: "utf8" }),
+      output: execFileSync(
+        argv[0],
+        [...argv.slice(1, script + 1), target, ...argv.slice(script + 2)],
+        { encoding: "utf8" },
+      ),
     };
   };
   const read = await tools.nativeCall("Read", {
@@ -1590,11 +1540,7 @@ test("a range Read of a CRLF file shows LF text that a later Edit matches", asyn
     new_string: "changed line\nnext",
   });
   assert.equal(edit.deny, undefined);
-  assert.ok(
-    files.get("/target with space/big").toString().endsWith(
-      "changed line\r\nnext\r\n",
-    ),
-  );
+  assert.ok(files.get("/target with space/big").toString().endsWith("changed line\r\nnext\r\n"));
 });
 
 test("a lost write creating a file is not repeated over later changes", async (t) => {
@@ -1608,26 +1554,18 @@ test("a lost write creating a file is not repeated over later changes", async (t
     }
     return result;
   };
-  const write = () =>
-    tools.nativeCall("Write", { file_path: "fresh", content: "first\n" });
+  const write = () => tools.nativeCall("Write", { file_path: "fresh", content: "first\n" });
   assert.match((await write()).deny, /result is unknown/);
   files.set("/target with space/fresh", Buffer.from("changed elsewhere\n"));
   assert.match((await write()).deny, /modified since read/);
-  assert.equal(
-    files.get("/target with space/fresh").toString(),
-    "changed elsewhere\n",
-  );
+  assert.equal(files.get("/target with space/fresh").toString(), "changed elsewhere\n");
 });
 
 test("a range Read shows invalid UTF-8 as a whole-file Read does", async (t) => {
   const { tools, files } = await fixture(t);
   files.set(
     "/target with space/latin",
-    Buffer.concat([
-      Buffer.from("caf"),
-      Buffer.from([0xe9]),
-      Buffer.from("\n".repeat(140000)),
-    ]),
+    Buffer.concat([Buffer.from("caf"), Buffer.from([0xe9]), Buffer.from("\n".repeat(140000))]),
   );
   tools.fileHelper = fileHelper;
   const directory = await mkdtemp(join(tmpdir(), "cowboy-range-latin-"));
@@ -1639,11 +1577,11 @@ test("a range Read shows invalid UTF-8 as a whole-file Read does", async (t) => 
     return {
       exitCode: 0,
       closed: true,
-      output: execFileSync(argv[0], [
-        ...argv.slice(1, script + 1),
-        target,
-        ...argv.slice(script + 2),
-      ], { encoding: "utf8" }),
+      output: execFileSync(
+        argv[0],
+        [...argv.slice(1, script + 1), target, ...argv.slice(script + 2)],
+        { encoding: "utf8" },
+      ),
     };
   };
   const read = await tools.nativeCall("Read", {
@@ -1695,11 +1633,13 @@ test("a held background command waits on output notifications, not a read per se
     reads++;
     return {
       chunks: output
-        ? [{
-          seq: 1,
-          stream: "stdout",
-          chunk: Buffer.from("\x1ee0:0\n").toString("base64"),
-        }]
+        ? [
+            {
+              seq: 1,
+              stream: "stdout",
+              chunk: Buffer.from("\x1ee0:0\n").toString("base64"),
+            },
+          ]
         : [],
       exited: false,
       closed: false,
@@ -1733,11 +1673,15 @@ test("output that keeps arriving is read once per settle interval", async (t) =>
     // One short line per read, like a build printing as it goes, for 300 ms.
     const closed = Date.now() - started >= 300;
     return {
-      chunks: closed ? [] : [{
-        seq: ++seq,
-        stream: "stdout",
-        chunk: Buffer.from("line\n").toString("base64"),
-      }],
+      chunks: closed
+        ? []
+        : [
+            {
+              seq: ++seq,
+              stream: "stdout",
+              chunk: Buffer.from("line\n").toString("base64"),
+            },
+          ],
       exited: closed,
       closed,
       exitCode: closed ? 0 : null,
@@ -1775,10 +1719,7 @@ test("a full page of output is drained without waiting", async (t) => {
   const result = await tools.collectOutput("bulk", 10000);
   assert.equal(result.output.length, 2 * 32768);
   assert.equal(reads, 2);
-  assert.ok(
-    Date.now() - started < 200,
-    "full pages waited for the settle interval",
-  );
+  assert.ok(Date.now() - started < 200, "full pages waited for the settle interval");
 });
 
 test("the settle wait ends at the process exit notification", async (t) => {
@@ -1806,11 +1747,13 @@ test("the settle wait ends at the process exit notification", async (t) => {
         }
       }, 40);
       return {
-        chunks: [{
-          seq: 1,
-          stream: "stdout",
-          chunk: Buffer.from("x").toString("base64"),
-        }],
+        chunks: [
+          {
+            seq: 1,
+            stream: "stdout",
+            chunk: Buffer.from("x").toString("base64"),
+          },
+        ],
         exited: false,
         closed: false,
         exitCode: null,
@@ -1820,10 +1763,7 @@ test("the settle wait ends at the process exit notification", async (t) => {
   };
   const result = await tools.collectOutput("ending", 30000);
   assert.equal(result.exitCode, 0);
-  assert.ok(
-    Date.now() - started < 2000,
-    "exit notification did not end the settle wait",
-  );
+  assert.ok(Date.now() - started < 2000, "exit notification did not end the settle wait");
 });
 
 test("an idle MCP server costs one read per wait bound", async (t) => {
@@ -1866,11 +1806,13 @@ test("an MCP notification during the wait is read at once", async (t) => {
       return { chunks: [], exited: false, closed: false, exitCode: null };
     }
     return {
-      chunks: [{
-        seq: 1,
-        stream: "stdout",
-        chunk: Buffer.from("{}").toString("base64"),
-      }],
+      chunks: [
+        {
+          seq: 1,
+          stream: "stdout",
+          chunk: Buffer.from("{}").toString("base64"),
+        },
+      ],
       exited: false,
       closed: false,
       exitCode: null,
@@ -1897,15 +1839,17 @@ test("a request written to an idle MCP server bounds its reply wait", async (t) 
     return reads === 1
       ? { chunks: [], exited: false, closed: false, exitCode: null }
       : {
-        chunks: [{
-          seq: 1,
-          stream: "stdout",
-          chunk: Buffer.from("{}").toString("base64"),
-        }],
-        exited: false,
-        closed: false,
-        exitCode: null,
-      };
+          chunks: [
+            {
+              seq: 1,
+              stream: "stdout",
+              chunk: Buffer.from("{}").toString("base64"),
+            },
+          ],
+          exited: false,
+          closed: false,
+          exitCode: null,
+        };
   };
   const started = Date.now();
   // The default idle bound: only the write's recheck ends this wait.

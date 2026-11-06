@@ -48,16 +48,12 @@ const CACHE_KEEPALIVE_KEYS = {
 };
 
 function record(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value
-    : undefined;
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
 }
 
 function metric(aggregate, key) {
   const value = record(aggregate)?.[key];
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 function modelFamily(model) {
@@ -68,7 +64,8 @@ function modelFamily(model) {
     normalized.startsWith("deepseek-v4-flash") ||
     normalized === "deepseek-chat" ||
     normalized === "deepseek-reasoner"
-  ) return "flash";
+  )
+    return "flash";
   return undefined;
 }
 
@@ -99,17 +96,15 @@ function emptyEstimate() {
 }
 
 function serverTools(aggregate, keys) {
-  const searchRequests = keys.searchRequests
-    ? metric(aggregate, keys.searchRequests)
-    : 0;
-  const fetchRequests = keys.fetchRequests
-    ? metric(aggregate, keys.fetchRequests)
-    : 0;
+  const searchRequests = keys.searchRequests ? metric(aggregate, keys.searchRequests) : 0;
+  const fetchRequests = keys.fetchRequests ? metric(aggregate, keys.fetchRequests) : 0;
   return {
     searchRequests,
     fetchRequests,
-    serverToolCost: (searchRequests * SERVER_TOOL_PRICES.searchCnyPerThousand +
-      fetchRequests * SERVER_TOOL_PRICES.fetchCnyPerThousand) / 1000,
+    serverToolCost:
+      (searchRequests * SERVER_TOOL_PRICES.searchCnyPerThousand +
+        fetchRequests * SERVER_TOOL_PRICES.fetchCnyPerThousand) /
+      1000,
   };
 }
 
@@ -146,17 +141,21 @@ function estimate(model, aggregate, keys) {
   const miss = cacheMissTokens / TOKENS_PER_MILLION;
   const output = outputTokens / TOKENS_PER_MILLION;
   return {
-    estimatedCost: hit * price.inputCacheHitCnyPerMillion +
+    estimatedCost:
+      hit * price.inputCacheHitCnyPerMillion +
       miss * price.inputCacheMissCnyPerMillion +
-      output * price.outputCnyPerMillion + tools.serverToolCost,
-    noCacheCost: (hit + miss) * price.inputCacheMissCnyPerMillion +
-      output * price.outputCnyPerMillion + tools.serverToolCost,
-    allHitFloorCost: (hit + miss) * price.inputCacheHitCnyPerMillion +
-      output * price.outputCnyPerMillion + tools.serverToolCost,
-    cacheSavings: hit *
-      (price.inputCacheMissCnyPerMillion - price.inputCacheHitCnyPerMillion),
-    cacheMissPremium: miss *
-      (price.inputCacheMissCnyPerMillion - price.inputCacheHitCnyPerMillion),
+      output * price.outputCnyPerMillion +
+      tools.serverToolCost,
+    noCacheCost:
+      (hit + miss) * price.inputCacheMissCnyPerMillion +
+      output * price.outputCnyPerMillion +
+      tools.serverToolCost,
+    allHitFloorCost:
+      (hit + miss) * price.inputCacheHitCnyPerMillion +
+      output * price.outputCnyPerMillion +
+      tools.serverToolCost,
+    cacheSavings: hit * (price.inputCacheMissCnyPerMillion - price.inputCacheHitCnyPerMillion),
+    cacheMissPremium: miss * (price.inputCacheMissCnyPerMillion - price.inputCacheHitCnyPerMillion),
     requests,
     usageObservedRequests,
     unknownModelRequests: 0,
@@ -172,30 +171,27 @@ function estimate(model, aggregate, keys) {
 }
 
 function add(target, value) {
-  for (
-    const key of [
-      "estimatedCost",
-      "noCacheCost",
-      "allHitFloorCost",
-      "cacheSavings",
-      "cacheMissPremium",
-      "requests",
-      "usageObservedRequests",
-      "unknownModelRequests",
-      "inputTokens",
-      "pricedInputTokens",
-      "unpricedInputTokens",
-      "outputTokens",
-      "unpricedOutputTokens",
-      "reasoningTokens",
-      "searchRequests",
-      "fetchRequests",
-      "serverToolCost",
-    ]
-  ) target[key] += value[key];
-  target.modelFamilies = [
-    ...new Set([...target.modelFamilies, ...value.modelFamilies]),
-  ].sort();
+  for (const key of [
+    "estimatedCost",
+    "noCacheCost",
+    "allHitFloorCost",
+    "cacheSavings",
+    "cacheMissPremium",
+    "requests",
+    "usageObservedRequests",
+    "unknownModelRequests",
+    "inputTokens",
+    "pricedInputTokens",
+    "unpricedInputTokens",
+    "outputTokens",
+    "unpricedOutputTokens",
+    "reasoningTokens",
+    "searchRequests",
+    "fetchRequests",
+    "serverToolCost",
+  ])
+    target[key] += value[key];
+  target.modelFamilies = [...new Set([...target.modelFamilies, ...value.modelFamilies])].sort();
   return target;
 }
 
@@ -213,9 +209,7 @@ function groupedCosts(byBillingModel, byAgentBillingModel, keys) {
   const summary = Object.values(byModel).reduce(add, emptyEstimate());
   const byAgentBilling = {};
   const byAgent = {};
-  for (
-    const [agent, models] of Object.entries(record(byAgentBillingModel) ?? {})
-  ) {
+  for (const [agent, models] of Object.entries(record(byAgentBillingModel) ?? {})) {
     const estimates = estimateMap(models, keys);
     byAgentBilling[agent] = estimates;
     byAgent[agent] = Object.values(estimates).reduce(add, emptyEstimate());
@@ -235,13 +229,13 @@ function costView(activity) {
     INTERACTIVE_KEYS,
   );
   const byLowHitCause = {};
-  for (
-    const [cause, models] of Object.entries(
-      record(record(activity.lowHit)?.byCauseModel) ?? {},
-    )
-  ) {
-    byLowHitCause[cause] = Object.values(estimateMap(models, INTERACTIVE_KEYS))
-      .reduce(add, emptyEstimate());
+  for (const [cause, models] of Object.entries(
+    record(record(activity.lowHit)?.byCauseModel) ?? {},
+  )) {
+    byLowHitCause[cause] = Object.values(estimateMap(models, INTERACTIVE_KEYS)).reduce(
+      add,
+      emptyEstimate(),
+    );
   }
   return {
     ...interactive,

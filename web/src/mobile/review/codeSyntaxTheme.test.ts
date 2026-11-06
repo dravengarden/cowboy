@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertNotEquals } from "@std/assert";
+import { assert, assertNotEquals } from "../../../../tools/test-assert.ts";
 import { codeSyntaxPalette } from "./codeSyntaxTheme.ts";
 
 function luminance(hex: string): number {

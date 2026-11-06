@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import { createTheme } from "@mui/material";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 import {
   APP_ICONS,
   DEFAULT_APP_ICON,

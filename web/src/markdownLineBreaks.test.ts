@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import remarkLineBreakTags from "./markdownLineBreaks.ts";
 
 test("a <br> tag in a table cell becomes a hard break", () => {

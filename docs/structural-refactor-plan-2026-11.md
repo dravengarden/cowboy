@@ -154,7 +154,7 @@ state, and an extraction can change focus, mounting, scroll or gesture timing
 by accident. `store.ts` is an application coordinator (transport, persistence
 and rendering timing in one module with module-global state), which makes
 isolated tests and deterministic teardown hard. `App.tsx` is additionally a
-4-space formatting outlier that `dprint` must skip (`AGENTS.md`). The
+4-space formatting outlier that `Biome` must skip (`AGENTS.md`). The
 desktop/mobile split under `web/src/desktop`, `web/src/mobile`,
 `web/src/explore` shows the intended feature-directory layout; the four files
 predate it.
@@ -313,7 +313,7 @@ Desktop browser gate (`desktop-composer`, `draft-documents`, `session-fold`,
 |---|---|---|
 | 3.1 Behaviour tests replace source-text tests | For each of the 28 source-reading test files, add the equivalent behavioural test (render, focus, geometry) and delete the substring assertion, before touching the file it reads. | both old and new tests pass on the unchanged tree, then the old one is removed |
 | 3.2 Settings and tool details | Settings panels (`App.tsx` 6,596–7,726) move to `web/src/settings/`; `ToolDetailsBrowser` leaves `Transcript.tsx`. Keys, DOM structure, refs and effect dependencies unchanged. | settings-recovery, provider-management, tool-details; Desktop gate |
-| 3.3 `App.tsx` | Extract `SessionList` (+ row memo, badges, spotlight) to `web/src/sessions/`, `CreateDialog`, `MachinesContent`/`ProvidersContent` to `web/src/machines/`, the delete/rename/info shells to `sessions/shells/`. `App.tsx` becomes the composition root. New files are 2-space and formatted by `dprint`, which shrinks the 4-space exception with every extraction. | session-fold, session-context, draft-documents, IndexedDB suites; Desktop gate; `just desktop-perf-profile` before/after |
+| 3.3 `App.tsx` | Extract `SessionList` (+ row memo, badges, spotlight) to `web/src/sessions/`, `CreateDialog`, `MachinesContent`/`ProvidersContent` to `web/src/machines/`, the delete/rename/info shells to `sessions/shells/`. `App.tsx` becomes the composition root. New files are 2-space and formatted by `Biome`, which shrinks the 4-space exception with every extraction. | session-fold, session-context, draft-documents, IndexedDB suites; Desktop gate; `just desktop-perf-profile` before/after |
 | 3.4 `Composer.tsx` | `ComposerWorkspace`, `PendingPanel`/`PendingRow`, `ComposerSheet` and the `Session*Section` components move into the existing `web/src/composer/` directory. | desktop-composer, sheet-keyboard, managed-calls; Desktop gate; perf profile; physical iOS composer acceptance (web/AGENTS.md pitfall #69 stays open) |
 | 3.5 `Transcript.tsx` and `ReviewApp.tsx` | Row renderers leave the `Transcript` component while the column-reverse scroll contract stays in one file; `DocumentView` leaves `ReviewApp`, which keeps only routing. | transcript and review-context suites, mobile review conformance; perf profile; swipe jank check (`docs/mobile-spatial-presentation.md`) |
 

@@ -8,10 +8,7 @@ import { checkDenial } from "../plugins/claude-code/runtime/context-mod.js";
 import { dontAskDenial } from "../plugins/claude-code/runtime/launch.mjs";
 
 const baseline = JSON.parse(
-  readFileSync(
-    new URL("./claude_permissions_native_baseline.json", import.meta.url),
-    "utf8",
-  ),
+  readFileSync(new URL("./claude_permissions_native_baseline.json", import.meta.url), "utf8"),
 );
 const tool = (call) => call.call.split(" ")[0];
 // Native validates a file call (read first, unchanged since read) before
@@ -21,11 +18,7 @@ const invalid = (call) => /^<tool_use_error>/.test(call.result.text);
 test("$.tool.check asks exactly where native prompts, in each prompting mode", () => {
   for (const mode of ["default", "acceptEdits", "bypassPermissions"]) {
     for (const call of baseline[mode].calls.filter((call) => !invalid(call))) {
-      assert.equal(
-        call.check === "ask",
-        call.native_prompted,
-        `${mode} ${call.call}`,
-      );
+      assert.equal(call.check === "ask", call.native_prompted, `${mode} ${call.call}`);
     }
   }
 });
@@ -50,9 +43,7 @@ test("a check's denial reads as native's tool result", () => {
 });
 
 test("dontAsk denies what would prompt, with native's message", () => {
-  const asked = baseline.dontAsk.calls.filter((call) =>
-    call.check === "ask" && !invalid(call)
-  );
+  const asked = baseline.dontAsk.calls.filter((call) => call.check === "ask" && !invalid(call));
   assert.ok(asked.length > 0);
   for (const call of asked) {
     assert.equal(call.native_prompted, false, call.call);

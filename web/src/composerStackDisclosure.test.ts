@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { readFile } from "node:fs/promises";
 import { readComposerSource } from "./appSource.test.ts";
 import {

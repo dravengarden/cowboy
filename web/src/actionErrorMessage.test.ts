@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { IdbPersistenceError } from "@cowboy/state-sync-idb";
 import {
   actionErrorMessage,

@@ -1,16 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -67,11 +58,7 @@ async function fixture(t, { policy } = {}) {
     workspace: { cwd: target },
     environment: { id: "fixture" },
   };
-  const tools = new WorkspaceTools(
-    connection,
-    binding,
-    join(local, "state.json"),
-  );
+  const tools = new WorkspaceTools(connection, binding, join(local, "state.json"));
   const policyPath = join(local, "file-buffers.json");
   if (policy) await writeFile(policyPath, JSON.stringify(policy));
   tools.useFileBuffers(policy ? policyPath : undefined);
@@ -86,18 +73,16 @@ async function fixture(t, { policy } = {}) {
     const script = run.join(" ");
     const kind = run[1] === "apply" ? "apply" : "shell";
     if (kind === "apply") {
-      applies.push(
-        /--request-file/.test(script) ? "--request-file" : "--request",
-      );
+      applies.push(/--request-file/.test(script) ? "--request-file" : "--request");
     }
     calls.push(`command:${kind}`);
     const output = execFileSync(run[0], run.slice(1), { encoding: "utf8" });
     return { exitCode: 0, exited: true, closed: true, output };
   };
   const buffers = () =>
-    readdir(join(local, "file-buffers")).catch(() => []).then((names) =>
-      names.filter((name) => /^[a-f0-9]{64}$/.test(name))
-    );
+    readdir(join(local, "file-buffers"))
+      .catch(() => [])
+      .then((names) => names.filter((name) => /^[a-f0-9]{64}$/.test(name)));
   return {
     tools,
     target,
@@ -132,12 +117,10 @@ test("edits after a read send only a hash-checked splice", async (t) => {
   await tools.call("read", { file_path: "main.rs" });
   assert.equal((await buffers()).length, 1);
   calls.length = 0;
-  for (
-    const [old_string, new_string] of [["fn main", "fn start"], [
-      "}\n",
-      "    run();\n}\n",
-    ]]
-  ) {
+  for (const [old_string, new_string] of [
+    ["fn main", "fn start"],
+    ["}\n", "    run();\n}\n"],
+  ]) {
     const result = await tools.call("edit", {
       file_path: "main.rs",
       old_string,
@@ -145,10 +128,7 @@ test("edits after a read send only a hash-checked splice", async (t) => {
     });
     assert.equal(result.isError, false, result.content[0].text);
   }
-  const expected = original.replace("fn main", "fn start").replace(
-    /}\n$/,
-    "    run();\n}\n",
-  );
+  const expected = original.replace("fn main", "fn start").replace(/}\n$/, "    run();\n}\n");
   assert.equal(await readFile(file, "utf8"), expected);
   // No whole-file transfer in either direction, and both edits inline.
   assert.deepEqual(calls, ["command:apply", "command:apply"]);
@@ -193,10 +173,7 @@ test("excluded, oversized and disabled files keep whole-file transfers", async (
   });
   await mkdir(join(target, "secret"));
   for (const name of ["key.PEM", "secret/notes.txt", "big.txt"]) {
-    await writeFile(
-      join(target, name),
-      name === "big.txt" ? "x".repeat(8192) : "value\n",
-    );
+    await writeFile(join(target, name), name === "big.txt" ? "x".repeat(8192) : "value\n");
     await tools.call("read", { file_path: name });
     calls.length = 0;
     const result = await tools.call("write", {
@@ -204,12 +181,11 @@ test("excluded, oversized and disabled files keep whole-file transfers", async (
       content: "replaced\n",
     });
     assert.equal(result.isError, false);
-    assert.deepEqual(calls, [
-      "fs/getMetadata",
-      "fs/readFile",
-      "fs/createDirectory",
-      "fs/writeFile",
-    ], name);
+    assert.deepEqual(
+      calls,
+      ["fs/getMetadata", "fs/readFile", "fs/createDirectory", "fs/writeFile"],
+      name,
+    );
     assert.equal(await readFile(join(target, name), "utf8"), "replaced\n");
   }
   // Neither the secrets nor the oversized file were copied locally; the
@@ -363,10 +339,7 @@ test("switching buffers off deletes the copies at the next file operation", asyn
   assert.deepEqual(await buffers(), []);
   // A pattern with too many `**` spans disables buffers rather than running
   // an unbounded search per file.
-  await writeFile(
-    policyPath,
-    JSON.stringify({ ...POLICY, excluded: ["**/".repeat(9) + "x"] }),
-  );
+  await writeFile(policyPath, JSON.stringify({ ...POLICY, excluded: ["**/".repeat(9) + "x"] }));
   await utimes(policyPath, new Date(), new Date(Date.now() + 2000));
   assert.equal((await tools.fileBufferPolicy()).enabled, false);
 });
@@ -381,7 +354,10 @@ test("a helper without apply falls back once and stays on whole files", async (t
   const file = join(target, "f.txt");
   await writeFile(file, "a\n");
   await tools.call("read", { file_path: "f.txt" });
-  for (const [from, to] of [["a", "b"], ["b", "c"]]) {
+  for (const [from, to] of [
+    ["a", "b"],
+    ["b", "c"],
+  ]) {
     const result = await tools.call("edit", {
       file_path: "f.txt",
       old_string: from,
@@ -424,10 +400,7 @@ test("new files, parents, large edits and binary bytes go through apply", async 
     content: "created\n",
   });
   assert.equal(result.isError, false);
-  assert.equal(
-    await readFile(join(target, "deep/new/file.txt"), "utf8"),
-    "created\n",
-  );
+  assert.equal(await readFile(join(target, "deep/new/file.txt"), "utf8"), "created\n");
   // A large replacement travels in a payload file the helper consumes.
   const large = "y".repeat(200 * 1024);
   result = await tools.call("write", {
@@ -435,15 +408,9 @@ test("new files, parents, large edits and binary bytes go through apply", async 
     content: large,
   });
   assert.equal(result.isError, false);
-  assert.equal(
-    await readFile(join(target, "deep/new/file.txt"), "utf8"),
-    large,
-  );
+  assert.equal(await readFile(join(target, "deep/new/file.txt"), "utf8"), large);
   assert.deepEqual(applies, ["--request", "--request-file"]);
-  assert.deepEqual(
-    await readdir(join(home, ".cache/cowboy/file-buffers")),
-    [],
-  );
+  assert.deepEqual(await readdir(join(home, ".cache/cowboy/file-buffers")), []);
   // CRLF and a BOM survive a splice byte for byte.
   const crlf = Buffer.from("﻿one\r\ntwo\r\n");
   await writeFile(join(target, "crlf.txt"), crlf);
@@ -454,10 +421,7 @@ test("new files, parents, large edits and binary bytes go through apply", async 
     new_string: "three",
   });
   assert.equal(result.isError, false);
-  assert.deepEqual(
-    await readFile(join(target, "crlf.txt")),
-    Buffer.from("﻿one\r\nthree\r\n"),
-  );
+  assert.deepEqual(await readFile(join(target, "crlf.txt")), Buffer.from("﻿one\r\nthree\r\n"));
 });
 
 test("copies are bounded by size and age, and dead writers' temporaries go", async (t) => {
@@ -474,9 +438,7 @@ test("copies are bounded by size and age, and dead writers' temporaries go", asy
   await tools.fileBufferSweep(policy);
   assert.equal((await buffers()).length, 3);
   assert.ok(
-    !(await buffers()).includes(
-      createHash("sha256").update("a".repeat(1000)).digest("hex"),
-    ),
+    !(await buffers()).includes(createHash("sha256").update("a".repeat(1000)).digest("hex")),
   );
   const directory = join(local, "file-buffers");
   const dead = `${"0".repeat(64)}.999999999.${crypto.randomUUID()}`;
@@ -518,12 +480,7 @@ test("an older Machine without a projection uses the documented defaults", async
 });
 
 test("globs and splices", () => {
-  const matches = fileBufferMatcher([
-    "*.pem",
-    "id_rsa*",
-    "/srv/**/cache/*",
-    "a?c",
-  ]);
+  const matches = fileBufferMatcher(["*.pem", "id_rsa*", "/srv/**/cache/*", "a?c"]);
   assert.ok(matches("/x/KEY.PEM"));
   assert.ok(matches("/home/u/.ssh/id_rsa.pub"));
   assert.ok(matches("/srv/a/b/cache/file"));

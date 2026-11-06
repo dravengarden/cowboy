@@ -3,7 +3,7 @@
 // evaluated here against in-memory fakes of `caches`, `fetch` and `self`.
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 
 const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
 const version = /const VERSION = "(cowboy-v\d+)"/.exec(source)![1]!;

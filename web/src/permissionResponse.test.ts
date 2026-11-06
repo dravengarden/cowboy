@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { permissionResponseNotice } from "./permissionResponse";
 
 test("an unconfirmed permission answer always says what happens next", () => {

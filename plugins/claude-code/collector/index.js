@@ -34,21 +34,13 @@ const CHILD_ENV_KEYS = [
 ];
 
 /** Anthropic's own plan identifiers, surfaced verbatim as the card badge. */
-const KNOWN_PLANS = new Set([
-  "max",
-  "ultra",
-  "pro",
-  "team",
-  "enterprise",
-  "free",
-]);
+const KNOWN_PLANS = new Set(["max", "ultra", "pro", "team", "enterprise", "free"]);
 
 /** Since 2026-10-30 the former Max 20x plan is named Ultra. The CLI still
  * reports `subscriptionType: "max"` for both tiers; only the credential's
  * rate-limit tier tells them apart. */
 export function planName(subscriptionType, rateLimitTier) {
-  return subscriptionType === "max" &&
-      rateLimitTier === "default_claude_max_20x"
+  return subscriptionType === "max" && rateLimitTier === "default_claude_max_20x"
     ? "ultra"
     : subscriptionType;
 }
@@ -56,9 +48,7 @@ export function planName(subscriptionType, rateLimitTier) {
 async function input() {
   const text = await Bun.stdin.text();
   try {
-    const request = text.trim() === ""
-      ? { operation: "collect" }
-      : JSON.parse(text);
+    const request = text.trim() === "" ? { operation: "collect" } : JSON.parse(text);
     if (!request || typeof request !== "object" || Array.isArray(request)) {
       throw new Error();
     }
@@ -82,8 +72,12 @@ function childEnvironment() {
 }
 
 function claudeCommand() {
-  return process.env.COWBOY_PLUGIN_COMMAND_CLAUDE ??
-    process.env.CLAUDE_CODE_EXECUTABLE ?? process.argv.slice(2)[0] ?? "claude";
+  return (
+    process.env.COWBOY_PLUGIN_COMMAND_CLAUDE ??
+    process.env.CLAUDE_CODE_EXECUTABLE ??
+    process.argv.slice(2)[0] ??
+    "claude"
+  );
 }
 
 /** `claude auth status --json` is the Provider's own read-only status verb. */
@@ -92,23 +86,17 @@ function authStatus(execution) {
 }
 
 function text(value) {
-  return typeof value === "string" && value.trim() !== ""
-    ? value.trim()
-    : undefined;
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
 }
 
 /** Project only the fields the account card renders. No tokens, no org ids. */
 function accountView(status, rateLimitTier) {
   const plan = planName(text(status?.subscriptionType), rateLimitTier);
   const account = {
-    ...(plan
-      ? { planType: KNOWN_PLANS.has(plan) ? plan : "subscription" }
-      : {}),
+    ...(plan ? { planType: KNOWN_PLANS.has(plan) ? plan : "subscription" } : {}),
     ...(text(status?.email) ? { email: text(status.email) } : {}),
     ...(text(status?.orgName) ? { organization: text(status.orgName) } : {}),
-    ...(text(status?.authMethod)
-      ? { authMethod: text(status.authMethod) }
-      : {}),
+    ...(text(status?.authMethod) ? { authMethod: text(status.authMethod) } : {}),
   };
   return Object.keys(account).length > 0 ? { account: { account } } : {};
 }
@@ -124,11 +112,15 @@ async function prepare(options = {}) {
   if (status?.loggedIn !== true) {
     throw new Error("Claude Code usage authentication required.");
   }
-  const usage = await nativeJson(USAGE_ARGS, {
-    type: "control_request",
-    request_id: REQUEST_ID,
-    request: { subtype: "get_usage", skip_behaviors: true },
-  }, execution);
+  const usage = await nativeJson(
+    USAGE_ARGS,
+    {
+      type: "control_request",
+      request_id: REQUEST_ID,
+      request: { subtype: "get_usage", skip_behaviors: true },
+    },
+    execution,
+  );
   return { status, usage, execution };
 }
 
@@ -139,50 +131,43 @@ async function collect(options = {}) {
   let balance;
   // Reset status is optional enrichment. Its private API or profile-scope
   // failures must never clear a successful native quota/authentication read.
-  if (
-    usage.rate_limits_available && execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR
-  ) {
+  if (usage.rate_limits_available && execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR) {
     try {
-      const token = await readCredential(
-        execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
-      );
+      const token = await readCredential(execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR);
       const client = resetClient(token, execution.deadline, options.fetchImpl);
-      const results = await Promise.allSettled([
-        fetchResets(client),
-        fetchPrepaidCredits(client),
-      ]);
+      const results = await Promise.allSettled([fetchResets(client), fetchPrepaidCredits(client)]);
       if (results[0].status === "fulfilled") credits = results[0].value;
       if (results[1].status === "fulfilled") balance = results[1].value;
     } catch {
       credits = undefined;
     }
   }
-  const tier = await readPlanTier(
-    execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
-  );
+  const tier = await readPlanTier(execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR);
   return {
     provider: "anthropic",
     status: "available",
     source: "Anthropic",
     observed_at_ms: Date.now(),
-    ...accountView({
-      ...status,
-      subscriptionType: text(usage.subscription_type) ??
-        status.subscriptionType,
-    }, tier),
+    ...accountView(
+      {
+        ...status,
+        subscriptionType: text(usage.subscription_type) ?? status.subscriptionType,
+      },
+      tier,
+    ),
     ...quota,
     ...(quota.rate_limits || balance || credits
       ? {
-        rate_limits: {
-          ...quota.rate_limits,
-          ...(credits === undefined ? {} : { rateLimitResetCredits: credits }),
-          usageCredits: {
-            ...quota.rate_limits?.usageCredits,
-            ...balance,
-            balanceStatus: balance === undefined ? "unavailable" : "available",
+          rate_limits: {
+            ...quota.rate_limits,
+            ...(credits === undefined ? {} : { rateLimitResetCredits: credits }),
+            usageCredits: {
+              ...quota.rate_limits?.usageCredits,
+              ...balance,
+              balanceStatus: balance === undefined ? "unavailable" : "available",
+            },
           },
-        },
-      }
+        }
       : {}),
   };
 }
@@ -196,34 +181,31 @@ async function main() {
       if (!usage.rate_limits_available) {
         throw new ResetFailure("Claude Code usage authentication required.");
       }
-      const token = await readCredential(
-        execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
-      );
+      const token = await readCredential(execution.env.CLAUDE_SECURESTORAGE_CONFIG_DIR);
       const client = resetClient(token, execution.deadline);
-      console.log(
-        JSON.stringify(await consumeReset(client, request, execution.deadline)),
-      );
-    } else if (
-      request.operation === undefined || request.operation === "collect"
-    ) {
+      console.log(JSON.stringify(await consumeReset(client, request, execution.deadline)));
+    } else if (request.operation === undefined || request.operation === "collect") {
       console.log(JSON.stringify(await collect()));
     } else {
       throw new Error("Unsupported Anthropic usage operation.");
     }
   } catch (error) {
     if (request?.operation === "consume_reset") {
-      console.log(JSON.stringify({
-        error: {
-          message: error instanceof ResetFailure
-            ? error.message
-            : "Claude reset is temporarily unavailable.",
-          call_may_have_reached_provider: error instanceof ResetFailure &&
-            error.callMayHaveReachedProvider,
-          ...(error instanceof ResetFailure && error.creditId
-            ? { credit_id: error.creditId }
-            : {}),
-        },
-      }));
+      console.log(
+        JSON.stringify({
+          error: {
+            message:
+              error instanceof ResetFailure
+                ? error.message
+                : "Claude reset is temporarily unavailable.",
+            call_may_have_reached_provider:
+              error instanceof ResetFailure && error.callMayHaveReachedProvider,
+            ...(error instanceof ResetFailure && error.creditId
+              ? { credit_id: error.creditId }
+              : {}),
+          },
+        }),
+      );
     } else {
       console.error(
         error instanceof ResetFailure ||

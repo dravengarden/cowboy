@@ -10,26 +10,29 @@ import { pathToFileURL } from "node:url";
 
 function post(context, path, value) {
   return new Promise((resolve, reject) => {
-    const req = request({
-      socketPath: context.socketPath,
-      path,
-      method: "POST",
-      headers: { authorization: `Bearer ${context.bridgeToken}` },
-    }, (res) => {
-      const chunks = [];
-      res.on("data", (data) => chunks.push(data));
-      res.on("end", () => {
-        try {
-          resolve({
-            status: res.statusCode,
-            body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
-          });
-        } catch (error) {
-          reject(error);
-        }
-      });
-      res.on("error", reject);
-    });
+    const req = request(
+      {
+        socketPath: context.socketPath,
+        path,
+        method: "POST",
+        headers: { authorization: `Bearer ${context.bridgeToken}` },
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (data) => chunks.push(data));
+        res.on("end", () => {
+          try {
+            resolve({
+              status: res.statusCode,
+              body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+            });
+          } catch (error) {
+            reject(error);
+          }
+        });
+        res.on("error", reject);
+      },
+    );
     req.on("error", reject);
     req.end(JSON.stringify(value));
   });
@@ -49,20 +52,13 @@ function local(command, signal) {
     once: true,
   });
   return new Promise((resolve) =>
-    child.once("exit", (code, killed) => resolve(code ?? (killed ? 143 : 1)))
+    child.once("exit", (code, killed) => resolve(code ?? (killed ? 143 : 1))),
   );
 }
 
-export async function runProxy(
-  command,
-  { stdin, stdout, stderr, env, signal, runLocal = local },
-) {
-  const context = JSON.parse(
-    await readFile(env.COWBOY_CLAUDE_CONTEXT, "utf8"),
-  );
-  const registered = (context.hooks?.commands ?? []).filter((entry) =>
-    entry.command === command
-  );
+export async function runProxy(command, { stdin, stdout, stderr, env, signal, runLocal = local }) {
+  const context = JSON.parse(await readFile(env.COWBOY_CLAUDE_CONTEXT, "utf8"));
+  const registered = (context.hooks?.commands ?? []).filter((entry) => entry.command === command);
   if (!registered.length) return await runLocal(command, signal);
   // One command may serve several events; native ends the proxy at the
   // event's own timeout, so the target keeps the longest as its backstop.
@@ -85,12 +81,17 @@ export async function runProxy(
     input?.tool_name === "Bash" &&
     typeof input.tool_input?.command === "string" &&
     input.tool_input.command.startsWith(context.taskWait + " ")
-  ) return 0;
+  )
+    return 0;
   const id = "hook-" + randomUUID();
   // Native's hook timeout terminates this process; stop the target command.
-  signal.addEventListener("abort", () => {
-    post(context, "/cancel", { id }).catch(() => {});
-  }, { once: true });
+  signal.addEventListener(
+    "abort",
+    () => {
+      post(context, "/cancel", { id }).catch(() => {});
+    },
+    { once: true },
+  );
   const hookInput = targetHookInput(input, context.targetCwd);
   // The bridge sends the target a private copy of native's transcript.
   const transcriptPath = hookInput.transcript_path;
@@ -112,9 +113,7 @@ export async function runProxy(
       timeout: hook.timeout,
       ...(hook.argv ? { argv: hook.argv } : {}),
       ...(typeof transcriptPath === "string" ? { transcriptPath } : {}),
-      ...(typeof agentTranscriptPath === "string"
-        ? { agentTranscriptPath }
-        : {}),
+      ...(typeof agentTranscriptPath === "string" ? { agentTranscriptPath } : {}),
     });
     while (reply.status === 202 && !signal.aborted) {
       reply = await post(context, "/result", { id });
@@ -133,9 +132,7 @@ export async function runProxy(
   return result.exitCode;
 }
 
-if (
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const controller = new AbortController();
   process.on("SIGTERM", () => {
     controller.abort();
@@ -147,8 +144,11 @@ if (
     stderr: process.stderr,
     env: process.env,
     signal: controller.signal,
-  }).then((code) => process.exitCode = code, (error) => {
-    process.stderr.write(`Target hook failed: ${error.message}\n`);
-    process.exitCode = 1;
-  });
+  }).then(
+    (code) => (process.exitCode = code),
+    (error) => {
+      process.stderr.write(`Target hook failed: ${error.message}\n`);
+      process.exitCode = 1;
+    },
+  );
 }

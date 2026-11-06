@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "../../../tools/test-assert.ts";
 import { BufferClientError, decodeResourceId } from "./protocol.ts";
 import { decodeNavigation } from "./navigationProtocol.ts";
 import { golden } from "./destinationFixture.ts";

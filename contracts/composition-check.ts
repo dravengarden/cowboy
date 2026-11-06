@@ -73,39 +73,40 @@ function compare(a: string, b: string): number {
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value !== null && typeof value === "object") {
-    return `{${
-      Object.entries(value).sort(([a], [b]) => compare(a, b)).map(
-        ([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`,
-      ).join(",")
-    }}`;
+    return `{${Object.entries(value)
+      .sort(([a], [b]) => compare(a, b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value) ?? fail("invalid_contract");
 }
 
 function compareBindings(a: Binding, b: Binding): number {
-  return compare(a.consumer.node, b.consumer.node) ||
+  return (
+    compare(a.consumer.node, b.consumer.node) ||
     compare(a.consumer.port, b.consumer.port) ||
     compare(a.provider.node, b.provider.node) ||
     compare(a.provider.port, b.provider.port) ||
-    compare(a.revision, b.revision);
+    compare(a.revision, b.revision)
+  );
 }
 
 function compareSites(a: Site, b: Site): number {
   if (a.kind !== b.kind) return a.kind === "service" ? -1 : 1;
-  return compare(a.service_id, b.service_id) ||
-    (a.kind === "machine" && b.kind === "machine"
-      ? compare(a.machine_id, b.machine_id)
-      : 0);
+  return (
+    compare(a.service_id, b.service_id) ||
+    (a.kind === "machine" && b.kind === "machine" ? compare(a.machine_id, b.machine_id) : 0)
+  );
 }
 
 function projectSite(site: Site): Site {
   return site.kind === "service"
     ? { kind: "service", service_id: site.service_id }
     : {
-      kind: "machine",
-      service_id: site.service_id,
-      machine_id: site.machine_id,
-    };
+        kind: "machine",
+        service_id: site.service_id,
+        machine_id: site.machine_id,
+      };
 }
 
 function projectBinding(binding: Binding): Binding {
@@ -125,9 +126,7 @@ function ancestry(id: ScopeId, scopes: ReadonlyMap<ScopeId, Scope>): Scope[] {
       fail("invalid_scope_tree");
     }
     result.push(scope);
-    next = scope.lifetime.kind === "service"
-      ? undefined
-      : scope.lifetime.parent;
+    next = scope.lifetime.kind === "service" ? undefined : scope.lifetime.parent;
   }
   return result;
 }
@@ -146,10 +145,11 @@ function validateScopes(scopes: ReadonlyMap<ScopeId, Scope>): ServiceId {
       service = scope.lifetime.service_id;
     } else {
       const owner = chain[1]?.lifetime.kind;
-      const valid = kind === "machine" && owner === "service" ||
-        kind === "workspace" && owner === "machine" ||
-        kind === "session" && owner === "workspace" ||
-        kind === "operation" && owner !== undefined && owner !== "operation";
+      const valid =
+        (kind === "machine" && owner === "service") ||
+        (kind === "workspace" && owner === "machine") ||
+        (kind === "session" && owner === "workspace") ||
+        (kind === "operation" && owner !== undefined && owner !== "operation");
       if (!valid) fail("invalid_scope_tree");
     }
   }
@@ -180,11 +180,13 @@ export async function checkComposition(raw: string): Promise<CheckedStructure> {
   const proposal: Composition = {
     ...decoded,
     scopes: [...decoded.scopes].sort((a, b) => compare(a.id, b.id)),
-    nodes: decoded.nodes.map((node) => ({
-      ...node,
-      provides: [...node.provides].sort((a, b) => compare(a.id, b.id)),
-      requires: [...node.requires].sort((a, b) => compare(a.id, b.id)),
-    })).sort((a, b) => compare(a.id, b.id)),
+    nodes: decoded.nodes
+      .map((node) => ({
+        ...node,
+        provides: [...node.provides].sort((a, b) => compare(a.id, b.id)),
+        requires: [...node.requires].sort((a, b) => compare(a.id, b.id)),
+      }))
+      .sort((a, b) => compare(a.id, b.id)),
     bindings: [...decoded.bindings].sort(compareBindings),
   };
   const scopes = new Map(proposal.scopes.map((scope) => [scope.id, scope]));
@@ -201,9 +203,9 @@ export async function checkComposition(raw: string): Promise<CheckedStructure> {
     const machine = chain.find((scope) => scope.lifetime.kind === "machine");
     if (
       machine?.lifetime.kind === "machine" &&
-      (node.site.kind !== "machine" ||
-        node.site.machine_id !== machine.lifetime.machine_id)
-    ) fail("invalid_placement");
+      (node.site.kind !== "machine" || node.site.machine_id !== machine.lifetime.machine_id)
+    )
+      fail("invalid_placement");
     if (node.identity.kind === "plugin") {
       const { release, generation, execution } = node.identity;
       if (execution === "isolated" && node.site.kind === "service") {
@@ -222,46 +224,42 @@ export async function checkComposition(raw: string): Promise<CheckedStructure> {
     if (node.owner.kind === "node") {
       const owner = nodes.get(node.owner.node) ?? fail("invalid_owner");
       if (
-        owner.id === node.id || compareSites(owner.site, node.site) !== 0 ||
+        owner.id === node.id ||
+        compareSites(owner.site, node.site) !== 0 ||
         !chain.some((scope) => scope.id === owner.scope)
-      ) fail("invalid_owner");
+      )
+        fail("invalid_owner");
       prerequisites.add(owner.id);
     }
     if (
-      new Set(node.provides.map((port) => port.id)).size !==
-        node.provides.length ||
-      new Set(node.requires.map((port) => port.id)).size !==
-        node.requires.length
-    ) fail("duplicate_port");
+      new Set(node.provides.map((port) => port.id)).size !== node.provides.length ||
+      new Set(node.requires.map((port) => port.id)).size !== node.requires.length
+    )
+      fail("duplicate_port");
     ports += node.provides.length + node.requires.length;
     if (ports > 2048) fail("port_budget");
   }
   const seen = new Set<string>();
   const cardinalities = new Map<string, number>();
   const remoteBindings: Binding[] = [];
-  const endpointNode = (id: NodeId): Node =>
-    nodes.get(id) ?? fail("invalid_endpoint");
+  const endpointNode = (id: NodeId): Node => nodes.get(id) ?? fail("invalid_endpoint");
   for (const binding of proposal.bindings) {
     const edge = canonical([binding.consumer, binding.provider]);
     if (seen.has(edge)) fail("duplicate_binding");
     seen.add(edge);
     const consumer = endpointNode(binding.consumer.node);
     const provider = endpointNode(binding.provider.node);
-    const required = consumer.requires.find((p) =>
-      p.id === binding.consumer.port
-    ) ??
-      fail("invalid_endpoint");
+    const required =
+      consumer.requires.find((p) => p.id === binding.consumer.port) ?? fail("invalid_endpoint");
     const provided =
-      provider.provides.find((p) => p.id === binding.provider.port) ??
-        fail("invalid_endpoint");
+      provider.provides.find((p) => p.id === binding.provider.port) ?? fail("invalid_endpoint");
     if (canonical(required.contract) !== canonical(provided.contract)) {
       fail("contract_mismatch");
     }
-    const visible = consumer.scope === provider.scope ||
-      provided.visibility === "descendants" &&
-        ancestry(consumer.scope, scopes).some((scope) =>
-          scope.id === provider.scope
-        );
+    const visible =
+      consumer.scope === provider.scope ||
+      (provided.visibility === "descendants" &&
+        ancestry(consumer.scope, scopes).some((scope) => scope.id === provider.scope));
     if (!visible) fail("scope_not_visible");
     if (compareSites(consumer.site, provider.site) !== 0) {
       if (provided.transport === "local") fail("local_port_crosses_site");
@@ -273,19 +271,19 @@ export async function checkComposition(raw: string): Promise<CheckedStructure> {
   }
   for (const node of nodes.values()) {
     for (const required of node.requires) {
-      const count =
-        cardinalities.get(canonical({ node: node.id, port: required.id })) ?? 0;
+      const count = cardinalities.get(canonical({ node: node.id, port: required.id })) ?? 0;
       if (
-        required.cardinality === "one" && count !== 1 ||
-        required.cardinality === "optional" && count > 1
-      ) fail("cardinality_mismatch");
+        (required.cardinality === "one" && count !== 1) ||
+        (required.cardinality === "optional" && count > 1)
+      )
+        fail("cardinality_mismatch");
     }
   }
   const dependencyOrder: NodeId[] = [];
   while (dependencies.size) {
     // Map insertion order is sorted NodeId order, including after deletions.
-    const ready = [...dependencies].find(([, deps]) => deps.size === 0)?.[0] ??
-      fail("dependency_cycle");
+    const ready =
+      [...dependencies].find(([, deps]) => deps.size === 0)?.[0] ?? fail("dependency_cycle");
     dependencies.delete(ready);
     for (const prerequisites of dependencies.values()) {
       prerequisites.delete(ready);
@@ -301,9 +299,7 @@ export async function checkComposition(raw: string): Promise<CheckedStructure> {
     sites.set(key, projection);
   }
   const bytes = new TextEncoder().encode(
-    `cowboy.composition.proposal.v1\n${CONTRACT_FINGERPRINT}\n${
-      canonical(proposal)
-    }`,
+    `cowboy.composition.proposal.v1\n${CONTRACT_FINGERPRINT}\n${canonical(proposal)}`,
   );
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   // The sole branding boundary is after full decoding, linking and digesting.
@@ -313,9 +309,9 @@ export async function checkComposition(raw: string): Promise<CheckedStructure> {
     status: "structurally_valid",
     authorized: false,
     contract_fingerprint: CONTRACT_FINGERPRINT,
-    proposal_digest: `sha256:${
-      Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("")
-    }`,
+    proposal_digest: `sha256:${Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join(
+      "",
+    )}`,
     dependency_order: dependencyOrder,
     reverse_dependency_order: [...dependencyOrder].reverse(),
     sites: [...sites.values()].sort((a, b) => compareSites(a.site, b.site)),

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../tools/test-assert.ts";
 import { resultStatus, resultText, toolContent, toolResult } from "./result";
 
 test("ACP, MCP and Codex opaque results expose the same text", () => {

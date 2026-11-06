@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../../tools/test-assert.ts";
 
 test("the entire production Web tree has no legacy SDK runtime dependency", async () => {
   async function visit(directory: URL): Promise<void> {

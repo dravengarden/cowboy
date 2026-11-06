@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { test } from "bun:test";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "../../../tools/test-assert.ts";
 import { captureContent, capturedIdentity } from "./content.ts";
 import { ID, opened, wire } from "./fixture.ts";
 import { BufferClientError, decodeResourceId } from "./protocol.ts";

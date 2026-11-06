@@ -5,7 +5,7 @@ import {
   assertRejects,
   assertStrictEquals,
   assertThrows,
-} from "@std/assert";
+} from "../../tools/test-assert.ts";
 import type { ClientSnapshot, Mutation } from "@cowboy/state-sync";
 import { replicatedStore } from "@cowboy/state-sync";
 import { ScopeClosedError } from "@cowboy/state-store/scope";

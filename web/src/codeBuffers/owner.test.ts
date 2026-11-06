@@ -4,7 +4,7 @@ import {
   assertEquals,
   assertRejects,
   assertThrows,
-} from "@std/assert";
+} from "../../../tools/test-assert.ts";
 import { BufferClientError, decodeResourceId } from "./protocol.ts";
 import { fixture, ID, opened, OTHER, readWire, wire } from "./fixture.ts";
 import { createOwnedCodeBuffers } from "./owner.ts";

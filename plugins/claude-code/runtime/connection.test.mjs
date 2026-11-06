@@ -25,18 +25,20 @@ async function fixture(t) {
       if (frame.method === "initialized") return;
       if (frame.method === "initialize") {
         state.resumes.push(frame.params.resumeSessionId);
-        socket.send(JSON.stringify({
-          id: frame.id,
-          result: {
-            sessionId: state.session,
-            environmentInfo: {
-              executorVersion: "0.159.3",
-              platformOs: "linux",
-              cwd: "file:///target",
-              shell: { path: "/bin/bash" },
+        socket.send(
+          JSON.stringify({
+            id: frame.id,
+            result: {
+              sessionId: state.session,
+              environmentInfo: {
+                executorVersion: "0.159.3",
+                platformOs: "linux",
+                cwd: "file:///target",
+                shell: { path: "/bin/bash" },
+              },
             },
-          },
-        }));
+          }),
+        );
       } else if (frame.method === "fs/writeFile") {
         state.writes++;
         socket.terminate(); // Effect committed; acknowledgement lost.
@@ -100,10 +102,14 @@ test("explicit shutdown cannot reopen the execution connection", async (t) => {
 test("retained cancellation resumes after a new call restores the connection", async (t) => {
   const { state, connection } = await fixture(t);
   const directory = await mkdtemp(join(tmpdir(), "claude-reconnect-cancel-"));
-  const tools = new WorkspaceTools(connection, {
-    environment: { id: "same-target" },
-    workspace: { cwd: "/target" },
-  }, join(directory, "state.json"));
+  const tools = new WorkspaceTools(
+    connection,
+    {
+      environment: { id: "same-target" },
+      workspace: { cwd: "/target" },
+    },
+    join(directory, "state.json"),
+  );
   // A reconciliation save can still be writing its temporary file.
   t.after(async () => {
     await tools.saves;

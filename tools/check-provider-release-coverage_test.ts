@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "./test-assert.ts";
 import { checkProviderReleaseCoverage } from "./check-provider-release-coverage.ts";
 
 test("Provider release coverage requires the exact signed published version", async () => {

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertStringIncludes } from "@std/assert";
+import { assert, assertStringIncludes } from "../../tools/test-assert.ts";
 import { createElement } from "react";
 import ReactMarkdown from "react-markdown";
 import { renderToStaticMarkup } from "react-dom/server";

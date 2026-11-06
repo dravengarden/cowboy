@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { modalRows } from "./modalNavigation.ts";
 
 const box = (top: number, height: number, left: number) => ({

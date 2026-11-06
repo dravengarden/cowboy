@@ -20,11 +20,7 @@ async function input() {
 }
 
 class ResetFailure extends Error {
-  constructor(
-    message,
-    callMayHaveReachedProvider = false,
-    creditId = undefined,
-  ) {
+  constructor(message, callMayHaveReachedProvider = false, creditId = undefined) {
     super(message);
     this.callMayHaveReachedProvider = callMayHaveReachedProvider;
     this.creditId = creditId;
@@ -40,8 +36,11 @@ class JsonRpcLines {
   }
 
   static async start() {
-    const command = process.env.COWBOY_PLUGIN_COMMAND_CODEX ??
-      process.env.COWBOY_CODEX_COMMAND ?? process.argv.slice(2)[0] ?? "codex";
+    const command =
+      process.env.COWBOY_PLUGIN_COMMAND_CODEX ??
+      process.env.COWBOY_CODEX_COMMAND ??
+      process.argv.slice(2)[0] ??
+      "codex";
     const child = spawn(command, {
       args: [
         "app-server",
@@ -65,9 +64,7 @@ class JsonRpcLines {
   }
 
   async write(value) {
-    await this.writer.write(
-      new TextEncoder().encode(`${JSON.stringify(value)}\n`),
-    );
+    await this.writer.write(new TextEncoder().encode(`${JSON.stringify(value)}\n`));
   }
 
   async notify(method, params) {
@@ -107,15 +104,14 @@ export function nearestCredit(rateLimits) {
   const credits = rateLimits?.rateLimitResetCredits?.credits;
   if (!Array.isArray(credits)) return undefined;
   return credits
-    .filter((credit) =>
-      credit?.status === "available" && typeof credit.id === "string"
-    )
-    .sort((left, right) =>
-      (left.expiresAt ?? Number.MAX_SAFE_INTEGER) -
-        (right.expiresAt ?? Number.MAX_SAFE_INTEGER) ||
-      (left.grantedAt ?? Number.MAX_SAFE_INTEGER) -
-        (right.grantedAt ?? Number.MAX_SAFE_INTEGER) ||
-      left.id.localeCompare(right.id)
+    .filter((credit) => credit?.status === "available" && typeof credit.id === "string")
+    .sort(
+      (left, right) =>
+        (left.expiresAt ?? Number.MAX_SAFE_INTEGER) -
+          (right.expiresAt ?? Number.MAX_SAFE_INTEGER) ||
+        (left.grantedAt ?? Number.MAX_SAFE_INTEGER) -
+          (right.grantedAt ?? Number.MAX_SAFE_INTEGER) ||
+        left.id.localeCompare(right.id),
     )[0]?.id;
 }
 
@@ -177,11 +173,7 @@ async function reset(rpc, request) {
       idempotencyKey: request.idempotency_key,
     });
   } catch (error) {
-    throw new ResetFailure(
-      error instanceof Error ? error.message : String(error),
-      true,
-      creditId,
-    );
+    throw new ResetFailure(error instanceof Error ? error.message : String(error), true, creditId);
   }
   return { outcome: result?.outcome ?? "unknown", credit_id: creditId };
 }
@@ -192,24 +184,24 @@ async function main() {
   try {
     request = await input();
     rpc = await JsonRpcLines.start();
-    const result = request.operation === "consume_reset"
-      ? await reset(rpc, request)
-      : await collect(rpc);
+    const result =
+      request.operation === "consume_reset" ? await reset(rpc, request) : await collect(rpc);
     console.log(JSON.stringify(result));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (request?.operation === "consume_reset") {
-      console.log(JSON.stringify({
-        error: {
-          message,
-          call_may_have_reached_provider: error instanceof ResetFailure
-            ? error.callMayHaveReachedProvider
-            : false,
-          ...(error instanceof ResetFailure && error.creditId
-            ? { credit_id: error.creditId }
-            : {}),
-        },
-      }));
+      console.log(
+        JSON.stringify({
+          error: {
+            message,
+            call_may_have_reached_provider:
+              error instanceof ResetFailure ? error.callMayHaveReachedProvider : false,
+            ...(error instanceof ResetFailure && error.creditId
+              ? { credit_id: error.creditId }
+              : {}),
+          },
+        }),
+      );
     } else {
       console.error(message);
       process.exitCode = 1;

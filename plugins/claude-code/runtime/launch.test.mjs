@@ -39,34 +39,29 @@ test("current-turn advertisement preserves native initialize and refuses unsuppo
   const supported = await new Agent().initialize(true);
   assert.equal(supported._meta.steering.idleBehavior, "promptRequired");
   assert.equal(supported.agentCapabilities.loadSession, true);
-  assert.equal(
-    (await new Agent().initialize(false))._meta.steering.idleBehavior,
-    undefined,
-  );
+  assert.equal((await new Agent().initialize(false))._meta.steering.idleBehavior, undefined);
 });
 
 test("bound launch preserves model and resume while replacing local execution surfaces", () => {
-  const args = nativeArguments([
-    "--print",
-    "--model",
-    "opus[1m]",
-    "--resume=native-session",
-    "--tools",
-    "Bash,Agent",
-    "--settings",
-    '{"hooks":{"SessionStart":[]}}',
-    "--mcp-config",
-    '{"mcpServers":{"local":{}}}',
-    "--plugin-dir",
-    "/runtime-user-plugin",
-    "--setting-sources=user,project,local",
-  ], "/private-owned-plugin");
-  assert.deepEqual(args.slice(-4), [
-    "--model",
-    "opus[1m]",
-    "--resume",
-    "native-session",
-  ]);
+  const args = nativeArguments(
+    [
+      "--print",
+      "--model",
+      "opus[1m]",
+      "--resume=native-session",
+      "--tools",
+      "Bash,Agent",
+      "--settings",
+      '{"hooks":{"SessionStart":[]}}',
+      "--mcp-config",
+      '{"mcpServers":{"local":{}}}',
+      "--plugin-dir",
+      "/runtime-user-plugin",
+      "--setting-sources=user,project,local",
+    ],
+    "/private-owned-plugin",
+  );
+  assert.deepEqual(args.slice(-4), ["--model", "opus[1m]", "--resume", "native-session"]);
   assert.equal(
     args[args.indexOf("--tools") + 1],
     [
@@ -76,9 +71,7 @@ test("bound launch preserves model and resume while replacing local execution su
   );
   const disallowed = args[args.indexOf("--disallowedTools") + 1].split(",");
   assert.ok(!disallowed.includes("Agent") && !disallowed.includes("Task"));
-  assert.ok(
-    !disallowed.includes("Skill") && disallowed.includes("ExitWorktree"),
-  );
+  assert.ok(!disallowed.includes("Skill") && disallowed.includes("ExitWorktree"));
   assert.equal(args[args.indexOf("--setting-sources") + 1], "");
   assert.equal(args.filter((arg) => arg === "--plugin-dir").length, 1);
   assert.equal(args[args.indexOf("--plugin-dir") + 1], "/private-owned-plugin");
@@ -86,23 +79,18 @@ test("bound launch preserves model and resume while replacing local execution su
 });
 
 test("bare mode, local worktrees and unsupported flags are rejected", () => {
-  for (
-    const flag of [
-      "--bare",
-      "--safe-mode",
-      "--worktree",
-      "--remote-control",
-      "--init",
-      "--unknown",
-    ]
-  ) {
+  for (const flag of [
+    "--bare",
+    "--safe-mode",
+    "--worktree",
+    "--remote-control",
+    "--init",
+    "--unknown",
+  ]) {
     assert.throws(() => nativeArguments([flag], "/owned"), /unavailable/);
   }
   assert.throws(() => nativeArguments(["--model"], "/owned"), /Invalid/);
-  assert.throws(
-    () => nativeArguments(["--permission-mode=plan"], "/owned"),
-    /plan files/,
-  );
+  assert.throws(() => nativeArguments(["--permission-mode=plan"], "/owned"), /plan files/);
 });
 
 test("configuration can change effort but cannot replace execution or reopen local IO", () => {
@@ -112,16 +100,7 @@ test("configuration can change effort but cannot replace execution or reopen loc
       settings: { effortLevel: "high", fastMode: false },
     }),
   );
-  for (
-    const key of [
-      "env",
-      "hooks",
-      "sandbox",
-      "enabledPlugins",
-      "permissions",
-      "mcpServers",
-    ]
-  ) {
+  for (const key of ["env", "hooks", "sandbox", "enabledPlugins", "permissions", "mcpServers"]) {
     assert.ok(
       !allowedControl({
         subtype: "apply_flag_settings",
@@ -129,24 +108,21 @@ test("configuration can change effort but cannot replace execution or reopen loc
       }),
     );
   }
-  for (
-    const subtype of [
-      "mcp_set_servers",
-      "read_file",
-      "rewind_files",
-      "seed_read_state",
-      "register_repo_root",
-      "reload_plugins",
-      "update_settings",
-    ]
-  ) {
+  for (const subtype of [
+    "mcp_set_servers",
+    "read_file",
+    "rewind_files",
+    "seed_read_state",
+    "register_repo_root",
+    "reload_plugins",
+    "update_settings",
+  ]) {
     assert.ok(!allowedControl({ subtype }));
   }
   assert.ok(
-    nativeArguments(
-      ["--replay-user-messages", "", "--setting-sources="],
-      "/owned",
-    ).includes("--replay-user-messages"),
+    nativeArguments(["--replay-user-messages", "", "--setting-sources="], "/owned").includes(
+      "--replay-user-messages",
+    ),
   );
 });
 
@@ -188,7 +164,9 @@ test("startup milestones reach the adapter's stderr through its private socket",
     const other = createConnection(path);
     other.write(
       "ordinary text\n[cowboy-claude] phase=x\u001b[2J totalMs=1\n" +
-        "[cowboy-claude] " + "x".repeat(300) + "\n",
+        "[cowboy-claude] " +
+        "x".repeat(300) +
+        "\n",
     );
     other.end();
     const deadline = Date.now() + 5000;
@@ -202,14 +180,8 @@ test("startup milestones reach the adapter's stderr through its private socket",
     server.close();
   }
   assert.equal(lines.length, 2);
-  assert.match(
-    lines[0],
-    /^\[cowboy-claude\] phase=execution-connected totalMs=\d+\n$/,
-  );
-  assert.match(
-    lines[1],
-    /^\[cowboy-claude\] phase=target-discovery totalMs=\d+\n$/,
-  );
+  assert.match(lines[0], /^\[cowboy-claude\] phase=execution-connected totalMs=\d+\n$/);
+  assert.match(lines[1], /^\[cowboy-claude\] phase=target-discovery totalMs=\d+\n$/);
 });
 
 test("stale runtime socket directories are removed and live ones kept", async (t) => {
@@ -227,15 +199,17 @@ test("stale runtime socket directories are removed and live ones kept", async (t
   const recent = await make("cowboy-claude-mod-DDDDDD");
   const other = await make("cowboy-claude-mod-toolongname");
   const server = createServer();
-  await new Promise((resolve) =>
-    server.listen(join(live, "bridge.sock"), resolve)
-  );
+  await new Promise((resolve) => server.listen(join(live, "bridge.sock"), resolve));
   t.after(() => server.close());
   for (const directory of [stale, staleTrace, live, other]) {
     await utimes(directory, old, old);
   }
   assert.equal(await sweepStaleRuntimeDirectories([root]), 2);
-  const exists = (path) => stat(path).then(() => true, () => false);
+  const exists = (path) =>
+    stat(path).then(
+      () => true,
+      () => false,
+    );
   assert.equal(await exists(stale), false);
   assert.equal(await exists(staleTrace), false);
   assert.equal(await exists(live), true);
@@ -265,10 +239,9 @@ test("native Claude checks for garbage often unless the user chose otherwise", (
   assert.deepEqual(nativeRuntimeEnvironment({}), {
     BUN_GC_TIMER_INTERVAL: "100",
   });
-  assert.deepEqual(
-    nativeRuntimeEnvironment({ BUN_GC_TIMER_INTERVAL: "1000" }),
-    { BUN_GC_TIMER_INTERVAL: "1000" },
-  );
+  assert.deepEqual(nativeRuntimeEnvironment({ BUN_GC_TIMER_INTERVAL: "1000" }), {
+    BUN_GC_TIMER_INTERVAL: "1000",
+  });
 });
 
 test("tool inputs stream eagerly unless the user chose otherwise", () => {
@@ -285,11 +258,7 @@ test("target MCP servers use the packaged native relay when there is one", async
   // A target without the native relay (macOS) runs the Node one.
   assert.deepEqual(await mcpRelay(directory, "/stage/context.json", relay), {
     command: process.execPath,
-    args: [
-      "--optimize-for-size",
-      join(directory, "mcp-proxy.mjs"),
-      "/stage/context.json",
-    ],
+    args: ["--optimize-for-size", join(directory, "mcp-proxy.mjs"), "/stage/context.json"],
   });
   await stat(join(directory, "mcp-proxy.mjs"));
   await writeFile(relay, "", { mode: 0o755 });
@@ -305,9 +274,7 @@ test("background target commands wait through the packaged native waiter when th
   const relay = join(directory, "cowboy-mcp-relay");
   assert.equal(
     await taskWaitCommand(directory, relay),
-    `'${process.execPath}' '--optimize-for-size' '${
-      join(directory, "task-wait.mjs")
-    }'`,
+    `'${process.execPath}' '--optimize-for-size' '${join(directory, "task-wait.mjs")}'`,
   );
   await stat(join(directory, "task-wait.mjs"));
   await writeFile(relay, "", { mode: 0o755 });
@@ -324,11 +291,9 @@ test("the shell prefix sends only registered hook commands to the proxy", async 
   const hook = "printf 'it'\"'\"'s a hook' # *";
   const script = join(directory, "prefix.sh");
   // The runtime may carry its own flags, as node does (NODE_FLAGS).
-  await writeFile(
-    script,
-    hookPrefixScript(["/bin/sh", "-e"], proxy, [hook, hook]),
-    { mode: 0o700 },
-  );
+  await writeFile(script, hookPrefixScript(["/bin/sh", "-e"], proxy, [hook, hook]), {
+    mode: 0o700,
+  });
   const run = (...argv) => execFileSync(script, argv, { encoding: "utf8" });
   assert.equal(run(hook), "proxied:" + hook);
   // An MCP server or any other command runs directly, without the proxy.
@@ -337,13 +302,9 @@ test("the shell prefix sends only registered hook commands to the proxy", async 
   // Multi-argument (exec form) commands are passed through unchanged.
   assert.equal(run("printf", "%s-%s", "a", "b"), "a-b");
   // With no registered hooks nothing is proxied.
-  await writeFile(
-    join(directory, "none.sh"),
-    hookPrefixScript("/bin/sh", proxy, []),
-    {
-      mode: 0o700,
-    },
-  );
+  await writeFile(join(directory, "none.sh"), hookPrefixScript("/bin/sh", proxy, []), {
+    mode: 0o700,
+  });
   assert.equal(
     execFileSync(join(directory, "none.sh"), [hook], { encoding: "utf8" }),
     "it's a hook",

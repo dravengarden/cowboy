@@ -12,15 +12,11 @@ for (const vector of linkVectors()) {
     try {
       const report = await checkComposition(vector.raw);
       if (vector.error) throw new Error(`expected ${vector.error}`);
-      if (
-        report.authorized !== false || report.status !== "structurally_valid"
-      ) {
+      if (report.authorized !== false || report.status !== "structurally_valid") {
         throw new Error("a diagnostic cannot grant execution");
       }
     } catch (error) {
-      if (
-        !(error instanceof CompositionCheckError) || error.code !== vector.error
-      ) {
+      if (!(error instanceof CompositionCheckError) || error.code !== vector.error) {
         throw error;
       }
     }
@@ -31,12 +27,14 @@ test("link report identity ignores declaration and JSON property order", async (
   const raw = baseInput();
   const original = await checkComposition(raw);
   const proposal = decodeComposition(raw);
-  const reversed = await checkComposition(JSON.stringify({
-    bindings: [...proposal.bindings].reverse(),
-    nodes: [...proposal.nodes].reverse(),
-    scopes: [...proposal.scopes].reverse(),
-    format: proposal.format,
-  }));
+  const reversed = await checkComposition(
+    JSON.stringify({
+      bindings: [...proposal.bindings].reverse(),
+      nodes: [...proposal.nodes].reverse(),
+      scopes: [...proposal.scopes].reverse(),
+      format: proposal.format,
+    }),
+  );
   if (JSON.stringify(original) !== JSON.stringify(reversed)) {
     throw new Error("declaration order changed a link report");
   }
@@ -44,25 +42,21 @@ test("link report identity ignores declaration and JSON property order", async (
     if (Array.isArray(value)) return value.map(reverseKeys);
     if (value !== null && typeof value === "object") {
       return Object.fromEntries(
-        Object.entries(value).reverse().map(
-          ([key, item]) => [key, reverseKeys(item)],
-        ),
+        Object.entries(value)
+          .reverse()
+          .map(([key, item]) => [key, reverseKeys(item)]),
       );
     }
     return value;
   };
-  const reordered = await checkComposition(
-    JSON.stringify(reverseKeys(proposal)),
-  );
+  const reordered = await checkComposition(JSON.stringify(reverseKeys(proposal)));
   if (JSON.stringify(original) !== JSON.stringify(reordered)) {
     throw new Error("nested property order changed a link report");
   }
   if (original.dependency_order.join() !== "victoria,client") {
     throw new Error("provider must precede consumer");
   }
-  const changed = await checkComposition(
-    baseInput([{ path: "/bindings/0/revision", value: "2" }]),
-  );
+  const changed = await checkComposition(baseInput([{ path: "/bindings/0/revision", value: "2" }]));
   if (original.proposal_digest === changed.proposal_digest) {
     throw new Error("binding revision must change identity");
   }
@@ -70,27 +64,22 @@ test("link report identity ignores declaration and JSON property order", async (
 
 test("checked reports are frozen diagnostics, not decodable grants", async () => {
   const report = await checkComposition(baseInput());
-  for (
-    const value of [
-      report,
-      report.sites,
-      report.sites[0],
-      report.sites[0].site,
-      report.dependency_order,
-      report.remote_bindings[0],
-      report.remote_bindings[0].consumer,
-    ]
-  ) {
+  for (const value of [
+    report,
+    report.sites,
+    report.sites[0],
+    report.sites[0].site,
+    report.dependency_order,
+    report.remote_bindings[0],
+    report.remote_bindings[0].consumer,
+  ]) {
     if (!Object.isFrozen(value)) throw new Error("mutable checked projection");
   }
   try {
     await checkComposition(JSON.stringify(report));
     throw new Error("accepted a serialized checked report as input");
   } catch (error) {
-    if (
-      !(error instanceof CompositionCheckError) ||
-      error.code !== "invalid_contract"
-    ) throw error;
+    if (!(error instanceof CompositionCheckError) || error.code !== "invalid_contract") throw error;
   }
   // Type-only assertions are deliberately not executed against frozen values.
   const types = (
@@ -125,10 +114,8 @@ test("link errors contain closed codes only", async () => {
     await checkComposition('{"secret":"synthetic-private-token"}');
     throw new Error("invalid input accepted");
   } catch (error) {
-    if (
-      !(error instanceof CompositionCheckError) ||
-      error.message !== "invalid_contract"
-    ) throw error;
+    if (!(error instanceof CompositionCheckError) || error.message !== "invalid_contract")
+      throw error;
     if (Object.hasOwn(error, "cause")) {
       throw new Error("native exception leaked");
     }

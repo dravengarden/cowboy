@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { presentHoverBlock } from "./symbolPresentation";
 
 test("symbol docs convert HTML breaks and hide rustdoc setup lines", () => {

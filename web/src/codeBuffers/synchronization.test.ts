@@ -4,7 +4,7 @@ import {
   assertEquals,
   assertRejects,
   assertThrows,
-} from "@std/assert";
+} from "../../../tools/test-assert.ts";
 import { captureContent, type CapturedContent } from "./content.ts";
 import { fixture, ID, opened, readWire, wire } from "./fixture.ts";
 import { BufferClientError } from "./protocol.ts";

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { lastRowBefore, requestSessionReveal, takeSessionReveal } from "./sessionReveal.ts";
 
 test("the boundary is exclusive and ignores optimistic rows", () => {

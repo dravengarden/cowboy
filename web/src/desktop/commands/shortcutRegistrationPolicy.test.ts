@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "../../../../tools/test-assert.ts";
 import {
   type RegisteredShortcut,
   shortcutRegistrationConflict,

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { RELIABLE_TOUCH_TAP_MOVE_SLOP_PX } from "./touchGestures.ts";
 import {
   iosRubberBand,

@@ -12,15 +12,18 @@ import {
 } from "../plugins/claude-code/runtime/mcp.mjs";
 
 test("Cowboy MCP uses the target relay and is absent from managed children", () => {
-  const entries = [{
-    name: "custom",
-    placement: "runtime",
-    config: { url: "https://example.invalid/mcp" },
-  }, {
-    name: "cowboy",
-    placement: "runtime",
-    config: { url: "https://old.invalid/mcp" },
-  }];
+  const entries = [
+    {
+      name: "custom",
+      placement: "runtime",
+      config: { url: "https://example.invalid/mcp" },
+    },
+    {
+      name: "cowboy",
+      placement: "runtime",
+      config: { url: "https://old.invalid/mcp" },
+    },
+  ];
   const ordinary = withCowboyMcp(entries, true);
   assert.equal(ordinary.length, 2);
   assert.deepEqual(ordinary[1], {
@@ -81,13 +84,7 @@ test("servers load in native's scopes and precedence", () => {
     entries.map((entry) => `${entry.scope}:${entry.name}`),
     ["local:dup", "user:usersrv", "project:outer", "local:localsrv"],
   );
-  assert.deepEqual(entries[0].argv, [
-    "python3",
-    "server.py",
-    "local",
-    "foo",
-    "${MISSING}",
-  ]);
+  assert.deepEqual(entries[0].argv, ["python3", "server.py", "local", "foo", "${MISSING}"]);
   assert.deepEqual(entries[0].env, { FOO: "foo-x" });
   assert.equal(entries[0].placement, "target");
   assert.deepEqual(omitted, []);
@@ -133,26 +130,32 @@ test("remote servers are reached from here unless they name the target", () => {
     cwd: "/p",
     environment: { HOST: "mcp.example.com", TOKEN: "t" },
   });
-  assert.deepEqual(entries.map((entry) => entry.config), [
-    {
-      type: "http",
-      url: "https://mcp.example.com/mcp",
-      headers: { Authorization: "Bearer t" },
-    },
-    { type: "sse", url: "https://example.com/sse" },
-  ]);
+  assert.deepEqual(
+    entries.map((entry) => entry.config),
+    [
+      {
+        type: "http",
+        url: "https://mcp.example.com/mcp",
+        headers: { Authorization: "Bearer t" },
+      },
+      { type: "sse", url: "https://example.com/sse" },
+    ],
+  );
   assert.deepEqual(
     omitted.map((entry) => entry.name),
     ["local", "helper", "socket", "unset", "broken", "bad name"],
   );
   assert.deepEqual(
     nativeMcpServers(
-      [...entries, {
-        name: "db",
-        placement: "target",
-        argv: ["db"],
-        env: {},
-      }],
+      [
+        ...entries,
+        {
+          name: "db",
+          placement: "target",
+          argv: ["db"],
+          env: {},
+        },
+      ],
       { command: "/node", args: ["/stage/mcp-proxy.mjs", "/stage/ctx.json"] },
     ).db,
     {
@@ -168,14 +171,13 @@ test("expansion, loopback names and tool prefixes follow native", () => {
   assert.equal(expandVariables("${A:-}", {}), "");
   assert.ok(loopbackUrl("http://localhost:1/") && loopbackUrl("http://[::1]/"));
   assert.ok(!loopbackUrl("https://example.com/"));
-  for (
-    const url of [
-      "http://localhost.:3000/mcp",
-      "http://[::ffff:127.0.0.1]:3000/mcp",
-      "http://[::]:1/",
-      "http://app.localhost./",
-    ]
-  ) assert.ok(loopbackUrl(url), url);
+  for (const url of [
+    "http://localhost.:3000/mcp",
+    "http://[::ffff:127.0.0.1]:3000/mcp",
+    "http://[::]:1/",
+    "http://app.localhost./",
+  ])
+    assert.ok(loopbackUrl(url), url);
   assert.ok(!loopbackUrl("http://[::ffff:10.0.0.1]/"));
   assert.equal(mcpToolPrefix("my-db_1"), "mcp__my-db_1__");
   assert.deepEqual(projectConfigDirectories("/a/b"), ["/a", "/a/b"]);
@@ -185,18 +187,22 @@ test("the relay carries stdio both ways and ends the target server", async () =>
   const posts = [];
   const reads = [
     {
-      chunks: [{
-        stream: "stdout",
-        data: Buffer.from("out\n").toString("base64"),
-      }],
+      chunks: [
+        {
+          stream: "stdout",
+          data: Buffer.from("out\n").toString("base64"),
+        },
+      ],
       afterSeq: 1,
       closed: false,
     },
     {
-      chunks: [{
-        stream: "stderr",
-        data: Buffer.from("err\n").toString("base64"),
-      }],
+      chunks: [
+        {
+          stream: "stderr",
+          data: Buffer.from("err\n").toString("base64"),
+        },
+      ],
       afterSeq: 2,
       closed: true,
       exitCode: 3,
@@ -238,16 +244,17 @@ test("the relay carries stdio both ways and ends the target server", async () =>
   });
   assert.deepEqual(
     posts.filter(([path]) => path === "/mcp-read").map(([, value]) => value),
-    [{ id: "p1", afterSeq: null }, { id: "p1", afterSeq: 1 }],
+    [
+      { id: "p1", afterSeq: null },
+      { id: "p1", afterSeq: 1 },
+    ],
   );
   assert.deepEqual(posts.at(-1), ["/mcp-stop", { id: "p1" }]);
   input.end();
 });
 
 test("MCP traffic queues for its own few connection slots", async () => {
-  const { WorkspaceTools } = await import(
-    "../plugins/claude-code/runtime/tools.mjs"
-  );
+  const { WorkspaceTools } = await import("../plugins/claude-code/runtime/tools.mjs");
   let active = 0;
   let peak = 0;
   const tools = new WorkspaceTools(
@@ -270,9 +277,7 @@ test("MCP traffic queues for its own few connection slots", async () => {
 });
 
 test("a gap in retained output ends the server instead of cutting its stream", async () => {
-  const { WorkspaceTools } = await import(
-    "../plugins/claude-code/runtime/tools.mjs"
-  );
+  const { WorkspaceTools } = await import("../plugins/claude-code/runtime/tools.mjs");
   const calls = [];
   const tools = new WorkspaceTools(
     {
@@ -309,9 +314,7 @@ test("a gap in retained output ends the server instead of cutting its stream", a
 });
 
 test("after its exit a server's output may skip only the exit's number", async () => {
-  const { WorkspaceTools } = await import(
-    "../plugins/claude-code/runtime/tools.mjs"
-  );
+  const { WorkspaceTools } = await import("../plugins/claude-code/runtime/tools.mjs");
   let reply;
   const tools = new WorkspaceTools(
     {

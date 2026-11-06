@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert } from "@std/assert";
+import { assert } from "../../tools/test-assert.ts";
 
 const theme = await Bun.file(new URL("./theme.ts", import.meta.url)).text();
 

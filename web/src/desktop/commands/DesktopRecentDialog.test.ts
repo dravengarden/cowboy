@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { desktopRecentAge, desktopRecentDigit } from "./DesktopRecentDialog.tsx";
 
 test("Recent digits use the physical top row and keypad", () => {

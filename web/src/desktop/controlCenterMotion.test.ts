@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../tools/test-assert.ts";
 import {
   CONTROL_CENTER_PANEL_ENTER_MS,
   CONTROL_CENTER_PANEL_EXIT_MS,

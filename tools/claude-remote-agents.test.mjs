@@ -58,10 +58,7 @@ test("agent outputs report recorded outcomes, never the raw transcript", async (
     }),
     true,
   );
-  assert.equal(
-    (await readHandle(tools, "a1b2c3")).result.file.content,
-    "final 中文 answer",
-  );
+  assert.equal((await readHandle(tools, "a1b2c3")).result.file.content, "final 中文 answer");
   // A continued agent can complete again; the latest outcome replaces it.
   await tools.completeAgent({
     agentId: "a1b2c3",
@@ -87,18 +84,13 @@ test("agent outputs report recorded outcomes, never the raw transcript", async (
   assert.equal(persisted.agents.foreign, undefined);
   // The runtime locator stays private state; it is not a model-facing read.
   assert.equal(
-    (await readHandle(tools, "a1b2c3")).result.file.content.includes(
-      "/runtime/home",
-    ),
+    (await readHandle(tools, "a1b2c3")).result.file.content.includes("/runtime/home"),
     false,
   );
   // A cold process reads the recorded outcome without native help.
   const resumed = new WorkspaceTools(connection, binding, state);
   await resumed.load();
-  assert.match(
-    (await readHandle(resumed, "a1b2c3")).result.file.content,
-    /was stopped/,
-  );
+  assert.match((await readHandle(resumed, "a1b2c3")).result.file.content, /was stopped/);
   assert.deepEqual(resumed.agentLocators(), {
     a1b2c3: registration.outputFile,
   });
@@ -117,13 +109,11 @@ test("a running agent from an earlier process is reported as ended, not running"
 
 test("agent registrations validate identity, bound answers and tolerate old state", async (t) => {
   const { tools, state, connection } = await fixture(t);
-  for (
-    const invalid of [
-      { ...registration, agentId: "../escape" },
-      { ...registration, owner: "" },
-      { ...registration, outputFile: "relative.output" },
-    ]
-  ) {
+  for (const invalid of [
+    { ...registration, agentId: "../escape" },
+    { ...registration, owner: "" },
+    { ...registration, outputFile: "relative.output" },
+  ]) {
     await assert.rejects(tools.registerAgent(invalid), /Invalid/);
   }
   await tools.registerAgent(registration);
@@ -187,19 +177,24 @@ test("an abandoned call cancels only the processes it started", async (t) => {
   const parentStarted = Promise.withResolvers();
   connection.started.set("child", childStarted);
   connection.started.set("parent", parentStarted);
-  const child = tools.nativeCall("Bash", { command: "child" }, {
-    id: "toolu_child",
-    owner: "a1b2c3",
-  });
-  const parent = tools.nativeCall("Bash", { command: "parent" }, {
-    id: "toolu_parent",
-  });
+  const child = tools.nativeCall(
+    "Bash",
+    { command: "child" },
+    {
+      id: "toolu_child",
+      owner: "a1b2c3",
+    },
+  );
+  const parent = tools.nativeCall(
+    "Bash",
+    { command: "parent" },
+    {
+      id: "toolu_parent",
+    },
+  );
   const childId = await childStarted.promise;
   const parentId = await parentStarted.promise;
-  assert.equal(
-    JSON.parse(await readFile(state, "utf8")).jobs[childId].owner,
-    "a1b2c3",
-  );
+  assert.equal(JSON.parse(await readFile(state, "utf8")).jobs[childId].owner, "a1b2c3");
   assert.deepEqual(await tools.cancelCall("toolu_child"), []);
   assert.equal(connection.live.has(childId), false);
   assert.ok(connection.live.has(parentId) && connection.live.has("peer"));
@@ -217,9 +212,13 @@ test("a call cancelled before its start submits no target command", async (t) =>
   const connection = processConnection();
   const { tools } = await fixture(t, connection);
   await tools.cancelCall("toolu_late");
-  const result = await tools.nativeCall("Bash", { command: "late" }, {
-    id: "toolu_late",
-  });
+  const result = await tools.nativeCall(
+    "Bash",
+    { command: "late" },
+    {
+      id: "toolu_late",
+    },
+  );
   assert.match(result.deny, /cancelled before its command started/);
   assert.equal(connection.calls.length, 0);
 });
@@ -229,10 +228,14 @@ test("a discarded background result still cancels its started process", async (t
   const { tools } = await fixture(t, connection);
   const started = Promise.withResolvers();
   connection.started.set("discarded", started);
-  const result = await tools.nativeCall("Bash", {
-    command: "discarded",
-    run_in_background: true,
-  }, { id: "toolu_discarded" });
+  const result = await tools.nativeCall(
+    "Bash",
+    {
+      command: "discarded",
+      run_in_background: true,
+    },
+    { id: "toolu_discarded" },
+  );
   const id = await started.promise;
   assert.match(result.result.stdout, /running in background with ID/);
   assert.equal(tools.calls.has("toolu_discarded"), false);
@@ -268,20 +271,25 @@ test("a queued file mutation of an abandoned call never writes", async (t) => {
   };
   const { tools } = await fixture(t, connection);
   for (const file of ["held", "queued"]) {
-    assert.equal(
-      (await tools.nativeCall("Read", { file_path: file })).deny,
-      undefined,
-    );
+    assert.equal((await tools.nativeCall("Read", { file_path: file })).deny, undefined);
   }
-  const holding = tools.nativeCall("Write", {
-    file_path: "held",
-    content: "first",
-  }, { id: "toolu_held" });
+  const holding = tools.nativeCall(
+    "Write",
+    {
+      file_path: "held",
+      content: "first",
+    },
+    { id: "toolu_held" },
+  );
   while (!writes.length) await new Promise((resolve) => setImmediate(resolve));
-  const queued = tools.nativeCall("Write", {
-    file_path: "queued",
-    content: "never",
-  }, { id: "toolu_queued", owner: "a1b2c3" });
+  const queued = tools.nativeCall(
+    "Write",
+    {
+      file_path: "queued",
+      content: "never",
+    },
+    { id: "toolu_queued", owner: "a1b2c3" },
+  );
   await tools.cancelOwner("a1b2c3");
   release.resolve();
   assert.equal((await holding).deny, undefined);
@@ -294,10 +302,14 @@ test("an abandoned background start is cancelled before its handle is delivered"
   const { tools } = await fixture(t, connection);
   const started = Promise.withResolvers();
   connection.started.set("background", started);
-  const pending = tools.nativeCall("Bash", {
-    command: "background",
-    run_in_background: true,
-  }, { id: "toolu_background" });
+  const pending = tools.nativeCall(
+    "Bash",
+    {
+      command: "background",
+      run_in_background: true,
+    },
+    { id: "toolu_background" },
+  );
   const id = await started.promise;
   await tools.cancelCall("toolu_background");
   assert.equal(connection.live.has(id), false);
@@ -307,21 +319,25 @@ test("an abandoned background start is cancelled before its handle is delivered"
 
 function post(bridge, path, value) {
   return new Promise((resolve, reject) => {
-    const req = request({
-      socketPath: bridge.socketPath,
-      path,
-      method: "POST",
-      headers: { authorization: `Bearer ${bridge.token}` },
-    }, (res) => {
-      const chunks = [];
-      res.on("data", (data) => chunks.push(data));
-      res.on("end", () =>
-        resolve({
-          status: res.statusCode,
-          body: JSON.parse(Buffer.concat(chunks)),
-        }));
-      res.on("error", reject);
-    });
+    const req = request(
+      {
+        socketPath: bridge.socketPath,
+        path,
+        method: "POST",
+        headers: { authorization: `Bearer ${bridge.token}` },
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (data) => chunks.push(data));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode,
+            body: JSON.parse(Buffer.concat(chunks)),
+          }),
+        );
+        res.on("error", reject);
+      },
+    );
     req.on("error", reject);
     req.end(JSON.stringify(value));
   });
@@ -332,29 +348,32 @@ test("bridge cancels admitted calls and spends identities cancelled first", asyn
   const cancelled = [];
   const agents = [];
   let finish;
-  const bridge = await startModBridge({
-    nativeCall(name, input, call) {
-      calls.push(call);
-      return new Promise((resolve) => finish = resolve);
+  const bridge = await startModBridge(
+    {
+      nativeCall(name, input, call) {
+        calls.push(call);
+        return new Promise((resolve) => (finish = resolve));
+      },
+      cancelCall: async (id) => {
+        cancelled.push(id);
+        return [];
+      },
+      registerAgent: async (value) => agents.push(value),
+      cancelDiscarded: async (id) => {
+        cancelled.push("discarded:" + id);
+        return [];
+      },
+      cancelOwner: async (id) => {
+        cancelled.push("owner:" + id);
+        return [];
+      },
+      completeAgent: async (value) => {
+        agents.push(value);
+        return true;
+      },
     },
-    cancelCall: async (id) => {
-      cancelled.push(id);
-      return [];
-    },
-    registerAgent: async (value) => agents.push(value),
-    cancelDiscarded: async (id) => {
-      cancelled.push("discarded:" + id);
-      return [];
-    },
-    cancelOwner: async (id) => {
-      cancelled.push("owner:" + id);
-      return [];
-    },
-    completeAgent: async (value) => {
-      agents.push(value);
-      return true;
-    },
-  }, { waitMs: 5 });
+    { waitMs: 5 },
+  );
   t.after(() => bridge.close());
   // Cancellation can reach the bridge before the call it abandons.
   assert.equal((await post(bridge, "/cancel", { id: "early" })).status, 200);
@@ -365,11 +384,13 @@ test("bridge cancels admitted calls and spends identities cancelled first", asyn
   });
   assert.match(early.body.deny, /cancelled before the target/);
   assert.equal(
-    (await post(bridge, "/tool", {
-      id: "early",
-      tool: "Bash",
-      input: { command: "effect" },
-    })).status,
+    (
+      await post(bridge, "/tool", {
+        id: "early",
+        tool: "Bash",
+        input: { command: "effect" },
+      })
+    ).status,
     409,
   );
   assert.equal(calls.length, 0);
@@ -389,42 +410,27 @@ test("bridge cancels admitted calls and spends identities cancelled first", asyn
   // completed processes, never as a new in-flight call.
   await post(bridge, "/cancel", { id: "child" });
   assert.deepEqual(cancelled, ["child", "discarded:child"]);
-  for (
-    const invalid of [
-      { ...call, id: "bad-owner", owner: "../x" },
-      { ...call, id: "extra", extra: true },
-    ]
-  ) {
+  for (const invalid of [
+    { ...call, id: "bad-owner", owner: "../x" },
+    { ...call, id: "extra", extra: true },
+  ]) {
     assert.equal((await post(bridge, "/tool", invalid)).status, 400);
   }
-  assert.deepEqual(
-    (await post(bridge, "/agent", registration)).body,
-    { registered: true },
-  );
+  assert.deepEqual((await post(bridge, "/agent", registration)).body, { registered: true });
   const completion = {
     agentId: "a1b2c3",
     answer: "done",
     reason: "answer",
     isAborted: false,
   };
-  assert.deepEqual(
-    (await post(bridge, "/agent-complete", completion)).body,
-    { registered: true },
-  );
+  assert.deepEqual((await post(bridge, "/agent-complete", completion)).body, { registered: true });
   assert.deepEqual(agents, [registration, completion]);
-  assert.deepEqual(
-    (await post(bridge, "/agent-stop", { agentId: "a1b2c3" })).body,
-    { cancelled: true },
-  );
-  assert.equal(
-    (await post(bridge, "/agent-stop", { agentId: "../x" })).status,
-    400,
-  );
+  assert.deepEqual((await post(bridge, "/agent-stop", { agentId: "a1b2c3" })).body, {
+    cancelled: true,
+  });
+  assert.equal((await post(bridge, "/agent-stop", { agentId: "../x" })).status, 400);
   assert.deepEqual(cancelled, ["child", "discarded:child", "owner:a1b2c3"]);
-  assert.equal(
-    (await post(bridge, "/agent", { ...registration, extra: 1 })).status,
-    400,
-  );
+  assert.equal((await post(bridge, "/agent", { ...registration, extra: 1 })).status, 400);
 });
 
 test("completion notifications project only the exact registered locator", () => {
@@ -435,12 +441,15 @@ test("completion notifications project only the exact registered locator", () =>
     door: "prompt",
     origin: { kind: "task-notification" },
     message: {
-      content: [{
-        type: "text",
-        text: notification("a1b2c3", registration.outputFile) +
-          notification("other", "/runtime/other.output") +
-          notification("a1b2c3", "/runtime/different.output"),
-      }],
+      content: [
+        {
+          type: "text",
+          text:
+            notification("a1b2c3", registration.outputFile) +
+            notification("other", "/runtime/other.output") +
+            notification("a1b2c3", "/runtime/different.output"),
+        },
+      ],
     },
   };
   const text = targetTaskNotification(event, outputs).message.content[0].text;
@@ -458,40 +467,32 @@ test("completion notifications project only the exact registered locator", () =>
 
 test("a queued mid-turn notification is projected where it renders and is stored", async () => {
   const { hooks, api } = await modFixture();
-  await hooks.get("tool.call").handler(api, {
-    tool: "Agent",
-    tool_use_id: "toolu_agent",
-    prompt: "x",
-  }, () => launched);
-  const queued =
-    `[SYSTEM NOTIFICATION - NOT USER INPUT]\n<task-notification>\n<task-id>a1b2c3</task-id>\n<output-file>${registration.outputFile}</output-file>\n<status>killed</status>\n</task-notification>`;
-  const rendered = await hooks.get(
-    'prompt.attachment:{"type":"queued_command"}',
-  ).handler(
+  await hooks.get("tool.call").handler(
     api,
-    { type: "queued_command", text: queued },
-    (event) => event,
+    {
+      tool: "Agent",
+      tool_use_id: "toolu_agent",
+      prompt: "x",
+    },
+    () => launched,
   );
-  assert.equal(
-    rendered.text,
-    queued.replace(registration.outputFile, "cowboy-agent://a1b2c3"),
-  );
-  assert.equal(
-    targetTaskNotificationText(queued, new Map()),
-    queued,
-  );
+  const queued = `[SYSTEM NOTIFICATION - NOT USER INPUT]\n<task-notification>\n<task-id>a1b2c3</task-id>\n<output-file>${registration.outputFile}</output-file>\n<status>killed</status>\n</task-notification>`;
+  const rendered = await hooks
+    .get('prompt.attachment:{"type":"queued_command"}')
+    .handler(api, { type: "queued_command", text: queued }, (event) => event);
+  assert.equal(rendered.text, queued.replace(registration.outputFile, "cowboy-agent://a1b2c3"));
+  assert.equal(targetTaskNotificationText(queued, new Map()), queued);
   for (const door of ["prompt", "delivery"]) {
-    const stored = await hooks.get(
-      `session.append:{"door":"${door}"}`,
-    ).handler(api, {
-      door,
-      origin: { kind: "task-notification" },
-      message: { content: [{ type: "text", text: queued }] },
-    }, (event) => event);
-    assert.equal(
-      stored.message.content[0].text,
-      rendered.text,
+    const stored = await hooks.get(`session.append:{"door":"${door}"}`).handler(
+      api,
+      {
+        door,
+        origin: { kind: "task-notification" },
+        message: { content: [{ type: "text", text: queued }] },
+      },
+      (event) => event,
     );
+    assert.equal(stored.message.content[0].text, rendered.text);
   }
 });
 
@@ -505,11 +506,7 @@ test("launch results and client completion frames use the agent handle", () => {
     },
     text: `agentId: a1b2c3\noutput_file: ${registration.outputFile}\n`,
   };
-  const projected = targetAgentResult(
-    result,
-    registration.outputFile,
-    "cowboy-agent://a1b2c3",
-  );
+  const projected = targetAgentResult(result, registration.outputFile, "cowboy-agent://a1b2c3");
   assert.equal(projected.result.outputFile, "cowboy-agent://a1b2c3");
   assert.equal(projected.text.includes("/runtime"), false);
   assert.equal(result.result.outputFile, registration.outputFile);
@@ -521,17 +518,13 @@ test("launch results and client completion frames use the agent handle", () => {
     output_file: registration.outputFile,
     status: "completed",
   };
-  assert.equal(
-    targetTaskFrame(frame, agents).output_file,
-    "cowboy-agent://a1b2c3",
-  );
-  for (
-    const other of [
-      { ...frame, task_id: "unregistered" },
-      { ...frame, output_file: "/runtime/else" },
-      { ...frame, type: "assistant" },
-    ]
-  ) assert.equal(targetTaskFrame(other, agents), other);
+  assert.equal(targetTaskFrame(frame, agents).output_file, "cowboy-agent://a1b2c3");
+  for (const other of [
+    { ...frame, task_id: "unregistered" },
+    { ...frame, output_file: "/runtime/else" },
+    { ...frame, type: "assistant" },
+  ])
+    assert.equal(targetTaskFrame(other, agents), other);
 });
 
 let fixtureId = 0;
@@ -544,7 +537,7 @@ async function modFixture() {
     const hook = { handler: handler ?? matcher };
     if (!hooks.has(name)) hooks.set(name, hook);
     if (handler) hooks.set(`${name}:${JSON.stringify(matcher)}`, hook);
-    return { catch: (fallback) => hook.fallback = fallback };
+    return { catch: (fallback) => (hook.fallback = fallback) };
   });
   const posts = [];
   const responses = new Map();
@@ -584,10 +577,11 @@ async function modFixture() {
         const path = url.slice("http://cowboy-execution".length);
         posts.push({ path, body: JSON.parse(options.body) });
         const response = responses.get(path)?.() ??
-          (path === "/link"
-            ? { ok: true, status: 200, text: '{"symlink":false}' }
-            : undefined) ??
-          { ok: true, status: 200, text: '{"ready":true}' };
+          (path === "/link" ? { ok: true, status: 200, text: '{"symlink":false}' } : undefined) ?? {
+            ok: true,
+            status: 200,
+            text: '{"ready":true}',
+          };
         return response;
       },
     },
@@ -616,55 +610,62 @@ test("Agent keeps native launch with restricted isolation and records ownership"
     native.push(event.tool);
     return event.tool === "Agent" ? launched : { native: event.tool };
   };
-  for (
-    const denied of [
-      { isolation: "worktree" },
-      { isolation: "remote" },
-      { run_in_background: false },
-      { subagent_type: "statusline-setup" },
-      { agentId: "child-agent" },
-    ]
-  ) {
-    const result = await call(api, {
-      tool: "Agent",
-      tool_use_id: "toolu_denied",
-      prompt: "x",
-      ...denied,
-    }, next);
+  for (const denied of [
+    { isolation: "worktree" },
+    { isolation: "remote" },
+    { run_in_background: false },
+    { subagent_type: "statusline-setup" },
+    { agentId: "child-agent" },
+  ]) {
+    const result = await call(
+      api,
+      {
+        tool: "Agent",
+        tool_use_id: "toolu_denied",
+        prompt: "x",
+        ...denied,
+      },
+      next,
+    );
     assert.equal(typeof result.deny, "string");
   }
   assert.deepEqual(native, []);
-  const result = await call(api, {
-    tool: "Agent",
-    tool_use_id: "toolu_agent",
-    subagent_type: "Explore",
-    prompt: "x",
-  }, next);
+  const result = await call(
+    api,
+    {
+      tool: "Agent",
+      tool_use_id: "toolu_agent",
+      subagent_type: "Explore",
+      prompt: "x",
+    },
+    next,
+  );
   assert.equal(result.result.outputFile, "cowboy-agent://a1b2c3");
   assert.equal(result.text, "output_file: cowboy-agent://a1b2c3");
   assert.deepEqual(posts, [{ path: "/agent", body: registration }]);
   // Registered agents use native TaskStop/SendMessage; other ids do not.
   posts.length = 0;
-  for (
-    const event of [{ tool: "TaskStop", task_id: "a1b2c3" }, {
+  for (const event of [
+    { tool: "TaskStop", task_id: "a1b2c3" },
+    {
       tool: "TaskStop",
       shell_id: "resumed",
-    }, { tool: "SendMessage", to: "a1b2c3", message: "continue" }]
-  ) {
+    },
+    { tool: "SendMessage", to: "a1b2c3", message: "continue" },
+  ]) {
     assert.deepEqual(await call(api, event, next), { native: event.tool });
   }
-  for (
-    const event of [
-      { tool: "SendMessage", to: "main", message: "x" },
-      { tool: "SendMessage", to: "other-session", message: "x" },
-      {
-        tool: "SendMessage",
-        to: "a1b2c3",
-        message: "x",
-        notify_when_idle: true,
-      },
-    ]
-  ) assert.equal(typeof (await call(api, event, next)).deny, "string");
+  for (const event of [
+    { tool: "SendMessage", to: "main", message: "x" },
+    { tool: "SendMessage", to: "other-session", message: "x" },
+    {
+      tool: "SendMessage",
+      to: "a1b2c3",
+      message: "x",
+      notify_when_idle: true,
+    },
+  ])
+    assert.equal(typeof (await call(api, event, next)).deny, "string");
   // A stopped agent's calls held by this Mod are cancelled by owner.
   assert.deepEqual(posts, [
     { path: "/agent-stop", body: { agentId: "a1b2c3" } },
@@ -684,11 +685,15 @@ test("Agent keeps native launch with restricted isolation and records ownership"
 test("failed registration keeps the projected launch but reports no recorded answer", async () => {
   const { hooks, api, responses } = await modFixture();
   responses.set("/agent", () => ({ ok: false, status: 500, text: "{}" }));
-  const result = await hooks.get("tool.call").handler(api, {
-    tool: "Agent",
-    tool_use_id: "toolu_agent",
-    prompt: "x",
-  }, () => launched);
+  const result = await hooks.get("tool.call").handler(
+    api,
+    {
+      tool: "Agent",
+      tool_use_id: "toolu_agent",
+      prompt: "x",
+    },
+    () => launched,
+  );
   assert.equal(result.result.outputFile, "cowboy-agent://a1b2c3");
   assert.match(result.text, /could not be recorded/);
 });
@@ -697,39 +702,58 @@ test("agent completion waits for registration and records the native outcome", a
   const { hooks, api, posts, responses } = await modFixture();
   const registered = Promise.withResolvers();
   responses.set("/agent", () => registered.promise);
-  const launching = hooks.get("tool.call").handler(api, {
-    tool: "Agent",
-    tool_use_id: "toolu_agent",
-    prompt: "x",
-  }, () => launched);
+  const launching = hooks.get("tool.call").handler(
+    api,
+    {
+      tool: "Agent",
+      tool_use_id: "toolu_agent",
+      prompt: "x",
+    },
+    () => launched,
+  );
   await new Promise((resolve) => setImmediate(resolve));
-  const complete = hooks.get("turn.complete").handler(api, {
-    agentId: "a1b2c3",
-    answer: "done",
-    reason: "answer",
-    isAborted: false,
-  }, (event) => ({ text: event.answer }));
+  const complete = hooks.get("turn.complete").handler(
+    api,
+    {
+      agentId: "a1b2c3",
+      answer: "done",
+      reason: "answer",
+      isAborted: false,
+    },
+    (event) => ({ text: event.answer }),
+  );
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(posts.map(({ path }) => path), ["/agent"]);
+  assert.deepEqual(
+    posts.map(({ path }) => path),
+    ["/agent"],
+  );
   registered.resolve({ ok: true, status: 200, text: '{"registered":true}' });
   assert.deepEqual(await complete, { text: "done" });
   await launching;
-  assert.deepEqual(posts.map(({ path }) => path), [
-    "/agent",
-    "/agent-complete",
-  ]);
+  assert.deepEqual(
+    posts.map(({ path }) => path),
+    ["/agent", "/agent-complete"],
+  );
   // The main conversation and unregistered agents record nothing.
-  await hooks.get("turn.complete").handler(api, {
-    answer: "parent",
-    reason: "answer",
-    isAborted: false,
-  }, (event) => ({ text: event.answer }));
-  await hooks.get("turn.complete").handler(api, {
-    agentId: "unregistered",
-    answer: "x",
-    reason: "answer",
-    isAborted: false,
-  }, (event) => ({ text: event.answer }));
+  await hooks.get("turn.complete").handler(
+    api,
+    {
+      answer: "parent",
+      reason: "answer",
+      isAborted: false,
+    },
+    (event) => ({ text: event.answer }),
+  );
+  await hooks.get("turn.complete").handler(
+    api,
+    {
+      agentId: "unregistered",
+      answer: "x",
+      reason: "answer",
+      isAborted: false,
+    },
+    (event) => ({ text: event.answer }),
+  );
   assert.equal(posts.length, 2);
 });
 
@@ -750,20 +774,22 @@ test("an abandoned target call is cancelled by its native signal", async () => {
     if (++polled === 2) controller.abort();
     return { ok: true, status: 202, text: '{"pending":"toolu_child"}' };
   });
-  const result = await call(api, {
-    tool: "Bash",
-    tool_use_id: "toolu_child",
-    agentId: "a1b2c3",
-    command: "sleep 600",
-  }, next);
+  const result = await call(
+    api,
+    {
+      tool: "Bash",
+      tool_use_id: "toolu_child",
+      agentId: "a1b2c3",
+      command: "sleep 600",
+    },
+    next,
+  );
   assert.match(result.deny, /cancelled/);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(posts.map(({ path }) => path), [
-    "/tool",
-    "/result",
-    "/result",
-    "/cancel",
-  ]);
+  assert.deepEqual(
+    posts.map(({ path }) => path),
+    ["/tool", "/result", "/result", "/cancel"],
+  );
   assert.deepEqual(posts[0].body.owner, "a1b2c3");
   assert.deepEqual(posts.at(-1).body, { id: "toolu_child" });
   // A call already abandoned on arrival never reaches the target.
@@ -788,11 +814,15 @@ test("an abandoned target call is cancelled by its native signal", async () => {
 test("a stopped agent ends its held target calls and SendMessage resumes it", async () => {
   const { hooks, api, posts, responses } = await modFixture();
   const call = hooks.get("tool.call").handler;
-  await call(api, {
-    tool: "Agent",
-    tool_use_id: "toolu_agent",
-    prompt: "x",
-  }, () => launched);
+  await call(
+    api,
+    {
+      tool: "Agent",
+      tool_use_id: "toolu_agent",
+      prompt: "x",
+    },
+    () => launched,
+  );
   posts.length = 0;
   let stop;
   responses.set("/tool", () => ({
@@ -804,12 +834,16 @@ test("a stopped agent ends its held target calls and SendMessage resumes it", as
     stop?.();
     return { ok: true, status: 202, text: '{"pending":"toolu_held"}' };
   });
-  const held = call(api, {
-    tool: "Bash",
-    tool_use_id: "toolu_held",
-    agentId: "a1b2c3",
-    command: "sleep 600",
-  }, () => assert.fail("native body ran"));
+  const held = call(
+    api,
+    {
+      tool: "Bash",
+      tool_use_id: "toolu_held",
+      agentId: "a1b2c3",
+      command: "sleep 600",
+    },
+    () => assert.fail("native body ran"),
+  );
   stop = () =>
     call(api, { tool: "TaskStop", task_id: "a1b2c3" }, () => ({
       result: { task_type: "local_agent" },
@@ -822,45 +856,67 @@ test("a stopped agent ends its held target calls and SendMessage resumes it", as
   );
   // Later calls of the stopped agent never reach the target.
   posts.length = 0;
-  const late = await call(api, {
-    tool: "Read",
-    tool_use_id: "toolu_late",
-    agentId: "a1b2c3",
-    file_path: "x",
-  }, () => assert.fail("native body ran"));
+  const late = await call(
+    api,
+    {
+      tool: "Read",
+      tool_use_id: "toolu_late",
+      agentId: "a1b2c3",
+      file_path: "x",
+    },
+    () => assert.fail("native body ran"),
+  );
   assert.match(late.deny, /cancelled/);
   assert.deepEqual(posts, []);
   // Continuing the agent re-admits its calls; another agent is unaffected.
-  await call(api, {
-    tool: "SendMessage",
-    to: "a1b2c3",
-    message: "again",
-  }, () => ({ result: { success: true } }));
+  await call(
+    api,
+    {
+      tool: "SendMessage",
+      to: "a1b2c3",
+      message: "again",
+    },
+    () => ({ result: { success: true } }),
+  );
   responses.set("/tool", () => ({ ok: true, status: 200, text: "{}" }));
   assert.deepEqual(
-    await call(api, {
-      tool: "Read",
-      tool_use_id: "toolu_again",
-      agentId: "a1b2c3",
-      file_path: "x",
-    }, () => assert.fail("native body ran")),
+    await call(
+      api,
+      {
+        tool: "Read",
+        tool_use_id: "toolu_again",
+        agentId: "a1b2c3",
+        file_path: "x",
+      },
+      () => assert.fail("native body ran"),
+    ),
     {},
   );
   // An aborted native completion also marks the agent stopped.
-  await hooks.get("turn.complete").handler(api, {
-    agentId: "a1b2c3",
-    answer: "",
-    reason: "aborted",
-    isAborted: true,
-  }, (event) => ({ text: event.answer }));
+  await hooks.get("turn.complete").handler(
+    api,
+    {
+      agentId: "a1b2c3",
+      answer: "",
+      reason: "aborted",
+      isAborted: true,
+    },
+    (event) => ({ text: event.answer }),
+  );
   posts.length = 0;
   assert.match(
-    (await call(api, {
-      tool: "Bash",
-      tool_use_id: "toolu_after_abort",
-      agentId: "a1b2c3",
-      command: "x",
-    }, () => assert.fail("native body ran"))).deny,
+    (
+      await call(
+        api,
+        {
+          tool: "Bash",
+          tool_use_id: "toolu_after_abort",
+          agentId: "a1b2c3",
+          command: "x",
+        },
+        () => assert.fail("native body ran"),
+      )
+    ).deny,
     /cancelled/,
   );
   assert.deepEqual(posts, []);
@@ -874,14 +930,22 @@ test("owner cancellation stops only that agent's in-flight calls", async (t) => 
   const peerStarted = Promise.withResolvers();
   connection.started.set("child", childStarted);
   connection.started.set("other", peerStarted);
-  const child = tools.nativeCall("Bash", { command: "child" }, {
-    id: "toolu_child",
-    owner: "a1b2c3",
-  });
-  const other = tools.nativeCall("Bash", { command: "other" }, {
-    id: "toolu_other",
-    owner: "other-agent",
-  });
+  const child = tools.nativeCall(
+    "Bash",
+    { command: "child" },
+    {
+      id: "toolu_child",
+      owner: "a1b2c3",
+    },
+  );
+  const other = tools.nativeCall(
+    "Bash",
+    { command: "other" },
+    {
+      id: "toolu_other",
+      owner: "other-agent",
+    },
+  );
   const childId = await childStarted.promise;
   const otherId = await peerStarted.promise;
   // Aborted completion is one path; native TaskStop uses cancelOwner directly.
@@ -897,10 +961,14 @@ test("owner cancellation stops only that agent's in-flight calls", async (t) => 
   // A call of that agent admitted but not yet started is refused.
   tools.callEntry("toolu_pending", "a1b2c3");
   await tools.cancelOwner("a1b2c3");
-  const pending = await tools.nativeCall("Bash", { command: "late" }, {
-    id: "toolu_pending",
-    owner: "a1b2c3",
-  });
+  const pending = await tools.nativeCall(
+    "Bash",
+    { command: "late" },
+    {
+      id: "toolu_pending",
+      owner: "a1b2c3",
+    },
+  );
   assert.match(pending.deny, /cancelled before its command started/);
   connection.live.delete(otherId);
   await other;
@@ -922,10 +990,7 @@ test("a continued agent reads as running until its new outcome is recorded", asy
     answerExpired: true,
   };
   assert.equal(await tools.resumeAgent("a1b2c3"), true);
-  assert.match(
-    (await readHandle(tools, "a1b2c3")).result.file.content,
-    /still running/,
-  );
+  assert.match((await readHandle(tools, "a1b2c3")).result.file.content, /still running/);
   // A process exit mid-round never restores the earlier outcome.
   const crashed = new WorkspaceTools(connection, binding, state);
   await crashed.load();
@@ -939,52 +1004,61 @@ test("a continued agent reads as running until its new outcome is recorded", asy
     reason: "answer",
     isAborted: false,
   });
-  assert.equal(
-    (await readHandle(tools, "a1b2c3")).result.file.content,
-    "second",
-  );
+  assert.equal((await readHandle(tools, "a1b2c3")).result.file.content, "second");
   for (const id of ["__proto__", "constructor", "prototype", "missing"]) {
     assert.equal(await tools.resumeAgent(id), false);
     assert.match((await readHandle(tools, id)).deny, /does not belong/);
   }
-  await assert.rejects(
-    tools.registerAgent({ ...registration, agentId: "__proto__" }),
-    /Invalid/,
-  );
+  await assert.rejects(tools.registerAgent({ ...registration, agentId: "__proto__" }), /Invalid/);
 });
 
 test("a continued agent's completion waits for its running state", async () => {
   const { hooks, api, posts, responses } = await modFixture();
   const call = hooks.get("tool.call").handler;
-  await call(api, {
-    tool: "Agent",
-    tool_use_id: "toolu_agent",
-    prompt: "x",
-  }, () => launched);
+  await call(
+    api,
+    {
+      tool: "Agent",
+      tool_use_id: "toolu_agent",
+      prompt: "x",
+    },
+    () => launched,
+  );
   posts.length = 0;
   const resumed = Promise.withResolvers();
   responses.set("/agent-resume", () => resumed.promise);
-  const sending = call(api, {
-    tool: "SendMessage",
-    to: "a1b2c3",
-    message: "again",
-  }, () => ({ result: { success: true } }));
+  const sending = call(
+    api,
+    {
+      tool: "SendMessage",
+      to: "a1b2c3",
+      message: "again",
+    },
+    () => ({ result: { success: true } }),
+  );
   await new Promise((resolve) => setImmediate(resolve));
-  const completing = hooks.get("turn.complete").handler(api, {
-    agentId: "a1b2c3",
-    answer: "again",
-    reason: "answer",
-    isAborted: false,
-  }, (event) => ({ text: event.answer }));
+  const completing = hooks.get("turn.complete").handler(
+    api,
+    {
+      agentId: "a1b2c3",
+      answer: "again",
+      reason: "answer",
+      isAborted: false,
+    },
+    (event) => ({ text: event.answer }),
+  );
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(posts.map(({ path }) => path), ["/agent-resume"]);
+  assert.deepEqual(
+    posts.map(({ path }) => path),
+    ["/agent-resume"],
+  );
   resumed.resolve({ ok: true, status: 200, text: '{"registered":true}' });
   await sending;
   await completing;
-  assert.deepEqual(posts.map(({ path }) => path), [
-    "/agent-resume",
-    "/agent-complete",
-  ]);
+  assert.deepEqual(
+    posts.map(({ path }) => path),
+    ["/agent-resume", "/agent-complete"],
+  );
 });
 
 test("agent answers yield so a near-limit state still cold-loads", async (t) => {
@@ -1017,18 +1091,13 @@ test("agent answers yield so a near-limit state still cold-loads", async (t) => 
   }
   const resumed = new WorkspaceTools(connection, binding, state);
   await resumed.load();
-  assert.ok(
-    Buffer.byteLength(await readFile(state)) <= 2 * 1024 * 1024 - 256 * 1024,
-  );
+  assert.ok(Buffer.byteLength(await readFile(state)) <= 2 * 1024 * 1024 - 256 * 1024);
   assert.equal(Object.keys(resumed.state.agents).length, 40);
   assert.match(
     (await readHandle(resumed, "agent39")).result.file.content,
     /^x+\n\[Answer truncated/,
   );
-  assert.match(
-    (await readHandle(resumed, "agent0")).result.file.content,
-    /no longer retained/,
-  );
+  assert.match((await readHandle(resumed, "agent0")).result.file.content, /no longer retained/);
 });
 
 test("cancellation during directory creation prevents the write", async (t) => {
@@ -1050,10 +1119,14 @@ test("cancellation during directory creation prevents the write", async (t) => {
   };
   ({ tools } = await fixture(t, connection));
   await tools.nativeCall("Read", { file_path: "file" });
-  const result = await tools.nativeCall("Write", {
-    file_path: "file",
-    content: "after",
-  }, { id: "toolu_write", owner: "a1b2c3" });
+  const result = await tools.nativeCall(
+    "Write",
+    {
+      file_path: "file",
+      content: "after",
+    },
+    { id: "toolu_write", owner: "a1b2c3" },
+  );
   assert.match(result.deny, /cancelled before it changed the target/);
   assert.deepEqual(writes, []);
 });
@@ -1073,10 +1146,14 @@ test("cancellation while a start is persisted submits nothing", async (t) => {
     }
     return await save(update);
   };
-  const pending = tools.nativeCall("Bash", { command: "late" }, {
-    id: "toolu_persisting",
-    owner: "a1b2c3",
-  });
+  const pending = tools.nativeCall(
+    "Bash",
+    { command: "late" },
+    {
+      id: "toolu_persisting",
+      owner: "a1b2c3",
+    },
+  );
   await persisting.promise;
   const cancelling = tools.cancelOwner("a1b2c3");
   release.resolve();
@@ -1090,11 +1167,16 @@ test("a target command native stopped at its deadline reads, and stops, as the c
   const { deadlineTasks, targetShellNotification } = await import(
     "../plugins/claude-code/runtime/context-mod.js"
   );
-  const tasks = new Map([["b1", {
-    jobId: "job-1",
-    toolUseId: "toolu_target",
-    command: "make long",
-  }]]);
+  const tasks = new Map([
+    [
+      "b1",
+      {
+        jobId: "job-1",
+        toolUseId: "toolu_target",
+        command: "make long",
+      },
+    ],
+  ]);
   const notification =
     "<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>toolu_mirror</tool-use-id>\n<output-file>/runtime/tasks/b1.output</output-file>\n<status>killed</status>\n<summary>Background command \"'/node' '/stage/task-wait.mjs' job-1\" was stopped after reaching its background time limit</summary>\n<note>If the work in progress still needs it, start it again with `run_in_background` and a longer `timeout`.</note>\n</task-notification>";
   const projected = targetShellNotification(notification, tasks);
@@ -1102,24 +1184,21 @@ test("a target command native stopped at its deadline reads, and stops, as the c
     projected,
     /<summary>Background command "make long" was stopped after reaching its background time limit<\/summary>/,
   );
-  assert.ok(
-    !projected.includes("task-wait") && !projected.includes("/runtime"),
-  );
+  assert.ok(!projected.includes("task-wait") && !projected.includes("/runtime"));
   // Only known tasks, and only a deadline stop, end their command.
   assert.deepEqual(deadlineTasks(notification), []);
 });
 
 test("a deadline stop the target did not confirm is said in the notification", async () => {
-  const { unconfirmedStop } = await import(
-    "../plugins/claude-code/runtime/context-mod.js"
-  );
+  const { unconfirmedStop } = await import("../plugins/claude-code/runtime/context-mod.js");
   const event = {
     message: {
-      content: [{
-        type: "text",
-        text:
-          "<task-notification>\n<task-id>job-1</task-id>\n<status>killed</status>\n</task-notification>",
-      }],
+      content: [
+        {
+          type: "text",
+          text: "<task-notification>\n<task-id>job-1</task-id>\n<status>killed</status>\n</task-notification>",
+        },
+      ],
     },
   };
   assert.match(

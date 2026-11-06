@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 import { transcriptRowContainment } from "./transcriptMotion.ts";
 import { readTranscriptSource } from "./appSource.test.ts";
 
