@@ -31,7 +31,7 @@ async function until(predicate: () => boolean, message: string) {
   throw new Error(`${message}: ${document.body.textContent?.slice(0, 1500)}`);
 }
 
-export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false) {
+export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false, checksEnabled = false) {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
   const sessions: SessionMeta[] = [
@@ -180,6 +180,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
   }
   globalThis.WebSocket = FixtureSocket as unknown as typeof WebSocket;
   let fetched = false;
+  let checkStarted = false;
   globalThis.fetch = (async (input, init) => {
     const url = new URL(String(input), location.href);
     if (!url.pathname.startsWith("/api/")) return originalFetch(input, init);
@@ -189,6 +190,15 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       }${url.search}`,
     );
     const json = (value: unknown) => Response.json(value);
+    if (checksEnabled && url.pathname.endsWith("/checks")) {
+      const run = { runId: "fixture-check", check: "lint", state: "passed", startedAtMs: Date.now(), diagnostics: [], truncated: false, outputTruncated: false };
+      if (init?.method === "POST") {
+        checkStarted = true;
+        return json({ status: "accepted", run });
+      }
+      return json({ apiVersion: 1, epoch: "fixture-epoch", allowed: true, runnable: true,
+        declared: [{ id: "lint", title: "Lint", format: "lines", timeoutSeconds: 30 }], runs: checkStarted ? [run] : [] });
+    }
     if (url.pathname === "/api/sync/dataset") {
       return json({
         schema: "dravengarden.cowboy.product-sync-dataset/v1",

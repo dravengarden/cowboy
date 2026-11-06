@@ -1,9 +1,4 @@
-import type {
-  CodeCheckRun,
-  CodeChecks,
-  CodeDiagnostic,
-  CodeLanguage,
-} from "./codeApi";
+import type { CodeCheckRun, CodeChecks, CodeDiagnostic, CodeLanguage } from "./codeApi";
 
 /** LSP severities, which the code viewer already styles. */
 const SEVERITY = { error: 1, warning: 2, note: 3 } as const;
@@ -32,9 +27,7 @@ export function checkDiagnosticsForPath(
   if (!checks) return [];
   return checks.runs.flatMap((run) =>
     run.diagnostics
-      .filter((diagnostic) =>
-        diagnostic.line > 0 && samePath(diagnostic.path, path)
-      )
+      .filter((diagnostic) => diagnostic.line > 0 && samePath(diagnostic.path, path))
       .map((diagnostic) => {
         const row = diagnostic.line - 1;
         const code = diagnostic.code ? `[${diagnostic.code}] ` : "";
@@ -43,11 +36,9 @@ export function checkDiagnosticsForPath(
           end: { row, column: LINE_END },
           severity: SEVERITY[diagnostic.severity],
           source: checkTitle(checks, run.check),
-          message: `${
-            checkTitle(checks, run.check)
-          }: ${code}${diagnostic.message}`,
+          message: `${checkTitle(checks, run.check)}: ${code}${diagnostic.message}`,
         };
-      })
+      }),
   );
 }
 
@@ -81,10 +72,7 @@ export interface CheckFileCounts {
   notes: number;
 }
 
-export function countForPath(
-  run: CodeCheckRun,
-  path: string,
-): CheckFileCounts {
+export function countForPath(run: CodeCheckRun, path: string): CheckFileCounts {
   const counts = { errors: 0, warnings: 0, notes: 0 };
   for (const diagnostic of run.diagnostics) {
     if (!samePath(diagnostic.path, path)) continue;
@@ -153,26 +141,33 @@ export function checkStatusSummary(
     const total = run.diagnostics.length;
     const more = run.truncated ? "+" : "";
     const reason = run.error ? ` (${run.error})` : "";
-    return `${title}: ${STATE_LABEL[run.state]} ${age}${reason} · ${
-      plural(total, "finding")
-    }${more}, ${formatCounts(counts)} in this file.`;
+    return `${title}: ${STATE_LABEL[run.state]} ${age}${reason} · ${plural(
+      total,
+      "finding",
+    )}${more}, ${formatCounts(counts)} in this file.`;
   });
   const running = checks.runs.filter((run) => run.state === "running");
+  const incomplete = checks.runs.some(
+    (run) =>
+      (run.state !== "passed" && run.state !== "running") || run.truncated || run.outputTruncated,
+  );
   const findings = here.errors + here.warnings + here.notes;
-  const severity = here.errors > 0
-    ? "error"
-    : here.warnings > 0
-    ? "warning"
-    : running.length > 0 || findings > 0
-    ? "info"
-    : "success";
-  const summary = findings > 0
-    ? `Checks · ${formatCounts(here)} in this file`
-    : running.length > 0
-    ? `Checks running · ${
-      running.map((run) => checkTitle(checks, run.check)).join(", ")
-    }`
-    : "Checks · no findings in this file";
+  const severity =
+    here.errors > 0
+      ? "error"
+      : here.warnings > 0 || incomplete
+        ? "warning"
+        : running.length > 0 || findings > 0
+          ? "info"
+          : "success";
+  const summary =
+    findings > 0
+      ? `Checks · ${formatCounts(here)} in this file`
+      : running.length > 0
+        ? `Checks running · ${running.map((run) => checkTitle(checks, run.check)).join(", ")}`
+        : incomplete
+          ? "Checks incomplete or failed · no findings reported in this file"
+          : "Checks · no findings in this file";
   return {
     severity,
     summary,

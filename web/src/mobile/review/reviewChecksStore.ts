@@ -73,3 +73,11 @@ export function useReviewChecks(sessionId: string): CodeChecks | undefined {
     () => entries.get(sessionId)?.data,
   );
 }
+
+export function refreshReviewChecks(sessionId: string): void {
+  const entry = entries.get(sessionId);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  entry.controller?.abort();
+  void refresh(sessionId, entry);
+}
