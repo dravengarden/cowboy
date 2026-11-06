@@ -147,7 +147,7 @@ image-pan canvases. Those retain their cursor and image-safe-area contracts.
 Full-screen headerless sheets put safe-area clearance inside their scrolling
 body. Never stack a second mask on a Transcript or the Sessions rail.
 Mobile Settings details start with their useful content. The bottom navigation
-groups Back and Close in a compact rounded floating control on the left, with a
+groups Back and Close in the shared `FloatingActionIsland` used by Sessions on the left, with a
 separate section name centered across the entire footer over a theme-aware gradient.
 Navigation glyphs scale in rem with global font size; touch targets retain 44px.
 Do not enclose the
