@@ -7,7 +7,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Weak};
@@ -27,6 +26,7 @@ mod buffer_navigation;
 mod buffer_sync;
 #[cfg(test)]
 mod navigation_fixture;
+mod process_tree;
 #[cfg(test)]
 mod route_recovery_tests;
 #[cfg(test)]
@@ -393,7 +393,7 @@ impl Drop for PrivateRuntimeDirectory {
 
 struct RunningCodeRuntime {
     child: parking_lot::Mutex<Child>,
-    process_group: parking_lot::Mutex<Option<PluginProcessGroup>>,
+    process_group: parking_lot::Mutex<Option<process_tree::ProcessTree>>,
     socket: PathBuf,
     _directory: PrivateRuntimeDirectory,
 }
@@ -408,22 +408,18 @@ impl RunningCodeRuntime {
             fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
         }
         let mut command = runtime_command(plan, &plan.runtime.launch, &socket, &state_dir)?;
-        command.as_std_mut().process_group(0);
-        let child = command.spawn().context("starting installed code runtime")?;
-        let process_id = child.id().context("code runtime has no process id")?;
+        let (child, process_tree) = process_tree::ProcessTree::spawn(&mut command)
+            .context("starting installed code runtime")?;
         let runtime = Self {
             child: parking_lot::Mutex::new(child),
-            process_group: parking_lot::Mutex::new(Some(PluginProcessGroup::new(process_id))),
+            process_group: parking_lot::Mutex::new(Some(process_tree)),
             socket,
             _directory: directory,
         };
         let mut probe =
             runtime_command(plan, &plan.runtime.readiness, &runtime.socket, &state_dir)?;
-        probe.as_std_mut().process_group(0);
-        let mut probe = probe
-            .spawn()
+        let (mut probe, _probe_group) = process_tree::ProcessTree::spawn(&mut probe)
             .context("starting code runtime readiness probe")?;
-        let _probe_group = probe.id().map(PluginProcessGroup::new);
         let result = tokio::time::timeout(
             Duration::from_millis(plan.runtime.readiness_timeout_ms),
             probe.wait(),
