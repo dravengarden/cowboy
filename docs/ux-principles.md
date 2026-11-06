@@ -25,10 +25,14 @@ labels, without adding a second navigation hierarchy.
 - Group related bottom controls into compact rows. Let short view labels use
   their natural width, with comparison or filter controls beside them. Avoid
   stacked full-width segmented bars, oversized capsules and repeated dividers.
-  Reduce decoration and wasted space while preserving 44 px touch targets.
-- Keep a control's visual highlight proportional to its glyph or label; the
-  hit area may be larger. Navigation glyphs and their selected highlight scale
-  with the global font setting, while the touch target keeps its minimum size.
+  Reduce decoration and wasted space while preserving comfortable touch targets.
+- Use MUI controls for tabs, mode selection and buttons. Review view tabs,
+  comparison and bottom navigation keep at least 48 CSS px in both dimensions
+  at every font scale.
+  Text and glyphs scale with the global font setting; control bounds do not
+  shrink with them. Selected fills and button outlines cover the control, so
+  its clickable extent remains clear. Verify taps in the padding as well as
+  on the icon or label; a bounding-box measurement alone is insufficient.
   Empty readers should use the available height for a balanced
   overview: explain the current scope, show known status and recent activity,
   and offer useful next actions when the workbench does not already provide

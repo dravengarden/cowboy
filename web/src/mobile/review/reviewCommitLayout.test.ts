@@ -55,12 +55,12 @@ test("repository history opens commit content on the main review surface", () =>
   assertStringIncludes(appSource, 'mode === "git" && commitTarget');
 });
 
-test("repository tabs use the shared segmented tabs", () => {
-  // SegmentedTabs.test.ts pins the iOS selected-pill invariants.
-  const start = controlsSource.indexOf("<SegmentedTabs");
+test("repository views use native MUI tabs", () => {
+  // Browser conformance checks selection and touch padding in the real theme.
+  const start = controlsSource.indexOf("<Tabs");
   const tabs = controlsSource.slice(
     start,
-    controlsSource.indexOf("/>", start),
+    controlsSource.indexOf("</Tabs>", start),
   );
   assertStringIncludes(tabs, "data-mobile-repository-tabs");
   assertStringIncludes(tabs, 'aria-label="Repository views"');

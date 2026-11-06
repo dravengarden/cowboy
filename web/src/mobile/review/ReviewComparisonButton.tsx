@@ -1,5 +1,5 @@
 import { ExpandMore } from "@mui/icons-material";
-import { Box, ButtonBase, Typography } from "@mui/material";
+import { Button, Typography } from "@mui/material";
 
 export function ReviewComparisonButton({
   label,
@@ -12,51 +12,36 @@ export function ReviewComparisonButton({
 }): React.JSX.Element {
   const [scenario, ...reference] = label.split(" · ");
   return (
-    <ButtonBase
+    <Button
       data-review-compare
+      variant="outlined"
+      color="inherit"
       aria-haspopup="dialog"
       aria-label={`Compare: ${label}`}
       title={label}
       disabled={disabled}
       onClick={onClick}
+      endIcon={<ExpandMore />}
       sx={{
         flex: "0 1 auto",
         maxWidth: "100%",
-        minWidth: 44,
-        minHeight: 44,
-        borderRadius: "0.5rem",
-        justifyContent: "stretch",
-        textAlign: "left",
-        "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main" },
+        minHeight: 48,
+        minWidth: 64,
+        px: 0.75,
+        borderColor: "divider",
+        color: "text.secondary",
+        fontSize: "0.8125rem",
+        textTransform: "none",
       }}
     >
-      <Box
+      <Typography
         component="span"
-        data-review-comparison-surface
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 0.25,
-          width: "100%",
-          minWidth: 0,
-          minHeight: "2rem",
-          pl: 0.75,
-          pr: 0.5,
-          py: 0.25,
-          bgcolor: "action.hover",
-          borderRadius: "0.5rem",
-        }}
+        variant="caption"
+        noWrap
+        sx={{ minWidth: 0, fontWeight: 500, fontSize: "inherit" }}
       >
-        <Typography
-          component="span"
-          variant="caption"
-          noWrap
-          sx={{ flex: 1, minWidth: 0, fontWeight: 500, fontSize: "0.8125rem" }}
-        >
-          {reference.length ? reference.join(" · ") : scenario}
-        </Typography>
-        <ExpandMore sx={{ fontSize: "1rem", color: "text.secondary", flexShrink: 0 }} />
-      </Box>
-    </ButtonBase>
+        {reference.length ? reference.join(" · ") : scenario}
+      </Typography>
+    </Button>
   );
 }
