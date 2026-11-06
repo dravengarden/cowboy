@@ -149,7 +149,9 @@ body. Never stack a second mask on a Transcript or the Sessions rail.
 Mobile Settings details start with their useful content. The bottom navigation
 groups Back and Close in the shared `FloatingActionIsland` used by Sessions on the left, with a
 separate section name centered across the entire footer over a theme-aware gradient.
-Navigation glyphs scale in rem with global font size; touch targets retain 44px.
+Use `MobileSheetActionGroup` for standard navigation, including Settings and Sessions.
+Floating islands share a 56px minimum shell height, theme material and 1.5rem glyphs;
+standard action targets are 46px. Do not override individual navigation colors or sizes.
 Do not enclose the
 title and controls in a large capsule. Descriptions belong in the Settings index.
 

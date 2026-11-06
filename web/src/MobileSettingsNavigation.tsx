@@ -1,5 +1,5 @@
-import { Box, IconButton, Typography } from "@mui/material";
-import { FloatingActionIsland } from "@cowboy/app-shell";
+import { Box, Typography } from "@mui/material";
+import { MobileSheetActionGroup } from "@cowboy/app-shell";
 import { ArrowBackIosNew, Close } from "@mui/icons-material";
 import type { MobileSettingsSection } from "./SettingsShell";
 
@@ -17,18 +17,14 @@ export function MobileSettingsNavigation({ section, onBack, onClose }: {
   const title = section ? titles[section] : "Settings";
   return (
     <Box component="nav" aria-label="Settings navigation" data-mobile-settings-navigation sx={{
-      width: "100%", display: "grid", gridTemplateColumns: section ? "102px minmax(0, 1fr) 102px" : "54px minmax(0, 1fr) 54px",
+      width: "100%", display: "grid", gridTemplateColumns: section ? "106px minmax(0, 1fr) 106px" : "56px minmax(0, 1fr) 56px",
       alignItems: "center", gap: 1, position: "relative", isolation: "isolate", pointerEvents: "none",
-      "& .MuiIconButton-root": { padding: 0, "& .MuiSvgIcon-root": { fontSize: "1.25rem" } },
     }}>
       <Box data-settings-navigation-actions>
-      <FloatingActionIsland columns={section ? "44px 44px" : "44px"} maxWidth={section ? 102 : 54}>
-      <IconButton aria-label={section ? `Back to Settings from ${title}` : "Close settings"} onClick={section ? onBack : onClose}
-        sx={{ width: 44, height: 44 }}>
-        {section ? <ArrowBackIosNew /> : <Close />}
-      </IconButton>
-      {section && <IconButton aria-label="Close settings" onClick={onClose} sx={{ width: 44, height: 44, color: "text.secondary" }}><Close /></IconButton>}
-      </FloatingActionIsland>
+      <MobileSheetActionGroup actions={[
+        ...(section ? [{ key: "back", label: `Back to Settings from ${title}`, onPress: onBack, icon: <ArrowBackIosNew /> }] : []),
+        { key: "close", label: "Close settings", onPress: onClose, icon: <Close /> },
+      ]} />
       </Box>
       <Typography title={title} noWrap sx={{ minWidth: 0, textAlign: "center", fontSize: "1.125rem", lineHeight: 1.3, fontWeight: 600 }}>{title}</Typography>
     </Box>
