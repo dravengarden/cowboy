@@ -81,7 +81,7 @@ impl Fixture {
             diagnostics: Arc::default(),
             next_message_id: crate::AtomicU32::new(1),
             next_lsp_request_id: crate::AtomicU64::new(1),
-            frontier: crate::analysis::Frontier::default(),
+            frontier: crate::analysis::Frontier,
         });
         for variant in [
             proto::create_buffer_for_peer::Variant::State(proto::BufferState {

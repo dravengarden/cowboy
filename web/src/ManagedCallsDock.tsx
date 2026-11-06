@@ -1,3 +1,4 @@
+import { StatusChip } from "./StatusChip";
 import { shortcutKey } from "./desktop/commands/imeShortcut";
 import {
   COMPOSER_STACK_DISCLOSURE_TIMEOUT,
@@ -118,7 +119,7 @@ export function StateChip(
     );
   }
   return (
-    <Chip
+    <StatusChip
       size="small"
       variant={tone === "active" ? "outlined" : "filled"}
       color={color}
@@ -126,7 +127,7 @@ export function StateChip(
       icon={tone === "active"
         ? <CircularProgress size="0.75rem" thickness={5} />
         : undefined}
-      sx={{ height: 22, fontWeight: 600, "& .MuiChip-label": { px: 0.75 } }}
+      sx={{ fontWeight: 600, "& .MuiChip-label": { px: 0.75 } }}
     />
   );
 }
@@ -153,12 +154,11 @@ export function VerdictChip(
     return <Badge label={label} color={attention ? "warning" : "default"} />;
   }
   return (
-    <Chip
+    <StatusChip
       size="small"
       variant="outlined"
       color={attention ? "warning" : "default"}
       label={label}
-      sx={{ height: 22, "& .MuiChip-label": { px: 0.75 } }}
     />
   );
 }

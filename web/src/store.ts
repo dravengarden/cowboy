@@ -37,6 +37,7 @@ import {
 } from "./sendImagePreviews";
 import {
   checkReconnectAdmission,
+  classifySocketClose,
   ForegroundProbe,
   isAppleTouchWebView,
   shouldReconnectOnForeground,
@@ -189,6 +190,11 @@ export type { MobileReviewTabState, MobileReviewState } from "./mobileReviewStat
 import { applyEnvelope, mergeEvents, containsSeq } from "./storeTimeline";
 import { conn } from "./clientConnection";
 import { createReconnectScheduler } from "./reconnectScheduler";
+import {
+  createSocketGuards,
+  SOCKET_BOOTSTRAP_TIMEOUT_MS,
+  SOCKET_UPGRADE_TIMEOUT_MS,
+} from "./socketGuards.ts";
 import { createLivenessWatch } from "./livenessWatch";
 import { createOutageTracker } from "./outageTracker";
 
@@ -2034,8 +2040,6 @@ export function notify(message: string, severity: "error" | "warning" | "info" =
 // Schedule the next reconnect after `delay` ms (the backoff `conn.connectionLost`
 // computed off the consecutive-failure count). One pending attempt at a time.
 const PRODUCT_AUTH_LOST_EVENT = "cowboy:product-auth-lost";
-const WS_AUTH_REQUIRED_CLOSE_CODE = 4001;
-const WS_CAPACITY_REQUIRED_CLOSE_CODE = 4429;
 
 type MeHandshake = "reconnect" | "logout" | "keep";
 
@@ -2286,35 +2290,38 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
   socketReady = false;
   let openedAt: number | undefined;
   let ready = false;
-  let bootstrapGuard: ReturnType<typeof setTimeout> | undefined;
-  const armBootstrapGuard = (): void => {
-    clearTimeout(bootstrapGuard);
-    bootstrapGuard = setTimeout(() => {
-      if (socket !== ws || ready || ws.readyState !== WebSocket.OPEN) return;
-      reportClientLog("warn", "websocket_bootstrap_timeout", "Cowboy WebSocket bootstrap timed out", { timeout_ms: 12_000 });
-      connectionSpan?.end("timeout");
-      reconnectNow("bootstrap_timeout");
-    }, 12_000);
-  };
-  // A socket wedged in CONNECTING (a half-open proxy / network that completes the
-  // TCP handshake but never the WS upgrade) fires NEITHER onopen NOR onclose, so
-  // without this it strands the UI on "Connecting…" forever with no reconnect.
-  // Force it closed after a grace → onclose → scheduleReconnect. Cleared the moment
-  // it opens or closes on its own.
-  const connectGuard = setTimeout(() => {
-    if (socket === ws && ws.readyState === WebSocket.CONNECTING) {
+  // A socket wedged in CONNECTING would strand the UI on "Connecting…" with no
+  // reconnect; forcing it closed routes through onclose → scheduleReconnect.
+  const guards = createSocketGuards({
+    onUpgradeTimeout: () => {
+      if (socket !== ws || ws.readyState !== WebSocket.CONNECTING) return;
       reportClientLog("warn", "websocket_connect_timeout", "Cowboy WebSocket upgrade timed out", {
         reason: connectReason,
         attempt: reconnecting ? outage.attempts : 0,
-        timeout_ms: 8000,
+        timeout_ms: SOCKET_UPGRADE_TIMEOUT_MS,
       });
       ws.close();
       connectionSpan?.end("timeout");
-    }
-  }, 8000);
+    },
+    onBootstrapTimeout: () => {
+      if (socket !== ws || ready || ws.readyState !== WebSocket.OPEN) return;
+      reportClientLog("warn", "websocket_bootstrap_timeout", "Cowboy WebSocket bootstrap timed out", {
+        timeout_ms: SOCKET_BOOTSTRAP_TIMEOUT_MS,
+      });
+      connectionSpan?.end("timeout");
+      reconnectNow("bootstrap_timeout");
+    },
+    onSessionsTimeout: () => {
+      if (
+        socket === ws && socketReady && ws.readyState === WebSocket.OPEN &&
+        !state.sessionsLoaded
+      ) {
+        ws.close();
+      }
+    },
+  });
   const markSocketReady = (): void => {
     if (ready || socket !== ws || ws.readyState !== WebSocket.OPEN) return;
-    clearTimeout(bootstrapGuard);
     ready = true;
     socketReady = true;
     socketReadyAt = Date.now();
@@ -2353,19 +2360,10 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     // Behind the replay, not instead of it: a row the replay could not carry
     // (durable admission still open) now gets a bounded deadline.
     reconcileStallWatchdogsForEverySession();
-    if (!state.sessionsLoaded) {
-      setTimeout(() => {
-        if (
-          socket === ws && socketReady && ws.readyState === WebSocket.OPEN &&
-          !state.sessionsLoaded
-        ) {
-          ws.close();
-        }
-      }, 6000);
-    }
+    guards.admitted(state.sessionsLoaded);
   };
   ws.onopen = (): void => {
-    clearTimeout(connectGuard);
+    guards.upgraded();
     if (ws.protocol !== PRODUCT_SYNC_SUBPROTOCOL) {
       ws.close();
       return;
@@ -2384,7 +2382,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     });
     markAlive();
     startLiveness(ws);
-    armBootstrapGuard();
+    guards.awaitBootstrap();
   };
   const presentBootstrap = createBootstrapPresentation<Outbound>(handle);
   ws.onmessage = (e: MessageEvent<string>): void => {
@@ -2398,17 +2396,16 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
         // Capacity waiting is intentional admission, not a wedged bootstrap.
         // Re-arm when admission becomes active rather than killing its queue.
         if (message.type === "client_capacity" && message.capacity.status === "waiting") {
-          clearTimeout(bootstrapGuard);
-        } else armBootstrapGuard();
+          guards.waitForCapacity();
+        } else guards.awaitBootstrap();
       }
     } catch (err) {
       console.warn("bad message", err);
     }
   };
   ws.onclose = (event): void => {
-    clearTimeout(bootstrapGuard);
+    guards.closed();
     connectionSpan?.end("error");
-    clearTimeout(connectGuard);
     // A superseded socket may close after its replacement has opened. It no
     // longer owns global connection state and must not raise the red banner or
     // schedule another reconnect.
@@ -2436,15 +2433,9 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
       visibility: document.visibilityState,
       network_online: navigator.onLine,
     });
-    if (event.code === WS_AUTH_REQUIRED_CLOSE_CODE) {
-      pauseProductSocketForAuth();
-      return;
-    }
-    if (event.code === WS_CAPACITY_REQUIRED_CLOSE_CODE) {
-      const retryAfter = state.activeCapacity?.retry_after_ms ?? 5_000;
-      scheduleReconnect(Math.max(1_000, retryAfter));
-      return;
-    }
+    const closeAction = classifySocketClose(event.code, state.activeCapacity?.retry_after_ms);
+    if (closeAction.kind === "pause_for_auth") return pauseProductSocketForAuth();
+    if (closeAction.kind === "wait_for_capacity") return scheduleReconnect(closeAction.delayMs);
     void (async () => {
       // Do not put an HTTP auth probe in front of an admitted socket's retry.
       // The replacement handshake still validates the cookie and frozen dataset.

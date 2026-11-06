@@ -4,6 +4,31 @@
 const WEBSOCKET_CONNECTING = 0;
 const WEBSOCKET_OPEN = 1;
 
+export const WS_AUTH_REQUIRED_CLOSE_CODE = 4001;
+export const WS_CAPACITY_REQUIRED_CLOSE_CODE = 4429;
+
+export type SocketCloseAction =
+  | { kind: "pause_for_auth" }
+  | { kind: "wait_for_capacity"; delayMs: number }
+  | { kind: "check_admission" };
+
+/** Classify the close of the socket that still owns global state. Auth loss
+ *  pauses without retrying, capacity honors the server's hint (at least 1s),
+ *  and every other close goes through reconnect admission. */
+export function classifySocketClose(
+  code: number,
+  capacityRetryAfterMs: number | undefined,
+): SocketCloseAction {
+  if (code === WS_AUTH_REQUIRED_CLOSE_CODE) return { kind: "pause_for_auth" };
+  if (code === WS_CAPACITY_REQUIRED_CLOSE_CODE) {
+    return {
+      kind: "wait_for_capacity",
+      delayMs: Math.max(1_000, capacityRetryAfterMs ?? 5_000),
+    };
+  }
+  return { kind: "check_admission" };
+}
+
 /** An admitted connection can retry through the authenticated WebSocket
  * handshake. HTTP diagnostics are needed only when admission itself failed:
  * an upgrade error hides whether authentication or the dataset changed. */

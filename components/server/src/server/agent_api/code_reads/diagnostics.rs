@@ -28,10 +28,16 @@ async fn observe(
     path: &str,
 ) -> (anyhow::Result<ZedAdapterResponse>, bool) {
     let first = observe_open_buffer(state, observed, path).await;
+    let session = observed.session().session_id();
     if !matches!(&first, Err(error) if error.to_string().contains("not open")) {
+        if first.is_ok() {
+            // Track an open file under the agent's own owner too, within its
+            // share: a holding left by an earlier Controller is then released
+            // when idle instead of pinning its code runtime indefinitely.
+            let _ = super::acquire::acquire(state, session, path).await;
+        }
         return (first, false);
     }
-    let session = observed.session().session_id();
     if let Err(reason) = super::acquire::acquire(state, session, path).await {
         return (Err(anyhow::anyhow!("not open: {reason}")), false);
     }

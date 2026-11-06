@@ -724,7 +724,13 @@ pub(in crate::server) async fn before_reset(
     state: &Arc<AppState>,
     session: &str,
 ) -> Result<Option<RecoveryV1>, String> {
-    preflight(state, session, false).await
+    preflight(state, session, false).await.map_err(|error| {
+        if error == "runtime is not connected" {
+            "Cannot clear the conversation while the runtime is disconnected. Your conversation has been kept. Please try again after the connection is restored.".into()
+        } else {
+            error
+        }
+    })
 }
 
 fn wake_intent(previous: BindingV1) -> RecoveryV1 {

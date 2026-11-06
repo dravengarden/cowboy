@@ -537,7 +537,7 @@ impl ZedRuntime {
             diagnostics,
             next_message_id: AtomicU32::new(2),
             next_lsp_request_id: AtomicU64::new(1),
-            frontier: analysis::Frontier::default(),
+            frontier: analysis::Frontier,
         })
     }
 

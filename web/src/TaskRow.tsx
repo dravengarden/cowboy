@@ -1,3 +1,4 @@
+import { StatusChip } from "./StatusChip";
 // One compact transcript row per background task anchor (a subagent child or
 // an accepted Call): icon, title, subtitle and a chip that is always the last
 // element. Opening details never expands the transcript — they open in the
@@ -43,7 +44,7 @@ export function TaskChip(
 ): React.JSX.Element {
   return (
     <Box sx={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
-      <Chip
+      <StatusChip
         data-task-chip
         size={size}
         variant="outlined"
