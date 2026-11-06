@@ -739,6 +739,7 @@ export function BackgroundTasksInspector({
         ? undefined
         : (): void => globalThis.history?.back()}
       fill={level !== "list" && Boolean(selected?.call)}
+      readerTopBleed={level === "conversation" && Boolean(selected?.call)}
       forceSheet
       cover
       portal
