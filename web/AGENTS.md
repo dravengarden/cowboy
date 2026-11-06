@@ -135,6 +135,9 @@ Use the active theme background, never fixed white or a new blur layer. Cover
 readers without a top header opt into `readerTopBleed`; their scroller owns the
 safe-area padding so content can pass behind the status area while scrolling.
 Keep the gradient noninteractive and the first item clear at the scroll boundary.
+Floating sheet footers use the shared `readerBottomEdge` masked frost and theme
+gradient behind controls. Keep this single layer bounded to the footer, never
+on the scrolling body; title-only dock contexts have no empty information card.
 Other native vertical readers use app-shell `ScrollEdges` as their last child:
 settings, tool details, task panels, pickers, logs, approvals and preview panes.
 Only overflowing edges fade; the first/last item is unobscured at its boundary.
@@ -145,7 +148,9 @@ Full-screen headerless sheets put safe-area clearance inside their scrolling
 body. Never stack a second mask on a Transcript or the Sessions rail.
 Mobile Settings details start with their useful content. The bottom navigation
 groups Back and Close in a compact rounded floating control on the left, with a
-separate section name beside it over a theme-aware gradient; do not enclose the
+separate section name centered across the entire footer over a theme-aware gradient.
+Navigation glyphs scale in rem with global font size; touch targets retain 44px.
+Do not enclose the
 title and controls in a large capsule. Descriptions belong in the Settings index.
 
 - Mobile is touch-first: single-task focus, large targets, progressive

@@ -428,6 +428,8 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
       () => document.querySelector("[data-mobile-task-level='list']"),
       "Back from the lead's details shows the list",
     );
+    const listTitle = document.querySelector<HTMLElement>("[data-context-title-only]")!;
+    check(listTitle?.textContent === "Background tasks" && getComputedStyle(listTitle).boxShadow === "none", "Title-only task navigation has no empty card");
     document.querySelector<HTMLElement>("[data-task-option='call:call-1']")!.click();
     await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "a call opens its transcript first");
     check(location.hash === taskHash("call:call-1"), "the detail level is deep-linkable");
