@@ -1,10 +1,10 @@
 import { test } from "bun:test";
 import {
-  assertEquals,
-  assertRejects,
-  assertStrictEquals,
-  assertThrows,
-} from "../../tools/test-assert.ts";
+  deepStrictEqual as assertEquals,
+  rejects as assertRejects,
+  strictEqual as assertStrictEquals,
+  throws as assertThrows,
+} from "node:assert/strict";
 import { createOwnedResourceScope, ScopeClosedError } from "./owned-scope.ts";
 
 test("owned scope seals synchronously and releases consumer before provider", async () => {
@@ -72,8 +72,7 @@ test("early release is idempotent and failures stay visible without preventing o
   assertStrictEquals(release(), failed);
   await assertRejects(() => failed);
   const done = scope.dispose();
-  const error = await assertRejects(() => done, AggregateError);
-  assertEquals(error.errors.length, 1);
+  await assertRejects(() => done, (error: unknown) => error instanceof AggregateError && error.errors.length === 1);
   assertEquals(attempts, 1);
   assertEquals(otherReleased, true);
   assertEquals(scope.snapshot(), {

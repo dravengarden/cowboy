@@ -29,6 +29,14 @@ asynchronous lifetime remain core responsibilities, never an installable UI host
 
 ## Plugin boundary
 
+Source release 3.81.0 records the already-integrated mobile reader changes and
+the Biome/native assertion migration from `9bb295d95`. Package tests now import
+Node assertions directly so their source closure stays inside each package.
+App-shell, Plugin API and state-store advance, along with state-sync/IDB and
+the six Agent Plugin consumers required by the dependency closure. Historical
+release records and native dependency pins are unchanged. These source version
+records do not publish signed Plugin artifacts or upgrade installed generations.
+
 A plugin manifest has an exact ID, SemVer version, kind, entry point, and exact
 component dependency list. The initial kinds are:
 

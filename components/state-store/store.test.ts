@@ -1,9 +1,9 @@
 import { test } from "bun:test";
 import {
-  assertEquals,
-  assertStrictEquals,
-  assertThrows,
-} from "../../tools/test-assert.ts";
+  deepStrictEqual as assertEquals,
+  strictEqual as assertStrictEquals,
+  throws as assertThrows,
+} from "node:assert/strict";
 import {
   type KvStorage,
   persisted,
@@ -171,8 +171,9 @@ test("disposed and retired listener incarnations cannot publish into a replaceme
   assertEquals(calls, 0);
   assertEquals(first.get(), false);
   assertEquals(second.get(), true);
-  assertThrows(() => first.set(true), Error, "disposed");
-  assertThrows(() => first.subscribe(() => {}), Error, "disposed");
+  const disposed = (error: unknown) => error instanceof Error && error.message.includes("disposed");
+  assertThrows(() => first.set(true), disposed);
+  assertThrows(() => first.subscribe(() => {}), disposed);
   second.dispose();
 });
 
@@ -293,8 +294,7 @@ test("disposal inside notification or updater fences remaining callbacks and wri
         other.dispose();
         return true;
       }),
-    Error,
-    "disposed",
+    (error: unknown) => error instanceof Error && error.message.includes("disposed"),
   );
   assertEquals(f.data.has("other"), false);
 });

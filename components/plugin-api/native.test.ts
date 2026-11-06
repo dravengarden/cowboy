@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertRejects } from "../../tools/test-assert.ts";
+import { deepStrictEqual as assertEquals, rejects as assertRejects } from "node:assert/strict";
 import {
   type CowboyNativePluginHost,
   installPluginRuntimeHosts,
@@ -53,8 +53,7 @@ test("native plugin ABI intersects signed and shell capabilities", async () => {
     assertEquals(calls, [["webauthn", { action: "capabilities" }]]);
     await assertRejects(
       () => invokeNativePluginCapability("passkey", "camera", {}),
-      Error,
-      "unavailable",
+      (error: unknown) => error instanceof Error && error.message.includes("unavailable"),
     );
   } finally {
     installPluginRuntimeHosts([], true);
