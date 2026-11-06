@@ -182,9 +182,13 @@ idle state before closing, and frees capacity only after a confirmed close.
 An unknown close keeps the owner fenced and counted; it is not retried under
 the same owner or redirected to a replacement worktree. Reads do not wait for
 unrelated idle cleanup. Gates 1 and
-2 hold for opens (target-confined admission, same-process recovery). Gate 4 is
-met by counts only: language-server RSS/CPU are not measured, and navigation
-and synchronization Unknowns keep their own fences. Holdings are process-local:
+2 hold for opens (target-confined admission, same-process recovery). The new
+Machine admission path additionally measures native process count, RSS and CPU
+before automatic warming, as specified in [19](19-code-review-engine.md#resource-budgets).
+It requires the containing Machine implementation; the earlier installed path
+had only Controller counts. These are admission thresholds, not hard resource
+limits. Navigation and synchronization Unknowns keep their own fences.
+Holdings are process-local:
 after a Controller restart the next `code.diagnostics` read of a held file
 re-tracks it (an open file is also held under the agent owner, within its share),
 so it is released when idle again; a held file never read again ends with its

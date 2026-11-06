@@ -5,6 +5,9 @@ use rustix::fs::{
 };
 use std::{fs::File, io, io::Read as _, path::Path};
 
+mod resources;
+pub(super) use resources::sample as resources;
+
 const DIRECTORY: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
     .union(OFlags::NOFOLLOW)

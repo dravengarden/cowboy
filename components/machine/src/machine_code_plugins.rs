@@ -27,6 +27,8 @@ mod buffer_sync;
 #[cfg(test)]
 mod navigation_fixture;
 mod process_tree;
+mod resource_budget;
+pub use resource_budget::Policy as CodeAgentResourcePolicy;
 #[cfg(test)]
 mod route_recovery_tests;
 #[cfg(test)]
@@ -44,6 +46,7 @@ pub struct CodeLaunchPlan {
     pub home: PathBuf,
 }
 
+#[derive(Clone)]
 pub enum CodeRuntimeSelection {
     Installed(CodeLaunchPlan),
     Legacy(PathBuf),
@@ -159,6 +162,7 @@ impl WorktreeRoute {
 
 #[derive(Default)]
 pub struct CodeRuntimeHost {
+    agent_admission: Mutex<()>,
     routes: Mutex<WorktreeRoutes>,
     engines: Mutex<BTreeMap<(String, String), Weak<RunningCodeRuntime>>>,
     buffer_leases: buffer_leases::Routes,
@@ -217,6 +221,22 @@ impl CodeRuntimeHost {
         active: Option<String>,
         select: impl FnOnce() -> Result<CodeRuntimeSelection>,
     ) -> Result<Value> {
+        self.request_with_admission(plugin_id, payload, active, select, None)
+            .await
+    }
+
+    async fn request_with_admission(
+        &self,
+        plugin_id: &str,
+        payload: &Value,
+        active: Option<String>,
+        select: impl FnOnce() -> Result<CodeRuntimeSelection>,
+        admission: Option<resource_budget::Admission>,
+    ) -> Result<Value> {
+        ensure!(
+            payload["type"] != "acquireAgentBuffer" || admission.is_some(),
+            "agent warming requires resource admission"
+        );
         // Private synchronization is never a generic Code RPC. Only the
         // separate connection-issued core invocation can enter that executor.
         ensure!(
@@ -275,7 +295,7 @@ impl CodeRuntimeHost {
             && route.is_idle()
             && matches!(
                 payload["type"].as_str(),
-                Some("ensureWorktree" | "openWorktree")
+                Some("ensureWorktree" | "openWorktree" | "acquireAgentBuffer")
             )
             && active.is_some()
             && route.generation != active;
@@ -306,6 +326,12 @@ impl CodeRuntimeHost {
                 .await;
         }
         let socket = target.socket().to_owned();
+        if let Some(admission) = admission {
+            if !matches!(target, CodeTarget::Installed(runtime) if admission.allows(runtime)) {
+                return Ok(resource_budget::unavailable());
+            }
+            return self.acquire_admitted(&mut route, &socket, payload).await;
+        }
         route.dispatching(payload)?;
         let response = exchange(&socket, payload).await?;
         if route.observe(payload, &response)? {
@@ -820,6 +846,7 @@ mod tests {
                 "api_version": 1,
                 "leases": u8::from(kind == "openWorktree" || kind == "openBuffer"),
                 "generation": generation, "descendant": descendant.id(),
+                "state": "ready",
                 "home": home,
                 "credential_environment": std::env::vars().any(|(key, _)| key.starts_with("ANTHROPIC_") || key.starts_with("COWBOY_AUTH_")),
             });

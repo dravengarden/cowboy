@@ -31,6 +31,7 @@ struct Held {
     last_used: Instant,
     releasing: bool,
     opening: usize,
+    possibly_open: bool,
 }
 
 type Key = (String, String);
@@ -52,13 +53,18 @@ pub(super) fn observed_paths(scope: &crate::core::SessionCodeScope) -> Vec<Strin
     paths
 }
 
-struct Opening(Key);
+struct Opening(Key, bool);
 
 impl Drop for Opening {
     fn drop(&mut self) {
-        if let Some(holding) = HELD.lock().get_mut(&self.0) {
+        let mut held = HELD.lock();
+        if let Some(holding) = held.get_mut(&self.0) {
             holding.opening -= 1;
+            holding.possibly_open |= self.1;
             holding.last_used = Instant::now();
+            if holding.opening == 0 && !holding.possibly_open {
+                held.remove(&self.0);
+            }
         }
     }
 }
@@ -129,16 +135,16 @@ pub(super) async fn acquire(
                     last_used: Instant::now(),
                     releasing: false,
                     opening: 1,
+                    possibly_open: false,
                 },
             );
         }
     }
-    let _opening = Opening(key);
+    let mut opening = Opening(key, true);
     let lease = owner(session);
-    let opened = zed_session::buffer_request(
+    let opened = zed_session::agent_buffer_request(
         &state.hub,
         &state.machine_control,
-        state.zed_adapter_socket.as_deref(),
         &context.scope,
         zed_session::BufferRequest {
             worktree: &worktree,
@@ -148,6 +154,16 @@ pub(super) async fn acquire(
         },
     )
     .await;
+    if let Ok(ZedAdapterResponse::AgentBufferBudget { state, .. }) = &opened {
+        // This typed reply precedes every ensure/open effect. It cannot clear
+        // an older unknown Open or another in-flight request's reservation.
+        opening.1 = false;
+        return Err(if state == "saturated" {
+            "budget"
+        } else {
+            "unavailable"
+        });
+    }
     if matches!(opened, Ok(ZedAdapterResponse::Buffer { .. })) {
         Ok(())
     } else {
@@ -261,7 +277,39 @@ mod tests {
             last_used: Instant::now(),
             releasing: false,
             opening: 0,
+            possibly_open: true,
         }
+    }
+
+    #[test]
+    fn definite_resource_refusal_frees_only_never_dispatched_holdings() {
+        let key = (uuid::Uuid::new_v4().to_string(), "file.rs".into());
+        let mut entry = holding("m", "/a");
+        entry.possibly_open = false;
+        entry.opening = 2;
+        HELD.lock().insert(key.clone(), entry);
+        drop(Opening(key.clone(), false));
+        assert_eq!(
+            HELD.lock()[&key].opening,
+            1,
+            "another caller is still pending"
+        );
+        drop(Opening(key.clone(), false));
+        assert!(
+            !HELD.lock().contains_key(&key),
+            "both requests refused before effects"
+        );
+        let mut entry = holding("m", "/a");
+        entry.possibly_open = false;
+        entry.opening = 2;
+        HELD.lock().insert(key.clone(), entry);
+        drop(Opening(key.clone(), true));
+        drop(Opening(key.clone(), false));
+        assert!(
+            HELD.lock()[&key].possibly_open,
+            "a refusal cannot erase another unknown Open"
+        );
+        HELD.lock().remove(&key);
     }
 
     #[test]
@@ -314,7 +362,7 @@ mod tests {
         let (started, ready) = tokio::sync::oneshot::channel();
         let task_key = key.clone();
         let task = tokio::spawn(async move {
-            let _opening = Opening(task_key);
+            let _opening = Opening(task_key, true);
             let _ = started.send(());
             std::future::pending::<()>().await;
         });

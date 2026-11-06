@@ -273,6 +273,10 @@ pub static SERVICE_FIELDS: &[Field] = &[
 pub const DEVICE_MAX_SESSIONS: Key<i64> = Key::new(Scope::Device, "capacity.max_sessions");
 pub const DEVICE_DRAINING: Key<bool> = Key::new(Scope::Device, "capacity.draining");
 pub const DEVICE_DISK_LOW_WATERMARK: Key<u64> = Key::new(Scope::Device, "disk.low_watermark");
+pub const DEVICE_CODE_AGENT_RSS: Key<u64> = Key::new(Scope::Device, "code.agent_rss_budget");
+pub const DEVICE_CODE_AGENT_PROCESSES: Key<i64> =
+    Key::new(Scope::Device, "code.agent_process_budget");
+pub const DEVICE_CODE_AGENT_CPU: Key<i64> = Key::new(Scope::Device, "code.agent_cpu_millicores");
 pub const DEVICE_ARTIFACT_CACHE_UNREFERENCED_AFTER: Key<Duration> =
     Key::new(Scope::Device, "retention.artifact_cache_unreferenced_after");
 
@@ -318,6 +322,33 @@ const FILE_BUFFERS_EXCLUDED: &[std::borrow::Cow<'static, str>] = &[
 ];
 
 pub static DEVICE_FIELDS: &[Field] = &[
+    Field {
+        key: "code.agent_rss_budget",
+        kind: Kind::Bytes {
+            min: 0,
+            max: 1 << 44,
+        },
+        default: Value::Bytes(2 << 30),
+        reload: Reload::Live,
+        doc: "Refuse automatic agent buffer warming when the Machine's Code runtime\nprocess trees reach this aggregate RSS. Shared pages can count more than once.\nThis is an admission threshold, not a kernel memory limit; interactive Code\nrequests remain available. Zero disables automatic warming.",
+    },
+    Field {
+        key: "code.agent_process_budget",
+        kind: Kind::Integer { min: 0, max: 4096 },
+        default: Value::Integer(32),
+        reload: Reload::Live,
+        doc: "Refuse automatic agent buffer warming at this aggregate Code process\ncount. Unknown or incomplete ownership also refuses warming; interactive\nrequests remain available. Zero disables automatic warming.",
+    },
+    Field {
+        key: "code.agent_cpu_millicores",
+        kind: Kind::Integer {
+            min: 0,
+            max: 256_000,
+        },
+        default: Value::Integer(2000),
+        reload: Reload::Live,
+        doc: "Refuse automatic agent buffer warming when aggregate Code CPU usage over\na fresh 250 ms observation reaches this many millicores (1000 = one core).\nThis is admission control, not a scheduler quota. Zero disables warming.",
+    },
     Field {
         key: "connection.controller_probe_timeout",
         kind: Kind::Duration {
