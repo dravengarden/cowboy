@@ -188,6 +188,8 @@ import { mobileReviewMutators, type MobileReviewState } from "./mobileReviewStat
 export type { MobileReviewTabState, MobileReviewState } from "./mobileReviewState";
 import { applyEnvelope, mergeEvents, containsSeq } from "./storeTimeline";
 import { conn } from "./clientConnection";
+import { createReconnectScheduler } from "./reconnectScheduler";
+import { createLivenessWatch } from "./livenessWatch";
 
 /// One staged message — a queued prompt or a draft. SERVER-AUTHORITATIVE: the
 /// daemon owns the per-session queue/drafts and the drain (next-on-turn-end), so
@@ -501,17 +503,14 @@ function retainTranscriptSessions(valid: ReadonlySet<string>): void {
 // The banner + version-probe + outage/reconnect-flash policy now live in `conn`
 // (the shared app-shell connection store). The store just reports socket
 // open/close into it and reads back the backoff delay. The only reconnect state
-// kept here is the single pending-attempt timer.
-let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+// kept here is the single pending attempt (reconnectScheduler.ts).
+const reconnect = createReconnectScheduler();
 let outageStartedAt: number | undefined;
 let reconnectAttempts = 0;
 let nextConnectReason = "initial";
 
 function clearReconnectTimer(): void {
-  if (reconnectTimer !== undefined) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = undefined;
-  }
+  reconnect.cancel();
 }
 
 /** Why the product socket is being abandoned. Only an explicit sign-out forgets
@@ -587,38 +586,31 @@ const LIVENESS_CHECK_MS = 15_000;
 const FOREGROUND_PROBE_MS = 4_000;
 const foregroundProbe = new ForegroundProbe(FOREGROUND_PROBE_MS);
 let foregroundProbeStartedAt = 0;
-let lastMessageAt = 0;
 let lastForegroundRecoveryAt = 0;
 // Delivery deadlines only count time this page could actually observe an echo.
 let socketReadyAt = 0;
 let visibleSince = 0;
-let livenessTimer: ReturnType<typeof setInterval> | undefined;
+const liveness = createLivenessWatch({ staleMs: STALE_MS, checkMs: LIVENESS_CHECK_MS });
 
 function markAlive(): void {
-  lastMessageAt = Date.now();
+  liveness.markAlive();
 }
 function stopLiveness(): void {
   foregroundProbe.cancel();
-  if (livenessTimer !== undefined) {
-    clearInterval(livenessTimer);
-    livenessTimer = undefined;
-  }
+  liveness.stop();
 }
 function startLiveness(ws: WebSocket): void {
   stopLiveness();
-  livenessTimer = setInterval(() => {
-    if (
-      socket === ws && ws.readyState === WebSocket.OPEN &&
-      Date.now() - lastMessageAt > STALE_MS
-    ) {
+  liveness.start({
+    isOpen: () => socket === ws && ws.readyState === WebSocket.OPEN,
+    onStale: () => {
       // Frozen watchdog timers can run just before visibilitychange on resume.
       // Let the foreground probe own recovery instead of replacing its socket.
       if (globalThis.document?.visibilityState === "visible") recoverSocket("liveness_stale");
       else reconnectNow("liveness_stale");
-      return;
-    }
-    publishSyncStatus(); // silence may have crossed the degraded threshold
-  }, LIVENESS_CHECK_MS);
+    },
+    onCheck: publishSyncStatus, // silence may have crossed the degraded threshold
+  });
 }
 
 // A suspended mobile WebSocket can remain OPEN in JS while its underlying TCP
@@ -630,7 +622,7 @@ function startLiveness(ws: WebSocket): void {
 function reconnectNow(reason: string): void {
   if (productSessionAbandoned || productSessionPausedForAuth) return;
   const stale = socket;
-  const silenceMs = lastMessageAt > 0 ? Math.max(0, Date.now() - lastMessageAt) : 0;
+  const silenceMs = liveness.lastMessageAt > 0 ? Math.max(0, Date.now() - liveness.lastMessageAt) : 0;
   const forced = reason === "user_retry" || reason === "auth_cookie_changed" || reason === "bootstrap_timeout";
   const recoveryStale = reason === "liveness_stale" && silenceMs > STALE_MS;
   if (!forced && !shouldStartImmediateReconnect(stale?.readyState, socketReady, openingDataset, recoveryStale)) {
@@ -733,7 +725,7 @@ if (typeof document !== "undefined") {
     if (
       shouldReconnectOnForeground(
         socket?.readyState,
-        now - lastMessageAt,
+        now - liveness.lastMessageAt,
         FOREGROUND_STALE_MS,
         appleTouchWebView,
         socketReady,
@@ -1476,7 +1468,7 @@ function handle(msg: Outbound): void {
       receiveCallApproval(msg.session_id, msg.approval);
       break;
     case "ping":
-      // Heartbeat: its ARRIVAL is the signal (onmessage stamps lastMessageAt for
+      // Heartbeat: its ARRIVAL is the signal (onmessage stamps liveness.lastMessageAt for
       // the liveness watchdog). Nothing to render.
       break;
     case "sessions": {
@@ -2080,18 +2072,15 @@ function logoutProductSession(): void {
 
 function scheduleReconnect(delay: number): void {
   if (productSessionAbandoned || productSessionPausedForAuth) return;
-  if (reconnectTimer !== undefined) return;
+  if (reconnect.pending) return;
   reportClientLog("info", "websocket_reconnect_scheduled", "Cowboy WebSocket reconnect scheduled", {
     delay_ms: delay,
     attempt: reconnectAttempts + 1,
   });
-  reconnectRetryAt = Date.now() + delay;
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = undefined;
-    reconnectRetryAt = undefined;
+  reconnect.schedule(delay, () => {
     nextConnectReason = "backoff";
     connect();
-  }, delay);
+  });
   publishSyncStatus();
 }
 
@@ -2599,7 +2588,6 @@ const replica = createReplica(syncDatabase, {
 let machinesSource: "none" | "replica" | "live" = "none";
 let retainedReplicaKey = "";
 let datasetFenced = false;
-let reconnectRetryAt: number | undefined;
 let outageFailures = 0;
 let lastLiveAt: number | undefined;
 
@@ -2998,12 +2986,12 @@ function syncStatusInput(): SyncStatusInput {
     socket: socket === undefined ? "none" : open ? "open" : "connecting",
     online: globalThis.navigator?.onLine ?? true,
     attempts: outageFailures,
-    ...(reconnectRetryAt !== undefined ? { retryAt: reconnectRetryAt } : {}),
+    ...(reconnect.retryAt !== undefined ? { retryAt: reconnect.retryAt } : {}),
     ...(capacity !== undefined ? { capacity: capacity.status } : {}),
     ...(capacity?.position !== undefined && capacity.position !== null ? { position: capacity.position } : {}),
     pausedForAuth: productSessionPausedForAuth,
     fenced: datasetFenced,
-    silenceMs: open && lastMessageAt > 0 ? Math.max(0, Date.now() - lastMessageAt) : 0,
+    silenceMs: open && liveness.lastMessageAt > 0 ? Math.max(0, Date.now() - liveness.lastMessageAt) : 0,
     ...(lastLiveAt !== undefined ? { lastLiveAt } : {}),
     outbox: outboxSummary(),
     updateReady: false,
@@ -4834,7 +4822,7 @@ function checkUnconfirmedDelivery(sessionId: string, cmid: string): void {
     connected: isConnected(),
   });
   void hydrateSession(sessionId);
-  if (bufferedBytes === 0 && Date.now() - lastMessageAt >= SEND_CHECK_MS) {
+  if (bufferedBytes === 0 && Date.now() - liveness.lastMessageAt >= SEND_CHECK_MS) {
     recoverSocket("delivery_unconfirmed");
   }
 }

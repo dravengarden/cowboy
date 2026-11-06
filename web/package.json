@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --ignore-pattern public/wasm_exec.js && cd .. && bun tools/check-structure.ts",
-    "test": "bun test src"
+    "test": "bun test src && bun test ./src/storeConnection.isolated.ts"
   },
   "dependencies": {
     "@cowboy/app-shell": "workspace:*",

@@ -298,17 +298,6 @@ fn authorize(
     Ok((meta, ledger))
 }
 
-fn error_view(error: Option<&crate::managed_calls::lifecycle::CallError>) -> Value {
-    let Some(error) = error else {
-        return Value::Null;
-    };
-    let mut value = json!(error);
-    if let Some(hint) = error.detail.as_deref().and_then(input_hint) {
-        value["hint"] = json!(hint);
-    }
-    value
-}
-
 /// Handle one forwarded gateway action.
 pub(in crate::server) async fn handle(
     state: &Arc<AppState>,

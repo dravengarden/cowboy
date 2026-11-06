@@ -79,7 +79,7 @@ export function BackgroundTasksBarView({
       sx={{
         borderBottom: desktop ? 1 : 0,
         borderColor: "divider",
-        mb: desktop ? 0.5 : 0,
+        mb: 0,
         color: "text.primary",
       }}
     >
@@ -96,7 +96,7 @@ export function BackgroundTasksBarView({
           justifyContent: "flex-start",
           gap: 0.75,
           px: desktop ? 1 : 1.5,
-          minHeight: desktop ? desktopSize(32) : mobileComposerPanelHeaderMinHeight,
+          minHeight: desktop ? desktopSize(28) : mobileComposerPanelHeaderMinHeight,
           borderRadius: 1,
           textAlign: "left",
           "&:hover, &:focus-visible": { bgcolor: "action.hover" },

@@ -2,6 +2,22 @@
 
 use super::*;
 
+pub(super) fn error_view(error: Option<&crate::managed_calls::lifecycle::CallError>) -> Value {
+    let Some(error) = error else {
+        return Value::Null;
+    };
+    let mut value = json!(error);
+    if let Some(hint) = error.detail.as_deref().and_then(input_hint) {
+        value["hint"] = json!(hint);
+    }
+    if error.code == "provider_startup_failed" {
+        value["hint"] = json!(
+            "the child runtime crashed or was interrupted before configuration was confirmed; inspect its lifecycle events for memory admission or authentication failures before retrying; do not change the requested preset to work around a startup failure"
+        );
+    }
+    value
+}
+
 pub(crate) fn envelope(record: &Record) -> Value {
     let next = if record.state.terminal() {
         json!({"argv":["cowboy","call","result",record.call_id]})
@@ -66,4 +82,19 @@ pub(in crate::server) fn input_hint(detail: &str) -> Option<&'static str> {
         }
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_failure_explains_recovery_without_changing_the_preset() {
+        let error =
+            crate::managed_calls::lifecycle::CallError::new("provider_startup_failed", None);
+        let view = error_view(Some(&error));
+        assert_eq!(view["code"], "provider_startup_failed");
+        assert!(view["hint"].as_str().unwrap().contains("lifecycle events"));
+        assert!(error_view(None).is_null());
+    }
 }

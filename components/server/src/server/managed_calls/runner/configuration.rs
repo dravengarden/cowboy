@@ -77,7 +77,9 @@ pub(super) async fn ready(
             state.hub.status(child),
             Some(Status::Crashed | Status::Interrupted)
         ) {
-            return Err("configuration_unavailable");
+            // Startup refusal (for example memory admission or authentication)
+            // is not evidence that the requested preset is unsupported.
+            return Err("provider_startup_failed");
         }
         if tokio::time::Instant::now() >= deadline {
             return Err("configuration_unconfirmed");

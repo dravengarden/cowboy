@@ -309,6 +309,7 @@ export async function runBackgroundTasksBrowserConformance(): Promise<string[]> 
     check(bar.textContent?.includes("◐ 2 working"), "the bar counts working tasks (subagent + call)");
     check(bar.textContent?.includes("✕ 1 failed"), "an unseen failure is counted");
     check(bar.getBoundingClientRect().height < 48, "the bar is one line");
+    check(bar.getBoundingClientRect().height < 32, "desktop background status uses a compact row");
     bar.style.width = "220px";
     await settle();
     const opener = bar.querySelector<HTMLElement>("[data-background-tasks-open]")!;
