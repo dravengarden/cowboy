@@ -1,11 +1,12 @@
 import { desktopSize } from "./surface/desktopSize";
 import { SegmentedTabs } from "./SegmentedTabs";
+import { MobileSettingsNavigation } from "./MobileSettingsNavigation";
 import { MachineProjects } from "./MachineProjects";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Alert, alpha, Box, Button, ButtonBase, Chip, CircularProgress, GlobalStyles, IconButton, MenuItem, Paper, Select, Stack, Switch, Tooltip, Typography, useMediaQuery } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material";
-import { ArrowBackIosNew, ChatBubbleOutline, Check as CheckIcon, ChevronRight, Close as CloseIcon, Code as CodeIcon, DeleteOutline, ExpandLess, ExpandMore, Refresh as RefreshIcon, SystemUpdateAlt } from "@mui/icons-material";
+import { ChatBubbleOutline, Check as CheckIcon, ChevronRight, Close as CloseIcon, Code as CodeIcon, DeleteOutline, ExpandLess, ExpandMore, Refresh as RefreshIcon, SystemUpdateAlt } from "@mui/icons-material";
 import { type SettingsProductFocus } from "./appSettings";
 import { ReviewSettingsContent } from "./mobile/review/ReviewSettings";
 import { AppIconSettings } from "./AppIconSettings";
@@ -29,7 +30,7 @@ import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { MachineProviderManagement, ProviderAuthenticationManagement } from "./ProviderManagement";
 import { machinePresencePresentation } from "./machinePresence";
 import { machineCommandResultPresentation } from "./machineCommandResult";
-import { ScrollEdges, MobileSheetActionGroup } from "@cowboy/app-shell";
+import { ScrollEdges } from "@cowboy/app-shell";
 import { ConfirmSheet, Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { HintTooltip } from "./HintTooltip";
@@ -258,52 +259,17 @@ export function MobileSettingsRoute({
     return (
         <Box
             data-mobile-settings-group={id}
+            role="region" aria-label={title}
             sx={{
                 minHeight: "100%",
             }}
         >
             <Box
-                id={`mobile-settings-${id}-header`}
-                data-mobile-settings-detail-header
-                sx={{
-                    position: "sticky",
-                    top: -1,
-                    zIndex: 3,
-                    bgcolor: "background.default",
-                    px: 0.75,
-                    pt: 1.75,
-                    pb: 1.5,
-                    borderBottom: 1,
-                    borderColor: "divider",
-                }}
-            >
-                <Stack spacing={0.5} sx={{ minWidth: 0 }}>
-                    <Typography
-                        variant="overline"
-                        color="primary.main"
-                        sx={{
-                            fontSize: "0.68rem",
-                            fontWeight: 760,
-                            letterSpacing: "0.12em",
-                            lineHeight: 1.2,
-                        }}
-                    >
-                        Settings
-                    </Typography>
-                    <Typography variant="h6" fontWeight={780} sx={{ lineHeight: 1.2 }}>
-                        {title}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.45 }}>
-                        {description}
-                    </Typography>
-                </Stack>
-            </Box>
-            <Box
                 id={`mobile-settings-${id}-content`}
                 sx={{
                     px: 0.75,
-                    pt: 1.5,
-                    pb: 12,
+                    pt: 0,
+                    pb: 2,
                 }}
             >
                 {contentReady
@@ -1316,17 +1282,12 @@ export function SettingsShell({
             );
             if (navigation === undefined || navigation === null) return;
             const field = active.closest<HTMLElement>(".MuiFormControl-root") ?? active;
-            const header = panel.querySelector<HTMLElement>(
-                "[data-mobile-settings-detail-header]",
-            );
             const surfaceBounds = surface.getBoundingClientRect();
+            const topClearance = Number.parseFloat(getComputedStyle(surface).scrollPaddingTop) || 0;
             const delta = settingsFocusRevealDelta(
                 field.getBoundingClientRect(),
                 {
-                    top: Math.max(
-                        surfaceBounds.top,
-                        header?.getBoundingClientRect().bottom ?? surfaceBounds.top,
-                    ),
+                    top: surfaceBounds.top + topClearance,
                     bottom: Math.min(
                         surfaceBounds.bottom,
                         navigation.getBoundingClientRect().top,
@@ -1607,24 +1568,13 @@ export function SettingsShell({
             wide
             cover
             portal
+            hideMobileTitle={!desktop}
             desktopMaxWidth={1440}
             mobileDismiss={desktop ? "footer" : "none"}
             actions={!desktop
                 ? (
-                    <Box data-mobile-settings-navigation sx={{ width: "100%" }}>
-                        <MobileSheetActionGroup
-                            actions={[{
-                                key: mobileSettingsSection === null ? "close" : "back",
-                                label: mobileSettingsSection === null ? "Close" : "Back",
-                                onPress: mobileSettingsSection === null
-                                    ? onClose
-                                    : (): void => changeMobileSettingsSection(null),
-                                icon: mobileSettingsSection === null
-                                    ? <CloseIcon aria-hidden fontSize="small" />
-                                    : <ArrowBackIosNew aria-hidden fontSize="small" />,
-                            }]}
-                        />
-                    </Box>
+                    <MobileSettingsNavigation section={mobileSettingsSection}
+                        onBack={(): void => changeMobileSettingsSection(null)} onClose={onClose} />
                 )
                 : undefined}
         >

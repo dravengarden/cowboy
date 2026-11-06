@@ -262,6 +262,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
             ? [
               { reference: "refs/remotes/origin/main", label: "origin/main" },
               { reference: "refs/remotes/origin/topic", label: "origin/topic" },
+              { reference: "refs/remotes/origin/feature/long-review-comparison-name", label: "origin/feature/long-review-comparison-name" },
             ]
             : [],
           ...(branches
@@ -502,15 +503,17 @@ async function checkReviewCompareAndSelection(
       "The default comparison should be named by its scenario",
     );
     await until(
-      () => fixture.container.querySelector("[data-review-unread]")?.textContent === "1 unread",
+      () => fixture.container.querySelector("[data-review-unread]")?.getAttribute("aria-label") === "1 unread",
       "Unread count is missing",
     );
 
+    await press(body.querySelector('[aria-label="More review actions"]'), "more actions");
     await press(body.querySelector("[data-review-fetch]"), "fetch control");
     await until(
-      () => fixture.container.textContent?.includes("Fetched just now") === true,
+      () => body.textContent?.includes("Fetched just now") === true,
       "Fetching should say how fresh the branch is",
     );
+    await press(body.querySelector('[aria-label="Close review actions"]'), "close actions");
 
     await press(compare(), "comparison control");
     await until(() => !!row("Other branches") || !!row("origin/topic"), "Comparison picker did not open");

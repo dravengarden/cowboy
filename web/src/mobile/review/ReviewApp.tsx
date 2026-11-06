@@ -1654,7 +1654,7 @@ export function ReviewApp({
           data-mobile-backdrop-chrome="true"
           sx={{
             flexShrink: 0,
-            borderTop: 1,
+            borderTop: navigationInline ? 0 : 1,
             borderColor: "divider",
             bgcolor: "background.default",
 
@@ -1937,7 +1937,7 @@ export function ReviewApp({
               <ReviewModeSwitcher mode={mode} onChange={activateReviewMode} />
               <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={currentMachineId}
                 renderTrigger={({ disabled, open }) => <ReviewMoreActions>{(close) => <>
-                {navigationInline && <Box ref={setInlineActionsContainer} />}
+                {navigationInline && <Box ref={setInlineActionsContainer} sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", minWidth: 0 }} />}
                 {contextReturnSession && (
                   <Button
                     aria-label={`Back to session ${contextReturnSession.title}`}

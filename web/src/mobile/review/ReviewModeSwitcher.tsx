@@ -43,7 +43,7 @@ export function ReviewModeSwitcher({
   const modeButtonSx: SxProps<Theme> = {
     width: 44,
     height: 44,
-    borderRadius: "16px",
+    borderRadius: "8px",
     bgcolor: "transparent",
     color: "text.secondary",
     transform: "none",
@@ -82,20 +82,15 @@ export function ReviewModeSwitcher({
         alignItems: "center",
         flex: "0 0 auto",
         boxSizing: "border-box",
-        height: 48,
-        p: "1px",
+        height: 44,
         gap: "2px",
-        borderRadius: "20px",
-        border: 1,
-        borderColor: (theme) => alpha(theme.palette.text.primary, 0.1),
-        bgcolor: (theme) => alpha(theme.palette.text.primary, 0.04),
         transform: "none",
         willChange: "auto",
         WebkitTapHighlightColor: "transparent",
         "& .MuiSvgIcon-root": {
           // Root-relative geometry keeps both mode glyphs in step with the
-          // global font-size setting instead of freezing them at 17px.
-          fontSize: "1.125rem",
+          // global font-size setting.
+          fontSize: "1.5rem",
         },
       }}
     >
