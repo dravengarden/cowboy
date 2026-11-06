@@ -189,6 +189,7 @@ export type { MobileReviewTabState, MobileReviewState } from "./mobileReviewStat
 import { applyEnvelope, mergeEvents, containsSeq } from "./storeTimeline";
 import { conn } from "./clientConnection";
 import { createReconnectScheduler } from "./reconnectScheduler";
+import { createLivenessWatch } from "./livenessWatch";
 
 /// One staged message — a queued prompt or a draft. SERVER-AUTHORITATIVE: the
 /// daemon owns the per-session queue/drafts and the drain (next-on-turn-end), so
@@ -585,38 +586,31 @@ const LIVENESS_CHECK_MS = 15_000;
 const FOREGROUND_PROBE_MS = 4_000;
 const foregroundProbe = new ForegroundProbe(FOREGROUND_PROBE_MS);
 let foregroundProbeStartedAt = 0;
-let lastMessageAt = 0;
 let lastForegroundRecoveryAt = 0;
 // Delivery deadlines only count time this page could actually observe an echo.
 let socketReadyAt = 0;
 let visibleSince = 0;
-let livenessTimer: ReturnType<typeof setInterval> | undefined;
+const liveness = createLivenessWatch({ staleMs: STALE_MS, checkMs: LIVENESS_CHECK_MS });
 
 function markAlive(): void {
-  lastMessageAt = Date.now();
+  liveness.markAlive();
 }
 function stopLiveness(): void {
   foregroundProbe.cancel();
-  if (livenessTimer !== undefined) {
-    clearInterval(livenessTimer);
-    livenessTimer = undefined;
-  }
+  liveness.stop();
 }
 function startLiveness(ws: WebSocket): void {
   stopLiveness();
-  livenessTimer = setInterval(() => {
-    if (
-      socket === ws && ws.readyState === WebSocket.OPEN &&
-      Date.now() - lastMessageAt > STALE_MS
-    ) {
+  liveness.start({
+    isOpen: () => socket === ws && ws.readyState === WebSocket.OPEN,
+    onStale: () => {
       // Frozen watchdog timers can run just before visibilitychange on resume.
       // Let the foreground probe own recovery instead of replacing its socket.
       if (globalThis.document?.visibilityState === "visible") recoverSocket("liveness_stale");
       else reconnectNow("liveness_stale");
-      return;
-    }
-    publishSyncStatus(); // silence may have crossed the degraded threshold
-  }, LIVENESS_CHECK_MS);
+    },
+    onCheck: publishSyncStatus, // silence may have crossed the degraded threshold
+  });
 }
 
 // A suspended mobile WebSocket can remain OPEN in JS while its underlying TCP
@@ -628,7 +622,7 @@ function startLiveness(ws: WebSocket): void {
 function reconnectNow(reason: string): void {
   if (productSessionAbandoned || productSessionPausedForAuth) return;
   const stale = socket;
-  const silenceMs = lastMessageAt > 0 ? Math.max(0, Date.now() - lastMessageAt) : 0;
+  const silenceMs = liveness.lastMessageAt > 0 ? Math.max(0, Date.now() - liveness.lastMessageAt) : 0;
   const forced = reason === "user_retry" || reason === "auth_cookie_changed" || reason === "bootstrap_timeout";
   const recoveryStale = reason === "liveness_stale" && silenceMs > STALE_MS;
   if (!forced && !shouldStartImmediateReconnect(stale?.readyState, socketReady, openingDataset, recoveryStale)) {
@@ -731,7 +725,7 @@ if (typeof document !== "undefined") {
     if (
       shouldReconnectOnForeground(
         socket?.readyState,
-        now - lastMessageAt,
+        now - liveness.lastMessageAt,
         FOREGROUND_STALE_MS,
         appleTouchWebView,
         socketReady,
@@ -1474,7 +1468,7 @@ function handle(msg: Outbound): void {
       receiveCallApproval(msg.session_id, msg.approval);
       break;
     case "ping":
-      // Heartbeat: its ARRIVAL is the signal (onmessage stamps lastMessageAt for
+      // Heartbeat: its ARRIVAL is the signal (onmessage stamps liveness.lastMessageAt for
       // the liveness watchdog). Nothing to render.
       break;
     case "sessions": {
@@ -2997,7 +2991,7 @@ function syncStatusInput(): SyncStatusInput {
     ...(capacity?.position !== undefined && capacity.position !== null ? { position: capacity.position } : {}),
     pausedForAuth: productSessionPausedForAuth,
     fenced: datasetFenced,
-    silenceMs: open && lastMessageAt > 0 ? Math.max(0, Date.now() - lastMessageAt) : 0,
+    silenceMs: open && liveness.lastMessageAt > 0 ? Math.max(0, Date.now() - liveness.lastMessageAt) : 0,
     ...(lastLiveAt !== undefined ? { lastLiveAt } : {}),
     outbox: outboxSummary(),
     updateReady: false,
@@ -4828,7 +4822,7 @@ function checkUnconfirmedDelivery(sessionId: string, cmid: string): void {
     connected: isConnected(),
   });
   void hydrateSession(sessionId);
-  if (bufferedBytes === 0 && Date.now() - lastMessageAt >= SEND_CHECK_MS) {
+  if (bufferedBytes === 0 && Date.now() - liveness.lastMessageAt >= SEND_CHECK_MS) {
     recoverSocket("delivery_unconfirmed");
   }
 }
