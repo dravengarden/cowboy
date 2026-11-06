@@ -115,6 +115,7 @@ pub(super) fn restored_busy(id: &str) -> RestoredSession {
             context_used: 0,
             context_size: 0,
             usage: None,
+            attention: Default::default(),
             background_tasks: 0,
             supports_current_turn: false,
             provider_update: None,

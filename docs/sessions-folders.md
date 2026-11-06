@@ -131,6 +131,17 @@ children emits one `empty` row (`empty:<folder>` key) as its body.
 
 ### Folder row and tree presentation (2026-10-04)
 
+Live requests also have a separate **need action** indicator. Session rows name
+approval or answer requests; the directory and global inbox count sessions once,
+including descendants of collapsed directories. Selecting an inbox entry opens
+the existing decision dock. Reading a session does not dismiss its requests;
+resolution, cancellation, worker exit or call-prompt expiry removes them across
+clients. The Controller includes request counts in the session snapshot, so an
+unopened transcript or client reconnect does not hide them. Native worker
+snapshots reconcile live request ids after Controller recovery. Calls reuse their
+existing expiring approval projection. These indicators are presentation only:
+the existing permission and elicitation handlers still own every decision.
+
 - **Counts, not one dot.** A single aggregated dot could not say how many
   agents run, and an empty folder left a hole where it sat. Folder rows have
   no leading status slot; a trailing capsule shows each non-zero live state

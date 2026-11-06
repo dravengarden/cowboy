@@ -155,6 +155,7 @@ fn sample_session_meta() -> crate::core::SessionMeta {
         context_used: 0,
         context_size: 0,
         usage: None,
+        attention: Default::default(),
         background_tasks: 0,
         supports_current_turn: false,
         provider_update: None,
