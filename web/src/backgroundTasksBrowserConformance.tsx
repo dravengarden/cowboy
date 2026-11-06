@@ -442,10 +442,15 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
       const transcript = document.querySelector<HTMLElement>("[data-call-transcript]")!.getBoundingClientRect();
       check(chip.left - level.left >= 12, `T16 the state chip keeps the gutter (${String(chip.left - level.left)}px)`);
       check(details.right <= level.right, "T16 Details stays inside the sheet");
-      const island = document.querySelector<HTMLElement>("[data-sheet-context-dock] > div")!.getBoundingClientRect();
+      const island = document.querySelector<HTMLElement>("[data-sheet-context-summary]")!.getBoundingClientRect();
       check(details.width >= 44 && details.height >= 44, "The floating details button retains its touch target");
-      check(island.width > details.width * 3, "The information surface is independent from the floating buttons");
-      check(chip.height <= 180, "Identity and supporting information remain compact");
+      const buttons = document.querySelector<HTMLElement>("[data-sheet-context-dock] > div:nth-child(2)")!.getBoundingClientRect();
+      check(island.right <= buttons.left && island.top < buttons.bottom && buttons.top < island.bottom, "Information and round controls share the same row");
+      check(chip.height <= 112, "The dock does not stack information over a second navigation row");
+      const dock = document.querySelector<HTMLElement>("[data-sheet-context-dock]")!;
+      const footer = dock.closest<HTMLElement>("[data-detent-sheet-footer]")!;
+      const measured = Number.parseFloat(getComputedStyle(dock.closest('[role="dialog"]')!).getPropertyValue("--cowboy-sheet-dock-clearance"));
+      check(Math.abs(measured - footer.getBoundingClientRect().height) < 1, "Transcript clearance follows the actual compact footer");
       check(Boolean(document.querySelector("[data-context-facts]")), "Execution facts stay visible beside navigation");
       check(document.querySelector("[data-context-facts]")?.textContent?.includes("gpt-6.1-sol"), "The model is visible without opening Details");
       check(Math.abs(transcript.bottom - level.bottom) < 1, "T16 the transcript reaches the island");
