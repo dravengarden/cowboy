@@ -29,14 +29,6 @@ asynchronous lifetime remain core responsibilities, never an installable UI host
 
 ## Plugin boundary
 
-Source release 3.81.0 records the already-integrated mobile reader changes and
-the Biome/native assertion migration from `9bb295d95`. Package tests now import
-Node assertions directly so their source closure stays inside each package.
-App-shell, Plugin API and state-store advance, along with state-sync/IDB and
-the six Agent Plugin consumers required by the dependency closure. Historical
-release records and native dependency pins are unchanged. These source version
-records do not publish signed Plugin artifacts or upgrade installed generations.
-
 A plugin manifest has an exact ID, SemVer version, kind, entry point, and exact
 component dependency list. The initial kinds are:
 
@@ -90,6 +82,25 @@ implicit workspace versions, private packages, missing public exports, and
 moving references are invalid.
 
 ## Independent Plugin releases
+
+Scoped release 3.82.0 replaces the packaged plugin-api, app-shell and state-store
+tests' external assertion imports with Node built-ins. It versions those packages,
+state-store's dependent packages and the plugin-api consumers without changing
+native pins. It removes the temporary root `@std/assert` dependency; package
+closure validation remains strict and historical release records stay unchanged.
+
+Scoped release 3.85.0 records app-shell 1.1.39 for the already-committed
+floating dock, footer edge and test-assertion changes after 3.84.0
+(`bd212af9`..`ca711c65`); no Plugin depends on that component, so the worker
+registry input is unchanged. Native pins are unchanged.
+
+Scoped release 3.81.0 records app-shell 1.1.36 for the already-committed
+reader edge and dock changes (`b1234031`..`c9c226a3`); no Plugin depends on that
+component, so the worker registry input stays at 3.79.0. The plugin-api and
+state-store tests keep their recorded bytes (`@std/assert`), so neither package
+nor its consumers change. Claude Code 3.20.28, Claude DeepSeek 3.1.52, Codex
+3.5.22 and Grok 3.1.53 version the Biome reformatting of their sources
+(`9bb295d9`) without a component release. Native pins are unchanged.
 
 Scoped release 3.80.0 records app-shell 1.1.35 for the already-committed
 sheet change `3f6fd69f` (no grab pills); no Plugin depends on that component,
@@ -287,6 +298,21 @@ tool, rather than copying the SDK or relying on an ambient compiler.
 Release 3.60.2 records state-sync-idb 1.8.2 for the already-committed source
 whose digest differed from the 1.8.1 record. No Plugin depends on that package;
 this metadata correction changes no Plugin pins or runtime behavior.
+
+The registry is one ordered history stored in two files. `components/registry.json`
+keeps the active release and every release an in-tree `plugin.json` or the
+worker pin (`components/worker-registry-input.json`) still references; every
+other release moves unchanged, in the same schema, to
+`components/registry-archive.json`. `src/plugin.rs`,
+`tools/check-plugin-components.ts`, `tools/worker-registry-input.ts` and the
+closure tests read both through `tools/component-registry.ts` (Rust:
+`merged_component_registry`), which sorts by release version and refuses a
+duplicate or a schema mismatch, so ordered validation, identity history and
+installed Plugins pinned to an archived release behave as before. The merged
+two-space encoding is byte-identical to the unsplit file, so the worker
+registry digest and the worker generation do not change when a release is
+archived; the archive is excluded from the per-file worker hash. Archive a
+release only after no in-tree Plugin or worker pin references it.
 
 `components/registry.json` remains append-only. Schema-2 entries (through 2.9.0)
 still enforce strictly increasing versions for every Plugin between adjacent

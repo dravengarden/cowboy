@@ -283,61 +283,63 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     !("tests" in result) ||
     !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "session-context"
-        ? 113
-        : suite === "sign-in"
-          ? 5
-          : suite === "session-move" || suite === "editor-plugin-sandbox"
-            ? 4
-            : suite === "dormant-session"
-              ? 29
-              : suite === "session-fold"
-                ? 7
-                : suite === "managed-calls"
-                  ? 22
-                  : suite === "info-metrics"
-                    ? 42
-                    : suite === "subscriptions"
-                      ? 143
-                      : suite === "about-layout"
-                        ? 10
-                        : suite === "session-maintenance"
-                          ? 8
-                          : suite === "project-placement"
-                            ? 13
-                            : suite === "workspace-picker"
-                              ? 10
-                              : suite === "sheet-keyboard"
-                                ? 4
-                                : suite === "workspace-extensions"
-                                  ? 25
-                                  : suite === "review-destination"
-                                    ? 10
-                                    : suite === "settings-recovery"
-                                      ? 9
-                                      : suite === "draft-documents"
-                                        ? 12
-                                        : suite === "desktop-composer"
-                                          ? 19
-                                          : suite === "code-buffer-cleanup"
-                                            ? 7
-                                            : suite === "code-buffers"
-                                              ? 24
-                                              : suite === "code-buffer-sync"
-                                                ? 9
-                                                : suite === "idb"
-                                                  ? 8
-                                                  : suite === "idb-outbox"
-                                                    ? 16
-                                                    : suite === "review-document-refresh"
-                                                      ? 5
-                                                      : suite === "review-context"
-                                                        ? 8
-                                                        : suite === "review-compare"
-                                                          ? 4
-                                                          : suite === "review-recovery"
-                                                            ? 17
-                                                            : 6) ||
+      (suite === "review-diff"
+        ? 8
+        : suite === "session-context"
+          ? 113
+          : suite === "sign-in"
+            ? 5
+            : suite === "session-move" || suite === "editor-plugin-sandbox"
+              ? 4
+              : suite === "dormant-session"
+                ? 29
+                : suite === "session-fold"
+                  ? 7
+                  : suite === "managed-calls"
+                    ? 22
+                    : suite === "info-metrics"
+                      ? 42
+                      : suite === "subscriptions"
+                        ? 143
+                        : suite === "about-layout"
+                          ? 10
+                          : suite === "session-maintenance"
+                            ? 8
+                            : suite === "project-placement"
+                              ? 13
+                              : suite === "workspace-picker"
+                                ? 10
+                                : suite === "sheet-keyboard"
+                                  ? 4
+                                  : suite === "workspace-extensions"
+                                    ? 25
+                                    : suite === "review-destination"
+                                      ? 10
+                                      : suite === "settings-recovery"
+                                        ? 9
+                                        : suite === "draft-documents"
+                                          ? 12
+                                          : suite === "desktop-composer"
+                                            ? 19
+                                            : suite === "code-buffer-cleanup"
+                                              ? 7
+                                              : suite === "code-buffers"
+                                                ? 24
+                                                : suite === "code-buffer-sync"
+                                                  ? 9
+                                                  : suite === "idb"
+                                                    ? 8
+                                                    : suite === "idb-outbox"
+                                                      ? 16
+                                                      : suite === "review-document-refresh"
+                                                        ? 5
+                                                        : suite === "review-context"
+                                                          ? 8
+                                                          : suite === "review-compare"
+                                                            ? 4
+                                                            : suite === "review-recovery"
+                                                              ? 17
+                                                              : 6) ||
     !result.tests.every((test) => typeof test === "string")
   ) {
     throw new Error(`browser conformance failed: ${JSON.stringify(result)}`);

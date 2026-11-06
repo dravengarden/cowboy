@@ -11,9 +11,7 @@ import {
 } from "./types.ts";
 
 const types = await readFile(new URL("./types.ts", import.meta.url), "utf8");
-const slotSource = await readFile(
-  new URL("./slot.tsx", import.meta.url), "utf8",
-);
+const slotSource = await readFile(new URL("./slot.tsx", import.meta.url), "utf8");
 
 function renderer(name: string): PluginSlotComponent {
   return () => name;
@@ -38,23 +36,23 @@ test("plugin renderer contract is closed and data-only", () => {
 
 test("signed renderer declarations select only Cowboy-owned components", async () => {
   installPluginRenderers(renderers);
-  installPluginRuntimeHosts([
-    {
-      id: "sample",
-      generation: "a".repeat(64),
-      slots: ["provider.usage"],
-      ui: {
-        schema_version: 1,
-        renderers: { "provider.usage": "provider-usage-v1" },
+  installPluginRuntimeHosts(
+    [
+      {
+        id: "sample",
+        generation: "a".repeat(64),
+        slots: ["provider.usage"],
+        ui: {
+          schema_version: 1,
+          renderers: { "provider.usage": "provider-usage-v1" },
+        },
+        native_capabilities: [],
       },
-      native_capabilities: [],
-    },
-  ], true);
-  const loaded = await loadPluginSlot("sample", "provider.usage");
-  assertEquals(
-    loaded?.({ pluginId: "sample", slot: "provider.usage" }),
-    "provider-usage-v1",
+    ],
+    true,
   );
+  const loaded = await loadPluginSlot("sample", "provider.usage");
+  assertEquals(loaded?.({ pluginId: "sample", slot: "provider.usage" }), "provider-usage-v1");
   assertEquals(await loadPluginSlot("sample", "provider.settings"), null);
 });
 
@@ -62,52 +60,42 @@ test("exact host generations coexist without falling through to the default", as
   installPluginRenderers(renderers);
   const oldDigest = `sha256:${"a".repeat(64)}`;
   const currentDigest = `sha256:${"b".repeat(64)}`;
-  installPluginRuntimeHosts([
-    {
-      id: "sample",
-      plugin_version: "1.0.0",
-      artifact_digest: oldDigest,
-      generation: "a".repeat(64),
-      default_for_id: false,
-      slots: ["provider.usage"],
-      ui: {
-        schema_version: 1,
-        renderers: { "provider.usage": "provider-usage-v1" },
+  installPluginRuntimeHosts(
+    [
+      {
+        id: "sample",
+        plugin_version: "1.0.0",
+        artifact_digest: oldDigest,
+        generation: "a".repeat(64),
+        default_for_id: false,
+        slots: ["provider.usage"],
+        ui: {
+          schema_version: 1,
+          renderers: { "provider.usage": "provider-usage-v1" },
+        },
+        native_capabilities: [],
       },
-      native_capabilities: [],
-    },
-    {
-      id: "sample",
-      plugin_version: "2.0.0",
-      artifact_digest: currentDigest,
-      generation: "b".repeat(64),
-      default_for_id: true,
-      slots: ["provider.usage"],
-      ui: {
-        schema_version: 1,
-        renderers: { "provider.usage": "provider-usage-activity-v1" },
+      {
+        id: "sample",
+        plugin_version: "2.0.0",
+        artifact_digest: currentDigest,
+        generation: "b".repeat(64),
+        default_for_id: true,
+        slots: ["provider.usage"],
+        ui: {
+          schema_version: 1,
+          renderers: { "provider.usage": "provider-usage-activity-v1" },
+        },
+        native_capabilities: [],
       },
-      native_capabilities: [],
-    },
-  ], true);
+    ],
+    true,
+  );
 
-  const old = await loadPluginSlot(
-    "sample",
-    "provider.usage",
-    "1.0.0",
-    oldDigest,
-  );
-  const current = await loadPluginSlot(
-    "sample",
-    "provider.usage",
-    "2.0.0",
-    currentDigest,
-  );
+  const old = await loadPluginSlot("sample", "provider.usage", "1.0.0", oldDigest);
+  const current = await loadPluginSlot("sample", "provider.usage", "2.0.0", currentDigest);
   const defaultRenderer = await loadPluginSlot("sample", "provider.usage");
-  assertEquals(
-    old?.({ pluginId: "sample", slot: "provider.usage" }),
-    "provider-usage-v1",
-  );
+  assertEquals(old?.({ pluginId: "sample", slot: "provider.usage" }), "provider-usage-v1");
   assertEquals(
     current?.({ pluginId: "sample", slot: "provider.usage" }),
     "provider-usage-activity-v1",
@@ -117,21 +105,14 @@ test("exact host generations coexist without falling through to the default", as
     "provider-usage-activity-v1",
   );
   assertEquals(
-    await loadPluginSlot(
-      "sample",
-      "provider.usage",
-      "1.0.0",
-      `sha256:${"c".repeat(64)}`,
-    ),
+    await loadPluginSlot("sample", "provider.usage", "1.0.0", `sha256:${"c".repeat(64)}`),
     null,
   );
 });
 
 test("plugin slot isolates renderer crashes from the shell", () => {
   assert(slotSource.includes("class PluginSlotBoundary"));
-  assert(
-    slotSource.includes("if (this.state.failed) return this.props.fallback"),
-  );
+  assert(slotSource.includes("if (this.state.failed) return this.props.fallback"));
   assert(slotSource.includes("pluginVersion"));
   assert(slotSource.includes("artifactDigest"));
   assert(slotSource.includes('display: "contents"'));

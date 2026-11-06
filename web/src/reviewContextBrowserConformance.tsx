@@ -31,7 +31,7 @@ async function until(predicate: () => boolean, message: string) {
   throw new Error(`${message}: ${document.body.textContent?.slice(0, 1500)}`);
 }
 
-export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false) {
+export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false, checksEnabled = false) {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
   const sessions: SessionMeta[] = [
@@ -180,6 +180,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
   }
   globalThis.WebSocket = FixtureSocket as unknown as typeof WebSocket;
   let fetched = false;
+  let checkStarted = false;
   globalThis.fetch = (async (input, init) => {
     const url = new URL(String(input), location.href);
     if (!url.pathname.startsWith("/api/")) return originalFetch(input, init);
@@ -189,6 +190,15 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       }${url.search}`,
     );
     const json = (value: unknown) => Response.json(value);
+    if (checksEnabled && url.pathname.endsWith("/checks")) {
+      const run = { runId: "fixture-check", check: "lint", state: "passed", startedAtMs: Date.now(), diagnostics: [], truncated: false, outputTruncated: false };
+      if (init?.method === "POST") {
+        checkStarted = true;
+        return json({ status: "accepted", run });
+      }
+      return json({ apiVersion: 1, epoch: "fixture-epoch", allowed: true, runnable: true,
+        declared: [{ id: "lint", title: "Lint", format: "lines", timeoutSeconds: 30 }], runs: checkStarted ? [run] : [] });
+    }
     if (url.pathname === "/api/sync/dataset") {
       return json({
         schema: "dravengarden.cowboy.product-sync-dataset/v1",
@@ -252,6 +262,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
             ? [
               { reference: "refs/remotes/origin/main", label: "origin/main" },
               { reference: "refs/remotes/origin/topic", label: "origin/topic" },
+              { reference: "refs/remotes/origin/feature/long-review-comparison-name", label: "origin/feature/long-review-comparison-name" },
             ]
             : [],
           ...(branches
@@ -299,8 +310,13 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
             detached: false,
             current: true,
           }],
-          target: { branch, changeCount: clean ? 0 : 1 },
+          target: { branch, changeCount: clean ? 0 : 1,
+            ...(branches && clean ? { base: { reference: "refs/remotes/origin/main", label: "origin/main", ahead: 0, behind: 20 } } : {}) },
         });
+      }
+      if (url.pathname.endsWith("/commit")) {
+        return json({ apiVersion: 1, oid: "abcdef01", parents: [], author: "Fixture", authorEmail: "fixture@example.test",
+          authoredAt: "2026-10-17T00:00:00Z", message: "Improve review", files: [], filesTruncated: false });
       }
       if (url.pathname.endsWith("/tree")) {
         return json({
@@ -492,15 +508,17 @@ async function checkReviewCompareAndSelection(
       "The default comparison should be named by its scenario",
     );
     await until(
-      () => fixture.container.querySelector("[data-review-unread]")?.textContent === "1 unread",
+      () => fixture.container.querySelector("[data-review-unread]")?.getAttribute("aria-label") === "1 unread",
       "Unread count is missing",
     );
 
+    await press(body.querySelector('[aria-label="More review actions"]'), "more actions");
     await press(body.querySelector("[data-review-fetch]"), "fetch control");
     await until(
-      () => fixture.container.textContent?.includes("Fetched just now") === true,
+      () => body.textContent?.includes("Fetched just now") === true,
       "Fetching should say how fresh the branch is",
     );
+    await press(body.querySelector('[aria-label="Close review actions"]'), "close actions");
 
     await press(compare(), "comparison control");
     await until(() => !!row("Other branches") || !!row("origin/topic"), "Comparison picker did not open");
@@ -651,11 +669,12 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
     );
 
     const modeButton = document.querySelector<HTMLElement>("[data-mobile-review-mode-switcher] [aria-pressed='true']")!;
-    const restingFill = getComputedStyle(modeButton).backgroundColor;
+    const modeGlyph = modeButton.querySelector<HTMLElement>("[data-review-mode-glyph]")!;
+    const restingFill = getComputedStyle(modeGlyph).backgroundColor;
     const hadCoarse = document.documentElement.classList.contains(COARSE_POINTER_ROOT_CLASS);
     document.documentElement.classList.add(COARSE_POINTER_ROOT_CLASS);
     modeButton.classList.add("Mui-focusVisible");
-    check(restingFill !== "rgba(0, 0, 0, 0)" && getComputedStyle(modeButton).backgroundColor === restingFill,
+    check(restingFill !== "rgba(0, 0, 0, 0)" && getComputedStyle(modeGlyph).backgroundColor === restingFill,
       "touch focus must preserve the selected Review mode fill");
     modeButton.classList.remove("Mui-focusVisible");
     if (!hadCoarse) document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
@@ -889,7 +908,7 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
       ),
       "The previous context's document was read against the new session",
     );
-    await click(textButton(overview()!, "Browse files"));
+    await click(labelled("Worktree files"));
     await until(
       () => !!files()?.textContent?.includes("README.md"),
       "Clean workspace should offer file browsing",

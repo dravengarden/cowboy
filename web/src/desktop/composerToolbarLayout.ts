@@ -20,6 +20,8 @@ export const desktopComposerToolbarSx: SxProps<Theme> = {
   },
   "@container composer-tools (min-width: 42rem)": {
     "& [data-format-tier='secondary']": { display: "inline-flex" },
+  },
+  "@container composer-tools (min-width: 60rem)": {
     "& [data-composer-delivery] [data-composer-action-label]": {
       display: "inline",
     },
@@ -29,8 +31,8 @@ export const desktopComposerToolbarSx: SxProps<Theme> = {
       { display: "inline" },
   },
   // Compact and Clear fold into one menu where the row cannot hold
-  // them on one line; their keys work either way. Their words come
-  // last, after Draft, Schedule and Stop have theirs.
+  // them on one line; their keys work either way. Their words follow
+  // the same width rule as the other delivery actions.
   // A narrow pane sheds keycaps before it wraps: first Stop's (the
   // status line shows Mod+. while a turn runs) and the conversation
   // menu's, then Draft's and Schedule's. Keys stay in tooltips and keep working; Send keeps its.
@@ -38,14 +40,22 @@ export const desktopComposerToolbarSx: SxProps<Theme> = {
     { display: "none" },
   "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='schedule']) kbd":
     { display: "none" },
-  // Compact's and Clear's Prompt chords are the widest keycaps
-  // (`Ctrl⇧.` off macOS): they appear only once the row has room.
+  // Conversation shortcuts read as secondary inline text, not another row
+  // of outlined controls. Keep the information visible at every inline width.
   "& [data-composer-delivery] :is([data-composer-action='compact'], [data-composer-action='clear']) kbd":
-    { display: "none" },
-  "@container composer-tools (min-width: 46rem)": {
-    "& [data-composer-delivery] :is([data-composer-action='compact'], [data-composer-action='clear']) kbd":
-      { display: "inline-flex" },
-  },
+    {
+      display: "inline-flex",
+      border: 0,
+      bgcolor: "transparent",
+      boxShadow: "none",
+      px: 0,
+      minWidth: 0,
+      fontWeight: 500,
+      fontFamily: "inherit",
+      color: "text.secondary",
+      opacity: 0.8,
+      "&[data-shortcut-state='inactive']": { opacity: 0.55 },
+    },
   // The narrowest row keeps the gauge and drops its number.
   "& [data-session-overflow] [data-context-reading]": { display: "none" },
   "@container composer-tools (min-width: 22rem)": {
@@ -63,14 +73,8 @@ export const desktopComposerToolbarSx: SxProps<Theme> = {
   },
   "& [data-session-inline]": { display: "none" },
   "& [data-session-overflow]": { display: "inline-flex" },
-  "& [data-composer-delivery] [data-session-inline] [data-composer-action-label]":
-    { display: "none" },
   "@container composer-tools (min-width: 34rem)": {
     "& [data-session-inline]": { display: "contents" },
     "& [data-session-overflow]": { display: "none" },
-  },
-  "@container composer-tools (min-width: 60rem)": {
-    "& [data-composer-delivery] [data-session-inline] [data-composer-action-label]":
-      { display: "inline" },
   },
 };

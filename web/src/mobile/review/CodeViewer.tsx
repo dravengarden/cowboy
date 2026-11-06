@@ -705,7 +705,7 @@ export default function CodeViewer({
         ),
       );
     }
-    if (kind === "source" && languageData) {
+    if (languageData) {
       values.push(
         EditorView.decorations.of(
           languageDecorations(

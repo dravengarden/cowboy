@@ -1473,7 +1473,6 @@ export function ReviewApp({
             onOpenSession={switchSession}
             embedded={navigationInline}
             actionsContainer={inlineActionsContainer}
-            onBrowseFiles={() => activateReviewMode("files")}
             onOpenWorktree={openableWorktreeProject
               ? (path) => openBoundContext(worktreeContextId(openableWorktreeProject.machineId, openableWorktreeProject.workspaceId, path))
               : undefined}
@@ -1654,7 +1653,7 @@ export function ReviewApp({
           data-mobile-backdrop-chrome="true"
           sx={{
             flexShrink: 0,
-            borderTop: 1,
+            borderTop: navigationInline ? 0 : 1,
             borderColor: "divider",
             bgcolor: "background.default",
 
@@ -1903,7 +1902,7 @@ export function ReviewApp({
               </IconButton>
             </Toolbar>}
             <Stack data-review-workbench direction="row" alignItems="center" spacing={0.5}
-              sx={{ px: 1, minHeight: 48, flexWrap: "wrap", "& .MuiIconButton-root": { width: 44, height: 44 } }}>
+              sx={{ px: 1, minHeight: 48, flexWrap: "wrap", "& .MuiIconButton-root": { width: 44, height: 44, "& .MuiSvgIcon-root": { fontSize: "1.5rem" } } }}>
               <HintTooltip title="Agent">
                 <IconButton
                   data-mobile-open-agent="true"
@@ -1917,7 +1916,7 @@ export function ReviewApp({
                   <ChatBubbleOutline />
                 </IconButton>
               </HintTooltip>
-              <ReviewContextButton
+              <ReviewContextButton branch={repositoryContext?.branch} changes={changeCount}
                 label={projectCodeContext
               ? `Open context. Current ${contextLabel.toLowerCase()} ${projectCodeContext.project}`
               : `Switch session. Current session ${currentSession?.title ?? "none"}`}
@@ -1937,7 +1936,7 @@ export function ReviewApp({
               <ReviewModeSwitcher mode={mode} onChange={activateReviewMode} />
               <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={currentMachineId}
                 renderTrigger={({ disabled, open }) => <ReviewMoreActions>{(close) => <>
-                {navigationInline && <Box ref={setInlineActionsContainer} />}
+                {navigationInline && <Box ref={setInlineActionsContainer} sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", minWidth: 0 }} />}
                 {contextReturnSession && (
                   <Button
                     aria-label={`Back to session ${contextReturnSession.title}`}

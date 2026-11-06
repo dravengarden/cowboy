@@ -3,9 +3,12 @@
 ## Why
 
 After the [worker pin advance](worker-pin-code-routing-2026-11-06.md) put Zed
-1.24.0 into service, `gopls` evidence was always `unknown`/`unversioned`: Zed
-merged pulled diagnostics (`textDocument/diagnostic`) without a document
-version. Private server `1.10.0` records the version each server last received
+1.24.0 into service, `gopls` evidence was always `unknown`/`unversioned`.
+The initial attribution to diagnostic pull was not verified: a later direct
+probe of Hawk's gopls v0.22.0 found no diagnostic-pull capability and found
+that pushed diagnostics omit version 0. Zed also merged pulled diagnostics
+(`textDocument/diagnostic`) without a document version, a separate source
+defect. Private server `1.10.0` records the version each server last received
 before the pull is sent and merges the result as published for that version; the
 server answers after every earlier change notification. Adapter `1.25.0` no
 longer disables evidence for the whole process after one slow reply.
@@ -40,7 +43,9 @@ longer disables evidence for the whole process after one slow reply.
 - This session's worktree stayed on 1.24.0 (`gopls` still `unversioned`) after
   the agent's holdings were released when idle: another lease holder, most
   likely an open Code pane, keeps the route pinned, as designed. Its evidence
-  moves to 1.25.0 once that worktree is next idle.
+  was expected to improve once that worktree was next idle. Subsequent
+  inspection confirmed this route was serving 1.25.0 and still returned
+  `unversioned`; runtime migration did not establish `document_current`.
 - The Controller (`c27b9ac5f`) now also holds an already-open file under the
   agent owner, so holdings left by an earlier Controller are re-tracked and
   released when idle.

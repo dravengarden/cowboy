@@ -68,6 +68,7 @@ import { markDetentSheetOpen, useIsTopDetentSheet } from "./detent-sheet-open.ts
 import { haptic as fireHaptic } from "./haptics.ts";
 import { ScrollEdges } from "./scroll-edges.tsx";
 import { readerTopEdge } from "./reader-top-edge.ts";
+import { readerBottomEdge } from "./reader-bottom-edge.ts";
 // The sheet sizes to its content but never taller than this fraction of the
 // viewport, so a strip of dimmed page always stays beyond it (it reads as a
 // sheet, not a full-page modal).
@@ -1049,6 +1050,7 @@ export function DetentSheet(
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={(event) => event.stopPropagation()}
                     sx={{
+                      ...(footerOverlay ? { isolation: "isolate", "&::before": (theme) => readerBottomEdge(theme)["&::before"] } : {}),
                       ...(footerOverlay
                         ? {
                           position: "absolute",
@@ -1070,9 +1072,7 @@ export function DetentSheet(
                       "& > :not([data-mobile-sheet-footer-shield])": {
                         pointerEvents: topMost ? "auto" : "none",
                       },
-                      // The circular dismiss island already has its own internal
-                      // glass breathing room; a full 8px footer lead made it look
-                      // detached from the final control. Keep a compact 4px seam.
+                      // Keep a compact 4px seam above the floating controls.
                       pt: 0.5,
                       // A cover lifts itself above the keyboard (bottom:--kb-inset), so
                       // when the keyboard is up the home-indicator clearance is moot —

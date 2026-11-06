@@ -22,8 +22,11 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   repository root is one Bun workspace (`web` plus the `components/*` packages
   it links): `just install` creates `node_modules`, `bun.lock` is the only
   lockfile, and a dependency change needs a new `depsHash` in `flake.nix`.
-  Tests import `test` from `bun:test` and assertions backed by `node:assert/strict` in `tools/test-assert.ts`;
-  scripts use `node:` and `Bun` APIs and spawn through `tools/lib/command.ts`.
+  Tests import `test` from `bun:test`. Repository-local tests reuse assertions
+  backed by `node:assert/strict` in `tools/test-assert.ts`; tests shipped inside
+  component packages import Node's built-in assertions directly to keep the
+  package self-contained.
+  Scripts use `node:` and `Bun` APIs and spawn through `tools/lib/command.ts`.
   Do not use `jsr:`/`npm:` specifiers.
 - Signed Plugin collectors (`plugins/*/collector/`) run on the Machine's
   bundled Bun with no host-provided globals. A package is self-contained, so

@@ -30,6 +30,7 @@ use crate::managed_calls::service::Ledger;
 const RUNNER: &str = include_str!("agent_api/runner.js");
 mod actions;
 mod code_reads;
+pub(super) use code_reads::maintain_holdings;
 mod control;
 mod event_reads;
 mod json_reads;

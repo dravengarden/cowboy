@@ -1,4 +1,5 @@
 import { Command } from "./lib/command.ts";
+import { mergedComponentRegistrySource, readComponentRegistrySources } from "./component-registry.ts";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import {
@@ -59,9 +60,9 @@ export function validateCodeAdapterRuntime(
 }
 
 export async function checkRepository(): Promise<void> {
-  const registry = await readJson<ComponentRegistry>(
-    "components/registry.json",
-  );
+  const registry = JSON.parse(
+    mergedComponentRegistrySource(readComponentRegistrySources()),
+  ) as ComponentRegistry;
   assert(
     registry.schema_version === 2 || registry.schema_version === 3,
     "unsupported component registry schema",

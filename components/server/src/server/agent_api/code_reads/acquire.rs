@@ -27,12 +27,36 @@ const IDLE: Duration = Duration::from_secs(300);
 struct Held {
     machine: String,
     worktree: String,
+    scope: Option<crate::core::SessionCodeScope>,
     last_used: Instant,
+    releasing: bool,
+    opening: usize,
 }
 
 type Key = (String, String);
 
 static HELD: LazyLock<Mutex<HashMap<Key, Held>>> = LazyLock::new(Mutex::default);
+
+struct Opening(Key);
+
+impl Drop for Opening {
+    fn drop(&mut self) {
+        if let Some(holding) = HELD.lock().get_mut(&self.0) {
+            holding.opening -= 1;
+            holding.last_used = Instant::now();
+        }
+    }
+}
+
+impl Held {
+    fn begin_release(&mut self, allowed: bool) -> bool {
+        if self.releasing || self.opening != 0 || (allowed && self.last_used.elapsed() < IDLE) {
+            return false;
+        }
+        self.releasing = true;
+        true
+    }
+}
 
 fn owner(session: &str) -> String {
     format!("cowboy-agent-{session}")
@@ -53,7 +77,6 @@ pub(super) async fn acquire(
     session: &str,
     path: &str,
 ) -> Result<(), &'static str> {
-    release_stale(state).await;
     if !state.hub.language_servers_allowed(session) {
         return Err("restricted");
     }
@@ -67,9 +90,17 @@ pub(super) async fn acquire(
     {
         let mut held = HELD.lock();
         if let Some(holding) = held.get_mut(&key) {
+            if holding.releasing
+                || holding.scope.as_ref() != Some(&context.scope)
+                || holding.machine != context.machine_id
+                || holding.worktree != worktree
+            {
+                return Err("unavailable");
+            }
             // Still sent: the open is idempotent for this owner and restores a
             // holding a replaced code runtime lost.
             holding.last_used = Instant::now();
+            holding.opening += 1;
         } else if !fits(&held, session, &context.machine_id, &worktree) {
             return Err("budget");
         } else {
@@ -79,11 +110,15 @@ pub(super) async fn acquire(
                 Held {
                     machine: context.machine_id.clone(),
                     worktree: worktree.clone(),
+                    scope: Some(context.scope.clone()),
                     last_used: Instant::now(),
+                    releasing: false,
+                    opening: 1,
                 },
             );
         }
     }
+    let _opening = Opening(key);
     let lease = owner(session);
     let opened = zed_session::buffer_request(
         &state.hub,
@@ -102,7 +137,8 @@ pub(super) async fn acquire(
         Ok(())
     } else {
         // Whatever the adapter kept is re-adopted by the same owner next time.
-        HELD.lock().remove(&key);
+        // An unknown Open may still own native resources. Keep its budget
+        // reservation until the same owner's release is confirmed.
         Err("unavailable")
     }
 }
@@ -119,30 +155,49 @@ pub(super) async fn release_stale(state: &AppState) {
         .map(|(key, _)| key.clone())
         .collect();
     for key in stale {
-        let Some(holding) = HELD.lock().remove(&key) else {
+        let holding = {
+            let mut held = HELD.lock();
+            let Some(holding) = held.get_mut(&key) else {
+                continue;
+            };
+            // A previous release may still execute. Do not send another close
+            // or let an acquisition reuse this owner after an unknown outcome.
+            // Acquisition may have refreshed it since the initial scan.
+            if !holding.begin_release(state.hub.language_servers_allowed(&key.0)) {
+                continue;
+            }
+            holding.clone()
+        };
+        let (session, path) = &key;
+        // Missing or replaced context cannot authorize release of the old
+        // native owner. Keep its reservation until lifecycle recovery.
+        let Some(context) = session_code_context(state, session) else {
             continue;
         };
-        let (session, path) = key;
-        // A session that no longer exists keeps nothing to release through.
-        let Some(context) = session_code_context(state, &session) else {
+        if holding.scope.as_ref() != Some(&context.scope)
+            || context.machine_id != holding.machine
+            || context.cwd != holding.worktree
+        {
             continue;
-        };
-        let lease = owner(&session);
-        if let Err(error) = zed_session::buffer_request(
+        }
+        let lease = owner(session);
+        let result = zed_session::buffer_request(
             &state.hub,
             &state.machine_control,
             state.zed_adapter_socket.as_deref(),
             &context.scope,
             zed_session::BufferRequest {
                 worktree: &holding.worktree,
-                path: &path,
+                path,
                 lease_id: &lease,
                 open: false,
             },
         )
-        .await
-        {
-            tracing::warn!(%session, ?error, "agent code buffer release failed");
+        .await;
+        if matches!(result, Ok(ZedAdapterResponse::Buffer { .. })) {
+            HELD.lock().remove(&key);
+        } else {
+            tracing::warn!(%session, "agent code buffer release remains unconfirmed");
         }
     }
 }
@@ -155,8 +210,84 @@ mod tests {
         Held {
             machine: machine.into(),
             worktree: worktree.into(),
+            scope: None,
             last_used: Instant::now(),
+            releasing: false,
+            opening: 0,
         }
+    }
+
+    #[test]
+    fn cleanup_rechecks_refresh_and_waits_for_in_flight_open() {
+        let mut held = holding("m", "/a");
+        assert!(
+            !held.begin_release(true),
+            "a refreshed holding survives an old scan"
+        );
+        held.last_used = Instant::now() - IDLE;
+        held.opening = 1;
+        assert!(
+            !held.begin_release(true),
+            "idle cleanup cannot overtake open"
+        );
+        assert!(
+            !held.begin_release(false),
+            "revocation cannot overtake open"
+        );
+        held.opening = 0;
+        assert!(held.begin_release(true));
+        assert!(
+            !held.begin_release(false),
+            "unknown close is never replayed"
+        );
+    }
+
+    #[test]
+    fn unknown_release_keeps_its_budget_and_revocation_releases_without_idle_wait() {
+        let mut held = HashMap::new();
+        for i in 0..MAX_PER_SESSION {
+            let mut entry = holding("m", "/a");
+            assert!(entry.begin_release(false));
+            held.insert(("a".into(), format!("f{i}")), entry);
+        }
+        assert!(!fits(&held, "a", "m", "/a"));
+        held.remove(&("a".into(), "f0".into()));
+        assert!(
+            fits(&held, "a", "m", "/a"),
+            "only confirmed close frees capacity"
+        );
+    }
+
+    #[tokio::test]
+    async fn canceled_open_stops_blocking_cleanup_without_freeing_unknown_resources() {
+        let key = (uuid::Uuid::new_v4().to_string(), "file.rs".into());
+        let mut entry = holding("m", "/a");
+        entry.opening = 1;
+        HELD.lock().insert(key.clone(), entry);
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let task_key = key.clone();
+        let task = tokio::spawn(async move {
+            let _opening = Opening(task_key);
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        });
+        ready.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let mut held = HELD.lock();
+        let entry = held
+            .get_mut(&key)
+            .expect("unknown open still consumes capacity");
+        assert_eq!(entry.opening, 0);
+        assert!(
+            !entry.begin_release(true),
+            "cancellation refreshes idle time"
+        );
+        assert!(
+            entry.begin_release(false),
+            "revocation can now attempt cleanup"
+        );
+        held.remove(&key);
     }
 
     #[test]

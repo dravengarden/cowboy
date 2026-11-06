@@ -2,29 +2,18 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { ok as assert, deepStrictEqual as assertEquals } from "node:assert/strict";
 
-const source = await readFile(
-  new URL("detent-sheet.tsx", import.meta.url), "utf8",
-);
+const source = await readFile(new URL("detent-sheet.tsx", import.meta.url), "utf8");
 
 test("drag paints the pointer sample without a frame of lag", () => {
   assert(source.includes('const SETTLE_EASE = "cubic-bezier(0.32, 0.72, 0, 1)"'));
   assert(source.includes("paint(y, false, true)"));
   assertEquals(source.includes("pendingYRef"), false);
-  assert(
-    source.includes("if (sheet.style.transition !== nextTransition)"),
-  );
+  assert(source.includes("if (sheet.style.transition !== nextTransition)"));
 });
 
 test("cover sheets clear Cowboy's iPad PWA top inset when the host publishes it", () => {
-  assert(
-    source.includes(
-      "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
-    ),
-  );
-  assertEquals(
-    source.includes('const SAFE_TOP = "env(safe-area-inset-top, 0px)"'),
-    false,
-  );
+  assert(source.includes("var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))"));
+  assertEquals(source.includes('const SAFE_TOP = "env(safe-area-inset-top, 0px)"'), false);
 });
 
 test("overlay footers pass blank space to the scroll body and keep ordinary shelves interactive", () => {

@@ -1,4 +1,4 @@
-import { UnfoldMore } from "@mui/icons-material";
+import { ExpandMore } from "@mui/icons-material";
 import { Box, ButtonBase, Typography } from "@mui/material";
 
 export function ReviewComparisonButton({
@@ -16,33 +16,47 @@ export function ReviewComparisonButton({
       data-review-compare
       aria-haspopup="dialog"
       aria-label={`Compare: ${label}`}
+      title={label}
       disabled={disabled}
       onClick={onClick}
       sx={{
-        flex: 1,
-        minWidth: 0,
+        flex: "0 1 auto",
+        maxWidth: "100%",
+        minWidth: 44,
         minHeight: 44,
-        gap: 0.5,
-        borderRadius: 1,
-        justifyContent: "flex-start",
+        borderRadius: "0.5rem",
+        justifyContent: "stretch",
         textAlign: "left",
+        "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main" },
       }}
     >
-      <Box sx={{ minWidth: 0, flex: 1 }}>
+      <Box
+        component="span"
+        data-review-comparison-surface
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 0.25,
+          width: "100%",
+          minWidth: 0,
+          minHeight: "2rem",
+          pl: 0.75,
+          pr: 0.5,
+          py: 0.25,
+          bgcolor: "action.hover",
+          borderRadius: "0.5rem",
+        }}
+      >
         <Typography
-          variant={reference.length ? "caption" : "body2"}
+          component="span"
+          variant="caption"
           noWrap
-          color={reference.length ? "text.secondary" : "text.primary"}
+          sx={{ flex: 1, minWidth: 0, fontWeight: 500, fontSize: "0.8125rem" }}
         >
-          {scenario}
+          {reference.length ? reference.join(" · ") : scenario}
         </Typography>
-        {reference.length > 0 && (
-          <Typography variant="body2" fontWeight={600} noWrap>
-            {reference.join(" · ")}
-          </Typography>
-        )}
+        <ExpandMore sx={{ fontSize: "1rem", color: "text.secondary", flexShrink: 0 }} />
       </Box>
-      <UnfoldMore fontSize="small" sx={{ color: "text.secondary", flexShrink: 0 }} />
     </ButtonBase>
   );
 }

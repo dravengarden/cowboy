@@ -48,12 +48,17 @@ pub(super) async fn scan(state: &Arc<AppState>, owner: Option<&str>) {
         None => store.superagent_owners().await.unwrap_or_default(),
     };
     for owner in owners {
-        let _guard = WRITES.lock().await;
-        let Ok((revision, config)) = settings(state, &owner).await else {
+        let Ok((_, config)) = settings(state, &owner).await else {
             continue;
         };
         for id in config.sessions.keys() {
-            if let Err(reason) = wake(state, &owner, revision, &config, id).await {
+            // Yield the admission lock between workers: a bounded historical
+            // read must not multiply into an owner-wide configuration stall.
+            let _guard = WRITES.lock().await;
+            let Ok((revision, current)) = settings(state, &owner).await else {
+                continue;
+            };
+            if let Err(reason) = wake(state, &owner, revision, &current, id).await {
                 tracing::debug!(session_id = id, reason, "superagent evaluation held");
             }
         }

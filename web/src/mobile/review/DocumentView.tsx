@@ -17,10 +17,9 @@ import { ReviewNavigation } from "./ReviewNavigation";
 import { type ReviewBufferMode } from "./ownedReviewBuffer";
 import { reviewDisplayText, useOwnedReviewBuffer } from "./useOwnedReviewBuffer";
 import { ReviewCodeStatus } from "./ReviewCodeStatus";
-import { ReviewCheckStatus } from "./ReviewCheckStatus";
 import { markdownPreviewSx } from "./reviewMarkdownPreview";
 import { ReviewDiffCodeStatus } from "./ReviewDiffCodeStatus";
-import { ReviewDocumentControls } from "./ReviewDocumentControls";
+import { ReviewDocumentFooter } from "./ReviewDocumentFooter";
 import { useOwnedReviewDiff } from "./useOwnedReviewDiff";
 import { captureTextScrollAnchor, DOCUMENT_REFRESH_RESUME_GRACE_MS, documentRefreshDecision, restoreTextScrollAnchor, type TextScrollAnchor } from "./documentRefreshModel";
 import { ReviewMediaPreview } from "./ReviewMediaPreview";
@@ -1431,9 +1430,6 @@ export function DocumentView({
           : target.kind === "source" && (
             <ReviewCodeStatus intelligence={owned} />
           ))}
-      {target.kind === "source" && !markdownPreview && (
-        <ReviewCheckStatus sessionId={sessionId} path={target.path} />
-      )}
       {target.kind === "source" && (
         <ReviewOutline
           open={outlineOpen}
@@ -1677,15 +1673,15 @@ export function DocumentView({
             </Popover>
           )}
       </Box>
-      {(truncated || counts || nextCursor || loadMoreError) && (
-        <ReviewDocumentControls
+        <ReviewDocumentFooter sessionId={sessionId} path={target.path}
+          checks={(target.kind === "source" || target.kind === "diff") && !markdownPreview}
+          visible={!!(truncated || counts || nextCursor || loadMoreError)}
           counts={counts} hunkCount={hunks.length} hunkIndex={hunkIndex}
           onPrevious={() => setHunkIndex((value) => value - 1)}
           onNext={() => setHunkIndex((value) => value + 1)}
           hasMore={!!nextCursor} loadingMore={loadingMore} loadMoreError={loadMoreError}
           onLoadMore={loadMore} limited={limited} diff={target.kind === "diff"}
         />
-      )}
     </Stack>
   );
 }

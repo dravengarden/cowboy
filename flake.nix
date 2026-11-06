@@ -84,6 +84,7 @@
           file.name == "contract.json"
         ) ./plugins)
         ./components/registry.json
+        ./components/registry-archive.json
         ./components/plugin-contract/schema.json
         ./components/code-intelligence/contract.json
       ];
@@ -243,7 +244,12 @@
       # Only behavior that runs inside a detached session contributes to the
       # pool generation. A control-plane-only change updates Cowboy without
       # draining live ACP sessions.
-      worker-generation-files = pkgs.lib.fileset.toList (pkgs.lib.fileset.unions ([
+      # The registry archive is part of the history that worker-registry-digest
+      # already covers, so it is not hashed again file by file: archiving a
+      # release must not change the worker generation.
+      worker-generation-files = builtins.filter
+        (path: path != ./components/registry-archive.json)
+        (pkgs.lib.fileset.toList (pkgs.lib.fileset.unions ([
         ./Cargo.toml
         ./Cargo.lock
         ./build.rs
@@ -285,7 +291,7 @@
         ./src/bin/cowboy-acp-worker.rs
       ] ++ plugin-contract-files ++ [
         (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
-      ]));
+      ])));
       worker-registry-input = builtins.fromJSON (builtins.readFile ./components/worker-registry-input.json);
       worker-registry-digest = assert worker-registry-input.schema == 1;
         assert builtins.match "[0-9a-f]{64}" worker-registry-input.registry_sha256 != null;
@@ -293,8 +299,12 @@
       worker-registry-check = pkgs.runCommand "cowboy-worker-registry-input-check" { } ''
         mkdir -p components
         ln -s ${./components/registry.json} components/registry.json
+        ln -s ${./components/registry-archive.json} components/registry-archive.json
         ln -s ${./components/worker-registry-input.json} components/worker-registry-input.json
-        ${bun}/bin/bun ${./tools/worker-registry-input.ts}
+        mkdir tools
+        cp ${./tools/worker-registry-input.ts} tools/worker-registry-input.ts
+        cp ${./tools/component-registry.ts} tools/component-registry.ts
+        ${bun}/bin/bun tools/worker-registry-input.ts
         touch "$out"
       '';
       worker-generation = "worker-" + builtins.substring 0 20 (
@@ -801,14 +811,31 @@
         })}
         EOF
       '';
-      cowboy-machine-bootstrap-release = machine-release true false false;
-      cowboy-machine-host-bootstrap-release = assert retained-worker-interface-compatible;
-        machine-release true true false;
-      cowboy-machine-release = machine-release false false false;
-      cowboy-machine-host-release = assert retained-worker-interface-compatible;
-        machine-release false true false;
-      cowboy-machine-writer-host-release = assert retained-worker-interface-compatible;
-        machine-release false true true;
+      # The Machine release matrix: one row per published output. `bootstrap`
+      # selects the read-only first-install input, `retainWorkers` reuses the
+      # pinned worker bundle (and so requires the retained worker interface to
+      # be byte-identical), `writer` selects the active-writer Machine, and
+      # `check` puts the row in `nix flake check` (the writer row needs a
+      # clean revision, so it is built at release time instead). The variants
+      # are not interchangeable: ordinary and bootstrap artifacts stay
+      # read-only, and retiring a row is a separately accepted migration
+      # (docs/compatibility-exits.md).
+      machine-release-matrix = {
+        cowboy-machine-release = { bootstrap = false; retainWorkers = false; writer = false; check = true; };
+        cowboy-machine-host-release = { bootstrap = false; retainWorkers = true; writer = false; check = true; };
+        cowboy-machine-bootstrap-release = { bootstrap = true; retainWorkers = false; writer = false; check = true; };
+        cowboy-machine-host-bootstrap-release = { bootstrap = true; retainWorkers = true; writer = false; check = true; };
+        cowboy-machine-writer-host-release = { bootstrap = false; retainWorkers = true; writer = true; check = false; };
+      };
+      machine-releases = pkgs.lib.mapAttrs (name: cell:
+        let
+          release = machine-release cell.bootstrap cell.retainWorkers cell.writer;
+        in
+        assert builtins.attrNames cell == [ "bootstrap" "check" "retainWorkers" "writer" ];
+        if cell.retainWorkers then assert retained-worker-interface-compatible; release else release
+      ) machine-release-matrix;
+      machine-release-checks = pkgs.lib.filterAttrs
+        (name: _: machine-release-matrix.${name}.check) machine-releases;
 
       cowboy-source-boundary = pkgs.runCommand "cowboy-source-boundary" { } ''
         test ! -e ${cowboy-src}/docs
@@ -967,12 +994,7 @@
         cowboy-chromium-test-browser = pkgs.chromium;
         cowboy-controller-release = cowboy-controller-release;
         cowboy-web-release = cowboy-web-release;
-        cowboy-machine-bootstrap-release = cowboy-machine-bootstrap-release;
-        cowboy-machine-host-bootstrap-release = cowboy-machine-host-bootstrap-release;
-        cowboy-machine-release = cowboy-machine-release;
-        cowboy-machine-host-release = cowboy-machine-host-release;
-        cowboy-machine-writer-host-release = cowboy-machine-writer-host-release;
-      };
+      } // machine-releases;
 
       # `cowboy`'s buildRustPackage check phase runs the Rust tests; cowboy-web's
       # build runs TypeScript checking before Vite. Developer lint/test policy is
@@ -980,11 +1002,9 @@
       checks.${system} = {
         inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary
           cowboy-web cowboy-controller-release cowboy-web-release
-          cowboy-machine-bootstrap-release cowboy-machine-release
-          cowboy-machine-host-release cowboy-machine-host-bootstrap-release
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
         cowboy-worker-registry-input = worker-registry-check;
-      };
+      } // machine-release-checks;
 
       # Android native-shell builds on Linux. The Rust and Tauri CLI versions
       # come from apps/native-shell/toolchain.json, so the shell cannot drift

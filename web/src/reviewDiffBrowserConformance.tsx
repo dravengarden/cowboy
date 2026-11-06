@@ -22,6 +22,9 @@ import type { ReviewDiffSource } from "./mobile/review/ownedDiffSource.ts";
 import { ReviewDiffCodeStatus } from "./mobile/review/ReviewDiffCodeStatus.tsx";
 import { useOwnedReviewDiff } from "./mobile/review/useOwnedReviewDiff.ts";
 import { useOwnedReviewBuffer } from "./mobile/review/useOwnedReviewBuffer.ts";
+import { diffCheckAnnotations } from "./mobile/review/diffCheckAnnotations";
+import { withCheckDiagnostics } from "./mobile/review/checkAnnotations";
+import { reviewCheckActionsBrowserChecks } from "./reviewCheckActionsBrowserChecks";
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -122,7 +125,13 @@ export async function runReviewDiffBrowserConformance(): Promise<string[]> {
           path="a.txt"
           softWrap
           fontSize={14}
-          diagnostics={false}
+          diagnostics
+          languageData={withCheckDiagnostics(undefined, "a.txt", diffCheckAnnotations(patch ?? "", [{
+            start: { row: 1, column: 0 },
+            end: { row: 1, column: 100 },
+            severity: 1,
+            message: "Fixture check finding",
+          }], diff.point))}
           inlayHints={false}
           semanticHighlighting={false}
           onInspect={diff.projection && intelligence.identity
@@ -223,6 +232,7 @@ export async function runReviewDiffBrowserConformance(): Promise<string[]> {
   try {
     render(patch, "staged");
     await until(() => status() === "historical", "staged refusal");
+    check(!container.querySelector(".cowboy-diagnostic"), "historical diff received current check findings");
     check(
       !fileCount() && !count(),
       "staged diff accessed current/native file",
@@ -270,6 +280,9 @@ export async function runReviewDiffBrowserConformance(): Promise<string[]> {
     );
     f.reply(2, language());
     await until(() => status() === "ready", "matching source");
+    await until(() => !!container.querySelector(".cowboy-diagnostic"), "diff check annotation");
+    check(container.querySelector(".cowboy-diagnostic")?.textContent === "a🙂z", "check finding marked the wrong diff line");
+    tests.push("check findings annotate the mapped new-file line, never staged history");
     check(
       !container.querySelector('[role="alert"]'),
       "ready diff occupied a status row",
@@ -400,5 +413,6 @@ export async function runReviewDiffBrowserConformance(): Promise<string[]> {
     flushSync(() => root.unmount());
     container.remove();
   }
+  tests.push(await reviewCheckActionsBrowserChecks());
   return tests;
 }
