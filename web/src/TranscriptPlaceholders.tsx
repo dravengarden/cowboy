@@ -12,6 +12,7 @@ import { prepareSweep } from "./sessionPreparing";
 import { CONVERSATION_SKELETON_TURNS, transcriptRestoreCaption } from "./transcriptLoadingPresentation";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { openSessionSettings } from "./sessionSettingsOpen";
+import { PreparingConversation } from "./PreparingConversation";
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -401,8 +402,7 @@ export function ConversationEmptyState({
     : kind === "cleared"
     ? "New conversation"
     : "Start a conversation";
-  // "ready" is a claim about the agent, so it must track the session status. A
-  // cleared session restarts its agent: saying "is ready with a fresh context"
+  // A cleared session restarts its agent: saying "is ready with a fresh context"
   // while the process is still spinning up is the contradiction this modifier
   // removes. Typing is still invited — a prompt written now is queued and the
   // daemon drains it on the Running edge.
@@ -456,6 +456,7 @@ export function ConversationEmptyState({
     return event.target.closest("[data-conversation-empty-settings], [data-session-start-settings], [data-session-handoff]") ===
       null;
   };
+  if (kind === "preparing" && committed) return <PreparingConversation sessionId={sessionId} location={location} />;
   return (
     <Stack
       data-conversation-empty-state={kind}

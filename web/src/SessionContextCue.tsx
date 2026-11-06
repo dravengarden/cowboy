@@ -7,7 +7,6 @@ import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
 import LinkOffOutlined from "@mui/icons-material/LinkOffOutlined";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import ChevronRightRounded from "@mui/icons-material/ChevronRightRounded";
-import HistoryRounded from "@mui/icons-material/HistoryRounded";
 import { glyphSize } from "./surface/desktopSize";
 import { mobileComposerPanelFrameSx, mobileComposerPanelHeaderMinHeight } from "./mobileComposerPrimitives";
 import { ProviderIcon } from "./ProviderIcon";
@@ -334,53 +333,12 @@ function useSessionLinks(sessionId: string): SessionLinkRow[] {
 export function SessionContinuedFrom(
   { sessionId }: { sessionId: string },
 ): React.JSX.Element | null {
-  const session = useStoreSelector((state) =>
-    state.sessions.find((entry) => entry.id === sessionId)
-  );
   const links = useSessionLinks(sessionId);
-  const { data: accounts } = useSubscriptionAccounts();
   const source = links.find((link) => link.kind === "continued");
-  const sourceSession = useStoreSelector((state) =>
-    state.sessions.find((entry) => entry.id === source?.id)
-  );
-  if (!source || !session) return null;
-  const openable = source.state === "open";
-  const note = source.state === "trash" ? "in Trash" : source.state === "deleted" ? "deleted" : "";
-  const more = links.length - 1;
-  const title = `${source.title}${more > 0 ? ` +${more}` : ""}`;
-  const here = sessionAccountIdentity(accounts, session).short;
-  const was = sourceSession && sessionAccountIdentity(accounts, sourceSession).short;
-  const change = was && was !== here ? `${was} → ${here}` : "";
+  if (!source) return null;
   return (
-    <Box sx={{ display: "flex", justifyContent: "center", flexShrink: 0, px: 1.5, pt: 1, maxWidth: "100%" }}>
-      <ButtonBase
-        data-session-handoff="start"
-        disabled={!openable}
-        aria-label={`Continued from ${title}${note && `, ${note}`}`}
-        title={openable ? "Open where this conversation was handed off" : `This session is ${note}`}
-        onClick={(): void => openSessionLink(source, sourceSession)}
-        sx={{
-          gap: 0.5,
-          minWidth: 0,
-          maxWidth: "100%",
-          minHeight: 32,
-          pl: 1.25,
-          pr: 0.75,
-          borderRadius: 999,
-          color: "text.secondary",
-          bgcolor: "action.hover",
-          animation: `${arrive} 240ms ease-out`,
-          "@media (prefers-reduced-motion: reduce)": { animation: "none" },
-        }}
-      >
-        <HistoryRounded sx={{ fontSize: glyphSize(16), flexShrink: 0 }} />
-        <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
-          Continued from{" "}
-          <Box component="span" sx={{ color: "text.primary", fontWeight: 600 }}>{title}</Box>
-          {note ? ` · ${note}` : change && ` · ${change}`}
-        </Typography>
-        {openable && <ChevronRightRounded sx={{ fontSize: glyphSize(16), flexShrink: 0 }} />}
-      </ButtonBase>
+    <Box data-session-handoff="start" sx={{ width: "100%", maxWidth: 560, minWidth: 0, px: 1 }}>
+      <SessionLink link={source} handoff />
     </Box>
   );
 }
@@ -493,7 +451,7 @@ export function SessionHandedOffDock(
 
 /** One session this conversation came from or read. Open while it exists;
  *  a source in Trash can come back, a deleted one stays as a named record. */
-function SessionLink({ link }: { link: SessionLinkRow }): React.JSX.Element {
+function SessionLink({ link, handoff = false }: { link: SessionLinkRow; handoff?: boolean }): React.JSX.Element {
   const session = useStoreSelector((state) =>
     state.sessions.find((entry) => entry.id === link.id)
   );
@@ -515,7 +473,8 @@ function SessionLink({ link }: { link: SessionLinkRow }): React.JSX.Element {
   return (
     <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0 }}>
       <ButtonBase
-        data-session-link={link.state}
+        data-session-link={handoff ? undefined : link.state}
+        data-session-handoff-link={handoff ? link.state : undefined}
         disabled={!open}
         title={open ? "Open at the point it was linked" : link.title}
         onClick={(): void => openSessionLink(link, session)}
