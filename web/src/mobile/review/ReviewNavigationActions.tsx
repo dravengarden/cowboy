@@ -8,6 +8,9 @@ import { createPortal } from "react-dom";
 import { openAppSettings } from "../../appSettings";
 import { HintTooltip } from "../../HintTooltip";
 import { useNetworkActionState } from "../../NetworkActionFeedback";
+import { dismissReviewActions } from "./ReviewMoreActions";
+
+type ReviewAction = MobileSheetAction & { opensDialog?: boolean };
 
 /** The navigator owns its actions even when they live in the page's bottom
  * bar. Moving between overview and sidebar never duplicates the navigator or
@@ -26,7 +29,7 @@ export function ReviewNavigationActions({
   embedded: boolean;
   container?: HTMLElement | null | undefined;
   label: string;
-  actions?: readonly MobileSheetAction[];
+  actions?: readonly ReviewAction[];
   refreshLabel: string;
   onRefresh: () => Promise<void> | void;
   disabled: boolean;
@@ -34,7 +37,7 @@ export function ReviewNavigationActions({
   onClose: () => void;
 }): React.JSX.Element | null {
   const refresh = useNetworkActionState();
-  const items: MobileSheetAction[] = [
+  const items: ReviewAction[] = [
     ...actions,
     {
       key: "refresh",
@@ -67,10 +70,14 @@ export function ReviewNavigationActions({
             <span>
               <Button
                 aria-label={action.label}
+                aria-haspopup={action.opensDialog ? "dialog" : undefined}
                 aria-busy={action.key === "refresh" && refresh.pending ||
                   undefined}
                 disabled={action.disabled}
-                onClick={action.onPress}
+                onClick={() => {
+                  action.onPress();
+                  if (action.opensDialog) dismissReviewActions(container);
+                }}
                 startIcon={action.icon}
                 sx={{ minHeight: 44, color: "text.secondary", textTransform: "none" }}
               >
