@@ -28,6 +28,8 @@ mod buffer_sync;
 #[cfg(test)]
 mod navigation_fixture;
 #[cfg(test)]
+mod route_recovery_tests;
+#[cfg(test)]
 mod sync_fixture;
 
 const MAX_CODE_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
@@ -67,31 +69,71 @@ struct WorktreeRoute {
     /// Installed generation of `target`; `None` for a legacy socket.
     generation: Option<String>,
     worktree_leases: u64,
+    /// An in-flight or unobserved non-idempotent open must pin its peer even
+    /// before any lease count is observed. Later observations cannot prove
+    /// that the original handler finished.
+    pending_worktree_open: bool,
     buffers: BTreeSet<(String, String)>,
     owned_buffers: BTreeSet<buffer_leases::LeaseRef>,
     owned_navigations: BTreeSet<crate::machine_protocol::code_buffer_navigation::NavigationRef>,
 }
 
 impl WorktreeRoute {
+    fn dispatching(&mut self, request: &Value) -> Result<()> {
+        match request["type"].as_str() {
+            Some("openWorktree") => {
+                ensure!(
+                    !self.pending_worktree_open,
+                    "original worktree open remains unconfirmed"
+                );
+                self.pending_worktree_open = true;
+            }
+            Some("openBuffer") => {
+                // Reserve before I/O, including cancellation. This owner is
+                // idempotent; only its confirmed close removes the reservation.
+                self.buffers.insert(Self::buffer_key(request)?);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn buffer_key(request: &Value) -> Result<(String, String)> {
+        Ok((
+            request["path"]
+                .as_str()
+                .context("buffer path is missing")?
+                .to_owned(),
+            request["leaseId"]
+                .as_str()
+                .context("buffer lease is missing")?
+                .to_owned(),
+        ))
+    }
+
     fn observe(&mut self, request: &Value, response: &Value) -> Result<bool> {
         match request.get("type").and_then(Value::as_str) {
             Some("openWorktree" | "closeWorktree" | "ensureWorktree") => {
+                ensure!(
+                    response["type"] == "worktree" && response["api_version"] == 1,
+                    "code runtime returned invalid worktree confirmation"
+                );
                 self.worktree_leases = response
                     .get("leases")
                     .and_then(Value::as_u64)
                     .context("code runtime returned invalid worktree leases")?;
+                if request["type"] == "openWorktree" {
+                    self.pending_worktree_open = false;
+                }
             }
             Some("openBuffer" | "closeBuffer") => {
-                let key = (
-                    request["path"]
-                        .as_str()
-                        .context("buffer path is missing")?
-                        .to_owned(),
-                    request["leaseId"]
-                        .as_str()
-                        .context("buffer lease is missing")?
-                        .to_owned(),
+                ensure!(
+                    response["type"] == "buffer"
+                        && response["api_version"] == 1
+                        && response["leases"].as_u64().is_some(),
+                    "code runtime returned invalid buffer confirmation"
                 );
+                let key = Self::buffer_key(request)?;
                 if request["type"] == "openBuffer" {
                     self.buffers.insert(key);
                 } else {
@@ -108,6 +150,7 @@ impl WorktreeRoute {
 
     fn is_idle(&self) -> bool {
         self.worktree_leases == 0
+            && !self.pending_worktree_open
             && self.buffers.is_empty()
             && self.owned_buffers.is_empty()
             && self.owned_navigations.is_empty()
@@ -262,7 +305,9 @@ impl CodeRuntimeHost {
                 .prepare(plugin_id, reservation, retained_route, &mut route, payload)
                 .await;
         }
-        let response = exchange(target.socket(), payload).await?;
+        let socket = target.socket().to_owned();
+        route.dispatching(payload)?;
+        let response = exchange(&socket, payload).await?;
         if route.observe(payload, &response)? {
             *route = WorktreeRoute::default();
         }
@@ -660,6 +705,24 @@ mod tests {
                 .unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
             let kind = request["type"].as_str().unwrap();
+            if matches!(kind, "openBuffer" | "openWorktree")
+                && matches!(
+                    generation.as_str(),
+                    "generation-lost-legacy" | "generation-pause-legacy"
+                )
+            {
+                fs::write(home.join("legacy-requested"), kind).unwrap();
+                if generation == "generation-lost-legacy" {
+                    continue;
+                }
+                for _ in 0..500 {
+                    if home.join("resume-legacy").exists() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert!(home.join("resume-legacy").exists());
+            }
             if let Some(response) =
                 navigation.reply(&request, &home, generation, &mut owned, &mut next_lease)
             {
@@ -757,13 +820,14 @@ mod tests {
                 continue;
             }
             let response = json!({
-                "type": if kind == "health" { "health" } else { "worktree" },
+                "type": if kind == "health" { "health" } else if matches!(kind, "openBuffer" | "closeBuffer") { "buffer" } else { "worktree" },
+                "api_version": 1,
                 "leases": u8::from(kind == "openWorktree" || kind == "openBuffer"),
                 "generation": generation, "descendant": descendant.id(),
                 "home": home,
                 "credential_environment": std::env::vars().any(|(key, _)| key.starts_with("ANTHROPIC_") || key.starts_with("COWBOY_AUTH_")),
             });
-            writeln!(stream, "{response}").unwrap();
+            let _ = writeln!(stream, "{response}");
         }
         let _ = descendant.kill();
         let _ = descendant.wait();
@@ -967,26 +1031,32 @@ mod tests {
     fn closing_one_buffer_does_not_drop_other_buffer_or_worktree_leases() {
         let mut route = WorktreeRoute::default();
         route
-            .observe(&json!({"type": "openWorktree"}), &json!({"leases": 1}))
+            .observe(
+                &json!({"type": "openWorktree"}),
+                &json!({"type":"worktree", "api_version":1, "leases": 1}),
+            )
             .unwrap();
         for id in ["a", "b"] {
             route
                 .observe(
                     &json!({"type": "openBuffer", "path": "a.rs", "leaseId": id}),
-                    &json!({}),
+                    &json!({"type":"buffer", "api_version":1, "leases":1}),
                 )
                 .unwrap();
         }
         assert!(
             !route
-                .observe(&json!({"type": "closeWorktree"}), &json!({"leases": 0}))
+                .observe(
+                    &json!({"type": "closeWorktree"}),
+                    &json!({"type":"worktree", "api_version":1, "leases": 0})
+                )
                 .unwrap()
         );
         assert!(
             !route
                 .observe(
                     &json!({"type": "closeBuffer", "path": "a.rs", "leaseId": "a"}),
-                    &json!({})
+                    &json!({"type":"buffer", "api_version":1, "leases":1})
                 )
                 .unwrap()
         );
@@ -994,7 +1064,7 @@ mod tests {
             route
                 .observe(
                     &json!({"type": "closeBuffer", "path": "a.rs", "leaseId": "b"}),
-                    &json!({})
+                    &json!({"type":"buffer", "api_version":1, "leases":0})
                 )
                 .unwrap()
         );
