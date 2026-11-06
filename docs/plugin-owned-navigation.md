@@ -44,7 +44,7 @@ replay; this does not add independent recovery or background-task quiescence.
 
 ## Finite ownership contract
 
-The `1.28.0` source candidate uses private server `1.13.0` navigation protocol
+The `1.28.0` release uses private server `1.13.0` navigation protocol
 two. Its original-operation receipts recover a lost completed reply through
 Query; source changes, malformed results and actual native Unknown outcomes
 remain fenced. This source change alone establishes neither publication nor
@@ -202,8 +202,16 @@ Before production cutover, still required:
 - Bound aggregate retained history/background effects and provide independently
   authorized native recovery; local release is not verified native cleanup.
 
-This source candidate does not publish a signed Catalog release, install a
-Plugin or authorize resident Machine maintenance. General DAG execution, state
+Zed `1.28.0` was published and installed on Hawk on 2026-11-06. The composite
+digest is `sha256:dad653c9635f6fb850e22dea62840ccb9b1a55dbc24453cc25215d17b71a36b7`;
+the fixed install operation `hawk-zed-1-28-0-converge` completed with Machine
+receipt `applied`. Public artifact bytes matched the signed package, adapter
+and server digests. The final immutable pair passed native navigation and
+actual install/drain conformance before publication. Production diagnostics
+returned gopls `document_current`, and the running adapter and server executable
+paths selected that exact generation. This verifies installation and ordinary
+diagnostics, not the pending production owned-navigation consumer acceptance
+listed above. General DAG execution, state
 leases and independent recovery remain in the
 [completion ledger](history/plugin-refactor-completion.md).
 
