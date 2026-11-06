@@ -461,6 +461,17 @@ floors are still 1 (current runtime 5, Machine 41), so every older-Machine
 branch waits on one Machine maintenance that raises them. 7.2 and 7.3 are
 Machine maintenance boundaries and wait for that explicit window.
 
+7.2 landed on 2026-11-06: `flake.nix` reads the five Machine release outputs
+from one `machine-release-matrix` table (`bootstrap`, `retainWorkers`,
+`writer`, `check`) instead of positional booleans and hand-kept package and
+check lists; `retainWorkers` rows keep the retained-worker interface
+assertion and the writer row stays out of `nix flake check` because it needs a
+clean revision. The plan's "eight outputs" predates the retired variants: the
+matrix has five rows beside the Controller and Web releases. Proof: the full
+derivation closure of every row (2,699–2,706 derivations) is identical before
+and after with the revision and store hashes masked, and the check set is
+unchanged. No variant was added or retired.
+
 ## 6. Not worth doing
 
 - A rewrite, a second controller, a microservices split or a wholesale state
