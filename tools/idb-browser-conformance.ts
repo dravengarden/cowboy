@@ -284,7 +284,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     !Array.isArray(result.tests) ||
     result.tests.length !==
       (suite === "session-context"
-        ? 110
+        ? 113
         : suite === "sign-in"
           ? 5
           : suite === "session-move" || suite === "editor-plugin-sandbox"
