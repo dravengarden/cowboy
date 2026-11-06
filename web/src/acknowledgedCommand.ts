@@ -1,6 +1,9 @@
-import type { Inbound } from "./protocol";
+import type { Envelope, Inbound } from "./protocol";
 import { beginConversationClear } from "./conversationClearance";
 import { reportClientDuration, startClientSpan } from "./observability";
+export function latestClearBoundary(events: readonly Envelope[] = []): number {
+  return [...events].reverse().find((event) => event.kind === "update" && event.update.sessionUpdate === "context_cleared")?.seq ?? -1;
+}
 
 export function acknowledgedCommand<T>(command: Inbound, predicate: (snapshot: T) => boolean, label: string,
   send: (command: Inbound) => boolean, wait: (predicate: (snapshot: T) => boolean, label: string) => Promise<void>): Promise<void> {

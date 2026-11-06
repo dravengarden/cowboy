@@ -103,7 +103,7 @@ import {
 } from "./pendingEditStore";
 import { revealPendingArrival } from "./pendingPanelState";
 import { linkTimeline } from "./derive";
-import { acknowledgedCommand } from "./acknowledgedCommand";
+import { acknowledgedCommand, latestClearBoundary } from "./acknowledgedCommand";
 import { SessionActionCancelled, sessionActionSnapshot, waitForSessionAction, waitForSnapshot } from "./sessionActionWait";
 import { resetExploreAfterContextClear } from "./explore/exploreStore";
 import { optimisticQuestionKey } from "./explore/optimisticPages";
@@ -5332,19 +5332,10 @@ export function clearQueue(sessionId: string): Promise<void> {
 // `context_cleared` boundary after clearing memory + durable history. This is
 // the Clear composer action — NOT a slash command (no agent exposes `clear`).
 export function resetSession(sessionId: string): Promise<void> {
-  const previousBoundary = [...(state.timelines.get(sessionId) ?? [])]
-    .reverse()
-    .find((event) =>
-      event.kind === "update" && event.update.sessionUpdate === "context_cleared"
-    )?.seq ?? -1;
+  const previousBoundary = latestClearBoundary(state.timelines.get(sessionId));
   return sendWithAck(
     { type: "reset_session", session_id: sessionId },
-    (snapshot) =>
-      (snapshot.timelines.get(sessionId) ?? []).some((event) =>
-        event.seq > previousBoundary &&
-        event.kind === "update" &&
-        event.update.sessionUpdate === "context_cleared"
-      ),
+    (snapshot) => latestClearBoundary(snapshot.timelines.get(sessionId)) > previousBoundary,
     "Clear conversation",
   ).catch((error: unknown) => {
     if (!(error instanceof SessionActionCancelled)) notify(error instanceof Error ? error.message : "Could not clear the conversation.");
