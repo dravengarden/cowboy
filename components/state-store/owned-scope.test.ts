@@ -4,7 +4,7 @@ import {
   assertRejects,
   assertStrictEquals,
   assertThrows,
-} from "../../tools/test-assert.ts";
+} from "@std/assert";
 import { createOwnedResourceScope, ScopeClosedError } from "./owned-scope.ts";
 
 test("owned scope seals synchronously and releases consumer before provider", async () => {

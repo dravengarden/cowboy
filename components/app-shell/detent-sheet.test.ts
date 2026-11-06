@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "../../tools/test-assert.ts";
+import { assert, assertEquals } from "@std/assert";
 
 const source = await readFile(
   new URL("detent-sheet.tsx", import.meta.url), "utf8",
