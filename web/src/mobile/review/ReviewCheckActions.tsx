@@ -41,7 +41,7 @@ export function ReviewCheckActions({ sessionId }: { sessionId: string }): React.
     }
   };
   return (
-    <Box sx={{ px: 1, py: 0.5, flexShrink: 0, maxHeight: "min(192px, 35dvh)", overflowY: "auto" }}>
+    <Box sx={{ px: 1, flexShrink: 0, maxHeight: "min(192px, 35dvh)", overflowY: "auto" }}>
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
         {checks.declared.map((check) => (
           <Button

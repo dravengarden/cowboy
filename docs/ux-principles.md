@@ -26,6 +26,17 @@ labels, without adding a second navigation hierarchy.
   their natural width, with comparison or filter controls beside them. Avoid
   stacked full-width segmented bars, oversized capsules and repeated dividers.
   Reduce decoration and wasted space while preserving 44 px touch targets.
+- Keep a control's visual highlight proportional to its glyph or label; the
+  hit area may be larger. Small reading fonts must not make navigation glyphs
+  unreadable. Empty readers should use the available height for a balanced
+  overview: explain the current scope, show known status and recent activity,
+  and offer useful next actions. Do not use fixed top padding or invent facts
+  merely to fill space. Move identity into the bottom context summary on Mobile.
+- All text follows the global font-size setting, including empty states,
+  metadata and navigation labels. Use relative font sizes without fixed-pixel
+  minimums. Keep touch-target size independent from text size. Mobile information
+  panels use the available width with modest side insets; shrinking text must
+  not shrink the panel into a narrow column or waste room needed by long paths.
 - Put next/previous, review marks, view selection and search directly in their
   active view. Secondary actions may contain refresh, integrations and settings.
   Useful facts remain visible in the reader's context dock or information rail;

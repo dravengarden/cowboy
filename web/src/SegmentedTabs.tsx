@@ -214,7 +214,7 @@ export function SegmentedTabs<T extends string>({
 }
 
 const selectedSegment = {
-  bgcolor: "action.selected",
+  bgcolor: (theme: Theme) => `var(--segmented-selected-fill, ${theme.palette.action.selected})`,
   color: "primary.main",
   fontWeight: 700,
 };

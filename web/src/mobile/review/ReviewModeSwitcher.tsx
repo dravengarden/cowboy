@@ -1,4 +1,4 @@
-import { AccountTreeOutlined, DifferenceOutlined } from "@mui/icons-material";
+import { CompareArrowsRounded, FolderOutlined } from "@mui/icons-material";
 import { Box, ButtonBase } from "@mui/material";
 import { alpha, type SxProps, type Theme } from "@mui/material/styles";
 import { COARSE_POINTER_ROOT_CLASS } from "../../platform";
@@ -37,8 +37,9 @@ export function ReviewModeSwitcher({
       theme.palette.mode === "dark" ? 0.24 : 0.13,
     );
   const selectedChip = {
-    bgcolor: selectedFill,
+    bgcolor: "transparent",
     color: "primary.main",
+    "& [data-review-mode-glyph]": { bgcolor: selectedFill },
   };
   const modeButtonSx: SxProps<Theme> = {
     width: 44,
@@ -90,7 +91,7 @@ export function ReviewModeSwitcher({
         "& .MuiSvgIcon-root": {
           // Root-relative geometry keeps both mode glyphs in step with the
           // global font-size setting.
-          fontSize: "1.5rem",
+          fontSize: "clamp(20px, 1.5rem, 28px)",
         },
       }}
     >
@@ -111,7 +112,7 @@ export function ReviewModeSwitcher({
         }}
         sx={modeButtonSx}
       >
-        <DifferenceOutlined />
+        <ModeGlyph><CompareArrowsRounded /></ModeGlyph>
       </ButtonBase>
       <ButtonBase
         disableRipple
@@ -130,8 +131,13 @@ export function ReviewModeSwitcher({
         }}
         sx={modeButtonSx}
       >
-        <AccountTreeOutlined />
+        <ModeGlyph><FolderOutlined /></ModeGlyph>
       </ButtonBase>
     </Box>
   );
+}
+
+function ModeGlyph({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <Box component="span" data-review-mode-glyph sx={{ width: 32, height: 32,
+    display: "grid", placeItems: "center", borderRadius: "10px" }}>{children}</Box>;
 }
