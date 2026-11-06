@@ -66,7 +66,8 @@ fn closed(envelope: &wire::CowboyBufferSyncEnvelope) -> wire::CowboyCloseBuffers
         panic!("not close");
     };
     wire::CowboyCloseBuffersResponse {
-        protocol: 1,
+        protocol: request.protocol,
+        operation_id: request.operation_id,
         instance: request.instance.clone(),
         outcome: Outcome::Closed as i32,
         buffer_ids: request.buffer_ids.clone(),
@@ -85,7 +86,26 @@ fn deliver(zed: &Zed, id: u32, payload: Payload) -> bool {
     )
 }
 
-async fn uncertain(f: &Fixture, zed: &Zed, lease: &LeaseRef) {
+fn retirements(zed: &Zed, receiver: &mut mpsc::Receiver<wire::CowboyBufferSyncEnvelope>) {
+    while let Ok(envelope) = receiver.try_recv() {
+        let Some(Payload::CloseRequest(request)) = &envelope.payload else {
+            panic!("not receipt retirement");
+        };
+        assert_eq!(
+            request.action,
+            wire::cowboy_close_buffers::Action::Forget as i32
+        );
+        reply(&zed.sync, envelope, Outcome::Forgotten);
+    }
+}
+
+async fn uncertain(
+    f: &Fixture,
+    zed: &Zed,
+    lease: &LeaseRef,
+    receiver: &mut mpsc::Receiver<wire::CowboyBufferSyncEnvelope>,
+) {
+    retirements(zed, receiver);
     for request in [
         Request::QueryBufferLease {
             lease: lease.clone(),
@@ -97,14 +117,31 @@ async fn uncertain(f: &Fixture, zed: &Zed, lease: &LeaseRef) {
             lease: lease.clone(),
         },
     ] {
-        assert_eq!(
-            state(
-                respond(request, &f.worktrees, &f.buffers, Some(zed))
-                    .await
-                    .unwrap()
-            ),
-            LeaseState::Unknown
+        let query = matches!(
+            &request,
+            Request::QueryBufferLease { .. } | Request::ReleaseBufferLease { .. }
         );
+        let response = if query {
+            let (response, ()) = tokio::join!(
+                respond(request, &f.worktrees, &f.buffers, Some(zed)),
+                async {
+                    let envelope = receiver.recv().await.unwrap();
+                    let Some(Payload::CloseRequest(request)) = &envelope.payload else {
+                        panic!("not recovery query");
+                    };
+                    assert_eq!(
+                        request.action,
+                        wire::cowboy_close_buffers::Action::Query as i32
+                    );
+                    assert!(request.operation_id > 0);
+                    reply(&zed.sync, envelope, Outcome::Unknown);
+                }
+            );
+            response
+        } else {
+            respond(request, &f.worktrees, &f.buffers, Some(zed)).await
+        };
+        assert_eq!(state(response.unwrap()), LeaseState::Unknown);
     }
     let next = f.prepare().await;
     assert!(
@@ -147,7 +184,7 @@ async fn lost_native_close_observer_keeps_original_owner_and_late_reply_cannot_c
         effect.id,
         Payload::CloseResponse(closed(&effect))
     ));
-    uncertain(&f, &zed, &lease).await;
+    uncertain(&f, &zed, &lease, &mut receiver).await;
     assert!(receiver.try_recv().is_err());
 }
 
@@ -166,9 +203,79 @@ async fn wrong_native_close_replies_never_complete_or_replay_release() {
         }
         assert!(deliver(&zed, effect.id, Payload::CloseResponse(response)));
         assert!(task.await.unwrap().is_err());
-        uncertain(&f, &zed, &lease).await;
+        uncertain(&f, &zed, &lease, &mut receiver).await;
         assert!(receiver.try_recv().is_err());
     }
+}
+
+#[tokio::test]
+async fn lost_close_recovers_only_from_the_matching_original_receipt() {
+    let (f, lease, zed, mut receiver) = fixture().await;
+    let task = release(&f, &zed, &lease);
+    let effect = admission(&zed, &mut receiver).await;
+    let Some(Payload::CloseRequest(original)) = effect.payload else {
+        panic!("not close");
+    };
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    for mismatch in [true, false] {
+        let (response, ()) = tokio::join!(
+            respond(
+                Request::QueryBufferLease {
+                    lease: lease.clone()
+                },
+                &f.worktrees,
+                &f.buffers,
+                Some(&zed)
+            ),
+            async {
+                let query = receiver.recv().await.unwrap();
+                let Some(Payload::CloseRequest(request)) = &query.payload else {
+                    panic!("not recovery query");
+                };
+                assert_eq!(
+                    request.action,
+                    wire::cowboy_close_buffers::Action::Query as i32
+                );
+                assert_eq!(request.operation_id, original.operation_id);
+                assert_eq!(request.instance, original.instance);
+                assert_eq!(request.buffer_ids, original.buffer_ids);
+                let mut response = closed(&query);
+                if mismatch {
+                    response.operation_id += 1;
+                }
+                assert!(deliver(&zed, query.id, Payload::CloseResponse(response)));
+            }
+        );
+        assert_eq!(
+            state(response.unwrap()),
+            if mismatch {
+                LeaseState::Unknown
+            } else {
+                LeaseState::Released
+            }
+        );
+        assert_eq!(f.buffers.active.read().await.is_empty(), !mismatch);
+    }
+    assert!(zed.diagnostics.lock().unwrap().revision(7).is_err());
+    retirements(&zed, &mut receiver);
+    assert_eq!(
+        state(
+            respond(
+                Request::QueryBufferLease { lease },
+                &f.worktrees,
+                &f.buffers,
+                Some(&zed)
+            )
+            .await
+            .unwrap()
+        ),
+        LeaseState::Released
+    );
+    assert!(
+        receiver.try_recv().is_err(),
+        "recovered owner did not dispatch another close"
+    );
 }
 
 #[tokio::test]
@@ -182,7 +289,7 @@ async fn real_native_close_deadline_keeps_unknown_without_retry_or_cleanup() {
         .unwrap()
         .unwrap_err();
     assert!(error.to_string().contains("observation timed out"));
-    uncertain(&f, &zed, &lease).await;
+    uncertain(&f, &zed, &lease, &mut receiver).await;
     assert!(receiver.try_recv().is_err());
 }
 
@@ -222,6 +329,7 @@ async fn cancellation_during_effect_free_probe_does_not_admit_close() {
     let effect = admission(&zed, &mut receiver).await;
     assert_eq!(reply(&zed.sync, effect, Outcome::Closed), [7]);
     assert_eq!(state(task.await.unwrap().unwrap()), LeaseState::Released);
+    retirements(&zed, &mut receiver);
     assert!(f.buffers.active.read().await.is_empty());
     assert!(zed.diagnostics.lock().unwrap().revision(7).is_err());
     assert_eq!(
@@ -262,6 +370,6 @@ async fn independently_confirmed_close_does_not_clear_another_unknown_close() {
     let effect = admission(&zed, &mut receiver).await;
     assert_eq!(reply(&zed.sync, effect, Outcome::Closed), [2]);
     assert_eq!(state(task.await.unwrap().unwrap()), LeaseState::Released);
-    uncertain(&f, &zed, &lease).await;
+    uncertain(&f, &zed, &lease, &mut receiver).await;
     assert!(receiver.try_recv().is_err());
 }

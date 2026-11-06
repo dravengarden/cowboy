@@ -294,7 +294,7 @@ struct BufferLease {
     closing: bool,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum BufferOwner {
     Legacy(String),
     Owned(u64),
@@ -415,6 +415,7 @@ struct ZedRuntime {
     next_message_id: AtomicU32,
     next_lsp_request_id: AtomicU64,
     frontier: analysis::Frontier,
+    closes: native_close::Registry,
 }
 
 async fn verify_zed_server(path: &Path) -> Result<()> {
@@ -541,6 +542,7 @@ impl ZedRuntime {
             next_message_id: AtomicU32::new(2),
             next_lsp_request_id: AtomicU64::new(1),
             frontier: analysis::Frontier,
+            closes: crate::native_close::Registry::default(),
         })
     }
 

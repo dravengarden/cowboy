@@ -20,6 +20,7 @@ pub(super) async fn fixture() -> (
         next_message_id: AtomicU32::new(1),
         next_lsp_request_id: AtomicU64::new(1),
         frontier: crate::analysis::Frontier,
+        closes: crate::native_close::Registry::default(),
     });
     (zed, receiver)
 }
