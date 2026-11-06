@@ -37,6 +37,21 @@ type Key = (String, String);
 
 static HELD: LazyLock<Mutex<HashMap<Key, Held>>> = LazyLock::new(Mutex::default);
 
+/// Observations from this exact Session incarnation only. A summary never
+/// refreshes idle time, acquires a new holding, or adopts a replaced scope.
+pub(super) fn observed_paths(scope: &crate::core::SessionCodeScope) -> Vec<String> {
+    let mut paths: Vec<_> = HELD
+        .lock()
+        .iter()
+        .filter(|((session, _), held)| {
+            session == scope.session_id() && held.scope.as_ref() == Some(scope)
+        })
+        .map(|((_, path), _)| path.clone())
+        .collect();
+    paths.sort();
+    paths
+}
+
 struct Opening(Key);
 
 impl Drop for Opening {
@@ -205,6 +220,38 @@ pub(super) async fn release_stale(state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_keeps_session_incarnations_separate_without_extending_idle_time() {
+        use crate::core::{Hub, SessionOrigin};
+        let hub = Hub::new();
+        for id in ["summary-session", "summary-other"] {
+            hub.create_local_session(
+                id.into(),
+                "codex".into(),
+                "/work/a".into(),
+                "test".into(),
+                SessionOrigin::default(),
+                false,
+            );
+        }
+        let scope = hub.session_code_scope("summary-session").unwrap();
+        let key = ("summary-session".into(), "a.rs".into());
+        let last_used = Instant::now() - Duration::from_secs(90);
+        let mut entry = holding("local", "/work/a");
+        entry.scope = Some(scope.clone());
+        entry.last_used = last_used;
+        HELD.lock().insert(key.clone(), entry);
+        assert_eq!(observed_paths(&scope), vec!["a.rs"]);
+        assert!(observed_paths(&hub.session_code_scope("summary-other").unwrap()).is_empty());
+        assert_eq!(HELD.lock()[&key].last_used, last_used);
+        hub.update_session_cwd("summary-session", "/work/b".into())
+            .unwrap();
+        hub.update_session_cwd("summary-session", "/work/a".into())
+            .unwrap();
+        assert!(observed_paths(&hub.session_code_scope("summary-session").unwrap()).is_empty());
+        HELD.lock().remove(&key);
+    }
 
     fn holding(machine: &str, worktree: &str) -> Held {
         Held {

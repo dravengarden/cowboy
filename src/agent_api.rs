@@ -74,6 +74,7 @@ pub const READ_OPERATIONS: &[&str] = &[
     "code.outline",
     "code.symbols",
     "code.diagnostics",
+    "code.summary",
     "code.checks",
     "accounts.list",
     "accounts.usage",
@@ -563,7 +564,7 @@ export interface Cowboy {
 // page_required: pass {limit:50}; an unpaged list above 50 fails instead of truncating.
 "#,
 CODE_SDK: r#"
-type CodeP=Promise<unknown>;export interface Cowboy{code: {search(q:string,o?:object):CodeP;outline(path:string):CodeP;symbols(q:string,o?:object):CodeP;diagnostics(paths:string[]):CodeP;checks():CodeP}} // help("code")
+type CodeP=Promise<unknown>;export interface Cowboy{code: {search(q:string,o?:object):CodeP;outline(path:string):CodeP;symbols(q:string,o?:object):CodeP;diagnostics(paths:string[]):CodeP;summary():CodeP;checks():CodeP}} // help("code")
 "#,
 PREFERENCES_READ_SDK: r#"
 export interface Cowboy { preferences: {
@@ -624,6 +625,15 @@ export interface Cowboy {
 // document_current: every language server analysed exactly this text (other files/config may differ); stale: one analysed
 // an older version; last_observed: no such evidence (a just-opened file may need another read).
 // not_open (agent share full) /unavailable is never "clean". Compile to confirm.
+export interface Cowboy {
+  code: { // passive counts over files this session tracked; never opens or refreshes a holding
+    summary(): Promise<{coverage:"agent_observed_files";
+      state:"unobserved"|"partial"|"document_current"|"stale"|"last_observed";
+      tracked:number;observed:number;counts:Record<"error"|"warning"|"information"|"hint",number>|null;
+      files:{path:string;state:string;counts?:Record<"error"|"warning"|"information"|"hint",number>}[]}>;
+  };
+}
+// counts:null means no usable observations; partial counts cover only observed files, never the project.
 export type CheckRun = {runId:string;check:string;state:"running"|"passed"|"failed"|"timed_out"|"error";startedAtMs:number;
   finishedAtMs?:number;exitCode?:number;error?:string;outputTruncated:boolean;truncated:boolean;
   diagnostics:{path:string;line:number;column:number;severity:"error"|"warning"|"note";code?:string;message:string}[]};
