@@ -1,6 +1,61 @@
 //! Synthetic private transport; final acceptance also uses the real static pair.
 use super::*;
 
+#[test]
+fn unknown_navigation_keeps_possible_target_alive_until_original_result_recovers() {
+    let source = (PathBuf::from("/root"), PathBuf::from("source"));
+    let target = (PathBuf::from("/root"), PathBuf::from("target"));
+    let buffer = |remote_id, owners| BufferLease {
+        remote_id,
+        lease_ids: owners,
+        closing: false,
+        version: Vec::new(),
+        sync: None,
+    };
+    let mut active = HashMap::from([
+        (
+            source.clone(),
+            buffer(
+                7,
+                HashSet::from([BufferOwner::Owned(1), BufferOwner::NavigationPending(9)]),
+            ),
+        ),
+        (
+            target.clone(),
+            buffer(8, HashSet::from([BufferOwner::Owned(2)])),
+        ),
+    ]);
+    assert!(
+        Plan::checked(
+            HashSet::from([target.clone()]),
+            &BufferOwner::Owned(2),
+            &active
+        )
+        .is_err()
+    );
+    assert!(
+        Plan::checked(
+            HashSet::from([source.clone()]),
+            &BufferOwner::Owned(1),
+            &active
+        )
+        .unwrap()
+        .native_ids
+        .is_empty()
+    );
+    active
+        .get_mut(&source)
+        .unwrap()
+        .lease_ids
+        .remove(&BufferOwner::NavigationPending(9));
+    assert_eq!(
+        Plan::checked(HashSet::from([target]), &BufferOwner::Owned(2), &active)
+            .unwrap()
+            .native_ids,
+        [8]
+    );
+}
+
 #[tokio::test]
 async fn shared_alias_cannot_drop_its_last_independent_owner_during_recovery() {
     let (mut zed, _) = coordinate_queries::fixture().await;

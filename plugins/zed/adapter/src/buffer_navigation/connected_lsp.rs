@@ -257,12 +257,20 @@ async fn acquire_all(
         else {
             panic!("not prepared")
         };
+        let lose_reply = matches!(kind, NavigationKind::Definition);
+        if lose_reply {
+            lose_original_reply(zed, &navigation, worktrees, buffers).await;
+        }
         let Response::OwnedBufferNavigation {
             state: State::Retained { locations },
             ..
         } = request(Request::BufferNavigation {
             navigation: navigation.clone(),
-            action: Action::Execute,
+            action: if lose_reply {
+                Action::Query
+            } else {
+                Action::Execute
+            },
         })
         .await
         .unwrap()
@@ -311,6 +319,34 @@ async fn acquire_all(
         retained.push((navigation, locations));
     }
     retained
+}
+
+async fn lose_original_reply(
+    zed: &Zed,
+    navigation: &NavigationRef,
+    worktrees: &Worktrees,
+    buffers: &Buffers,
+) {
+    zed.sync.discard_next_navigation_response();
+    let execute = || {
+        respond(
+            Request::BufferNavigation {
+                navigation: navigation.clone(),
+                action: Action::Execute,
+            },
+            worktrees,
+            buffers,
+            Some(zed),
+        )
+    };
+    assert!(execute().await.is_err());
+    assert!(matches!(
+        execute().await.unwrap(),
+        Response::OwnedBufferNavigation {
+            state: State::Unknown,
+            ..
+        }
+    ));
 }
 
 async fn exercise_handoff(

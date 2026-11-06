@@ -86,7 +86,7 @@ impl Plan {
             sync_owners::ensure_readable(buffer)?;
             ids.insert(buffer.remote_id);
         }
-        let native_ids = ids
+        let native_ids: Vec<_> = ids
             .into_iter()
             .filter(|id| {
                 active
@@ -97,6 +97,14 @@ impl Plan {
                     })
             })
             .collect();
+        ensure!(
+            native_ids.is_empty()
+                || !active.values().any(|buffer| buffer
+                    .lease_ids
+                    .iter()
+                    .any(|owner| matches!(owner, BufferOwner::NavigationPending(_)))),
+            "navigation outcome must be recovered before removing shared native buffers"
+        );
         Ok(Self { keys, native_ids })
     }
 

@@ -92,7 +92,10 @@ impl Fixture {
             .unwrap()
             .remote_id = 7;
         let (mut zed, outbound) = coordinate_queries::fixture().await;
-        let (transport, navigation, closed) = crate::native_close::tests::fixture();
+        let (transport, receiver, closed) = crate::native_close::tests::fixture();
+        let (forward, navigation) = mpsc::channel(32);
+        let weak = Arc::downgrade(&transport);
+        tokio::spawn(reply_control(weak, receiver, forward));
         Arc::get_mut(&mut zed).unwrap().sync = transport;
         zed.worktree_paths.write().await.insert(1, root.clone());
         zed.buffer_files.write().await.insert(
@@ -127,7 +130,49 @@ impl Fixture {
         );
         tokio::spawn(async move { respond(request, &worktrees, &buffers, Some(&zed)).await })
     }
+}
 
+async fn reply_control(
+    weak: std::sync::Weak<crate::sync_native::Transport>,
+    mut receiver: mpsc::Receiver<wire::CowboyBufferSyncEnvelope>,
+    forward: mpsc::Sender<wire::CowboyBufferSyncEnvelope>,
+) {
+    use wire::cowboy_buffer_sync_envelope::Payload;
+    use wire::cowboy_navigation_response::Outcome;
+    while let Some(envelope) = receiver.recv().await {
+        if let Some(Payload::NavigationRequest(request)) = &envelope.payload
+            && (request.query.is_empty() || request.action != 0)
+        {
+            let outcome = if request.query.is_empty() {
+                Outcome::Supported
+            } else if request.action == 2 {
+                continue;
+            } else {
+                Outcome::Unknown
+            };
+            let reply = wire::CowboyBufferSyncEnvelope {
+                responding_to: Some(envelope.id),
+                payload: Some(Payload::NavigationResponse(
+                    wire::CowboyNavigationResponse {
+                        protocol: 2,
+                        instance: vec![3; 16],
+                        operation_id: request.operation_id,
+                        outcome: outcome as i32,
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            };
+            let Some(transport) = weak.upgrade() else {
+                break;
+            };
+            transport.response(envelope.id, &reply.encode_to_vec());
+        } else if forward.send(envelope).await.is_err() {
+            break;
+        }
+    }
+}
+impl Fixture {
     async fn prepare(&self) -> NavigationRef {
         let Response::OwnedBufferNavigation {
             navigation,
@@ -211,7 +256,9 @@ impl Fixture {
             responding_to: Some(envelope.id),
             payload: Some(Payload::NavigationResponse(
                 wire::CowboyNavigationResponse {
-                    protocol: 1,
+                    protocol: 2,
+                    instance: request.instance,
+                    operation_id: request.operation_id,
                     outcome: wire::cowboy_navigation_response::Outcome::Complete as i32,
                     result: proto::LspQueryResponse {
                         project_id: proto::REMOTE_SERVER_PROJECT_ID,
@@ -482,7 +529,6 @@ async fn disconnected_observer_keeps_one_saved_navigation_result() {
     let native = f.navigation.recv().await.unwrap();
     drop(client);
     f.reply_navigation(native, definitions(&[8]));
-    ack_registration(&f.zed, f.outbound.recv().await.unwrap()).await;
     assert!(task.await.unwrap().is_err());
     for action_kind in [Action::Query, Action::Execute] {
         assert!(matches!(
