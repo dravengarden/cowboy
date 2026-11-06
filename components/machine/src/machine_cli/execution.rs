@@ -83,7 +83,10 @@ impl Manager {
         if !keeper::valid_operation_id(&session.session_id) || self.service_id.is_none() {
             return false;
         }
-        let directory = self.root.join("runtime").join(&session.session_id);
+        let Ok(root) = self.root.join("runtime").canonicalize() else {
+            return false;
+        };
+        let directory = root.join(&session.session_id);
         if Path::new(&session.cwd) != directory
             || directory.canonicalize().ok().as_ref() != Some(&directory)
         {
@@ -558,6 +561,12 @@ impl Manager {
         let root = self.root.join("runtime");
         std::fs::create_dir_all(&root).map_err(|_| Refusal::PreparationFailed)?;
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+            .map_err(|_| Refusal::PreparationFailed)?;
+        // Host state may have a canonical alias (macOS /var -> /private/var).
+        // Publish the canonical parent, while still rejecting linked session
+        // directories and requiring the exact persisted runtime identity.
+        let root = root
+            .canonicalize()
             .map_err(|_| Refusal::PreparationFailed)?;
         let directory = root.join(session_id);
         let runtime = RuntimeLocation {
