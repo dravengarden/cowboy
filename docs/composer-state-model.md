@@ -113,8 +113,13 @@ iOS acceptance (web/AGENTS.md pitfall #69).
   surfaces in the real App (Desktop and touch layouts, in-page fake socket and
   fetch): schedule open/dismiss, picker Stop replacing the picker with the stop
   confirmation and sending `cancel`, the clear-draft popper (Escape keeps the
-  draft, confirm clears it) and the clear-conversation confirmation. Removing
-  the picker's Stop transition or the popper's Escape close fails it (checked).
+  draft, confirm clears it), the clear-conversation confirmation, the mobile
+  toolbar options and the move-draft picker (the fake socket acknowledges
+  `add_draft` with a `sync_patch`; dismissing moves nothing, a destination
+  sends `move_draft`). Removing the picker's Stop transition, the popper's
+  Escape close, the move entry or the toolbar options close fails it (checked).
+  Synthetic Escape is not trusted input for the Desktop key dispatcher or the
+  move sheet, so those two are dismissed by backdrop or Close instead.
   The older desktop-composer suite renders the toolbar alone and never mounted
   `ComposerWorkspace`.
 

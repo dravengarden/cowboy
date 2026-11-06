@@ -18,6 +18,7 @@ import { isMac } from "./platform";
 import type { SessionMeta } from "./protocol";
 
 const SESSION = "surface-session";
+const OTHER = "surface-destination";
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 async function until<T>(read: () => T | null | undefined | false, what: string): Promise<T> {
   for (let i = 0; i < 200; i++) {
@@ -59,6 +60,9 @@ function installFakes(sent: { type: string; session_id?: string }[]): void {
     context_used: 40_000,
     context_size: 200_000,
   } as SessionMeta;
+  // A second session gives the move-draft picker a destination.
+  const other = { ...session, id: OTHER, title: "Destination session", status: "exited", updated_at_ms: now - 30_000 } as SessionMeta;
+  let queueVersion = 0;
   class FixtureSocket {
     static OPEN = 1;
     static CONNECTING = 0;
@@ -73,7 +77,7 @@ function installFakes(sent: { type: string; session_id?: string }[]): void {
     constructor() {
       setTimeout(() => {
         this.onopen?.();
-        this.publish({ type: "sessions", sessions: [session] });
+        this.publish({ type: "sessions", sessions: [session, other] });
         this.publish({ type: "bootstrap_complete" });
       }, 20);
     }
@@ -81,7 +85,20 @@ function installFakes(sent: { type: string; session_id?: string }[]): void {
       this.onmessage?.({ data: JSON.stringify(message) });
     }
     send(data: string) {
-      sent.push(JSON.parse(data) as { type: string });
+      const frame = JSON.parse(data) as { type: string; session_id?: string; cmid?: string; text?: string; content?: unknown };
+      sent.push(frame);
+      // Acknowledge a saved draft the way the Controller does, so the row
+      // leaves "Saving…" and offers its actions.
+      if (frame.type === "add_draft" && frame.cmid) {
+        setTimeout(() =>
+          this.publish({
+            type: "sync_patch",
+            state: `queue:${frame.session_id}`,
+            version: ++queueVersion,
+            value: { queue: [], drafts: [{ id: frame.cmid, text: frame.text, content: frame.content, cmid: frame.cmid }] },
+            confirmed: [frame.cmid],
+          }), 10);
+      }
     }
     close() {
       this.readyState = 3;
@@ -165,7 +182,10 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
 
   // Desktop: the toolbar's schedule action and the delivery picker's Stop.
   const desktop = mount("desktop", "1280px");
-  (await until(() => desktop.container.querySelector<HTMLElement>("[data-desktop-session-row]"), "session row")).click();
+  (await until(
+    () => [...desktop.container.querySelectorAll<HTMLElement>("[data-desktop-session-row]")].find((row) => row.textContent?.includes("Surface session")),
+    "session row",
+  )).click();
   await typeDraft(desktop.container, "surface check");
   (await until(() => desktop.container.querySelector<HTMLElement>("[data-composer-action=schedule]:not([disabled])"), "schedule action")).click();
   await until(() => document.querySelector("[aria-label=发送时间]"), "schedule dialog");
@@ -225,6 +245,37 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
   await gone(() => context.isConnected && document.querySelector("[role=dialog]"), "context confirmation");
   check(!sent.some((frame) => frame.type === "reset" || frame.type === "clear_context"), "cancelling sends no context action");
   passed.push("Mobile clear-conversation confirmation opens and Cancel closes it without a request");
+
+  const customize = await until(
+    () => mobile.container.querySelector<HTMLElement>("[data-mobile-focus-format-row] [data-testid=TuneIcon]")?.closest<HTMLElement>("button"),
+    "customize toolbar button",
+  );
+  customize.click();
+  const toolbarSheet = () => document.querySelector<HTMLElement>("[aria-label='Toolbar options']");
+  await until(toolbarSheet, "toolbar options sheet");
+  const closeSheet = await until(() => toolbarSheet()?.querySelector<HTMLElement>("[aria-label=Close]"), "toolbar sheet close");
+  closeSheet.click();
+  await gone(toolbarSheet, "toolbar options sheet");
+  passed.push("Mobile toolbar options open from the format row and Close dismisses them");
+
+  await typeDraft(mobile.container, "draft to move");
+  (await until(() => mobile.container.querySelector<HTMLElement>("[aria-label='save as draft']:not([disabled])"), "save as draft")).click();
+  const moveAction = () => mobile.container.querySelector<HTMLElement>("[aria-label='Move to another session…']");
+  (await until(moveAction, "draft move action")).click();
+  const destination = () => byText("[role=dialog] *", "Destination session");
+  await until(destination, "move destination picker");
+  const pickerDialog = destination()!.closest<HTMLElement>("[role=dialog]")!;
+  const dismiss = pickerDialog.querySelector<HTMLElement>("[aria-label=Close]") ??
+    [...document.querySelectorAll<HTMLElement>(".MuiBackdrop-root")].at(-1);
+  check(dismiss, "move picker dismiss control");
+  dismiss.click();
+  await gone(destination, "move destination picker");
+  check(!sent.some((frame) => frame.type === "move_draft"), "dismissing the picker moves nothing");
+  (await until(moveAction, "draft move action")).click();
+  (await until(destination, "move destination picker")).click();
+  await until(() => sent.some((frame) => frame.type === "move_draft" && frame.session_id === SESSION), "move_draft request");
+  await gone(destination, "move destination picker");
+  passed.push("Draft move picker: dismissing moves nothing, choosing a destination sends move_draft and closes it");
   mobile.root.unmount();
   mobile.container.remove();
   return passed;
