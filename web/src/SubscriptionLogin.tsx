@@ -5,6 +5,7 @@ import { productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
 import { useStoreSelector } from "./store";
 import { SubscriptionAuthorization } from "./SubscriptionAuthorization";
+import { SubscriptionLoginRecovery } from "./SubscriptionLoginRecovery";
 import { loginReasonText } from "./loginReasons";
 import { canReplaceLogin, loginCompleted, loginFailure, loginLink, loginOptions, subscriptionLogin, type LoginOptions, type LoginScope, type LoginView } from "./subscriptionLoginController";
 
@@ -120,6 +121,7 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, machine: 
     const timer = setTimeout(() => setClock(Date.now()), Math.min(challenge.expires_at_ms - Date.now(), 2_147_483_647));
     return () => clearTimeout(timer);
   }, [challenge]);
+  if (view.storageBlocked) return <SubscriptionLoginRecovery owner={owner} view={view} reference={reference} onClose={onClose} />;
   if (requestMismatch) return <Stack spacing={1.5}>
     <Alert severity="warning">Another sign-in is saved in this tab. Continue that attempt, or close this link. No new login has been started.</Alert>
     <Button variant="contained" disabled={view.busy} onClick={() => { setNewSignIn(true); checkStatus(); }}>Continue saved sign-in</Button>

@@ -77,6 +77,18 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
     return new Response(null, { status: 503 });
   }) as typeof fetch;
   try {
+    sessionStorage.setItem(keys[0]!, "broken-json");
+    render("lynx");
+    await until(() => Boolean(button("lynx", "Check server sign-in")));
+    click("lynx", "Check server sign-in");
+    await until(() => container.textContent!.includes("Server sign-in status: active"));
+    check(!input("lynx") && !container.querySelector("a") && writes.length === 0 && sessionStorage.getItem(keys[0]!) === "broken-json",
+      "corrupt recovery reads the server receipt without exposing authorization or clearing evidence");
+    click("lynx", "Retry saved record");
+    check(Boolean(button("lynx", "Check server sign-in")) && writes.length === 0,
+      "retrying corrupt storage retains the recovery fence and never starts a login");
+    render();
+    sessionStorage.removeItem(keys[0]!);
     render("lynx");
     await until(() => Boolean(input("lynx") && !button("lynx", "Check status")?.disabled));
     loginAllowed = false;
