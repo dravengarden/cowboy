@@ -55,3 +55,10 @@ Navigation and synchronization Unknowns keep their own fences, and the admission
 gate is still process-wide while nothing is unresolved
 ([20](../architecture/20-agent-code-intelligence.md#acquisition-gated) gates 1,
 3 and 4). Automatic acquisition stays off.
+
+## Correction (2026-11-06)
+
+Installation did not put this generation into service for existing worktrees:
+their code-runtime routes stayed on the generation they started with. It served
+only after the [worker pin advance](worker-pin-code-routing-2026-11-06.md)
+restarted the Machine with idle routes following the active generation.
