@@ -69,3 +69,10 @@ now set `TMPDIR=/tmp` inside their namespace.
   per-file `state`); a file no Code pane holds stays `not_open`. Per-server
   evidence appears once a Code pane holds the file.
 - Falcon and macbook-air have no Zed installation and were not changed.
+
+## Correction (2026-11-06)
+
+Installation did not put this generation into service for existing worktrees:
+their code-runtime routes stayed on the generation they started with. It served
+only after the [worker pin advance](worker-pin-code-routing-2026-11-06.md)
+restarted the Machine with idle routes following the active generation.

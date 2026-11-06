@@ -166,7 +166,10 @@ rather than leaks. Agent holdings are a bounded share below interactive use:
 they are released after 5 minutes idle or when the switch is off. Gates 1 and
 2 hold for opens (target-confined admission, same-process recovery). Gate 4 is
 met by counts only: language-server RSS/CPU are not measured, and navigation
-and synchronization Unknowns keep their own fences.
+and synchronization Unknowns keep their own fences. Holdings are process-local:
+after a Controller restart a buffer the agent still holds keeps serving reads but
+is no longer released when idle; it ends with its code runtime (a new Zed
+generation or Machine restart), bounded by the per-Machine share.
 
 ### Baselines, attribution, matching
 

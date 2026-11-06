@@ -50,3 +50,10 @@ per-buffer fences without same-process recovery; interactive priority and
 per-Machine language-server budgets
 ([20](../architecture/20-agent-code-intelligence.md#acquisition-gated) gates 3
 and 4) are not built. Automatic acquisition stays off.
+
+## Correction (2026-11-06)
+
+Installation did not put this generation into service for existing worktrees:
+their code-runtime routes stayed on the generation they started with. It served
+only after the [worker pin advance](worker-pin-code-routing-2026-11-06.md)
+restarted the Machine with idle routes following the active generation.
