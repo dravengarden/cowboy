@@ -121,7 +121,9 @@ boundaries and stay.
   collection, Provider auth scope, reconnect grant reconciliation and the
   runtime encryption key, plus the remote-wipe, temporary-credential,
   worker-tree and account-transition `ensure!` gates, and the managed-call,
-  managed-image, managed-environment and Agent control gates (28–33).
+  managed-image, managed-environment and Agent control gates (28–33); the
+  runtime current-turn and delivery-control flags (34/35), the telemetry
+  binding commit check (15) and the Plugin inventory protocol filter (7).
   `MACHINE_PROTOCOL_FLOOR`
   makes them unreachable.
 
