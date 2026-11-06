@@ -67,21 +67,22 @@ pub(super) async fn acquire(
     {
         let mut held = HELD.lock();
         if let Some(holding) = held.get_mut(&key) {
+            // Still sent: the open is idempotent for this owner and restores a
+            // holding a replaced code runtime lost.
             holding.last_used = Instant::now();
-            return Ok(());
-        }
-        if !fits(&held, session, &context.machine_id, &worktree) {
+        } else if !fits(&held, session, &context.machine_id, &worktree) {
             return Err("budget");
+        } else {
+            // Reserve before the await so concurrent reads cannot oversubscribe.
+            held.insert(
+                key.clone(),
+                Held {
+                    machine: context.machine_id.clone(),
+                    worktree: worktree.clone(),
+                    last_used: Instant::now(),
+                },
+            );
         }
-        // Reserve before the await so concurrent reads cannot oversubscribe.
-        held.insert(
-            key.clone(),
-            Held {
-                machine: context.machine_id.clone(),
-                worktree: worktree.clone(),
-                last_used: Instant::now(),
-            },
-        );
     }
     let lease = owner(session);
     let opened = zed_session::buffer_request(
