@@ -10,6 +10,7 @@ import { assert } from "@std/assert";
 export const SPLIT_SOURCES = {
   "App.tsx": [
     "./App.tsx",
+    "./DeleteSessionShell.tsx",
     "./SettingsShell.tsx",
     "./SessionList.tsx",
     "./sessionFocusLifecycle.ts",
