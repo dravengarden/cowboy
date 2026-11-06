@@ -622,6 +622,13 @@ typed runtime lock and npm lock payloads and builds all six separately so a
 shared SDK change cannot leave one Provider un-linkable. An unbound envelope
 may be reviewed in Web but is never installable.
 
+Do not run package-building gates concurrently with runtime binding, signing,
+reader acceptance or publication in the same worktree: `plugin-check`,
+`provider-check` and `just check` can overwrite `dist/plugins` with unsigned,
+unbound envelopes. Finish those gates first, or prepare the release in a
+separate clean worktree at the exact accepted commit. If a gate rebuilt the
+package, repeat binding, signing and verification before using it as a release.
+
 External publishers can consume the immutable `.#cowboy-plugin-pack` Nix output;
 `cowboy-plugin-pack version` reports the exact SDK tool version. Their own
 repository still owns build, sign, verify and publish recipes and release
