@@ -3,6 +3,41 @@ use serde_json::json;
 
 const OWNER: &str = "cowboy-agent-3f3af1ecebbd1410ab417ec0d27bbfcb5d340e177ae159b59fc8626c2dfd9175-00000000000000000000000000000001";
 
+#[tokio::test]
+async fn invalid_files_refuse_before_runtime_selection_or_owner_reservation() {
+    use std::os::unix::fs::symlink;
+    let root = PrivateRuntimeDirectory::create().unwrap();
+    fs::create_dir(root.0.join("src")).unwrap();
+    fs::write(root.0.join("src/good.rs"), "fn main() {}\n").unwrap();
+    symlink("src", root.0.join("alias")).unwrap();
+    symlink("src/good.rs", root.0.join("linked.rs")).unwrap();
+    let host = CodeRuntimeHost::default();
+    for path in [
+        "missing.rs",
+        "src",
+        "alias/good.rs",
+        "linked.rs",
+        "../outside.rs",
+        "/etc/passwd",
+    ] {
+        let payload = json!({"type":"acquireAgentBuffer", "ownerProtocol":2, "worktree":root.0, "path":path, "leaseId":OWNER});
+        let reply = host
+            .acquire_agent(
+                "zed",
+                &payload,
+                None,
+                resource_budget::Policy::from_config(None),
+                || panic!("invalid input must not start a runtime"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply["type"], "agentBufferBudget");
+        assert_eq!(reply["state"], "unavailable");
+        assert!(host.routes.lock().await.is_empty());
+    }
+    assert!(regular_file(&root.0, "src/good.rs"));
+}
+
 #[test]
 fn uncertain_effects_and_aliases_never_free_or_reuse_an_owner() {
     let mut legacy = Holding::opening("/tree", false);

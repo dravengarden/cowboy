@@ -9,6 +9,35 @@ const PER_OWNER: usize = 4;
 const PER_MACHINE: usize = 8;
 const WORKTREES: usize = 2;
 
+/// Cheap negative admission evidence, never a replacement for the native
+/// resolver. Reject directories, missing inputs and symlinks at every level;
+/// do not open special files or follow a projected checkout outside the root.
+pub(super) fn regular_file(root: &Path, relative: &str) -> bool {
+    use std::path::Component;
+    let mut path = root.to_owned();
+    let mut components = Path::new(relative).components().peekable();
+    if components.peek().is_none() {
+        return false;
+    }
+    while let Some(component) = components.next() {
+        let Component::Normal(name) = component else {
+            return false;
+        };
+        path.push(name);
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            return false;
+        };
+        if components.peek().is_some() {
+            if !metadata.is_dir() {
+                return false;
+            }
+        } else {
+            return metadata.is_file();
+        }
+    }
+    false
+}
+
 // Both protocol generations count against the same session share on rollback.
 pub(super) fn owner(lease: &str, version_two: bool) -> Result<String> {
     use sha2::{Digest as _, Sha256};

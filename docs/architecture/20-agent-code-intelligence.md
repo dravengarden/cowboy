@@ -220,6 +220,29 @@ that owner. Independently authorized recovery of those uncertain holdings
 remains separate work. This is Machine-process state, not persistence across
 a Machine restart.
 
+Hawk activated the Machine-owned idle cleanup and retained process retirement
+from `2b154933ef0313f2590acf4a3ce0ab41fd1d68ea` on 2026-11-06. Controller
+transaction `1793977879629449763-2b154933ef03` and Machine transaction
+`1793977908771016764-2b154933ef03` both reported `succeeded` / `committed`,
+retaining `worker-4f248c87703274b63cd9`. All four Machines reconnected;
+health returned `ok` and the public SPA returned HTTP 200 with `no-store`.
+A subsequent production read of `machines/cmd/cowboy-release-activate/main.go`
+returned `acquired: true` and gopls `document_current`; the actual adapter
+and server processes used Zed 1.28.0 generation
+`dad653c9635f6fb850e22dea62840ccb9b1a55dbc24453cc25215d17b71a36b7`.
+After the idle interval, the passive summary returned `tracked: 0`,
+`counts: null`, and both observed adapter/server PIDs had exited. This checks
+idle release without another acquisition; original-cgroup removal and detached
+descendant accounting are established separately by the delegated-cgroup tests.
+This does not establish Unknown recovery or worker-generation acceptance.
+
+Automatic acquisition now preflights regular files before selecting a runtime
+or reserving an owner. Missing files, directories and symlink components return
+a definite pre-dispatch refusal, avoiding an orphan reservation for inputs
+already known to be unusable. Native resolution remains authoritative: a file
+can change after preflight, and an uncertain dispatched request still retains
+its original ownership and capacity.
+
 ### Baselines, attribution, matching
 
 - Baselines are immutable, content-matched captures at a read or pre-write

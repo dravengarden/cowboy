@@ -211,6 +211,12 @@ impl CodeRuntimeHost {
                 && !lease.chars().any(char::is_whitespace),
             "invalid agent warming buffer identity"
         );
+        // Reject known-invalid inputs before selecting a runtime or reserving
+        // an owner. This is only a preflight: native resolution must still
+        // enforce its boundary if the filesystem changes after this check.
+        if !agent_holdings::regular_file(&worktree, &path) {
+            return Ok(unavailable());
+        }
         match self
             .agent_holding_capacity(
                 plugin_id,
@@ -318,6 +324,7 @@ mod tests {
     #[tokio::test]
     async fn failed_cold_readiness_is_a_definite_pre_buffer_refusal() {
         let root = PrivateRuntimeDirectory::create().unwrap();
+        fs::write(root.0.join("file.rs"), "").unwrap();
         let host = CodeRuntimeHost::default();
         let mut plan = super::super::tests::fixture_plan(&root.0, "readiness-refused");
         plan.runtime.readiness.command = "undeclared-readiness-command".into();
@@ -443,6 +450,7 @@ mod tests {
     #[ignore = "requires delegated writable cgroup v2"]
     async fn real_resource_budget_refuses_warming_and_preserves_interactive_access() {
         let root = PrivateRuntimeDirectory::create().unwrap();
+        fs::write(root.0.join("file.rs"), "").unwrap();
         let host = CodeRuntimeHost::default();
         let plan = super::super::tests::fixture_plan(&root.0, "resources");
         let payload = serde_json::json!({"type":"acquireAgentBuffer", "worktree":root.0, "path":"file.rs", "leaseId":"cowboy-agent-fixture"});
