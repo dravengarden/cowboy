@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import { assertEquals } from "@std/assert";
 import {
   checkReconnectAdmission,
+  classifySocketClose,
   ForegroundProbe,
   isAppleTouchWebView,
   shouldReconnectOnForeground,
@@ -197,4 +198,14 @@ test("Apple touch WebView detection covers iPhone and desktop-UA iPad", () => {
     ),
     false,
   );
+});
+
+test("socket close codes map to pause, capacity wait, or admission", () => {
+  assertEquals(classifySocketClose(4001, 30_000), { kind: "pause_for_auth" });
+  assertEquals(classifySocketClose(4429, undefined), { kind: "wait_for_capacity", delayMs: 5_000 });
+  assertEquals(classifySocketClose(4429, 250), { kind: "wait_for_capacity", delayMs: 1_000 });
+  assertEquals(classifySocketClose(4429, 12_000), { kind: "wait_for_capacity", delayMs: 12_000 });
+  for (const code of [1000, 1001, 1006, 1011, 4000]) {
+    assertEquals(classifySocketClose(code, 12_000), { kind: "check_admission" });
+  }
 });
