@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 
 test("default font scale is 65 percent with a 50 percent minimum", async () => {
   const source = await readFile(

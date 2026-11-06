@@ -176,7 +176,7 @@ workspace-extensions-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" workspace-extensions' conformance "{{BROWSER}}"
 
 idb-conformance-check:
-    dprint check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs tools/cdp-fixture.ts tools/cdp-browser-conformance.ts tools/cdp-keyboard-acceptance.ts
+    bun x --no-install biome format tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs tools/cdp-fixture.ts tools/cdp-browser-conformance.ts tools/cdp-keyboard-acceptance.ts
     bun run typecheck
 
 # Retain an actual product-store bundle before and after a latency change.
@@ -197,7 +197,7 @@ build-site:
 
 # Keep the published ecosystem synchronized with the real Plugin Catalog inputs.
 site-check:
-    dprint check site/build.ts site/build_test.ts site/site.js
+    bun x --no-install biome format site/build.ts site/build_test.ts site/site.js
     bun run typecheck
     bun test ./site/build_test.ts
     just build-site
@@ -233,7 +233,7 @@ native-plugin-conformance RUNTIME="auto":
 
 # Source/dependency and keyboard checks also run on Linux in the pinned shell.
 native-shell-check:
-    dprint check tools/check-native-shell.ts tools/check-native-shell_test.ts tools/native-shell-probe.js tools/native-shell-probe_test.ts
+    bun x --no-install biome format tools/check-native-shell.ts tools/check-native-shell_test.ts tools/native-shell-probe.js tools/native-shell-probe_test.ts
     bun run typecheck
     bun test ./tools/check-native-shell_test.ts ./tools/native-shell-probe_test.ts ./tools/native-shell-loader_test.ts
     python3 -m unittest discover -s tools -p 'native_shell_smoke_test.py'
@@ -269,15 +269,15 @@ component-package-check:
     cargo package --locked --allow-dirty --list -p cowboy-plugin-sdk >/dev/null
 
 plugin-check: component-package-check
-    dprint check plugins/claude-code/collector/credits.js plugins/claude-code/collector/resets.js plugins/claude-code/resets.test.js
-    dprint check plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js plugins/claude-code/collector/index.js plugins/claude-code/collector/usage.js plugins/claude-code/collector/process.js plugins/codex/collector/process.js plugins/grok/collector/process.js plugins/claude-code/usage.test.js
+    bun x --no-install biome format plugins/claude-code/collector/credits.js plugins/claude-code/collector/resets.js plugins/claude-code/resets.test.js
+    bun x --no-install biome format plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js plugins/claude-code/collector/index.js plugins/claude-code/collector/usage.js plugins/claude-code/collector/process.js plugins/codex/collector/process.js plugins/grok/collector/process.js plugins/claude-code/usage.test.js
     bun run typecheck
     bun test ./components/plugin-api/*.test.ts ./components/state-store/*.test.ts ./components/app-shell/*.test.ts
     bun test ./tools/check-plugin-components_test.ts ./tools/plugin-component-closure_test.ts
     bun test ./tools/plugin-source-digest_test.ts
     cd plugins && bun test ./collector-sidecars.test.js ./claude-deepseek/pricing.test.js ./claude-code/usage.test.js ./claude-code/resets.test.js
     bun tools/check-plugin-components.ts
-    dprint check tools/worker-registry-input.ts tools/worker-registry-input_test.ts
+    bun x --no-install biome format tools/worker-registry-input.ts tools/worker-registry-input_test.ts
     bun test ./tools/worker-registry-input_test.ts
     bun tools/worker-registry-input.ts
 
@@ -592,12 +592,12 @@ claude-remote-check:
     cargo test --locked --manifest-path plugins/claude-code/relay/Cargo.toml
     cargo build --locked --release --manifest-path plugins/claude-code/relay/Cargo.toml
     COWBOY_MCP_RELAY="$PWD/plugins/claude-code/relay/target/release/cowboy-mcp-relay" node --test tools/claude-mcp-relay.test.mjs
-    dprint check tools/claude-mcp-relay.test.mjs
+    bun x --no-install biome format tools/claude-mcp-relay.test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
-    dprint check "plugins/claude-code/runtime/**/*.{ts,js,mjs}"
+    bun x --no-install biome format plugins/claude-code/runtime
     node --import ./tools/register-memory-client.mjs --test tools/claude-remote-privacy.test.mjs
-    dprint check tools/claude-remote-privacy.test.mjs
-    dprint check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
+    bun x --no-install biome format tools/claude-remote-privacy.test.mjs
+    bun x --no-install biome format tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
     bun run typecheck
     python3 -m unittest discover -s tools -p remote_impact_test.py
 
@@ -608,7 +608,7 @@ provider-check: claude-remote-check plugin-check
     node --test components/provider-runtime/packages/deepseek-harness/launch_test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/execution-mcp.test.mjs
-    dprint check plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/memory.mjs plugins/codex/runtime/execution-mcp.mjs plugins/codex/runtime/execution-mcp.test.mjs plugins/codex/runtime/source.json plugins/codex/runtime/package.json plugins/codex/runtime/package-lock.json
+    bun x --no-install biome format plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/memory.mjs plugins/codex/runtime/execution-mcp.mjs plugins/codex/runtime/execution-mcp.test.mjs plugins/codex/runtime/source.json plugins/codex/runtime/package.json plugins/codex/runtime/package-lock.json
     bun run typecheck
     bun test ./tools/check-provider-release-coverage_test.ts
     bun test ./tools/provider-runtime-platforms_test.ts
@@ -628,7 +628,7 @@ provider-check: claude-remote-check plugin-check
     for manifest in plugins/*/plugin.json; do plugin="${manifest#plugins/}"; just plugin-isolation-check "${plugin%/plugin.json}"; done
     cd web && bun run typecheck
     bun components/provider-ui/validate-packages.ts dist/plugins/*/*.cowboy-plugin
-    dprint check tools/check-provider-ui-execution.ts
+    bun x --no-install biome format tools/check-provider-ui-execution.ts
     bun tools/check-provider-ui-execution.ts dist/plugins/*/*.cowboy-plugin
     cd web && bun test ./src/providerSdk.test.ts
 
@@ -637,7 +637,7 @@ composition-generate:
     bun tools/generate-composition-contract.ts --write
 
 composition-check:
-    dprint check tools/generate-composition-contract.ts tools/generate-composition-contract_test.ts tools/composition-link-conformance.ts contracts
+    bun x --no-install biome format tools/generate-composition-contract.ts tools/generate-composition-contract_test.ts tools/composition-link-conformance.ts contracts
     bun run typecheck
     bun test ./tools/generate-composition-contract_test.ts
     bun tools/generate-composition-contract.ts
@@ -697,7 +697,7 @@ feature-check:
 # src/protocol_contract.rs) must be current in their generated TypeScript
 # module, whose literals the web typecheck holds to web/src/protocol.ts.
 protocol-contract-check:
-    dprint check tools/generate-protocol-fixtures.ts
+    bun x --no-install biome format tools/generate-protocol-fixtures.ts
     bun tools/generate-protocol-fixtures.ts --check
 
 # docs/INDEX.md links every docs/ Markdown page and no local link is broken.
@@ -708,10 +708,10 @@ docs-index-check:
 # may appear or grow (tools/structure-baseline.json). After moving an offender
 # unchanged, record the move with: bun tools/check-structure.ts --update
 structure-check:
-    dprint check tools/check-structure.ts tools/check-structure_test.ts
+    bun x --no-install biome format tools/check-structure.ts tools/check-structure_test.ts
     bun test ./tools/check-structure_test.ts
     bun tools/check-structure.ts
-    dprint check tools/check-module-layers.ts tools/check-module-layers_test.ts
+    bun x --no-install biome format tools/check-module-layers.ts tools/check-module-layers_test.ts
     bun test ./tools/check-module-layers_test.ts
     bun tools/check-module-layers.ts
 

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { sessionJumpLabels } from "./sessionJump.ts";
 
 test("session jump labels start on the home row in displayed order", () => {

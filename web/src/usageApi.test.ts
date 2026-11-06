@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { test } from "bun:test";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../../tools/test-assert.ts";
 import type { ProviderUiManifest } from "@cowboy/provider-ui";
 import { providerUiManifestFixture } from "./providerUiContract.fixture.ts";
 import {

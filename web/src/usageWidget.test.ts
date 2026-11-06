@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { testFirstPartyHostPlugins } from "./testFirstPartyHostInventory.test.ts";
 import { applyUsageHostPlugins } from "./usageHostMap.ts";
 import { usageBalanceForAccount, usageWidgetForAccount, usageWidgetProviders } from "./usageWidget";

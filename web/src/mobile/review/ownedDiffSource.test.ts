@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../../../../tools/test-assert.ts";
 import { deferred } from "../../codeBuffers/fixture.ts";
 import { BufferClientError } from "../../codeBuffers/protocol.ts";
 import {

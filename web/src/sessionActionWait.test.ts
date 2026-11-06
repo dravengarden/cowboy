@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../../tools/test-assert.ts";
 import { sessionActionSnapshot, waitForSessionAction } from "./sessionActionWait";
 
 test("reconnection sends once, only after readiness", async () => {

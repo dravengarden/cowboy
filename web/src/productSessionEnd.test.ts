@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { assertEquals, assertRejects, assertThrows } from "../../tools/test-assert.ts";
 import {
   announceProductSessionEnd,
   PRODUCT_SESSION_END_EVENT,

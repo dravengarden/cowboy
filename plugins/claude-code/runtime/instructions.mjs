@@ -79,9 +79,7 @@ export function withoutComment(line) {
 // Items of a YAML flow sequence or scalar, keeping commas inside quotes and
 // braces (`["src/**/*.{ts,tsx}", 'a,b']`).
 function flowItems(value) {
-  const body = value.startsWith("[") && value.endsWith("]")
-    ? value.slice(1, -1)
-    : value;
+  const body = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
   const items = [];
   let current = "";
   let quote = null;
@@ -91,10 +89,10 @@ function flowItems(value) {
       if (char === quote) quote = null;
       else current += char;
     } else if (char === '"' || char === "'") quote = char;
-    else if (char === "{") (depth++, current += char);
-    else if (char === "}") (depth--, current += char);
+    else if (char === "{") depth++, (current += char);
+    else if (char === "}") depth--, (current += char);
     else if (char === "," && depth === 0) {
-      (items.push(current.trim()), current = "");
+      items.push(current.trim()), (current = "");
     } else current += char;
   }
   items.push(current.trim());
@@ -113,9 +111,7 @@ function expandBraces(glob) {
     else if (glob[index] === "}" && --depth === 0) {
       parts.push(glob.slice(start, index));
       const tail = glob.slice(index + 1);
-      return parts.flatMap((part) =>
-        expandBraces(glob.slice(0, open) + part + tail)
-      );
+      return parts.flatMap((part) => expandBraces(glob.slice(0, open) + part + tail));
     } else if (glob[index] === "," && depth === 1) {
       parts.push(glob.slice(start, index));
       start = index + 1;
@@ -144,7 +140,9 @@ function singleGlobMatches(glob, path) {
       const close = glob.indexOf("]", index + 1);
       if (close < 0) pattern += "\\[";
       else {
-        const set = glob.slice(index + 1, close).replace(/^!/, "^")
+        const set = glob
+          .slice(index + 1, close)
+          .replace(/^!/, "^")
           .replace(/\\/g, "\\\\");
         pattern += `[${set}]`;
         index = close;
@@ -158,9 +156,7 @@ function singleGlobMatches(glob, path) {
 export function importsOf(text, file, home) {
   const imports = [];
   const prose = text.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "");
-  for (
-    const match of prose.matchAll(/(?:^|\s)@((?:~\/|\.{0,2}\/|[\w.-])[^\s]*)/g)
-  ) {
+  for (const match of prose.matchAll(/(?:^|\s)@((?:~\/|\.{0,2}\/|[\w.-])[^\s]*)/g)) {
     let target = match[1];
     if (target.startsWith("~/")) {
       if (!home) continue;
@@ -222,7 +218,7 @@ export async function instructionFiles({ cwd, home, read, rules }) {
     await addRules(home, "user", cwd);
   }
   const directories = [];
-  for (let directory = cwd;; directory = posix.dirname(directory)) {
+  for (let directory = cwd; ; directory = posix.dirname(directory)) {
     directories.unshift(directory);
     if (directory === "/") break;
   }
@@ -238,14 +234,10 @@ export async function instructionFiles({ cwd, home, read, rules }) {
 // What a Read of `path` attaches natively: CLAUDE.md files of the directories
 // between the working directory and the file, then matching scoped rules;
 // `attached` holds what this session has already shown.
-export async function nestedInstructions(
-  { cwd, path, read, conditional, attached, home },
-) {
+export async function nestedInstructions({ cwd, path, read, conditional, attached, home }) {
   const relative = posix.relative(cwd, path);
-  if (
-    !relative || relative.startsWith("../") || relative === ".." ||
-    posix.isAbsolute(relative)
-  ) return [];
+  if (!relative || relative.startsWith("../") || relative === ".." || posix.isAbsolute(relative))
+    return [];
   const found = [];
   // Marked as shown only once everything is read: a failed read leaves the
   // files for a later Read.
@@ -263,9 +255,10 @@ export async function nestedInstructions(
       await attach(target, depth + 1);
     }
   };
-  const parts = posix.dirname(relative).split("/").filter((part) =>
-    part !== "."
-  );
+  const parts = posix
+    .dirname(relative)
+    .split("/")
+    .filter((part) => part !== ".");
   let directory = cwd;
   for (const part of parts) {
     directory = posix.join(directory, part);
@@ -274,10 +267,7 @@ export async function nestedInstructions(
   for (const rule of conditional) {
     if (seen(rule.path)) continue;
     const local = posix.relative(rule.root, path);
-    if (
-      local.startsWith("../") ||
-      !rule.paths.some((glob) => globMatches(glob, local))
-    ) continue;
+    if (local.startsWith("../") || !rule.paths.some((glob) => globMatches(glob, local))) continue;
     shown.add(rule.path);
     found.push({ path: rule.path, content: rule.content });
     for (const target of importsOf(rule.content, rule.path, home)) {

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertEquals, assertFalse } from "@std/assert";
+import { assert, assertEquals, assertFalse } from "../../../../tools/test-assert.ts";
 import { matchesShortcut, parseShortcut } from "./shortcut";
 
 test("shortcut parser normalizes a desktop chord", () => {

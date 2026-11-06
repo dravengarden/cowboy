@@ -15,100 +15,113 @@ if (themeMode !== "light" && themeMode !== "dark") {
   throw new Error("unknown theme mode");
 }
 if (
-  suite !== "idb" && suite !== "idb-outbox" && suite !== "provider-ui" &&
-  suite !== "provider-management" && suite !== "plugin-lifecycle" &&
-  suite !== "settings-recovery" && suite !== "code-buffers" &&
-  suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
-  suite !== "code-buffer-sync" && suite !== "review-code" &&
-  suite !== "review-document-refresh" && suite !== "review-diff" &&
-  suite !== "review-destination" && suite !== "review-recovery" &&
-  suite !== "workspace-extensions" && suite !== "sheet-keyboard" &&
-  suite !== "workspace-picker" && suite !== "project-placement" &&
-  suite !== "sign-in" && suite !== "desktop-composer" &&
-  suite !== "session-move" && suite !== "session-fold" &&
-  suite !== "draft-documents" && suite !== "editor-plugin-sandbox" &&
-  suite !== "managed-calls" && suite !== "session-maintenance" &&
-  suite !== "dormant-session" && suite !== "about-layout" &&
-  suite !== "info-metrics" && suite !== "review-context" &&
+  suite !== "idb" &&
+  suite !== "idb-outbox" &&
+  suite !== "provider-ui" &&
+  suite !== "provider-management" &&
+  suite !== "plugin-lifecycle" &&
+  suite !== "settings-recovery" &&
+  suite !== "code-buffers" &&
+  suite !== "code-buffer-context" &&
+  suite !== "code-buffer-cleanup" &&
+  suite !== "code-buffer-sync" &&
+  suite !== "review-code" &&
+  suite !== "review-document-refresh" &&
+  suite !== "review-diff" &&
+  suite !== "review-destination" &&
+  suite !== "review-recovery" &&
+  suite !== "workspace-extensions" &&
+  suite !== "sheet-keyboard" &&
+  suite !== "workspace-picker" &&
+  suite !== "project-placement" &&
+  suite !== "sign-in" &&
+  suite !== "desktop-composer" &&
+  suite !== "session-move" &&
+  suite !== "session-fold" &&
+  suite !== "draft-documents" &&
+  suite !== "editor-plugin-sandbox" &&
+  suite !== "managed-calls" &&
+  suite !== "session-maintenance" &&
+  suite !== "dormant-session" &&
+  suite !== "about-layout" &&
+  suite !== "info-metrics" &&
+  suite !== "review-context" &&
   suite !== "review-compare" &&
-  suite !== "subscriptions" && suite !== "session-context"
+  suite !== "subscriptions" &&
+  suite !== "session-context"
 ) {
   throw new Error("unknown suite");
 }
-const entry = suite === "session-context"
-  ? "runSessionContextBrowserConformance"
-  : suite === "subscriptions"
-  ? "runSubscriptionsBrowserConformance"
-  : suite === "review-context"
-  ? "runReviewContextBrowserConformance"
-  : suite === "review-compare"
-  ? "runReviewCompareBrowserConformance"
-  : suite === "info-metrics"
-  ? "runInfoMetricsBrowserConformance"
-  : suite === "dormant-session"
-  ? "runDormantSessionBrowserConformance"
-  : suite === "about-layout"
-  ? "runAboutLayoutBrowserConformance"
-  : suite === "session-maintenance"
-  ? "runSessionMaintenanceBrowserConformance"
-  : suite === "managed-calls"
-  ? "runManagedCallsBrowserConformance"
-  : suite === "editor-plugin-sandbox"
-  ? "runEditorPluginSandboxBrowserConformance"
-  : suite === "draft-documents"
-  ? "runDraftDocumentsBrowserConformance"
-  : suite === "session-fold"
-  ? "runSessionFoldBrowserConformance"
-  : suite === "session-move"
-  ? "runSessionMoveBrowserConformance"
-  : suite === "desktop-composer"
-  ? "runDesktopComposerBrowserConformance"
-  : suite === "sign-in"
-  ? "runSignInBrowserConformance"
-  : suite === "idb"
-  ? "runIdbBrowserConformance"
-  : suite === "project-placement"
-  ? "runProjectPlacementBrowserConformance"
-  : suite === "workspace-picker"
-  ? "runWorkspacePickerBrowserConformance"
-  : suite === "sheet-keyboard"
-  ? "runCoverKeyboardBrowserConformance"
-  : suite === "workspace-extensions"
-  ? "runWorkspaceExtensionsBrowserConformance"
-  : suite === "idb-outbox"
-  ? "runIdbOutboxBrowserConformance"
-  : suite === "provider-ui"
-  ? "runProviderUiBrowserConformance"
-  : suite === "plugin-lifecycle"
-  ? "runPluginLifecycleBrowserConformance"
-  : suite === "settings-recovery"
-  ? "runSettingsRecoveryBrowserConformance"
-  : suite === "code-buffers"
-  ? "runCodeBufferBrowserConformance"
-  : suite === "code-buffer-context"
-  ? "runCodeBufferContextBrowserConformance"
-  : suite === "code-buffer-cleanup"
-  ? "runCodeBufferCleanupBrowserConformance"
-  : suite === "code-buffer-sync"
-  ? "runCodeBufferSynchronizationBrowserConformance"
-  : suite === "review-code"
-  ? "runReviewCodeBrowserConformance"
-  : suite === "review-document-refresh"
-  ? "runReviewDocumentRefreshBrowserConformance"
-  : suite === "review-diff"
-  ? "runReviewDiffBrowserConformance"
-  : suite === "review-destination"
-  ? "runReviewDestinationBrowserConformance"
-  : suite === "review-recovery"
-  ? "runReviewRecoveryBrowserConformance"
-  : "runProviderManagementBrowserConformance";
-if (
-  !browser?.startsWith("/nix/store/") ||
-  (!browser.endsWith("/bin/firefox") && !chromium)
-) {
-  throw new Error(
-    "pass an absolute pinned /nix/store browser /bin/firefox or /bin/chromium path",
-  );
+const entry =
+  suite === "session-context"
+    ? "runSessionContextBrowserConformance"
+    : suite === "subscriptions"
+      ? "runSubscriptionsBrowserConformance"
+      : suite === "review-context"
+        ? "runReviewContextBrowserConformance"
+        : suite === "review-compare"
+          ? "runReviewCompareBrowserConformance"
+          : suite === "info-metrics"
+            ? "runInfoMetricsBrowserConformance"
+            : suite === "dormant-session"
+              ? "runDormantSessionBrowserConformance"
+              : suite === "about-layout"
+                ? "runAboutLayoutBrowserConformance"
+                : suite === "session-maintenance"
+                  ? "runSessionMaintenanceBrowserConformance"
+                  : suite === "managed-calls"
+                    ? "runManagedCallsBrowserConformance"
+                    : suite === "editor-plugin-sandbox"
+                      ? "runEditorPluginSandboxBrowserConformance"
+                      : suite === "draft-documents"
+                        ? "runDraftDocumentsBrowserConformance"
+                        : suite === "session-fold"
+                          ? "runSessionFoldBrowserConformance"
+                          : suite === "session-move"
+                            ? "runSessionMoveBrowserConformance"
+                            : suite === "desktop-composer"
+                              ? "runDesktopComposerBrowserConformance"
+                              : suite === "sign-in"
+                                ? "runSignInBrowserConformance"
+                                : suite === "idb"
+                                  ? "runIdbBrowserConformance"
+                                  : suite === "project-placement"
+                                    ? "runProjectPlacementBrowserConformance"
+                                    : suite === "workspace-picker"
+                                      ? "runWorkspacePickerBrowserConformance"
+                                      : suite === "sheet-keyboard"
+                                        ? "runCoverKeyboardBrowserConformance"
+                                        : suite === "workspace-extensions"
+                                          ? "runWorkspaceExtensionsBrowserConformance"
+                                          : suite === "idb-outbox"
+                                            ? "runIdbOutboxBrowserConformance"
+                                            : suite === "provider-ui"
+                                              ? "runProviderUiBrowserConformance"
+                                              : suite === "plugin-lifecycle"
+                                                ? "runPluginLifecycleBrowserConformance"
+                                                : suite === "settings-recovery"
+                                                  ? "runSettingsRecoveryBrowserConformance"
+                                                  : suite === "code-buffers"
+                                                    ? "runCodeBufferBrowserConformance"
+                                                    : suite === "code-buffer-context"
+                                                      ? "runCodeBufferContextBrowserConformance"
+                                                      : suite === "code-buffer-cleanup"
+                                                        ? "runCodeBufferCleanupBrowserConformance"
+                                                        : suite === "code-buffer-sync"
+                                                          ? "runCodeBufferSynchronizationBrowserConformance"
+                                                          : suite === "review-code"
+                                                            ? "runReviewCodeBrowserConformance"
+                                                            : suite === "review-document-refresh"
+                                                              ? "runReviewDocumentRefreshBrowserConformance"
+                                                              : suite === "review-diff"
+                                                                ? "runReviewDiffBrowserConformance"
+                                                                : suite === "review-destination"
+                                                                  ? "runReviewDestinationBrowserConformance"
+                                                                  : suite === "review-recovery"
+                                                                    ? "runReviewRecoveryBrowserConformance"
+                                                                    : "runProviderManagementBrowserConformance";
+if (!browser?.startsWith("/nix/store/") || (!browser.endsWith("/bin/firefox") && !chromium)) {
+  throw new Error("pass an absolute pinned /nix/store browser /bin/firefox or /bin/chromium path");
 }
 const temporary = await mkdtemp(join(tmpdir(), "cowboy-idb-browser-"));
 let child: ChildProcess | undefined;
@@ -144,49 +157,42 @@ try {
     editorPlugin = await readFile(packed, "utf8");
   }
   const digest = Array.from(
-    new Uint8Array(
-      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(script)),
-    ),
+    new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(script))),
   )
-    .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
   const profile = `${temporary}/profile`;
   await mkdir(profile);
   const token = crypto.randomUUID();
   const report = Promise.withResolvers<unknown>();
-  server = serveFixture(
-    async ({ request }) => {
-      const url = new URL(request.url);
-      if (request.method === "GET" && url.pathname === "/fixture.js") {
-        return new Response(script, {
-          headers: { "Content-Type": "text/javascript" },
-        });
-      }
-      if (
-        editorPlugin !== null && request.method === "GET" &&
-        url.pathname === "/editor-plugin.cowboy-plugin"
-      ) {
-        return new Response(editorPlugin, {
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (
-        suite === "idb-outbox" && request.method === "GET" &&
-        url.pathname === "/outbox-peer.js"
-      ) {
-        return new Response(
-          'import { runIdbOutboxPeer } from "/fixture.js"; runIdbOutboxPeer();',
-          {
-            headers: { "Content-Type": "text/javascript" },
-          },
-        );
-      }
-      if (request.method === "POST" && url.pathname === `/report/${token}`) {
-        report.resolve(await request.json());
-        return new Response("ok");
-      }
-      if (request.method === "GET" && url.pathname === `/${token}`) {
-        return new Response(
-          `<!doctype html><script>
+  server = serveFixture(async ({ request }) => {
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/fixture.js") {
+      return new Response(script, {
+        headers: { "Content-Type": "text/javascript" },
+      });
+    }
+    if (
+      editorPlugin !== null &&
+      request.method === "GET" &&
+      url.pathname === "/editor-plugin.cowboy-plugin"
+    ) {
+      return new Response(editorPlugin, {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (suite === "idb-outbox" && request.method === "GET" && url.pathname === "/outbox-peer.js") {
+      return new Response('import { runIdbOutboxPeer } from "/fixture.js"; runIdbOutboxPeer();', {
+        headers: { "Content-Type": "text/javascript" },
+      });
+    }
+    if (request.method === "POST" && url.pathname === `/report/${token}`) {
+      report.resolve(await request.json());
+      return new Response("ok");
+    }
+    if (request.method === "GET" && url.pathname === `/${token}`) {
+      return new Response(
+        `<!doctype html><script>
 localStorage.setItem("cowboy:theme-system-default-v1", "1");
 localStorage.setItem("cowboy-theme-mode", ${JSON.stringify(themeMode)});
 // This HTTP fixture owns transport/authentication; real proofs run separately
@@ -198,23 +204,22 @@ try { const { ${entry} } = await import("/fixture.js"); result = { ok: true, tes
 catch (error) { result = { ok: false, error: String(error) }; }
 await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) });
 </script>`,
-          {
-            headers: {
-              "Content-Type": "text/html",
-              "Content-Security-Policy":
-                // Same-origin workers exercise peer IndexedDB owners; blob:
-                // lets the editor plugin sandbox (a srcdoc
-                // frame inheriting this policy) start its Worker. The production
-                // policy is web_security.rs. Attachment previews use
-                // data/blob URLs and must exercise actual browser decoding.
-                "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; img-src 'self' data: blob:",
-            },
+        {
+          headers: {
+            "Content-Type": "text/html",
+            "Content-Security-Policy":
+              // Same-origin workers exercise peer IndexedDB owners; blob:
+              // lets the editor plugin sandbox (a srcdoc
+              // frame inheriting this policy) start its Worker. The production
+              // policy is web_security.rs. Attachment previews use
+              // data/blob URLs and must exercise actual browser decoding.
+              "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; img-src 'self' data: blob:",
           },
-        );
-      }
-      return new Response("not found", { status: 404 });
-    },
-  );
+        },
+      );
+    }
+    return new Response("not found", { status: 404 });
+  });
   const environment = {
     MOZ_HEADLESS: "1",
     MOZ_CRASHREPORTER_DISABLE: "1",
@@ -235,28 +240,28 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
   child = new Command(browser, {
     args: chromium
       ? [
-        "--headless",
-        "--no-sandbox",
-        "--disable-gpu",
-        // Match headless Firefox's 1366x768 Desktop viewport so both engines
-        // exercise the same layout branch.
-        "--window-size=1366,768",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-background-networking",
-        "--disable-component-update",
-        "--remote-debugging-port=0",
-        `--user-data-dir=${profile}`,
-        `http://127.0.0.1:${server.port}/${token}`,
-      ]
+          "--headless",
+          "--no-sandbox",
+          "--disable-gpu",
+          // Match headless Firefox's 1366x768 Desktop viewport so both engines
+          // exercise the same layout branch.
+          "--window-size=1366,768",
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--disable-background-networking",
+          "--disable-component-update",
+          "--remote-debugging-port=0",
+          `--user-data-dir=${profile}`,
+          `http://127.0.0.1:${server.port}/${token}`,
+        ]
       : [
-        "--headless",
-        "--no-remote",
-        "--new-instance",
-        "--profile",
-        profile,
-        `http://127.0.0.1:${server.port}/${token}`,
-      ],
+          "--headless",
+          "--no-remote",
+          "--new-instance",
+          "--profile",
+          profile,
+          `http://127.0.0.1:${server.port}/${token}`,
+        ],
     clearEnv: true,
     env: environment,
     stdout: "null",
@@ -268,115 +273,121 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     // scheduling latency into a spurious failure.
     suite === "draft-documents" ? 150_000 : 90_000,
   );
-  void child.status.then(() =>
-    report.reject(new Error("browser exited before report"))
-  );
+  void child.status.then(() => report.reject(new Error("browser exited before report")));
   const result = await report.promise;
   if (
-    typeof result !== "object" || result === null || !("ok" in result) ||
+    typeof result !== "object" ||
+    result === null ||
+    !("ok" in result) ||
     result.ok !== true ||
-    !("tests" in result) || !Array.isArray(result.tests) ||
+    !("tests" in result) ||
+    !Array.isArray(result.tests) ||
     result.tests.length !==
       (suite === "session-context"
         ? 110
         : suite === "sign-in"
-        ? 5
-        : suite === "session-move" || suite === "editor-plugin-sandbox"
-        ? 4
-        : suite === "dormant-session"
-        ? 29
-        : suite === "session-fold"
-        ? 7
-        : suite === "managed-calls"
-        ? 20
-        : suite === "info-metrics"
-        ? 42
-        : suite === "subscriptions"
-        ? 143
-        : suite === "about-layout"
-        ? 10
-        : suite === "session-maintenance"
-        ? 8
-        : suite === "project-placement"
-        ? 13
-        : suite === "workspace-picker"
-        ? 10
-        : suite === "sheet-keyboard"
-        ? 4
-        : suite === "workspace-extensions"
-        ? 25
-        : suite === "review-destination"
-        ? 10
-        : suite === "settings-recovery"
-        ? 9
-        : suite === "draft-documents"
-        ? 12
-        : suite === "desktop-composer"
-        ? 19
-        : suite === "code-buffer-cleanup"
-        ? 7
-        : suite === "code-buffers"
-        ? 24
-        : suite === "code-buffer-sync"
-        ? 9
-        : suite === "idb"
-        ? 8
-        : suite === "idb-outbox"
-        ? 16
-        : suite === "review-document-refresh"
-        ? 5
-        : suite === "review-context"
-        ? 8
-        : suite === "review-compare"
-        ? 4
-        : suite === "review-recovery"
-        ? 17
-        : 6) ||
+          ? 5
+          : suite === "session-move" || suite === "editor-plugin-sandbox"
+            ? 4
+            : suite === "dormant-session"
+              ? 29
+              : suite === "session-fold"
+                ? 7
+                : suite === "managed-calls"
+                  ? 20
+                  : suite === "info-metrics"
+                    ? 42
+                    : suite === "subscriptions"
+                      ? 143
+                      : suite === "about-layout"
+                        ? 10
+                        : suite === "session-maintenance"
+                          ? 8
+                          : suite === "project-placement"
+                            ? 13
+                            : suite === "workspace-picker"
+                              ? 10
+                              : suite === "sheet-keyboard"
+                                ? 4
+                                : suite === "workspace-extensions"
+                                  ? 25
+                                  : suite === "review-destination"
+                                    ? 10
+                                    : suite === "settings-recovery"
+                                      ? 9
+                                      : suite === "draft-documents"
+                                        ? 12
+                                        : suite === "desktop-composer"
+                                          ? 19
+                                          : suite === "code-buffer-cleanup"
+                                            ? 7
+                                            : suite === "code-buffers"
+                                              ? 24
+                                              : suite === "code-buffer-sync"
+                                                ? 9
+                                                : suite === "idb"
+                                                  ? 8
+                                                  : suite === "idb-outbox"
+                                                    ? 16
+                                                    : suite === "review-document-refresh"
+                                                      ? 5
+                                                      : suite === "review-context"
+                                                        ? 8
+                                                        : suite === "review-compare"
+                                                          ? 4
+                                                          : suite === "review-recovery"
+                                                            ? 17
+                                                            : 6) ||
     !result.tests.every((test) => typeof test === "string")
   ) {
     throw new Error(`browser conformance failed: ${JSON.stringify(result)}`);
   }
-  console.log(JSON.stringify(
-    {
-      ok: true,
-      suite,
-      theme_mode: themeMode,
-      browser: new TextDecoder().decode(version.stdout).trim(),
-      executable: browser,
-      fixture_sha256: digest,
-      isolation: "fresh profile / private loopback namespace / no credentials",
-      tests: result.tests,
-      physical_device: "not_checked",
-    },
-    null,
-    2,
-  ));
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        suite,
+        theme_mode: themeMode,
+        browser: new TextDecoder().decode(version.stdout).trim(),
+        executable: browser,
+        fixture_sha256: digest,
+        isolation: "fresh profile / private loopback namespace / no credentials",
+        tests: result.tests,
+        physical_device: "not_checked",
+      },
+      null,
+      2,
+    ),
+  );
 } finally {
   clearTimeout(deadline);
   if (chromium && child) {
     try {
-      const [port, path] =
-        (await readFile(`${temporary}/profile/DevToolsActivePort`, "utf8"))
-          .trim().split("\n");
+      const [port, path] = (await readFile(`${temporary}/profile/DevToolsActivePort`, "utf8"))
+        .trim()
+        .split("\n");
       const socket = new WebSocket(`ws://127.0.0.1:${port}${path}`);
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
           socket.close();
           resolve();
         }, 2000);
-        socket.onopen = () =>
-          socket.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+        socket.onopen = () => socket.send(JSON.stringify({ id: 1, method: "Browser.close" }));
         socket.onclose = socket.onerror = () => {
           clearTimeout(timer);
           resolve();
         };
       });
-    } catch { /* An already-exited browser needs no graceful close. */ }
+    } catch {
+      /* An already-exited browser needs no graceful close. */
+    }
   }
   if (child) {
     try {
       child.kill("SIGKILL");
-    } catch { /* already exited */ }
+    } catch {
+      /* already exited */
+    }
     await child.status;
   }
   await server?.shutdown();

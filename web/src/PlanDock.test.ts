@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertStringIncludes } from "@std/assert";
+import { assertStringIncludes } from "../../tools/test-assert.ts";
 
 const source = await readFile(
   new URL("./PlanDock.tsx", import.meta.url), "utf8",

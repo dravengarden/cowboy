@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { deliverCurrentTurn } from "./currentTurnDelivery";
 
 test("a restored current-turn message only observes its exact receipt", async () => {

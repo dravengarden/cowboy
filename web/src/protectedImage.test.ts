@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 import { afterAll, beforeAll, test } from "bun:test";
 import {
   imageDisplayUrl,

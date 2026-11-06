@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { derive, linkTimeline } from "./derive";
 import { prettifyCrashDetail, rpcErrorKind } from "./crashDetail";
 import type { AcpUpdate, Envelope } from "./protocol";

@@ -5,7 +5,7 @@
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import { test } from "bun:test";
-import { assert, assertEquals, assertFalse } from "@std/assert";
+import { assert, assertEquals, assertFalse } from "../../tools/test-assert.ts";
 import {
   BOOT_SNAPSHOT_CACHE,
   BOOT_SNAPSHOT_HINT_KEY,

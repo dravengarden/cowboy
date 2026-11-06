@@ -124,7 +124,7 @@ out=$(survey "$@") || exit "$?"; printf '%s\n' "$out"
 // A directory and its ancestors, root first.
 function ancestors(cwd) {
   const directories = [];
-  for (let directory = cwd;; directory = posix.dirname(directory)) {
+  for (let directory = cwd; ; directory = posix.dirname(directory)) {
     directories.unshift(directory);
     if (directory === "/") return directories;
   }
@@ -144,16 +144,13 @@ export function parseStartupSurvey(output, candidates) {
   // The script prints one exact section sequence. A listed name that imitates
   // a marker or a listing line breaks it, and the survey is not trusted.
   let at = 0;
-  const section = (header) =>
-    sections[at]?.header === header ? sections[at++] : undefined;
+  const section = (header) => (sections[at]?.header === header ? sections[at++] : undefined);
   const git = {};
   const gitAnswer = (name) => {
     const match = /^git (\w+) (\d{1,3})$/.exec(sections[at]?.header ?? "");
     const lines = sections[at]?.lines;
-    if (
-      match?.[1] !== name || lines.length !== 1 ||
-      !/^[A-Za-z0-9+/]*={0,2}$/.test(lines[0])
-    ) return false;
+    if (match?.[1] !== name || lines.length !== 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(lines[0]))
+      return false;
     at++;
     git[name] = {
       exitCode: Number(match[2]),
@@ -165,10 +162,9 @@ export function parseStartupSurvey(output, candidates) {
   if (platform?.lines.length !== 4 || !gitAnswer("inside")) return undefined;
   if (
     git.inside.exitCode === 0 &&
-    !["branch", "origin", "master", "main", "user", "status", "log"].every(
-      gitAnswer,
-    )
-  ) return undefined;
+    !["branch", "origin", "master", "main", "user", "status", "log"].every(gitAnswer)
+  )
+    return undefined;
   if (!gitAnswer("toplevel")) return undefined;
   const [rulesSection, skillsSection, answersSection, end] = [
     "rules",
@@ -176,15 +172,14 @@ export function parseStartupSurvey(output, candidates) {
     "candidates",
     "end",
   ].map(section);
-  if (
-    !end || at !== sections.length || end.lines.length !== 1 ||
-    end.lines[0] !== ""
-  ) return undefined;
+  if (!end || at !== sections.length || end.lines.length !== 1 || end.lines[0] !== "")
+    return undefined;
   // Successful answers have known shapes; anything else is not trusted.
   if (
     (git.inside.exitCode === 0 && git.inside.output.trim() !== "true") ||
     (git.toplevel.exitCode === 0 && !git.toplevel.output.startsWith("/"))
-  ) return undefined;
+  )
+    return undefined;
   const facts = new Map();
   const listed = (line) => {
     const match = /^(\d+|\?)\t(\/.*)$/.exec(line);
@@ -219,7 +214,8 @@ export function parseStartupSurvey(output, candidates) {
       if (
         Buffer.byteLength(path) < 4096 &&
         path.split("/").every((part) => Buffer.byteLength(part) <= 255)
-      ) facts.set(path, null);
+      )
+        facts.set(path, null);
     } else if (/^F\s*\d+\s*$/.test(answer)) {
       facts.set(path, { isFile: true, size: Number(answer.slice(1)) });
     } else if (answer !== "O") return undefined;
@@ -307,26 +303,29 @@ export function fileBufferMatcher(patterns) {
     };
   });
   return (path) =>
-    compiled.some(({ path: whole, regex }) =>
-      regex.test(whole ? path : posix.basename(path))
-    );
+    compiled.some(({ path: whole, regex }) => regex.test(whole ? path : posix.basename(path)));
 }
 
 function validFileBufferPolicy(value) {
-  const size = (number, max) =>
-    Number.isSafeInteger(number) && number >= 0 && number <= max;
-  return value?.schema === 1 && typeof value.enabled === "boolean" &&
+  const size = (number, max) => Number.isSafeInteger(number) && number >= 0 && number <= max;
+  return (
+    value?.schema === 1 &&
+    typeof value.enabled === "boolean" &&
     size(value.max_file_size, MAX_FILE) &&
-    Array.isArray(value.excluded) && value.excluded.length <= 256 &&
-    value.excluded.every((pattern) =>
-      typeof pattern === "string" && pattern.length > 0 &&
-      pattern.length <= 256 &&
-      // Each `**` is an unanchored search; the Device bounds them too.
-      pattern.split("**").length <= 9
+    Array.isArray(value.excluded) &&
+    value.excluded.length <= 256 &&
+    value.excluded.every(
+      (pattern) =>
+        typeof pattern === "string" &&
+        pattern.length > 0 &&
+        pattern.length <= 256 &&
+        // Each `**` is an unanchored search; the Device bounds them too.
+        pattern.split("**").length <= 9,
     ) &&
     size(value.cache_max_bytes, 1024 ** 3) &&
     size(value.cache_max_age_seconds, 366 * 24 * 3600) &&
-    size(value.target_temp_max_age_seconds, 8 * 24 * 3600);
+    size(value.target_temp_max_age_seconds, 8 * 24 * 3600)
+  );
 }
 
 // The single replacement that turns `base` into `written`: their common
@@ -339,15 +338,16 @@ export function bufferSplice(base, written) {
   while (
     suffix < limit - prefix &&
     base[base.length - 1 - suffix] === written[written.length - 1 - suffix]
-  ) suffix++;
+  )
+    suffix++;
   if (prefix === base.length && prefix === written.length) return [];
-  return [{
-    offset: prefix,
-    delete: base.length - prefix - suffix,
-    insert: written.subarray(prefix, written.length - suffix).toString(
-      "base64",
-    ),
-  }];
+  return [
+    {
+      offset: prefix,
+      delete: base.length - prefix - suffix,
+      insert: written.subarray(prefix, written.length - suffix).toString("base64"),
+    },
+  ];
 }
 
 // The executor's completed-operation retention (15 minutes), well past any
@@ -394,14 +394,10 @@ export function cksumDigest(bytes) {
     crc = ((crc << 8) ^ CKSUM_TABLE[((crc >>> 24) ^ byte) & 0xff]) >>> 0;
   };
   for (const byte of bytes) step(byte);
-  for (
-    let length = bytes.length;
-    length > 0;
-    length = Math.floor(length / 256)
-  ) {
+  for (let length = bytes.length; length > 0; length = Math.floor(length / 256)) {
     step(length & 0xff);
   }
-  return `c${(~crc) >>> 0}-${bytes.length}`;
+  return `c${~crc >>> 0}-${bytes.length}`;
 }
 
 // Earlier generations kept every finished command. A record read through
@@ -409,14 +405,12 @@ export function cksumDigest(bytes) {
 const FINISHED_JOBS_KEPT = 64;
 export function pruneFinishedJobs(jobs) {
   // Output retained for a handle not yet read keeps its record.
-  const finished = Object.keys(jobs).filter((id) =>
-    jobs[id].closed && jobs[id].endRead && !jobs[id].retained
+  const finished = Object.keys(jobs).filter(
+    (id) => jobs[id].closed && jobs[id].endRead && !jobs[id].retained,
   );
   const dropped = new Set(finished.slice(0, -FINISHED_JOBS_KEPT));
   return dropped.size
-    ? Object.fromEntries(
-      Object.entries(jobs).filter(([id]) => !dropped.has(id)),
-    )
+    ? Object.fromEntries(Object.entries(jobs).filter(([id]) => !dropped.has(id)))
     : jobs;
 }
 
@@ -450,10 +444,12 @@ export function readAhead(read, limit) {
       const path = queue.shift();
       if (results.has(path)) continue;
       active++;
-      get(path).catch(() => {}).finally(() => {
-        active--;
-        pump();
-      });
+      get(path)
+        .catch(() => {})
+        .finally(() => {
+          active--;
+          pump();
+        });
     }
   };
   get.prefetch = (paths) => {
@@ -468,10 +464,12 @@ export function bindingKey(binding) {
     Array.isArray(value)
       ? value.map(canonical)
       : value && typeof value === "object"
-      ? Object.fromEntries(
-        Object.keys(value).sort().map((key) => [key, canonical(value[key])]),
-      )
-      : value;
+        ? Object.fromEntries(
+            Object.keys(value)
+              .sort()
+              .map((key) => [key, canonical(value[key])]),
+          )
+        : value;
   return hash(JSON.stringify(canonical(binding)));
 }
 export const NATIVE_TOOLS = [
@@ -489,25 +487,20 @@ const TASK_COMMAND_LIMIT = 4096;
 const TASK_COMMANDS_LIMIT = 256 * 1024;
 export const AGENT_OUTPUT_PREFIX = "cowboy-agent://";
 // Registry keys index plain objects; exclude inherited property names.
-export const AGENT_ID =
-  /^(?!(?:__proto__|constructor|prototype)$)[a-zA-Z0-9_-]{1,128}$/;
+export const AGENT_ID = /^(?!(?:__proto__|constructor|prototype)$)[a-zA-Z0-9_-]{1,128}$/;
 const MAX_AGENTS = 512;
 const MAX_STATE = 2 * 1024 * 1024;
 // Agent answers yield to reads and jobs; the whole file must stay loadable.
 const MAX_AGENT_STATE = 512 * 1024;
 const AGENT_STATE_BUDGET = MAX_STATE - 256 * 1024;
 export const DESCRIPTIONS = {
-  Bash:
-    "Run Bash in the current workspace. Starts in the project directory; use cd within a command when needed. Waits up to timeout milliseconds (default 120000, maximum 600000). A running command returns a task id and cowboy-task:// output handle: use Read on that handle to wait for output, or TaskStop to cancel.",
-  Read:
-    "Read a workspace file before editing it. Text has line numbers; offset starts at 1. Supports PNG, JPEG, GIF, WebP and PDF; pages (such as 1-5, at most 20) renders PDF pages as images. A cowboy-task:// handle reads new retained command output and waits up to 10 seconds; handles survive resume.",
+  Bash: "Run Bash in the current workspace. Starts in the project directory; use cd within a command when needed. Waits up to timeout milliseconds (default 120000, maximum 600000). A running command returns a task id and cowboy-task:// output handle: use Read on that handle to wait for output, or TaskStop to cancel.",
+  Read: "Read a workspace file before editing it. Text has line numbers; offset starts at 1. Supports PNG, JPEG, GIF, WebP and PDF; pages (such as 1-5, at most 20) renders PDF pages as images. A cowboy-task:// handle reads new retained command output and waits up to 10 seconds; handles survive resume.",
   Write:
     "Write UTF-8 content. Existing files must first be read; changes since that read cause a conflict. Creates missing parent directories.",
-  Edit:
-    "Replace an exact string in a previously read file. Unless replace_all is true the match must be unique. A changed file requires another Read.",
+  Edit: "Replace an exact string in a previously read file. Unless replace_all is true the match must be unique. A changed file requires another Read.",
   Glob: "Find matching files relative to path or the current workspace.",
-  Grep:
-    "Search workspace files with ripgrep. Supports regex, glob, file type, context, pagination, and content/files_with_matches/count output modes.",
+  Grep: "Search workspace files with ripgrep. Supports regex, glob, file type, context, pagination, and content/files_with_matches/count output modes.",
   NotebookEdit:
     "Edit a previously read Jupyter notebook. cell_id selects an existing cell; insert without cell_id adds the first cell. Metadata is retained.",
   TaskStop:
@@ -559,9 +552,8 @@ ${SNAPSHOT_END}`;
 // The packaged native version names the agent as native's AI_AGENT does.
 const NATIVE_VERSION = (() => {
   try {
-    return JSON.parse(
-      readFileSync(new URL("../claude-execution.json", import.meta.url)),
-    ).native_version;
+    return JSON.parse(readFileSync(new URL("../claude-execution.json", import.meta.url)))
+      .native_version;
   } catch {
     return undefined;
   }
@@ -583,9 +575,7 @@ export const MOVED_UNREAD =
 // Native's duration in a timeout message: "1s", "1m 1s".
 export function shellDuration(ms) {
   const seconds = Math.floor(ms / 1000);
-  return seconds < 60
-    ? `${seconds}s`
-    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 // Variables native Claude Code sets for its Bash commands (2.1.287). Its
@@ -627,18 +617,15 @@ export function persistedOutput(path, output) {
   let preview = output.slice(0, 2000);
   const newline = preview.lastIndexOf("\n");
   if (newline > 1000) preview = preview.slice(0, newline + 1);
-  return `<persisted-output>\nOutput too large (${
-    (bytes / 1024).toFixed(1)
-  }KB). Full output saved to: ${path}\n\nPreview (first 2KB):\n${preview}${
+  return `<persisted-output>\nOutput too large (${(bytes / 1024).toFixed(
+    1,
+  )}KB). Full output saved to: ${path}\n\nPreview (first 2KB):\n${preview}${
     preview.endsWith("\n") ? "" : "\n"
   }...\n</persisted-output>`;
 }
 
 function checkedString(value, name, max = MAX_FILE) {
-  if (
-    typeof value !== "string" || value.includes("\0") ||
-    Buffer.byteLength(value) > max
-  ) {
+  if (typeof value !== "string" || value.includes("\0") || Buffer.byteLength(value) > max) {
     throw new Error(`Invalid ${name}`);
   }
   return value;
@@ -648,17 +635,13 @@ function checkedString(value, name, max = MAX_FILE) {
 function bounded(value, fallback, min, max, name) {
   if (value === undefined) return fallback;
   if (!Number.isSafeInteger(value) || value < min || value > max) {
-    throw new Error(
-      `Invalid tool limit: ${name} must be an integer from ${min} to ${max}`,
-    );
+    throw new Error(`Invalid tool limit: ${name} must be an integer from ${min} to ${max}`);
   }
   return value;
 }
 function decode(bytes) {
   try {
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-      bytes,
-    );
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     throw new Error("File is not valid UTF-8; use a target binary utility");
   }
@@ -670,8 +653,7 @@ function decode(bytes) {
 // says that bytes were replaced, so writing the text back would lose them.
 export function textFile(bytes) {
   const utf16 = bytes[0] === 0xff && bytes[1] === 0xfe;
-  const bom = !utf16 && bytes[0] === 0xef && bytes[1] === 0xbb &&
-    bytes[2] === 0xbf;
+  const bom = !utf16 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
   const body = bom ? bytes.subarray(3) : bytes;
   const raw = utf16
     ? bytes.subarray(2).toString("utf16le")
@@ -688,23 +670,30 @@ export function textFile(bytes) {
 // Native 2.1.302 refuses both Edit and Write on undecodable or NUL-bearing
 // files, even when the replacement text itself is valid UTF-8.
 function encodingRefusal(bytes, file) {
-  const reason = !file.utf16 && bytes.subarray(0, 8192).includes(0)
-    ? "File has NUL bytes in its first 8 KB: binary data, UTF-16/UTF-32 without a byte-order mark, or text with embedded NULs."
-    : file.lossy
-    ? "File is not valid UTF-8: it uses a legacy encoding such as Windows-1252, Shift-JIS or GBK, or it is binary."
-    : null;
-  return reason && reason +
-      " These tools write UTF-8 (or UTF-16LE behind its byte-order mark) and never convert a file's encoding on their own, so nothing was written. If the file is text, make the change with a shell command that reads and writes it in its own encoding (iconv, or PowerShell Get-Content/Set-Content -Encoding), or ask the user whether to convert it to UTF-8 first. To replace the whole file with new UTF-8 text anyway, delete it first, then Write it.";
+  const reason =
+    !file.utf16 && bytes.subarray(0, 8192).includes(0)
+      ? "File has NUL bytes in its first 8 KB: binary data, UTF-16/UTF-32 without a byte-order mark, or text with embedded NULs."
+      : file.lossy
+        ? "File is not valid UTF-8: it uses a legacy encoding such as Windows-1252, Shift-JIS or GBK, or it is binary."
+        : null;
+  return (
+    reason &&
+    reason +
+      " These tools write UTF-8 (or UTF-16LE behind its byte-order mark) and never convert a file's encoding on their own, so nothing was written. If the file is text, make the change with a shell command that reads and writes it in its own encoding (iconv, or PowerShell Get-Content/Set-Content -Encoding), or ask the user whether to convert it to UTF-8 first. To replace the whole file with new UTF-8 text anyway, delete it first, then Write it."
+  );
 }
 
 function encodingWarning(bytes, file) {
-  const reason = !file.utf16 && bytes.subarray(0, 8192).includes(0)
-    ? "This file has NUL bytes in its first 8 KB: binary data, UTF-16/UTF-32 without a byte-order mark, or text with embedded NULs."
-    : file.lossy
-    ? "This file is not valid UTF-8: it uses a legacy encoding such as Windows-1252, Shift-JIS or GBK, or it is binary. Its undecodable bytes show above as U+FFFD."
-    : null;
-  return reason &&
-    `[${reason} Edit and Write will refuse it: change it with a shell command that keeps its encoding, or ask the user whether to convert it to UTF-8.]`;
+  const reason =
+    !file.utf16 && bytes.subarray(0, 8192).includes(0)
+      ? "This file has NUL bytes in its first 8 KB: binary data, UTF-16/UTF-32 without a byte-order mark, or text with embedded NULs."
+      : file.lossy
+        ? "This file is not valid UTF-8: it uses a legacy encoding such as Windows-1252, Shift-JIS or GBK, or it is binary. Its undecodable bytes show above as U+FFFD."
+        : null;
+  return (
+    reason &&
+    `[${reason} Edit and Write will refuse it: change it with a shell command that keeps its encoding, or ask the user whether to convert it to UTF-8.]`
+  );
 }
 // Native's answer to allow_large where the read does not run beside it. The
 // target's limits bound what one call returns, so the flag raises nothing.
@@ -715,14 +704,8 @@ const ALLOW_LARGE_UNAVAILABLE =
 export function textBytes(text, { crlf, utf16, bom }) {
   const content = crlf ? text.replaceAll("\n", "\r\n") : text;
   return utf16
-    ? Buffer.concat([
-      Buffer.from([0xff, 0xfe]),
-      Buffer.from(content, "utf16le"),
-    ])
-    : Buffer.concat([
-      Buffer.from(bom ? [0xef, 0xbb, 0xbf] : []),
-      Buffer.from(content),
-    ]);
+    ? Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(content, "utf16le")])
+    : Buffer.concat([Buffer.from(bom ? [0xef, 0xbb, 0xbf] : []), Buffer.from(content)]);
 }
 
 // Persist only an unfinished UTF-8 suffix, not a decoder's private internals.
@@ -733,12 +716,9 @@ function decodeOutput(bytes) {
     const pending = bytes.subarray(bytes.length - length);
     try {
       if (
-        new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-          pending,
-          {
-            stream: true,
-          },
-        ) === ""
+        new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(pending, {
+          stream: true,
+        }) === ""
       ) {
         return {
           text: bytes.subarray(0, bytes.length - length).toString("utf8"),
@@ -817,10 +797,11 @@ export function endedCommand(shell, script, end, cwdFile) {
   return [
     shell,
     "-c",
-    `exec 3>&2 2>/dev/null; "$0" -c "$1" 2>&3 3>&-; s=$?; ` + directory +
-    `printf '\\036%s:%d${field}\\n' "$2" "$s"${value} >&3; ` +
-    `printf '\\036%s:%d${field}\\n' "$2" "$s"${value}; ` +
-    `exit "$s"`,
+    `exec 3>&2 2>/dev/null; "$0" -c "$1" 2>&3 3>&-; s=$?; ` +
+      directory +
+      `printf '\\036%s:%d${field}\\n' "$2" "$s"${value} >&3; ` +
+      `printf '\\036%s:%d${field}\\n' "$2" "$s"${value}; ` +
+      `exit "$s"`,
     shell,
     script,
     end,
@@ -831,7 +812,8 @@ export function endedCommand(shell, script, end, cwdFile) {
 // Extensions native's Read refuses as binary (2.1.302); images and PDFs
 // among them have readers of their own.
 const BINARY_EXTENSIONS = new Set(
-  (".png .jpg .jpeg .gif .bmp .ico .webp .tiff .tif .mp4 .mov .avi .mkv " +
+  (
+    ".png .jpg .jpeg .gif .bmp .ico .webp .tiff .tif .mp4 .mov .avi .mkv " +
     ".webm .wmv .flv .m4v .mpeg .mpg .mp3 .wav .ogg .flac .aac .m4a .wma " +
     ".aiff .opus .zip .tar .gz .bz2 .7z .rar .xz .z .tgz .iso .exe .dll .so " +
     ".dylib .bin .o .a .obj .lib .app .msi .deb .rpm .pdf .doc .docx .xls " +
@@ -840,7 +822,8 @@ const BINARY_EXTENSIONS = new Set(
     ".psd .ai .eps .sketch .fig .xd .blend .3ds .max .swf .fla .lockb .dat " +
     ".data .heic .heif .avif .zst .lz4 .whl .dmg .apk .docm .dotx .dotm " +
     ".xlsm .xlsb .xltx .xltm .pptm .ppsx .ppsm .potx .potm .numbers .epub " +
-    ".parquet .feather .npy .npz .pickle").split(" "),
+    ".parquet .feather .npy .npz .pickle"
+  ).split(" "),
 );
 
 // Native's PDF limits and `pages` grammar ("3", "1-5", "10-").
@@ -854,7 +837,11 @@ const PDF_REMOTE_BYTES = 10 * 1024 * 1024;
 const PDF_PAGES_BYTES = 10 * 1024 * 1024;
 // Native's size wording: "588 bytes", "6.9KB", "20MB".
 export function fileSize(bytes) {
-  const units = [["GB", 1024 ** 3], ["MB", 1024 ** 2], ["KB", 1024]];
+  const units = [
+    ["GB", 1024 ** 3],
+    ["MB", 1024 ** 2],
+    ["KB", 1024],
+  ];
   for (const [unit, size] of units) {
     if (bytes >= size) {
       return `${(bytes / size).toFixed(1).replace(/\.0$/, "")}${unit}`;
@@ -888,9 +875,7 @@ export function pdfPages(pages) {
       `Invalid pages parameter: "${pages}". Give one page ("3") or one range ("1-5"), not a list. To read several pages or ranges, read each one separately. Pages are 1-indexed.`,
     );
   }
-  const count = range.lastPage === Infinity
-    ? PDF_PAGES + 1
-    : range.lastPage - range.firstPage + 1;
+  const count = range.lastPage === Infinity ? PDF_PAGES + 1 : range.lastPage - range.firstPage + 1;
   if (count > PDF_PAGES) {
     throw new Error(
       `Page range "${pages}" exceeds maximum of ${PDF_PAGES} pages per request. Please use a smaller range.`,
@@ -910,28 +895,29 @@ export function pdftoppmFailure(output, range) {
     if (count === 0) {
       return "PDF reports 0 pages (empty page tree). The PDF may be invalid.";
     }
-    const asked = range.firstPage === range.lastPage
-      ? `page ${range.firstPage}`
-      : range.lastPage === Infinity
-      ? `pages ${range.firstPage}-`
-      : `pages ${range.firstPage}-${range.lastPage}`;
+    const asked =
+      range.firstPage === range.lastPage
+        ? `page ${range.firstPage}`
+        : range.lastPage === Infinity
+          ? `pages ${range.firstPage}-`
+          : `pages ${range.firstPage}-${range.lastPage}`;
     return `Requested ${asked} is outside the document (PDF has ${count} ${
       count === 1 ? "page" : "pages"
-    }). Use a range within 1-${count}, maximum ${PDF_PAGES} pages per request (e.g. pages: "1-${
-      Math.min(count, PDF_PAGES)
-    }").`;
+    }). Use a range within 1-${count}, maximum ${PDF_PAGES} pages per request (e.g. pages: "1-${Math.min(
+      count,
+      PDF_PAGES,
+    )}").`;
   }
   if (
     /damaged|corrupt|invalid/i.test(output) ||
-    /Syntax Error(?: \(\d+\))?: Couldn't (?:find trailer dictionary|read xref table)/i
-      .test(output)
-  ) return "PDF file is corrupted or invalid.";
+    /Syntax Error(?: \(\d+\))?: Couldn't (?:find trailer dictionary|read xref table)/i.test(output)
+  )
+    return "PDF file is corrupted or invalid.";
   return `pdftoppm failed: ${output}`;
 }
 
 function missing(error) {
-  return error.remote &&
-    /No such file|not found|NotFound/i.test(JSON.stringify(error.remote));
+  return error.remote && /No such file|not found|NotFound/i.test(JSON.stringify(error.remote));
 }
 
 // One bounded, exact hunk for native diff presentation. Large originals are
@@ -941,14 +927,10 @@ function patch(before, after) {
   const old = before.match(/[^\n]*\n|[^\n]+$/g) ?? [];
   const next = after.match(/[^\n]*\n|[^\n]+$/g) ?? [];
   let start = 0;
-  while (
-    start < Math.min(old.length, next.length) && old[start] === next[start]
-  ) start++;
+  while (start < Math.min(old.length, next.length) && old[start] === next[start]) start++;
   let end = 0;
-  while (
-    end < Math.min(old.length, next.length) - start &&
-    old.at(-end - 1) === next.at(-end - 1)
-  ) end++;
+  while (end < Math.min(old.length, next.length) - start && old.at(-end - 1) === next.at(-end - 1))
+    end++;
   const from = Math.max(0, start - 3);
   const oldTo = Math.min(old.length, old.length - end + 3);
   const newTo = Math.min(next.length, next.length - end + 3);
@@ -956,7 +938,7 @@ function patch(before, after) {
     lines.flatMap((line) =>
       line.endsWith("\n")
         ? [prefix + line.slice(0, -1)]
-        : [prefix + line, "\\ No newline at end of file"]
+        : [prefix + line, "\\ No newline at end of file"],
     );
   const lines = [
     ...render(old.slice(from, start), " "),
@@ -965,13 +947,15 @@ function patch(before, after) {
     ...render(next.slice(next.length - end, newTo), " "),
   ];
   if (Buffer.byteLength(lines.join("\n")) > MAX_OUTPUT) return [];
-  return [{
-    oldStart: from + 1,
-    oldLines: oldTo - from,
-    newStart: from + 1,
-    newLines: newTo - from,
-    lines,
-  }];
+  return [
+    {
+      oldStart: from + 1,
+      oldLines: oldTo - from,
+      newStart: from + 1,
+      newLines: newTo - from,
+      lines,
+    },
+  ];
 }
 
 export class WorkspaceTools {
@@ -1009,13 +993,14 @@ export class WorkspaceTools {
   async load() {
     try {
       const stat = await lstat(this.statePath);
-      if (
-        !stat.isFile() || stat.size > MAX_STATE || (stat.mode & 0o077)
-      ) throw new Error("Invalid tool state");
+      if (!stat.isFile() || stat.size > MAX_STATE || stat.mode & 0o077)
+        throw new Error("Invalid tool state");
       const state = JSON.parse(await readFile(this.statePath, "utf8"));
       if (
-        state.schema !== 1 || state.binding !== this.state.binding ||
-        !state.reads || !state.jobs
+        state.schema !== 1 ||
+        state.binding !== this.state.binding ||
+        !state.reads ||
+        !state.jobs
       ) {
         throw new Error("Tool state belongs to another execution environment");
       }
@@ -1040,21 +1025,16 @@ export class WorkspaceTools {
   async cleanupTemporaryStates() {
     const directory = dirname(this.statePath);
     const owner = await lstat(directory);
-    if (
-      !owner.isDirectory() || (owner.mode & 0o077) ||
-      owner.uid !== process.getuid()
-    ) {
+    if (!owner.isDirectory() || owner.mode & 0o077 || owner.uid !== process.getuid()) {
       throw new Error("Invalid private state directory");
     }
     const prefix = basename(this.statePath) + ".";
     for (const entry of await readdir(directory)) {
       if (!entry.startsWith(prefix)) continue;
-      const match = /^(\d+)\.([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/
-        .exec(entry.slice(prefix.length));
-      if (
-        !match || !Number.isSafeInteger(Number(match[1])) ||
-        Number(match[1]) <= 0
-      ) continue;
+      const match = /^(\d+)\.([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/.exec(
+        entry.slice(prefix.length),
+      );
+      if (!match || !Number.isSafeInteger(Number(match[1])) || Number(match[1]) <= 0) continue;
       try {
         process.kill(Number(match[1]), 0);
         continue;
@@ -1064,9 +1044,7 @@ export class WorkspaceTools {
       const path = posix.join(directory, entry);
       try {
         const stat = await lstat(path);
-        if (
-          stat.isFile() && !(stat.mode & 0o077) && stat.uid === owner.uid
-        ) await unlink(path);
+        if (stat.isFile() && !(stat.mode & 0o077) && stat.uid === owner.uid) await unlink(path);
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
       }
@@ -1110,9 +1088,13 @@ export class WorkspaceTools {
 
   async isDirectory(path) {
     try {
-      return (await this.connection.call("fs/getMetadata", {
-        path: pathToFileURL(path).href,
-      })).isDirectory === true;
+      return (
+        (
+          await this.connection.call("fs/getMetadata", {
+            path: pathToFileURL(path).href,
+          })
+        ).isDirectory === true
+      );
     } catch {
       return false;
     }
@@ -1121,9 +1103,13 @@ export class WorkspaceTools {
   async isSymlink(path) {
     checkedString(path, "file path", 16384);
     try {
-      return (await this.connection.call("fs/getMetadata", {
-        path: pathToFileURL(path).href,
-      })).isSymlink === true;
+      return (
+        (
+          await this.connection.call("fs/getMetadata", {
+            path: pathToFileURL(path).href,
+          })
+        ).isSymlink === true
+      );
     } catch (error) {
       if (missing(error)) return false;
       throw error;
@@ -1136,7 +1122,7 @@ export class WorkspaceTools {
     await this.beginning?.catch(() => {});
     const hooks = {};
     const paths = ["settings.json", "settings.local.json"].map((name) =>
-      posix.join(this.cwd, ".claude", name)
+      posix.join(this.cwd, ".claude", name),
     );
     const read = readAhead((path) => this.startupBytes(path), paths.length);
     read.prefetch(paths);
@@ -1164,22 +1150,16 @@ export class WorkspaceTools {
   // Run one hook command beside the project, with the hook's JSON input on
   // stdin. The executor cannot close a piped stdin, so the input travels in a
   // private file that the shell opens as stdin and unlinks before the command.
-  async runHook(
-    { command, argv, input, timeoutMs, call, transcript, agentTranscript },
-  ) {
+  async runHook({ command, argv, input, timeoutMs, call, transcript, agentTranscript }) {
     checkedString(command, "hook command", MAX_OUTPUT);
     const home = this.home();
     if (!home || !this.shell) throw new Error("Target hook shell unavailable");
     const directory = posix.join(home, ".cache", "cowboy", "hook-input");
     const file = posix.join(directory, randomUUID() + ".json");
     // A private target copy of the runtime transcript for this hook run.
-    const copy = transcript
-      ? posix.join(directory, randomUUID() + ".jsonl")
-      : undefined;
+    const copy = transcript ? posix.join(directory, randomUUID() + ".jsonl") : undefined;
     // A SubagentStop hook also reads the subagent's own transcript.
-    const agentCopy = agentTranscript
-      ? posix.join(directory, randomUUID() + ".jsonl")
-      : undefined;
+    const agentCopy = agentTranscript ? posix.join(directory, randomUUID() + ".jsonl") : undefined;
     // Known before submission: a lost start reply can still be cancelled.
     const id = randomUUID();
     let started = false;
@@ -1212,27 +1192,25 @@ export class WorkspaceTools {
       await this.startForeground(
         argv
           ? [
-            this.shell,
-            "-c",
-            inline
-              ? 'i=$1 && shift && printf "%s" "$i" | exec "$@"'
-              : 'exec 0<"$1" && rm -f -- "$1" && shift && exec "$@"',
-            this.shell,
-            inline ? input : file,
-            ...argv.map((value) =>
-              value.replaceAll("${CLAUDE_PROJECT_DIR}", this.cwd)
-            ),
-          ]
+              this.shell,
+              "-c",
+              inline
+                ? 'i=$1 && shift && printf "%s" "$i" | exec "$@"'
+                : 'exec 0<"$1" && rm -f -- "$1" && shift && exec "$@"',
+              this.shell,
+              inline ? input : file,
+              ...argv.map((value) => value.replaceAll("${CLAUDE_PROJECT_DIR}", this.cwd)),
+            ]
           : [
-            this.shell,
-            "-c",
-            inline
-              ? 'printf "%s" "$1" | exec "$0" -c "$2"'
-              : 'exec 0<"$1" && rm -f -- "$1" && exec "$0" -c "$2"',
-            this.shell,
-            inline ? input : file,
-            command,
-          ],
+              this.shell,
+              "-c",
+              inline
+                ? 'printf "%s" "$1" | exec "$0" -c "$2"'
+                : 'exec 0<"$1" && rm -f -- "$1" && exec "$0" -c "$2"',
+              this.shell,
+              inline ? input : file,
+              command,
+            ],
         call,
         { CLAUDE_PROJECT_DIR: this.cwd, CLAUDE_ENV_FILE: this.envFile() },
         id,
@@ -1257,9 +1235,7 @@ export class WorkspaceTools {
           streams[chunk.stream].push(bytes);
         }
         // A closed process can hold more output than one read returns.
-      } while (
-        result.closed ? result.chunks.length > 0 : Date.now() < deadline
-      );
+      } while (result.closed ? result.chunks.length > 0 : Date.now() < deadline);
       if (!result.closed) {
         settled = true;
         await this.cancelTasks([id]);
@@ -1283,10 +1259,12 @@ export class WorkspaceTools {
       if (call?.id) this.calls.delete(call.id);
       for (const path of [inline ? undefined : file, copy, agentCopy]) {
         if (!path) continue;
-        await this.connection.call("fs/remove", {
-          path: pathToFileURL(path).href,
-          force: true,
-        }).catch(() => {});
+        await this.connection
+          .call("fs/remove", {
+            path: pathToFileURL(path).href,
+            force: true,
+          })
+          .catch(() => {});
       }
     }
   }
@@ -1329,10 +1307,12 @@ export class WorkspaceTools {
       }
     } finally {
       for (const part of [...parts, temporary]) {
-        await this.connection.call("fs/remove", {
-          path: pathToFileURL(part).href,
-          force: true,
-        }).catch(() => {});
+        await this.connection
+          .call("fs/remove", {
+            path: pathToFileURL(part).href,
+            force: true,
+          })
+          .catch(() => {});
       }
     }
   }
@@ -1356,12 +1336,11 @@ export class WorkspaceTools {
         for (;;) {
           const previous = this.state.hookTranscripts?.[key];
           const kind = this.hookDigestKind ?? "sha256";
-          const digestOf = (bytes) =>
-            kind === "cksum" ? cksumDigest(bytes) : hash(bytes);
-          const append = previous?.kind === kind &&
+          const digestOf = (bytes) => (kind === "cksum" ? cksumDigest(bytes) : hash(bytes));
+          const append =
+            previous?.kind === kind &&
             transcript.length >= previous.length &&
-            digestOf(transcript.subarray(0, previous.length)) ===
-              previous.digest;
+            digestOf(transcript.subarray(0, previous.length)) === previous.digest;
           const digest = digestOf(transcript);
           const prepare = async (bytes, base) => {
             await this.hookInputFile(delta, bytes, call);
@@ -1409,10 +1388,12 @@ export class WorkspaceTools {
         }
       } finally {
         for (const path of [delta, copy + ".cache"]) {
-          await this.connection.call("fs/remove", {
-            path: pathToFileURL(path).href,
-            force: true,
-          }).catch(() => {});
+          await this.connection
+            .call("fs/remove", {
+              path: pathToFileURL(path).href,
+              force: true,
+            })
+            .catch(() => {});
         }
       }
     });
@@ -1423,13 +1404,11 @@ export class WorkspaceTools {
     await this.save(() => {
       const previous = this.state.hookTranscripts;
       const next = { ...(previous ?? {}), [key]: base };
-      const keys = Object.keys(next).sort((a, b) =>
-        next[b].used - next[a].used
-      );
+      const keys = Object.keys(next).sort((a, b) => next[b].used - next[a].used);
       evicted = keys.slice(HOOK_TRANSCRIPT_CACHES);
       for (const old of evicted) delete next[old];
       this.state.hookTranscripts = next;
-      return () => this.state.hookTranscripts = previous;
+      return () => (this.state.hookTranscripts = previous);
     });
     const home = this.home();
     if (!home) return;
@@ -1508,9 +1487,8 @@ export class WorkspaceTools {
         call,
       ).catch(() => undefined);
       this.live(call);
-      const count = info?.exitCode === 0
-        ? Number(/^Pages:\s+(\d+)/m.exec(info.output)?.[1] ?? NaN)
-        : NaN;
+      const count =
+        info?.exitCode === 0 ? Number(/^Pages:\s+(\d+)/m.exec(info.output)?.[1] ?? NaN) : NaN;
       if (count > PDF_WHOLE_PAGES) {
         throw new Error(
           `This PDF has ${count} pages, which is too many to read at once. Use the pages parameter to read specific page ranges (e.g., pages: "1-5"). Maximum ${PDF_PAGES} pages per request.`,
@@ -1525,11 +1503,11 @@ export class WorkspaceTools {
       // to return from another machine applies.
       if (size > PDF_REMOTE_BYTES) {
         throw new Error(
-          `This PDF (${
-            fileSize(size)
-          }) is larger than can be returned whole from this machine to the calling session (at most ${
-            fileSize(PDF_REMOTE_BYTES)
-          }). Use the pages parameter with at most ${PDF_PAGES} pages per call (for example pages: 1-3, which come back as images), or read the file where the session runs.`,
+          `This PDF (${fileSize(
+            size,
+          )}) is larger than can be returned whole from this machine to the calling session (at most ${fileSize(
+            PDF_REMOTE_BYTES,
+          )}). Use the pages parameter with at most ${PDF_PAGES} pages per call (for example pages: 1-3, which come back as images), or read the file where the session runs.`,
         );
       }
       const result = await this.connection.call("fs/readFile", {
@@ -1537,9 +1515,7 @@ export class WorkspaceTools {
       });
       const bytes = Buffer.from(result.dataBase64, "base64");
       if (!bytes.subarray(0, 5).toString("latin1").startsWith("%PDF-")) {
-        throw new Error(
-          `File is not a valid PDF (missing %PDF- header): ${path}`,
-        );
+        throw new Error(`File is not a valid PDF (missing %PDF- header): ${path}`);
       }
       return text(`PDF file read: ${path}`, {
         type: "pdf",
@@ -1555,9 +1531,7 @@ export class WorkspaceTools {
     }
     if (size === 0) throw new Error(`PDF file is empty: ${path}`);
     if (size > PDF_RENDER_BYTES) {
-      throw new Error(
-        "PDF file exceeds maximum allowed size for text extraction (100MB).",
-      );
+      throw new Error("PDF file exceeds maximum allowed size for text extraction (100MB).");
     }
     const parent = posix.join(this.home() ?? "/", ".cache", "cowboy", "pdf");
     await this.privateDirectory(parent);
@@ -1575,9 +1549,7 @@ export class WorkspaceTools {
           "100",
           "-f",
           String(range.firstPage),
-          ...(range.lastPage === Infinity
-            ? []
-            : ["-l", String(range.lastPage)]),
+          ...(range.lastPage === Infinity ? [] : ["-l", String(range.lastPage)]),
           path,
           posix.join(directory, "page"),
         ],
@@ -1595,12 +1567,12 @@ export class WorkspaceTools {
       const listing = await this.connection.call("fs/readDirectory", {
         path: pathToFileURL(directory).href,
       });
-      const names = (listing.entries ?? []).map((entry) => entry.fileName)
-        .filter((name) => name?.endsWith(".jpg")).sort();
+      const names = (listing.entries ?? [])
+        .map((entry) => entry.fileName)
+        .filter((name) => name?.endsWith(".jpg"))
+        .sort();
       if (!names.length) {
-        throw new Error(
-          "pdftoppm produced no output pages. The PDF may be invalid.",
-        );
+        throw new Error("pdftoppm produced no output pages. The PDF may be invalid.");
       }
       // The pages cross the execution connection one by one and the Mods
       // bridge together. Native recompresses a page above 500 KB; here a
@@ -1616,9 +1588,9 @@ export class WorkspaceTools {
         total += bytes;
         if (total > PDF_PAGES_BYTES) {
           throw new Error(
-            `The rendered pages of ${path} are too large to return from this machine in one call (at most ${
-              fileSize(PDF_PAGES_BYTES)
-            } of page images). Use the pages parameter with fewer pages.`,
+            `The rendered pages of ${path} are too large to return from this machine in one call (at most ${fileSize(
+              PDF_PAGES_BYTES,
+            )} of page images). Use the pages parameter with fewer pages.`,
           );
         }
         const image = await this.connection.call("fs/readFile", { path: page });
@@ -1636,11 +1608,13 @@ export class WorkspaceTools {
         pages: images,
       });
     } finally {
-      await this.connection.call("fs/remove", {
-        path: pathToFileURL(directory).href,
-        recursive: true,
-        force: true,
-      }).catch(() => {});
+      await this.connection
+        .call("fs/remove", {
+          path: pathToFileURL(directory).href,
+          recursive: true,
+          force: true,
+        })
+        .catch(() => {});
     }
   }
 
@@ -1649,28 +1623,26 @@ export class WorkspaceTools {
   // a private runtime file that native's own Read then reads (the context
   // Mod calls it); native's image result carries no path.
   async readImage(path) {
-    const metadata = await this.connection.call("fs/getMetadata", {
-      path: pathToFileURL(path).href,
-    }).catch((error) => {
-      throw missing(error) ? this.missingFile() : error;
-    });
+    const metadata = await this.connection
+      .call("fs/getMetadata", {
+        path: pathToFileURL(path).href,
+      })
+      .catch((error) => {
+        throw missing(error) ? this.missingFile() : error;
+      });
     if (!metadata.isFile) {
       throw new Error(`EISDIR: illegal operation on a directory, read`);
     }
     if (metadata.size > IMAGE_MAX_BYTES) {
       throw new Error(
-        `Image file exceeds the ${
-          fileSize(IMAGE_MAX_BYTES)
-        } this machine returns to the calling session: ${path}`,
+        `Image file exceeds the ${fileSize(
+          IMAGE_MAX_BYTES,
+        )} this machine returns to the calling session: ${path}`,
       );
     }
     const bytes = await this.largeBytes(path, metadata.size);
     await this.rememberRead(path, hash(bytes));
-    return await this.localRead(
-      bytes,
-      posix.extname(path).toLowerCase(),
-      path,
-    );
+    return await this.localRead(bytes, posix.extname(path).toLowerCase(), path);
   }
 
   // A file of any size up to the image limit, in parts below the execution
@@ -1681,14 +1653,17 @@ export class WorkspaceTools {
     await this.privateDirectory(parent);
     const directory = posix.join(parent, `parts-${randomUUID()}`);
     try {
-      const split = await this.command([
-        this.shell,
-        "-c",
-        'mkdir -- "$1" && exec split -b 4194304 -- "$2" "$1/part-"',
-        this.shell,
-        directory,
-        path,
-      ], 60000);
+      const split = await this.command(
+        [
+          this.shell,
+          "-c",
+          'mkdir -- "$1" && exec split -b 4194304 -- "$2" "$1/part-"',
+          this.shell,
+          directory,
+          path,
+        ],
+        60000,
+      );
       if (split.exitCode !== 0) {
         throw new Error("Target file could not be read");
       }
@@ -1696,10 +1671,7 @@ export class WorkspaceTools {
         path: pathToFileURL(directory).href,
       });
       const parts = [];
-      for (
-        const name of (listing.entries ?? []).map((entry) => entry.fileName)
-          .sort()
-      ) {
+      for (const name of (listing.entries ?? []).map((entry) => entry.fileName).sort()) {
         const part = await this.connection.call("fs/readFile", {
           path: pathToFileURL(posix.join(directory, name)).href,
         });
@@ -1707,11 +1679,13 @@ export class WorkspaceTools {
       }
       return Buffer.concat(parts);
     } finally {
-      await this.connection.call("fs/remove", {
-        path: pathToFileURL(directory).href,
-        recursive: true,
-        force: true,
-      }).catch(() => {});
+      await this.connection
+        .call("fs/remove", {
+          path: pathToFileURL(directory).href,
+          recursive: true,
+          force: true,
+        })
+        .catch(() => {});
     }
   }
 
@@ -1743,9 +1717,7 @@ export class WorkspaceTools {
     }
     let policy = FILE_BUFFERS_DISABLED;
     try {
-      if (
-        stat.isFile() && stat.size <= 65536 && stat.uid === process.getuid()
-      ) {
+      if (stat.isFile() && stat.size <= 65536 && stat.uid === process.getuid()) {
         const value = JSON.parse(await readFile(path, "utf8"));
         if (validFileBufferPolicy(value)) {
           policy = Object.freeze({
@@ -1805,20 +1777,15 @@ export class WorkspaceTools {
   }
 
   async fileBufferPut(bytes, policy) {
-    if (
-      !policy || bytes.length > policy.max_file_size ||
-      bytes.length > policy.cache_max_bytes
-    ) return;
+    if (!policy || bytes.length > policy.max_file_size || bytes.length > policy.cache_max_bytes)
+      return;
     const directory = this.fileBufferDirectory();
     const digest = hash(bytes);
     const file = join(directory, digest);
     try {
       await mkdir(directory, { recursive: true, mode: 0o700 });
       const owner = await lstat(directory);
-      if (
-        !owner.isDirectory() || (owner.mode & 0o077) ||
-        owner.uid !== process.getuid()
-      ) return;
+      if (!owner.isDirectory() || owner.mode & 0o077 || owner.uid !== process.getuid()) return;
       const now = new Date();
       try {
         // Content-addressed: an existing copy only needs its use recorded.
@@ -1906,9 +1873,7 @@ export class WorkspaceTools {
       expect: hash(written),
       splices: bufferSplice(base ?? Buffer.alloc(0), written),
       staleTempSeconds: policy.target_temp_max_age_seconds,
-      ...(this.home()
-        ? { payloadDirectory: this.fileBufferPayloadDirectory() }
-        : {}),
+      ...(this.home() ? { payloadDirectory: this.fileBufferPayloadDirectory() } : {}),
     });
     try {
       let args;
@@ -1918,10 +1883,7 @@ export class WorkspaceTools {
         const directory = this.fileBufferPayloadDirectory();
         if (!directory) return undefined;
         await this.privateDirectory(directory);
-        payload = posix.join(
-          directory,
-          `payload-${randomUUID().replaceAll("-", "")}.json`,
-        );
+        payload = posix.join(directory, `payload-${randomUUID().replaceAll("-", "")}.json`);
         this.live(call);
         await this.connection.call("fs/writeFile", {
           path: pathToFileURL(payload).href,
@@ -1949,8 +1911,10 @@ export class WorkspaceTools {
         outcome?.schema !== 1 ||
         !["applied", "conflict", "error"].includes(outcome.status) ||
         (outcome.status !== "error" &&
-          outcome.sha256 !== "absent" && !BUFFER_NAME.test(outcome.sha256))
-      ) return undefined;
+          outcome.sha256 !== "absent" &&
+          !BUFFER_NAME.test(outcome.sha256))
+      )
+        return undefined;
       // The helper deletes a request file as it reads it.
       consumed = true;
       this.fileBufferStats.applies++;
@@ -1962,19 +1926,19 @@ export class WorkspaceTools {
     } finally {
       if (payload && !consumed) {
         // Never read by the helper, or not known to have been.
-        await this.connection.call("fs/remove", {
-          path: pathToFileURL(payload).href,
-          force: true,
-        }).catch(() => {});
+        await this.connection
+          .call("fs/remove", {
+            path: pathToFileURL(payload).href,
+            force: true,
+          })
+          .catch(() => {});
       }
     }
   }
 
   fileBufferPayloadDirectory() {
     const home = this.home();
-    return home
-      ? posix.join(home, ".cache", "cowboy", "file-buffers")
-      : undefined;
+    return home ? posix.join(home, ".cache", "cowboy", "file-buffers") : undefined;
   }
 
   async localRead(bytes, extension, target) {
@@ -2012,14 +1976,8 @@ export class WorkspaceTools {
   async realpath(path) {
     checkedString(path, "file path", 16384);
     if (!this.fileHelper) return null;
-    const result = await this.command([
-      this.fileHelper,
-      "realpath",
-      "--",
-      path,
-    ]);
-    return result.exitCode === 0 && result.output.startsWith("/") &&
-        !result.output_limit
+    const result = await this.command([this.fileHelper, "realpath", "--", path]);
+    return result.exitCode === 0 && result.output.startsWith("/") && !result.output_limit
       ? result.output
       : null;
   }
@@ -2044,9 +2002,7 @@ export class WorkspaceTools {
     this.state.reads[path] = digest;
     // Expiration revokes edit authority: an evicted file must be read again.
     // Only hashes are persisted; no mirrored source or target file is deleted.
-    while (
-      Buffer.byteLength(JSON.stringify(this.state.reads)) > MAX_READ_STATE
-    ) {
+    while (Buffer.byteLength(JSON.stringify(this.state.reads)) > MAX_READ_STATE) {
       delete this.state.reads[Object.keys(this.state.reads)[0]];
     }
   }
@@ -2067,14 +2023,7 @@ export class WorkspaceTools {
     const offset = bounded(args.offset, 1, 1, 10000000, "offset");
     const limit = bounded(args.limit, 2000, 1, 10000, "limit");
     const result = await this.command(
-      [
-        this.fileHelper,
-        "read-range",
-        "--",
-        path,
-        String(offset),
-        String(limit),
-      ],
+      [this.fileHelper, "read-range", "--", path, String(offset), String(limit)],
       10000,
       call,
     );
@@ -2088,18 +2037,23 @@ export class WorkspaceTools {
     // observation use the bounded full-file path, including on retained hosts.
     if (data.textEncoding === undefined) return null;
     if (
-      data.schema !== 1 || data.textEncoding !== "utf8" ||
+      data.schema !== 1 ||
+      data.textEncoding !== "utf8" ||
       !/^[a-f0-9]{64}$/.test(data.sha256) ||
-      !Number.isSafeInteger(data.size) || data.size < 0 ||
+      !Number.isSafeInteger(data.size) ||
+      data.size < 0 ||
       data.size > MAX_FILE ||
-      !Number.isSafeInteger(data.totalLines) || data.totalLines < 1 ||
-      data.totalLines > MAX_FILE + 1 || data.startLine !== offset ||
-      !Number.isSafeInteger(data.numLines) || data.numLines < 0 ||
-      data.numLines !==
-        Math.max(0, Math.min(limit, data.totalLines - offset + 1)) ||
+      !Number.isSafeInteger(data.totalLines) ||
+      data.totalLines < 1 ||
+      data.totalLines > MAX_FILE + 1 ||
+      data.startLine !== offset ||
+      !Number.isSafeInteger(data.numLines) ||
+      data.numLines < 0 ||
+      data.numLines !== Math.max(0, Math.min(limit, data.totalLines - offset + 1)) ||
       typeof data.dataBase64 !== "string" ||
       data.dataBase64.length > 44000
-    ) throw new Error("Invalid target range read");
+    )
+      throw new Error("Invalid target range read");
     const bytes = Buffer.from(data.dataBase64, "base64");
     if (bytes.toString("base64") !== data.dataBase64) {
       throw new Error("Invalid target range encoding");
@@ -2115,8 +2069,7 @@ export class WorkspaceTools {
     if (lines.length !== data.numLines) {
       throw new Error("Invalid target range lines");
     }
-    const rendered = lines.map((line, index) => `${offset + index}\t${line}`)
-      .join("\n");
+    const rendered = lines.map((line, index) => `${offset + index}\t${line}`).join("\n");
     if (Buffer.byteLength(rendered) > MAX_OUTPUT) {
       throw new Error(
         "Selected lines exceed output limit; request a smaller range" +
@@ -2138,10 +2091,11 @@ export class WorkspaceTools {
 
   async bytes(path, optional = false, knownMetadata) {
     try {
-      const metadata = knownMetadata ??
-        await this.connection.call("fs/getMetadata", {
+      const metadata =
+        knownMetadata ??
+        (await this.connection.call("fs/getMetadata", {
           path: pathToFileURL(path).href,
-        });
+        }));
       if (!metadata.isFile || metadata.size > MAX_FILE) {
         throw new Error("Read requires a file of at most 4 MiB");
       }
@@ -2184,7 +2138,7 @@ export class WorkspaceTools {
       await this.save(() => {
         const job = this.state.jobs[processId];
         delete this.state.jobs[processId];
-        return () => this.state.jobs[processId] = job;
+        return () => (this.state.jobs[processId] = job);
       });
       throw new Error("Tool call was cancelled before its command started");
     }
@@ -2226,10 +2180,7 @@ export class WorkspaceTools {
   collect(processId, timeout, limit = MAX_OUTPUT) {
     // Each task has one output cursor. Other tasks and file operations do not
     // wait behind this collection; cancellation submits terminate immediately.
-    return this.ordered(
-      `task:${processId}`,
-      () => this.collectOutput(processId, timeout, limit),
-    );
+    return this.ordered(`task:${processId}`, () => this.collectOutput(processId, timeout, limit));
   }
 
   async collectOutput(processId, timeout, limit = MAX_OUTPUT) {
@@ -2250,16 +2201,13 @@ export class WorkspaceTools {
     }
     const job = { ...previous, utf8Pending: { ...previous.utf8Pending } };
     const chunks = [];
-    const pending = job.utf8Pending ??= {};
+    const pending = (job.utf8Pending ??= {});
     let size = 0;
     const started = Date.now();
     const deadline = started + timeout;
     let quiet = 0;
     do {
-      const page = Math.min(
-        limit > MAX_OUTPUT ? BULK_READ : 32768,
-        limit - size,
-      );
+      const page = Math.min(limit > MAX_OUTPUT ? BULK_READ : 32768, limit - size);
       const before = size;
       const read = (waitMs) =>
         this.connection.call("process/read", {
@@ -2269,14 +2217,10 @@ export class WorkspaceTools {
           waitMs,
         });
       const remaining = deadline - Date.now();
-      const result = quiet >= QUIET_READS && this.connection.listeners &&
-          remaining > 1000
-        ? await this.notifiedRead(
-          processId,
-          Math.min(QUIET_WAIT_MS, remaining),
-          () => read(0),
-        )
-        : await read(Math.max(1, Math.min(1000, remaining)));
+      const result =
+        quiet >= QUIET_READS && this.connection.listeners && remaining > 1000
+          ? await this.notifiedRead(processId, Math.min(QUIET_WAIT_MS, remaining), () => read(0))
+          : await read(Math.max(1, Math.min(1000, remaining)));
       quiet = result.chunks.length ? 0 : quiet + 1;
       for (const chunk of result.chunks) {
         if (job.afterSeq !== null && chunk.seq <= job.afterSeq) {
@@ -2287,20 +2231,16 @@ export class WorkspaceTools {
         }
         job.afterSeq = chunk.seq;
         const bytes = Buffer.from(chunk.chunk, "base64");
-        const decoded = decodeOutput(Buffer.concat([
-          Buffer.from(pending[chunk.stream] ?? "", "base64"),
-          bytes,
-        ]));
+        const decoded = decodeOutput(
+          Buffer.concat([Buffer.from(pending[chunk.stream] ?? "", "base64"), bytes]),
+        );
         let shown = decoded.text;
         // Each stream has its own end line: one stream's says nothing of
         // what the other still holds. Past it, a stream is not output.
         const stream = chunk.stream;
         if (job.end && job.endLines?.[stream] !== undefined) shown = "";
         else if (job.end) {
-          const split = splitEnd(
-            (job.endHeld?.[stream] ?? "") + shown,
-            job.end,
-          );
+          const split = splitEnd((job.endHeld?.[stream] ?? "") + shown, job.end);
           shown = split.text;
           job.endHeld = { ...job.endHeld, [stream]: split.held ?? "" };
           if (split.code !== undefined) {
@@ -2346,9 +2286,7 @@ export class WorkspaceTools {
         chunks.push(job.endHeld?.stdout ?? "", job.endHeld?.stderr ?? "");
         delete job.endHeld;
         for (const stream of ["stdout", "stderr"]) {
-          chunks.push(
-            Buffer.from(pending[stream] ?? "", "base64").toString("utf8"),
-          );
+          chunks.push(Buffer.from(pending[stream] ?? "", "base64").toString("utf8"));
           delete pending[stream];
         }
       }
@@ -2357,7 +2295,9 @@ export class WorkspaceTools {
       // means more is already waiting and is drained at once; a command that
       // ends during the wait wakes it through its exit notification.
       if (
-        result.chunks.length && !result.closed && size - before < page / 2 &&
+        result.chunks.length &&
+        !result.closed &&
+        size - before < page / 2 &&
         Date.now() - started >= (this.settleAfterMs ?? SETTLE_AFTER_MS) &&
         deadline - Date.now() > SETTLE_MS
       ) {
@@ -2478,11 +2418,9 @@ export class WorkspaceTools {
         posix.join(directory, "CLAUDE.local.md"),
       ]),
       ...["settings.json", "settings.local.json"].map((name) =>
-        posix.join(this.cwd, ".claude", name)
+        posix.join(this.cwd, ".claude", name),
       ),
-      ...projectConfigDirectories(this.cwd).map((directory) =>
-        posix.join(directory, ".mcp.json")
-      ),
+      ...projectConfigDirectories(this.cwd).map((directory) => posix.join(directory, ".mcp.json")),
       ...(home ? [posix.join(home, ".claude.json")] : []),
     ];
   }
@@ -2492,30 +2430,24 @@ export class WorkspaceTools {
   // Without a survey the platform is probed as before and each walk asks the
   // target itself.
   begin() {
-    return this.beginning ??= this.beginStartup();
+    return (this.beginning ??= this.beginStartup());
   }
 
   async beginStartup() {
     const home = this.home();
     const directories = ancestors(this.cwd);
     const candidates = this.startupCandidates(home, directories);
-    const ruleRoots = [...(home ? [home] : []), ...directories].map((
-      directory,
-    ) => posix.join(directory, ".claude", "rules"));
+    const ruleRoots = [...(home ? [home] : []), ...directories].map((directory) =>
+      posix.join(directory, ".claude", "rules"),
+    );
     // Every root a repository root can select: skillRoots stops there.
-    const skillDirectories = skillRoots(this.cwd, home, undefined).map((
-      root,
-    ) => root.directory);
+    const skillDirectories = skillRoots(this.cwd, home, undefined).map((root) => root.directory);
     const args = [...ruleRoots, "--", ...skillDirectories, "--", ...candidates];
     let survey;
     try {
       const end = randomUUID().replaceAll("-", "");
       const result = await this.command(
-        endedCommand(
-          "bash",
-          `set -- ${args.map(shellLiteral).join(" ")}\n${STARTUP_SURVEY}`,
-          end,
-        ),
+        endedCommand("bash", `set -- ${args.map(shellLiteral).join(" ")}\n${STARTUP_SURVEY}`, end),
         10000,
         undefined,
         { end },
@@ -2551,9 +2483,7 @@ export class WorkspaceTools {
     }
     // As natively, commands use the user's shell when it is bash or zsh.
     const [bash, , userShell] = platform.split("\n");
-    this.shell = /^\/\S*\/(bash|zsh)$/.test(userShell?.trim() ?? "")
-      ? userShell.trim()
-      : bash;
+    this.shell = /^\/\S*\/(bash|zsh)$/.test(userShell?.trim() ?? "") ? userShell.trim() : bash;
     if (!this.readOnly) this.startSnapshot();
     const helper = platform.split("\n")[3]?.trim();
     this.fileHelper = helper?.startsWith("/") ? helper : undefined;
@@ -2586,23 +2516,17 @@ export class WorkspaceTools {
     const { platform } = await this.begin();
     const userShell = platform.split("\n")[2];
     // Independent target queries; gitStatus never rejects.
-    const [instructions, git] = await Promise.all([
-      this.instructions(),
-      this.gitStatus(),
-    ]);
+    const [instructions, git] = await Promise.all([this.instructions(), this.gitStatus()]);
     const shellName = basename(userShell?.trim() || "");
     return {
       schema: 1,
       nonce: randomUUID().replaceAll("-", ""),
       // Native's environment block, with the target's facts.
-      environment:
-        `# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${this.cwd}\n - Is a git repository: ${
-          git !== undefined
-        }\n - Platform: linux\n - Shell: ${
-          ["bash", "zsh"].includes(shellName) ? shellName : "unknown"
-        }\n - OS Version: ${
-          platform.split("\n")[1].trim()
-        }\n - ${UNTRUSTED_DOWNLOADS}`,
+      environment: `# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${this.cwd}\n - Is a git repository: ${
+        git !== undefined
+      }\n - Platform: linux\n - Shell: ${
+        ["bash", "zsh"].includes(shellName) ? shellName : "unknown"
+      }\n - OS Version: ${platform.split("\n")[1].trim()}\n - ${UNTRUSTED_DOWNLOADS}`,
       git: git ?? null,
       instructionFiles: instructions,
     };
@@ -2613,14 +2537,12 @@ export class WorkspaceTools {
     const home = this.home();
     const directories = ancestors(this.cwd);
     const roots = [...(home ? [home] : []), ...directories].map((directory) =>
-      posix.join(directory, ".claude", "rules")
+      posix.join(directory, ".claude", "rules"),
     );
     const fresh = async (path, startup = false) => {
       // Only an absent file is skipped; a failed read stops the session
       // rather than starting it without the project's instructions.
-      const bytes = startup
-        ? await this.startupBytes(path)
-        : await this.bytes(path, true);
+      const bytes = startup ? await this.startupBytes(path) : await this.bytes(path, true);
       if (!bytes) return undefined;
       try {
         return decode(bytes);
@@ -2658,22 +2580,16 @@ export class WorkspaceTools {
     }
     const ruleFiles = listed
       .filter((line) => line.startsWith("/"))
-      .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+      .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
     read.prefetch(ruleFiles);
     const { files, conditional } = await instructionFiles({
       cwd: this.cwd,
       home,
       read,
-      rules: async (directory) =>
-        ruleFiles.filter((path) => path.startsWith(directory + "/")),
+      rules: async (directory) => ruleFiles.filter((path) => path.startsWith(directory + "/")),
     });
-    if (
-      files.reduce(
-        (total, file) => total + Buffer.byteLength(file.content),
-        0,
-      ) >
-        MAX_FILE
-    ) throw new Error("Target instructions exceed limit");
+    if (files.reduce((total, file) => total + Buffer.byteLength(file.content), 0) > MAX_FILE)
+      throw new Error("Target instructions exceed limit");
     // Each conversation (the main one, each agent) is shown a nested file
     // once; what started the session counts for all of them.
     const initial = files.map((file) => file.path);
@@ -2705,7 +2621,7 @@ export class WorkspaceTools {
       }
     };
     const projectPaths = projectConfigDirectories(this.cwd).map((directory) =>
-      posix.join(directory, ".mcp.json")
+      posix.join(directory, ".mcp.json"),
     );
     const userPath = home ? posix.join(home, ".claude.json") : undefined;
     const ahead = readAhead(read, READ_AHEAD);
@@ -2721,33 +2637,30 @@ export class WorkspaceTools {
     const names = [
       ...new Set(
         [userConfig, ...projectConfigs].flatMap((text) =>
-          [...(text ?? "").matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)/g)].map((
-            match,
-          ) => match[1])
+          [...(text ?? "").matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)/g)].map((match) => match[1]),
         ),
       ),
     ].slice(0, 256);
     let environment = {};
     if (names.length) {
-      const listed = await this.command(
-        [
-          "sh",
-          "-c",
-          'for n; do if printenv "$n" >/dev/null; then printf "%s=" "$n"; printenv "$n"; printf "\\0"; fi; done; exit 0',
-          "sh",
-          ...names,
-        ],
-      );
+      const listed = await this.command([
+        "sh",
+        "-c",
+        'for n; do if printenv "$n" >/dev/null; then printf "%s=" "$n"; printenv "$n"; printf "\\0"; fi; done; exit 0',
+        "sh",
+        ...names,
+      ]);
       if (listed.exitCode !== 0 || listed.output_limit) {
         throw new Error("Target environment could not be read");
       }
       environment = Object.fromEntries(
-        listed.output.split("\0").filter((item) => item.includes("=")).map((
-          item,
-        ) => [
-          item.slice(0, item.indexOf("=")),
-          item.slice(item.indexOf("=") + 1).replace(/\n$/, ""),
-        ]),
+        listed.output
+          .split("\0")
+          .filter((item) => item.includes("="))
+          .map((item) => [
+            item.slice(0, item.indexOf("=")),
+            item.slice(item.indexOf("=") + 1).replace(/\n$/, ""),
+          ]),
       );
     }
     return {
@@ -2761,7 +2674,7 @@ export class WorkspaceTools {
 
   // One startup answer shared by the skill and MCP walks.
   repositoryRoot() {
-    return this.startupRepositoryRoot ??= this.findRepositoryRoot();
+    return (this.startupRepositoryRoot ??= this.findRepositoryRoot());
   }
 
   async findRepositoryRoot() {
@@ -2817,7 +2730,8 @@ export class WorkspaceTools {
     if (!this.mcpExits) {
       this.mcpExits = new Map();
       this.connection.listeners?.add((frame) => {
-        const exited = frame.method === "process/exited" &&
+        const exited =
+          frame.method === "process/exited" &&
           Object.hasOwn(this.state.mcp, frame.params?.processId);
         if (exited && Number.isSafeInteger(frame.params.seq)) {
           this.mcpExits.set(frame.params.processId, frame.params.seq);
@@ -2827,7 +2741,7 @@ export class WorkspaceTools {
     await this.save(() => {
       const previous = this.state.mcp;
       this.state.mcp = { ...previous, [id]: server.name };
-      return () => this.state.mcp = previous;
+      return () => (this.state.mcp = previous);
     });
     const result = await this.mcpCall("process/start", {
       processId: id,
@@ -2858,7 +2772,7 @@ export class WorkspaceTools {
     // Writes of one process stay in order; a starting process is retried.
     return await this.ordered(`mcp-write:${id}`, async () => {
       const writeId = randomUUID();
-      for (let attempt = 0;; attempt++) {
+      for (let attempt = 0; ; attempt++) {
         const result = await this.mcpCall("process/write", {
           processId: id,
           chunk: data,
@@ -2898,9 +2812,9 @@ export class WorkspaceTools {
         listener = (frame) => {
           if (
             frame.method === "closed" ||
-            (frame.method === "process/exited" &&
-              frame.params?.processId === id)
-          ) resolve();
+            (frame.method === "process/exited" && frame.params?.processId === id)
+          )
+            resolve();
         };
         listeners.add(listener);
       });
@@ -2950,7 +2864,7 @@ export class WorkspaceTools {
     }
     this.mcpWakes ??= new Map();
     let wakes = this.mcpWakes.get(id);
-    if (!wakes) this.mcpWakes.set(id, wakes = new Set());
+    if (!wakes) this.mcpWakes.set(id, (wakes = new Set()));
     // An idle MCP server is the steady state of every session: its relay
     // asks again as soon as this returns, so a quiet bound skips the second
     // read. Over the cross-border link that halves the idle polling, which
@@ -2978,22 +2892,12 @@ export class WorkspaceTools {
       // The exit's own number (from its notification) may fall between
       // output still draining; any other gap is lost output. The read's
       // reply can arrive before the exit notification: wait for it briefly.
-      if (
-        chunk.seq === expected + 2 && result.exited && this.mcpExits &&
-        !this.mcpExits.has(id)
-      ) {
-        for (
-          let waited = 0;
-          waited < 2000 && !this.mcpExits.has(id);
-          waited += 50
-        ) {
+      if (chunk.seq === expected + 2 && result.exited && this.mcpExits && !this.mcpExits.has(id)) {
+        for (let waited = 0; waited < 2000 && !this.mcpExits.has(id); waited += 50) {
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
       }
-      if (
-        chunk.seq === expected + 2 &&
-        this.mcpExits?.get(id) === expected + 1
-      ) {
+      if (chunk.seq === expected + 2 && this.mcpExits?.get(id) === expected + 1) {
         expected = chunk.seq;
         continue;
       }
@@ -3024,18 +2928,15 @@ export class WorkspaceTools {
     } catch (error) {
       // Unless the executor says the process is gone, it may still run:
       // keep its record, so a later stop (or the next launcher) ends it.
-      if (
-        !/unknown process|not found|no such process/i.test(
-          JSON.stringify(error.remote ?? null),
-        )
-      ) throw error;
+      if (!/unknown process|not found|no such process/i.test(JSON.stringify(error.remote ?? null)))
+        throw error;
     }
     this.mcpWakes?.delete(id);
     await this.save(() => {
       const previous = this.state.mcp;
       const { [id]: _stopped, ...rest } = previous;
       this.state.mcp = rest;
-      return () => this.state.mcp = previous;
+      return () => (this.state.mcp = previous);
     });
   }
 
@@ -3049,9 +2950,7 @@ export class WorkspaceTools {
     }
     // Together: each stop is a round trip on the session's startup path,
     // and mcpCall keeps them within MCP traffic's share of the connection.
-    await Promise.all(
-      Object.keys(this.state.mcp).map((id) => this.mcpStop(id).catch(() => {})),
-    );
+    await Promise.all(Object.keys(this.state.mcp).map((id) => this.mcpStop(id).catch(() => {})));
   }
 
   // The target's skills and custom commands, in native precedence. A listing
@@ -3061,17 +2960,11 @@ export class WorkspaceTools {
   // or exceed the read limit.
   async skillFiles() {
     await this.beginning?.catch(() => {});
-    const roots = skillRoots(
-      this.cwd,
-      this.home(),
-      await this.repositoryRoot(),
-    );
+    const roots = skillRoots(this.cwd, this.home(), await this.repositoryRoot());
     const surveyed = this.survey?.skills;
     let listed;
     if (roots.every((root) => surveyed?.has(root.directory))) {
-      listed = new Map(
-        roots.map((root) => [root.directory, surveyed.get(root.directory)]),
-      );
+      listed = new Map(roots.map((root) => [root.directory, surveyed.get(root.directory)]));
     } else {
       const listing = await this.command([
         this.shell,
@@ -3091,12 +2984,13 @@ export class WorkspaceTools {
       }
     }
     const entries = roots.flatMap((root) =>
-      listed.get(root.directory).sort((left, right) =>
-        left < right ? -1 : left > right ? 1 : 0
-      ).flatMap((path) => {
-        const name = skillName(root, path);
-        return name === undefined ? [] : [{ root, path, name }];
-      })
+      listed
+        .get(root.directory)
+        .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+        .flatMap((path) => {
+          const name = skillName(root, path);
+          return name === undefined ? [] : [{ root, path, name }];
+        }),
     );
     const read = readAhead((path) => this.startupBytes(path), READ_AHEAD);
     read.prefetch(entries.map((entry) => entry.path));
@@ -3110,10 +3004,7 @@ export class WorkspaceTools {
       } catch (error) {
         // The target refused this file (permissions, a directory): skip it.
         // A failed connection still stops the session.
-        if (
-          error.remote ||
-          /UTF-8|at most 4 MiB|exceeds 4 MiB/.test(error.message)
-        ) continue;
+        if (error.remote || /UTF-8|at most 4 MiB|exceeds 4 MiB/.test(error.message)) continue;
         throw error;
       }
       found.push({ ...root, name, path, content });
@@ -3128,42 +3019,39 @@ export class WorkspaceTools {
       surveyed
         ? Promise.resolve(surveyed[name] ?? { exitCode: 1, output: "" })
         : this.command(["git", "--no-optional-locks", ...args]).catch(() => ({
-          exitCode: 1,
-          output: "",
-        }));
+            exitCode: 1,
+            output: "",
+          }));
     const inside = await git("inside", "rev-parse", "--is-inside-work-tree");
     if (inside.exitCode !== 0) return undefined;
-    const [branch, origin, master, main, user, status, log] = await Promise.all(
-      [
-        git("branch", "branch", "--show-current"),
-        git("origin", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"),
-        git("master", "rev-parse", "--verify", "--quiet", "refs/heads/master"),
-        git("main", "rev-parse", "--verify", "--quiet", "refs/heads/main"),
-        git("user", "config", "user.name"),
-        git("status", "status", "--short"),
-        git("log", "log", "--oneline", "-n", "5"),
-      ],
-    );
-    const mainBranch = origin.exitCode === 0 && origin.output.trim()
-      ? origin.output.trim().replace(/^origin\//, "")
-      : master.exitCode === 0 && main.exitCode !== 0
-      ? "master"
-      : "main";
+    const [branch, origin, master, main, user, status, log] = await Promise.all([
+      git("branch", "branch", "--show-current"),
+      git("origin", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"),
+      git("master", "rev-parse", "--verify", "--quiet", "refs/heads/master"),
+      git("main", "rev-parse", "--verify", "--quiet", "refs/heads/main"),
+      git("user", "config", "user.name"),
+      git("status", "status", "--short"),
+      git("log", "log", "--oneline", "-n", "5"),
+    ]);
+    const mainBranch =
+      origin.exitCode === 0 && origin.output.trim()
+        ? origin.output.trim().replace(/^origin\//, "")
+        : master.exitCode === 0 && main.exitCode !== 0
+          ? "master"
+          : "main";
     // A status that did not complete is not a clean tree.
-    let changes = status.exitCode === 0
-      ? status.output.trim()
-      : "(unavailable: git status did not complete)";
+    let changes =
+      status.exitCode === 0 ? status.output.trim() : "(unavailable: git status did not complete)";
     if (changes.length > 2000) {
-      changes = changes.slice(0, 2000) +
+      changes =
+        changes.slice(0, 2000) +
         '\n... (truncated because it exceeds 2k characters. If you need more information, run "git status" using Bash)';
     }
     return [
       "This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.",
       `Current branch: ${branch.output.trim()}`,
       `Main branch (you will usually use this for PRs): ${mainBranch}`,
-      ...(user.exitCode === 0 && user.output.trim()
-        ? [`Git user: ${user.output.trim()}`]
-        : []),
+      ...(user.exitCode === 0 && user.output.trim() ? [`Git user: ${user.output.trim()}`] : []),
       `Status:\n${changes || "(clean)"}`,
       `Recent commits:\n${log.exitCode === 0 ? log.output.trim() : ""}`,
     ].join("\n\n");
@@ -3188,7 +3076,8 @@ export class WorkspaceTools {
         conditional: this.nested.conditional,
         attached: attached.get(owner),
         home: this.nested.home,
-      })).catch(() => null);
+      }),
+    ).catch(() => null);
   }
 
   // Preserve read/edit order for the same lexical path. Serialize mutations
@@ -3200,30 +3089,29 @@ export class WorkspaceTools {
     const operation = Promise.resolve().then(() => {
       if (["read", "write", "edit", "notebookedit"].includes(name)) {
         const path = this.path(args.file_path ?? args.notebook_path);
-        return this.ordered(
-          `file:${path}`,
-          () =>
-            name === "read" ? this.invoke(name, args, call) : this.ordered(
-              "file-mutations",
-              () => {
+        return this.ordered(`file:${path}`, () =>
+          name === "read"
+            ? this.invoke(name, args, call)
+            : this.ordered("file-mutations", () => {
                 // A call abandoned while queued must not change the target.
                 this.live(call);
                 return this.invoke(name, args, call);
-              },
-            ),
+              }),
         );
       }
       return this.invoke(name, args, call);
     });
     return operation.catch((error) => ({
-      content: [{
-        type: "text",
-        text: error.remote
-          ? "Target operation failed or its result is unknown. Do not repeat a mutation; inspect its state first."
-          : error.code
-          ? "Execution state could not be saved. The target operation may have completed; inspect it before repeating a mutation."
-          : error.message,
-      }],
+      content: [
+        {
+          type: "text",
+          text: error.remote
+            ? "Target operation failed or its result is unknown. Do not repeat a mutation; inspect its state first."
+            : error.code
+              ? "Execution state could not be saved. The target operation may have completed; inspect it before repeating a mutation."
+              : error.message,
+        },
+      ],
       isError: true,
     }));
   }
@@ -3242,9 +3130,7 @@ export class WorkspaceTools {
       // Like native, a longer request is clamped to the maximum, not refused.
       const maxTimeout = background ? 7200000 : 600000;
       const timeout = bounded(
-        Number.isSafeInteger(args.timeout)
-          ? Math.min(args.timeout, maxTimeout)
-          : args.timeout,
+        Number.isSafeInteger(args.timeout) ? Math.min(args.timeout, maxTimeout) : args.timeout,
         120000,
         1,
         maxTimeout,
@@ -3256,13 +3142,10 @@ export class WorkspaceTools {
       // directory without a separate target command.
       // Read-only targets cannot record a final directory; each command
       // then starts in the snapshot, as after a command that left it.
-      const cwdFile = background || this.readOnly ? undefined : posix.join(
-        this.home() ?? "/",
-        ".cache",
-        "cowboy",
-        "shell",
-        `cwd-${randomUUID()}`,
-      );
+      const cwdFile =
+        background || this.readOnly
+          ? undefined
+          : posix.join(this.home() ?? "/", ".cache", "cowboy", "shell", `cwd-${randomUUID()}`);
       const end = randomUUID().replaceAll("-", "");
       const snapshot = await this.shellSnapshot;
       const argv = endedCommand(
@@ -3286,15 +3169,11 @@ export class WorkspaceTools {
         : this.startForeground(argv, call, environment, undefined, fields));
       if (background) {
         return {
-          ...text(
-            JSON.stringify({ task_id: id, running: true }),
-            {
-              stdout:
-                `Command running in background with ID: ${id}. Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. ${NOTIFIED}To check interim output, use Read on that file path.`,
-              stderr: "",
-              interrupted: false,
-            },
-          ),
+          ...text(JSON.stringify({ task_id: id, running: true }), {
+            stdout: `Command running in background with ID: ${id}. Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. ${NOTIFIED}To check interim output, use Read on that file path.`,
+            stderr: "",
+            interrupted: false,
+          }),
           task: { id, command },
         };
       }
@@ -3302,20 +3181,16 @@ export class WorkspaceTools {
         // Collect the whole output (bounded) so a large result can be
         // persisted as natively, instead of stopping at one read's limit.
         const deadline = Date.now() + timeout;
-        const page = () =>
-          Math.max(MAX_OUTPUT, COLLECT_LIMIT - Buffer.byteLength(output));
+        const page = () => Math.max(MAX_OUTPUT, COLLECT_LIMIT - Buffer.byteLength(output));
         let output = "";
         let result = await this.collect(id, timeout, page());
         output = result.output;
         while (
-          result.output_limit && Buffer.byteLength(output) < COLLECT_LIMIT &&
+          result.output_limit &&
+          Buffer.byteLength(output) < COLLECT_LIMIT &&
           (result.closed || Date.now() < deadline)
         ) {
-          result = await this.collect(
-            id,
-            Math.max(1, deadline - Date.now()),
-            page(),
-          );
+          result = await this.collect(id, Math.max(1, deadline - Date.now()), page());
           output += result.output;
         }
         const complete = { ...result, output };
@@ -3324,8 +3199,7 @@ export class WorkspaceTools {
           await this.save(() => {
             const { ephemeral: _handle, ...job } = this.state.jobs[id];
             this.state.jobs[id] = { ...job, ...this.taskCommand(command) };
-            return () =>
-              this.state.jobs[id] = job;
+            return () => (this.state.jobs[id] = job);
           });
           return {
             ...text(JSON.stringify(complete), {
@@ -3342,12 +3216,12 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           // not moved to the background (measured on 2.1.287).
           await this.cancelTasks([id]);
           return {
-            content: [{
-              type: "text",
-              text: `Exit code 143\nCommand timed out after ${
-                shellDuration(timeout)
-              }`,
-            }],
+            content: [
+              {
+                type: "text",
+                text: `Exit code 143\nCommand timed out after ${shellDuration(timeout)}`,
+              },
+            ],
             isError: true,
           };
         }
@@ -3364,7 +3238,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
               endLines: {},
               ...this.taskCommand(command),
             };
-            return () => this.state.jobs[id] = job;
+            return () => (this.state.jobs[id] = job);
           });
           // Native 2.1.312 leads with the output read so far, or says none
           // was read (measured).
@@ -3373,12 +3247,14 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
             ...text(JSON.stringify(complete), {
               stdout: [
                 shown,
-                `Command did not complete within its ${
-                  Math.ceil(timeout / 1000)
-                }s timeout and was moved to the background (ID: ${id}). Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. ${NOTIFIED}${DEADLINE}${MOVED_RUNNING}${
+                `Command did not complete within its ${Math.ceil(
+                  timeout / 1000,
+                )}s timeout and was moved to the background (ID: ${id}). Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. ${NOTIFIED}${DEADLINE}${MOVED_RUNNING}${
                   shown ? "" : MOVED_UNREAD
                 }To check interim output, use Read on that file path.`,
-              ].filter(Boolean).join("\n"),
+              ]
+                .filter(Boolean)
+                .join("\n"),
               stderr: "",
               interrupted: false,
             }),
@@ -3394,16 +3270,14 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           };
         }
         const reported = this.shellEnds?.get(id)?.cwd;
-        const reset = cwdFile
-          ? await this.settleShellDirectory(cwdFile, reported)
-          : "";
+        const reset = cwdFile ? await this.settleShellDirectory(cwdFile, reported) : "";
         const shown = [output.trim(), reset].filter(Boolean).join("\n");
         return text(JSON.stringify(complete), {
           // Natively a reset still follows a persisted output's preview.
-          stdout: shown.length > INLINE_OUTPUT
-            ? [await this.persistOutput(id, output, result), reset]
-              .filter(Boolean).join("\n")
-            : shown,
+          stdout:
+            shown.length > INLINE_OUTPUT
+              ? [await this.persistOutput(id, output, result), reset].filter(Boolean).join("\n")
+              : shown,
           stderr: "",
           interrupted: false,
         });
@@ -3420,7 +3294,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
             // the task removes it once it is observed closed.
             await this.save(() => {
               this.state.jobs[id] = { ...this.state.jobs[id], cwdFile };
-              return () => this.state.jobs[id] = job;
+              return () => (this.state.jobs[id] = job);
             }).catch(() => {});
           } else await this.removeTarget(cwdFile);
         }
@@ -3440,11 +3314,12 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         }
         await this.cancelTasks([id]);
       }
-      const timeout = name === "taskstop"
-        ? 10000
-        : args.block === false
-        ? 1
-        : bounded(args.timeout, 10000, 1, 120000, "timeout");
+      const timeout =
+        name === "taskstop"
+          ? 10000
+          : args.block === false
+            ? 1
+            : bounded(args.timeout, 10000, 1, 120000, "timeout");
       const result = await this.collect(id, timeout);
       const command = job.command ?? "";
       return text(JSON.stringify(result), {
@@ -3494,51 +3369,46 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         throw new Error(result.output.slice(0, 4096) || "Search failed");
       }
       const offset = bounded(args.offset, 0, 0, 1000000, "offset");
-      const limit = bounded(args.head_limit, 200, 0, 10000, "head_limit") ||
-        10000;
-      const lines = result.output.replace(/\n$/, "").split("\n").filter((
-        line,
-      ) => line.length > 0);
+      const limit = bounded(args.head_limit, 200, 0, 10000, "head_limit") || 10000;
+      const lines = result.output
+        .replace(/\n$/, "")
+        .split("\n")
+        .filter((line) => line.length > 0);
       const selected = lines.slice(offset, offset + limit);
       const truncated = lines.length > offset + limit || result.output_limit;
-      const output = selected.join("\n") +
-        (truncated
-          ? "\n[More results available; narrow the search or change offset.]"
-          : "");
+      const output =
+        selected.join("\n") +
+        (truncated ? "\n[More results available; narrow the search or change offset.]" : "");
       const mode = args.output_mode ?? "files_with_matches";
       return text(
         output,
         name === "glob"
           ? {
-            durationMs: Date.now() - started,
-            numFiles: selected.length,
-            filenames: selected,
-            truncated,
-          }
+              durationMs: Date.now() - started,
+              numFiles: selected.length,
+              filenames: selected,
+              truncated,
+            }
           : {
-            mode,
-            numFiles: mode === "files_with_matches" ? selected.length : 0,
-            filenames: mode === "files_with_matches" ? selected : [],
-            ...(mode === "files_with_matches"
-              ? {}
-              : { content: output, numLines: selected.length }),
-            appliedLimit: limit,
-            appliedOffset: offset,
-          },
+              mode,
+              numFiles: mode === "files_with_matches" ? selected.length : 0,
+              filenames: mode === "files_with_matches" ? selected : [],
+              ...(mode === "files_with_matches"
+                ? {}
+                : { content: output, numLines: selected.length }),
+              appliedLimit: limit,
+              appliedOffset: offset,
+            },
       );
     }
     if (!["read", "write", "edit", "notebookedit"].includes(name)) {
       throw new Error("Unsupported execution tool");
     }
     const path = this.path(args.file_path ?? args.notebook_path);
-    if (
-      name === "read" && args.allow_large !== undefined &&
-      typeof args.allow_large !== "boolean"
-    ) throw new Error("Invalid allow_large");
+    if (name === "read" && args.allow_large !== undefined && typeof args.allow_large !== "boolean")
+      throw new Error("Invalid allow_large");
     // What a refusal for size adds when the call asked for a large read.
-    const large = name === "read" && args.allow_large === true
-      ? ALLOW_LARGE_UNAVAILABLE
-      : "";
+    const large = name === "read" && args.allow_large === true ? ALLOW_LARGE_UNAVAILABLE : "";
     if (name === "read") {
       // Native refuses these by name alone, existing or not.
       const extension = path.slice(path.lastIndexOf(".")).toLowerCase();
@@ -3551,27 +3421,24 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         );
       }
     }
-    if (
-      name === "read" &&
-      IMAGE_EXTENSIONS.includes(posix.extname(path).toLowerCase())
-    ) return await this.readImage(path);
+    if (name === "read" && IMAGE_EXTENSIONS.includes(posix.extname(path).toLowerCase()))
+      return await this.readImage(path);
     if (name === "read" && posix.extname(path).toLowerCase() === ".pdf") {
       const pdf = await this.readPdf(path, args.pages, call);
       if (pdf) return pdf;
     }
     let metadata;
     if (name === "read" && this.fileHelper && args.pages === undefined) {
-      metadata = await this.connection.call("fs/getMetadata", {
-        path: pathToFileURL(path).href,
-      }).catch((error) => {
-        throw missing(error) ? this.missingFile() : error;
-      });
+      metadata = await this.connection
+        .call("fs/getMetadata", {
+          path: pathToFileURL(path).href,
+        })
+        .catch((error) => {
+          throw missing(error) ? this.missingFile() : error;
+        });
       // Short files keep exactly the original two RPCs. Metadata is reused
       // only within this call; it is never a cross-read freshness cache.
-      if (
-        metadata.isFile && metadata.size >= RANGE_FILE_THRESHOLD &&
-        metadata.size <= MAX_FILE
-      ) {
+      if (metadata.isFile && metadata.size >= RANGE_FILE_THRESHOLD && metadata.size <= MAX_FILE) {
         const range = await this.rangeRead(path, args, call);
         if (range) return range;
       }
@@ -3583,7 +3450,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       if (large && /4 MiB/.test(error.message)) {
         throw new Error(error.message + "." + large);
       }
-      if (name === "write" && await this.isDirectory(path)) {
+      if (name === "write" && (await this.isDirectory(path))) {
         throw new Error(
           `${shown} is a directory, not a file. To create a file inside it, include the file name in file_path.`,
         );
@@ -3592,9 +3459,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     };
     // Edit and Write start from the verified copy of what was last read or
     // written, when one is kept; the target confirms it by hash on applying.
-    const buffers = name === "write" || name === "edit"
-      ? await this.fileBuffersFor(path)
-      : undefined;
+    const buffers =
+      name === "write" || name === "edit" ? await this.fileBuffersFor(path) : undefined;
     // Whether a file exists is always asked of the target.
     const stamped = this.state.reads[path];
     let bytes;
@@ -3605,11 +3471,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     }
     if (!buffered) {
       try {
-        bytes = await this.bytes(
-          path,
-          name === "write" || name === "edit",
-          metadata,
-        );
+        bytes = await this.bytes(path, name === "write" || name === "edit", metadata);
       } catch (error) {
         await failed(error);
       }
@@ -3620,17 +3482,14 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         await this.fileBufferPut(bytes, await this.fileBuffersFor(path));
         return result;
       };
-      const imageTypes = [["89504e470d0a1a0a", "image/png"], [
-        "ffd8ff",
-        "image/jpeg",
-      ], ["47494638", "image/gif"]];
-      let mimeType = imageTypes.find(([magic]) =>
-        bytes.toString("hex").startsWith(magic)
-      )?.[1];
-      if (
-        bytes.subarray(0, 4).toString() === "RIFF" &&
-        bytes.subarray(8, 12).toString() === "WEBP"
-      ) mimeType = "image/webp";
+      const imageTypes = [
+        ["89504e470d0a1a0a", "image/png"],
+        ["ffd8ff", "image/jpeg"],
+        ["47494638", "image/gif"],
+      ];
+      let mimeType = imageTypes.find(([magic]) => bytes.toString("hex").startsWith(magic))?.[1];
+      if (bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP")
+        mimeType = "image/webp";
       // Natively only an extensionless file is sniffed for an image.
       if (mimeType && posix.extname(path) === "") {
         return await remember(await this.localRead(bytes, "", path));
@@ -3643,39 +3502,32 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       const warning = encodingWarning(bytes, decoded);
       const lines = decoded.text.split("\n");
       const selected = lines.slice(offset, offset + limit);
-      const result = selected.map((line, index) =>
-        `${offset + index + 1}\t${line}`
-      ).join("\n");
+      const result = selected.map((line, index) => `${offset + index + 1}\t${line}`).join("\n");
       if (Buffer.byteLength(result) > MAX_OUTPUT) {
         throw new Error(
-          "Selected lines exceed output limit; request a smaller range" +
-            (large && "." + large),
+          "Selected lines exceed output limit; request a smaller range" + (large && "." + large),
         );
       }
-      return await remember(
-        {
-          ...text(result, {
-            type: "text",
-            file: {
-              filePath: shown,
-              content: selected.join("\n"),
-              numLines: selected.length,
-              startLine: offset + 1,
-              totalLines: lines.length,
-            },
-          }),
-          ...(warning ? { context: [warning] } : {}),
-        },
-      );
+      return await remember({
+        ...text(result, {
+          type: "text",
+          file: {
+            filePath: shown,
+            content: selected.join("\n"),
+            numLines: selected.length,
+            startLine: offset + 1,
+            totalLines: lines.length,
+          },
+        }),
+        ...(warning ? { context: [warning] } : {}),
+      });
     }
     // Natively an unread file may be written or edited; one read since and
     // changed on disk may not.
     const known = this.state.reads[path];
     // NotebookEdit still requires a Read first, as natively.
     if (name === "notebookedit" && known === undefined) {
-      throw new Error(
-        "File has not been read yet. Read it first before writing to it.",
-      );
+      throw new Error("File has not been read yet. Read it first before writing to it.");
     }
     if (bytes && known !== undefined && known !== hash(bytes)) {
       throw new Error(MODIFIED_SINCE_READ);
@@ -3712,9 +3564,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         } else {
           const count = original.split(old).length - 1;
           if (!count) {
-            throw new Error(
-              `String to replace not found in file.\nString: ${old}`,
-            );
+            throw new Error(`String to replace not found in file.\nString: ${old}`);
           }
           if (!args.replace_all && count !== 1) {
             throw new Error(
@@ -3732,18 +3582,16 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       const notebook = JSON.parse(decode(bytes));
       if (!Array.isArray(notebook.cells)) throw new Error("Invalid notebook");
       const mode = args.edit_mode ?? "replace";
-      if (
-        args.cell_type !== undefined &&
-        !["code", "markdown"].includes(args.cell_type)
-      ) {
+      if (args.cell_type !== undefined && !["code", "markdown"].includes(args.cell_type)) {
         throw new Error("Invalid notebook cell type");
       }
       if (mode === "insert" && args.cell_type === undefined) {
         throw new Error("Inserting a cell requires cell_type");
       }
-      const index = args.cell_id === undefined
-        ? -1
-        : notebook.cells.findIndex((cell) => cell.id === args.cell_id);
+      const index =
+        args.cell_id === undefined
+          ? -1
+          : notebook.cells.findIndex((cell) => cell.id === args.cell_id);
       if (index < 0 && (mode !== "insert" || args.cell_id !== undefined)) {
         throw new Error("Notebook cell not found");
       }
@@ -3756,25 +3604,17 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         notebook_path: path,
         original_file: decode(bytes),
       };
-      const source = checkedString(args.new_source, "new_source").match(
-        /[^\n]*\n|[^\n]+$/g,
-      ) ?? [];
+      const source = checkedString(args.new_source, "new_source").match(/[^\n]*\n|[^\n]+$/g) ?? [];
       if (mode === "delete") notebook.cells.splice(index, 1);
       else if (mode === "insert") {
         const cell_type = args.cell_type ?? "code";
-        notebook.cells.splice(
-          index + 1,
-          0,
-          {
-            id: randomUUID().slice(0, 8),
-            cell_type,
-            metadata: {},
-            source,
-            ...(cell_type === "code"
-              ? { outputs: [], execution_count: null }
-              : {}),
-          },
-        );
+        notebook.cells.splice(index + 1, 0, {
+          id: randomUUID().slice(0, 8),
+          cell_type,
+          metadata: {},
+          source,
+          ...(cell_type === "code" ? { outputs: [], execution_count: null } : {}),
+        });
       } else if (mode === "replace") {
         const cell = notebook.cells[index];
         cell.source = source;
@@ -3793,10 +3633,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     if (written.length > MAX_FILE) {
       throw new Error("Result exceeds file limit");
     }
-    let originalFile = originalText !== null &&
-        Buffer.byteLength(originalText) <= MAX_OUTPUT
-      ? originalText
-      : null;
+    let originalFile =
+      originalText !== null && Buffer.byteLength(originalText) <= MAX_OUTPUT ? originalText : null;
     if (originalText === null && bytes && bytes.length <= MAX_OUTPUT) {
       try {
         originalFile = decode(bytes);
@@ -3818,20 +3656,15 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     const expect = hash(written);
     let committed = false;
     if (
-      buffers && written.length <= buffers.max_file_size &&
+      buffers &&
+      written.length <= buffers.max_file_size &&
       (bytes?.length ?? 0) <= buffers.max_file_size
     ) {
       // Replaced as native replaces it (a new inode), and only if the target
       // still holds exactly the bytes this edit started from.
       let base = bytes;
       for (;;) {
-        const outcome = await this.fileBufferApply(
-          path,
-          base,
-          written,
-          buffers,
-          call,
-        );
+        const outcome = await this.fileBufferApply(path, base, written, buffers, call);
         if (outcome?.status === "applied" && outcome.sha256 === expect) {
           committed = true;
           break;
@@ -3882,29 +3715,28 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     }
     await this.rememberRead(path, expect);
     await this.fileBufferPut(written, buffers);
-    const native = name === "write"
-      ? {
-        type: bytes ? "update" : "create",
-        filePath: shown,
-        content,
-        originalFile,
-        structuredPatch: patch(originalFile, content),
-      }
-      : name === "edit"
-      ? {
-        filePath: shown,
-        oldString: args.old_string,
-        newString: args.new_string,
-        originalFile,
-        structuredPatch: patch(originalFile, content),
-        userModified: false,
-        replaceAll: args.replace_all === true,
-        // Natively an edit of an unread file says its content is not known.
-        ...(known === undefined && bytes
-          ? { contentNotInModelContext: true }
-          : {}),
-      }
-      : { ...notebookResult, updated_file: content };
+    const native =
+      name === "write"
+        ? {
+            type: bytes ? "update" : "create",
+            filePath: shown,
+            content,
+            originalFile,
+            structuredPatch: patch(originalFile, content),
+          }
+        : name === "edit"
+          ? {
+              filePath: shown,
+              oldString: args.old_string,
+              newString: args.new_string,
+              originalFile,
+              structuredPatch: patch(originalFile, content),
+              userModified: false,
+              replaceAll: args.replace_all === true,
+              // Natively an edit of an unread file says its content is not known.
+              ...(known === undefined && bytes ? { contentNotInModelContext: true } : {}),
+            }
+          : { ...notebookResult, updated_file: content };
     return text(`Updated ${path}`, native);
   }
 
@@ -3951,11 +3783,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     }
     const cwd = this.state.shellCwd;
     if (cwd && cwd !== this.cwd) {
-      lines.push(
-        `cd -- ${shellLiteral(cwd)} 2>/dev/null || cd -- ${
-          shellLiteral(this.cwd)
-        }`,
-      );
+      lines.push(`cd -- ${shellLiteral(cwd)} 2>/dev/null || cd -- ${shellLiteral(this.cwd)}`);
     }
     // As natively, Bash first loads what project hooks wrote to
     // CLAUDE_ENV_FILE; only sessions with project hooks have one.
@@ -3964,11 +3792,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       lines.push(`if [ -f ${file} ]; then . ${file}; fi`);
     }
     if (cwdFile) {
-      lines.push(
-        `(umask 077 && mkdir -p -- ${
-          shellLiteral(posix.dirname(cwdFile))
-        }) 2>/dev/null`,
-      );
+      lines.push(`(umask 077 && mkdir -p -- ${shellLiteral(posix.dirname(cwdFile))}) 2>/dev/null`);
     }
     lines.push("exec 2>&1");
     lines.push(
@@ -3981,9 +3805,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
   // The directory a successful command ended in persists for later commands
   // when it is inside the project; elsewhere native resets it and says so.
   async settleShellDirectory(cwdFile, reported) {
-    const next = reported ??
-      (await this.bytes(cwdFile, true).catch(() => undefined))
-        ?.toString("utf8").trim();
+    const next =
+      reported ?? (await this.bytes(cwdFile, true).catch(() => undefined))?.toString("utf8").trim();
     if (!next?.startsWith("/")) return "";
     this.projectPhysical ??= this.command([
       this.shell,
@@ -3994,15 +3817,15 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     ]).then((result) => result.output.trim());
     const project = await this.projectPhysical.catch(() => this.cwd);
     const relative = posix.relative(project, next);
-    const inside = relative === "" ||
-      (relative !== ".." && !relative.startsWith("../") &&
-        !posix.isAbsolute(relative));
+    const inside =
+      relative === "" ||
+      (relative !== ".." && !relative.startsWith("../") && !posix.isAbsolute(relative));
     const cwd = inside ? next : this.cwd;
     if (this.state.shellCwd !== cwd) {
       await this.save(() => {
         const previous = this.state.shellCwd;
         this.state.shellCwd = cwd;
-        return () => this.state.shellCwd = previous;
+        return () => (this.state.shellCwd = previous);
       });
     }
     return inside ? "" : `Shell cwd was reset to ${this.cwd}`;
@@ -4029,12 +3852,14 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       path: pathToFileURL(path).href,
       dataBase64: bytes.toString("base64"),
     });
-    return persistedOutput(path, output) +
+    return (
+      persistedOutput(path, output) +
       (cut
         ? "\n[The saved output stops at 4 MiB.]"
         : result.closed && result.output_limit
-        ? `\n[Output limit reached; read ${TASK_OUTPUT_PREFIX}${id} for more.]`
-        : "");
+          ? `\n[Output limit reached; read ${TASK_OUTPUT_PREFIX}${id} for more.]`
+          : "")
+    );
   }
 
   bashResult(result) {
@@ -4042,7 +3867,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       ? `Exit code: ${result.exitCode}`
       : `Command is still running. Task id: ${result.task_id}\nRead output: ${TASK_OUTPUT_PREFIX}${result.task_id}`;
     return {
-      stdout: result.output +
+      stdout:
+        result.output +
         (result.output && !result.output.endsWith("\n") ? "\n" : "") +
         progress +
         (result.output_limit
@@ -4112,18 +3938,20 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
   // A stopped native agent no longer awaits the calls it left in flight.
   // Cancel them all, rather than relying on each held hook's abort signal.
   async cancelOwner(agentId) {
-    const ids = [...this.calls].filter(([, entry]) => entry.owner === agentId)
-      .map(([id]) => id);
+    const ids = [...this.calls].filter(([, entry]) => entry.owner === agentId).map(([id]) => id);
     return (await Promise.all(ids.map((id) => this.cancelCall(id)))).flat();
   }
 
   async registerAgent({ agentId, toolUseId, owner, outputFile }) {
     if (
-      !AGENT_ID.test(agentId) || !AGENT_ID.test(toolUseId) ||
+      !AGENT_ID.test(agentId) ||
+      !AGENT_ID.test(toolUseId) ||
       (owner !== null && !AGENT_ID.test(owner)) ||
-      typeof outputFile !== "string" || !posix.isAbsolute(outputFile) ||
+      typeof outputFile !== "string" ||
+      !posix.isAbsolute(outputFile) ||
       outputFile.length > 4096
-    ) throw new Error("Invalid native agent registration");
+    )
+      throw new Error("Invalid native agent registration");
     await this.save(() => {
       const previous = this.state.agents[agentId];
       const agents = { ...this.state.agents };
@@ -4144,7 +3972,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       }
       const before = this.state.agents;
       this.state.agents = agents;
-      return () => this.state.agents = before;
+      return () => (this.state.agents = before);
     });
   }
 
@@ -4154,14 +3982,16 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     if (
       !Object.hasOwn(this.state.agents, agentId) ||
       typeof answer !== "string" ||
-      typeof reason !== "string" || reason.length > 128 ||
+      typeof reason !== "string" ||
+      reason.length > 128 ||
       typeof isAborted !== "boolean"
-    ) return false;
+    )
+      return false;
     const bytes = Buffer.from(answer);
-    const bounded = bytes.length > MAX_OUTPUT
-      ? decodeOutput(bytes.subarray(0, MAX_OUTPUT)).text +
-        "\n[Answer truncated at 64 KiB.]"
-      : answer;
+    const bounded =
+      bytes.length > MAX_OUTPUT
+        ? decodeOutput(bytes.subarray(0, MAX_OUTPUT)).text + "\n[Answer truncated at 64 KiB.]"
+        : answer;
     await this.save(() => {
       const before = this.state.agents;
       const agents = { ...before };
@@ -4169,27 +3999,16 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       agents[agentId] = {
         ...previous,
         incarnation: this.incarnation,
-        status: isAborted
-          ? "stopped"
-          : reason === "answer"
-          ? "completed"
-          : "failed",
+        status: isAborted ? "stopped" : reason === "answer" ? "completed" : "failed",
         reason,
         answer: bounded,
         completions: previous.completions + 1,
       };
       // Keep registrations, but drop the oldest recorded answers (this one
       // last) to bound the state file. Completion notifications delivered them.
-      const others = Buffer.byteLength(
-        JSON.stringify({ ...this.state, agents: {} }),
-      );
+      const others = Buffer.byteLength(JSON.stringify({ ...this.state, agents: {} }));
       let size = Buffer.byteLength(JSON.stringify(agents));
-      for (
-        const id of [
-          ...Object.keys(agents).filter((id) => id !== agentId),
-          agentId,
-        ]
-      ) {
+      for (const id of [...Object.keys(agents).filter((id) => id !== agentId), agentId]) {
         if (size <= MAX_AGENT_STATE && others + size <= AGENT_STATE_BUDGET) {
           break;
         }
@@ -4198,7 +4017,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         agents[id] = { ...agents[id], answer: null, answerExpired: true };
       }
       this.state.agents = agents;
-      return () => this.state.agents = before;
+      return () => (this.state.agents = before);
     });
     if (isAborted) await this.cancelOwner(agentId);
     return true;
@@ -4220,7 +4039,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           answer: null,
         },
       };
-      return () => this.state.agents = before;
+      return () => (this.state.agents = before);
     });
     return true;
   }
@@ -4228,9 +4047,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
   // Runtime-local native output files, for exact locator projection only.
   agentLocators() {
     return Object.fromEntries(
-      Object.entries(this.state.agents).map((
-        [id, agent],
-      ) => [id, agent.outputFile]),
+      Object.entries(this.state.agents).map(([id, agent]) => [id, agent.outputFile]),
     );
   }
 
@@ -4238,27 +4055,25 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
   // runtime paths and environment. Only the recorded final answer is read.
   agentOutput(handle) {
     const id = handle.slice(AGENT_OUTPUT_PREFIX.length);
-    const agent = AGENT_ID.test(id) && Object.hasOwn(this.state.agents, id)
-      ? this.state.agents[id]
-      : undefined;
+    const agent =
+      AGENT_ID.test(id) && Object.hasOwn(this.state.agents, id) ? this.state.agents[id] : undefined;
     if (!agent) {
       return { deny: "Agent output does not belong to this session" };
     }
     let content;
     if (agent.status === "running") {
-      content = agent.incarnation === this.incarnation
-        ? "The agent is still running. Its completion notification delivers its final answer; partial output is not available in this execution environment."
-        : "The Claude process that ran this agent ended before the agent reported completion. No final answer was recorded.";
-    } else if (agent.answerExpired) {
       content =
-        `The agent ${agent.status}. Its answer was delivered in the completion notification and is no longer retained.`;
+        agent.incarnation === this.incarnation
+          ? "The agent is still running. Its completion notification delivers its final answer; partial output is not available in this execution environment."
+          : "The Claude process that ran this agent ended before the agent reported completion. No final answer was recorded.";
+    } else if (agent.answerExpired) {
+      content = `The agent ${agent.status}. Its answer was delivered in the completion notification and is no longer retained.`;
     } else if (agent.status === "completed") content = agent.answer;
     else {
       content =
         `The agent ${
           agent.status === "stopped" ? "was stopped" : `ended (${agent.reason})`
-        } before completing.` +
-        (agent.answer ? `\nLast answer:\n${agent.answer}` : "");
+        } before completing.` + (agent.answer ? `\nLast answer:\n${agent.answer}` : "");
     }
     const lines = content.split("\n").length;
     return {
@@ -4307,8 +4122,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     if (result.isError) return { deny: result.content[0].text };
     if (!result.native) {
       return {
-        deny:
-          "Target result unavailable; inspect state before repeating a mutation",
+        deny: "Target result unavailable; inspect state before repeating a mutation",
       };
     }
     // A command left running is named, so its completion can be notified.
@@ -4318,18 +4132,13 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       ...(result.context ? { context: result.context } : {}),
       // A command still running whose output has no task notification.
       ...(result.running ? { running: true } : {}),
-      ...(result.localRead
-        ? { localRead: result.localRead, localTarget: result.localTarget }
-        : {}),
+      ...(result.localRead ? { localRead: result.localRead, localTarget: result.localTarget } : {}),
     };
     // As natively (2.1.296, measured), a Read, Write or Edit below the working
     // directory brings the instruction files of the directories in between,
     // once each.
     if (["Read", "Write", "Edit"].includes(name)) {
-      const nested = await this.nestedFor(
-        this.path(args.file_path),
-        call?.owner ?? null,
-      );
+      const nested = await this.nestedFor(this.path(args.file_path), call?.owner ?? null);
       // A failed load is said, not shown as the absence of instructions.
       if (nested === null) {
         return { ...answer, instructions: { unavailable: true } };
@@ -4360,11 +4169,13 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         for (const [id, job] of previous) this.state.jobs[id] = job;
       };
     });
-    await Promise.all(ids.map(async (id) => {
-      // Existing tasks stop immediately; pending starts settle independently.
-      await this.startingForeground.get(id)?.catch(() => {});
-      await this.reconcileCancellation(id);
-    }));
+    await Promise.all(
+      ids.map(async (id) => {
+        // Existing tasks stop immediately; pending starts settle independently.
+        await this.startingForeground.get(id)?.catch(() => {});
+        await this.reconcileCancellation(id);
+      }),
+    );
     this.scheduleCancellations();
     return ids.filter((id) => this.state.jobs[id]?.cancelRequested);
   }
@@ -4402,7 +4213,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           drained: result.closed && !result.output_limit,
         },
       };
-      return () => this.state.jobs[id] = previous;
+      return () => (this.state.jobs[id] = previous);
     });
   }
 
@@ -4416,7 +4227,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       const { retained: _retained, ...rest } = previous;
       // Fully drained output leaves nothing for the target to answer.
       this.state.jobs[id] = drained ? { ...rest, endRead: true } : rest;
-      return () => this.state.jobs[id] = previous;
+      return () => (this.state.jobs[id] = previous);
     });
     await rm(file, { force: true }).catch(() => {});
     return {
@@ -4469,15 +4280,15 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
             const previous = this.state.jobs[id];
             if (!previous) return;
             this.state.jobs[id] = { ...previous, ended: true };
-            return () => this.state.jobs[id] = previous;
+            return () => (this.state.jobs[id] = previous);
           }).catch(() => {});
           return { closed: true, exitCode: split.code };
         }
         from = !split.held
           ? []
           : split.held.length > text.length
-          ? [...from, chunk.seq]
-          : [chunk.seq];
+            ? [...from, chunk.seq]
+            : [chunk.seq];
         held = split.held;
       }
       // A closed command's end line can still be on a later page.
@@ -4491,10 +4302,12 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
   }
 
   async removeTarget(path) {
-    await this.connection.call("fs/remove", {
-      path: pathToFileURL(path).href,
-      force: true,
-    }).catch(() => {});
+    await this.connection
+      .call("fs/remove", {
+        path: pathToFileURL(path).href,
+        force: true,
+      })
+      .catch(() => {});
   }
 
   // A command that outlived its Bash call leaves its directory file behind.
@@ -4507,7 +4320,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       if (!previous) return;
       const { cwdFile: _file, ...job } = previous;
       this.state.jobs[id] = job;
-      return () => this.state.jobs[id] = previous;
+      return () => (this.state.jobs[id] = previous);
     }).catch(() => {});
   }
 
@@ -4519,22 +4332,25 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
   // Without `ps`, only the command's group ends. Reports whether the
   // command's process was found.
   async killTree(end) {
-    const result = await this.command([
-      this.shell ?? "/bin/sh",
-      "-c",
-      'ps -A -ww -o pid= -o ppid= -o command= | awk -v a="$1" -v b="$2" \'' +
-      "{ pid[NR] = $1; parent[NR] = $2 } " +
-      'index($0, a b) && root == "" { root = $1 } ' +
-      'END { if (root == "") exit; print "found" > "/dev/stderr"; ' +
-      "tree[root] = 1; grown = 1; " +
-      "while (grown) { grown = 0; for (i = 1; i <= NR; i++) " +
-      "if (!(pid[i] in tree) && (parent[i] in tree)) { tree[pid[i]] = 1; grown = 1 } } " +
-      "for (p in tree) if (p != root) print p }' | xargs kill -KILL 2>/dev/null; exit 0",
-      "kill-tree",
-      // Split, so this utility's own arguments never contain the nonce.
-      end.slice(0, 16),
-      end.slice(16),
-    ], 5000);
+    const result = await this.command(
+      [
+        this.shell ?? "/bin/sh",
+        "-c",
+        'ps -A -ww -o pid= -o ppid= -o command= | awk -v a="$1" -v b="$2" \'' +
+          "{ pid[NR] = $1; parent[NR] = $2 } " +
+          'index($0, a b) && root == "" { root = $1 } ' +
+          'END { if (root == "") exit; print "found" > "/dev/stderr"; ' +
+          "tree[root] = 1; grown = 1; " +
+          "while (grown) { grown = 0; for (i = 1; i <= NR; i++) " +
+          "if (!(pid[i] in tree) && (parent[i] in tree)) { tree[pid[i]] = 1; grown = 1 } } " +
+          "for (p in tree) if (p != root) print p }' | xargs kill -KILL 2>/dev/null; exit 0",
+        "kill-tree",
+        // Split, so this utility's own arguments never contain the nonce.
+        end.slice(0, 16),
+        end.slice(16),
+      ],
+      5000,
+    );
     return result.output.includes("found");
   }
 
@@ -4548,9 +4364,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           this.treesKilled.add(id);
         }
       }
-      await this.connection.call("process/terminate", { processId: id }).catch(
-        () => {},
-      );
+      await this.connection.call("process/terminate", { processId: id }).catch(() => {});
       // This observation does not advance the task's output cursor. Do not
       // wait behind its foreground output collection to deliver cancellation.
       const result = await this.connection.call("process/read", {
@@ -4565,7 +4379,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           if (!previous) return;
           const { unknownSince: _since, ...job } = previous;
           this.state.jobs[id] = job;
-          return () => this.state.jobs[id] = previous;
+          return () => (this.state.jobs[id] = previous);
         });
       }
       if (!result.closed) return;
@@ -4573,7 +4387,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         const previous = this.state.jobs[id];
         if (!previous) return;
         this.state.jobs[id] = { ...previous, cancelRequested: false };
-        return () => this.state.jobs[id] = previous;
+        return () => (this.state.jobs[id] = previous);
       });
       this.foreground.delete(id);
       await this.releaseCwdFile(id);
@@ -4591,10 +4405,9 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
   async settleUnknownCancellation(id, error) {
     if (
       this.startingForeground.has(id) ||
-      !/unknown process|not found|no such process/i.test(
-        JSON.stringify(error?.remote ?? null),
-      )
-    ) return;
+      !/unknown process|not found|no such process/i.test(JSON.stringify(error?.remote ?? null))
+    )
+      return;
     const job = this.state.jobs[id];
     if (!job?.cancelRequested) return;
     const now = Date.now();
@@ -4603,7 +4416,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         const previous = this.state.jobs[id];
         if (!previous) return;
         this.state.jobs[id] = { ...previous, unknownSince: now };
-        return () => this.state.jobs[id] = previous;
+        return () => (this.state.jobs[id] = previous);
       });
       return;
     }
@@ -4612,7 +4425,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     await this.save(() => {
       const previous = this.state.jobs[id];
       delete this.state.jobs[id];
-      return () => this.state.jobs[id] = previous;
+      return () => (this.state.jobs[id] = previous);
     });
     this.foreground.delete(id);
     this.treesKilled.delete(id);
@@ -4629,9 +4442,11 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
 
   scheduleCancellations() {
     if (
-      this.cancelTimer || this.connection.closed ||
+      this.cancelTimer ||
+      this.connection.closed ||
       !Object.values(this.state.jobs).some((job) => job.cancelRequested)
-    ) return;
+    )
+      return;
     this.cancelTimer = setTimeout(async () => {
       try {
         await this.reconcileCancellations();

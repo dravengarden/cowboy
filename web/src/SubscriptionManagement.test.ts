@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertThrows } from "@std/assert";
+import { assertEquals, assertThrows } from "../../tools/test-assert.ts";
 import { subscriptionLoginsPage } from "./SubscriptionLogins";
 import { subscriptionWriteRejected, validPendingSubscription, validSubscriptionLabel, validSubscriptionSnapshot } from "./SubscriptionManagement";
 import { legacySubscriptionLabel, validLegacyLabels } from "./subscriptionDisplay";

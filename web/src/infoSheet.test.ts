@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 
 const detailsSource = await readFile(
   new URL("./ProviderUsageActivityDetails.tsx", import.meta.url), "utf8",

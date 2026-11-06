@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "../../../tools/test-assert.ts";
 import golden from "../../../contracts/code-buffer-client.fixture.json" with {
   type: "json",
 };

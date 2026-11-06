@@ -8,9 +8,7 @@ const preferencesToggle = document.querySelector(".preferences-toggle");
 const preferencesPopover = document.querySelector(".preferences-popover");
 const backToTop = document.querySelector(".back-to-top");
 const themeChoices = [...document.querySelectorAll("[data-theme-choice]")];
-const languageChoices = [
-  ...document.querySelectorAll("[data-language-choice]"),
-];
+const languageChoices = [...document.querySelectorAll("[data-language-choice]")];
 const colorSchemeQuery = globalThis.matchMedia("(prefers-color-scheme: dark)");
 
 let themeMode = ["system", "light", "dark"].includes(root.dataset.themeMode)
@@ -36,10 +34,7 @@ function setThemeMode(mode, { persist = true } = {}) {
   document.body?.style.setProperty("background-color", canvas);
   themeColor?.setAttribute("content", canvas);
   themeChoices.forEach((choice) => {
-    choice.setAttribute(
-      "aria-pressed",
-      String(choice.getAttribute("data-theme-choice") === mode),
-    );
+    choice.setAttribute("aria-pressed", String(choice.getAttribute("data-theme-choice") === mode));
   });
   if (!persist) return;
   try {
@@ -71,8 +66,7 @@ const zhMessages = {
     "Cowboy 是自托管远程 Agent IDE，可从一个控制平面安全调度你的多台机器上的 Codex、Claude Code、Grok 与 DeepSeek runtime。",
   "meta.socialDescription":
     "在一个自托管控制平面中管理你的 Agent 与 Machine，由独立版本、签名并固定的插件驱动。",
-  "meta.twitterDescription":
-    "自托管一个安全控制平面，调度你的多台 Machine 上的所有编码 Agent。",
+  "meta.twitterDescription": "自托管一个安全控制平面，调度你的多台 Machine 上的所有编码 Agent。",
   "skip.content": "跳到正文",
   "brand.home": "Cowboy 首页",
   "brand.github": "在 GitHub 上查看 Cowboy",
@@ -124,14 +118,11 @@ const zhMessages = {
   "safety.title.remote": "远程控制。",
   "safety.title.local": "本地边界。",
   "safety.signed": "签名并固定",
-  "safety.signedBody":
-    "发布者、契约、插件包与 runtime 工件共同解析为同一个不可变发布。",
+  "safety.signedBody": "发布者、契约、插件包与 runtime 工件共同解析为同一个不可变发布。",
   "safety.scoped": "以 Machine 为边界",
-  "safety.scopedBody":
-    "在一台 Machine 上安装 Provider，不会静默更改其他 Machine。",
+  "safety.scopedBody": "在一台 Machine 上安装 Provider，不会静默更改其他 Machine。",
   "safety.closed": "故障关闭",
-  "safety.closedBody":
-    "不兼容或被篡改的字节永远不会替换当前启用的 generation。",
+  "safety.closedBody": "不兼容或被篡改的字节永远不会替换当前启用的 generation。",
   "product.eyebrow": "一个控制平面，两种专用界面",
   "product.title.near": "工作运行在哪里，",
   "product.title.where": "你都在现场。",
@@ -177,8 +168,7 @@ const zhMessages = {
   "ecosystem.intro":
     "每个集成都通过同一套通用生命周期独立版本化、打包、签名、发布、安装、升级、回滚与移除。Cowboy 从类型化契约中读取能力，而不是硬编码供应商界面。",
   "plugins.filterAria": "筛选插件",
-  "plugins.filter.all": () =>
-    `全部 ${String(document.querySelectorAll(".plugin-card").length)}`,
+  "plugins.filter.all": () => `全部 ${String(document.querySelectorAll(".plugin-card").length)}`,
   "plugins.filter.agent": "Agent 提供方",
   "plugins.filter.code": "代码智能",
   "plugins.filter.telemetry": "遥测",
@@ -196,16 +186,12 @@ const zhMessages = {
   "plugins.summary.codex": "采用标准 OpenAI 账户与配置的 Codex",
   "plugins.summary.claude-code": "采用标准 Anthropic 账户与配置的 Claude Code",
   "plugins.summary.grok": "使用标准 xAI 认证的官方 Grok Build Agent",
-  "plugins.summary.codex-deepseek":
-    "运行于隔离 DeepSeek runtime、支持 V4 Flash 与 V4 Pro 的 Codex",
+  "plugins.summary.codex-deepseek": "运行于隔离 DeepSeek runtime、支持 V4 Flash 与 V4 Pro 的 Codex",
   "plugins.summary.claude-deepseek":
     "运行于隔离 DeepSeek runtime、提供百万 token 通道的 Claude Code",
-  "plugins.summary.deepseek-harness":
-    "运行于隔离 DeepSeek runtime 的 DeepSeek 官方 Agent Harness",
-  "plugins.summary.zed":
-    "为每个已连接 worktree 提供进程隔离的符号、悬停、定义与引用。",
-  "plugins.summary.matrix":
-    "在 Codex 与 Claude 会话之间共享、有证据支撑的长期记忆。",
+  "plugins.summary.deepseek-harness": "运行于隔离 DeepSeek runtime 的 DeepSeek 官方 Agent Harness",
+  "plugins.summary.zed": "为每个已连接 worktree 提供进程隔离的符号、悬停、定义与引用。",
+  "plugins.summary.matrix": "在 Codex 与 Claude 会话之间共享、有证据支撑的长期记忆。",
   "plugins.summary.review":
     "通过 Cowboy 托管调用，由另一类 Agent 进行只读的代码审查、设计审查和分析。",
   "plugins.summary.victoria":
@@ -290,7 +276,7 @@ const originalAttributes = new WeakMap();
 function translatedValue(key, language) {
   if (language !== "zh") return null;
   const value = zhMessages[key];
-  return typeof value === "function" ? value() : value ?? null;
+  return typeof value === "function" ? value() : (value ?? null);
 }
 
 function applyTranslations(language) {
@@ -313,10 +299,7 @@ function applyTranslations(language) {
         originals[attribute] = node.getAttribute(attribute) ?? "";
       }
       const key = node.getAttribute(`data-i18n-${attribute}`);
-      node.setAttribute(
-        attribute,
-        translatedValue(key, language) ?? originals[attribute],
-      );
+      node.setAttribute(attribute, translatedValue(key, language) ?? originals[attribute]);
     });
   }
 }
@@ -347,8 +330,7 @@ let language = root.dataset.language === "zh" ? "zh" : "en";
 function refreshControlLabels() {
   const messages = runtimeMessages[language];
   const navigationOpen = navToggle?.getAttribute("aria-expanded") === "true";
-  const preferencesOpen =
-    preferencesToggle?.getAttribute("aria-expanded") === "true";
+  const preferencesOpen = preferencesToggle?.getAttribute("aria-expanded") === "true";
   navToggle?.setAttribute(
     "aria-label",
     navigationOpen ? messages.closeNavigation : messages.openNavigation,
@@ -374,9 +356,7 @@ function setLanguage(nextLanguage, { persist = true } = {}) {
   const filterStatus = document.querySelector("#plugin-filter-status");
   const visibleCount = Number(filterStatus?.dataset.visibleCount);
   if (filterStatus && Number.isFinite(visibleCount)) {
-    filterStatus.textContent = runtimeMessages[language].pluginsShown(
-      visibleCount,
-    );
+    filterStatus.textContent = runtimeMessages[language].pluginsShown(visibleCount);
   }
   if (!persist) return;
   try {
@@ -433,8 +413,7 @@ navigation?.querySelectorAll("a").forEach((link) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
-  const preferencesOpen =
-    preferencesToggle?.getAttribute("aria-expanded") === "true";
+  const preferencesOpen = preferencesToggle?.getAttribute("aria-expanded") === "true";
   closeNavigation();
   closePreferences({ restoreFocus: preferencesOpen });
 });
@@ -454,7 +433,8 @@ function updateHeader() {
 
 function updateBackToTop() {
   if (!backToTop) return;
-  const controlsOpen = navToggle?.getAttribute("aria-expanded") === "true" ||
+  const controlsOpen =
+    navToggle?.getAttribute("aria-expanded") === "true" ||
     preferencesToggle?.getAttribute("aria-expanded") === "true";
   const threshold = Math.max(520, globalThis.innerHeight * 0.65);
   const visible = globalThis.scrollY > threshold && !controlsOpen;
@@ -474,9 +454,8 @@ globalThis.addEventListener("resize", updateBackToTop, { passive: true });
 
 backToTop?.addEventListener("click", (event) => {
   event.preventDefault();
-  const reducedMotion = globalThis.matchMedia?.(
-    "(prefers-reduced-motion: reduce)",
-  ).matches ?? false;
+  const reducedMotion =
+    globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
   globalThis.scrollTo({
     top: 0,
     left: 0,
@@ -497,16 +476,13 @@ filterButtons.forEach((button) => {
       candidate.setAttribute("aria-pressed", String(candidate === button));
     });
     pluginCards.forEach((card) => {
-      const show = filter === "all" ||
-        card.getAttribute("data-kind") === filter;
+      const show = filter === "all" || card.getAttribute("data-kind") === filter;
       card.toggleAttribute("hidden", !show);
       if (show) visible += 1;
     });
     if (filterStatus) {
       filterStatus.dataset.visibleCount = String(visible);
-      filterStatus.textContent = runtimeMessages[language].pluginsShown(
-        visible,
-      );
+      filterStatus.textContent = runtimeMessages[language].pluginsShown(visible);
     }
   });
 });
@@ -547,9 +523,7 @@ document.querySelectorAll("[data-current-year]").forEach((node) => {
 });
 
 const revealItems = [...document.querySelectorAll(".reveal")];
-const reducedMotion = globalThis.matchMedia?.(
-  "(prefers-reduced-motion: reduce)",
-).matches;
+const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 if (!("IntersectionObserver" in globalThis) || reducedMotion) {
   revealItems.forEach((item) => item.classList.add("is-visible"));

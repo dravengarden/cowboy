@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { shouldApplyHydratedConfigOptions } from "./configOptionsHydration";
 
 test("hydration may seed config options when no live update raced it", () => {

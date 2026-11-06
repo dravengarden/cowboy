@@ -4,7 +4,7 @@ import {
   assertEquals,
   assertRejects,
   assertThrows,
-} from "@std/assert";
+} from "../../tools/test-assert.ts";
 import { defineProviderUiContract } from "@cowboy/provider-authoring";
 import type { ProviderHostContext, UiNode } from "@cowboy/provider-ui";
 import {

@@ -5,7 +5,7 @@ import {
   assertRejects,
   assertStrictEquals,
   assertThrows,
-} from "@std/assert";
+} from "../../tools/test-assert.ts";
 import {
   createProductSyncDatabase,
   decodeSyncDataset,

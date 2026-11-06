@@ -57,11 +57,7 @@ export function measured(path: string): boolean {
   if (!SOURCE_ROOTS.some((root) => path.startsWith(root))) return false;
   if (!/\.(rs|ts|tsx)$/.test(path) || path.endsWith(".d.ts")) return false;
   const name = path.slice(path.lastIndexOf("/") + 1);
-  if (
-    /(^|[._-])test(s)?([._-]|$)|Tests?\.|fixture|Conformance|conformance/.test(
-      name,
-    )
-  ) {
+  if (/(^|[._-])test(s)?([._-]|$)|Tests?\.|fixture|Conformance|conformance/.test(name)) {
     return false;
   }
   if (/\.generated\.ts$/.test(name)) return false;
@@ -133,8 +129,7 @@ export function rustCode(source: string): string {
       const start = i + raw[0].length;
       const end = source.indexOf(close, start);
       const stop = end === -1 ? n : end + close.length;
-      out += source.slice(i, start) +
-        blank(source.slice(start, stop - close.length)) + close;
+      out += source.slice(i, start) + blank(source.slice(start, stop - close.length)) + close;
       i = stop;
       continue;
     }
@@ -153,10 +148,7 @@ export function rustCode(source: string): string {
         end = source.indexOf("'", i + 2);
       } else if (source[i + 2] === "'") {
         end = i + 2;
-      } else if (
-        next !== undefined && /[\uD800-\uDBFF]/.test(next) &&
-        source[i + 3] === "'"
-      ) {
+      } else if (next !== undefined && /[\uD800-\uDBFF]/.test(next) && source[i + 3] === "'") {
         end = i + 3;
       }
       if (end !== -1 && end - i <= 12) {
@@ -306,13 +298,10 @@ function matching(code: string, open: number): number {
   return -1;
 }
 
-const RUST_TEST_ATTRIBUTE =
-  /#\[(?:cfg\((?:all\()?test\b[^\]]*|(?:tokio::)?test\b[^\]]*)\]/g;
+const RUST_TEST_ATTRIBUTE = /#\[(?:cfg\((?:all\()?test\b[^\]]*|(?:tokio::)?test\b[^\]]*)\]/g;
 
 /** Blank Rust items marked as test-only; returns the code and lines removed. */
-export function stripRustTests(
-  code: string,
-): { code: string; removed: number } {
+export function stripRustTests(code: string): { code: string; removed: number } {
   let result = code;
   let removed = 0;
   RUST_TEST_ATTRIBUTE.lastIndex = 0;
@@ -376,9 +365,7 @@ export function rustFunctions(code: string): Found[] {
       if (code[k] !== "{") continue;
       const end = matching(code, k);
       if (end === -1) continue;
-      const qualified = [...scopes.map((scope) => scope.name), name[1]].join(
-        "::",
-      );
+      const qualified = [...scopes.map((scope) => scope.name), name[1]].join("::");
       found.push({
         name: qualified,
         size: lineAt(code, end) - lineAt(code, match.index) + 1,
@@ -391,10 +378,11 @@ export function rustFunctions(code: string): Found[] {
     let label = header[1].trim();
     if (match[1] === "impl") {
       label = label.replace(/^<[^]*?>\s*/, "");
-      const target = label.includes(" for ")
-        ? label.slice(label.lastIndexOf(" for ") + 5)
-        : label;
-      label = target.replace(/<[^]*$/, "").replace(/\bwhere\b[^]*$/, "").trim();
+      const target = label.includes(" for ") ? label.slice(label.lastIndexOf(" for ") + 5) : label;
+      label = target
+        .replace(/<[^]*$/, "")
+        .replace(/\bwhere\b[^]*$/, "")
+        .trim();
       const separator = label.lastIndexOf("::");
       if (separator !== -1) label = label.slice(separator + 2);
     } else {
@@ -437,10 +425,7 @@ export function tsFunctions(code: string): Found[] {
       const start = match.index + match[0].length - 1;
       let body = -1;
       const arrow = code.indexOf("=>", start);
-      const params = code.indexOf(
-        "(",
-        match.index + match[0].indexOf(name) + name.length,
-      );
+      const params = code.indexOf("(", match.index + match[0].indexOf(name) + name.length);
       if (pattern === TS_DECLARATIONS[1] && arrow !== -1) {
         // Arrow body: a block or a parenthesised expression right after `=>`.
         const after = /\S/.exec(code.slice(arrow + 2));
@@ -469,15 +454,12 @@ export function tsFunctions(code: string): Found[] {
       }
     }
   }
-  return [...found.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) =>
-    value
-  );
+  return [...found.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
 }
 
 export function hookCalls(code: string): number {
-  return (code.match(
-    /(?<![\w$.])(?:React\.)?use[A-Z][\w$]*\s*(?:<[^>()\n]*>)?\s*\(/g,
-  ) ?? []).length;
+  return (code.match(/(?<![\w$.])(?:React\.)?use[A-Z][\w$]*\s*(?:<[^>()\n]*>)?\s*\(/g) ?? [])
+    .length;
 }
 
 /** Measure one file; only over-limit measures are interesting to callers. */
@@ -608,9 +590,7 @@ export function update(
     const slot = `${measure.kind} ${area(measure.path)}`;
     used.set(slot, (used.get(slot) ?? 0) + size);
     if (measure.size > recorded) {
-      refused.push(
-        `${measure.key} grew to ${measure.size}; --update never raises a recorded size`,
-      );
+      refused.push(`${measure.key} grew to ${measure.size}; --update never raises a recorded size`);
     }
   }
   for (const measure of fresh.sort((a, b) => a.size - b.size)) {
@@ -626,9 +606,9 @@ export function update(
       used.set(slot, total);
     } else {
       refused.push(
-        `${measure.kind} ${measure.key} (${measure.size}) is new and ${
-          area(measure.path)
-        } has no freed allowance; split it below ${measure.limit}`,
+        `${measure.kind} ${measure.key} (${measure.size}) is new and ${area(
+          measure.path,
+        )} has no freed allowance; split it below ${measure.limit}`,
       );
     }
   }
@@ -643,16 +623,17 @@ export function report(measures: Measure[]): string[] {
     `files over 3000 lines: ${files.filter((m) => m.size > 3000).length}`,
     `files over their limit: ${files.filter((m) => m.size > m.limit).length}`,
     `functions measured: ${functions.length}`,
-    ...[150, 200, 400, 800].map((n) =>
-      `functions over ${n} lines: ${functions.filter((m) => m.size > n).length}`
+    ...[150, 200, 400, 800].map(
+      (n) => `functions over ${n} lines: ${functions.filter((m) => m.size > n).length}`,
     ),
     `TSX files over ${LIMITS.hooks} hook calls: ${
       measures.filter((m) => m.kind === "hooks" && m.size > m.limit).length
     }`,
     "largest functions:",
-    ...functions.sort((a, b) => b.size - a.size).slice(0, 10).map((m) =>
-      `  ${m.size}  ${m.key}`
-    ),
+    ...functions
+      .sort((a, b) => b.size - a.size)
+      .slice(0, 10)
+      .map((m) => `  ${m.size}  ${m.key}`),
   ];
 }
 
@@ -679,10 +660,8 @@ async function repositorySources(): Promise<string[]> {
   const found: string[] = [];
   const walk = async (dir: string): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
-      if (
-        entry.name === "node_modules" || entry.name === "dist" ||
-        entry.name === "target"
-      ) continue;
+      if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "target")
+        continue;
       const path = dir === "." ? entry.name : `${dir}/${entry.name}`;
       if (entry.isDirectory()) await walk(path);
       else if (entry.isFile()) found.push(path);
@@ -694,22 +673,18 @@ async function repositorySources(): Promise<string[]> {
 
 export function serialize(baseline: Baseline): string {
   const sorted = (record: Record<string, number>) =>
-    Object.fromEntries(
-      Object.entries(record).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
-    );
-  return `${
-    JSON.stringify(
-      {
-        schema: 1,
-        limits: baseline.limits,
-        file: sorted(baseline.file),
-        function: sorted(baseline.function),
-        hooks: sorted(baseline.hooks),
-      },
-      null,
-      2,
-    )
-  }\n`;
+    Object.fromEntries(Object.entries(record).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  return `${JSON.stringify(
+    {
+      schema: 1,
+      limits: baseline.limits,
+      file: sorted(baseline.file),
+      function: sorted(baseline.function),
+      hooks: sorted(baseline.hooks),
+    },
+    null,
+    2,
+  )}\n`;
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -755,9 +730,7 @@ async function main(argv: string[]): Promise<number> {
   for (const line of verdict.failures) console.error(line);
   if (verdict.failures.length > 0) return 1;
   if (verdict.lowerable > 0) {
-    console.log(
-      `structure ok; ${verdict.lowerable} baseline entries can be lowered with --update`,
-    );
+    console.log(`structure ok; ${verdict.lowerable} baseline entries can be lowered with --update`);
   } else {
     console.log("structure ok");
   }

@@ -2,10 +2,7 @@
  * Web unit tests independent of generated dist files and never invokes a host.
  */
 import { readFile } from "node:fs/promises";
-import {
-  type SurfaceSlot,
-  validateProviderUiManifest,
-} from "@cowboy/provider-ui";
+import { type SurfaceSlot, validateProviderUiManifest } from "@cowboy/provider-ui";
 import { createProviderUiOwner } from "../web/src/providerUiOwner.ts";
 
 let providers = 0;
@@ -19,9 +16,7 @@ for (const path of process.argv.slice(2)) {
     const owner = createProviderUiOwner(manifest, slot);
     try {
       if (owner.snapshot().problem) {
-        throw new Error(
-          `unsupported UI execution profile: ${manifest.id}/${slot}`,
-        );
+        throw new Error(`unsupported UI execution profile: ${manifest.id}/${slot}`);
       }
       surfaces++;
     } finally {

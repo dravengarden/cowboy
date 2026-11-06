@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert, assertAlmostEquals, assertEquals } from "@std/assert";
+import { assert, assertAlmostEquals, assertEquals } from "../../tools/test-assert.ts";
 import {
   constrainPanAxis,
   FLICK_MIN_VELOCITY,

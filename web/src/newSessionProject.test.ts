@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { defaultNewSessionProject } from "./newSessionProject.ts";
 import type { MachineSummary } from "./protocol.ts";
 import type { ProjectChoice } from "./projectPlacement.ts";

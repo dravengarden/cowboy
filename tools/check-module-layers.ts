@@ -66,11 +66,7 @@ async function rustFiles(dir: string): Promise<string[]> {
   return out;
 }
 
-export async function loadCrate(
-  repo: string,
-  name: string,
-  dir: string,
-): Promise<CrateSource> {
+export async function loadCrate(repo: string, name: string, dir: string): Promise<CrateSource> {
   const modules = new Map<string, { path: string; code: string }[]>();
   const base = join(repo, dir);
   for (const entry of await readdir(base, { withFileTypes: true })) {
@@ -79,8 +75,8 @@ export async function loadCrate(
     const files = entry.isDirectory()
       ? await rustFiles(join(base, entry.name))
       : entry.name.endsWith(".rs")
-      ? [join(base, entry.name)]
-      : [];
+        ? [join(base, entry.name)]
+        : [];
     for (const file of files) {
       const code = stripRustTests(rustCode(await readFile(file, "utf8"))).code;
       const list = modules.get(module) ?? [];
@@ -90,9 +86,7 @@ export async function loadCrate(
   }
   let root = "";
   try {
-    root =
-      stripRustTests(rustCode(await readFile(join(base, "lib.rs"), "utf8")))
-        .code;
+    root = stripRustTests(rustCode(await readFile(join(base, "lib.rs"), "utf8"))).code;
   } catch {
     // A binary-only crate has no library surface to re-export from.
   }
@@ -127,40 +121,33 @@ export function references(
   const local = new Set<string>();
   const external = new Set<string>();
   const ident = "[A-Za-z_][A-Za-z0-9_]*";
-  for (
-    const match of code.matchAll(
-      new RegExp(`(?<![\\w$:])crate::(?:(${ident})|\\{)`, "g"),
-    )
-  ) {
+  for (const match of code.matchAll(new RegExp(`(?<![\\w$:])crate::(?:(${ident})|\\{)`, "g"))) {
     if (match[1]) local.add(match[1]);
-    else {for (
-        const head of groupHeads(code, match.index + match[0].length - 1)
-      ) local.add(head);}
+    else {
+      for (const head of groupHeads(code, match.index + match[0].length - 1)) local.add(head);
+    }
   }
   // `super::` repeated `depth` times or more climbs to the crate root.
-  for (
-    const match of code.matchAll(
-      new RegExp(`(?<![\\w$:])((?:super::)+)(?:(${ident})|\\{)`, "g"),
-    )
-  ) {
+  for (const match of code.matchAll(
+    new RegExp(`(?<![\\w$:])((?:super::)+)(?:(${ident})|\\{)`, "g"),
+  )) {
     const climbs = match[1].length / "super::".length;
     if (climbs < depth) continue;
     if (match[2]) {
       if (match[2] !== "super") local.add(match[2]);
-    } else {for (
-        const head of groupHeads(code, match.index + match[0].length - 1)
-      ) local.add(head);}
+    } else {
+      for (const head of groupHeads(code, match.index + match[0].length - 1)) local.add(head);
+    }
   }
   for (const crate of crates) {
-    for (
-      const match of code.matchAll(
-        new RegExp(`(?<![\\w$:])${crate}::(?:(${ident})|\\{)`, "g"),
-      )
-    ) {
+    for (const match of code.matchAll(
+      new RegExp(`(?<![\\w$:])${crate}::(?:(${ident})|\\{)`, "g"),
+    )) {
       if (match[1]) external.add(`${crate}::${match[1]}`);
-      else {for (
-          const head of groupHeads(code, match.index + match[0].length - 1)
-        ) external.add(`${crate}::${head}`);}
+      else {
+        for (const head of groupHeads(code, match.index + match[0].length - 1))
+          external.add(`${crate}::${head}`);
+      }
     }
   }
   return { local, external };
@@ -189,11 +176,7 @@ export function resolve(
       return resolve(crates, match[1], match[2], seen);
     }
   }
-  for (
-    const match of source.root.matchAll(
-      /pub\s+use\s+([A-Za-z_][A-Za-z0-9_]*)::\*\s*;/g,
-    )
-  ) {
+  for (const match of source.root.matchAll(/pub\s+use\s+([A-Za-z_][A-Za-z0-9_]*)::\*\s*;/g)) {
     if (!crates.has(match[1])) continue;
     const found = resolve(crates, match[1], name, seen);
     if (found) return found;
@@ -201,9 +184,7 @@ export function resolve(
   return null;
 }
 
-export function buildGraph(
-  crates: Map<string, CrateSource>,
-): Map<string, Set<string>> {
+export function buildGraph(crates: Map<string, CrateSource>): Map<string, Set<string>> {
   const graph = new Map<string, Set<string>>();
   const names = [...crates.keys()];
   for (const [crate, source] of crates) {
@@ -283,25 +264,18 @@ export function edgeList(graph: Map<string, Set<string>>): string[] {
   return edges.sort();
 }
 
-export function check(
-  graph: Map<string, Set<string>>,
-  baseline: Baseline,
-): string[] {
+export function check(graph: Map<string, Set<string>>, baseline: Baseline): string[] {
   const failures: string[] = [];
   const recordedEdges = new Set(baseline.edges);
   const current = cycles(graph);
   for (const cycle of current) {
-    const home = baseline.cycles.find((recorded) =>
-      cycle.every((node) => recorded.includes(node))
-    );
+    const home = baseline.cycles.find((recorded) => cycle.every((node) => recorded.includes(node)));
     if (!home) {
-      const joined = cycle.filter((node) =>
-        !baseline.cycles.some((recorded) => recorded.includes(node))
+      const joined = cycle.filter(
+        (node) => !baseline.cycles.some((recorded) => recorded.includes(node)),
       );
       failures.push(
-        `new or enlarged dependency cycle (${cycle.length} modules): ${
-          cycle.join(", ")
-        }` +
+        `new or enlarged dependency cycle (${cycle.length} modules): ${cycle.join(", ")}` +
           (joined.length > 0
             ? `; newly entangled: ${joined.join(", ")}`
             : "; it merges recorded cycles"),

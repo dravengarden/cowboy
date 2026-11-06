@@ -11,22 +11,16 @@ export async function verifyNativeShell(repository: string): Promise<void> {
   const root = await realpath(repository);
   const native = resolve(root, "apps/native-shell");
   requireValue(
-    await realpath(native) === native,
+    (await realpath(native)) === native,
     "native shell must be owned by this checkout, not a source symlink",
   );
   async function walk(path: string): Promise<void> {
     for (const entry of await readdir(path, { withFileTypes: true })) {
-      requireValue(
-        !entry.isSymbolicLink(),
-        "native source symlink: " + entry.name,
-      );
+      requireValue(!entry.isSymbolicLink(), "native source symlink: " + entry.name);
       if (entry.isDirectory()) {
         // Cargo/Tauri outputs are never release inputs (Git archive stages only
         // tracked sources); refuse even output symlinks before skipping them.
-        if (
-          path === resolve(native, "tauri") &&
-          ["target", "gen"].includes(entry.name)
-        ) continue;
+        if (path === resolve(native, "tauri") && ["target", "gen"].includes(entry.name)) continue;
         await walk(resolve(path, entry.name));
       }
     }
@@ -45,10 +39,7 @@ export async function verifyNativeShell(repository: string): Promise<void> {
       ),
     "native build must invoke tauri_build::build from the default build.rs",
   );
-  requireValue(
-    /^\[workspace\]$/m.test(manifest),
-    "native crate needs an independent workspace",
-  );
+  requireValue(/^\[workspace\]$/m.test(manifest), "native crate needs an independent workspace");
   requireValue(
     !/\b(?:path|git|workspace)\s*=/.test(manifest),
     "native crate may not borrow path/git/workspace dependencies",
@@ -57,15 +48,9 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     manifest.includes('rust-version = "' + toolchain.rust + '"'),
     "Rust toolchain pin differs",
   );
-  const names = [
-    "tauri",
-    "tauri-build",
-    "tauri-plugin-opener",
-    "tauri-plugin-haptics",
-  ];
+  const names = ["tauri", "tauri-build", "tauri-plugin-opener", "tauri-plugin-haptics"];
   requireValue(
-    JSON.stringify(Object.keys(toolchain.crates).sort()) ===
-      JSON.stringify(names.sort()),
+    JSON.stringify(Object.keys(toolchain.crates).sort()) === JSON.stringify(names.sort()),
     "unexpected native dependency inventory",
   );
   const packages = lock.split("[[package]]").slice(1);
@@ -74,9 +59,9 @@ export async function verifyNativeShell(repository: string): Promise<void> {
   const tao = packages.find((block) => block.includes('name = "tao"\n'));
   const taoVersion = tao?.match(/^version = "(\d+)\.(\d+)\.(\d+)"$/m);
   requireValue(
-    taoVersion && Number(taoVersion[1]) === 0 &&
-      (Number(taoVersion[2]) > 37 ||
-        (Number(taoVersion[2]) === 37 && Number(taoVersion[3]) >= 1)),
+    taoVersion &&
+      Number(taoVersion[1]) === 0 &&
+      (Number(taoVersion[2]) > 37 || (Number(taoVersion[2]) === 37 && Number(taoVersion[3]) >= 1)),
     "iOS scene lifecycle requires Tao 0.37.1 or newer",
   );
   const iosInfo = await read("tauri/Info.ios.plist");
@@ -85,16 +70,15 @@ export async function verifyNativeShell(repository: string): Promise<void> {
   requireValue(
     conformanceInfo.includes("<key>UIApplicationSceneManifest</key>") &&
       conformanceInfo.includes("<string>CowboyPluginConformance</string>") &&
-      conformanceInfo.includes(
-        "<key>UIWindowSceneSessionRoleApplication</key>",
-      ) &&
+      conformanceInfo.includes("<key>UIWindowSceneSessionRoleApplication</key>") &&
       conformanceMain.includes("initWithWindowScene:") &&
       conformanceMain.includes("UIWindowSceneDelegate,"),
     "native conformance fixture needs its own window-scene lifecycle",
   );
   requireValue(
-    /<key>UIApplicationSceneManifest<\/key>\s*<dict>\s*<key>UIApplicationSupportsMultipleScenes<\/key>\s*<false\/>\s*<key>UISceneConfigurations<\/key>\s*<dict>\s*<key>UIWindowSceneSessionRoleApplication<\/key>\s*<array>\s*<dict>\s*<key>UISceneConfigurationName<\/key>\s*<string>TaoScene<\/string>\s*<key>UISceneDelegateClassName<\/key>\s*<string>TaoSceneDelegate<\/string>/
-      .test(iosInfo),
+    /<key>UIApplicationSceneManifest<\/key>\s*<dict>\s*<key>UIApplicationSupportsMultipleScenes<\/key>\s*<false\/>\s*<key>UISceneConfigurations<\/key>\s*<dict>\s*<key>UIWindowSceneSessionRoleApplication<\/key>\s*<array>\s*<dict>\s*<key>UISceneConfigurationName<\/key>\s*<string>TaoScene<\/string>\s*<key>UISceneDelegateClassName<\/key>\s*<string>TaoSceneDelegate<\/string>/.test(
+      iosInfo,
+    ),
     "iOS needs a static single-scene Tao delegate configuration",
   );
   for (const [name, version] of Object.entries(toolchain.crates)) {
@@ -102,17 +86,16 @@ export async function verifyNativeShell(repository: string): Promise<void> {
       typeof version === "string" && /^\d+\.\d+\.\d+$/.test(version),
       "native dependencies need exact versions",
     );
-    const declaration = manifest.split("\n").find((line) =>
-      line.startsWith(name + " = ")
-    );
+    const declaration = manifest.split("\n").find((line) => line.startsWith(name + " = "));
     requireValue(
       declaration?.includes('"=' + version + '"'),
       "unlocked native manifest dependency: " + name,
     );
     requireValue(
-      packages.some((block) =>
-        block.includes('name = "' + name + '"\n') &&
-        block.includes('version = "' + version + '"\n')
+      packages.some(
+        (block) =>
+          block.includes('name = "' + name + '"\n') &&
+          block.includes('version = "' + version + '"\n'),
       ),
       "native lock missing pinned crate: " + name,
     );
@@ -120,30 +103,25 @@ export async function verifyNativeShell(repository: string): Promise<void> {
   const app = packages.find((block) => block.includes('name = "cowboy-app"\n'));
   requireValue(app, "native lock is missing cowboy-app");
   for (const name of names) {
-    requireValue(
-      app.includes(' "' + name + '"'),
-      "native lock root omits dependency: " + name,
-    );
+    requireValue(app.includes(' "' + name + '"'), "native lock root omits dependency: " + name);
   }
   for (const block of packages) {
     if (block === app) continue;
     requireValue(
-      block.includes(
-        'source = "registry+https://github.com/rust-lang/crates.io-index"',
-      ) &&
+      block.includes('source = "registry+https://github.com/rust-lang/crates.io-index"') &&
         /^checksum = "[a-f0-9]{64}"$/m.test(block),
       "native lock must use checksummed registry dependencies",
     );
   }
   const config = JSON.parse(await read("tauri/tauri.conf.json"));
-  const [cliMajor, cliMinor] = String(toolchain.tauriCli).split(".").map(
-    Number,
-  );
+  const [cliMajor, cliMinor] = String(toolchain.tauriCli).split(".").map(Number);
   requireValue(
     !config.app.windows.some(
       (window: { limitNavigationsToAppBoundDomains?: boolean }) =>
         window.limitNavigationsToAppBoundDomains === true,
-    ) || cliMajor > 2 || (cliMajor === 2 && cliMinor >= 12),
+    ) ||
+      cliMajor > 2 ||
+      (cliMajor === 2 && cliMinor >= 12),
     "App-Bound Domains configuration requires the Tauri CLI 2.12 schema",
   );
   const frontend = resolve(native, "tauri", config.build.frontendDist);
@@ -152,20 +130,13 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     !isAbsolute(local) && local !== ".." && !local.startsWith(".." + sep),
     "native frontend escapes checkout",
   );
-  requireValue(
-    frontend === resolve(native, "loader"),
-    "native shell must embed its owned loader",
-  );
-  requireValue(
-    config.identifier === "top.thundersparrow.cowboy",
-    "native identity changed",
-  );
+  requireValue(frontend === resolve(native, "loader"), "native shell must embed its owned loader");
+  requireValue(config.identifier === "top.thundersparrow.cowboy", "native identity changed");
   // Tauri's own drag-drop handler swallows OS file drops before the WebView
   // sees them, which would disable the Composer's HTML5 file drop.
   requireValue(
     config.app.windows.every(
-      (window: { dragDropEnabled?: boolean }) =>
-        window.dragDropEnabled === false,
+      (window: { dragDropEnabled?: boolean }) => window.dragDropEnabled === false,
     ),
     "native windows must leave file drops to the WebView",
   );
@@ -180,28 +151,27 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     );
     await stat(resolve(native, "tauri", path));
   }
-  for (
-    const path of [
-      "loader/index.html",
-      "tauri/build.rs",
-      "tauri/src/lib.rs",
-      "tauri/src/main.rs",
-      "tauri/Info.ios.plist",
-      "apple/project.yml",
-      "apple/LaunchScreen.storyboard",
-      "apple/Sources/cowboy-app/main.mm",
-      "apple/Sources/cowboy-app/bindings/bindings.h",
-      "apple/Sources/cowboy-app/CowboyNativeTweaks.mm",
-      "apple/Sources/cowboy-app/CowboyPasskeyBridge.mm",
-      "apple/Sources/cowboy-app/CowboyAppIconBridge.mm",
-      "apple/Sources/cowboy-app/CowboyKeyboardGeometry.h",
-      "apple/Sources/cowboy-app/CowboyDevBridge.swift",
-      "apple/Assets.xcassets/AppIcon.appiconset/Contents.json",
-      "android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt",
-      "android/app/src/main/java/top/thundersparrow/cowboy/AuthenticationBrowser.kt",
-      "android/app/src/main/java/top/thundersparrow/cowboy/NativeHaptics.kt",
-    ]
-  ) await read(path);
+  for (const path of [
+    "loader/index.html",
+    "tauri/build.rs",
+    "tauri/src/lib.rs",
+    "tauri/src/main.rs",
+    "tauri/Info.ios.plist",
+    "apple/project.yml",
+    "apple/LaunchScreen.storyboard",
+    "apple/Sources/cowboy-app/main.mm",
+    "apple/Sources/cowboy-app/bindings/bindings.h",
+    "apple/Sources/cowboy-app/CowboyNativeTweaks.mm",
+    "apple/Sources/cowboy-app/CowboyPasskeyBridge.mm",
+    "apple/Sources/cowboy-app/CowboyAppIconBridge.mm",
+    "apple/Sources/cowboy-app/CowboyKeyboardGeometry.h",
+    "apple/Sources/cowboy-app/CowboyDevBridge.swift",
+    "apple/Assets.xcassets/AppIcon.appiconset/Contents.json",
+    "android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt",
+    "android/app/src/main/java/top/thundersparrow/cowboy/AuthenticationBrowser.kt",
+    "android/app/src/main/java/top/thundersparrow/cowboy/NativeHaptics.kt",
+  ])
+    await read(path);
   // Android: SDK Manager-owned components are pinned exactly, the Tauri
   // config agrees with the pin, and the generated activity is replaced by the
   // owned Kotlin source rather than Tauri's template.
@@ -219,16 +189,18 @@ export async function verifyNativeShell(repository: string): Promise<void> {
   );
   requireValue(
     JSON.stringify(
-      (android.abis as {
-        name: string;
-        tauriTarget: string;
-        rustTarget: string;
-      }[])
-        .map((abi) => [abi.name, abi.tauriTarget, abi.rustTarget]),
-    ) === JSON.stringify([
-      ["arm64-v8a", "aarch64", "aarch64-linux-android"],
-      ["x86_64", "x86_64", "x86_64-linux-android"],
-    ]),
+      (
+        android.abis as {
+          name: string;
+          tauriTarget: string;
+          rustTarget: string;
+        }[]
+      ).map((abi) => [abi.name, abi.tauriTarget, abi.rustTarget]),
+    ) ===
+      JSON.stringify([
+        ["arm64-v8a", "aarch64", "aarch64-linux-android"],
+        ["x86_64", "x86_64", "x86_64-linux-android"],
+      ]),
     "unexpected Android ABI inventory",
   );
   const androidActivity = await read(
@@ -250,18 +222,11 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     !/DEVELOPMENT_TEAM:/.test(project),
     "default project must not require a personal signing team",
   );
+  requireValue(project.includes("path: Sources"), "Xcode must include both owned bridges");
+  const capabilities = JSON.parse(await read("tauri/capabilities/remote-haptics.json"));
   requireValue(
-    project.includes("path: Sources"),
-    "Xcode must include both owned bridges",
-  );
-  const capabilities = JSON.parse(
-    await read("tauri/capabilities/remote-haptics.json"),
-  );
-  requireValue(
-    JSON.stringify(capabilities.remote.urls) === JSON.stringify([
-      "https://cowboy.stormbird.xyz",
-      "https://cowboy.stormbird.xyz/*",
-    ]),
+    JSON.stringify(capabilities.remote.urls) ===
+      JSON.stringify(["https://cowboy.stormbird.xyz", "https://cowboy.stormbird.xyz/*"]),
     "remote native IPC must stay scoped to Cowboy",
   );
 }

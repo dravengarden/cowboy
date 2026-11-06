@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { isMarkdownReviewPath } from "./reviewMarkdown.ts";
 
 test("Markdown review recognizes common document extensions", () => {

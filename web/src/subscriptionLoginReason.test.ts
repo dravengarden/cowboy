@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { subscriptionLoginReason } from "./SessionSubscription";
 
 test("only definite sign-in states disable a subscription choice", () => {

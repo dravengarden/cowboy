@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertMatch } from "@std/assert";
+import { assertMatch } from "../../tools/test-assert.ts";
 import { newUuid } from "./uuid";
 
 test("newUuid returns a UUID-shaped identifier in the current runtime", () => {

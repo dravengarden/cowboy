@@ -52,23 +52,25 @@ test("executor errors retain private classification without publishing diagnosti
     socket.on("message", (bytes) => {
       const frame = JSON.parse(bytes.toString());
       if (frame.method === "initialized") return;
-      socket.send(JSON.stringify(
-        frame.method === "initialize"
-          ? {
-            id: frame.id,
-            result: {
-              sessionId: "fixture-session",
-              environmentInfo: {
-                executorVersion: "0.159.3",
-                platformOs: "linux",
-                cwd: "file:///workspace",
-                shell: { path: "/bin/bash" },
-                ...privateDetails,
-              },
-            },
-          }
-          : { id: frame.id, error: diagnostic },
-      ));
+      socket.send(
+        JSON.stringify(
+          frame.method === "initialize"
+            ? {
+                id: frame.id,
+                result: {
+                  sessionId: "fixture-session",
+                  environmentInfo: {
+                    executorVersion: "0.159.3",
+                    platformOs: "linux",
+                    cwd: "file:///workspace",
+                    shell: { path: "/bin/bash" },
+                    ...privateDetails,
+                  },
+                },
+              }
+            : { id: frame.id, error: diagnostic },
+        ),
+      );
     });
   });
   const connection = await Connection.open({
@@ -84,11 +86,7 @@ test("executor errors retain private classification without publishing diagnosti
   });
   const directory = await mkdtemp(join(tmpdir(), "claude-private-error-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const tools = new WorkspaceTools(
-    connection,
-    binding,
-    join(directory, "state.json"),
-  );
+  const tools = new WorkspaceTools(connection, binding, join(directory, "state.json"));
   const result = await tools.call("read", { file_path: "/workspace/file" });
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /Do not repeat a mutation/);
@@ -97,21 +95,25 @@ test("executor errors retain private classification without publishing diagnosti
 
 function post(bridge, value) {
   return new Promise((resolve, reject) => {
-    const req = request({
-      socketPath: bridge.socketPath,
-      path: "/tool",
-      method: "POST",
-      headers: { authorization: `Bearer ${bridge.token}` },
-    }, (res) => {
-      const chunks = [];
-      res.on("data", (data) => chunks.push(data));
-      res.on("end", () =>
-        resolve({
-          status: res.statusCode,
-          body: JSON.parse(Buffer.concat(chunks)),
-        }));
-      res.on("error", reject);
-    });
+    const req = request(
+      {
+        socketPath: bridge.socketPath,
+        path: "/tool",
+        method: "POST",
+        headers: { authorization: `Bearer ${bridge.token}` },
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (data) => chunks.push(data));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode,
+            body: JSON.parse(Buffer.concat(chunks)),
+          }),
+        );
+        res.on("error", reject);
+      },
+    );
     req.on("error", reject);
     req.end(JSON.stringify(value));
   });

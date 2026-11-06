@@ -1,14 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -53,14 +45,15 @@ function localConnection(home) {
               seq: ++job.seq,
               stream,
               chunk: data.toString("base64"),
-            }));
+            }),
+          );
         }
         job.done = new Promise((resolve) =>
           child.on("close", (code, signal) => {
             job.exitCode = code ?? (signal ? 143 : 1);
             job.closed = true;
             resolve();
-          })
+          }),
         );
         processes.set(params.processId, job);
         return { processId: params.processId };
@@ -90,12 +83,12 @@ function localConnection(home) {
         // As the executor's, a read is bounded and a closed process can still
         // hold unread output.
         let size = 0;
-        const chunks = job.chunks.filter((chunk) =>
-          params.afterSeq === null || chunk.seq > params.afterSeq
-        ).filter((chunk, index) =>
-          (size += Buffer.from(chunk.chunk, "base64").length) <=
-            params.maxBytes || index === 0
-        );
+        const chunks = job.chunks
+          .filter((chunk) => params.afterSeq === null || chunk.seq > params.afterSeq)
+          .filter(
+            (chunk, index) =>
+              (size += Buffer.from(chunk.chunk, "base64").length) <= params.maxBytes || index === 0,
+          );
         return {
           chunks,
           exited: job.closed,
@@ -156,18 +149,12 @@ async function shellFixture(t) {
     workspace: { cwd: project },
     environment: { id: "fixture" },
   };
-  const tools = new WorkspaceTools(
-    localConnection(home),
-    binding,
-    join(root, "state.json"),
-  );
+  const tools = new WorkspaceTools(localConnection(home), binding, join(root, "state.json"));
   await tools.load();
   tools.shell = "/bin/sh";
   const bash = async (args) => {
     const result = await tools.dispatch("Bash", args);
-    return result.deny !== undefined
-      ? { error: result.deny }
-      : result.result.stdout;
+    return result.deny !== undefined ? { error: result.deny } : result.result.stdout;
   };
   return { tools, bash, project, home };
 }
@@ -176,14 +163,8 @@ test("Bash results read as native's", async (t) => {
   const { bash } = await shellFixture(t);
   assert.equal(await bash({ command: "echo hi" }), "hi");
   assert.equal(await bash({ command: "true" }), "");
-  assert.equal(
-    await bash({ command: "printf '  a\\n\\n  b  \\n'" }),
-    "a\n\n  b",
-  );
-  assert.equal(
-    await bash({ command: "echo out1; echo err1 >&2; echo out2" }),
-    "out1\nerr1\nout2",
-  );
+  assert.equal(await bash({ command: "printf '  a\\n\\n  b  \\n'" }), "a\n\n  b");
+  assert.equal(await bash({ command: "echo out1; echo err1 >&2; echo out2" }), "out1\nerr1\nout2");
   assert.deepEqual(await bash({ command: "echo out; exit 7" }), {
     error: "Exit code 7\nout",
   });
@@ -195,15 +176,9 @@ test("Bash results read as native's", async (t) => {
 test("Bash runs commands in native's shell shape", async (t) => {
   const { bash } = await shellFixture(t);
   // eval inside an && list: set -e cannot end the command early.
-  assert.equal(
-    await bash({ command: "set -e; false; echo reached" }),
-    "reached",
-  );
+  assert.equal(await bash({ command: "set -e; false; echo reached" }), "reached");
   assert.equal(await bash({ command: "cat; echo after" }), "after");
-  assert.equal(
-    await bash({ command: "echo $CLAUDECODE $GIT_EDITOR" }),
-    "1 true",
-  );
+  assert.equal(await bash({ command: "echo $CLAUDECODE $GIT_EDITOR" }), "1 true");
   // Exports and functions do not persist between calls.
   await bash({ command: "export PROBE=1; probe() { :; }" });
   assert.equal(await bash({ command: 'echo "${PROBE:-unset}"' }), "unset");
@@ -217,10 +192,7 @@ test("the shell directory persists inside the project and resets outside", async
   // A failed command leaves the directory where it was.
   await bash({ command: "cd ..; false" });
   assert.equal(await bash({ command: "pwd -P" }), `${physical}/sub`);
-  assert.equal(
-    await bash({ command: "cd / && pwd" }),
-    `/\nShell cwd was reset to ${project}`,
-  );
+  assert.equal(await bash({ command: "cd / && pwd" }), `/\nShell cwd was reset to ${project}`);
   assert.equal(await bash({ command: "pwd -P" }), physical);
   // Background commands never move the session.
   await bash({ command: "cd sub", run_in_background: true });
@@ -237,19 +209,13 @@ test("large output is persisted on the target with native's preview", async (t) 
   const shown = await bash({ command: "seq 1 20000" });
   const path = /Full output saved to: (\S+)/.exec(shown)[1];
   assert.ok(path.startsWith(join(home, ".cache/cowboy/tool-results/")));
-  assert.equal(
-    (await readFile(path, "utf8")).split("\n").length,
-    20001,
-  );
+  assert.equal((await readFile(path, "utf8")).split("\n").length, 20001);
   assert.match(
     shown,
     /^<persisted-output>\nOutput too large \(106\.3KB\)\. Full output saved to: \S+\n\nPreview \(first 2KB\):\n1\n2\n/,
   );
   assert.match(shown, /\n526\n527\n\.\.\.\n<\/persisted-output>$/);
-  assert.equal(
-    await bash({ command: "head -c 25000 /dev/zero | tr '\\0' y" }),
-    "y".repeat(25000),
-  );
+  assert.equal(await bash({ command: "head -c 25000 /dev/zero | tr '\\0' y" }), "y".repeat(25000));
 });
 
 test("a large output is read in a few large pages, not 32 KiB reads", async (t) => {
@@ -267,32 +233,27 @@ test("a large output is read in a few large pages, not 32 KiB reads", async (t) 
   assert.equal((await readFile(path, "utf8")).length, 3000000);
   // Each read crosses the Machine link; a 3 MB output takes a handful.
   assert.ok(Math.max(...reads) >= 1024 * 1024, String(reads));
-  assert.ok(
-    reads.filter((bytes) => bytes > 1).length <= 12,
-    String(reads.length),
-  );
+  assert.ok(reads.filter((bytes) => bytes > 1).length <= 12, String(reads.length));
 });
 
 test("long failures keep native's head and tail", () => {
   assert.equal(
     shellFailure({ exitCode: 2, output: "z".repeat(31000) }),
-    `Exit code 2\n${
-      "z".repeat(4988)
-    }\n\n... [20012 characters truncated] ...\n\n${"z".repeat(5000)}`,
+    `Exit code 2\n${"z".repeat(
+      4988,
+    )}\n\n... [20012 characters truncated] ...\n\n${"z".repeat(5000)}`,
   );
   assert.equal(
     persistedOutput("/p", "x".repeat(40001)),
-    `<persisted-output>\nOutput too large (39.1KB). Full output saved to: /p\n\nPreview (first 2KB):\n${
-      "x".repeat(2000)
-    }\n...\n</persisted-output>`,
+    `<persisted-output>\nOutput too large (39.1KB). Full output saved to: /p\n\nPreview (first 2KB):\n${"x".repeat(
+      2000,
+    )}\n...\n</persisted-output>`,
   );
 });
 
 test("commands see the target user's shell snapshot, as natively", async (t) => {
   const { bash, tools, home } = await shellFixture(t);
-  tools.shell = process.env.SHELL?.endsWith("/bash")
-    ? process.env.SHELL
-    : "/bin/sh";
+  tools.shell = process.env.SHELL?.endsWith("/bash") ? process.env.SHELL : "/bin/sh";
   await writeFile(
     join(home, ".bashrc"),
     [
@@ -317,14 +278,15 @@ test("commands see the target user's shell snapshot, as natively", async (t) => 
 
 test("commands carry native's environment", async (t) => {
   const { tools } = await shellFixture(t);
-  const result = await tools.dispatch("Bash", {
-    command:
-      'echo "$CLAUDECODE $CLAUDE_CODE_CHILD_SESSION $CLAUDE_CODE_SESSION_ID $CLAUDE_EFFORT $GIT_EDITOR $COREPACK_ENABLE_AUTO_PIN ${CLAUDE_PID:-no-pid}"',
-  }, { shell: { sessionId: "session-1", effort: "high" } });
-  assert.equal(
-    result.result.stdout,
-    "1 1 session-1 high true 0 no-pid",
+  const result = await tools.dispatch(
+    "Bash",
+    {
+      command:
+        'echo "$CLAUDECODE $CLAUDE_CODE_CHILD_SESSION $CLAUDE_CODE_SESSION_ID $CLAUDE_EFFORT $GIT_EDITOR $COREPACK_ENABLE_AUTO_PIN ${CLAUDE_PID:-no-pid}"',
+    },
+    { shell: { sessionId: "session-1", effort: "high" } },
   );
+  assert.equal(result.result.stdout, "1 1 session-1 high true 0 no-pid");
 });
 
 test("a timed-out command keeps all its output behind its handle", async (t) => {
@@ -364,10 +326,7 @@ test("a command outliving its call removes its directory file when it ends", asy
 test("a directory reset follows a persisted output's preview", async (t) => {
   const { bash, project } = await shellFixture(t);
   const shown = await bash({ command: "cd / && seq 1 20000" });
-  assert.match(
-    shown,
-    new RegExp(`</persisted-output>\\nShell cwd was reset to ${project}$`),
-  );
+  assert.match(shown, new RegExp(`</persisted-output>\\nShell cwd was reset to ${project}$`));
 });
 
 test("a timed-out command starting with sleep is killed, as natively", async (t) => {
@@ -427,8 +386,7 @@ test("a stopped command reads as stopped to its waiter", async (t) => {
     task_id: started.task.id,
   });
   assert.deepEqual(stopped.result, {
-    message:
-      `Successfully stopped task: ${started.task.id} (echo begin; sleep 30)`,
+    message: `Successfully stopped task: ${started.task.id} (echo begin; sleep 30)`,
     task_id: started.task.id,
     task_type: "local_bash",
     command: "echo begin; sleep 30",
@@ -437,10 +395,9 @@ test("a stopped command reads as stopped to its waiter", async (t) => {
     stopped: true,
   });
   // Natively a stopped or finished command is no longer a task.
-  assert.deepEqual(
-    await tools.dispatch("TaskStop", { task_id: started.task.id }),
-    { deny: `No task found with ID: ${started.task.id}` },
-  );
+  assert.deepEqual(await tools.dispatch("TaskStop", { task_id: started.task.id }), {
+    deny: `No task found with ID: ${started.task.id}`,
+  });
 });
 
 test("the end line is found across output boundaries", () => {
@@ -522,7 +479,10 @@ test("a command's final directory arrives on its end line", async (t) => {
   });
   assert.match(await bash({ command: "pwd" }), /\/project\/sub$/);
   // No file reads or removals: the wrapper settled the directory file.
-  assert.deepEqual(methods.filter((method) => method.startsWith("fs/")), []);
+  assert.deepEqual(
+    methods.filter((method) => method.startsWith("fs/")),
+    [],
+  );
   assert.deepEqual(await readdir(join(home, ".cache/cowboy/shell")), []);
 });
 
@@ -556,10 +516,7 @@ test("old finished records are pruned when the state loads", () => {
   assert.equal(Object.keys(pruned).length, 66);
   assert.ok(pruned.running && pruned.killed && pruned["done-99"]);
   assert.equal(pruned["done-35"], undefined);
-  assert.equal(
-    pruneFinishedJobs({ a: { closed: true, endRead: true } }).a.closed,
-    true,
-  );
+  assert.equal(pruneFinishedJobs({ a: { closed: true, endRead: true } }).a.closed, true);
 });
 
 test("task commands are kept only while running, within a bound", async (t) => {
@@ -604,8 +561,8 @@ test("output read after the other stream's end line is kept", async () => {
   const tools = new WorkspaceTools(
     {
       async call(_method, params) {
-        const next = chunks.find((chunk) =>
-          params.afterSeq === null || chunk.seq > params.afterSeq
+        const next = chunks.find(
+          (chunk) => params.afterSeq === null || chunk.seq > params.afterSeq,
         );
         return {
           chunks: next ? [next] : [],
@@ -643,17 +600,20 @@ test("a tree kill that finds no process yet looks again", async () => {
         return output === undefined
           ? { chunks: [], exited: false, closed: false }
           : {
-            chunks: output && params.afterSeq === null
-              ? [{
-                seq: 1,
-                stream: "stderr",
-                chunk: Buffer.from(output).toString("base64"),
-              }]
-              : [],
-            exited: true,
-            closed: true,
-            exitCode: 0,
-          };
+              chunks:
+                output && params.afterSeq === null
+                  ? [
+                      {
+                        seq: 1,
+                        stream: "stderr",
+                        chunk: Buffer.from(output).toString("base64"),
+                      },
+                    ]
+                  : [],
+              exited: true,
+              closed: true,
+              exitCode: 0,
+            };
       },
     },
     { workspace: { cwd: "/project" }, environment: { id: "fixture" } },
@@ -686,9 +646,9 @@ test("the waiter finds an end line split across its waits", async () => {
       async call(method, params) {
         assert.equal(method, "process/read");
         return {
-          chunks: chunks.slice(0, visible).filter((chunk) =>
-            params.afterSeq === null || chunk.seq > params.afterSeq
-          ),
+          chunks: chunks
+            .slice(0, visible)
+            .filter((chunk) => params.afterSeq === null || chunk.seq > params.afterSeq),
           exited: true,
           closed: false,
         };
@@ -711,8 +671,7 @@ test("the waiter finds an end line split across its waits", async () => {
 test("a stopped command's jobs end with it, in groups of their own too", async (t) => {
   const { tools, project, home } = await shellFixture(t);
   // Native's snapshot turns job control on: each job is its own group.
-  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout
-    .toString().trim();
+  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout.toString().trim();
   const env = { ...process.env };
   t.after(() => Object.assign(process.env, env));
   process.env.HOME = home;
@@ -724,9 +683,7 @@ test("a stopped command's jobs end with it, in groups of their own too", async (
   let pid;
   while (!pid) {
     await new Promise((resolve) => setTimeout(resolve, 50));
-    pid = Number(
-      await readFile(join(project, "job.pid"), "utf8").catch(() => 0),
-    );
+    pid = Number(await readFile(join(project, "job.pid"), "utf8").catch(() => 0));
   }
   t.after(() => alive(pid) && process.kill(pid));
   assert.ok(alive(pid));
@@ -753,14 +710,10 @@ test("a command ends with its shell, leaving what it started running", async (t)
   t.after(() => pids.forEach((pid) => alive(pid) && process.kill(pid)));
   const began = Date.now();
   // The child holds the output pipe; natively the call still returns.
-  assert.equal(
-    await bash({ command: "sleep 30 & echo $! > a.pid; echo started" }),
-    "started",
-  );
-  assert.deepEqual(
-    await bash({ command: "sleep 30 & echo $! > b.pid; exit 3" }),
-    { error: "Exit code 3" },
-  );
+  assert.equal(await bash({ command: "sleep 30 & echo $! > a.pid; echo started" }), "started");
+  assert.deepEqual(await bash({ command: "sleep 30 & echo $! > b.pid; exit 3" }), {
+    error: "Exit code 3",
+  });
   assert.equal(await bash({ command: "exec echo replaced" }), "replaced");
   assert.ok(Date.now() - began < 10000);
   for (const name of ["a.pid", "b.pid"]) {
@@ -782,34 +735,38 @@ test("a command ends with its shell, leaving what it started running", async (t)
   });
   assert.equal(read.result.file.content, "child\nExit code: 0");
   // Stopping a finished command leaves what it started.
-  assert.deepEqual(
-    await tools.dispatch("TaskStop", { task_id: started.task.id }),
-    { deny: `No task found with ID: ${started.task.id}` },
-  );
+  assert.deepEqual(await tools.dispatch("TaskStop", { task_id: started.task.id }), {
+    deny: `No task found with ID: ${started.task.id}`,
+  });
   assert.ok(pids.every(alive));
 });
 
 test("the waiter ends with the target command's status", async () => {
-  const { waitFor } = await import(
-    "../plugins/claude-code/runtime/task-wait.mjs"
-  );
-  const replies = [{ afterSeq: 3 }, { unavailable: true }, {
-    closed: true,
-    exitCode: 7,
-  }];
+  const { waitFor } = await import("../plugins/claude-code/runtime/task-wait.mjs");
+  const replies = [
+    { afterSeq: 3 },
+    { unavailable: true },
+    {
+      closed: true,
+      exitCode: 7,
+    },
+  ];
   const sent = [];
   const code = await waitFor("job-1", {
     post: async (path, body) => (sent.push({ path, body }), replies.shift()),
     pause: async () => {},
   });
   assert.equal(code, 7);
-  assert.deepEqual(sent.map(({ body }) => body.afterSeq), [null, 3, 3]);
+  assert.deepEqual(
+    sent.map(({ body }) => body.afterSeq),
+    [null, 3, 3],
+  );
   // A stopped command never reads as a completion.
   let settled = false;
   waitFor("job-2", {
     post: async () => ({ stopped: true }),
     hold: () => new Promise(() => {}),
-  }).then(() => settled = true);
+  }).then(() => (settled = true));
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(settled, false);
 });
@@ -818,11 +775,16 @@ test("a native task's notification reads as the target command's", async () => {
   const { targetShellNotification } = await import(
     "../plugins/claude-code/runtime/context-mod.js?shell-notify"
   );
-  const tasks = new Map([["bnative1", {
-    jobId: "6f2c-job",
-    toolUseId: "toolu_model",
-    command: "make test",
-  }]]);
+  const tasks = new Map([
+    [
+      "bnative1",
+      {
+        jobId: "6f2c-job",
+        toolUseId: "toolu_model",
+        command: "make test",
+      },
+    ],
+  ]);
   assert.equal(
     targetShellNotification(
       "<task-notification>\n<task-id>bnative1</task-id>\n<tool-use-id>toolu_plugin_x</tool-use-id>\n<output-file>/runtime/home/tasks/bnative1.output</output-file>\n<status>failed</status>\n<summary>Background command \"'/node' '/stage/task-wait.mjs' 6f2c-job\" failed with exit code 3</summary>\n</task-notification>",
@@ -830,8 +792,7 @@ test("a native task's notification reads as the target command's", async () => {
     ),
     '<task-notification>\n<task-id>6f2c-job</task-id>\n<tool-use-id>toolu_model</tool-use-id>\n<output-file>cowboy-task://6f2c-job</output-file>\n<status>failed</status>\n<summary>Background command "make test" failed with exit code 3</summary>\n</task-notification>',
   );
-  const other =
-    "<task-notification>\n<task-id>else</task-id>\n</task-notification>";
+  const other = "<task-notification>\n<task-id>else</task-id>\n</task-notification>";
   assert.equal(targetShellNotification(other, tasks), other);
 });
 
@@ -876,28 +837,18 @@ test("instruction rules follow symbolic links and their imports", async (t) => {
   tools.shell = "/bin/sh";
   const shared = join(home, "shared-rules");
   await mkdir(join(shared, "nested"), { recursive: true });
-  await writeFile(
-    join(shared, "nested", "linked-dir.md"),
-    "LINKED_DIR_RULE\n@sibling.txt\n",
-  );
+  await writeFile(join(shared, "nested", "linked-dir.md"), "LINKED_DIR_RULE\n@sibling.txt\n");
   await writeFile(join(shared, "nested", "sibling.txt"), "RULE_IMPORT\n");
   await writeFile(join(shared, "file.md"), "LINKED_FILE_RULE\n");
   await mkdir(join(project, ".claude", "rules"), { recursive: true });
   const { symlink } = await import("node:fs/promises");
-  await symlink(
-    join(shared, "nested"),
-    join(project, ".claude", "rules", "team"),
-  );
-  await symlink(
-    join(shared, "file.md"),
-    join(project, ".claude", "rules", "one.md"),
-  );
+  await symlink(join(shared, "nested"), join(project, ".claude", "rules", "team"));
+  await symlink(join(shared, "file.md"), join(project, ".claude", "rules", "one.md"));
   const files = await tools.instructions();
-  assert.deepEqual(files.map((file) => file.content), [
-    "LINKED_FILE_RULE\n",
-    "LINKED_DIR_RULE\n@sibling.txt\n",
-    "RULE_IMPORT\n",
-  ]);
+  assert.deepEqual(
+    files.map((file) => file.content),
+    ["LINKED_FILE_RULE\n", "LINKED_DIR_RULE\n@sibling.txt\n", "RULE_IMPORT\n"],
+  );
 });
 
 test("a Git status that fails is not reported as clean", async (t) => {
@@ -907,13 +858,10 @@ test("a Git status that fails is not reported as clean", async (t) => {
     argv.includes("status")
       ? Promise.reject(new Error("Target utility exceeded its limit"))
       : argv[0] === "git" && argv.includes("--is-inside-work-tree")
-      ? { exitCode: 0, output: "true\n" }
-      : original(argv, ...rest);
+        ? { exitCode: 0, output: "true\n" }
+        : original(argv, ...rest);
   const git = await tools.gitStatus();
-  assert.match(
-    git,
-    /\n\nStatus:\n\(unavailable: git status did not complete\)\n\n/,
-  );
+  assert.match(git, /\n\nStatus:\n\(unavailable: git status did not complete\)\n\n/);
 });
 
 test("a nested instruction load that fails is reported", async (t) => {
@@ -960,8 +908,7 @@ test("PDF pages parse and fail as native's", () => {
 
 test("PDFs read on the target as native's document and page images", async (t) => {
   const { tools, project, home } = await shellFixture(t);
-  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout
-    .toString().trim();
+  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout.toString().trim();
   spawnSync("python3", [
     "-c",
     "import sys; sys.path.insert(0, sys.argv[2]); from pathlib import Path; from claude_pdf_cases import setup; setup(Path(sys.argv[1]))",
@@ -971,11 +918,7 @@ test("PDFs read on the target as native's document and page images", async (t) =
   const whole = await tools.dispatch("Read", { file_path: "pdf-one.pdf" });
   assert.equal(whole.result.type, "pdf");
   assert.equal(whole.result.file.filePath, join(project, "pdf-one.pdf"));
-  assert.ok(
-    Buffer.from(whole.result.file.base64, "base64").toString().startsWith(
-      "%PDF-",
-    ),
-  );
+  assert.ok(Buffer.from(whole.result.file.base64, "base64").toString().startsWith("%PDF-"));
   assert.match(
     (await tools.dispatch("Read", { file_path: "pdf-many.pdf" })).deny,
     /^This PDF has 25 pages, which is too many to read at once\./,
@@ -988,21 +931,18 @@ test("PDFs read on the target as native's document and page images", async (t) =
   assert.equal(parts.result.firstPage, 2);
   assert.equal(parts.result.file.count, 2);
   assert.ok(
-    parts.result.pages.every((page) =>
-      page.mediaType === "image/jpeg" &&
-      Buffer.from(page.base64, "base64")[0] === 0xff
+    parts.result.pages.every(
+      (page) => page.mediaType === "image/jpeg" && Buffer.from(page.base64, "base64")[0] === 0xff,
     ),
   );
   // The rendered pages do not stay on the target.
   assert.deepEqual(await readdir(join(home, ".cache/cowboy/pdf")), []);
   assert.match(
-    (await tools.dispatch("Read", { file_path: "pdf-many.pdf", pages: "30" }))
-      .deny,
+    (await tools.dispatch("Read", { file_path: "pdf-many.pdf", pages: "30" })).deny,
     /^Requested page 30 is outside the document \(PDF has 25 pages\)/,
   );
   assert.equal(
-    (await tools.dispatch("Read", { file_path: "pdf-note.txt", pages: "1" }))
-      .result.file.content,
+    (await tools.dispatch("Read", { file_path: "pdf-note.txt", pages: "1" })).result.file.content,
     "hello\n",
   );
   assert.match(
@@ -1029,31 +969,30 @@ test("a whole PDF too large for one message reads as native's remote refusal", a
 
 test("an abandoned PDF Read stops its page rendering", async (t) => {
   const { tools, project } = await shellFixture(t);
-  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout
-    .toString().trim();
+  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout.toString().trim();
   const bin = join(project, "fake-bin");
   await mkdir(bin);
   await writeFile(
     join(bin, "pdftoppm"),
-    `#!${tools.shell}\necho $$ > "${
-      join(project, "render.pid")
-    }"\nexec sleep 60\n`,
+    `#!${tools.shell}\necho $$ > "${join(project, "render.pid")}"\nexec sleep 60\n`,
     { mode: 0o755 },
   );
   const env = { ...process.env };
   t.after(() => Object.assign(process.env, env));
   process.env.PATH = `${bin}:${process.env.PATH}`;
   await writeFile(join(project, "doc.pdf"), "%PDF-1.4\n");
-  const reading = tools.nativeCall("Read", {
-    file_path: "doc.pdf",
-    pages: "1",
-  }, { id: "toolu_pdf" });
+  const reading = tools.nativeCall(
+    "Read",
+    {
+      file_path: "doc.pdf",
+      pages: "1",
+    },
+    { id: "toolu_pdf" },
+  );
   let pid;
   while (!pid) {
     await new Promise((resolve) => setTimeout(resolve, 50));
-    pid = Number(
-      await readFile(join(project, "render.pid"), "utf8").catch(() => 0),
-    );
+    pid = Number(await readFile(join(project, "render.pid"), "utf8").catch(() => 0));
   }
   t.after(() => alive(pid) && process.kill(pid));
   const began = Date.now();
@@ -1068,23 +1007,18 @@ test("an abandoned PDF Read stops its page rendering", async (t) => {
 
 test("a missing file reads as native's, with the range helper enabled too", async (t) => {
   const { tools, project } = await shellFixture(t);
-  const expected =
-    `File does not exist. Note: your current working directory is ${project}.`;
+  const expected = `File does not exist. Note: your current working directory is ${project}.`;
   for (const helper of [undefined, "/cowboy-file-helper"]) {
     tools.fileHelper = helper;
     for (const file_path of ["absent.txt", "absent.pdf"]) {
-      assert.equal(
-        (await tools.dispatch("Read", { file_path })).deny,
-        expected,
-      );
+      assert.equal((await tools.dispatch("Read", { file_path })).deny, expected);
     }
   }
 });
 
 test("rendered pages too large for one message ask for fewer pages", async (t) => {
   const { tools, project } = await shellFixture(t);
-  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout
-    .toString().trim();
+  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout.toString().trim();
   const bin = join(project, "fake-bin");
   await mkdir(bin);
   // Two 6 MiB "pages": each fits, together they do not.
@@ -1099,9 +1033,10 @@ test("rendered pages too large for one message ask for fewer pages", async (t) =
   await writeFile(join(project, "doc.pdf"), "%PDF-1.4\n");
   assert.equal(
     (await tools.dispatch("Read", { file_path: "doc.pdf", pages: "1-2" })).deny,
-    `The rendered pages of ${
-      join(project, "doc.pdf")
-    } are too large to return from this machine in one call (at most 10MB of page images). Use the pages parameter with fewer pages.`,
+    `The rendered pages of ${join(
+      project,
+      "doc.pdf",
+    )} are too large to return from this machine in one call (at most 10MB of page images). Use the pages parameter with fewer pages.`,
   );
 });
 
@@ -1124,9 +1059,7 @@ test("target skills and commands are found as native finds them", async (t) => {
   await chmod(join(project, ".claude/skills/locked/SKILL.md"), 0);
   const found = await tools.skillFiles();
   assert.deepEqual(
-    found.map((file) =>
-      `${file.scope}:${file.kind}:${file.name}:${file.content}`
-    ),
+    found.map((file) => `${file.scope}:${file.kind}:${file.name}:${file.content}`),
     [
       "user:skill:shared:USER\n",
       "project:skill:shared:PROJECT\n",
@@ -1146,18 +1079,13 @@ test("a target MCP server runs on the target with its stdin relayed", async (t) 
     { name: "db", argv: ["sh", "server.sh"], env: { FOO: "foo:" } },
     { CLAUDECODE: "1" },
   );
-  assert.equal(
-    await tools.mcpWrite(id, Buffer.from("ping\n").toString("base64")),
-    "accepted",
-  );
+  assert.equal(await tools.mcpWrite(id, Buffer.from("ping\n").toString("base64")), "accepted");
   let output = "";
   let afterSeq = null;
   while (!output.includes("\n")) {
     const read = await tools.mcpRead(id, afterSeq, 1000);
     afterSeq = read.afterSeq;
-    output += read.chunks.map((chunk) =>
-      Buffer.from(chunk.data, "base64").toString()
-    ).join("");
+    output += read.chunks.map((chunk) => Buffer.from(chunk.data, "base64").toString()).join("");
   }
   assert.equal(output, `ping|${project}|foo:${project}1\n`);
   assert.deepEqual(Object.values(tools.state.mcp), ["db"]);
@@ -1192,10 +1120,12 @@ test("a background command's timeout is its deadline, up to two hours", async (t
   assert.ok(started.task?.id, JSON.stringify(started));
   await tools.cancelTasks([started.task.id]);
   // A foreground command clamps the same request to ten minutes, as natively.
-  const clamped = await tools.dispatch("Bash", {
-    command: "true",
-    timeout: 1800000,
-  }).catch((error) => ({ deny: error.message }));
+  const clamped = await tools
+    .dispatch("Bash", {
+      command: "true",
+      timeout: 1800000,
+    })
+    .catch((error) => ({ deny: error.message }));
   assert.equal(clamped.deny, undefined, JSON.stringify(clamped));
 });
 
@@ -1203,8 +1133,5 @@ test("commands see credential-like variables, as natively", async (t) => {
   const { bash } = await shellFixture(t);
   process.env.COWBOY_FIXTURE_TOKEN = "fixture-secret";
   t.after(() => delete process.env.COWBOY_FIXTURE_TOKEN);
-  assert.equal(
-    await bash({ command: 'printf "%s" "$COWBOY_FIXTURE_TOKEN"' }),
-    "fixture-secret",
-  );
+  assert.equal(await bash({ command: 'printf "%s" "$COWBOY_FIXTURE_TOKEN"' }), "fixture-secret");
 });

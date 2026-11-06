@@ -38,7 +38,7 @@ routinely breaks another.
 
 ## Editing discipline (project-specific)
 
-- **NEVER `dprint fmt` `src/App.tsx`** — it is a pre-existing 4-space outlier
+- **NEVER `biome format --write` `src/App.tsx`** — it is a pre-existing 4-space outlier
   (rest of `src/` is 2-space); a format would wholesale-reflow ~3700 lines.
   Match 4-space when editing it.
 - App-shell primitives are Cowboy-owned under `src/components/app-shell`.
@@ -49,7 +49,7 @@ routinely breaks another.
   Markdown/code renderer; never replace readable source with broken media.
 - Quality gate before commit: `bun run typecheck` + `bun run lint` +
   `bun run test` in `web/` (the cowboy web gate). Do not run a repo-wide
-  `dprint fmt`. Tests use `bun:test`; `test-preload.ts` supplies the browser
+  `biome format --write`. Tests use `bun:test`; `test-preload.ts` supplies the browser
   globals Bun lacks.
 - Browser UI conformance must use the real Cowboy theme through
   `src/browserProductTheme.tsx` (or `useThemeMode` when testing theme changes).

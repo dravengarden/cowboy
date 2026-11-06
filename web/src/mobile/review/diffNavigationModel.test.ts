@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel.ts";
 
 test("diff hunk navigation indexes unified diff headers", () => {

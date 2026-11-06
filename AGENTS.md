@@ -7,6 +7,10 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 
 ## Toolchain
 
+- Use the pinned Biome formatter and the existing Rust-based linters. Do not
+  introduce dprint, Deno runtimes, or libraries maintained by the Deno
+  organization (including its standard-library packages). Tests use Bun and
+  Node's built-in assertions; retain type checking as a separate gate.
 - Run Rust, Bun, build, lint, and test commands from the repository root in
   the pinned shell, for example `nix develop -c just check-compact`. Ordinary
   interactive Cargo commands retain incremental state; the complete gate avoids
@@ -18,7 +22,7 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   repository root is one Bun workspace (`web` plus the `components/*` packages
   it links): `just install` creates `node_modules`, `bun.lock` is the only
   lockfile, and a dependency change needs a new `depsHash` in `flake.nix`.
-  Tests import `test` from `bun:test` and assertions from `@std/assert`;
+  Tests import `test` from `bun:test` and assertions backed by `node:assert/strict` in `tools/test-assert.ts`;
   scripts use `node:` and `Bun` APIs and spawn through `tools/lib/command.ts`.
   Do not use `jsr:`/`npm:` specifiers.
 - Signed Plugin collectors (`plugins/*/collector/`) run on the Machine's
@@ -138,7 +142,7 @@ require the exact successful build receipt and published SideStore version.
   robustness layers (SW shell cache, AppErrorBoundary, ConnectionBanner, store
   NUL-strip / skip-bad-row, parking_lot mutex) exist to catch that — keep them.
   (memory: cowboy-white-screen-robustness)
-- **`web/src/App.tsx` is a 4-space-indent outlier** — never run `dprint fmt` on it
+- **`web/src/App.tsx` is a 4-space-indent outlier** — never run `biome format --write` on it
   (it would reformat 3700 lines). Match 4-space when editing it.
   (memory: cowboy-web-app-tsx-4space)
 - Web app-shell primitives and the Bun/Vite builder are owned by Cowboy under

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { isPureTerminalOutputDelta } from "./protocol.ts";
 
 test("pure terminal output deltas are transient transcript telemetry", () => {

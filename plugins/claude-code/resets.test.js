@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../../tools/test-assert.ts";
 import {
   consumeReset,
   readCredential,
@@ -37,39 +37,33 @@ test("Claude reset projection distinguishes unknown, held and server-selected us
   });
   const result = resetCredits(
     block({
-      grants: [
-        grant(),
-        grant({ id: "another", resets_left: 1, ends_at: null }),
-      ],
+      grants: [grant(), grant({ id: "another", resets_left: 1, ends_at: null })],
     }),
   );
   assertEquals(result.availableCount, 2);
-  assertEquals(result.credits.map((c) => [c.id, c.status]), [[
-    "launch-reset:2",
-    "available",
-  ]]);
+  assertEquals(
+    result.credits.map((c) => [c.id, c.status]),
+    [["launch-reset:2", "available"]],
+  );
   assertEquals(result.credits[0].title, "5h + Weekly reset (2 left)");
-  for (
-    const change of [{ paused: true }, { usable_now: false }, {
+  for (const change of [
+    { paused: true },
+    { usable_now: false },
+    {
       ends_at: "2000-01-01T00:00:00Z",
-    }]
-  ) {
+    },
+  ]) {
     assertEquals(
-      resetCredits(block({ grants: [grant(change)] })).credits.some((c) =>
-        c.status === "available"
+      resetCredits(block({ grants: [grant(change)] })).credits.some(
+        (c) => c.status === "available",
       ),
       false,
     );
   }
-  assertEquals(
-    resetCredits(block({ cooldown_until: "2099-01-01T00:00:00Z" })).credits,
-    [],
-  );
+  assertEquals(resetCredits(block({ cooldown_until: "2099-01-01T00:00:00Z" })).credits, []);
 });
 
-function clientFixture(
-  { status = block(), reply = { result: "reset" }, error } = {},
-) {
+function clientFixture({ status = block(), reply = { result: "reset" }, error } = {}) {
   const calls = [];
   return {
     calls,
@@ -119,66 +113,48 @@ test("stale confirmation refuses a second use of the same multi-use grant", asyn
   const { client, calls } = clientFixture({
     status: block({ grants: [grant({ resets_left: 1 })] }),
   });
-  const error = await assertRejects(
-    () => consumeReset(client, request),
-    ResetFailure,
-  );
+  const error = await assertRejects(() => consumeReset(client, request), ResetFailure);
   assertEquals(error.callMayHaveReachedProvider, false);
   assertEquals(calls.filter((c) => c.body).length, 0);
 });
 
 test("unavailable and malformed preflight never sends a reset", async () => {
-  for (
-    const status of [
-      null,
-      block({ eligible: false }),
-      block({ grants: [grant({ usable_now: false })] }),
-      block({ grants: [grant({ id: "../escape" })] }),
-      block({ grants: [grant(), grant()] }),
-    ]
-  ) {
+  for (const status of [
+    null,
+    block({ eligible: false }),
+    block({ grants: [grant({ usable_now: false })] }),
+    block({ grants: [grant({ id: "../escape" })] }),
+    block({ grants: [grant(), grant()] }),
+  ]) {
     const { client, calls } = clientFixture({ status });
-    const error = await assertRejects(
-      () => consumeReset(client, request),
-      ResetFailure,
-    );
+    const error = await assertRejects(() => consumeReset(client, request), ResetFailure);
     assertEquals(error.callMayHaveReachedProvider, false);
     assertEquals(calls.filter((c) => c.body).length, 0);
   }
 });
 
 test("lost or unrecognized reset replies remain unknown without automatic retry or secret diagnostics", async () => {
-  for (
-    const fixture of [
-      { error: new Error("secret-token") },
-      { reply: {} },
-      {
-        reply: { result: "future" },
-      },
-      { reply: { result: "unavailable" } },
-      {
-        reply: { result: "already_used", reason: "stamp_indeterminate" },
-      },
-      { reply: { result: "unavailable", reason: "reset_unconfirmed" } },
-    ]
-  ) {
+  for (const fixture of [
+    { error: new Error("secret-token") },
+    { reply: {} },
+    {
+      reply: { result: "future" },
+    },
+    { reply: { result: "unavailable" } },
+    {
+      reply: { result: "already_used", reason: "stamp_indeterminate" },
+    },
+    { reply: { result: "unavailable", reason: "reset_unconfirmed" } },
+  ]) {
     const { client, calls } = clientFixture(fixture);
-    const error = await assertRejects(
-      () => consumeReset(client, request),
-      ResetFailure,
-    );
+    const error = await assertRejects(() => consumeReset(client, request), ResetFailure);
     assertEquals(error.callMayHaveReachedProvider, true);
     assertEquals(error.message.includes("secret-token"), false);
     assertEquals(calls.filter((c) => c.body).length, 1);
   }
-  for (
-    const result of ["not_limited", "cooldown", "ineligible"]
-  ) {
+  for (const result of ["not_limited", "cooldown", "ineligible"]) {
     const { client } = clientFixture({ reply: { result } });
-    const error = await assertRejects(
-      () => consumeReset(client, request),
-      ResetFailure,
-    );
+    const error = await assertRejects(() => consumeReset(client, request), ResetFailure);
     assertEquals(error.callMayHaveReachedProvider, false);
   }
   const { client } = clientFixture({ reply: { result: "already_used" } });
@@ -187,29 +163,28 @@ test("lost or unrecognized reset replies remain unknown without automatic retry 
 
 test("HTTP client pins origin, refuses redirects, bounds output and times out", async () => {
   const calls = [];
-  const client = resetClient(
-    "fixture-token",
-    Date.now() + 1000,
-    async (url, options) => {
-      calls.push({ url, options });
-      return Response.json({ ok: true });
-    },
-  );
+  const client = resetClient("fixture-token", Date.now() + 1000, async (url, options) => {
+    calls.push({ url, options });
+    return Response.json({ ok: true });
+  });
   await client("/api/oauth/usage");
   assertEquals(calls[0].url, "https://api.anthropic.com/api/oauth/usage");
   assertEquals(calls[0].options.redirect, "error");
   assertEquals(calls[0].options.headers.Authorization, "Bearer fixture-token");
-  const native = provider.runtime.dependencies.find((dependency) =>
-    dependency.id === "anthropic-claude-code"
+  const native = provider.runtime.dependencies.find(
+    (dependency) => dependency.id === "anthropic-claude-code",
   );
   assertEquals(
     calls[0].options.headers["User-Agent"],
     `claude-cli/${native.version} (external, cli)`,
   );
-  await assertRejects(() =>
-    resetClient("fixture", Date.now() - 1, () => {
-      throw Error("must not fetch");
-    })("/api/oauth/usage"), ResetFailure);
+  await assertRejects(
+    () =>
+      resetClient("fixture", Date.now() - 1, () => {
+        throw Error("must not fetch");
+      })("/api/oauth/usage"),
+    ResetFailure,
+  );
   await assertRejects(
     () =>
       resetClient(
@@ -249,11 +224,7 @@ test("credential read uses only the explicitly projected shared directory and ne
     await assertRejects(() => readCredential(undefined), ResetFailure);
     data.claudeAiOauth.expiresAt = 1;
     await writeFile(path, JSON.stringify(data));
-    await assertRejects(
-      () => readCredential(directory),
-      ResetFailure,
-      "authentication required",
-    );
+    await assertRejects(() => readCredential(directory), ResetFailure, "authentication required");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

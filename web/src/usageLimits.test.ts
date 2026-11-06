@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { quotaView } from "../../plugins/claude-code/collector/usage.js";
 import {
   acceptedScheduleTime,

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "../../../tools/test-assert.ts";
 import { AuthApiError, type ProductMe } from "./authApi.ts";
 import {
   type RecentProductAuthOptions,

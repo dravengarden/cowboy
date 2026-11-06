@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { changedWordRange } from "./diffWordModel.ts";
 
 test("word diff isolates the changed middle of a replacement", () => {

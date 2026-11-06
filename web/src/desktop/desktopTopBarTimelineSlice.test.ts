@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert } from "@std/assert";
+import { assert } from "../../../tools/test-assert.ts";
 import {
   desktopTopBarTimelineSlice,
   sameDesktopTopBarTimelineSlice,

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { normalizeMarkdownMath } from "./markdownMath.ts";
 
 test("LaTeX math delimiters normalize to GitHub math syntax", () => {

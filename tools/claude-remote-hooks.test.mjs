@@ -1,16 +1,7 @@
-const fileHelper = fileURLToPath(
-  new URL("../target/debug/cowboy-execution-host", import.meta.url),
-);
+const fileHelper = fileURLToPath(new URL("../target/debug/cowboy-execution-host", import.meta.url));
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,10 +9,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import {
-  DESCRIPTIONS,
-  WorkspaceTools,
-} from "../plugins/claude-code/runtime/tools.mjs";
+import { DESCRIPTIONS, WorkspaceTools } from "../plugins/claude-code/runtime/tools.mjs";
 import { startModBridge } from "../plugins/claude-code/runtime/mod-bridge.mjs";
 import { projectHookSettings } from "../plugins/claude-code/runtime/launch.mjs";
 import {
@@ -33,19 +21,18 @@ import { runProxy } from "../plugins/claude-code/runtime/hook-proxy.mjs";
 
 test("matchers follow the native baseline", () => {
   // Native 2.1.287: whole-name, case-sensitive regular expressions.
-  for (
-    const [matcher, expected] of [
-      [undefined, true],
-      ["", true],
-      ["*", true],
-      ["Bash", true],
-      ["Bas", false],
-      ["B.*h", true],
-      ["Edit|Bash", true],
-      ["bash", false],
-      ["(", false],
-    ]
-  ) assert.equal(hookMatches(matcher, "Bash"), expected, String(matcher));
+  for (const [matcher, expected] of [
+    [undefined, true],
+    ["", true],
+    ["*", true],
+    ["Bash", true],
+    ["Bas", false],
+    ["B.*h", true],
+    ["Edit|Bash", true],
+    ["bash", false],
+    ["(", false],
+  ])
+    assert.equal(hookMatches(matcher, "Bash"), expected, String(matcher));
 });
 
 test("hook outcomes are reported as native reports them", () => {
@@ -57,37 +44,31 @@ test("hook outcomes are reported as native reports them", () => {
   const json = (value) => run(0, JSON.stringify(value));
   const pre = (value) => hookOutcome("PreToolUse", "Bash", "cmd", value);
   const post = (value) => hookOutcome("PostToolUse", "Bash", "cmd", value);
-  assert.equal(
-    pre(run(2, "", "PRE_BLOCK\n")).deny,
-    "PreToolUse:Bash hook error: [cmd]: PRE_BLOCK",
-  );
+  assert.equal(pre(run(2, "", "PRE_BLOCK\n")).deny, "PreToolUse:Bash hook error: [cmd]: PRE_BLOCK");
   assert.deepEqual(post(run(2, "", "POST_FEEDBACK\n")).context, [
     'PostToolUse:Bash hook blocking error from command: "cmd": [cmd]: POST_FEEDBACK\n',
   ]);
-  assert.deepEqual(
-    hookOutcome("PostToolUseFailure", "Bash", "cmd", run(2, "", "F\n")).context,
-    ['PostToolUseFailure:Bash hook blocking error from command: "cmd": [cmd]: F\n'],
-  );
-  const request = (value) =>
-    hookOutcome("PermissionRequest", "Bash", "cmd", value);
+  assert.deepEqual(hookOutcome("PostToolUseFailure", "Bash", "cmd", run(2, "", "F\n")).context, [
+    'PostToolUseFailure:Bash hook blocking error from command: "cmd": [cmd]: F\n',
+  ]);
+  const request = (value) => hookOutcome("PermissionRequest", "Bash", "cmd", value);
   const decision = (value) => json({ hookSpecificOutput: { decision: value } });
   assert.deepEqual(request(run(2, "", "NO")), {});
   assert.deepEqual(request(decision({ behavior: "deny", message: "M" })), {
     deny: "M",
   });
-  assert.deepEqual(
-    request(decision({ behavior: "deny", message: "M", interrupt: true })),
-    { deny: "M", stop: "" },
-  );
-  assert.deepEqual(
-    request(decision({ behavior: "allow", updatedInput: { command: "x" } })),
-    { allow: true, input: { command: "x" } },
-  );
+  assert.deepEqual(request(decision({ behavior: "deny", message: "M", interrupt: true })), {
+    deny: "M",
+    stop: "",
+  });
+  assert.deepEqual(request(decision({ behavior: "allow", updatedInput: { command: "x" } })), {
+    allow: true,
+    input: { command: "x" },
+  });
   assert.deepEqual(request(json({ continue: false })), {});
   const specific = (fields) => json({ hookSpecificOutput: fields });
   assert.equal(
-    pre(specific({ permissionDecision: "deny", permissionDecisionReason: "R" }))
-      .deny,
+    pre(specific({ permissionDecision: "deny", permissionDecisionReason: "R" })).deny,
     "PreToolUse:Bash hook error: R",
   );
   assert.equal(
@@ -95,43 +76,50 @@ test("hook outcomes are reported as native reports them", () => {
     "PreToolUse:Bash hook error: LEGACY",
   );
   assert.equal(
-    pre(specific({ permissionDecision: "ask", permissionDecisionReason: "A" }))
-      .ask,
+    pre(specific({ permissionDecision: "ask", permissionDecisionReason: "A" })).ask,
     "A",
   );
-  const allowed = pre(specific({
-    permissionDecision: "allow",
-    updatedInput: { command: "updated" },
-  }));
-  assert.deepEqual([allowed.allow, allowed.input], [true, {
-    command: "updated",
-  }]);
+  const allowed = pre(
+    specific({
+      permissionDecision: "allow",
+      updatedInput: { command: "updated" },
+    }),
+  );
+  assert.deepEqual(
+    [allowed.allow, allowed.input],
+    [
+      true,
+      {
+        command: "updated",
+      },
+    ],
+  );
   assert.deepEqual(pre(specific({ additionalContext: "C" })).context, [
     "PreToolUse:Bash hook additional context: C",
   ]);
   assert.deepEqual(
-    post(json({
-      decision: "block",
-      reason: "B",
-      hookSpecificOutput: { additionalContext: "C" },
-    })).context,
+    post(
+      json({
+        decision: "block",
+        reason: "B",
+        hookSpecificOutput: { additionalContext: "C" },
+      }),
+    ).context,
     [
       'PostToolUse:Bash hook blocking error from command: "cmd": B',
       "PostToolUse:Bash hook additional context: C",
     ],
   );
   assert.equal(post(json({ continue: false, stopReason: "S" })).stop, "S");
-  for (
-    const ignored of [
-      run(1, "", "fails"),
-      run(0, "plain stdout"),
-      { timedOut: true },
-      undefined,
-    ]
-  ) {
+  for (const ignored of [
+    run(1, "", "fails"),
+    run(0, "plain stdout"),
+    { timedOut: true },
+    undefined,
+  ]) {
     assert.deepEqual(
       Object.entries(pre(ignored)).filter(([, value]) =>
-        Array.isArray(value) ? value.length : value !== undefined
+        Array.isArray(value) ? value.length : value !== undefined,
       ),
       [],
     );
@@ -140,28 +128,36 @@ test("hook outcomes are reported as native reports them", () => {
 
 test("project hooks reach native in routable form; command hooks are registered", () => {
   const hooks = {
-    PreToolUse: [{
-      matcher: "Edit|Write",
-      hooks: [
-        { type: "command", command: "guard.sh", timeout: 5 },
-        { type: "prompt", prompt: "Is this safe?" },
-        { type: "command", command: "only-git.sh", if: "Bash(git *)" },
-      ],
-    }],
-    PostToolUse: [{
-      matcher: "Write",
-      hooks: [
-        { type: "command", command: "tests.sh", async: true },
-        { type: "command", command: "wake.sh", asyncRewake: true },
-      ],
-    }],
-    Stop: [{
-      hooks: [{
-        type: "command",
-        command: "node",
-        args: ["${CLAUDE_PROJECT_DIR}/stop's.js", "--x"],
-      }],
-    }],
+    PreToolUse: [
+      {
+        matcher: "Edit|Write",
+        hooks: [
+          { type: "command", command: "guard.sh", timeout: 5 },
+          { type: "prompt", prompt: "Is this safe?" },
+          { type: "command", command: "only-git.sh", if: "Bash(git *)" },
+        ],
+      },
+    ],
+    PostToolUse: [
+      {
+        matcher: "Write",
+        hooks: [
+          { type: "command", command: "tests.sh", async: true },
+          { type: "command", command: "wake.sh", asyncRewake: true },
+        ],
+      },
+    ],
+    Stop: [
+      {
+        hooks: [
+          {
+            type: "command",
+            command: "node",
+            args: ["${CLAUDE_PROJECT_DIR}/stop's.js", "--x"],
+          },
+        ],
+      },
+    ],
   };
   const result = projectHookSettings(hooks);
   const exec = "'node' '${CLAUDE_PROJECT_DIR}/stop'\\''s.js' '--x'";
@@ -179,9 +175,7 @@ test("project hooks reach native in routable form; command hooks are registered"
   // Shell form reaches native unchanged (native shows the project's text);
   // exec form becomes a shell form the prefix routes.
   assert.deepEqual(result.settings.hooks.PreToolUse, hooks.PreToolUse);
-  assert.deepEqual(result.settings.hooks.Stop[0].hooks, [
-    { type: "command", command: exec },
-  ]);
+  assert.deepEqual(result.settings.hooks.Stop[0].hooks, [{ type: "command", command: exec }]);
   assert.deepEqual(result.tool, {
     PreToolUse: [
       { matcher: "Edit|Write", index: 0 },
@@ -212,10 +206,7 @@ test("async hook output is noted for the next turn only", () => {
       "PostToolUse:Write async hook: tests ran",
     ],
   );
-  assert.deepEqual(
-    asyncHookNotes("PostToolUse", "Write", { exitCode: 2, stdout: "" }),
-    [],
-  );
+  assert.deepEqual(asyncHookNotes("PostToolUse", "Write", { exitCode: 2, stdout: "" }), []);
 });
 
 const binding = {
@@ -250,10 +241,7 @@ test("hook transcripts send only appends and keep immutable, verified snapshots"
     },
   });
   tools.fileHelper = fileHelper;
-  await writeFile(
-    join(directory, "hashlib.py"),
-    'raise RuntimeError("project module")',
-  );
+  await writeFile(join(directory, "hashlib.py"), 'raise RuntimeError("project module")');
   const execute = async (argv) => {
     try {
       await promisify(execFile)(argv[0], argv.slice(1), {
@@ -270,15 +258,11 @@ test("hook transcripts send only appends and keep immutable, verified snapshots"
   const initial = Buffer.from('{"text":"会话🦅"}\r\n'.repeat(100000));
   const addition = Buffer.from('{"next":"incremental"}\n');
   const extended = Buffer.concat([initial, addition]);
-  const paths = ["first", "second", "same"].map((name) =>
-    join(directory, name + ".jsonl")
-  );
+  const paths = ["first", "second", "same"].map((name) => join(directory, name + ".jsonl"));
   // Concurrent requests only serialize preparation, and every snapshot stays
   // byte-identical after the next cache update.
   await Promise.all(
-    [initial, extended, extended].map((bytes, index) =>
-      tools.hookTranscript(bytes, paths[index])
-    ),
+    [initial, extended, extended].map((bytes, index) => tools.hookTranscript(bytes, paths[index])),
   );
   assert.deepEqual(writes, [initial.length, addition.length, 0]);
   for (const [index, bytes] of [initial, extended, extended].entries()) {
@@ -297,15 +281,9 @@ test("hook transcripts send only appends and keep immutable, verified snapshots"
     assert.deepEqual(await readFile(paths[0]), initial);
   }
   // Truncation/compaction and same-sized rewrites send a fresh base.
-  for (
-    const [index, bytes] of [initial, Buffer.alloc(initial.length, 120)]
-      .entries()
-  ) {
+  for (const [index, bytes] of [initial, Buffer.alloc(initial.length, 120)].entries()) {
     writes.length = 0;
-    await tools.hookTranscript(
-      bytes,
-      join(directory, `rewrite-${index}.jsonl`),
-    );
+    await tools.hookTranscript(bytes, join(directory, `rewrite-${index}.jsonl`));
     assert.deepEqual(writes, [bytes.length]);
   }
   // A completed utility with a lost reply is not replayed. The next distinct
@@ -340,11 +318,14 @@ test("8 MiB hook transcripts fit the execution wire with and without the Cowboy 
         // Same serialized invocation limit as the real worker, including
         // Base64 expansion. This rejects the formerly unchunked 8 MiB write.
         assert.ok(
-          Buffer.byteLength(JSON.stringify({
-            operation_id: "a".repeat(32),
-            method,
-            params,
-          })) <= 7 * 1024 * 1024,
+          Buffer.byteLength(
+            JSON.stringify({
+              operation_id: "a".repeat(32),
+              method,
+              params,
+            }),
+          ) <=
+            7 * 1024 * 1024,
         );
         const path = fileURLToPath(params.path);
         if (method === "fs/writeFile") {
@@ -366,13 +347,19 @@ test("8 MiB hook transcripts fit the execution wire with and without the Cowboy 
     const path = join(directory, helper ? "helper.jsonl" : "shell.jsonl");
     await tools.hookTranscript(bytes, path);
     assert.deepEqual(await readFile(path), bytes);
-    assert.equal(writes.reduce((sum, size) => sum + size, 0), bytes.length);
+    assert.equal(
+      writes.reduce((sum, size) => sum + size, 0),
+      bytes.length,
+    );
     assert.ok(writes.length > 1);
     writes.length = 0;
     await tools.hookTranscript(bytes, path + ".repeat");
     assert.deepEqual(await readFile(path + ".repeat"), bytes);
     // Unchanged: the helper and the shell snapshot both send no bytes.
-    assert.equal(writes.reduce((sum, size) => sum + size, 0), 0);
+    assert.equal(
+      writes.reduce((sum, size) => sum + size, 0),
+      0,
+    );
   }
 });
 
@@ -404,13 +391,7 @@ test("uncertain transcript preparation is cancelled before input cleanup", async
       tools.hookTranscript(Buffer.alloc(200000, 120), "/target/snapshot.jsonl"),
       new RegExp("lost " + lost),
     );
-    assert.deepEqual(events, [
-      "fs/writeFile",
-      "admitted",
-      "cancelled",
-      "fs/remove",
-      "fs/remove",
-    ]);
+    assert.deepEqual(events, ["fs/writeFile", "admitted", "cancelled", "fs/remove", "fs/remove"]);
     assert.equal(tools.state.hookTranscripts, undefined);
   }
 });
@@ -508,16 +489,15 @@ test("a target hook gets its input on stdin, the project directory and separate 
   });
   assert.deepEqual(result, { exitCode: 2, stdout: "out", stderr: "err" });
   // The private directory (the environment file's) is prepared first.
-  const prepare = calls.find(({ method, params }) =>
-    method === "process/start" && params.argv[2].startsWith("umask 077")
+  const prepare = calls.find(
+    ({ method, params }) => method === "process/start" && params.argv[2].startsWith("umask 077"),
   );
   assert.equal(prepare.params.argv[4], "/home/target/.cache/cowboy/hook-input");
   // Small input is the start request's argument, piped to the hook: no
   // file is written or removed for it.
   assert.ok(!calls.some(({ method }) => method === "fs/writeFile"));
   assert.ok(!calls.some(({ method }) => method === "fs/remove"));
-  const start = calls.findLast(({ method }) => method === "process/start")
-    .params;
+  const start = calls.findLast(({ method }) => method === "process/start").params;
   assert.deepEqual(start.argv, [
     "/bin/bash",
     "-c",
@@ -542,21 +522,16 @@ test("a target hook gets its input on stdin, the project directory and separate 
   const file = fileURLToPath(written.path);
   assert.ok(file.startsWith("/home/target/.cache/cowboy/hook-input/"));
   assert.equal(Buffer.from(written.dataBase64, "base64").toString(), large);
+  assert.deepEqual(calls.findLast(({ method }) => method === "process/start").params.argv, [
+    "/bin/bash",
+    "-c",
+    'exec 0<"$1" && rm -f -- "$1" && exec "$0" -c "$2"',
+    "/bin/bash",
+    file,
+    "guard.sh",
+  ]);
   assert.deepEqual(
-    calls.findLast(({ method }) => method === "process/start").params.argv,
-    [
-      "/bin/bash",
-      "-c",
-      'exec 0<"$1" && rm -f -- "$1" && exec "$0" -c "$2"',
-      "/bin/bash",
-      file,
-      "guard.sh",
-    ],
-  );
-  assert.deepEqual(
-    calls.filter(({ method }) => method === "fs/remove").map(({ params }) =>
-      params.path
-    ),
+    calls.filter(({ method }) => method === "fs/remove").map(({ params }) => params.path),
     [written.path],
   );
   assert.equal(start.envPolicy.set.CLAUDE_PROJECT_DIR, "/target");
@@ -583,20 +558,14 @@ test("a target hook gets its input on stdin, the project directory and separate 
   ).transcript_path;
   assert.ok(copy.endsWith(".jsonl"));
   assert.equal(fileURLToPath(deltaWrite.params.path), copy + ".delta");
-  assert.equal(
-    Buffer.from(deltaWrite.params.dataBase64, "base64").toString(),
-    "line\n",
-  );
+  assert.equal(Buffer.from(deltaWrite.params.dataBase64, "base64").toString(), "line\n");
   const href = (path) => pathToFileURL(path).href;
   assert.deepEqual(
-    calls.filter(({ method }) => method === "fs/remove").map(({ params }) =>
-      params.path
-    ).sort(),
-    [
-      href(copy),
-      href(copy + ".delta"),
-      href(copy + ".cache"),
-    ].sort(),
+    calls
+      .filter(({ method }) => method === "fs/remove")
+      .map(({ params }) => params.path)
+      .sort(),
+    [href(copy), href(copy + ".delta"), href(copy + ".cache")].sort(),
   );
   // Exec form runs its argv directly; the placeholder is the target's.
   calls.length = 0;
@@ -607,8 +576,7 @@ test("a target hook gets its input on stdin, the project directory and separate 
     timeoutMs: 5000,
     call: { id: "hook-e" },
   });
-  const execStart = calls.find(({ method }) => method === "process/start")
-    .params.argv;
+  const execStart = calls.find(({ method }) => method === "process/start").params.argv;
   assert.deepEqual(execStart.slice(2, 5), [
     'i=$1 && shift && printf "%s" "$i" | exec "$@"',
     "/bin/bash",
@@ -663,9 +631,9 @@ test("a target hook gets its input on stdin, the project directory and separate 
   connection.call = read;
   const submitted = calls.find(({ method }) => method === "process/start");
   assert.ok(
-    calls.some(({ method, params }) =>
-      method === "process/terminate" &&
-      params.processId === submitted.params.processId
+    calls.some(
+      ({ method, params }) =>
+        method === "process/terminate" && params.processId === submitted.params.processId,
     ),
   );
   assert.equal(tools.calls.size, 0);
@@ -744,28 +712,22 @@ async function modFixture(hooks, runs, base) {
             }),
           };
         }
-        return responses.get(path)?.(body) ??
+        return (
+          responses.get(path)?.(body) ??
           (path === "/link"
             ? { ok: true, status: 200, text: '{"symlink":false}' }
-            : { ok: true, status: 200, text: '{"ready":true}' });
+            : { ok: true, status: 200, text: '{"ready":true}' })
+        );
       },
     },
   };
   await registered.get("session.start").handler(api, {}, (event) => event);
   if (base) {
-    await registered.get("classic.UserPromptSubmit").handler(
-      api,
-      base,
-      (event) => event,
-    );
+    await registered.get("classic.UserPromptSubmit").handler(api, base, (event) => event);
   }
   posts.length = 0;
   const call = (event) =>
-    registered.get("tool.call").handler(
-      api,
-      event,
-      () => assert.fail("native body ran"),
-    );
+    registered.get("tool.call").handler(api, event, () => assert.fail("native body ran"));
   return { call, posts, responses, api, registered };
 }
 
@@ -801,7 +763,10 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
       command: "rm -rf x",
     });
     assert.equal(result.deny, "PreToolUse:Bash hook error: [pre.sh]: NO");
-    assert.deepEqual(posts.map(({ path }) => path), ["/hook"]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/hook"],
+    );
     assert.deepEqual(posts[0].body.input, {
       session_id: "session-1",
       cwd: "/target",
@@ -855,7 +820,10 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
     await call({ tool: "Bash", tool_use_id: "t3", command: "x" });
     const ask = posts.find(({ path }) => path === "/permission");
     assert.equal(ask.body.reason, "CONFIRM");
-    assert.equal(posts.some(({ path }) => path === "/tool"), false);
+    assert.equal(
+      posts.some(({ path }) => path === "/tool"),
+      false,
+    );
   });
   await t.test("continue:false runs the tool, then ends the turn", async () => {
     const { call, posts, responses } = await modFixture(hooks, {
@@ -871,16 +839,22 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
   });
   await t.test("unsupported hook types refuse matching calls only", async () => {
     for (const event of ["PreToolUse", "PostToolUse"]) {
-      const { call, posts, responses } = await modFixture({
-        commands: [],
-        tool: { [event]: [{ matcher: "Write", unsupported: "http hook" }] },
-      }, {});
+      const { call, posts, responses } = await modFixture(
+        {
+          commands: [],
+          tool: { [event]: [{ matcher: "Write", unsupported: "http hook" }] },
+        },
+        {},
+      );
       responses.set("/tool", reply(toolResult));
       const refused = await call({ tool: "Write", tool_use_id: "w" });
       assert.match(refused.deny, new RegExp(`${event} http hook for Write`));
       assert.deepEqual(posts, []);
       await call({ tool: "Read", tool_use_id: "r", file_path: "a" });
-      assert.deepEqual(posts.map(({ path }) => path), ["/tool"]);
+      assert.deepEqual(
+        posts.map(({ path }) => path),
+        ["/tool"],
+      );
     }
   });
   await t.test("an abandoned call cancels its pending hook and never runs", async () => {
@@ -922,18 +896,19 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
     assert.match(result.deny, /cancelled/);
     await new Promise((resolve) => setImmediate(resolve));
     const hookId = posts.find(({ path }) => path === "/hook").body.id;
-    const cancels = posts.filter(({ path }) => path === "/cancel")
-      .map(({ body }) => body.id);
+    const cancels = posts.filter(({ path }) => path === "/cancel").map(({ body }) => body.id);
     assert.deepEqual(cancels.sort(), ["t6", hookId].sort());
-    assert.equal(posts.some(({ path }) => path === "/tool"), false);
+    assert.equal(
+      posts.some(({ path }) => path === "/tool"),
+      false,
+    );
   });
   await t.test("a PreToolUse guard that cannot run refuses the call", async () => {
     const { call, posts, api } = await modFixture(hooks, {});
     const fetch = api.http.fetch;
     api.http.fetch = async (url, options) =>
       url.endsWith("/hook")
-        ? (posts.push({ path: "/hook" }),
-          { ok: false, status: 409, text: '{"deny":"capacity"}' })
+        ? (posts.push({ path: "/hook" }), { ok: false, status: 409, text: '{"deny":"capacity"}' })
         : fetch(url, options);
     const result = await call({
       tool: "Bash",
@@ -941,7 +916,10 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
       command: "x",
     });
     assert.match(result.deny, /could not run on the target/);
-    assert.equal(posts.some(({ path }) => path === "/tool"), false);
+    assert.equal(
+      posts.some(({ path }) => path === "/tool"),
+      false,
+    );
   });
   await t.test("async hooks run in the background", async () => {
     const asyncHooks = {
@@ -966,15 +944,19 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
     assert.ok(posts.some(({ path }) => path === "/tool"));
   });
   await t.test("hook input carries native's base fields and the transcript path", async () => {
-    const { call, posts, responses } = await modFixture(hooks, {
-      "pre.sh": () => ({ exitCode: 0, stdout: "" }),
-      "post.sh": () => ({ exitCode: 0, stdout: "" }),
-    }, {
-      session_id: "native-session",
-      transcript_path: "/runtime/home/.claude/projects/p/native-session.jsonl",
-      prompt_id: "prompt-1",
-      permission_mode: "acceptEdits",
-    });
+    const { call, posts, responses } = await modFixture(
+      hooks,
+      {
+        "pre.sh": () => ({ exitCode: 0, stdout: "" }),
+        "post.sh": () => ({ exitCode: 0, stdout: "" }),
+      },
+      {
+        session_id: "native-session",
+        transcript_path: "/runtime/home/.claude/projects/p/native-session.jsonl",
+        prompt_id: "prompt-1",
+        permission_mode: "acceptEdits",
+      },
+    );
     responses.set("/tool", reply(toolResult));
     await call({
       tool: "Bash",
@@ -983,10 +965,7 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
       command: "x",
     });
     const hook = posts.find(({ path }) => path === "/hook").body;
-    assert.equal(
-      hook.transcriptPath,
-      "/runtime/home/.claude/projects/p/native-session.jsonl",
-    );
+    assert.equal(hook.transcriptPath, "/runtime/home/.claude/projects/p/native-session.jsonl");
     assert.deepEqual(hook.input, {
       session_id: "native-session",
       prompt_id: "prompt-1",
@@ -1040,7 +1019,10 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
       },
     };
     const stop = { exitCode: 0, stdout: '{"continue":false}' };
-    for (const [pre, aborted] of [[stop, true], [{ exitCode: 0 }, false]]) {
+    for (const [pre, aborted] of [
+      [stop, true],
+      [{ exitCode: 0 }, false],
+    ]) {
       const { call, posts, responses } = await modFixture(stopHooks, {
         "pre.sh": () => pre,
         "failed.sh": () => stop,
@@ -1052,7 +1034,10 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
         command: "exit 3",
       });
       assert.equal(result.deny, "Exit code 3");
-      assert.equal(posts.some(({ path }) => path === "abort"), aborted);
+      assert.equal(
+        posts.some(({ path }) => path === "abort"),
+        aborted,
+      );
     }
   });
   await t.test("PreToolUse context follows a failed call's error", async () => {
@@ -1062,21 +1047,20 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
     });
     responses.set("/tool", reply({ deny: "Exit code 3" }));
     const result = await call({ tool: "Bash", tool_use_id: "c", command: "x" });
-    assert.equal(
-      result.deny,
-      "Exit code 3\n\nPreToolUse:Bash hook additional context: PRE",
-    );
+    assert.equal(result.deny, "Exit code 3\n\nPreToolUse:Bash hook additional context: PRE");
   });
   await t.test("a subagent's tool hooks name its native agent type", async () => {
     const { call, posts, responses, registered } = await modFixture(hooks, {
       "pre.sh": () => ({ exitCode: 0, stdout: "" }),
       "post.sh": () => ({ exitCode: 0, stdout: "" }),
     });
-    await registered.get("classic.SubagentStart").handler(
-      {},
-      { agent_id: "child", agent_type: "Explore", effort: { level: "high" } },
-      (event) => event,
-    );
+    await registered
+      .get("classic.SubagentStart")
+      .handler(
+        {},
+        { agent_id: "child", agent_type: "Explore", effort: { level: "high" } },
+        (event) => event,
+      );
     responses.set("/tool", reply(toolResult));
     await call({
       tool: "Bash",
@@ -1092,7 +1076,10 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
     const { call, posts, responses } = await modFixture(hooks, {});
     responses.set("/tool", reply(toolResult));
     await call({ tool: "Read", tool_use_id: "t5", file_path: "a" });
-    assert.deepEqual(posts.map(({ path }) => path), ["/tool"]);
+    assert.deepEqual(
+      posts.map(({ path }) => path),
+      ["/tool"],
+    );
   });
 });
 
@@ -1104,69 +1091,83 @@ test("the bridge copies only native transcripts under its projects root", async 
   await writeFile(join(root, "p", "s.jsonl"), "native\n");
   await writeFile(join(directory, "secret.jsonl"), "secret\n");
   const received = [];
-  const bridge = await startModBridge({
-    runHook: async (value) => {
-      received.push(value.transcript?.bytes.toString() ?? null);
-      return { exitCode: 0, stdout: "", stderr: "" };
+  const bridge = await startModBridge(
+    {
+      runHook: async (value) => {
+        received.push(value.transcript?.bytes.toString() ?? null);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
     },
-  }, { waitMs: 50, transcriptRoot: root });
+    { waitMs: 50, transcriptRoot: root },
+  );
   t.after(() => bridge.close());
-  for (
-    const [index, transcriptPath] of [
-      join(root, "p", "s.jsonl"),
-      join(directory, "secret.jsonl"),
-      join(root, "p", "..", "..", "secret.jsonl"),
-    ].entries()
-  ) {
+  for (const [index, transcriptPath] of [
+    join(root, "p", "s.jsonl"),
+    join(directory, "secret.jsonl"),
+    join(root, "p", "..", "..", "secret.jsonl"),
+  ].entries()) {
     await new Promise((resolve) => {
-      const req = request({
-        socketPath: bridge.socketPath,
-        path: "/hook",
-        method: "POST",
-        headers: { authorization: `Bearer ${bridge.token}` },
-      }, (res) => {
-        res.resume();
-        res.on("end", resolve);
-      });
-      req.end(JSON.stringify({
-        id: `hook-${index}`,
-        command: "stop.sh",
-        input: {},
-        timeout: 5,
-        transcriptPath,
-      }));
+      const req = request(
+        {
+          socketPath: bridge.socketPath,
+          path: "/hook",
+          method: "POST",
+          headers: { authorization: `Bearer ${bridge.token}` },
+        },
+        (res) => {
+          res.resume();
+          res.on("end", resolve);
+        },
+      );
+      req.end(
+        JSON.stringify({
+          id: `hook-${index}`,
+          command: "stop.sh",
+          input: {},
+          timeout: 5,
+          transcriptPath,
+        }),
+      );
     });
   }
   assert.deepEqual(received, ["native\n", null, null]);
   // A subagent transcript under the root travels the same way.
   const agents = [];
-  const agentBridge = await startModBridge({
-    runHook: async (value) => {
-      agents.push([
-        value.agentTranscript?.bytes.toString() ?? null,
-        value.agentTranscript?.key.length ?? null,
-      ]);
-      return { exitCode: 0, stdout: "", stderr: "" };
+  const agentBridge = await startModBridge(
+    {
+      runHook: async (value) => {
+        agents.push([
+          value.agentTranscript?.bytes.toString() ?? null,
+          value.agentTranscript?.key.length ?? null,
+        ]);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
     },
-  }, { waitMs: 50, transcriptRoot: root });
+    { waitMs: 50, transcriptRoot: root },
+  );
   t.after(() => agentBridge.close());
   await new Promise((resolve) => {
-    const req = request({
-      socketPath: agentBridge.socketPath,
-      path: "/hook",
-      method: "POST",
-      headers: { authorization: "Bearer " + agentBridge.token },
-    }, (res) => {
-      res.resume();
-      res.on("end", resolve);
-    });
-    req.end(JSON.stringify({
-      id: "hook-agent",
-      command: "stop.sh",
-      input: {},
-      timeout: 5,
-      agentTranscriptPath: join(root, "p", "s.jsonl"),
-    }));
+    const req = request(
+      {
+        socketPath: agentBridge.socketPath,
+        path: "/hook",
+        method: "POST",
+        headers: { authorization: "Bearer " + agentBridge.token },
+      },
+      (res) => {
+        res.resume();
+        res.on("end", resolve);
+      },
+    );
+    req.end(
+      JSON.stringify({
+        id: "hook-agent",
+        command: "stop.sh",
+        input: {},
+        timeout: 5,
+        agentTranscriptPath: join(root, "p", "s.jsonl"),
+      }),
+    );
   });
   assert.deepEqual(agents, [["native\n", 16]]);
 });
@@ -1177,21 +1178,24 @@ test("the native hook proxy runs its command on the target", async (t) => {
   const runs = [];
   const cancelled = [];
   let release;
-  const bridge = await startModBridge({
-    runHook: async (value) => {
-      runs.push(value);
-      if (value.command === "slow.sh") {
-        await new Promise((resolve) => release = resolve);
-        return { timedOut: true };
-      }
-      return { exitCode: 2, stdout: "OUT", stderr: "ERR" };
+  const bridge = await startModBridge(
+    {
+      runHook: async (value) => {
+        runs.push(value);
+        if (value.command === "slow.sh") {
+          await new Promise((resolve) => (release = resolve));
+          return { timedOut: true };
+        }
+        return { exitCode: 2, stdout: "OUT", stderr: "ERR" };
+      },
+      cancelCall: async (id) => {
+        cancelled.push(id);
+        release?.();
+        return [];
+      },
     },
-    cancelCall: async (id) => {
-      cancelled.push(id);
-      release?.();
-      return [];
-    },
-  }, { waitMs: 5, permissions: { mode: "acceptEdits" } });
+    { waitMs: 5, permissions: { mode: "acceptEdits" } },
+  );
   t.after(() => bridge.close());
   const contextPath = join(directory, "context.json");
   await writeFile(
@@ -1202,10 +1206,14 @@ test("the native hook proxy runs its command on the target", async (t) => {
       targetCwd: "/target",
       taskWait: "'/node' '/stage/task-wait.mjs'",
       hooks: {
-        commands: [{ command: "notify.sh", timeout: 9 }, {
-          command: "slow.sh",
-          timeout: 9,
-        }, { command: "notify.sh", timeout: 30 }],
+        commands: [
+          { command: "notify.sh", timeout: 9 },
+          {
+            command: "slow.sh",
+            timeout: 9,
+          },
+          { command: "notify.sh", timeout: 30 },
+        ],
       },
     }),
   );
@@ -1311,18 +1319,21 @@ test("PermissionRequest hooks race a pending host prompt", async (t) => {
     const made = await modFixture(hooks, { "perm.sh": perm });
     made.api.tool.check = async () => ({ decision: "ask" });
     let polls = 0;
-    made.responses.set("/permission", () =>
-      new Promise((resolve) =>
-        setTimeout(
-          () =>
-            resolve(
-              ++polls < 5
-                ? { ok: true, status: 202, text: '{"pending":"p"}' }
-                : reply({ behavior: "deny", message: "HOST" })(),
-            ),
-          10,
-        )
-      ));
+    made.responses.set(
+      "/permission",
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve(
+                ++polls < 5
+                  ? { ok: true, status: 202, text: '{"pending":"p"}' }
+                  : reply({ behavior: "deny", message: "HOST" })(),
+              ),
+            10,
+          ),
+        ),
+    );
     made.responses.set("/tool", reply(toolResult));
     return made;
   };
@@ -1341,10 +1352,7 @@ test("PermissionRequest hooks race a pending host prompt", async (t) => {
     assert.deepEqual(hook.permission_suggestions, []);
     assert.equal(hook.tool_use_id, undefined);
     assert.ok(posts.some(({ path }) => path === "/withdraw"));
-    assert.deepEqual(
-      posts.find(({ path }) => path === "/tool").body.input,
-      { command: "amended" },
-    );
+    assert.deepEqual(posts.find(({ path }) => path === "/tool").body.input, { command: "amended" });
   });
   await t.test("a hook deny refuses the call; interrupt ends the turn", async () => {
     for (const interrupt of [false, true]) {
@@ -1357,8 +1365,14 @@ test("PermissionRequest hooks race a pending host prompt", async (t) => {
         command: "x",
       });
       assert.equal(result.deny, "NO");
-      assert.equal(posts.some(({ path }) => path === "/tool"), false);
-      assert.equal(posts.some(({ path }) => path === "abort"), interrupt);
+      assert.equal(
+        posts.some(({ path }) => path === "/tool"),
+        false,
+      );
+      assert.equal(
+        posts.some(({ path }) => path === "abort"),
+        interrupt,
+      );
     }
   });
   await t.test("the first decision wins; a deny wins a tie", async () => {
@@ -1366,33 +1380,34 @@ test("PermissionRequest hooks race a pending host prompt", async (t) => {
       new Promise((resolve) => setTimeout(() => resolve(value()), ms));
     const allow = decision({ behavior: "allow" });
     const deny = decision({ behavior: "deny", message: "NO" });
-    for (
-      const [first, second, expected] of [
-        [allow, later(deny, 2000), undefined],
-        [allow, deny, "NO"],
-      ]
-    ) {
-      const made = await modFixture({
-        commands: [
-          { command: "a.sh", timeout: 5 },
-          { command: "b.sh", timeout: 5 },
-        ],
-        tool: {
-          PermissionRequest: [{ matcher: "Bash", index: 0 }, {
-            matcher: "Bash",
-            index: 1,
-          }],
+    for (const [first, second, expected] of [
+      [allow, later(deny, 2000), undefined],
+      [allow, deny, "NO"],
+    ]) {
+      const made = await modFixture(
+        {
+          commands: [
+            { command: "a.sh", timeout: 5 },
+            { command: "b.sh", timeout: 5 },
+          ],
+          tool: {
+            PermissionRequest: [
+              { matcher: "Bash", index: 0 },
+              {
+                matcher: "Bash",
+                index: 1,
+              },
+            ],
+          },
         },
-      }, { "a.sh": first, "b.sh": second });
+        { "a.sh": first, "b.sh": second },
+      );
       made.api.tool.check = async () => ({ decision: "ask" });
       made.responses.set(
         "/permission",
         () =>
           new Promise((resolve) =>
-            setTimeout(
-              () => resolve({ ok: true, status: 202, text: '{"pending":"p"}' }),
-              10,
-            )
+            setTimeout(() => resolve({ ok: true, status: 202, text: '{"pending":"p"}' }), 10),
           ),
       );
       made.responses.set("/tool", reply(toolResult));
@@ -1412,7 +1427,10 @@ test("PermissionRequest hooks race a pending host prompt", async (t) => {
       command: "x",
     });
     assert.equal(result.deny, "HOST");
-    assert.equal(posts.some(({ path }) => path === "/withdraw"), false);
+    assert.equal(
+      posts.some(({ path }) => path === "/withdraw"),
+      false,
+    );
   });
   await t.test("an immediate host answer starts no hook", async () => {
     const { call, posts, responses, api } = await modFixture(hooks, {
@@ -1426,6 +1444,9 @@ test("PermissionRequest hooks race a pending host prompt", async (t) => {
       command: "x",
     });
     assert.equal(result.deny, "NOW");
-    assert.equal(posts.some(({ path }) => path === "/hook"), false);
+    assert.equal(
+      posts.some(({ path }) => path === "/hook"),
+      false,
+    );
   });
 });

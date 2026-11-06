@@ -34,17 +34,19 @@ function crate(
 }
 
 test("references see crate paths, grouped trees, aliases and root-climbing super chains, not comments or tests", () => {
-  const source = code([
-    "use crate::{core::Hub, store, config::{self, Load}};",
-    "use crate::usage as metered;",
-    "use super::super::machine_control::Lane;",
-    "use super::sibling::Item;",
-    "/// See [`crate::supervisor::Supervisor`].",
-    'const PATH: &str = "crate::logs";',
-    "fn f() { cowboy_wire::machine_protocol::negotiate(); crate::scheduler::tick(); }",
-    "#[cfg(test)]",
-    "mod tests { use crate::fixtures::Thing; }",
-  ].join("\n"));
+  const source = code(
+    [
+      "use crate::{core::Hub, store, config::{self, Load}};",
+      "use crate::usage as metered;",
+      "use super::super::machine_control::Lane;",
+      "use super::sibling::Item;",
+      "/// See [`crate::supervisor::Supervisor`].",
+      'const PATH: &str = "crate::logs";',
+      "fn f() { cowboy_wire::machine_protocol::negotiate(); crate::scheduler::tick(); }",
+      "#[cfg(test)]",
+      "mod tests { use crate::fixtures::Thing; }",
+    ].join("\n"),
+  );
   const refs = references(source, 2, ["cowboy_wire"]);
   expect([...refs.local].sort()).toEqual([
     "config",
@@ -56,12 +58,8 @@ test("references see crate paths, grouped trees, aliases and root-climbing super
   ]);
   expect([...refs.external]).toEqual(["cowboy_wire::machine_protocol"]);
   // From a file directly under the crate root a single super:: reaches the root.
-  expect([...references(code("use super::store::Row;"), 1, []).local]).toEqual([
-    "store",
-  ]);
-  expect([...references(code("use super::store::Row;"), 2, []).local]).toEqual(
-    [],
-  );
+  expect([...references(code("use super::store::Row;"), 1, []).local]).toEqual(["store"]);
+  expect([...references(code("use super::store::Row;"), 2, []).local]).toEqual([]);
 });
 
 test("names resolve through explicit and glob re-exports to the owning crate's module", () => {
@@ -92,13 +90,9 @@ test("names resolve through explicit and glob re-exports to the owning crate's m
   expect(resolve(crates, "cowboy_server", "Jemalloc")).toBeNull();
 });
 
-function graphOf(
-  modules: Record<string, string>,
-): ReturnType<typeof buildGraph> {
+function graphOf(modules: Record<string, string>): ReturnType<typeof buildGraph> {
   const files = Object.fromEntries(
-    Object.entries(modules).map((
-      [module, source],
-    ) => [module, { [`src/${module}.rs`]: source }]),
+    Object.entries(modules).map(([module, source]) => [module, { [`src/${module}.rs`]: source }]),
   );
   return buildGraph(new Map([["cowboy", crate("cowboy", "", files)]]));
 }
@@ -145,9 +139,7 @@ test("cycles are found and a recorded cycle may shrink but not grow, merge or ti
     config: "use crate::usage::U;",
     usage: "use crate::config::X;",
   });
-  expect(check(fresh, baseline)[0]).toContain(
-    "new or enlarged dependency cycle",
-  );
+  expect(check(fresh, baseline)[0]).toContain("new or enlarged dependency cycle");
 
   // Breaking the cycle passes.
   expect(

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { regionInDirection, regionMotionKey } from "./regionNavigation.ts";
 
 const box = (left: number, top: number, right: number, bottom: number) => ({

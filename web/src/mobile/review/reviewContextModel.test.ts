@@ -1,7 +1,7 @@
 import type { SessionContext } from "../../sessionContext.ts";
 import { reviewLinkedSessions } from "./reviewContextModel.ts";
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import type { SessionMeta } from "../../protocol";
 import { groupRepositoryWorktrees } from "./repositoryTargetModel";
 import {

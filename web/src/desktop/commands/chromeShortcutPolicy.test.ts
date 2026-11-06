@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "../../../../tools/test-assert.ts";
 import {
   assertChromeShortcutAllowed,
   chromeShortcutConflict,

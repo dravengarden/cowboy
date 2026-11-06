@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { diffContextFolds } from "./diffContextModel.ts";
 
 test("long unified-diff context keeps three lines around changes", () => {

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import {
   DEFAULT_VIM_TIMEOUT_MS,
   escapeMappingLine,

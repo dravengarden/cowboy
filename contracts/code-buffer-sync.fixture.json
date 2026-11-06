@@ -14,8 +14,14 @@
       "utf8Bytes": 3
     },
     "version": [
-      { "replicaId": 0, "timestamp": 1 },
-      { "replicaId": 65535, "timestamp": 4294967295 }
+      {
+        "replicaId": 0,
+        "timestamp": 1
+      },
+      {
+        "replicaId": 65535,
+        "timestamp": 4294967295
+      }
     ]
   },
   "pending": false

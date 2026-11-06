@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../tools/test-assert.ts";
 import { readComposerSource } from "./appSource.test.ts";
 
 /** Comment-free, whitespace-collapsed view: these are assertions about the

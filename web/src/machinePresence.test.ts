@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { machinePresencePresentation } from "./machinePresence.ts";
 
 test("machine reconnect grace is distinct from true offline presence", () => {

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { desktopOverlayOwnsShortcuts } from "./desktopShortcutScope.ts";
 
 function root(match: boolean): { querySelector: () => unknown } {

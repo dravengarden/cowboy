@@ -12,23 +12,29 @@ export async function readDescriptor(path) {
     throw new Error("Execution descriptor must be absolute");
   }
   const stat = await lstat(path);
-  if (!stat.isFile() || stat.size > 32768 || (stat.mode & 0o077)) {
+  if (!stat.isFile() || stat.size > 32768 || stat.mode & 0o077) {
     throw new Error("Execution descriptor must be a private regular file");
   }
   const descriptor = JSON.parse(await readFile(path, "utf8"));
   const url = new URL(descriptor.endpoint);
   const binding = descriptor.binding;
   if (
-    descriptor.schema !== 1 || binding?.schema !== 1 ||
+    descriptor.schema !== 1 ||
+    binding?.schema !== 1 ||
     binding.environment?.protocol !== 1 ||
     binding.environment.executor_digest !== EXECUTOR_DIGEST ||
     !/^[a-zA-Z0-9_-]{1,128}$/.test(binding.environment.id) ||
     !isAbsolute(binding.workspace?.cwd ?? "") ||
     !/^[a-f0-9]{64}$/.test(descriptor.bearer_token) ||
-    url.protocol !== "ws:" || url.hostname !== "127.0.0.1" ||
-    url.username || url.password || url.search || url.hash ||
+    url.protocol !== "ws:" ||
+    url.hostname !== "127.0.0.1" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
     url.pathname !== "/"
-  ) throw new Error("Unsupported execution descriptor");
+  )
+    throw new Error("Unsupported execution descriptor");
   return descriptor;
 }
 
@@ -54,7 +60,7 @@ export class Connection {
     if (this.stopped) throw new Error("Execution unavailable; no replay");
     if (this.connecting) return await this.connecting;
     if (!this.closed) return;
-    this.connecting = this.connect().finally(() => this.connecting = null);
+    this.connecting = this.connect().finally(() => (this.connecting = null));
     await this.connecting;
   }
 
@@ -100,35 +106,27 @@ export class Connection {
     try {
       await new Promise((resolve, reject) => {
         socket.once("open", resolve);
-        socket.once(
-          "error",
-          () => reject(new Error("Execution connection refused")),
-        );
-        socket.once(
-          "close",
-          () => reject(new Error("Execution connection closed")),
-        );
+        socket.once("error", () => reject(new Error("Execution connection refused")));
+        socket.once("close", () => reject(new Error("Execution connection closed")));
       });
       const initialized = await connection.request("initialize", {
         clientName: "cowboy-claude",
-        ...(connection.sessionId
-          ? { resumeSessionId: connection.sessionId }
-          : {}),
+        ...(connection.sessionId ? { resumeSessionId: connection.sessionId } : {}),
       });
       const info = initialized.environmentInfo;
       if (
-        info?.executorVersion !== "0.159.3" || info.platformOs !== "linux" ||
+        info?.executorVersion !== "0.159.3" ||
+        info.platformOs !== "linux" ||
         fileURLToPath(info.cwd) !== descriptor.binding.workspace.cwd ||
         !isAbsolute(info.shell?.path ?? "") ||
-        typeof initialized.sessionId !== "string" || !initialized.sessionId ||
+        typeof initialized.sessionId !== "string" ||
+        !initialized.sessionId ||
         (connection.sessionId && connection.sessionId !== initialized.sessionId)
       ) {
         connection.close();
         throw new Error("Execution environment differs from binding");
       }
-      connection.socket.send(
-        JSON.stringify({ method: "initialized", params: {} }),
-      );
+      connection.socket.send(JSON.stringify({ method: "initialized", params: {} }));
       // A managed target announces the constraint its keeper enforces. It
       // is fixed for the environment's lifetime, across reconnects.
       const managed = initialized.cowboyManaged ?? null;
@@ -185,11 +183,7 @@ export class Connection {
     this.closed = true;
     for (const { reject, timer } of this.pending.values()) {
       clearTimeout(timer);
-      reject(
-        new Error(
-          "Execution unavailable or result unknown; no local fallback and no replay",
-        ),
-      );
+      reject(new Error("Execution unavailable or result unknown; no local fallback and no replay"));
     }
     this.pending.clear();
     for (const listener of this.listeners) listener({ method: "closed" });

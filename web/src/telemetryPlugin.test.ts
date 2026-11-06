@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { test } from "bun:test";
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "../../tools/test-assert.ts";
 import {
   genericPluginCompatibilityProblem,
   type PluginContractInventory,

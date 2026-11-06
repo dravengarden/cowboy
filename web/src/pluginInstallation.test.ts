@@ -6,7 +6,7 @@ import {
   assertNotEquals,
   assertRejects,
   assertThrows,
-} from "@std/assert";
+} from "../../tools/test-assert.ts";
 import {
   createPluginInstallRequest,
   decodeInstallHistory,

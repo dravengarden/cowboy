@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import type { ProviderCatalogResponse } from "@cowboy/provider-ui";
 import type { SessionMeta } from "./protocol.ts";
 import { sessionProviderAuthShortcut } from "./providerAuthShortcut.ts";

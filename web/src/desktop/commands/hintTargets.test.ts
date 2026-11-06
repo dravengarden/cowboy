@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../../../tools/test-assert.ts";
 import { assignMnemonics } from "./hintTargets.ts";
 
 test("mnemonics prefer explicit keys, then word initials, then letters", () => {

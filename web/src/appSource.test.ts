@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert } from "@std/assert";
+import { assert } from "../../tools/test-assert.ts";
 
 // Source-text assertions about the large shell modules predate their split
 // (docs/structural-refactor-plan-2026-11.md, Phase 3). They read the

@@ -5,7 +5,7 @@ import {
   assertEquals,
   assertRejects,
   assertThrows,
-} from "@std/assert";
+} from "../../tools/test-assert.ts";
 import { PreviewDeadline } from "./telemetryBinding.ts";
 import {
   confirmRecoveryOnce,

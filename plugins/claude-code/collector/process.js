@@ -32,7 +32,7 @@ class ChildProcess {
   }
 
   get stdin() {
-    return this.#stdin ??= writable(this.#child.stdin);
+    return (this.#stdin ??= writable(this.#child.stdin));
   }
 
   get stdout() {
@@ -52,20 +52,19 @@ class ChildProcess {
  * unless `clearEnv` is set; each stdio stream is "piped", "inherit" or "null".
  */
 export function spawn(command, options = {}) {
-  const env = options.clearEnv
-    ? { ...options.env }
-    : { ...process.env, ...options.env };
+  const env = options.clearEnv ? { ...options.env } : { ...process.env, ...options.env };
   // Found on the child's PATH when it sets one, else on the host's, so a
   // cleared environment can still name a command.
   const executable = command.includes("/")
     ? command
-    : Bun.which(command, { PATH: env.PATH ?? process.env.PATH ?? "" }) ??
-      command;
-  return new ChildProcess(Bun.spawn({
-    cmd: [executable, ...(options.args ?? [])],
-    env,
-    stdin: STDIO[options.stdin ?? "inherit"],
-    stdout: STDIO[options.stdout ?? "inherit"],
-    stderr: STDIO[options.stderr ?? "inherit"],
-  }));
+    : (Bun.which(command, { PATH: env.PATH ?? process.env.PATH ?? "" }) ?? command);
+  return new ChildProcess(
+    Bun.spawn({
+      cmd: [executable, ...(options.args ?? [])],
+      env,
+      stdin: STDIO[options.stdin ?? "inherit"],
+      stdout: STDIO[options.stdout ?? "inherit"],
+      stderr: STDIO[options.stderr ?? "inherit"],
+    }),
+  );
 }

@@ -13,13 +13,7 @@ import {
   memoryToolNames,
   sessionExtensions,
 } from "@cowboy/memory-client";
-export {
-  callGuidance,
-  MatrixClient,
-  memoryConfiguration,
-  memoryToolNames,
-  sessionExtensions,
-};
+export { callGuidance, MatrixClient, memoryConfiguration, memoryToolNames, sessionExtensions };
 // Legacy Matrix enrollment without a session-extension descriptor.
 export const MATRIX_TOOLS = [
   ...MEMORY_TOOLS,
@@ -33,9 +27,11 @@ export function claudePrompt(frame) {
   return typeof content === "string"
     ? content
     : Array.isArray(content)
-    ? content.filter((item) => item.type === "text").map((item) => item.text)
-      .join("\n")
-    : "";
+      ? content
+          .filter((item) => item.type === "text")
+          .map((item) => item.text)
+          .join("\n")
+      : "";
 }
 export function claudeObservation(frame) {
   if (frame.type !== "assistant") return null;
@@ -117,9 +113,7 @@ export async function localMemoryNative(executable, args) {
             const content = frame.message.content;
             frame.message.content = [
               { type: "text", text: context },
-              ...(typeof content === "string"
-                ? [{ type: "text", text: content }]
-                : content),
+              ...(typeof content === "string" ? [{ type: "text", text: content }] : content),
             ];
           }
         }
@@ -139,9 +133,7 @@ export async function localMemoryNative(executable, args) {
     }
   })();
   Promise.all([input, output]).catch(() => {
-    process.stderr.write(
-      "Matrix session delivery failed; inspect its private queue\n",
-    );
+    process.stderr.write("Matrix session delivery failed; inspect its private queue\n");
     child.kill("SIGTERM");
   });
   try {

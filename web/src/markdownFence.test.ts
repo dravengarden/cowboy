@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { fencedCodeIsOpen } from "./markdownFence.ts";
 
 test("a fence is open until a matching closing fence arrives", () => {

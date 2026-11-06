@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { derive, pendingPermissions, type RenderItem } from "./derive";
 import type { AcpUpdate, Envelope } from "./protocol";
 import {

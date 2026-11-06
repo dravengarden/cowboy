@@ -5,7 +5,7 @@ import {
   assertMatch,
   assertRejects,
   assertStringIncludes,
-} from "@std/assert";
+} from "../../../tools/test-assert.ts";
 import { adminApi, type PluginRelease } from "./adminApi.ts";
 
 const release: PluginRelease = {

@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { orderedItems } from "./aboutPreferences";
 
 test("layout order survives renamed/offline items and appends newly available items", () => {

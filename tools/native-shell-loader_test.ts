@@ -5,7 +5,7 @@
 // without a browser (docs/offline-first-sync.md §Open decisions).
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "./test-assert.ts";
 
 const source = await readFile(
   new URL("../apps/native-shell/loader/index.html", import.meta.url),

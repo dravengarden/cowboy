@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { readComposerSource } from "./appSource.test.ts";
 
 const composerSource = await readComposerSource();

@@ -21,8 +21,11 @@ if (!output?.startsWith("/")) {
 await mkdir(output, { recursive: true });
 const flow = process.argv.slice(2)[2] ?? "composer";
 if (
-  flow !== "composer" && flow !== "draft" && flow !== "approval" &&
-  flow !== "tabs" && flow !== "run-config"
+  flow !== "composer" &&
+  flow !== "draft" &&
+  flow !== "approval" &&
+  flow !== "tabs" &&
+  flow !== "run-config"
 ) {
   throw new Error("unknown flow");
 }
@@ -37,21 +40,21 @@ addEventListener("error", (e) => (globalThis.__errors ??= []).push(String(e.mess
 addEventListener("unhandledrejection", (e) => (globalThis.__errors ??= []).push(String(e.reason?.stack ?? e.reason)));
 ${flow === "draft" ? 'localStorage.setItem("cowboy:vim", "1");' : ""}
 ${
-      flow === "run-config"
-        ? 'globalThis.CowboyDeviceProof = { proof: async () => "fixture", resetChallenge() {}, install() {} };'
-        : ""
-    }
+  flow === "run-config"
+    ? 'globalThis.CowboyDeviceProof = { proof: async () => "fixture", resetChallenge() {}, install() {} };'
+    : ""
+}
 const fixture = await import("/fixture.js");
 await fixture.${
       flow === "draft"
         ? "mountDraftKeyboardAcceptance"
         : flow === "approval"
-        ? "mountApprovalKeyboardAcceptance"
-        : flow === "tabs"
-        ? "mountTabsKeyboardAcceptance"
-        : flow === "run-config"
-        ? "mountRunConfigKeyboardAcceptance"
-        : "mountDesktopKeyboardAcceptance"
+          ? "mountApprovalKeyboardAcceptance"
+          : flow === "tabs"
+            ? "mountTabsKeyboardAcceptance"
+            : flow === "run-config"
+              ? "mountRunConfigKeyboardAcceptance"
+              : "mountDesktopKeyboardAcceptance"
     }();
 </script>`,
 );
@@ -68,26 +71,24 @@ const until = async (expression: string, message: string, ms = 8000) => {
   }
   throw new Error(`Timed out: ${message}`);
 };
-const mac = (await page.evaluate<string>("navigator.platform")).toLowerCase()
-  .includes("mac");
+const mac = (await page.evaluate<string>("navigator.platform")).toLowerCase().includes("mac");
 const MOD = mac ? 4 : 1; // CDP modifiers: Alt=1, Ctrl=2, Meta=4, Shift=8
 const KEYS: Readonly<Record<string, [string, number]>> = {
   " ": ["Space", 32],
-  "Escape": ["Escape", 27],
-  "Enter": ["Enter", 13],
+  Escape: ["Escape", 27],
+  Enter: ["Enter", 13],
   "'": ["Quote", 222],
-  "ArrowUp": ["ArrowUp", 38],
+  ArrowUp: ["ArrowUp", 38],
   "[": ["BracketLeft", 219],
   "]": ["BracketRight", 221],
   "<": ["Comma", 188],
   ">": ["Period", 190],
 };
 const key = async (value: string, modifiers = 0, extra: CdpParams = {}) => {
-  const [code, keyCode] = KEYS[value] ??
-    [
-      /^[a-z]$/i.test(value) ? `Key${value.toUpperCase()}` : `Digit${value}`,
-      value.toUpperCase().charCodeAt(0),
-    ];
+  const [code, keyCode] = KEYS[value] ?? [
+    /^[a-z]$/i.test(value) ? `Key${value.toUpperCase()}` : `Digit${value}`,
+    value.toUpperCase().charCodeAt(0),
+  ];
   const text = value.length === 1 && modifiers === 0 ? value : undefined;
   const base = {
     key: value,
@@ -134,18 +135,13 @@ const shot = async (name: string) => {
 };
 const mode = () => page.evaluate<string>("globalThis.__workspace?.mode");
 const editorText = () =>
-  page.evaluate<string>(
-    "globalThis.__acceptance.editor.current?.getValue() ?? ''",
-  );
+  page.evaluate<string>("globalThis.__acceptance.editor.current?.getValue() ?? ''");
 
 const draftFlow = async (): Promise<void> => {
   const title = "document.querySelector(\"input[aria-label='Draft title']\")";
-  const titleFocused = () =>
-    page.evaluate<boolean>(`document.activeElement === ${title}`);
+  const titleFocused = () => page.evaluate<boolean>(`document.activeElement === ${title}`);
   const inBody = () =>
-    page.evaluate<boolean>(
-      "Boolean(document.activeElement?.closest('.cm-editor'))",
-    );
+    page.evaluate<boolean>("Boolean(document.activeElement?.closest('.cm-editor'))");
   await until(
     `${title} && document.querySelector('[data-workspace-document] .cm-content')`,
     "Draft page mounts",
@@ -178,18 +174,14 @@ const draftFlow = async (): Promise<void> => {
     ),
     "The title takes a Vim Normal block cursor on its last character",
   );
-  results.push(
-    "Vim Normal gg then k on the first line enters the title in Normal at its end",
-  );
+  results.push("Vim Normal gg then k on the first line enters the title in Normal at its end");
   await key("A", 8);
   await page.send("Input.insertText", { text: " renamed" });
   await key("Enter");
   await sleep(150);
   check(await inBody(), "Enter in the title returns to the body");
   check(
-    await page.evaluate<boolean>(
-      `${title}.value === "Acceptance draft renamed"`,
-    ),
+    await page.evaluate<boolean>(`${title}.value === "Acceptance draft renamed"`),
     "Typing in the title renames the draft",
   );
   results.push("Typing renames; Enter returns to the body start");
@@ -211,9 +203,7 @@ const draftFlow = async (): Promise<void> => {
   await key("Escape");
   await sleep(150);
   check(await inBody(), "A second Esc returns to the body");
-  results.push(
-    "Insert ↑ enters the title typing; Esc to its Normal, Esc again to the body",
-  );
+  results.push("Insert ↑ enters the title typing; Esc to its Normal, Esc again to the body");
   // On the Draft page its own actions are root keys: which-key lists them
   // under Here, and Session-only keys (Conversation, Plan, Queue) are absent.
   await key("Escape");
@@ -242,9 +232,7 @@ const draftFlow = async (): Promise<void> => {
   // Normal, j returns to the body.
   await key("b");
   check(
-    await page.evaluate<boolean>(
-      `${title}.selectionStart === ${title}.value.lastIndexOf(" ") + 1`,
-    ),
+    await page.evaluate<boolean>(`${title}.selectionStart === ${title}.value.lastIndexOf(" ") + 1`),
     "b moves to the title's last word",
   );
   await shot("4b-title-normal");
@@ -270,13 +258,12 @@ const draftFlow = async (): Promise<void> => {
 };
 
 const approvalFlow = async (): Promise<void> => {
-  const choice = (n: number) =>
-    `document.querySelector('[data-desktop-approval-choice="${n}"]')`;
+  const choice = (n: number) => `document.querySelector('[data-desktop-approval-choice="${n}"]')`;
   const chosen = (n: number) =>
     page.evaluate<boolean>(
-      `${choice(n)}?.disabled === true && ${
-        choice(n)
-      }.querySelector('.MuiCircularProgress-root') !== null`,
+      `${choice(n)}?.disabled === true && ${choice(
+        n,
+      )}.querySelector('.MuiCircularProgress-root') !== null`,
     );
   const subject = () =>
     page.evaluate<string>(
@@ -306,14 +293,9 @@ const approvalFlow = async (): Promise<void> => {
     ),
     "The header counts the waiting requests",
   );
-  check(
-    (await subject()).includes("scripts/mp check"),
-    "The oldest request is first",
-  );
+  check((await subject()).includes("scripts/mp check"), "The oldest request is first");
   await shot("approval-dock");
-  results.push(
-    "The dock shows the oldest request, its numbered choices and the queue",
-  );
+  results.push("The dock shows the oldest request, its numbered choices and the queue");
 
   // 2. Reading history neither moves nor collapses the dock.
   const top = () =>
@@ -321,13 +303,10 @@ const approvalFlow = async (): Promise<void> => {
       "document.querySelector('[data-desktop-approval-dock]').getBoundingClientRect().top",
     );
   const before = await top();
-  await page.evaluate(
-    "document.querySelector('[data-approval-transcript]').scrollTop = 0",
-  );
+  await page.evaluate("document.querySelector('[data-approval-transcript]').scrollTop = 0");
   await sleep(150);
   check(
-    await top() === before &&
-      await page.evaluate<boolean>(`${choice(1)} !== null`),
+    (await top()) === before && (await page.evaluate<boolean>(`${choice(1)} !== null`)),
     "Scrolling the transcript leaves the dock and its buttons in place",
   );
   results.push("Scrolling the transcript neither moves nor collapses the dock");
@@ -336,10 +315,7 @@ const approvalFlow = async (): Promise<void> => {
   // by the Provider's labels, and the digit answers.
   await click("[data-approval-transcript]");
   await key(" ");
-  await until(
-    "document.querySelector('[data-desktop-leader-menu=\"root\"]')",
-    "which-key opens",
-  );
+  await until("document.querySelector('[data-desktop-leader-menu=\"root\"]')", "which-key opens");
   check(
     await page.evaluate<boolean>(
       "document.querySelector('[data-desktop-leader-menu]').textContent.includes(\"Yes, and don't ask again\")",
@@ -357,33 +333,23 @@ const approvalFlow = async (): Promise<void> => {
     "An answer that cannot leave says so",
   );
   await shot("approval-answered");
-  results.push(
-    "Reader: ␣1 answers; the choice spins and reports the closed connection",
-  );
+  results.push("Reader: ␣1 answers; the choice spins and reports the closed connection");
 
   // 4. One answer per request: the other keys wait.
   await key(" ");
   await key("3");
   await sleep(150);
-  check(
-    await chosen(1) && !(await chosen(3)),
-    "A second key cannot change an answer in flight",
-  );
-  results.push(
-    "A request takes one answer; later keys are ignored while it is in flight",
-  );
+  check((await chosen(1)) && !(await chosen(3)), "A second key cannot change an answer in flight");
+  results.push("A request takes one answer; later keys are ignored while it is in flight");
 
   // 5. Resolution brings the next request, unanswered.
   await resolve();
-  check(
-    (await subject()) === "git status --short",
-    "The next request follows",
-  );
+  check((await subject()) === "git status --short", "The next request follows");
   check(
     await page.evaluate<boolean>(
-      `${
-        choice(1)
-      }.disabled === false && document.querySelector('[data-desktop-approval-waiting]')?.textContent === '1 of 2 waiting'`,
+      `${choice(
+        1,
+      )}.disabled === false && document.querySelector('[data-desktop-approval-waiting]')?.textContent === '1 of 2 waiting'`,
     ),
     "The next request starts unanswered",
   );
@@ -399,14 +365,9 @@ const approvalFlow = async (): Promise<void> => {
   const text = await page.evaluate<string>(
     "globalThis.__approval.editor.current?.getValue() ?? ''",
   );
-  check(
-    text === "hi",
-    `The digit stays out of the editor (got ${JSON.stringify(text)})`,
-  );
+  check(text === "hi", `The digit stays out of the editor (got ${JSON.stringify(text)})`);
   results.push(
-    `Insert: ${
-      mac ? "⌘K" : "Alt+K"
-    } then 3 rejects without leaving the editor or typing the digit`,
+    `Insert: ${mac ? "⌘K" : "Alt+K"} then 3 rejects without leaving the editor or typing the digit`,
   );
 
   // 7. A pointer press on a choice answers too.
@@ -425,9 +386,7 @@ const approvalFlow = async (): Promise<void> => {
   // 8. With nothing waiting the dock and its keys are gone.
   await resolve();
   check(
-    await page.evaluate<boolean>(
-      "document.querySelector('[data-desktop-approval-dock]') === null",
-    ),
+    await page.evaluate<boolean>("document.querySelector('[data-desktop-approval-dock]') === null"),
     "The dock leaves with the last request",
   );
   await key("Escape");
@@ -458,17 +417,12 @@ const tabsFlow = async (): Promise<void> => {
   const expect = async (expected: string, message: string) => {
     await sleep(120);
     const actual = await strip();
-    check(
-      actual === expected,
-      `${message}: expected "${expected}", got "${actual}"`,
-    );
+    check(actual === expected, `${message}: expected "${expected}", got "${actual}"`);
   };
   const tab = (id: string) => `[data-desktop-tab="${id}"]`;
   const browse = (id: string) => click(`[data-acceptance-open="${id}"]`);
   const body = async () => {
-    await page.evaluate(
-      "document.querySelector('[data-acceptance-body]').focus()",
-    );
+    await page.evaluate("document.querySelector('[data-acceptance-body]').focus()");
     await sleep(80);
   };
   const leader = async (...keys: string[]) => {
@@ -478,11 +432,7 @@ const tabsFlow = async (): Promise<void> => {
       await key(value, value === "<" || value === ">" ? 8 : 0);
     }
   };
-  const pointer = async (
-    selector: string,
-    button: "left" | "middle" | "right",
-    clickCount = 1,
-  ) => {
+  const pointer = async (selector: string, button: "left" | "middle" | "right", clickCount = 1) => {
     const box = await page.evaluate<{ x: number; y: number } | null>(`(() => {
       const element = document.querySelector(${JSON.stringify(selector)});
       if (!element) return null;
@@ -501,21 +451,14 @@ const tabsFlow = async (): Promise<void> => {
     }
     await sleep(150);
   };
-  await until(
-    "document.querySelector('[data-desktop-tabs]')",
-    "tab strip mounts",
-    20_000,
-  );
+  await until("document.querySelector('[data-desktop-tabs]')", "tab strip mounts", 20_000);
   await expect("alpha?*", "The item on screen has a preview tab");
   const sizes = await page.evaluate<number[][]>(
     `[...document.querySelectorAll('[data-desktop-tab] svg')].slice(0, 2).map((icon) => { const rect = icon.getBoundingClientRect(); return [Math.round(rect.width), Math.round(rect.height)]; })`,
   );
   check(
-    sizes[0]?.[0] === 16 && sizes[0]?.[1] === 10 &&
-      sizes[1]?.[0] === 16 && sizes[1]?.[1] === 16,
-    `The 10px status dot reserves a 16px slot beside the 16px glyph: ${
-      sizes.join(", ")
-    }`,
+    sizes[0]?.[0] === 16 && sizes[0]?.[1] === 10 && sizes[1]?.[0] === 16 && sizes[1]?.[1] === 16,
+    `The 10px status dot reserves a 16px slot beside the 16px glyph: ${sizes.join(", ")}`,
   );
   await browse("beta");
   await expect("beta?*", "Browsing reuses the preview tab");
@@ -524,19 +467,14 @@ const tabsFlow = async (): Promise<void> => {
   await expect("beta*", "A double click keeps the tab");
   await browse("gamma");
   await expect("beta gamma?*", "The next item opens right of the current tab");
-  await page.evaluate(
-    "document.querySelector('[data-acceptance-input]').focus()",
-  );
+  await page.evaluate("document.querySelector('[data-acceptance-input]').focus()");
   await page.send("Input.insertText", { text: "typed" });
   await expect("beta gamma*", "Typing in the item keeps its tab");
   await browse("delta");
   await leader("b", "k");
   await expect("beta gamma delta*", "␣BK keeps the preview tab");
   await browse("draft:notes");
-  await expect(
-    "beta gamma delta draft:notes?*",
-    "A Draft takes a tab like a Session",
-  );
+  await expect("beta gamma delta draft:notes?*", "A Draft takes a tab like a Session");
   results.push(
     "Preview tab: browsing reuses it; double click, typing and ␣BK keep it; Sessions and Drafts share the strip",
   );
@@ -548,9 +486,7 @@ const tabsFlow = async (): Promise<void> => {
   await expect("beta* gamma delta draft:notes?", "␣] wraps to the first tab");
   check(
     await page.evaluate<boolean>(
-      `document.querySelector('${
-        tab("gamma")
-      } kbd')?.textContent?.trim() === "␣2"`,
+      `document.querySelector('${tab("gamma")} kbd')?.textContent?.trim() === "␣2"`,
     ),
     "Every tab shows its leader digit",
   );
@@ -560,9 +496,7 @@ const tabsFlow = async (): Promise<void> => {
   await shot("6-tabs-leader");
   await key("3");
   await expect("beta gamma delta* draft:notes?", "␣3 opens the third tab");
-  results.push(
-    "␣[ ␣] step and wrap; every tab shows its digit and ␣3 opens the third",
-  );
+  results.push("␣[ ␣] step and wrap; every tab shows its digit and ␣3 opens the third");
 
   await leader("b", "p");
   await expect("^delta* beta gamma draft:notes?", "␣BP pins to the front");
@@ -572,10 +506,7 @@ const tabsFlow = async (): Promise<void> => {
   await leader("b", "u");
   await expect("^delta beta draft:notes*", "␣BU reopens the last closed tab");
   await leader("b", "u");
-  await expect(
-    "^delta beta draft:notes gamma*",
-    "␣BU again reopens the one before it",
-  );
+  await expect("^delta beta draft:notes gamma*", "␣BU again reopens the one before it");
   await leader("b", "<");
   await expect("^delta beta gamma* draft:notes", "␣B< moves the tab left");
   await leader("b", "d");
@@ -585,9 +516,7 @@ const tabsFlow = async (): Promise<void> => {
   );
   await leader("b", "o");
   await expect("^delta draft:notes*", "␣BO spares pinned tabs");
-  results.push(
-    "␣BP pins; ␣BR ␣BD ␣BO close (pinned tabs stay); ␣BU reopens; ␣B< moves",
-  );
+  results.push("␣BP pins; ␣BR ␣BD ␣BO close (pinned tabs stay); ␣BU reopens; ␣B< moves");
 
   await browse("alpha");
   await browse("beta");
@@ -697,10 +626,8 @@ try {
       (await editorText()).includes("hi ok"),
       `Space types in Insert (got ${JSON.stringify(await editorText())})`,
     );
-    check(await mode() === "normal", "Typing Space never arms the leader");
-    results.push(
-      "Insert: trusted Space types a space and never arms the leader",
-    );
+    check((await mode()) === "normal", "Typing Space never arms the leader");
+    results.push("Insert: trusted Space types a space and never arms the leader");
 
     // 1b. A Session switch may focus the editable twice within CodeMirror's
     // 10ms focus-report window. Normal must still hand
@@ -722,7 +649,7 @@ try {
     }, { capture: true, once: true })`);
     await key("i");
     check(
-      await page.evaluate<string>("globalThis.__firstKeyTarget") === "sink",
+      (await page.evaluate<string>("globalThis.__firstKeyTarget")) === "sink",
       "The first Normal `i` after a repeated focus reaches the command sink",
     );
     results.push(
@@ -735,14 +662,8 @@ try {
       `JSON.stringify({ region: globalThis.__workspace.focusedRegion, active: document.activeElement?.outerHTML.slice(0, 120), sinkRegion: document.activeElement?.closest("[data-desktop-region]")?.dataset.desktopFocused })`,
     );
     await key(" ");
-    check(
-      await mode() === "command",
-      `Space in Vim Normal arms the leader ${normalState}`,
-    );
-    await until(
-      "document.querySelector('[data-desktop-leader-menu=\"root\"]')",
-      "which-key panel",
-    );
+    check((await mode()) === "command", `Space in Vim Normal arms the leader ${normalState}`);
+    await until("document.querySelector('[data-desktop-leader-menu=\"root\"]')", "which-key panel");
     check(
       await page.evaluate<boolean>(
         'Boolean(document.querySelector(\'[data-composer-action="attach"] [data-shortcut-state="active"]\'))',
@@ -752,11 +673,8 @@ try {
     await sleep(250); // let the which-key entrance animation finish
     await shot("1-leader-which-key");
     await key("Escape");
-    check(await mode() === "normal", "Esc closes the leader");
-    check(
-      !(await editorText()).includes("  "),
-      "The leader Space typed nothing",
-    );
+    check((await mode()) === "normal", "Esc closes the leader");
+    check(!(await editorText()).includes("  "), "The leader Space typed nothing");
     results.push(
       "Vim Normal: trusted Space opens which-key, lights ␣ slots, Esc closes, no stray space",
     );
@@ -765,10 +683,7 @@ try {
     await key("0");
     await key("f");
     await key(" ");
-    check(
-      await mode() === "normal",
-      "f<Space> stays a Vim motion, not the leader",
-    );
+    check((await mode()) === "normal", "f<Space> stays a Vim motion, not the leader");
     results.push("Vim f<Space>: a pending Vim command keeps Space");
 
     // 3. IME composition owns Space and Esc.
@@ -783,10 +698,7 @@ try {
       "Boolean(document.querySelector('.cm-content')?.matches(':focus-within, :focus'))",
     );
     await key(" ", 0, { text: undefined });
-    check(
-      await mode() !== "command",
-      "Space during composition does not arm the leader",
-    );
+    check((await mode()) !== "command", "Space during composition does not arm the leader");
     await page.send("Input.insertText", { text: "你" });
     await sleep(150);
     check(
@@ -801,7 +713,7 @@ try {
 
     // 4. ⌘K from Insert arms the same leader.
     await prefix();
-    check(await mode() === "command", "Mod+K arms the leader from Insert");
+    check((await mode()) === "command", "Mod+K arms the leader from Insert");
     await key("Escape");
     await key("Escape");
     results.push(`${mac ? "⌘K" : "Alt+K"} arms the leader from Insert`);
@@ -809,10 +721,7 @@ try {
     // 5. ' labels the focused list; a label moves the cursor.
     await click("[data-desktop-item='beta']");
     await key("'");
-    await until(
-      "document.querySelectorAll('[data-desktop-hint]').length === 5",
-      "five row labels",
-    );
+    await until("document.querySelectorAll('[data-desktop-hint]').length === 5", "five row labels");
     await shot("2-list-labels");
     const label = await page.evaluate<string>(`(() => {
     const target = document.querySelector("[data-desktop-item='delta']").getBoundingClientRect();
@@ -829,17 +738,12 @@ try {
       ),
       "The label moves the cursor to Delta and clears the labels",
     );
-    results.push(
-      `' labels five rows; trusted label "${label}" moves the cursor`,
-    );
+    results.push(`' labels five rows; trusted label "${label}" moves the cursor`);
 
     // 6. Leader inside a dialog labels its controls.
     await key(" ");
     await key("n");
-    await until(
-      "document.querySelector('[role=tab][aria-label=Draft]')",
-      "␣N opens Create",
-    );
+    await until("document.querySelector('[role=tab][aria-label=Draft]')", "␣N opens Create");
     await sleep(400);
     await prefix();
     await until(
@@ -896,26 +800,20 @@ try {
       "h on the tabs selects Draft",
     );
     await key("l");
-    await page.evaluate(
-      "document.querySelector('[data-folder-defaults-toggle]').focus()",
-    );
+    await page.evaluate("document.querySelector('[data-folder-defaults-toggle]').focus()");
     await key("Enter");
     await until(
       "document.querySelector('[data-default-field=provider]')",
       "folder defaults expand from keyboard",
     );
-    await page.evaluate(
-      "document.querySelector('[data-default-field=provider]').focus()",
-    );
+    await page.evaluate("document.querySelector('[data-default-field=provider]').focus()");
     await key("Enter");
     await until(
       "document.activeElement?.getAttribute('aria-label') === 'Search defaults'",
       "default picker focuses search",
     );
     check(
-      await page.evaluate<boolean>(
-        "document.querySelectorAll('[role=dialog]').length === 1",
-      ),
+      await page.evaluate<boolean>("document.querySelectorAll('[role=dialog]').length === 1"),
       "default picker stays in the create dialog",
     );
     await key("Escape");
@@ -929,18 +827,14 @@ try {
       "Escape returns to the same default field",
     );
     await shot("3c-folder-defaults");
-    await page.evaluate(
-      "document.querySelector('[data-default-field=review_directory]').focus()",
-    );
+    await page.evaluate("document.querySelector('[data-default-field=review_directory]').focus()");
     await key("Enter");
     await until(
       "document.activeElement?.getAttribute('aria-label') === 'Find a Review directory'",
       "Review directory defaults focus search",
     );
     check(
-      await page.evaluate<boolean>(
-        "document.querySelectorAll('[role=dialog]').length === 1",
-      ),
+      await page.evaluate<boolean>("document.querySelectorAll('[role=dialog]').length === 1"),
       "Review directory defaults stay in the create dialog",
     );
     await shot("3d-zed-defaults");
@@ -983,8 +877,7 @@ try {
   }
 } catch (error) {
   await shot("failure").catch(() => {});
-  const errors = await page.evaluate<string[]>("globalThis.__errors ?? []")
-    .catch(() => []);
+  const errors = await page.evaluate<string[]>("globalThis.__errors ?? []").catch(() => []);
   console.log(
     JSON.stringify(
       {

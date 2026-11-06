@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assert } from "@std/assert";
+import { assert } from "../../tools/test-assert.ts";
 import {
   NETWORK_PRESS_MIN_MS,
   NETWORK_PROGRESS_DELAY_MS,

@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals } from "../../../tools/test-assert.ts";
 import { test } from "bun:test";
 import { EDITOR_PLUGIN_SANDBOX_BOOT } from "./sandboxBoot";
 

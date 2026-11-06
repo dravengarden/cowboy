@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "../../tools/test-assert.ts";
 import { workspaceBranch, workspaceTree } from "./workspaceHierarchy";
 
 test("hierarchy preserves selectable parents and opaque duplicate identities", () => {
