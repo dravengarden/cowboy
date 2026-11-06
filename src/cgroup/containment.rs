@@ -82,6 +82,16 @@ pub struct Containment {
     directory: std::fs::File,
 }
 
+/// A bounded observation of the original process tree. RSS sums process
+/// resident sets (shared pages can be counted more than once); CPU is the
+/// kernel's cumulative subtree usage, not a rate or a resource limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourceSample {
+    pub processes: u32,
+    pub rss_bytes: u64,
+    pub cpu_usage_usec: u64,
+}
+
 impl Containment {
     pub fn prepare(command: &mut tokio::process::Command) -> io::Result<Self> {
         #[cfg(target_os = "linux")]
@@ -97,6 +107,17 @@ impl Containment {
 
     pub fn identity(&self) -> &ContainmentIdentity {
         &self.identity
+    }
+
+    pub fn resources(&self) -> io::Result<ResourceSample> {
+        #[cfg(target_os = "linux")]
+        {
+            linux::resources(self)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(io::Error::other("native resource accounting unavailable"))
+        }
     }
 
     pub async fn finish(self) -> io::Result<()> {

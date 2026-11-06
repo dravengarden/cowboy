@@ -178,6 +178,33 @@ each worktree starts its own language servers. Before any automatic warming:
 Buffer-mirror accounting is not an RSS bound
 (`docs/plugin-owned-buffer-reads.md`).
 
+Automatic buffer acquisition uses Machine-side admission before native
+`ensureWorktree` or `openBuffer`. Device settings `code.agent_rss_budget`
+(default 2 GiB), `code.agent_process_budget` (32), and
+`code.agent_cpu_millicores` (2000) apply live. Zero disables automatic warming.
+The Machine sums actual process RSS across its original contained Code trees
+and reads kernel subtree CPU usage over a fresh 250 ms window. Shared resident
+pages can count more than once. Missing ownership, legacy sockets, changing
+membership, unsupported hosts, busy interactive routes, or stale observations
+refuse warming; none is interpreted as zero consumption. Automatic admissions
+serialize with each other, while interactive requests bypass their queue and
+resource thresholds. The observation retains the exact runtime instances and
+expires after two seconds before any native buffer effect.
+
+These are **admission thresholds**, not kernel memory or CPU limits. Language
+servers can grow after admission, and interactive use remains available over
+the thresholds. No process is killed to make an automatic request fit. A
+retained Machine without this operation cannot silently fall back to unbudgeted
+automatic warming. Controller buffer/worktree count reservations remain in
+addition to these measured thresholds; a definite resource refusal can release
+only a reservation with no prior possible native effect.
+
+The settings use the shared typed Device schema. Device writes currently have
+no remote configuration writer, so scoped AI control uses the host-owned
+`cowboy config show/check/diff/apply --scope device --format json` boundary;
+Service configuration mutations cannot authorize a Device policy edit. This
+exception ends when authenticated Device configuration mutation is available.
+
 ## Removing the implementation name from the product
 
 | Surface                          | Change                                                                                                                                                                                                                                                                                                           | Status      |

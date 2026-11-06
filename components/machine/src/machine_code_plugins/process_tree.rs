@@ -10,6 +10,14 @@ pub(super) struct ProcessTree {
 }
 
 impl ProcessTree {
+    pub(super) fn resources(&self) -> Result<crate::cgroup::containment::ResourceSample> {
+        self._containment
+            .as_ref()
+            .context("Code process ownership unavailable")?
+            .resources()
+            .context("observing original Code process tree")
+    }
+
     pub(super) fn spawn(command: &mut Command) -> Result<(Child, Self)> {
         command.as_std_mut().process_group(0);
         // The membership FD is installed in pre_exec. A successful spawn
@@ -76,6 +84,20 @@ mod tests {
                     .unwrap()
             )
         );
+        let sample = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(sample) = tree.resources()
+                    && sample.processes >= 2
+                    && sample.rss_bytes > 0
+                {
+                    break sample;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("original process tree must have real RSS/CPU accounting");
+        assert!(sample.cpu_usage_usec > 0);
         drop(tree);
         let status = tokio::time::timeout(Duration::from_secs(2), child.wait())
             .await

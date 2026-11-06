@@ -243,6 +243,10 @@ pub(super) struct ServerAnalysis {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(super) enum ZedAdapterResponse {
+    AgentBufferBudget {
+        api_version: u8,
+        state: String,
+    },
     Worktree {
         api_version: u8,
         state: String,
@@ -303,6 +307,18 @@ pub(super) fn validate_zed_adapter_response(
         | ZedAdapterResponse::BufferHover { api_version: 1, .. }
         | ZedAdapterResponse::BufferNavigation { api_version: 1, .. }
         | ZedAdapterResponse::BufferSymbols { api_version: 1, .. }) => Ok(response),
+        ZedAdapterResponse::AgentBufferBudget {
+            api_version: 1,
+            state,
+        } if matches!(state.as_str(), "saturated" | "unavailable") => {
+            Ok(ZedAdapterResponse::AgentBufferBudget {
+                api_version: 1,
+                state,
+            })
+        }
+        ZedAdapterResponse::AgentBufferBudget { .. } => {
+            anyhow::bail!("invalid Code resource admission receipt")
+        }
         ZedAdapterResponse::Worktree { api_version, .. }
         | ZedAdapterResponse::Buffer { api_version, .. }
         | ZedAdapterResponse::BufferLanguage { api_version, .. }

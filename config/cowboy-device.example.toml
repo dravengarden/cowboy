@@ -3,6 +3,24 @@
 # Validate edits with `cowboy config check --scope device`; see docs/configuration.md.
 schema = 1
 
+[code]
+# Refuse automatic agent buffer warming when the Machine's Code runtime
+# process trees reach this aggregate RSS. Shared pages can count more than once.
+# This is an admission threshold, not a kernel memory limit; interactive Code
+# requests remain available. Zero disables automatic warming.
+# size string such as "1.5GiB", from 0B to 16TiB; applies live.
+# agent_rss_budget = "2GiB"
+# Refuse automatic agent buffer warming at this aggregate Code process
+# count. Unknown or incomplete ownership also refuses warming; interactive
+# requests remain available. Zero disables automatic warming.
+# integer from 0 to 4096; applies live.
+# agent_process_budget = 32
+# Refuse automatic agent buffer warming when aggregate Code CPU usage over
+# a fresh 250 ms observation reaches this many millicores (1000 = one core).
+# This is admission control, not a scheduler quota. Zero disables warming.
+# integer from 0 to 256000; applies live.
+# agent_cpu_millicores = 2000
+
 [connection]
 # Reconnect when the Controller does not answer a WebSocket Ping within
 # this budget, even if a local proxy still accepts writes. Applies to new probes.
