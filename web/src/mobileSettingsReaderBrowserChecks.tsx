@@ -33,12 +33,16 @@ export async function checkMobileSettingsReader(keep = false): Promise<void> {
     check(!dialog.textContent?.includes("Cowboy information and diagnostics"), "Detail drops the redundant description");
     check(content.getBoundingClientRect().top - dialog.getBoundingClientRect().top < 100, "Detail starts directly below the safe-area fade");
     check(footer.textContent === "About", "Current section stays visible in the bottom navigation");
+    const frost = getComputedStyle(footer.closest('[data-detent-sheet-footer]')!, "::before");
+    check(frost.backdropFilter === "blur(8px)" && frost.maskImage.includes("linear-gradient") && frost.pointerEvents === "none", "Footer frost fades progressively without intercepting touch");
     check(footer.scrollWidth <= footer.clientWidth, "Navigation fits the available width");
     const back = footer.querySelector<HTMLButtonElement>('[aria-label="Back to Settings from About"]')!;
     check(back.getBoundingClientRect().height >= 44, "Back retains its touch target");
     check(back.getBoundingClientRect().width === 44, "Back remains an independent round action");
     const title = footer.querySelector<HTMLElement>('[title="About"]')!;
-    check(Math.abs(title.getBoundingClientRect().left + title.getBoundingClientRect().width / 2 - (footer.getBoundingClientRect().left + footer.getBoundingClientRect().width / 2)) < 1, "Section identity is centered independently of the buttons");
+    const actions = footer.querySelector<HTMLElement>('[data-settings-navigation-actions]')!;
+    check(actions.querySelectorAll('button').length === 2, "Back and Close share the left floating group");
+    check(actions.getBoundingClientRect().left === footer.getBoundingClientRect().left && actions.getBoundingClientRect().right <= title.getBoundingClientRect().left, "Both actions remain left of the separate section identity");
     const scroller = dialog.querySelector<HTMLElement>("[data-scroll-edges]")!;
     scroller.scrollTop = scroller.scrollHeight;
     await wait();
