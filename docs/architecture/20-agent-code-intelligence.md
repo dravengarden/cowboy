@@ -236,6 +236,17 @@ idle release without another acquisition; original-cgroup removal and detached
 descendant accounting are established separately by the delegated-cgroup tests.
 This does not establish Unknown recovery or worker-generation acceptance.
 
+The separate worker candidate from that same revision subsequently passed
+Codex native execution (34 checks), Claude native execution (96), managed
+read-only Claude (7), session/recovery (39), logs (11), connected Code (38),
+and both Providers' distinct-generation coexistence and descendant drain.
+The [immutable acceptance record](../experiments/code-worker-pin-2026-11-06.json)
+binds `worker-39e0360cdcbff26cfa61` and the supplied release artifacts. These
+isolated fixtures use no production credentials and do not establish a
+production pin activation. The session fixture uses a short `/tmp` root;
+the initial long Nix-shell temporary path failed Unix socket startup before
+the scenario ran and is not included as accepted evidence.
+
 Automatic acquisition now preflights regular files before selecting a runtime
 or reserving an owner. Missing files, directories and symlink components return
 a definite pre-dispatch refusal, avoiding an orphan reservation for inputs
