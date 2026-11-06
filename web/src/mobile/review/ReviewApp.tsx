@@ -1903,7 +1903,7 @@ export function ReviewApp({
               </IconButton>
             </Toolbar>}
             <Stack data-review-workbench direction="row" alignItems="center" spacing={0.5}
-              sx={{ px: 1, minHeight: 48, flexWrap: "wrap", "& .MuiIconButton-root": { width: 44, height: 44 } }}>
+              sx={{ px: 1, minHeight: 48, flexWrap: "wrap", "& .MuiIconButton-root": { width: 44, height: 44, "& .MuiSvgIcon-root": { fontSize: "clamp(20px, 1.5rem, 28px)" } } }}>
               <HintTooltip title="Agent">
                 <IconButton
                   data-mobile-open-agent="true"
@@ -1917,7 +1917,7 @@ export function ReviewApp({
                   <ChatBubbleOutline />
                 </IconButton>
               </HintTooltip>
-              <ReviewContextButton
+              <ReviewContextButton branch={repositoryContext?.branch} changes={changeCount}
                 label={projectCodeContext
               ? `Open context. Current ${contextLabel.toLowerCase()} ${projectCodeContext.project}`
               : `Switch session. Current session ${currentSession?.title ?? "none"}`}

@@ -34,6 +34,7 @@ import { ReviewChanges } from "./ReviewChanges";
 import { useReviewRecovery } from "./useReviewRecovery";
 import { ReviewNavigationActions } from "./ReviewNavigationActions";
 import { ReviewRepositoryControls, type RepositorySection } from "./ReviewRepositoryControls";
+import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import type { SessionMeta } from "../../protocol";
 import type { PullSummary } from "../../extensions/api";
 import { loadRepositoryPulls, type RepositoryPulls } from "./repositoryPulls";
@@ -103,6 +104,7 @@ export function ReviewRepository({
   /** Review a worktree of this repository that no session owns. */
   onOpenWorktree?: ((path: string) => void) | undefined;
 }): React.JSX.Element {
+  const desktop = useSurfaceProfile().kind === "desktop";
   const [section, setSection] = useState<RepositorySection>("changes");
   const [changesRefresh, setChangesRefresh] = useState(0);
   const [otherOpen, setOtherOpen] = useState(false);
@@ -340,12 +342,12 @@ export function ReviewRepository({
       pl: "env(safe-area-inset-left, 0px)",
       pr: "env(safe-area-inset-right, 0px)",
     }}>
-      <Box data-repository-change-target sx={{ px: 1.5, py: 0.75, flexShrink: 0 }}>
+      {desktop && <Box data-repository-change-target sx={{ px: 1.5, py: 0.75, flexShrink: 0 }}>
         <Typography variant="caption" fontWeight={600} noWrap>{targetBranch}{targetPull ? ` · #${targetPull.number}` : ""}</Typography>
         <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
           {targetFacts.map((fact) => fact.label).join(" · ")}
         </Typography>
-      </Box>
+      </Box>}
       <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
         {section === "changes"
           ? (
@@ -363,6 +365,7 @@ export function ReviewRepository({
               compact
               controlsContainer={controlsContainer}
               actionsContainer={embedded ? actionsContainer ?? null : undefined}
+              repository={{ machineLabel, projectPath, commits, onHistory: () => setSection("history"), onCommit: (commit) => { onOpenCommit(commit); onClose(); } }}
               {...(onBrowseFiles ? { onBrowseFiles } : {})}
               linkedSession={linkedSession}
               refreshToken={(refreshToken ?? 0) + changesRefresh}

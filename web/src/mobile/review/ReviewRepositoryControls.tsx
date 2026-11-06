@@ -37,11 +37,23 @@ export function ReviewRepositoryControls({
           minWidth: 0,
           gap: 0,
           gridAutoColumns: "max-content",
+          "--segmented-selected-fill": "transparent",
           "&& [data-segmented-tab]": {
             minHeight: 44,
             px: 0.5,
             borderRadius: 1,
-            fontSize: "0.8125rem",
+            fontSize: "max(11px, 0.8125rem)",
+            "&[data-selected='true']::after": {
+              content: '""',
+              position: "absolute",
+              left: 6,
+              right: 6,
+              bottom: 5,
+              height: 2,
+              borderRadius: 1,
+              bgcolor: "primary.main",
+              pointerEvents: "none",
+            },
           },
         }}
         value={section}
@@ -52,9 +64,7 @@ export function ReviewRepositoryControls({
           { value: "worktrees", label: "Worktrees" },
         ]}
       />
-      {section === "changes" && (
-        <Box ref={onControls} sx={{ display: "contents" }} />
-      )}
+      {section === "changes" && <Box ref={onControls} sx={{ display: "contents" }} />}
     </Stack>
   );
 }

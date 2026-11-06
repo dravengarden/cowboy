@@ -1,7 +1,5 @@
 import {
   CheckCircleOutline,
-  DescriptionOutlined,
-  FolderOutlined,
   Refresh,
 } from "@mui/icons-material";
 import {
@@ -15,7 +13,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MobileSheetDismiss } from "@cowboy/app-shell";
+import { MobileSheetDismiss, ScrollEdges } from "@cowboy/app-shell";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import {
@@ -34,6 +32,7 @@ import { buildGitChangeTree } from "./gitChangeTree";
 import { reviewEntryKey } from "./diffNavigationModel";
 import { useReviewRecovery } from "./useReviewRecovery";
 import { ReviewChangeControls } from "./ReviewChangeControls";
+import { ReviewEmptyState, type EmptyReviewContext } from "./ReviewEmptyState";
 import { ReviewComparePicker } from "./ReviewComparePicker";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
 import {
@@ -69,6 +68,7 @@ export function ReviewChanges({
   onPreview,
   controlsContainer,
   actionsContainer,
+  repository,
 }: {
   sessionId: string | undefined;
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
@@ -94,6 +94,7 @@ export function ReviewChanges({
   onPreview?: ((path: string) => void) | undefined;
   controlsContainer?: HTMLElement | null | undefined;
   actionsContainer?: HTMLElement | null | undefined;
+  repository?: EmptyReviewContext | undefined;
 }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<{
     sessionId: string;
@@ -372,13 +373,13 @@ export function ReviewChanges({
           flex: 1,
           minHeight: 0,
           px: 0.75,
-          pb: 2,
+          pb: queue.length === 0 ? 0 : 2,
           ...mobileNativeYScrollSx,
         }}
       >
         {(loading && !result) || (!!sessionId && !result && !error)
           ? (
-            <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}>
+            <Box sx={{ display: "grid", placeItems: "center", minHeight: "100%" }}>
               <CircularProgress size={24} />
             </Box>
           )
@@ -401,47 +402,16 @@ export function ReviewChanges({
           )
           : queue.length === 0
           ? (
-            <Stack alignItems="center" spacing={1} sx={{ pt: 10 }}>
-              <DescriptionOutlined color="disabled" />
-              <Typography color="text.secondary">
-                {documentsOnly
-                  ? "No Markdown changes in this comparison"
-                  : comparison
-                  ? "No changes from this branch"
-                  : "Working tree is clean"}
-              </Typography>
-              {linkedSession && (
-                <>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    align="center"
-                    sx={{ px: 3 }}
-                  >
-                    {`This session's worktree doesn't include the changes in ${linkedSession.title}.`}
-                  </Typography>
-                  <Button
-                    data-review-linked-session
-                    variant="outlined"
-                    onClick={linkedSession.onOpen}
-                  >
-                    Review linked session
-                  </Button>
-                </>
-              )}
-              {onBrowseFiles && (
-                <Button startIcon={<FolderOutlined />} onClick={onBrowseFiles}>
-                  Browse files
-                </Button>
-              )}
-            </Stack>
+            <ReviewEmptyState comparisonLabel={reviewCompareLabel(comparison, scenarios, comparisons)}
+              compared={!!comparison} documentsOnly={documentsOnly} target={target} head={head}
+              repository={repository} onBrowseFiles={onBrowseFiles} linkedSession={linkedSession} />
           )
           : listedCount === 0
           ? (
-            <Stack alignItems="center" spacing={1} sx={{ pt: 10 }}>
+            <Stack alignItems="center" spacing={1} sx={{ minHeight: "100%", justifyContent: "center", px: 2, py: 3 }}>
               <CheckCircleOutline color="disabled" />
               <Typography color="text.secondary">All changes viewed</Typography>
-              <Button onClick={() => setUnreadOnly(false)}>
+              <Button onClick={() => setUnreadOnly(false)} sx={{ minHeight: 44, textTransform: "none" }}>
                 Show all changes
               </Button>
             </Stack>
@@ -514,6 +484,7 @@ export function ReviewChanges({
               )}
             </Stack>
           )}
+        <ScrollEdges />
       </Box>
       <ReviewChangeControls container={controlsContainer} actionsContainer={actionsContainer}
         label={reviewCompareLabel(comparison, scenarios, comparisons)} disabled={comparison === undefined}

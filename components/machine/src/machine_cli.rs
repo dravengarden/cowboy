@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context as _, bail};
+use anyhow::{Context as _, Result, bail};
 use clap::{Parser, ValueEnum};
 use futures::{SinkExt as _, StreamExt as _};
 use serde::{Deserialize, Serialize};
@@ -19,10 +19,10 @@ use crate::machine_components::ComponentStore;
 use crate::machine_plugins::{MachinePluginStore, PluginExecutionScope, UninstallAccess};
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation};
 use crate::machine_protocol::{
-    AuthState, CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS, ComponentId, ComponentInventory,
-    ComponentKind, ComponentState, ComponentUpdate, ConnectionMode, MACHINE_PROTOCOL_VERSION,
-    MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity, MachineCommand, MachineEvent, MachineFrame,
-    MachineHello, MachineWorkspace, Platform, ProviderMaterializationState,
+    AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState, ComponentUpdate,
+    ConnectionMode, MACHINE_PROTOCOL_VERSION, MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity,
+    MachineCommand, MachineEvent, MachineFrame, MachineHello, MachineWorkspace, Platform,
+    ProviderMaterializationState,
 };
 
 mod auth_watch;
@@ -39,6 +39,8 @@ mod login_process;
 mod native_login;
 mod native_logout;
 mod projects;
+mod reconnect;
+use reconnect::Backoff;
 pub mod telemetry_binding;
 pub mod telemetry_export;
 pub mod telemetry_recovery;
@@ -704,7 +706,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     let execution = Arc::new(execution);
     let deletion_service_id = args.service_id.clone();
     let durable_state = crate::machine_broker::DurableStateView::default();
-    let controller = controller_loop(ControllerConfig {
+    let controller = reconnect::run(ControllerConfig {
         memory_relay,
         execution,
         controller_url,
@@ -1191,21 +1193,7 @@ fn resolve_runtime_machine_id(
     load_enrolled_machine_id(state_dir).unwrap_or_else(|| cli_machine_id.to_owned())
 }
 
-async fn controller_loop(config: ControllerConfig) -> anyhow::Result<()> {
-    let mut retry = Duration::from_secs(1);
-    loop {
-        match controller_connection(&config).await {
-            Ok(()) => retry = Duration::from_secs(1),
-            Err(error) => tracing::warn!(%error, "Machine controller disconnected"),
-        }
-        tokio::time::sleep(retry).await;
-        retry = (retry * 2).min(Duration::from_secs(
-            CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS,
-        ));
-    }
-}
-
-async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> {
+async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -> Result<()> {
     config.workspaces.reload()?;
     let mut endpoint =
         reqwest::Url::parse(&config.controller_url).context("parsing controller URL")?;
@@ -1442,9 +1430,9 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let state_dir = config.state_dir.clone();
     let mut resources_due = tokio::time::Instant::now();
     let mut decoder = crate::machine_transport::Decoder::new((chunked, compressed, paced, stream));
-    // The Controller may stop hearing this Machine while its frames still
-    // arrive here; record how the socket ended and how long it was silent.
+    // Record disconnect and silence even when only one direction fails.
     let connected_at = tokio::time::Instant::now();
+    retry.connected(connected_at);
     let mut last_inbound = connected_at;
     let mut liveness_probe = liveness::Probe::default();
     let result: anyhow::Result<()> = async {

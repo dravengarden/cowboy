@@ -387,11 +387,11 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
         });
         tab.classList.add("Mui-focusVisible");
         await new Promise<void>((resolve) => setTimeout(resolve, 200));
-        const background = getComputedStyle(tab).backgroundColor;
+        const indicator = getComputedStyle(tab, "::after");
         check(
           tab.getAttribute("aria-selected") === "true" &&
-            background !== "transparent" && background !== "rgba(0, 0, 0, 0)",
-          `${mode}: selected touch tab lost its fill`,
+            indicator.height === "2px" && indicator.backgroundColor !== "rgba(0, 0, 0, 0)",
+          `${mode}: selected touch tab lost its underline`,
         );
         for (
           const other of container.querySelectorAll<HTMLElement>(
@@ -412,22 +412,22 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
     }
     document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
     tests.push(
-      "real light and dark themes retain selected tab fill after touch and clear the old tab",
+      "real light and dark themes retain the selected underline after touch and clear the old tab",
     );
     const strip = container.querySelector<HTMLElement>(
       "[data-repository-change-target]",
     );
-    await until(
-      () => !!strip?.textContent?.includes("#12"),
-      "the branch's pull request",
-    );
-    check(
-      strip?.textContent ===
-        "task/mine · #122 uncommitted · Not pushed · ↑3 ↓1 origin/main",
-      `change target strip reads ${strip?.textContent}`,
-    );
+    if (strip) {
+      await until(() => !!strip.textContent?.includes("#12"), "the branch's pull request");
+      check(strip.textContent === "task/mine · #122 uncommitted · Not pushed · ↑3 ↓1 origin/main",
+        `change target strip reads ${strip.textContent}`);
+    }
     click("Repository details");
     await until(() => !!document.querySelector("[data-repository-pull]"), "PR action in repository details");
+    const details = document.querySelector("[data-repository-project-path]")?.parentElement?.textContent;
+    for (const fact of ["task/mine", "2 uncommitted", "Not pushed", "↑3 ↓1 origin/main"]) {
+      check(details?.includes(fact), `Repository details lost ${fact}`);
+    }
     const pull = document.querySelector<HTMLElement>("[data-repository-pull]")!;
     check(pull.textContent === "#12", "the PR stays identified in repository details");
     pull.click();

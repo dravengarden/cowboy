@@ -130,6 +130,12 @@ async function run(p: FixturePage) {
     '[aria-label="Git changes"]',
   ];
   await capture("changes", controls);
+  await p.evaluate("document.documentElement.style.fontSize='10px'");
+  await capture("small-text", controls);
+  await p.evaluate(
+    `(()=>{const icon=document.querySelector('[data-review-mode-glyph] svg').getBoundingClientRect();if(icon.width<20||icon.height<20)throw new Error('Review mode glyph is too small');if(document.querySelector('[data-repository-change-target]'))throw new Error('Mobile retained a duplicate top branch header');})()`,
+  );
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
   await click('[aria-label="More review actions"]');
   await click('[aria-label="Repository details"]');
   await until(
@@ -168,9 +174,18 @@ async function run(p: FixturePage) {
   await capture("narrow", controls);
   await viewport(844, 390);
   await capture("landscape", controls);
+  await emptyOverview(p, controls);
+  await p.evaluate("fixture.select('worktree')");
+  await until("!!document.querySelector('[data-review-unread]')");
+  await reviewFilesAndDiff(p);
+}
+
+async function emptyOverview(p: FixturePage, controls: string[]) {
   await viewport(390, 844);
   await p.evaluate("fixture.select('project')");
-  await until("document.body.textContent.includes('No changes from this branch')");
+  await until(
+    "document.body.textContent.includes('No changes to review') && document.body.textContent.includes('20 commits behind')",
+  );
   await capture(
     "empty",
     controls.filter((selector) => selector !== "[data-review-unread]"),
@@ -178,6 +193,15 @@ async function run(p: FixturePage) {
   await p.evaluate(
     `(()=>{const r=document.querySelector('[data-review-repository-controls]').getBoundingClientRect();if(r.height>52)throw new Error('Empty review uses more than one repository toolbar row')})()`,
   );
+  await p.evaluate(
+    `(()=>{const card=document.querySelector('[data-review-empty-state] > div').getBoundingClientRect();const reader=document.querySelector('[data-review-empty-state]').parentElement.getBoundingClientRect();if(Math.abs(card.top+card.height/2-reader.top-reader.height/2)>30)throw new Error('Empty overview is not centered');if(!document.querySelector('[data-review-context-branch]')?.textContent.includes('main'))throw new Error('Branch is missing from bottom context');})()`,
+  );
+  await p.evaluate("document.documentElement.style.fontSize='10px'");
+  await capture(
+    "empty-small-text",
+    controls.filter((selector) => selector !== "[data-review-unread]"),
+  );
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
   await viewport(320, 568);
   await capture(
     "empty-narrow",
@@ -186,9 +210,38 @@ async function run(p: FixturePage) {
   await p.evaluate(
     `(()=>{const r=document.querySelector('[data-review-repository-controls]').getBoundingClientRect();if(r.height>52)throw new Error('Empty narrow review should fit one repository row')})()`,
   );
+  await p.evaluate(
+    "document.querySelector('[aria-label=\"View repository history\"]').scrollIntoView({block:'nearest'})",
+  );
+  await capture("empty-narrow-actions", [
+    '[aria-label="View repository history"]',
+    "[data-review-context-button]",
+  ]);
+  await click('[aria-label="View repository history"]');
+  await until(
+    "document.querySelector('[data-segmented-tab=\"history\"]')?.getAttribute('aria-selected')==='true'",
+  );
+  await click('[data-segmented-tab="changes"]');
+  await until("!!document.querySelector('[data-review-empty-state]')");
+  await viewport(844, 390);
+  await p.evaluate(
+    "document.querySelector('[aria-label=\"View repository history\"]').scrollIntoView({block:'nearest'})",
+  );
+  await capture("empty-landscape-actions", [
+    '[aria-label="View repository history"]',
+    "[data-review-context-button]",
+  ]);
   await viewport(390, 844);
-  await p.evaluate("fixture.select('worktree')");
-  await until("!!document.querySelector('[data-review-unread]')");
+  await p.evaluate(
+    "document.querySelector('[aria-label=\"Recent repository activity\"] [role=\"button\"]').scrollIntoView({block:'nearest'})",
+  );
+  await click('[aria-label="Recent repository activity"] [role="button"]');
+  await until("!!document.querySelector('[data-review-commit]')");
+  await click('[aria-label="Git changes"]');
+  await until("!!document.querySelector('[data-review-empty-state]')");
+}
+
+async function reviewFilesAndDiff(p: FixturePage) {
   await click('[aria-label="Worktree files"]');
   await until("!!document.querySelector('[data-code-tree-path=\"README.md\"]')");
   await capture("files", ["[data-review-find-bar]", "[data-review-context-button]"]);
