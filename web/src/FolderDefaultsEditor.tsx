@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -460,7 +461,7 @@ export function FolderDefaultsEditor(
                   another default.
                 </Typography>
               )}
-            </Box>
+            <ScrollEdges /></Box>
           </>
         )
         : (

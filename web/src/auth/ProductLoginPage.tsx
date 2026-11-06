@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import {
   Alert,
   Box,
@@ -426,7 +427,7 @@ export function ProductLoginPage({
             </Alert>
           )}
       </Stack>
-    </Box>
+    <ScrollEdges /></Box>
   );
 }
 

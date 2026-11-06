@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -268,7 +269,7 @@ function LogDetail({
             }}
           >
             {detailEvidence(state.value.evidence)}
-          </Box>
+          <ScrollEdges /></Box>
         </Box>
       )}
     </Stack>

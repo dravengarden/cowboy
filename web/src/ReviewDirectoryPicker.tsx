@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { useState } from "react";
 import {
   Box,
@@ -303,7 +304,7 @@ export function ReviewDirectoryPicker(
             No matching directories.
           </Typography>
         )}
-      </Box>
+      <ScrollEdges /></Box>
     </Stack>
   );
 }

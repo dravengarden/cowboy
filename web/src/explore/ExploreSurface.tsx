@@ -36,7 +36,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import {
+import { ScrollEdges,
   DetentSheet,
   MobileSheetContextDock,
 } from "@cowboy/app-shell";
@@ -1184,7 +1184,7 @@ function PageList({
               sx={{ height: "1px", pointerEvents: "none" }}
             />
           )}
-        </List>
+        <ScrollEdges /></List>
       </Box>
     </Stack>
   );

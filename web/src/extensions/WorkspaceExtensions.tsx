@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { desktopSize } from "../surface/desktopSize";
 import {
   ArrowBack,
@@ -187,7 +188,7 @@ function ResourceDetail(
               : <Typography color="text.secondary">No description.</Typography>}
           </>
         )}
-    </Stack>
+    <ScrollEdges /></Stack>
   );
 }
 
@@ -445,7 +446,7 @@ function ResourceList(
               ))}
             </List>
           )}
-      </Box>
+      <ScrollEdges /></Box>
       <Stack
         direction="row"
         alignItems="center"
@@ -502,7 +503,7 @@ export default function WorkspaceExtensions(
           Back to extensions
         </Button>
         <ExtensionManager initialMachineId={machineId} />
-      </Stack>
+      <ScrollEdges /></Stack>
     );
   }
   if (extension && inventory) {
@@ -579,6 +580,6 @@ export default function WorkspaceExtensions(
             ))}
           </List>
         )}
-    </Stack>
+    <ScrollEdges /></Stack>
   );
 }

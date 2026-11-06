@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { ProtectedImage } from "./ProtectedImage";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -32,7 +33,6 @@ import { transcriptLifecycleLabel } from "./transcriptLoadingPresentation";
 import { ProtectedImageLightbox as ImageLightbox } from "./ProtectedImageLightbox";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { toolIcon } from "./ToolDetailsBrowser";
-
 export const pulse = keyframes`
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.55; }
@@ -1099,7 +1099,7 @@ export const ItemView = memo(function ItemView({
               </Box>
               <Box sx={{ mt: 0.5, overflowWrap: "anywhere", whiteSpace: "pre-wrap", maxHeight: "30vh", overflow: "auto" }}>
                 Earlier error: {item.detail ?? "The session stopped unexpectedly."}
-              </Box>
+              <ScrollEdges /></Box>
             </Box>
           </Box>
         );
@@ -1237,7 +1237,7 @@ export const ItemView = memo(function ItemView({
                 }}
               >
                 {item.summary.trim()}
-              </Box>
+              <ScrollEdges /></Box>
             </Box>
           )}
         </Box>
@@ -1276,7 +1276,7 @@ export function ErrorDetails({ detail }: { detail: string }): React.JSX.Element 
       <Box component="summary" sx={{ cursor: "pointer" }}>Details</Box>
       <Box component="pre" sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", m: 0, mt: 0.5, maxHeight: "20vh", overflow: "auto" }}>
         {detail}
-      </Box>
+      <ScrollEdges /></Box>
     </Box>
   );
 }

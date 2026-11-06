@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 // Delete a folder that may hold sessions (docs/sessions-folders.md#trash).
 // The folder, its subfolders and every checked item go to Trash together and
 // restore together. Unchecking an item keeps it: it moves to the destination
@@ -225,7 +226,7 @@ export function DeleteFolderToTrashShell(
                     </Box>
                   );
                 })}
-              </Box>
+              <ScrollEdges /></Box>
             </>
           )}
           {contents.length > 0 && (

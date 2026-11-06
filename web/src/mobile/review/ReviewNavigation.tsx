@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { lazy, Suspense, useLayoutEffect, useRef, useState } from "react";
 import { Alert, Box, Button, Stack, Typography } from "@mui/material";
 import { useStore } from "@cowboy/state-store";
@@ -312,7 +313,7 @@ function NavigationView({ intelligence, point, source }: {
                       onScrollTopChange={() => undefined}
                     />
                   </Suspense>
-                </Box>
+                <ScrollEdges /></Box>
               </>
             )
             : (

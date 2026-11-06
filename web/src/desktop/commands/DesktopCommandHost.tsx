@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { useDesktopInsertCommand } from "../editorInsert";
 import { OPEN_BACKGROUND_TASKS_EVENT } from "../../backgroundTaskInspectorState";
 import { desktopSize } from "../../surface/desktopSize";
@@ -748,7 +749,7 @@ export function DesktopCommandHost({
               )}
             </ListItemButton>
           ))}
-        </List>
+        <ScrollEdges /></List>
       </Box>
       </DesktopModal>
     </>

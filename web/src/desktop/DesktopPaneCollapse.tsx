@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { desktopSize } from "../surface/desktopSize";
 import { shortcutKey } from "./commands/imeShortcut";
 import {
@@ -29,7 +30,6 @@ import { type DesktopPane, useDesktopWorkspace } from "./DesktopWorkspaceControl
 import { DesktopShortcut, LeaderKeycap } from "./commands/DesktopKeycap";
 import { DESKTOP_SHORTCUTS, DESKTOP_WORKSPACE_KEYS } from "./commands/workspaceShortcuts";
 import type { RailGroup } from "./sessionsRailGroups";
-
 const PANE_LABEL: Record<DesktopPane, string> = {
   sessions: "Sessions",
   prompt: "Prompt",
@@ -771,7 +771,7 @@ export function DesktopSessionsRail({
             onOpen={(anchor): void => setMenu({ id: group.id, anchor })}
           />
         ))}
-      </Stack>
+      <ScrollEdges /></Stack>
       {footer && (
         <Box
           data-desktop-sessions-rail-foot

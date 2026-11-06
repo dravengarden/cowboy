@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import {
   CommitOutlined,
   DescriptionOutlined,
@@ -142,7 +143,7 @@ function CommitPatch({
         {patch && (patch.truncated || allLines.length > lines.length) && (
           <Alert severity="info">Large patch preview truncated</Alert>
         )}
-      </Box>
+      <ScrollEdges /></Box>
     </Stack>
   );
 }
