@@ -9,7 +9,7 @@
   "file": {
     "components/app-shell/connection-banner.tsx": 915,
     "components/app-shell/detent-sheet.tsx": 1095,
-    "components/machine/src/machine_broker.rs": 5255,
+    "components/machine/src/machine_broker.rs": 5037,
     "components/machine/src/machine_cli.rs": 3984,
     "components/machine/src/machine_plugins.rs": 5514,
     "components/plugin-sdk/src/host.rs": 1602,
@@ -83,7 +83,7 @@
     "components/app-shell/nav-shell.tsx::NavShell": 498,
     "components/machine/src/execution_host.rs::run": 321,
     "components/machine/src/machine_broker.rs::Broker::ensure_session_in_lifecycle": 209,
-    "components/machine/src/machine_broker.rs::Broker::spawn_worker": 559,
+    "components/machine/src/machine_broker.rs::Broker::spawn_worker": 340,
     "components/machine/src/machine_broker.rs::handle_core_command": 422,
     "components/machine/src/machine_cli.rs::collect_inventory": 238,
     "components/machine/src/machine_cli.rs::controller_connection": 520,
