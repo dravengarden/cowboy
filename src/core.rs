@@ -36,6 +36,7 @@ mod hub_config;
 mod hub_events;
 mod hub_provider_pins;
 mod hub_queue;
+mod hub_superagent;
 mod hub_sync;
 mod session_attention;
 pub use session_attention::SessionAttention;
@@ -945,6 +946,7 @@ pub struct DispatchOwnership {
     hub: std::sync::Weak<HubInner>,
     session: String,
     epoch: u64,
+    supervision: Option<crate::superagent::DispatchContext>,
 }
 
 impl std::fmt::Debug for DispatchOwnership {
@@ -962,6 +964,7 @@ impl DispatchOwnership {
             hub: std::sync::Arc::downgrade(&hub.inner),
             session: session.into(),
             epoch,
+            supervision: None,
         })
     }
 }
@@ -1055,6 +1058,7 @@ pub struct SessionInfo {
 /// Admission and delivery are separate facts for each recent dispatch.
 struct DispatchedPrompt {
     cmid: String,
+    epoch: u64,
     echoed: bool,
 }
 
@@ -3454,15 +3458,6 @@ impl Hub {
             .lock()
             .get(session_id)
             .map(|session| session.last_activity.elapsed())
-    }
-
-    #[must_use]
-    pub fn session_has_in_flight_prompt(&self, session_id: &str) -> bool {
-        self.inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .is_some_and(|session| session.in_flight)
     }
 
     /// Runtime-owned prompt guard, excluding channel/preflight ownership.

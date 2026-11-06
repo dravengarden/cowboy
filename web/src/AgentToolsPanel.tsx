@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { SessionSuperagentSettings, SuperagentSettings } from "./SuperagentSettings";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import Check from "@mui/icons-material/Check";
 import ExpandMore from "@mui/icons-material/ExpandMore";
@@ -630,6 +631,7 @@ export function SessionToolsSection(
           }}
         />
       )}
+      <SessionSuperagentSettings sessionId={sessionId} />
     </Box>
   );
 }
@@ -718,6 +720,7 @@ export function AgentToolsSettings(): React.JSX.Element {
           />
         </>
       )}
+      <SuperagentSettings />
     </Box>
   );
 }

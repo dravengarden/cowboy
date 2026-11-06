@@ -1111,6 +1111,10 @@ pub(super) async fn dispatch_preflight<T>(
 }
 
 pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
+    if req.ownership.supervision().is_some() {
+        superagent::dispatch(state, req).await;
+        return;
+    }
     let hub = &state.hub;
     let supervisor = &state.supervisor;
     let plugin_lifecycle_fences = &state.plugin_lifecycle_fences;

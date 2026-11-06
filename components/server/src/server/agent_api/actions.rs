@@ -477,119 +477,28 @@ async fn execute(
     args: Value,
     operation: Option<&str>,
 ) -> Result<Value, &'static str> {
+    read_parent(&state.hub, state.store.as_ref(), meta)
+        .await
+        .map_err(|_| "permission_denied")?;
+    if super::super::superagent::restricted(state, meta).await?
+        && !matches!(action, "superagent.follow_up" | "superagent.propose")
+        && !(action == "receipts.get" && args["domain"] == "superagent")
+    {
+        return Err("superagent_scope_denied");
+    }
     if action == "receipts.get" {
-        if operation.is_some() {
-            return Err("invalid_argument");
-        }
-        let input: ReceiptInput = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
-        if !crate::managed_calls::valid_id(&input.operation) {
-            return Err("invalid_argument");
-        }
-        return match input.domain.as_str() {
-            "control" => Ok(success(
-                super::control::receipt(state, meta, &input.operation).await?,
-            )),
-            "logins" => {
-                let owner = account_owner(state, meta).await?;
-                Ok(success(
-                    super::super::provider_accounts::login::operation_receipt(
-                        state,
-                        &owner,
-                        &document_operation(&meta.id, &input.operation),
-                    )
-                    .await?,
-                ))
-            }
-            "accounts" => {
-                let owner = account_owner(state, meta).await?;
-                let receipt = state
-                    .store
-                    .as_ref()
-                    .ok_or("unavailable")?
-                    .provider_account_receipt(
-                        &owner,
-                        &document_operation(&meta.id, &input.operation),
-                    )
-                    .await
-                    .map_err(|_| "unavailable")?;
-                Ok(success(match receipt {
-                    Some(receipt) => super::super::provider_accounts::receipt_value(&receipt),
-                    None => json!({"status":"unknown"}),
-                }))
-            }
-            "preferences" => {
-                let owner = preference_owner(state, meta).await?;
-                let receipt = state
-                    .store
-                    .as_ref()
-                    .ok_or("unavailable")?
-                    .preference_receipt(&owner, &document_operation(&meta.id, &input.operation))
-                    .await
-                    .map_err(|_| "unavailable")?;
-                Ok(success(match receipt {
-                    Some(prefs) => json!({"status":"committed","preferences":prefs}),
-                    None if state.hub.review_default_receipt(&review_operation(
-                        &owner,
-                        &meta.id,
-                        &input.operation,
-                    )) =>
-                    {
-                        json!({"status":"accepted","scope":crate::review_directory::SCOPE,"durable_receipt":false})
-                    }
-                    None => json!({"status":"unknown"}),
-                }))
-            }
-            "calls" => {
-                let record = ledger
-                    .observe(&input.operation)
-                    .await
-                    .map_err(|_| "unavailable")?;
-                let record = match record {
-                    Some(record) => Some(record),
-                    None => ledger
-                        .inspect(&input.operation)
-                        .await
-                        .map_err(|_| "unavailable")?,
-                };
-                match record {
-                    Some(record) => Ok(call_result(
-                        super::super::managed_calls::dispatch_calls(
-                            state,
-                            meta,
-                            ledger,
-                            Action::Inspect {
-                                call_id: record.call_id,
-                            },
-                        )
-                        .await,
-                    )),
-                    None => Ok(success(json!({"status":"unknown"}))),
-                }
-            }
-            "documents" => {
-                let owner = document_owner(&state.hub, state.store.as_ref(), meta).await?;
-                let id = state
-                    .store
-                    .as_ref()
-                    .ok_or("unavailable")?
-                    .draft_operation_document(
-                        &owner,
-                        &document_operation(&meta.id, &input.operation),
-                    )
-                    .await
-                    .map_err(|_| "unavailable")?;
-                Ok(success(match id {
-                    Some(id) => json!({"status":"committed","document_id":id}),
-                    None => json!({"status":"unknown"}),
-                }))
-            }
-            _ => Err("invalid_argument"),
-        };
+        return receipt(state, meta, ledger, args, operation).await;
     }
     let operation = operation
         .filter(|id| crate::managed_calls::valid_id(id))
         .ok_or("invalid_operation")?;
+    if operation.starts_with("sa-") {
+        return Err("reserved_operation_prefix");
+    }
     match action {
+        "superagent.follow_up" | "superagent.propose" => Ok(success(
+            super::super::superagent::execute(state, meta, action, args, operation).await?,
+        )),
         "control.apply" => Ok(success(
             super::control::apply(state, meta, args, operation).await?,
         )),
@@ -737,7 +646,11 @@ async fn execute(
             }
             let input: crate::store::preferences::PreferenceChange =
                 serde_json::from_value(args).map_err(|_| "invalid_argument")?;
-            let owner = preference_owner(state, meta).await?;
+            let owner = if input.scope == crate::superagent::SCOPE {
+                document_owner(&state.hub, state.store.as_ref(), meta).await?
+            } else {
+                preference_owner(state, meta).await?
+            };
             if state
                 .hub
                 .review_default_receipt(&review_operation(&owner, &meta.id, operation))
@@ -749,8 +662,10 @@ async fn execute(
                 &owner,
                 &document_operation(&meta.id, operation),
                 &input,
+                Some(meta),
             )
             .await?;
+            let value = crate::superagent::settings_discovery(value);
             if value.get("error").is_some() {
                 Ok(json!({"state":"error","error":value["error"],"current":value["current"]}))
             } else {
@@ -836,6 +751,135 @@ async fn execute(
             }
         }
         _ => Err("unknown_operation"),
+    }
+}
+
+async fn receipt(
+    state: &Arc<AppState>,
+    meta: &SessionMeta,
+    ledger: &Ledger,
+    args: Value,
+    operation: Option<&str>,
+) -> Result<Value, &'static str> {
+    if operation.is_some() {
+        return Err("invalid_argument");
+    }
+    let input: ReceiptInput = serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+    if !crate::managed_calls::valid_id(&input.operation) {
+        return Err("invalid_argument");
+    }
+    match input.domain.as_str() {
+        "superagent" => {
+            let owner = meta.owner_user_id.as_deref().ok_or("permission_denied")?;
+            let id = format!(
+                "sa-request-{}",
+                crate::superagent::patterns::digest(input.operation.as_bytes())
+            );
+            let receipt = state
+                .store
+                .as_ref()
+                .ok_or("unavailable")?
+                .agent_operation_receipt(owner, &meta.id, &id)
+                .await
+                .map_err(|_| "unavailable")?;
+            Ok(success(
+                receipt.flatten().unwrap_or(json!({"status":"unknown"})),
+            ))
+        }
+        "control" => Ok(success(
+            super::control::receipt(state, meta, &input.operation).await?,
+        )),
+        "logins" => {
+            let owner = account_owner(state, meta).await?;
+            Ok(success(
+                super::super::provider_accounts::login::operation_receipt(
+                    state,
+                    &owner,
+                    &document_operation(&meta.id, &input.operation),
+                )
+                .await?,
+            ))
+        }
+        "accounts" => {
+            let owner = account_owner(state, meta).await?;
+            let receipt = state
+                .store
+                .as_ref()
+                .ok_or("unavailable")?
+                .provider_account_receipt(&owner, &document_operation(&meta.id, &input.operation))
+                .await
+                .map_err(|_| "unavailable")?;
+            Ok(success(match receipt {
+                Some(receipt) => super::super::provider_accounts::receipt_value(&receipt),
+                None => json!({"status":"unknown"}),
+            }))
+        }
+        "preferences" => {
+            let owner = preference_owner(state, meta).await?;
+            let receipt = state
+                .store
+                .as_ref()
+                .ok_or("unavailable")?
+                .preference_receipt(&owner, &document_operation(&meta.id, &input.operation))
+                .await
+                .map_err(|_| "unavailable")?;
+            Ok(success(crate::superagent::settings_discovery(
+                match receipt {
+                    Some(prefs) => json!({"status":"committed","preferences":prefs}),
+                    None if state.hub.review_default_receipt(&review_operation(
+                        &owner,
+                        &meta.id,
+                        &input.operation,
+                    )) =>
+                    {
+                        json!({"status":"accepted","scope":crate::review_directory::SCOPE,"durable_receipt":false})
+                    }
+                    None => json!({"status":"unknown"}),
+                },
+            )))
+        }
+        "calls" => {
+            let record = ledger
+                .observe(&input.operation)
+                .await
+                .map_err(|_| "unavailable")?;
+            let record = match record {
+                Some(record) => Some(record),
+                None => ledger
+                    .inspect(&input.operation)
+                    .await
+                    .map_err(|_| "unavailable")?,
+            };
+            match record {
+                Some(record) => Ok(call_result(
+                    super::super::managed_calls::dispatch_calls(
+                        state,
+                        meta,
+                        ledger,
+                        Action::Inspect {
+                            call_id: record.call_id,
+                        },
+                    )
+                    .await,
+                )),
+                None => Ok(success(json!({"status":"unknown"}))),
+            }
+        }
+        "documents" => {
+            let owner = document_owner(&state.hub, state.store.as_ref(), meta).await?;
+            let id = state
+                .store
+                .as_ref()
+                .ok_or("unavailable")?
+                .draft_operation_document(&owner, &document_operation(&meta.id, &input.operation))
+                .await
+                .map_err(|_| "unavailable")?;
+            Ok(success(match id {
+                Some(id) => json!({"status":"committed","document_id":id}),
+                None => json!({"status":"unknown"}),
+            }))
+        }
+        _ => Err("invalid_argument"),
     }
 }
 

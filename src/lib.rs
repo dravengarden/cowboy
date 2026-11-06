@@ -246,6 +246,8 @@ pub mod protocol_contract;
 // flake.nix do not carry these files, so an unconditional declaration breaks
 // their release builds while the full checkout still compiles.
 #[cfg(feature = "full")]
+pub mod superagent;
+#[cfg(feature = "full")]
 pub mod task_notifications;
 #[cfg(feature = "full")]
 pub mod web_push;
