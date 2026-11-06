@@ -25,7 +25,7 @@ pub(crate) async fn fixture_with(
         diagnostics: Arc::default(),
         next_message_id: AtomicU32::new(1),
         next_lsp_request_id: AtomicU64::new(1),
-        frontier: crate::analysis::Frontier::default(),
+        frontier: crate::analysis::Frontier,
     });
     {
         let mut cache = zed.diagnostics.lock().unwrap();

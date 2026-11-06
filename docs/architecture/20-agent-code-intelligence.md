@@ -126,7 +126,10 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   `document_current` only for a versioned, not disk-based, not merged set of
   exactly that text; `stale` when the analyzed version is older; otherwise
   `unknown` with a reason (`unpublished`, `in_flight`, `unversioned`,
-  `save_triggered`, `merged`). `code.diagnostics` reports a file as
+  `save_triggered`, `merged`). Pulled diagnostics (`textDocument/diagnostic`,
+  used by gopls and most current servers) carry the document version the server
+  last received when the pull was sent (private server 1.10.0); the server
+  answers after every earlier change notification. `code.diagnostics` reports a file as
   `document_current` only when every listed server is. This is document
   evidence only; the input frontier for dependencies and configuration is
   still open, so nothing reports `fresh`.
@@ -167,9 +170,10 @@ they are released after 5 minutes idle or when the switch is off. Gates 1 and
 2 hold for opens (target-confined admission, same-process recovery). Gate 4 is
 met by counts only: language-server RSS/CPU are not measured, and navigation
 and synchronization Unknowns keep their own fences. Holdings are process-local:
-after a Controller restart a buffer the agent still holds keeps serving reads but
-is no longer released when idle; it ends with its code runtime (a new Zed
-generation or Machine restart), bounded by the per-Machine share.
+after a Controller restart the next `code.diagnostics` read of a held file
+re-tracks it (an open file is also held under the agent owner, within its share),
+so it is released when idle again; a held file never read again ends with its
+code runtime, bounded by the per-Machine share.
 
 ### Baselines, attribution, matching
 

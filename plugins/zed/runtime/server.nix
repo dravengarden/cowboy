@@ -39,7 +39,7 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.9.0";
+  version = "1.10.0";
   inherit src cargoDeps;
   patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ./server/acquisition-bounds.patch ./server/replacement-bounds.patch ./server/snapshot-lifetimes.patch ./server/remote-edits.patch ];
   postPatch = ''
@@ -128,6 +128,22 @@ in platform.buildRustPackage {
         cowboy_frontier: cowboy_frontier::State,' \
       --replace-fail '                buffer_snapshots: Default::default(),' '                buffer_snapshots: Default::default(),
                     cowboy_frontier: Default::default(),' \
+      --replace-fail '        let diagnostics = self.pull_diagnostics(buffer, cx);
+            cx.spawn(async move |lsp_store, cx| {
+                let diagnostics = match diagnostics.await {' '        let cowboy_versions = self.cowboy_pull_versions(&buffer, cx);
+            let diagnostics = self.pull_diagnostics(buffer, cx);
+            cx.spawn(async move |lsp_store, cx| {
+                let diagnostics = match diagnostics.await {' \
+      --replace-fail '                                        uri,
+                                            diagnostics,
+                                            version: None,
+                                        },
+                                        result_id: result_id.map(SharedString::new),' '                                        uri,
+                                            diagnostics,
+                                            // Cowboy: the version the pull was answered for.
+                                            version: cowboy_versions.get(&server_id).copied(),
+                                        },
+                                        result_id: result_id.map(SharedString::new),' \
       --replace-fail '        let snapshot = self.buffer_snapshot_for_lsp_version(buffer, server_id, version, cx)?;
 
             let edits_since_save' '        let snapshot = self.buffer_snapshot_for_lsp_version(buffer, server_id, version, cx)?;
