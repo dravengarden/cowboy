@@ -135,6 +135,14 @@ Use the active theme background, never fixed white or a new blur layer. Cover
 readers without a top header opt into `readerTopBleed`; their scroller owns the
 safe-area padding so content can pass behind the status area while scrolling.
 Keep the gradient noninteractive and the first item clear at the scroll boundary.
+Other native vertical readers use app-shell `ScrollEdges` as their last child:
+settings, tool details, task panels, pickers, logs, approvals and preview panes.
+Only overflowing edges fade; the first/last item is unobscured at its boundary.
+Keep sticky command headers outside the masked reader (or disable its top edge).
+Editing focus suspends the fade; do not decorate textarea/CodeMirror internals or
+image-pan canvases. Those retain their cursor and image-safe-area contracts.
+Full-screen headerless sheets put safe-area clearance inside their scrolling
+body. Never stack a second mask on a Transcript or the Sessions rail.
 
 - Mobile is touch-first: single-task focus, large targets, progressive
   disclosure, safe system-keyboard behaviour, and native gestures.

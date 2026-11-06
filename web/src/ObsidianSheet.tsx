@@ -17,7 +17,7 @@ import {
 import { Box, Paper, Typography, useTheme } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { decisionShelfSurface } from "./decisionShelf";
-import { markDetentSheetOpen } from "@cowboy/app-shell";
+import { ScrollEdges, markDetentSheetOpen } from "@cowboy/app-shell";
 import { haptic as fireHaptic, MobileSheetDismiss } from "@cowboy/app-shell";
 import {
   OBSIDIAN_SHEET_INSET_PX,
@@ -364,7 +364,7 @@ export function ObsidianSheet({
           }
         }}
         sx={{
-          position: "fixed",
+          position: "fixed", "--cowboy-reader-sticky-top": "0px",
           left: inset,
           right: inset,
           bottom,
@@ -432,7 +432,7 @@ export function ObsidianSheet({
           }}
         >
           {children}
-        </Box>
+        <ScrollEdges /></Box>
         {actions == null && floatingDismiss
           ? (
             <Box

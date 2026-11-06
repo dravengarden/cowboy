@@ -29,7 +29,7 @@ import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { MachineProviderManagement, ProviderAuthenticationManagement } from "./ProviderManagement";
 import { machinePresencePresentation } from "./machinePresence";
 import { machineCommandResultPresentation } from "./machineCommandResult";
-import { MobileSheetActionGroup } from "@cowboy/app-shell";
+import { ScrollEdges, MobileSheetActionGroup } from "@cowboy/app-shell";
 import { ConfirmSheet, Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { HintTooltip } from "./HintTooltip";
@@ -1772,7 +1772,7 @@ export function SettingsShell({
                             <InfoContent desktop />
                         ) : <UsageLogs />}
                     </Box>
-                </Box>
+                <ScrollEdges /></Box>
             ) : !tabPanelVisible ? null : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent providerIntent={initialProviderIntent} /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
             <Stack
                 key={mobileSettingsSection ?? "index"}

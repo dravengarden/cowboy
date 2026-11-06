@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { StatusChip } from "./StatusChip";
 import { shortcutKey } from "./desktop/commands/imeShortcut";
 import {
@@ -93,7 +94,6 @@ import {
   useManagedCalls,
   useCallClock,
 } from "./managedCalls";
-
 export function StateChip(
   { call, desktop = false }: { call: ManagedCallSummary; desktop?: boolean },
 ): React.JSX.Element {
@@ -1201,7 +1201,7 @@ function DesktopCallRail({ calls, selected, onSelect }: {
           </ButtonBase>
         );
       })}
-    </Box>
+    <ScrollEdges /></Box>
   );
 }
 
@@ -1644,7 +1644,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
                       desktop
                       onOpenChild={openChild}
                     />
-                  </Box>
+                  <ScrollEdges /></Box>
                 )}
               </Stack>
               <Box sx={{ mx: -3, mt: 1, borderTop: 1, borderColor: "divider" }}>

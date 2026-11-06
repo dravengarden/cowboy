@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { Alert, Button, Stack, Typography } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmSheet } from "./Sheet";
@@ -125,7 +126,7 @@ export function SubscriptionRevocation({ account, label, revoking, owner, datase
         {started && !completed && <Typography role="status">Cleanup is pending. Offline Machines and unconfirmed process exits stay in the list until confirmed.</Typography>}
         <Stack sx={{ maxHeight: "35vh", overflowY: "auto" }}>
           {progress?.completion?.missing.map((item, index) => <Typography variant="body2" key={`${item.kind}:${item.target}:${index}`} sx={{ overflowWrap: "anywhere" }}>{item.kind.replaceAll("_", " ")} · {item.target}</Typography>)}
-        </Stack>
+        <ScrollEdges /></Stack>
       </Stack>
     </ConfirmSheet>
   </>;

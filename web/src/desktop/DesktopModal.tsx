@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import {
   Box,
   Dialog,
@@ -109,7 +110,7 @@ export function DesktopModal({
           : { minHeight: 0, overflow: "auto" }}
       >
         {children}
-      </Box>
+      <ScrollEdges /></Box>
       {footer && <><Divider />{footer}</>}
       {shortcutGroups
         ? <DesktopShortcutBar groups={shortcutGroups} />

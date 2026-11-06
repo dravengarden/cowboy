@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { KeyboardArrowDown, KeyboardArrowUp, Refresh } from "@mui/icons-material";
 import { Box, Button, ButtonBase, Chip, CircularProgress, Popover, Stack, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
@@ -34,7 +35,6 @@ import type { CodeLanguage } from "./codeApi";
 import type { GitReviewEntry } from "./gitReviewModel";
 import { restoreReviewScrollTop } from "./reviewScrollPosition";
 import { HintTooltip } from "../../HintTooltip";
-
 export const SYMBOL_NAVIGATION_KINDS = [
   "definition",
   "declaration",
@@ -1222,7 +1222,7 @@ export function DocumentView({
                 </HintTooltip>
               );
             })}
-          </Box>
+          <ScrollEdges /></Box>
         )}
       </Box>
     )
@@ -1673,7 +1673,7 @@ export function DocumentView({
                 }}
               >
                 {symbolContent}
-              </Box>
+              <ScrollEdges /></Box>
             </Popover>
           )}
       </Box>

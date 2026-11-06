@@ -37,6 +37,7 @@ import {
 } from "react";
 
 import { DetentSheet } from "./detent-sheet.tsx";
+import { ScrollEdges } from "./scroll-edges.tsx";
 
 const DISMISS_TAP_MOVE_SLOP_PX = 10;
 const DISMISS_TAP_MAX_MS = 800;
@@ -648,7 +649,7 @@ export function BottomSheet(
     islandActions,
     islandContext,
     hideMobileTitle = false,
-    readerTopBleed = false,
+    readerTopBleed = hideMobileTitle,
     denseHeader,
     fill = false,
   }: BottomSheetProps,
@@ -673,7 +674,7 @@ export function BottomSheet(
         PaperProps={{ sx: { maxWidth: wide ? { sm: 560, lg: 720 } : 444 } }}
       >
         {title == null ? null : <DialogTitle sx={{ fontWeight: 700 }}>{title}</DialogTitle>}
-        <DialogContent>{children}</DialogContent>
+        <DialogContent>{children}<ScrollEdges /></DialogContent>
         {actions == null
           ? null
           : <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, px: 3, pb: 2 }}>{actions}</Box>}

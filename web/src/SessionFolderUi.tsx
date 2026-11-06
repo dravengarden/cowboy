@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 // Sessions-sidebar folder chrome shared by the Mobile drawer and the Desktop
 // rail (docs/sessions-folders.md): the per-device collapsed set, the folder
 // name prompt, the Move-to / Bind-project pickers and the delete confirm.
@@ -454,7 +455,7 @@ export function FolderPickerShell({
                 : "No matching folders."}
             </Typography>
           )}
-        </List>
+        <ScrollEdges top={false} /></List>
       </Sheet>
     </InAppRoot>
   );
@@ -548,7 +549,7 @@ export function ProjectPickerShell({
               No project labels among the current sessions.
             </Typography>
           )}
-        </List>
+        <ScrollEdges /></List>
       </Sheet>
     </InAppRoot>
   );

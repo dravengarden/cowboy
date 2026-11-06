@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 // The background-tasks inspector (docs/background-tasks.md §6.2): the Tool
 // inspector's frame — a Desktop Dialog with a rail beside the details, a
 // Mobile cover Sheet — listing every TaskSummary grouped Needs you / Active /
@@ -667,7 +668,7 @@ export function BackgroundTasksInspector({
               <TaskList tasks={tasks} selected={selectedKey} desktop onSelect={(key): void => selectBackgroundTask(key)} />
               <Box sx={{ flex: 1 }} />
               {legacySwitch}
-            </Box>
+            <ScrollEdges /></Box>
             <Box
               sx={{
                 minHeight: 0,
@@ -693,7 +694,7 @@ export function BackgroundTasksInspector({
                 }}
               >
                 {detail}
-              </Box>
+              <ScrollEdges /></Box>
             </Box>
           </Box>
           <DesktopShortcutBar
@@ -768,7 +769,7 @@ export function BackgroundTasksInspector({
               <Box inert={level !== "conversation"} sx={{ flex: 1, minWidth: 0, display: "flex", visibility: level === "conversation" ? "visible" : "hidden" }}>
                 <CallConversation call={selected.call} desktop={false} onDetails={showMobileDetails} />
               </Box>
-              {level === "detail" && <Box sx={{ position: "absolute", inset: 0, overflowY: "auto", px: 2, pb: "var(--cowboy-sheet-dock-clearance, 76px)" }}>{detail}</Box>}
+              {level === "detail" && <Box sx={{ position: "absolute", inset: 0, overflowY: "auto", px: 2, pb: "var(--cowboy-sheet-dock-clearance, 76px)" }}>{detail}<ScrollEdges /></Box>}
             </Box>
           )
           : detail}

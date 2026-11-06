@@ -42,6 +42,11 @@ labels, without adding a second navigation hierarchy.
 - Use paint-only selected states and the existing sheet/drawer primitives.
   Reading, taps and swipes must stay responsive with real code on screen.
   Follow the [mobile compositor contract](mobile-spatial-presentation.md).
+- Use the shared theme-aware reader edges for vertical reading surfaces.
+  Full-screen content can pass beneath a soft safe-area gradient; local scroll
+  regions fade only where more content remains. Short content and boundary
+  items remain clear. Keep focused input, sticky actions and nested dialogs
+  unobscured, and preserve native editor and image-pan behaviour.
 
 ## Desktop: keyboard and available space
 

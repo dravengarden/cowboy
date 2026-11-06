@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { useEffect, useRef, useState } from "react";
 import { alpha, Box, ButtonBase, Stack, Typography } from "@mui/material";
 import {
@@ -200,7 +201,7 @@ export function DesktopRecentDialog({
             </ButtonBase>
           );
         })}
-      </Box>
+      <ScrollEdges /></Box>
     </DesktopModal>
   );
 }

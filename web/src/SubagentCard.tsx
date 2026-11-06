@@ -1,7 +1,7 @@
 // One ACP subagent's details: what it was asked, its bounded activity and its
 // result. The transcript shows one compact row per subagent (TaskRow); these
 // details open in the background-tasks inspector. Shared by Desktop and Mobile.
-
+import { ScrollEdges } from "@cowboy/app-shell";
 import {
   Box,
   Button,
@@ -74,7 +74,7 @@ function Section({ label, children }: { label: string; children: string }): Reac
       <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 650 }}>
         {label}
       </Typography>
-      <Box sx={SECTION_TEXT_SX}>{children}</Box>
+      <Box sx={SECTION_TEXT_SX}>{children}<ScrollEdges /></Box>
     </Box>
   );
 }

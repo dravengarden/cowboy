@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, Stack, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
@@ -151,7 +152,7 @@ function RunConfigPane({
         }}
       >
         {children}
-      </Stack>
+      <ScrollEdges /></Stack>
       {footer}
     </Box>
   );
@@ -483,7 +484,7 @@ export function RunConfigurationDialog({
         >
           {session && <SessionContextSettings session={session} inlineLinks />}
         </RunConfigPane>
-      </Box>
+      <ScrollEdges /></Box>
     </DesktopModal>
   );
 }
