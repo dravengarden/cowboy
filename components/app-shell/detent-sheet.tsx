@@ -167,7 +167,7 @@ const frostSheen = (mode: "light" | "dark", isTop: boolean): string => {
 // behind the sheet" bug). Keeping the sheet < 1300 lets all those overlays
 // render above it for free — no per-control z-index overrides needed anywhere.
 const Z = 1250;
-const SAFE_BOTTOM = "calc(16px + env(safe-area-inset-bottom, 0px))";
+const SAFE_BOTTOM = "calc(var(--cowboy-sheet-footer-gap, 16px) + env(safe-area-inset-bottom, 0px))";
 // Prefer Cowboy's iPad PWA floor when the host publishes it. Standalone
 // WebKit often reports a zero safe-area while still painting status chrome
 // over the grabber; env() remains the fallback for hosts without the var.
@@ -1061,7 +1061,7 @@ export function DetentSheet(
                       display: "flex",
                       justifyContent: "center",
                       gap: 1,
-                      px: 2,
+                      paddingInline: "max(var(--cowboy-sheet-footer-inline, 16px), env(safe-area-inset-left, 0px)) max(var(--cowboy-sheet-footer-inline, 16px), env(safe-area-inset-right, 0px))",
                       visibility: topMost ? "visible" : "hidden",
                       // Blank overlay space belongs to the scroll body. Ordinary
                       // action shelves remain interactive; floating island rows

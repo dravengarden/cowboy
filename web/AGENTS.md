@@ -109,9 +109,14 @@ the peek, or freeze the session list to make a swipe cheaper.
 
 Mobile cover readers and inspectors use the shared `Sheet.islandContext` (or
 `MobileSheetContextDock` for direct DetentSheet owners) to place identity and
-status in the reusable `SheetContextSummary` above the independent round
-navigation island. Facts wrap across the available width; excess content scrolls
-within the bounded summary. Use the context action for Details and an action rail when multiple
+status in the reusable `SheetContextSummary` beside the independent round
+navigation island. Place navigation on the left for left-handed access; match
+the summary’s floating surface treatment to the controls, using small corners
+and compact padding for information rather than capsule geometry. Use available
+footer width with safe-area-aware side insets; retain the system bottom safe area.
+Facts wrap across the available width; excess content scrolls
+within the bounded summary. The summary title opens Details; avoid stacking a
+full-width information card over a centered navigation island. Use an action rail when multiple
 commands are useful. Do not hide common information just to shrink the dock.
 Empty rails consume no space. Avoid a duplicate
 top title/status bar. Preserve specialized multi-action navigators such as Tool
