@@ -317,7 +317,15 @@ impl Registry {
             let active = buffers.active.write().await;
             super::native_open::recover(&buffers.native_open, &active, zed).await?;
         }
-        super::sync_owners::ensure_admission(buffers, &*buffers.active.read().await)?;
+        let key = (slot.worktree.clone(), slot.path.clone());
+        super::native_open::admit(
+            buffers,
+            &*buffers.active.read().await,
+            zed,
+            &key,
+            current.remote_id,
+        )
+        .await?;
         open_prevalidated(slot, id, current.remote_id, buffers, zed).await?;
         Ok(reply(lease, LeaseState::Open))
     }

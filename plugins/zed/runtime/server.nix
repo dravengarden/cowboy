@@ -39,7 +39,7 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.8.0";
+  version = "1.9.0";
   inherit src cargoDeps;
   patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ./server/acquisition-bounds.patch ./server/replacement-bounds.patch ./server/snapshot-lifetimes.patch ./server/remote-edits.patch ];
   postPatch = ''
@@ -83,7 +83,9 @@ in platform.buildRustPackage {
         CowboyAnalysisFrontier cowboy_analysis_frontier = 1006;
         CowboyAnalysisFrontierResponse cowboy_analysis_frontier_response = 1007;
         CowboyOpenAttempt cowboy_open_attempt = 1008;
-        CowboyOpenAttemptResponse cowboy_open_attempt_response = 1009;'
+        CowboyOpenAttemptResponse cowboy_open_attempt_response = 1009;
+        CowboyOpenTarget cowboy_open_target = 1010;
+        CowboyOpenTargetResponse cowboy_open_target_response = 1011;'
     substituteInPlace crates/proto/src/proto.rs \
       --replace-fail '(ReloadBuffers, Foreground),' '(ReloadBuffers, Foreground),
         (CowboyBufferSync, Foreground),
@@ -95,19 +97,23 @@ in platform.buildRustPackage {
         (CowboyAnalysisFrontier, Foreground),
         (CowboyAnalysisFrontierResponse, Foreground),
         (CowboyOpenAttempt, Foreground),
-        (CowboyOpenAttemptResponse, Foreground),' \
+        (CowboyOpenAttemptResponse, Foreground),
+        (CowboyOpenTarget, Foreground),
+        (CowboyOpenTargetResponse, Foreground),' \
       --replace-fail '(ReloadBuffers, ReloadBuffersResponse),' '(ReloadBuffers, ReloadBuffersResponse),
         (CowboyBufferSync, CowboyBufferSyncResponse),
         (CowboyNavigation, CowboyNavigationResponse),
         (CowboyCloseBuffers, CowboyCloseBuffersResponse),
         (CowboyAnalysisFrontier, CowboyAnalysisFrontierResponse),
-        (CowboyOpenAttempt, CowboyOpenAttemptResponse),' \
+        (CowboyOpenAttempt, CowboyOpenAttemptResponse),
+        (CowboyOpenTarget, CowboyOpenTargetResponse),' \
       --replace-fail '    ReloadBuffers,' '    ReloadBuffers,
         CowboyBufferSync,
         CowboyNavigation,
         CowboyCloseBuffers,
         CowboyAnalysisFrontier,
-        CowboyOpenAttempt,'
+        CowboyOpenAttempt,
+        CowboyOpenTarget,'
     substituteInPlace crates/project/src/lsp_store.rs \
       --replace-fail 'pub struct LspStore {' 'mod cowboy_navigation;
     mod cowboy_frontier;
@@ -187,7 +193,8 @@ in platform.buildRustPackage {
       --replace-fail 'client.add_entity_request_handler(Self::handle_reload_buffers);' 'client.add_entity_request_handler(Self::handle_reload_buffers);
         client.add_entity_request_handler(Self::handle_cowboy_buffer_sync);
         client.add_entity_request_handler(Self::handle_cowboy_close_buffers);
-        client.add_entity_request_handler(Self::handle_cowboy_open_attempt);' \
+        client.add_entity_request_handler(Self::handle_cowboy_open_attempt);
+        client.add_entity_request_handler(Self::handle_cowboy_open_target);' \
       --replace-fail '    pub fn has_shared_buffers(&self) -> bool {' '    pub(crate) fn cowboy_navigation_owner(&self, peer: proto::PeerId, buffer: &Entity<Buffer>, cx: &App) -> bool {
             self.shared_buffers.get(&peer)
                 .and_then(|values| values.get(&buffer.read(cx).remote_id()))

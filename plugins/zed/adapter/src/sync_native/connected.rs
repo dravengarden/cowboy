@@ -454,6 +454,14 @@ async fn restart_does_not_adopt_old_ticket(
 async fn private_extensions(zed: &ZedRuntime, buffer: u64, worktree: u64, workspace: &Path) {
     analysis_frontier_answers(zed, buffer).await;
     recovers_an_abandoned_open(zed, worktree, workspace).await;
+    // The server names what an open would return: reserving the open buffer
+    // refuses only its own path; an unopened path is still admitted.
+    let reserved = HashSet::from([buffer]);
+    let target = |path: &'static str| {
+        crate::native_open::ensure_target_unreserved(&reserved, zed, worktree, Path::new(path))
+    };
+    assert!(target("sample.txt").await.is_err());
+    assert!(target("never-opened.txt").await.is_ok());
 }
 
 // An open whose owner never committed latches the fence; the same server

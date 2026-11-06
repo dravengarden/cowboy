@@ -1,7 +1,7 @@
 //! Private adapter coordination, not a Service authorization API. Generic
 //! Machine forwarding rejects effects; protocol 20 adds a separate core-owned
 //! invocation. A serialized ID, content hash or read lease grants no effect.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -107,13 +107,27 @@ pub(super) fn ensure_admission(
     buffers: &crate::BufferState,
     active: &HashMap<Key, BufferLease>,
 ) -> Result<()> {
-    buffers.native_open.check()?;
+    ensure_unfenced(buffers, active)?;
     // A path not in this map can alias an existing native ID (overlapping roots,
     // links, native canonicalization). Until that ID is known, do not issue an
-    // OpenBuffer/navigation at all. This conservative gate is process-wide;
-    // unrelated already-open reads and releases remain available.
+    // OpenBuffer/navigation at all. Opens confine this to the actual target
+    // with `reserved` and the server's open-target answer; navigation and
+    // synchronization keep it process-wide. Unrelated already-open reads and
+    // releases remain available.
     for buffer in active.values() {
         ensure_readable(buffer)?;
+    }
+    Ok(())
+}
+
+/// The process-wide part of admission: an unresolved open or navigation can
+/// yield any native ID.
+pub(super) fn ensure_unfenced(
+    buffers: &crate::BufferState,
+    active: &HashMap<Key, BufferLease>,
+) -> Result<()> {
+    buffers.native_open.check()?;
+    for buffer in active.values() {
         ensure!(
             !buffer
                 .lease_ids
@@ -123,6 +137,16 @@ pub(super) fn ensure_admission(
         );
     }
     Ok(())
+}
+
+/// Native IDs a new open must not alias: closing or reserved for
+/// synchronization.
+pub(super) fn reserved(active: &HashMap<Key, BufferLease>) -> HashSet<u64> {
+    active
+        .values()
+        .filter(|buffer| ensure_readable(buffer).is_err())
+        .map(|buffer| buffer.remote_id)
+        .collect()
 }
 
 struct Ticket {

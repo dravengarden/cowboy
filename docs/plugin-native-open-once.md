@@ -71,6 +71,19 @@ bound to the exact native process by the connection itself; a replaced server
 starts a new adapter runtime with no latched attempt. The owner chose this
 automatic, query-only recovery (2026-11-05), so no Operator step is involved.
 
+## Reservations confined to the open target (Zed 1.24.0)
+
+A buffer that is closing or reserved for synchronization used to refuse every
+new open on the Machine, because a different path could alias its native ID.
+Private server `1.9.0` answers `CowboyOpenTarget` with what an open of a path
+would return (`NOT_OPEN`, `OPEN` with the existing buffer ID, or `LOADING`)
+using the same lookup as `open_buffer`, without opening anything. An open is
+refused only when that answer is a reserved native ID, is `LOADING`, or is
+unavailable; an unopened path or another buffer is admitted. The check runs
+before the lease leaves Prepared and again under the active-map write lock
+before dispatch. Unresolved opens and unresolved navigation remain
+process-wide fences: their native IDs are not known.
+
 ## Evidence and limits
 
 Source tests cover cancellation at all three native awaits, malformed replies,

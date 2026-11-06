@@ -529,3 +529,87 @@ async fn a_pending_open_stays_fenced() {
     assert!(closed.try_recv().is_err());
     assert!(outbound.try_recv().is_err());
 }
+
+async fn answer_target(
+    zed: &Zed,
+    private: &mut tokio::sync::mpsc::Receiver<wire::CowboyBufferSyncEnvelope>,
+    state: wire::cowboy_open_target_response::State,
+    buffer_id: u64,
+) {
+    let envelope = private.recv().await.unwrap();
+    let Some(Payload::OpenTargetRequest(query)) = &envelope.payload else {
+        panic!("not an open target query: {envelope:?}")
+    };
+    assert_eq!((query.protocol, query.path.as_str()), (1, "other.txt"));
+    let encoded = wire::CowboyBufferSyncEnvelope {
+        responding_to: Some(envelope.id),
+        payload: Some(Payload::OpenTargetResponse(
+            wire::CowboyOpenTargetResponse {
+                protocol: 1,
+                state: state as i32,
+                buffer_id,
+            },
+        )),
+        ..Default::default()
+    }
+    .encode_to_vec();
+    assert!(zed.sync.response(envelope.id, &encoded));
+}
+
+#[tokio::test]
+async fn a_reservation_refuses_only_opens_that_could_alias_it() {
+    use wire::cowboy_open_target_response::State as Target;
+    for (target, buffer_id, admitted) in [
+        (Target::NotOpen, 0, true),
+        (Target::Open, 5, true),
+        (Target::Open, 8, false),
+        (Target::Loading, 0, false),
+    ] {
+        let f = Fixture::new().await;
+        let (sync, mut private, _closed) = crate::native_close::tests::fixture();
+        let (zed, mut outbound) = coordinate_queries::fixture_with(sync).await;
+        let held = f.prepare().await;
+        let task = spawn(&f, &zed, Request::OpenBufferLease { lease: held });
+        ordinary_open(&zed, &mut outbound, 8).await;
+        assert_eq!(state(task.await.unwrap().unwrap()), LeaseState::Open);
+        // Native buffer 8 is now closing: its ID is reserved.
+        f.buffers
+            .active
+            .write()
+            .await
+            .values_mut()
+            .next()
+            .unwrap()
+            .closing = true;
+        let next = prepare_other(&f).await;
+        let task = spawn(
+            &f,
+            &zed,
+            Request::OpenBufferLease {
+                lease: next.clone(),
+            },
+        );
+        answer_target(&zed, &mut private, target, buffer_id).await;
+        if admitted {
+            // Checked again under the active-map write lock before dispatch.
+            answer_target(&zed, &mut private, target, buffer_id).await;
+            ordinary_open(&zed, &mut outbound, 9).await;
+            assert_eq!(state(task.await.unwrap().unwrap()), LeaseState::Open);
+        } else {
+            let error = task.await.unwrap().unwrap_err();
+            assert!(
+                error.to_string().contains("reserved native buffer"),
+                "{error:#}"
+            );
+            assert!(outbound.try_recv().is_err(), "a refused open dispatched");
+            assert_eq!(
+                state(
+                    f.request(Request::QueryBufferLease { lease: next })
+                        .await
+                        .unwrap()
+                ),
+                LeaseState::Prepared
+            );
+        }
+    }
+}

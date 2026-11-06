@@ -1549,7 +1549,7 @@ async fn open_buffer_at(
     if let Some(zed) = zed {
         native_open::recover(&buffers.native_open, &all, zed).await?;
     }
-    sync_owners::ensure_admission(buffers, &all)?;
+    native_open::admit(buffers, &all, zed, &key, worktree_id).await?;
     let mut attempt = None;
     if !all.contains_key(&key) {
         let (remote_id, version) = if let Some(zed) = zed {

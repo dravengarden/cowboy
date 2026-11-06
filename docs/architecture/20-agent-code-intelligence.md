@@ -142,7 +142,8 @@ multiply Unknown outcomes. Therefore **no automatic acquisition** (pull, badge
 or push) until all of:
 
 1. fences scoped to the native-ID alias set of the target, never to pathname
-   equality;
+   equality (open admission done in Zed 1.24.0; unresolved navigation stays
+   process-wide);
 2. independently authorized Unknown recovery and cleanup tied to exact native
    process identity, surviving Controller restart and worker replacement
    (open recovery implemented in Zed 1.23.0: an automatic query of the same

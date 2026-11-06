@@ -56,6 +56,62 @@ impl Attempt<'_> {
 /// An upstream round trip first proves the original request reached the
 /// server, so `UNKNOWN` means it was never sent. A buffer it opened that no
 /// owner holds is released through the confirmed native close.
+/// Admission of one open: the process-wide fences, then reservations confined
+/// to what this open could return. Without a native runtime every
+/// reservation still applies.
+pub(super) async fn admit(
+    buffers: &BufferState,
+    active: &HashMap<(PathBuf, PathBuf), BufferLease>,
+    zed: Option<&Zed>,
+    key: &(PathBuf, PathBuf),
+    worktree_id: u64,
+) -> Result<()> {
+    let Some(zed) = zed else {
+        return sync_owners::ensure_admission(buffers, active);
+    };
+    sync_owners::ensure_unfenced(buffers, active)?;
+    if let Some(buffer) = active.get(key) {
+        return sync_owners::ensure_readable(buffer);
+    }
+    ensure_target_unreserved(&sync_owners::reserved(active), zed, worktree_id, &key.1).await
+}
+
+/// Refuse an open only when its target could be a reserved native buffer:
+/// the same server reports which existing buffer the open would return.
+pub(super) async fn ensure_target_unreserved(
+    reserved: &HashSet<u64>,
+    zed: &ZedRuntime,
+    worktree_id: u64,
+    path: &Path,
+) -> Result<()> {
+    use wire::cowboy_open_target_response::State;
+    if reserved.is_empty() {
+        return Ok(());
+    }
+    let refused = || anyhow::anyhow!("the open target may alias a reserved native buffer");
+    let query = Payload::OpenTargetRequest(wire::CowboyOpenTarget {
+        project_id: proto::REMOTE_SERVER_PROJECT_ID,
+        protocol: 1,
+        worktree_id,
+        path: path.to_string_lossy().into_owned(),
+    });
+    let Ok(Ok(Payload::OpenTargetResponse(reply))) =
+        tokio::time::timeout(Duration::from_secs(5), zed.sync.exchange(zed, query)).await
+    else {
+        return Err(refused());
+    };
+    anyhow::ensure!(reply.protocol == 1, refused());
+    if reply.state == State::NotOpen as i32
+        || (reply.state == State::Open as i32
+            && reply.buffer_id != 0
+            && !reserved.contains(&reply.buffer_id))
+    {
+        Ok(())
+    } else {
+        Err(refused())
+    }
+}
+
 pub(super) async fn recover(
     fence: &Fence,
     active: &HashMap<(PathBuf, PathBuf), BufferLease>,

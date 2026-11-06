@@ -163,3 +163,24 @@ message CowboyOpenAttemptResponse {
   Outcome outcome = 2;
   uint64 buffer_id = 3;
 }
+
+// Which existing native buffer an `OpenBufferByPath` for this path would return,
+// without opening anything. `LOADING` means a load is in flight.
+message CowboyOpenTarget {
+  uint64 project_id = 1;
+  uint32 protocol = 2;
+  uint64 worktree_id = 3;
+  string path = 4;
+}
+
+message CowboyOpenTargetResponse {
+  uint32 protocol = 1;
+  enum State {
+    UNSPECIFIED = 0;
+    NOT_OPEN = 1;
+    OPEN = 2;
+    LOADING = 3;
+  }
+  State state = 2;
+  uint64 buffer_id = 3;
+}

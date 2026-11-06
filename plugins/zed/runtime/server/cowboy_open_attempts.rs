@@ -4,6 +4,10 @@
 //! instead of replaying the open. Recording starts before the handler's first
 //! await; requests on one connection are dispatched in order, so a request
 //! this process never recorded was never received before the query.
+//!
+//! The same module answers which native buffer an open of a path would return
+//! (`CowboyOpenTarget`) without opening anything, so the peer can confine its
+//! admission fences to the buffers a new open could actually alias.
 use super::*;
 use parking_lot::Mutex;
 
@@ -93,7 +97,60 @@ impl Drop for Attempt {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// An open would load a new buffer.
+    NotOpen,
+    /// An open would return this existing buffer.
+    Open(u64),
+    /// A load for this path is in flight; its buffer is not known yet.
+    Loading,
+}
+
 impl BufferStore {
+    /// What `open_buffer` would return for this path, without opening it.
+    pub fn cowboy_open_target(&self, path: &ProjectPath) -> Target {
+        if let Some(buffer) = self.path_to_buffer_id.get(path).copied()
+            && self.get(buffer).is_some()
+        {
+            Target::Open(buffer.to_proto())
+        } else if self.loading_buffers.contains_key(path) {
+            Target::Loading
+        } else {
+            Target::NotOpen
+        }
+    }
+
+    pub(super) async fn handle_cowboy_open_target(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::CowboyOpenTarget>,
+        cx: AsyncApp,
+    ) -> Result<proto::CowboyOpenTargetResponse> {
+        use proto::cowboy_open_target_response::State as Reply;
+        let request = envelope.payload;
+        anyhow::ensure!(
+            request.protocol == 1
+                && request.project_id == proto::REMOTE_SERVER_PROJECT_ID
+                && request.path.len() <= 4_096,
+            "invalid private open target query"
+        );
+        let path = ProjectPath {
+            worktree_id: WorktreeId::from_proto(request.worktree_id),
+            path: RelPath::from_unix_str(&request.path)?.into(),
+        };
+        let target = this.read_with(&cx, |this, _| this.cowboy_open_target(&path));
+        let (state, buffer_id) = match target {
+            Target::NotOpen => (Reply::NotOpen, 0),
+            Target::Open(id) => (Reply::Open, id),
+            Target::Loading => (Reply::Loading, 0),
+        };
+        Ok(proto::CowboyOpenTargetResponse {
+            protocol: 1,
+            state: state as i32,
+            buffer_id,
+        })
+    }
+
     pub fn cowboy_open_attempts(&self) -> &State {
         &self.cowboy_open_attempts
     }

@@ -18,5 +18,7 @@ message CowboyBufferSyncEnvelope {
     CowboyAnalysisFrontierResponse analysis_response = 1007;
     CowboyOpenAttempt open_attempt_request = 1008;
     CowboyOpenAttemptResponse open_attempt_response = 1009;
+    CowboyOpenTarget open_target_request = 1010;
+    CowboyOpenTargetResponse open_target_response = 1011;
   }
 }
