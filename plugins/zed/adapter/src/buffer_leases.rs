@@ -454,6 +454,7 @@ async fn open_prevalidated(
         BufferOwner::Owned(id),
         buffers,
         zed,
+        None,
     )
     .await?;
     slot.state = Phase::Open;

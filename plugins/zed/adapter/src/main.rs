@@ -23,8 +23,10 @@ mod coordinate_queries;
 mod coordinates;
 mod diagnostics;
 mod extensions;
+mod legacy_buffers;
 #[cfg(test)]
 use extensions::extension_manifest;
+use legacy_buffers::{close_buffer, open_buffer};
 mod native_close;
 mod native_open;
 mod navigation_native;
@@ -377,6 +379,7 @@ type Buffers = Arc<BufferState>;
 #[derive(Default)]
 struct BufferState {
     active: RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>,
+    legacy: Mutex<legacy_buffers::Registry>,
     native_open: native_open::Fence,
     leases: Mutex<buffer_leases::Registry>,
     syncs: Mutex<sync_owners::Registry>,
@@ -1509,33 +1512,6 @@ async fn buffer_key(worktree: PathBuf, relative: PathBuf) -> Result<(PathBuf, Pa
     Ok((worktree, relative))
 }
 
-async fn open_buffer(
-    worktree: PathBuf,
-    path: PathBuf,
-    lease_id: String,
-    worktrees: &Worktrees,
-    buffers: &Buffers,
-    zed: Option<&Zed>,
-) -> Result<Response> {
-    validate_lease_id(&lease_id)?;
-    let (worktree, path) = buffer_key(worktree, path).await?;
-    let worktree_id = worktrees
-        .read()
-        .await
-        .get(&worktree)
-        .context("worktree is not open")?
-        .remote_id;
-    open_buffer_at(
-        worktree,
-        path,
-        worktree_id,
-        BufferOwner::Legacy(lease_id),
-        buffers,
-        zed,
-    )
-    .await
-}
-
 async fn open_buffer_at(
     worktree: PathBuf,
     path: PathBuf,
@@ -1543,9 +1519,16 @@ async fn open_buffer_at(
     owner: BufferOwner,
     buffers: &Buffers,
     zed: Option<&Zed>,
+    expected_id: Option<u64>,
 ) -> Result<Response> {
     let key = (worktree.clone(), path.clone());
     let mut all = buffers.active.write().await;
+    if let Some(id) = expected_id {
+        anyhow::ensure!(
+            all.get(&key).is_some_and(|buffer| buffer.remote_id == id),
+            "original legacy buffer is no longer retained"
+        );
+    }
     if let Some(zed) = zed {
         native_open::recover(&buffers.native_open, &all, zed).await?;
     }
@@ -1587,26 +1570,6 @@ async fn open_buffer_at(
         attempt.complete();
     }
     Ok(response)
-}
-
-async fn close_buffer(
-    worktree: PathBuf,
-    path: PathBuf,
-    lease_id: String,
-    buffers: &Buffers,
-    zed: Option<&Zed>,
-) -> Result<Response> {
-    validate_lease_id(&lease_id)?;
-    let (worktree, path) = buffer_key(worktree, path).await?;
-    close_buffer_at(
-        worktree,
-        path,
-        BufferOwner::Legacy(lease_id),
-        buffers,
-        zed,
-        || {},
-    )
-    .await
 }
 
 // Release the already captured native resource. Do not resolve a filesystem
