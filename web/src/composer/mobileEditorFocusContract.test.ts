@@ -1061,7 +1061,8 @@ test("delivery picker dismisses mobile keyboard and restores the captured select
   );
   assertEquals(close.includes("flushSync("), true);
   assertEquals(close.includes("focusSelection(source.selection)"), true);
-  assertEquals(close.indexOf("setForceAnchor(null)") < close.indexOf("focusSelection"), true);
+  assertEquals(close.indexOf("setDeliveryAnchor(null)") >= 0 &&
+      close.indexOf("setDeliveryAnchor(null)") < close.indexOf("focusSelection"), true);
 });
 
 test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => {
