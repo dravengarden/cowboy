@@ -1061,7 +1061,7 @@ export function DetentSheet(
                       display: "flex",
                       justifyContent: "center",
                       gap: 1,
-                      px: 2,
+                      paddingInline: "max(var(--cowboy-sheet-footer-inline, 16px), env(safe-area-inset-left, 0px)) max(var(--cowboy-sheet-footer-inline, 16px), env(safe-area-inset-right, 0px))",
                       visibility: topMost ? "visible" : "hidden",
                       // Blank overlay space belongs to the scroll body. Ordinary
                       // action shelves remain interactive; floating island rows
