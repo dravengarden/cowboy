@@ -908,7 +908,7 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
       ),
       "The previous context's document was read against the new session",
     );
-    await click(textButton(overview()!, "Browse files"));
+    await click(labelled("Worktree files"));
     await until(
       () => !!files()?.textContent?.includes("README.md"),
       "Clean workspace should offer file browsing",

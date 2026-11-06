@@ -387,11 +387,11 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
         });
         tab.classList.add("Mui-focusVisible");
         await new Promise<void>((resolve) => setTimeout(resolve, 200));
-        const indicator = getComputedStyle(tab, "::after");
+        const indicator = getComputedStyle(tab.querySelector(".segmented-tab-label")!);
         check(
           tab.getAttribute("aria-selected") === "true" &&
-            indicator.height === "2px" && indicator.backgroundColor !== "rgba(0, 0, 0, 0)",
-          `${mode}: selected touch tab lost its underline`,
+            indicator.backgroundColor !== "rgba(0, 0, 0, 0)",
+          `${mode}: selected touch tab lost its fill`,
         );
         for (
           const other of container.querySelectorAll<HTMLElement>(
@@ -402,7 +402,7 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
           other.classList.add("Mui-focusVisible");
           // MUI interpolates the previous tab's background for 150ms.
           await new Promise<void>((resolve) => setTimeout(resolve, 200));
-          const fill = getComputedStyle(other).backgroundColor;
+          const fill = getComputedStyle(other.querySelector(".segmented-tab-label")!).backgroundColor;
           check(
             fill === "transparent" || /rgba\([^)]*,\s*0\)$/.test(fill),
             `${mode}: old touch tab retained selected paint (${fill})`,
@@ -412,7 +412,7 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
     }
     document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
     tests.push(
-      "real light and dark themes retain the selected underline after touch and clear the old tab",
+      "real light and dark themes retain the selected fill after touch and clear the old tab",
     );
     const strip = container.querySelector<HTMLElement>(
       "[data-repository-change-target]",

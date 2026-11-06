@@ -133,7 +133,7 @@ async function run(p: FixturePage) {
   await p.evaluate("document.documentElement.style.fontSize='10px'");
   await capture("small-text", controls);
   await p.evaluate(
-    `(()=>{const icon=document.querySelector('[data-review-mode-glyph] svg').getBoundingClientRect();if(icon.width<20||icon.height<20)throw new Error('Review mode glyph is too small');if(document.querySelector('[data-repository-change-target]'))throw new Error('Mobile retained a duplicate top branch header');})()`,
+    `(()=>{const icon=document.querySelector('[data-review-mode-glyph] svg').getBoundingClientRect();if(icon.width!==15||icon.height!==15)throw new Error('Review mode glyph ignores the small root font');if(document.querySelector('[data-repository-change-target]'))throw new Error('Mobile retained a duplicate top branch header');})()`,
   );
   await p.evaluate("document.documentElement.style.removeProperty('font-size')");
   await click('[aria-label="More review actions"]');
@@ -205,25 +205,25 @@ async function emptyOverview(p: FixturePage, controls: string[]) {
   await p.evaluate(
     `(()=>{const r=document.querySelector('[data-review-repository-controls]').getBoundingClientRect();if(r.height>52)throw new Error('Empty narrow review should fit one repository row')})()`,
   );
-  await p.evaluate(
-    "document.querySelector('[aria-label=\"View repository history\"]').scrollIntoView({block:'nearest'})",
-  );
+  await p.evaluate(`(() => {
+    const content=document.querySelector('[data-review-empty-state]').textContent;
+    if(content.includes('Browse files') || content.includes('View history'))throw new Error('Empty review duplicates the persistent navigation');
+  })()`);
   await capture("empty-narrow-actions", [
-    '[aria-label="View repository history"]',
+    '[data-segmented-tab="history"]',
+    '[aria-label="Worktree files"]',
     "[data-review-context-button]",
   ]);
-  await click('[aria-label="View repository history"]');
+  await click('[data-segmented-tab="history"]');
   await until(
     "document.querySelector('[data-segmented-tab=\"history\"]')?.getAttribute('aria-selected')==='true'",
   );
   await click('[data-segmented-tab="changes"]');
   await until("!!document.querySelector('[data-review-empty-state]')");
   await viewport(844, 390);
-  await p.evaluate(
-    "document.querySelector('[aria-label=\"View repository history\"]').scrollIntoView({block:'nearest'})",
-  );
   await capture("empty-landscape-actions", [
-    '[aria-label="View repository history"]',
+    '[data-segmented-tab="history"]',
+    '[aria-label="Worktree files"]',
     "[data-review-context-button]",
   ]);
   await viewport(390, 844);
@@ -257,6 +257,14 @@ async function overviewFontScales(p: FixturePage, controls: string[]) {
         if(Math.abs(size-sizes[i]*${scale})>0.05)throw new Error('Text ignores global font scale: '+node.textContent+' '+size);
         return {text:node.textContent,size};
       });
+      const icons=Array.from(document.querySelectorAll('[data-review-workbench] .MuiIconButton-root > svg, [data-review-mode-glyph] > svg'));
+      if(icons.length<4)throw new Error('Missing workbench icons');
+      for(const icon of icons) {
+        const r=icon.getBoundingClientRect();
+        if(Math.abs(r.width-24*${scale})>0.05 || Math.abs(r.height-24*${scale})>0.05)throw new Error('Workbench icon ignores global font size');
+      }
+      const plate=document.querySelector('[data-review-mode-glyph]').getBoundingClientRect();
+      if(Math.abs(plate.width-32*${scale})>0.05)throw new Error('Mode highlight ignores global font size');
       const facts=document.querySelector('[data-review-empty-facts]').getBoundingClientRect();
       const overview=document.querySelector('[data-review-empty-state]').parentElement.getBoundingClientRect();
       if(overview.width-facts.width>24.5)throw new Error('Empty overview wastes available width');

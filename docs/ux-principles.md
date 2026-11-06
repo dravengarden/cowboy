@@ -27,10 +27,13 @@ labels, without adding a second navigation hierarchy.
   stacked full-width segmented bars, oversized capsules and repeated dividers.
   Reduce decoration and wasted space while preserving 44 px touch targets.
 - Keep a control's visual highlight proportional to its glyph or label; the
-  hit area may be larger. Small reading fonts must not make navigation glyphs
-  unreadable. Empty readers should use the available height for a balanced
+  hit area may be larger. Navigation glyphs and their selected highlight scale
+  with the global font setting, while the touch target keeps its minimum size.
+  Empty readers should use the available height for a balanced
   overview: explain the current scope, show known status and recent activity,
-  and offer useful next actions. Do not use fixed top padding or invent facts
+  and offer useful next actions when the workbench does not already provide
+  them. Avoid duplicate file/history buttons beside persistent navigation.
+  Do not use fixed top padding or invent facts
   merely to fill space. Move identity into the bottom context summary on Mobile.
 - All text follows the global font-size setting, including empty states,
   metadata and navigation labels. Use relative font sizes without fixed-pixel

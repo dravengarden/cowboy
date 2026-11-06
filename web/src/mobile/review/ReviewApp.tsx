@@ -1473,7 +1473,6 @@ export function ReviewApp({
             onOpenSession={switchSession}
             embedded={navigationInline}
             actionsContainer={inlineActionsContainer}
-            onBrowseFiles={() => activateReviewMode("files")}
             onOpenWorktree={openableWorktreeProject
               ? (path) => openBoundContext(worktreeContextId(openableWorktreeProject.machineId, openableWorktreeProject.workspaceId, path))
               : undefined}
@@ -1903,7 +1902,7 @@ export function ReviewApp({
               </IconButton>
             </Toolbar>}
             <Stack data-review-workbench direction="row" alignItems="center" spacing={0.5}
-              sx={{ px: 1, minHeight: 48, flexWrap: "wrap", "& .MuiIconButton-root": { width: 44, height: 44, "& .MuiSvgIcon-root": { fontSize: "clamp(20px, 1.5rem, 28px)" } } }}>
+              sx={{ px: 1, minHeight: 48, flexWrap: "wrap", "& .MuiIconButton-root": { width: 44, height: 44, "& .MuiSvgIcon-root": { fontSize: "1.5rem" } } }}>
               <HintTooltip title="Agent">
                 <IconButton
                   data-mobile-open-agent="true"
