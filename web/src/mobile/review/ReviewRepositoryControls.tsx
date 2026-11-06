@@ -1,5 +1,4 @@
-import { Box, Stack } from "@mui/material";
-import { SegmentedTabs } from "../../SegmentedTabs";
+import { Box, Stack, Tab, Tabs } from "@mui/material";
 
 export type RepositorySection = "changes" | "history" | "worktrees";
 
@@ -20,60 +19,44 @@ export function ReviewRepositoryControls({
       sx={{
         flexShrink: 0,
         flexWrap: "wrap",
-        columnGap: 0.5,
+        columnGap: 0.25,
         px: 0.75,
         py: 0.25,
         bgcolor: "background.default",
       }}
     >
-      <SegmentedTabs
-        rootProps={{ "data-mobile-repository-tabs": "" }}
+      <Tabs
+        data-mobile-repository-tabs
         aria-label="Repository views"
-        fullWidth={false}
+        selectionFollowsFocus
         sx={{
           flex: "0 0 auto",
           minWidth: 0,
-          position: "relative",
-          zIndex: 0,
-          gap: 0,
-          gridAutoColumns: "max-content",
-          "--segmented-selected-fill": "transparent",
-          "&::before": {
-            content: '""',
-            position: "absolute",
-            inset: 0,
-            my: "auto",
-            height: "2rem",
-            borderRadius: "0.5rem",
-            bgcolor: "action.hover",
-            zIndex: -1,
-            pointerEvents: "none",
-          },
-          "&& [data-segmented-tab]": {
-            minHeight: 44,
-            minWidth: 44,
-            px: 0,
-            borderRadius: "0.5rem",
+          maxWidth: "100%",
+          minHeight: 48,
+          borderRadius: 1,
+          bgcolor: "action.hover",
+          "& .MuiTabs-indicator": { display: "none" },
+          "& .MuiTabs-list": { flexWrap: "wrap" },
+          "& .MuiTab-root": {
+            minHeight: 48,
+            minWidth: 48,
+            px: 0.5,
+            borderRadius: 1,
             fontSize: "0.8125rem",
-            "& .segmented-tab-label": {
-              px: "0.25rem",
-              py: "0.375rem",
-              borderRadius: "0.375rem",
-            },
-            "&[data-selected='true'] .segmented-tab-label": {
+            textTransform: "none",
+            "&.Mui-selected": {
               bgcolor: "action.selected",
-              fontWeight: 600,
             },
           },
         }}
         value={section}
-        onChange={onSection}
-        options={[
-          { value: "changes", label: "Changes" },
-          { value: "history", label: "History" },
-          { value: "worktrees", label: "Worktrees" },
-        ]}
-      />
+        onChange={(_, value: RepositorySection) => onSection(value)}
+      >
+        <Tab data-segmented-tab="changes" value="changes" label="Changes" />
+        <Tab data-segmented-tab="history" value="history" label="History" />
+        <Tab data-segmented-tab="worktrees" value="worktrees" label="Worktrees" />
+      </Tabs>
       {section === "changes" && <Box ref={onControls} sx={{ display: "contents" }} />}
     </Stack>
   );

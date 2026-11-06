@@ -1902,7 +1902,7 @@ export function ReviewApp({
               </IconButton>
             </Toolbar>}
             <Stack data-review-workbench direction="row" alignItems="center" spacing={0.5}
-              sx={{ px: 1, minHeight: 48, flexWrap: "wrap", "& .MuiIconButton-root": { width: 44, height: 44, "& .MuiSvgIcon-root": { fontSize: "1.5rem" } } }}>
+              sx={{ px: 1, minHeight: 48, flexWrap: "wrap", "& .MuiIconButton-root": { width: "auto", height: "auto", minWidth: 48, minHeight: 48, p: 1, "& .MuiSvgIcon-root": { fontSize: "1.5rem" } } }}>
               <HintTooltip title="Agent">
                 <IconButton
                   data-mobile-open-agent="true"
@@ -1911,7 +1911,7 @@ export function ReviewApp({
                     navigationHaptic();
                     openMobileProduct("agent");
                   }}
-                  sx={{ width: 44, height: 44, color: "text.secondary" }}
+                  sx={{ color: "text.secondary" }}
                 >
                   <ChatBubbleOutline />
                 </IconButton>

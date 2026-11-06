@@ -53,8 +53,8 @@ export function ReviewChangeControls({
           aria-pressed={unreadOnly}
           onClick={onUnread}
           sx={{
-            minWidth: 44,
-            height: 44,
+            minWidth: 48,
+            minHeight: 48,
             px: 0.75,
             gap: 0.5,
             borderRadius: 1,

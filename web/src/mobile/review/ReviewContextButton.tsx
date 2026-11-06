@@ -27,7 +27,7 @@ export function ReviewContextButton({
     <Box
       sx={{
         flex: 1,
-        minWidth: 0,
+        minWidth: mobile ? 48 : 0,
         ...(mobile ? { borderRadius: "8px", bgcolor: "background.paper" } : {}),
       }}
     >
@@ -38,7 +38,7 @@ export function ReviewContextButton({
         sx={{
           width: "100%",
           minWidth: 0,
-          minHeight: 44,
+          minHeight: mobile ? 48 : 44,
           flexDirection: "column",
           alignItems: "stretch",
           textAlign: "left",

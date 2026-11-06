@@ -669,12 +669,11 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
     );
 
     const modeButton = document.querySelector<HTMLElement>("[data-mobile-review-mode-switcher] [aria-pressed='true']")!;
-    const modeGlyph = modeButton.querySelector<HTMLElement>("[data-review-mode-glyph]")!;
-    const restingFill = getComputedStyle(modeGlyph).backgroundColor;
+    const restingFill = getComputedStyle(modeButton).backgroundColor;
     const hadCoarse = document.documentElement.classList.contains(COARSE_POINTER_ROOT_CLASS);
     document.documentElement.classList.add(COARSE_POINTER_ROOT_CLASS);
     modeButton.classList.add("Mui-focusVisible");
-    check(restingFill !== "rgba(0, 0, 0, 0)" && getComputedStyle(modeGlyph).backgroundColor === restingFill,
+    check(restingFill !== "rgba(0, 0, 0, 0)" && getComputedStyle(modeButton).backgroundColor === restingFill,
       "touch focus must preserve the selected Review mode fill");
     modeButton.classList.remove("Mui-focusVisible");
     if (!hadCoarse) document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
