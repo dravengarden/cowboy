@@ -20,6 +20,7 @@ use crate::core::SessionMeta;
 
 mod acquire;
 mod diagnostics;
+mod summary;
 
 pub(in crate::server) async fn maintain_holdings(state: std::sync::Arc<AppState>) {
     let mut shutdown = state.shutdown.clone();
@@ -56,6 +57,10 @@ pub(super) async fn read(
             only_keys(args, &["paths"])?;
             Request::Diagnostics(paths(args)?)
         }
+        "code.summary" => {
+            only_keys(args, &[])?;
+            Request::Summary
+        }
         "code.symbols" => {
             only_keys(args, &["query", "limit"])?;
             Request::Symbols(text(args, "query")?, limit(args)?.unwrap_or(50))
@@ -87,6 +92,14 @@ pub(super) async fn read(
         }
         return Ok(value);
     }
+    if let Request::Summary = request {
+        let paths = acquire::observed_paths(observed.session());
+        let value = diagnostics::read_existing(state, observed, paths).await;
+        if !session::current(&state.hub, &state.machine_control, observed) {
+            return Err("code_context_changed".into());
+        }
+        return Ok(summary::project(value));
+    }
     let value = match request {
         Request::Search(params) => {
             let result = content_search(state, &scope, cwd, params.query())
@@ -104,7 +117,7 @@ pub(super) async fn read(
                 .map_err(failed)?;
             json!({"state":"complete","precision":"heuristic","path":path,"symbols":symbols})
         }
-        Request::Diagnostics(_) => unreachable!("answered above"),
+        Request::Diagnostics(_) | Request::Summary => unreachable!("answered above"),
         Request::Symbols(query, limit) => {
             let found = workspace_symbols(state, &scope, cwd, query, limit)
                 .await
@@ -125,6 +138,7 @@ pub(super) async fn read(
 enum Request {
     Search(ContentSearchParams),
     Diagnostics(Vec<String>),
+    Summary,
     Outline(String),
     Symbols(String, usize),
 }
