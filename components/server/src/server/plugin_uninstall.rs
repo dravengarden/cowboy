@@ -2,9 +2,7 @@
 //! no automatic replay across Controller/Machine connection incarnations.
 
 use super::*;
-use crate::machine_control::{
-    CommandFailure, CommandRequestError, ConnectionToken, PluginUninstallTransport,
-};
+use crate::machine_control::{CommandFailure, CommandRequestError, ConnectionToken};
 use crate::machine_protocol::plugin_recovery::{RecoveryBasis, RecoveryObservation};
 use crate::machine_protocol::plugin_step::{StepLookup, StepOutcome};
 use crate::plugin_operation::{Actor, Phase, Problem, UninstallIntent};
@@ -270,7 +268,6 @@ trait Effects: Sync {
 struct LiveEffects {
     state: Arc<AppState>,
     connection: ConnectionToken,
-    transport: PluginUninstallTransport,
     authority: UninstallAuthority,
     release: crate::plugin_catalog::VerifiedPluginRelease,
 }
@@ -304,8 +301,8 @@ impl Effects for LiveEffects {
             && intent.machine_step().is_ok_and(|step| {
                 self.state
                     .machine_control
-                    .plugin_uninstall_transport(&self.connection, &step)
-                    == Ok(self.transport)
+                    .plugin_uninstall_preflight(&self.connection, &step)
+                    .is_ok()
             })
             && self.authority.within_budget();
         if !valid {
@@ -321,56 +318,24 @@ impl Effects for LiveEffects {
         self.state.supervisor.reload_session(id, true)
     }
     async fn uninstall(&self, intent: &UninstallIntent) -> Result<(), CommandRequestError> {
-        if self.transport == PluginUninstallTransport::Leased {
-            let step = intent.machine_step().map_err(|_| CommandRequestError {
-                certainty: CommandFailure::NotSent,
-                detail: "invalid Machine step".to_owned(),
-            })?;
-            let observation = self
-                .state
-                .machine_control
-                .plugin_uninstall_step(&self.connection, &step, false)
-                .await?;
-            return require_applied_step(observation.result);
-        }
-        let request_id = machine_request_id("plugin-uninstall");
-        self.state
+        let step = intent.machine_step().map_err(|_| CommandRequestError {
+            certainty: CommandFailure::NotSent,
+            detail: "invalid Machine step".to_owned(),
+        })?;
+        let observation = self
+            .state
             .machine_control
-            .command_on_connection(
-                &self.connection,
-                request_id.clone(),
-                crate::machine_protocol::MachineCommand::UninstallPlugin {
-                    request_id,
-                    plugin_id: intent.plugin_id.clone(),
-                    generation_digest: intent.generation_digest.clone(),
-                },
-            )
-            .await
+            .plugin_uninstall_step(&self.connection, &step, false)
+            .await?;
+        require_applied_step(observation.result)
     }
-    async fn reactivate(&self, intent: &UninstallIntent) -> Result<(), CommandRequestError> {
-        if self.transport == PluginUninstallTransport::Leased {
-            // A durable forward receipt does not grant installation-CAS or
-            // authorize an unjournaled inverse. Keep the recovery fence.
-            return Err(CommandRequestError {
-                certainty: CommandFailure::NotSent,
-                detail: "durable compensation requires a separately verified recovery step"
-                    .to_owned(),
-            });
-        }
-        let request_id = machine_request_id("plugin-reactivate");
-        self.state
-            .machine_control
-            .reactivate_plugin_on_connection(
-                &self.connection,
-                request_id,
-                crate::machine_control::RetainedPluginTarget {
-                    plugin_id: &intent.plugin_id,
-                    version: &intent.plugin_version,
-                    digest: &intent.generation_digest,
-                    fingerprint: &intent.contract_fingerprint,
-                },
-            )
-            .await
+    async fn reactivate(&self, _intent: &UninstallIntent) -> Result<(), CommandRequestError> {
+        // A durable forward receipt does not grant installation-CAS or
+        // authorize an unjournaled inverse. Keep the recovery fence.
+        Err(CommandRequestError {
+            certainty: CommandFailure::NotSent,
+            detail: "durable compensation requires a separately verified recovery step".to_owned(),
+        })
     }
 }
 
@@ -608,15 +573,13 @@ async fn run_admitted(
         let connection = state.machine_control.operation_connection(&plan.machine_id).map_err(anyhow::Error::msg)?;
         let (intent, release) = validate_intent(&state, id.clone(), plan).await?;
         let step = intent.machine_step()?;
-        let transport = state.machine_control.plugin_uninstall_transport(&connection, &step).map_err(anyhow::Error::msg)?;
+        state.machine_control.plugin_uninstall_preflight(&connection, &step).map_err(anyhow::Error::msg)?;
         let authority = approval.bind(&intent)?;
-        let effects = LiveEffects { state: Arc::clone(&state), connection, transport, authority, release };
-        if transport == PluginUninstallTransport::Leased {
-            let observation = state.machine_control.plugin_uninstall_step(&effects.connection, &step, true)
-                .await.map_err(|_| anyhow::anyhow!("Machine operation preflight unavailable"))?;
-            ensure!(observation.admission_enabled && observation.result == StepLookup::NotFound {},
-                "Machine durable uninstall is not admitting a new step; no workers were stopped");
-        }
+        let effects = LiveEffects { state: Arc::clone(&state), connection, authority, release };
+        let observation = state.machine_control.plugin_uninstall_step(&effects.connection, &step, true)
+            .await.map_err(|_| anyhow::anyhow!("Machine operation preflight unavailable"))?;
+        ensure!(observation.admission_enabled && observation.result == StepLookup::NotFound {},
+            "Machine durable uninstall is not admitting a new step; no workers were stopped");
         ensure!(effects.authorized(&intent).await, "Plugin confirmation authority is no longer current");
         // Even an intent COMMIT error can be ambiguous. Keep the memory fence;
         // startup either finds the record or safely forgets a no-effect attempt.

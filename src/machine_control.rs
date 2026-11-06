@@ -112,7 +112,6 @@ pub enum RequestBinding<'a> {
     Plugin(&'a PluginHostBinding),
     Workspace(&'a WorkspaceCodeScope),
     Connection(&'a ConnectionToken),
-    Reactivate(&'a ConnectionToken, RetainedPluginTarget<'a>),
     Telemetry(
         &'a ConnectionToken,
         &'a BindingStep,
@@ -123,14 +122,6 @@ pub enum RequestBinding<'a> {
         &'a crate::machine_protocol::telemetry_export::ExportAttempt,
         &'a TelemetryInstallationLease,
     ),
-}
-
-#[derive(Clone, Copy)]
-pub struct RetainedPluginTarget<'a> {
-    pub plugin_id: &'a str,
-    pub version: &'a str,
-    pub digest: &'a str,
-    pub fingerprint: &'a str,
 }
 
 #[derive(Debug, Clone)]
@@ -170,12 +161,6 @@ pub enum ReplyKind {
     TelemetryRecovery,
     TelemetryRecoveryCommit,
     TelemetryRecoveryAudit,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PluginUninstallTransport {
-    Legacy,
-    Leased,
 }
 
 /// One refused adapter request. `detail` stays a diagnostic string; only the
@@ -433,24 +418,6 @@ impl LiveState {
                     plugin.state == PluginInstallationState::Active
                         && same_installation(plugin, expected)
                 }) && matches.next().is_none()
-            })
-    }
-
-    fn may_reactivate(&self, machine_id: &str, target: RetainedPluginTarget<'_>) -> bool {
-        self.plugin_inventory
-            .get(machine_id)
-            .is_some_and(|inventory| {
-                let mut slot = inventory
-                    .plugins
-                    .iter()
-                    .filter(|p| p.plugin_id == target.plugin_id);
-                let matches = slot.next().is_none_or(|p| {
-                    p.state == PluginInstallationState::Active
-                        && p.plugin_version == target.version
-                        && p.generation_digest == target.digest
-                        && p.contract_fingerprint == target.fingerprint
-                });
-                matches && slot.next().is_none()
             })
     }
 
@@ -897,7 +864,6 @@ impl MachineControl {
         }
         if let Some(
             RequestBinding::Connection(token)
-            | RequestBinding::Reactivate(token, _)
             | RequestBinding::Telemetry(token, _, _)
             | RequestBinding::TelemetryExport(token, _, _),
         ) = binding
@@ -918,13 +884,6 @@ impl MachineControl {
                 .is_some_and(|target| lease.matches(&live, token, target))
         {
             return Err("Managed telemetry installation changed before dispatch".to_owned());
-        }
-        if let Some(RequestBinding::Reactivate(_, target)) = binding
-            && !live.may_reactivate(machine_id, target)
-        {
-            return Err(
-                "Plugin recovery inventory is missing or the installation changed".to_owned(),
-            );
         }
         if let Some(RequestBinding::Plugin(binding)) = binding
             && (!connection.token.same(&binding.connection)
@@ -1122,11 +1081,13 @@ impl MachineControl {
             .ok_or_else(|| "Machine is not connected".to_owned())
     }
 
-    pub fn plugin_uninstall_transport(
+    /// Admit a Plugin uninstall on this exact connection. Every admitted
+    /// Machine runs it as a leased, durable step (`MACHINE_PROTOCOL_FLOOR`).
+    pub fn plugin_uninstall_preflight(
         &self,
         token: &ConnectionToken,
         step: &UninstallStep,
-    ) -> Result<PluginUninstallTransport, String> {
+    ) -> Result<(), String> {
         step.validate()
             .map_err(|_| "Invalid Plugin uninstall intent".to_owned())?;
         if !self.matches_site(token, &step.service_id, &step.machine_id) {
@@ -1140,11 +1101,7 @@ impl MachineControl {
             .map(|c| c.protocol)
             .ok_or_else(|| "Machine connection changed before Plugin preflight".to_owned())?;
         if protocol >= crate::machine_protocol::PLUGIN_EXECUTION_LEASE_PROTOCOL_VERSION {
-            Ok(PluginUninstallTransport::Leased)
-        } else if step.schema == 1
-            && (5..crate::machine_protocol::PLUGIN_STEP_PROTOCOL_VERSION).contains(&protocol)
-        {
-            Ok(PluginUninstallTransport::Legacy)
+            Ok(())
         } else {
             Err(
                 "Update the Machine for bounded Plugin execution; no workers were stopped"
@@ -1454,29 +1411,6 @@ impl MachineControl {
             command,
             PROVIDER_COMMAND_TIMEOUT,
             Some(RequestBinding::Connection(connection)),
-        )
-        .await
-    }
-
-    /// Reject an observed replacement before enqueue. The older Machine
-    /// protocol still has no durable installation-CAS; this is NOT that proof.
-    pub async fn reactivate_plugin_on_connection(
-        &self,
-        connection: &ConnectionToken,
-        request_id: String,
-        target: RetainedPluginTarget<'_>,
-    ) -> Result<(), CommandRequestError> {
-        let command = MachineCommand::ReactivatePlugin {
-            request_id: request_id.clone(),
-            plugin_id: target.plugin_id.to_owned(),
-            generation_digest: target.digest.to_owned(),
-        };
-        self.command_receipt(
-            &connection.0.machine_id,
-            request_id,
-            command,
-            PROVIDER_COMMAND_TIMEOUT,
-            Some(RequestBinding::Reactivate(connection, target)),
         )
         .await
     }
@@ -2115,7 +2049,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn leased_uninstall_requires_current_capable_connection_without_legacy_downgrade() {
+    async fn leased_uninstall_requires_current_capable_connection() {
         let control = MachineControl::default();
         let step = crate::machine_protocol::plugin_step::fixture();
         let mut tracked = step.clone();
@@ -2125,7 +2059,7 @@ mod tests {
                 .try_into()
                 .unwrap(),
         );
-        for protocol in 1..=13 {
+        for protocol in [1, 9, 12, 13, 37] {
             let (sender, mut commands) = mpsc::unbounded_channel();
             let connection = control.install(
                 "machine-test".into(),
@@ -2134,33 +2068,30 @@ mod tests {
                 protocol,
                 sender,
             );
-            let selected = control.plugin_uninstall_transport(&connection, &step);
-            match protocol {
-                5..=9 => assert_eq!(selected.unwrap(), PluginUninstallTransport::Legacy),
-                13 => assert_eq!(selected.unwrap(), PluginUninstallTransport::Leased),
-                _ => assert!(selected.is_err()),
+            let leased = protocol >= 13;
+            for admitted in [&step, &tracked] {
+                assert_eq!(
+                    control
+                        .plugin_uninstall_preflight(&connection, admitted)
+                        .is_ok(),
+                    leased
+                );
             }
-            assert_eq!(
-                control
-                    .plugin_uninstall_transport(&connection, &tracked)
-                    .is_ok(),
-                protocol == 13
-            );
             let mut wrong = step.clone();
             wrong.machine_id = "other-machine".into();
             assert!(
                 control
-                    .plugin_uninstall_transport(&connection, &wrong)
+                    .plugin_uninstall_preflight(&connection, &wrong)
                     .is_err()
             );
             let mut invalid = step.clone();
             invalid.schema = 3;
             assert!(
                 control
-                    .plugin_uninstall_transport(&connection, &invalid)
+                    .plugin_uninstall_preflight(&connection, &invalid)
                     .is_err()
             );
-            if protocol < 13 {
+            if !leased {
                 let result = control
                     .plugin_uninstall_step(
                         &connection,
@@ -2175,7 +2106,7 @@ mod tests {
             control.disconnect("machine-test");
             assert!(
                 control
-                    .plugin_uninstall_transport(&connection, &step)
+                    .plugin_uninstall_preflight(&connection, &step)
                     .is_err()
             );
             assert!(!control.leased_plugin_steps(&connection));
@@ -2184,14 +2115,13 @@ mod tests {
                 control.install("machine-test".into(), "epoch".into(), false, 13, sender);
             assert!(
                 control
-                    .plugin_uninstall_transport(&connection, &step)
+                    .plugin_uninstall_preflight(&connection, &step)
                     .is_err()
             );
-            assert_eq!(
+            assert!(
                 control
-                    .plugin_uninstall_transport(&replacement, &step)
-                    .unwrap(),
-                PluginUninstallTransport::Leased
+                    .plugin_uninstall_preflight(&replacement, &step)
+                    .is_ok()
             );
         }
     }
@@ -2364,49 +2294,6 @@ mod tests {
             .await;
         assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown);
         assert!(control.live.read().pending.is_empty());
-    }
-
-    #[tokio::test]
-    async fn compensation_rejects_a_replaced_or_ambiguous_installation_slot() {
-        let control = MachineControl::default();
-        let (connection, mut rx) = connect(&control, "hawk");
-        let expected = plugin_inventory("codex");
-        let target = RetainedPluginTarget {
-            plugin_id: &expected.plugin_id,
-            version: &expected.plugin_version,
-            digest: &expected.generation_digest,
-            fingerprint: &expected.contract_fingerprint,
-        };
-        assert!(
-            control
-                .reactivate_plugin_on_connection(&connection, "missing".to_owned(), target)
-                .await
-                .is_err()
-        );
-        let mut replaced = expected.clone();
-        replaced.generation_digest = format!("sha256:{}", "f".repeat(64));
-        for inventory in [vec![replaced], vec![expected.clone(), expected.clone()]] {
-            observe(&control, &connection, inventory);
-            let error = control
-                .reactivate_plugin_on_connection(&connection, "conflict".to_owned(), target)
-                .await
-                .unwrap_err();
-            assert_eq!(error.certainty, CommandFailure::NotSent);
-            assert!(rx.try_recv().is_err());
-        }
-        for inventory in [vec![expected.clone()], Vec::new()] {
-            observe(&control, &connection, inventory);
-            let request =
-                control.reactivate_plugin_on_connection(&connection, "allowed".to_owned(), target);
-            let (result, ()) = tokio::join!(request, async {
-                assert!(matches!(
-                    rx.recv().await,
-                    Some(MachineCommand::ReactivatePlugin { .. })
-                ));
-                control.record_remote(&connection, command_reply("allowed"));
-            });
-            result.unwrap();
-        }
     }
 
     #[test]
