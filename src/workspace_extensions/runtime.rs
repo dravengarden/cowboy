@@ -356,7 +356,6 @@ async fn read_with_cli(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt as _;
 
     #[test]
     fn remote_identity_is_confined_and_never_exports_credentials() {
@@ -386,7 +385,10 @@ mod tests {
         let executable = root.join("gh-fixture");
         let data = root.join("data.json");
         // No credentials: the script only verifies argv/environment and serves fixture bytes.
-        std::fs::write(&executable, format!(r#"#!/bin/sh
+        install_fake_cli(
+            &executable,
+            &format!(
+                r#"#!/bin/sh
 test -z "$GH_TOKEN$GITHUB_TOKEN$GH_DEBUG" || exit 42
 test "$GH_PROMPT_DISABLED" = 1 || exit 43
 if [ "$1" = auth ]; then
@@ -396,8 +398,10 @@ fi
 test "$1:$2:$3:$4:$5:$6:$7" = 'api:--method:GET:--hostname:github.com:--header:Accept: application/vnd.github+json' || exit 45
 case "$8" in 'repos/owner/repo/issues?state=open&per_page=50&page=1'|'repos/owner/repo/issues/12') ;; *) exit 46 ;; esac
 cat '{}'
-"#, data.display())).unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+"#,
+                data.display()
+            ),
+        );
         let contract: cowboy_plugin_sdk::WorkspaceExtensionContract =
             serde_json::from_str(include_str!("../../plugins/github/contract.json")).unwrap();
         let view = contract.views.iter().find(|v| v.id == "issues").unwrap();
@@ -460,11 +464,10 @@ cat '{}'
             .await,
             Err(Failure::InvalidRequest)
         ));
-        std::fs::write(
+        install_fake_cli(
             &executable,
             "#!/bin/sh\necho 'secret raw error' >&2\nexit 1\n",
-        )
-        .unwrap();
+        );
         assert!(matches!(
             read_with_cli(executable.to_str().unwrap(), &remote, view, None, None, 1).await,
             Err(Failure::ConnectionUnavailable)

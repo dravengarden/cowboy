@@ -170,7 +170,7 @@ pub(super) async fn agent_buffer_request(
     let mut operation = Operation::connect(hub, control, None, scope).await?;
     operation
         .request(serde_json::json!({
-            "type":"acquireAgentBuffer", "worktree":request.worktree,
+            "type":"acquireAgentBuffer", "ownerProtocol":2, "worktree":request.worktree,
             "path":request.path, "leaseId":request.lease_id,
         }))
         .await

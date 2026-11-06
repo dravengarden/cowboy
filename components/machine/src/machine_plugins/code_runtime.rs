@@ -2,6 +2,15 @@
 use super::*;
 
 impl MachinePluginStore {
+    /// Attach Device policy before starting automatic Code lifecycle work.
+    pub fn configure_code_maintenance(
+        &self,
+        config: crate::config::Handle,
+    ) -> tokio::task::JoinHandle<()> {
+        self.use_device_config(config);
+        self.code_runtimes.start_agent_maintenance()
+    }
+
     pub async fn navigate_code_buffer(
         &self,
         invocation: CodeNavigationInvocation,

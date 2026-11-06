@@ -1,9 +1,9 @@
 //! Agent acquisition: `code.diagnostics` opens a file of the session's own
 //! worktree that no Code pane holds. The session's "Project language servers"
 //! switch is the authority (owner decision, 2026-11-06); the Operator-only
-//! owned-buffer API is not used. Each session holds its buffers under one
-//! deterministic legacy owner, so a retry or a Controller restart re-adopts an
-//! open instead of leaking another. Agent holdings are a small share of each
+//! owned-buffer API is not used. Each holding has a unique legacy owner,
+//! retained across retries. A later acquisition never reuses an owner whose
+//! delayed Close could still arrive. Holdings are a small share of each
 //! Machine, below interactive use, and are released after idle or once the
 //! switch is off.
 
@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
+use sha2::{Digest as _, Sha256};
 
 use super::super::super::{
     AppState, ZedAdapterResponse, session_code_context, zed_language_target, zed_session,
@@ -25,6 +26,7 @@ const IDLE: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Debug)]
 struct Held {
+    lease: String,
     machine: String,
     worktree: String,
     scope: Option<crate::core::SessionCodeScope>,
@@ -80,7 +82,11 @@ impl Held {
 }
 
 fn owner(session: &str) -> String {
-    format!("cowboy-agent-{session}")
+    format!(
+        "cowboy-agent-{:x}-{}",
+        Sha256::digest(session.as_bytes()),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 /// Whether one more holding fits the session's and the Machine's share.
@@ -108,7 +114,7 @@ pub(super) async fn acquire(
         })
         .ok_or("refused")?;
     let key = (session.to_owned(), target.clone());
-    {
+    let lease = {
         let mut held = HELD.lock();
         if let Some(holding) = held.get_mut(&key) {
             if holding.releasing
@@ -122,13 +128,16 @@ pub(super) async fn acquire(
             // holding a replaced code runtime lost.
             holding.last_used = Instant::now();
             holding.opening += 1;
+            holding.lease.clone()
         } else if !fits(&held, session, &context.machine_id, &worktree) {
             return Err("budget");
         } else {
+            let lease = owner(session);
             // Reserve before the await so concurrent reads cannot oversubscribe.
             held.insert(
                 key.clone(),
                 Held {
+                    lease: lease.clone(),
                     machine: context.machine_id.clone(),
                     worktree: worktree.clone(),
                     scope: Some(context.scope.clone()),
@@ -138,10 +147,10 @@ pub(super) async fn acquire(
                     possibly_open: false,
                 },
             );
+            lease
         }
-    }
+    };
     let mut opening = Opening(key, true);
-    let lease = owner(session);
     let opened = zed_session::agent_buffer_request(
         &state.hub,
         &state.machine_control,
@@ -211,7 +220,7 @@ pub(super) async fn release_stale(state: &AppState) {
         {
             continue;
         }
-        let lease = owner(session);
+        let lease = &holding.lease;
         let result = zed_session::buffer_request(
             &state.hub,
             &state.machine_control,
@@ -220,7 +229,7 @@ pub(super) async fn release_stale(state: &AppState) {
             zed_session::BufferRequest {
                 worktree: &holding.worktree,
                 path,
-                lease_id: &lease,
+                lease_id: lease,
                 open: false,
             },
         )
@@ -236,6 +245,23 @@ pub(super) async fn release_stale(state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_acquisition_never_reuses_a_delayed_close_owner() {
+        let first = owner("sess-test");
+        let next = owner("sess-test");
+        assert_ne!(first, next);
+        assert_eq!(
+            first.rsplit_once('-').unwrap().0,
+            next.rsplit_once('-').unwrap().0
+        );
+        assert_ne!(
+            first.rsplit_once('-').unwrap().0,
+            owner("another-session").rsplit_once('-').unwrap().0
+        );
+        assert!(first.len() <= 128);
+        assert!(owner(&"long-session".repeat(100)).len() <= 128);
+    }
 
     #[test]
     fn summary_keeps_session_incarnations_separate_without_extending_idle_time() {
@@ -271,6 +297,7 @@ mod tests {
 
     fn holding(machine: &str, worktree: &str) -> Held {
         Held {
+            lease: owner("fixture"),
             machine: machine.into(),
             worktree: worktree.into(),
             scope: None,
@@ -402,6 +429,6 @@ mod tests {
             held.insert(("b".into(), format!("g{i}")), holding("m", "/b"));
         }
         assert!(!fits(&held, "d", "m", "/a"), "per-Machine share");
-        assert_eq!(owner("sess-1"), "cowboy-agent-sess-1");
+        assert!(owner("sess-1").starts_with("cowboy-agent-"));
     }
 }

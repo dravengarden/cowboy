@@ -21,6 +21,7 @@ use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+mod agent_holdings;
 mod buffer_leases;
 mod buffer_navigation;
 mod buffer_sync;
@@ -77,12 +78,18 @@ struct WorktreeRoute {
     /// that the original handler finished.
     pending_worktree_open: bool,
     buffers: BTreeSet<(String, String)>,
+    agent_buffers: BTreeMap<(String, String), agent_holdings::Holding>,
     owned_buffers: BTreeSet<buffer_leases::LeaseRef>,
     owned_navigations: BTreeSet<crate::machine_protocol::code_buffer_navigation::NavigationRef>,
 }
 
 impl WorktreeRoute {
     fn dispatching(&mut self, request: &Value) -> Result<()> {
+        if matches!(request["type"].as_str(), Some("openBuffer" | "closeBuffer"))
+            && let Some(held) = self.agent_buffers.get_mut(&Self::buffer_key(request)?)
+        {
+            held.dispatching(request)?;
+        }
         match request["type"].as_str() {
             Some("openWorktree") => {
                 ensure!(
@@ -141,6 +148,7 @@ impl WorktreeRoute {
                     self.buffers.insert(key);
                 } else {
                     self.buffers.remove(&key);
+                    self.agent_buffers.remove(&key);
                 }
             }
             _ => {}
@@ -155,6 +163,7 @@ impl WorktreeRoute {
         self.worktree_leases == 0
             && !self.pending_worktree_open
             && self.buffers.is_empty()
+            && self.agent_buffers.is_empty()
             && self.owned_buffers.is_empty()
             && self.owned_navigations.is_empty()
     }
@@ -744,6 +753,15 @@ mod tests {
                 .unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
             let kind = request["type"].as_str().unwrap();
+            if kind == "closeBuffer" && generation == "generation-lost-agent-close" {
+                let marker = home.join("close-count");
+                let count: u32 = fs::read_to_string(&marker)
+                    .unwrap_or_default()
+                    .parse()
+                    .unwrap_or(0);
+                fs::write(marker, (count + 1).to_string()).unwrap();
+                continue;
+            }
             if matches!(kind, "openBuffer" | "openWorktree")
                 && matches!(
                     generation.as_str(),

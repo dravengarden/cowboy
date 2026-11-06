@@ -175,10 +175,14 @@ impl CodeRuntimeHost {
             .as_object()
             .context("invalid agent warming request")?;
         ensure!(
-            fields.len() == 4
+            (fields.len() == 4 || fields.len() == 5)
+                && fields.keys().all(|key| matches!(
+                    key.as_str(),
+                    "type" | "worktree" | "path" | "leaseId" | "ownerProtocol"
+                ))
                 && fields
-                    .keys()
-                    .all(|key| matches!(key.as_str(), "type" | "worktree" | "path" | "leaseId")),
+                    .get("ownerProtocol")
+                    .is_none_or(|value| value.as_u64() == Some(2)),
             "invalid agent warming request fields"
         );
         // Only automatic callers queue here. Interactive requests and releases
@@ -193,7 +197,7 @@ impl CodeRuntimeHost {
             Ok(sample) => return Ok(refused("saturated", Some(sample))),
             Err(_) => return Ok(refused("unavailable", None)),
         }
-        request_worktree(payload)?;
+        let worktree = request_worktree(payload)?.context("agent worktree is missing")?;
         let (path, lease) = WorktreeRoute::buffer_key(payload)?;
         ensure!(
             !path.is_empty()
@@ -203,6 +207,19 @@ impl CodeRuntimeHost {
                 && !lease.chars().any(char::is_whitespace),
             "invalid agent warming buffer identity"
         );
+        match self
+            .agent_holding_capacity(
+                plugin_id,
+                &worktree,
+                &(path, lease),
+                payload["ownerProtocol"] == 2,
+            )
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => return Ok(refused("saturated", None)),
+            Err(_) => return Ok(refused("unavailable", None)),
+        }
         let selection = select()?;
         ensure!(
             matches!(selection, CodeRuntimeSelection::Installed(_)),
@@ -253,6 +270,18 @@ impl CodeRuntimeHost {
         let open = serde_json::json!({"type":"openBuffer", "worktree":payload["worktree"], "path":payload["path"], "leaseId":payload["leaseId"]});
         // Reserve before either native effect. Cancellation while ensuring the
         // worktree cannot lose its original route or admission ownership.
+        let key = WorktreeRoute::buffer_key(&open)?;
+        agent_holdings::owner(&key.1, payload["ownerProtocol"] == 2)?;
+        let worktree = payload["worktree"]
+            .as_str()
+            .context("agent worktree is missing")?;
+        route
+            .agent_buffers
+            .entry(key.clone())
+            .or_insert_with(|| {
+                agent_holdings::Holding::opening(worktree, payload["ownerProtocol"] == 2)
+            })
+            .refresh(worktree)?;
         route.dispatching(&open)?;
         let ensure = serde_json::json!({"type":"ensureWorktree", "path":payload["worktree"], "trusted":true});
         let ready = exchange(socket, &ensure).await?;
@@ -263,6 +292,11 @@ impl CodeRuntimeHost {
         );
         let response = exchange(socket, &open).await?;
         route.observe(&open, &response)?;
+        route
+            .agent_buffers
+            .get_mut(&key)
+            .expect("reserved before dispatch")
+            .confirm();
         Ok(response)
     }
 }

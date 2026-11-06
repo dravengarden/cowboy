@@ -540,7 +540,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         current_platform(),
         std::env::consts::ARCH.to_owned(),
     )?);
-    providers.use_device_config(device_config.clone());
+    let _code_maintenance = providers.configure_code_maintenance(device_config.clone());
     // Reader floor 6a420ff5 is accepted for both components and Hawk's cold
     // bootstrap. Unadmitted Machines still open read-only without adoption.
     const INSTALLATION_TRACKING_ENABLED: bool = true;

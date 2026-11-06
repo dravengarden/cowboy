@@ -172,9 +172,14 @@ Until then agents receive only observations that already exist safely
 **Agent acquisition (implemented, Controller with Zed 1.24.0).** The owner
 chose the session's "Project language servers" switch as the acquisition
 authority (2026-11-06). `code.diagnostics` opens a file of the session's own
-worktree that no Code pane holds under one deterministic legacy owner per
-session (`cowboy-agent-<session>`), so a retry or Controller restart re-adopts
-rather than leaks. Agent holdings are a bounded share below interactive use:
+worktree that no Code pane holds under an acquisition-specific legacy owner
+(`cowboy-agent-<session-sha256>-<nonce>`). Retries retain that identity; a new
+holding or Controller restart uses a new identity so a delayed old Close cannot
+release the replacement. The Machine groups nonce-bearing owners by session
+for limits. The internal request explicitly declares `ownerProtocol: 2`;
+legacy requests retain Controller-only cleanup for rollback compatibility.
+Older Machines reject the additional field before native effects. Agent
+holdings are a bounded share below interactive use:
 4 per session, 8 per Machine, at most 2 agent-warmed worktrees per Machine;
 an independent Controller task checks every 30 seconds for holdings idle for
 5 minutes or with the switch off. Cleanup waits for in-flight opens, rechecks
@@ -203,11 +208,17 @@ gopls `document_current` after activation. This accepts successful admission,
 not saturation behavior: the latter is covered by delegated-cgroup tests of
 RSS/process/CPU refusal, interactive access and original/replacement accounting.
 
-Holdings are process-local:
-after a Controller restart the next `code.diagnostics` read of a held file
-re-tracks it (an open file is also held under the agent owner, within its share),
-so it is released when idle again; a held file never read again ends with its
-code runtime, bounded by the per-Machine share.
+The Machine also records automatic holdings before ensure/open dispatch and
+enforces the 4/8/2 count limits independently of Controller memory. Its own
+30-second maintenance loop releases confirmed Opens after five idle minutes,
+using the exact original runtime and original worktree spelling. Thus a
+Controller restart does not reset Machine admission counts or leave confirmed
+idle Opens dependent on another agent read. Interactive owners are preserved.
+Uncertain Opens and Closes remain counted; maintenance does not retry Close or
+infer completion from a missing owner. A release in progress prevents reuse of
+that owner. Independently authorized recovery of those uncertain holdings
+remains separate work. This is Machine-process state, not persistence across
+a Machine restart.
 
 ### Baselines, attribution, matching
 
