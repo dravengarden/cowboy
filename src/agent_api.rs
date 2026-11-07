@@ -618,7 +618,7 @@ export interface Cowboy {
   code: { // language engine's diagnostics; opens files no Code pane holds (acquired:true) when Project language servers is on
     diagnostics(paths:string[]): Promise<{coverage:"open_buffers";files:({path:string;acquired?:true;
       state:"document_current"|"stale"|"last_observed";counts:Record<"error"|"warning"|"information"|"hint",number>;diagnostics:CodeDiagnostic[];truncated:boolean;
-      analysis?:{server:string;state:"document_current"|"stale"|"unknown";reason:string|null}[]}
+      analysis?:{server:string;state:"document_current"|"stale"|"unknown";reason:string|null}[];bufferSnapshot?:{instance:string;buffer:string;bufferEpoch:string;version:{replicaId:number;timestamp:number}[];content:{sha256:string;utf8Bytes:number}}|null}
       | {path:string;state:"not_open"|"restricted"|"refused"|"unavailable"})[]}>; // 1..20 paths, <=50 per file, 1-based
   };
 }

@@ -286,6 +286,23 @@ impl Cache {
         Ok(self.text(id)?.content().clone())
     }
 
+    pub(crate) fn snapshot(
+        &self,
+        id: u64,
+    ) -> Result<Option<crate::language_observation::BufferSnapshot>> {
+        let text = self.text(id)?;
+        Ok(self
+            .instance
+            .as_ref()
+            .map(|instance| crate::language_observation::BufferSnapshot {
+                instance: instance.clone(),
+                buffer: id.to_string(),
+                buffer_epoch: self.buffers[&id].incarnation.to_string(),
+                version: text.version(),
+                content: text.content().clone(),
+            }))
+    }
+
     pub(crate) fn text_page(&self, id: u64, offset: u32) -> Result<String> {
         self.text(id)?.text_page(offset)
     }

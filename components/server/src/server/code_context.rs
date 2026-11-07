@@ -4,6 +4,7 @@
 use super::*;
 
 mod diagnostics;
+mod snapshot;
 pub(super) use diagnostics::{CodeDiagnostic, CodePoint};
 
 pub(super) fn projected_work_items(columbus: &std::path::Path) -> Vec<WorkspaceWorkItem> {
@@ -263,6 +264,8 @@ pub(super) enum ZedAdapterResponse {
         api_version: u8,
         path: String,
         version: Vec<CodeBufferVersion>,
+        #[serde(default, rename = "bufferSnapshot")]
+        buffer_snapshot: Option<Box<snapshot::BufferSnapshot>>,
         diagnostics: Vec<CodeDiagnostic>,
         inlay_hints: Vec<CodeInlayHint>,
         semantic_tokens: Vec<u32>,

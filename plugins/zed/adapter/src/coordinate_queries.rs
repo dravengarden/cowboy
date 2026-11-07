@@ -3,6 +3,7 @@ use super::*;
 use coordinates::tests::{peer, wire};
 
 mod content;
+mod snapshot;
 
 pub(crate) async fn fixture() -> (Arc<ZedRuntime>, mpsc::UnboundedReceiver<proto::Envelope>) {
     fixture_with(native_close::tests::fixture().0).await

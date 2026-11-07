@@ -156,6 +156,7 @@ async fn read_with_acquisition(
             Ok(ZedAdapterResponse::BufferLanguage {
                 diagnostics,
                 analysis,
+                buffer_snapshot,
                 ..
             }) => {
                 let analysis = analysis.filter(|servers| servers.len() <= MAX_SERVERS);
@@ -174,7 +175,8 @@ async fn read_with_acquisition(
                     .map(diagnostic)
                     .collect();
                 let mut file = json!({"path":path,"state":file_state(analysis.as_deref()),
-                    "counts":counts,"diagnostics":listed,"truncated":truncated});
+                    "counts":counts,"diagnostics":listed,"truncated":truncated,
+                    "bufferSnapshot":buffer_snapshot.filter(|value| value.bounded())});
                 if acquired {
                     file["acquired"] = json!(true);
                 }

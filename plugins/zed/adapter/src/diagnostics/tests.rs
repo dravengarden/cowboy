@@ -123,6 +123,31 @@ fn diagnostic_identity_preserves_native_codes_servers_and_observation_lifetimes(
 }
 
 #[test]
+fn empty_diagnostic_snapshots_preserve_text_identity_and_own_read_contract() {
+    let mut cache = Cache::default();
+    base(&mut cache, "a🙂z\n");
+    let first = serde_json::to_value(cache.snapshot(7).unwrap()).unwrap();
+    update(&mut cache, 1, 1, vec![]);
+    let same_text = serde_json::to_value(cache.snapshot(7).unwrap()).unwrap();
+    assert_eq!(first, same_text);
+    let observation = crate::LanguageObservation {
+        snapshot: cache.snapshot(7).unwrap().map(Box::new),
+        version: Some(cache.version(7).unwrap()),
+        ..Default::default()
+    };
+    let owned = serde_json::to_value(observation).unwrap();
+    assert!(owned.get("snapshot").is_none());
+    assert!(owned.get("version").is_none());
+    assert_eq!(owned.as_object().unwrap().len(), 4);
+    base(&mut cache, "a🙂z\n");
+    let replacement = serde_json::to_value(cache.snapshot(7).unwrap()).unwrap();
+    assert_eq!(first["content"], replacement["content"]);
+    assert_ne!(first["bufferEpoch"], replacement["bufferEpoch"]);
+    cache.instance = None;
+    assert!(cache.snapshot(7).unwrap().is_none());
+}
+
+#[test]
 fn identity_text_counts_against_the_same_diagnostic_budget() {
     for code in [true, false] {
         let mut cache = Cache::default();

@@ -28,9 +28,11 @@ mod coordinate_queries;
 mod coordinates;
 mod diagnostics;
 mod extensions;
+mod language_observation;
 mod legacy_buffers;
 #[cfg(test)]
 use extensions::extension_manifest;
+use language_observation::LanguageObservation;
 use legacy_buffers::{close_buffer, open_buffer};
 mod native_close;
 mod native_open;
@@ -234,6 +236,8 @@ enum Response {
         worktree: PathBuf,
         path: PathBuf,
         version: Vec<BufferVersionEntry>,
+        #[serde(rename = "bufferSnapshot", skip_serializing_if = "Option::is_none")]
+        buffer_snapshot: Option<Box<language_observation::BufferSnapshot>>,
         diagnostics: Vec<LanguageDiagnostic>,
         inlay_hints: Vec<LanguageInlayHint>,
         semantic_tokens: Vec<u32>,
@@ -372,19 +376,6 @@ type WorktreePaths = Arc<RwLock<HashMap<u64, PathBuf>>>;
 type Zed = Arc<ZedRuntime>;
 type PendingRequests = Arc<Mutex<HashMap<u32, oneshot::Sender<proto::Envelope>>>>;
 type DiagnosticCache = Arc<std::sync::Mutex<diagnostics::Cache>>;
-
-#[derive(Debug, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LanguageObservation {
-    diagnostics_state: diagnostics::Status,
-    #[serde(serialize_with = "diagnostics::serialize_legacy")]
-    diagnostics: Vec<LanguageDiagnostic>,
-    inlay_hints: Vec<LanguageInlayHint>,
-    semantic_tokens: Vec<u32>,
-    /// Per-server evidence; only `bufferLanguage` carries it (owned reads are strict).
-    #[serde(skip)]
-    analysis: Option<Vec<analysis::ServerAnalysis>>,
-}
 
 struct ZedRuntime {
     _child: Mutex<Child>,
@@ -765,6 +756,8 @@ impl ZedRuntime {
             .collect();
 
         Ok(LanguageObservation {
+            snapshot: cache.snapshot(buffer_id)?.map(Box::new),
+            version: Some(version),
             diagnostics_state,
             diagnostics,
             inlay_hints: hints,
@@ -1371,7 +1364,8 @@ async fn buffer_language(
         api_version: ADAPTER_VERSION,
         worktree,
         path,
-        version: lease.version.clone(),
+        version: observation.version.unwrap_or_else(|| lease.version.clone()),
+        buffer_snapshot: observation.snapshot,
         diagnostics: observation.diagnostics,
         inlay_hints: observation.inlay_hints,
         semantic_tokens: observation.semantic_tokens,
@@ -1950,6 +1944,7 @@ mod tests {
     fn buffer_versions_use_the_stable_camel_case_contract() {
         let value = serde_json::to_value(Response::BufferLanguage {
             api_version: ADAPTER_VERSION,
+            buffer_snapshot: None,
             worktree: PathBuf::from("/tmp"),
             path: PathBuf::from("file.rs"),
             version: vec![BufferVersionEntry {

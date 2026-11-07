@@ -337,6 +337,17 @@ arguments remained unchanged; four Machines were ready and health/SPA checks
 passed. This verifies the deployed metadata path, not baseline matching,
 project freshness, automatic observation or push delivery.
 
+The Zed 1.30.0 source candidate adds `bufferSnapshot`: the original mirror
+instance, buffer incarnation, exact text clock and SHA-256/UTF-8 byte count of
+its LF-normalized text. The same revision check protects diagnostics and this
+snapshot across asynchronous language queries. Language responses now return
+the version actually queried, rather than the original Open version. Empty
+diagnostic sets can carry this text identity too; missing or over-budget
+identity remains unavailable. Owned-read protocol one stays unchanged.
+This identifies the native mirror, which may differ from disk; it is not an
+immutable baseline capture, an analyzed-input frontier or causal attribution.
+Publication and production acceptance remain separate from these source tests.
+
 - Baselines are immutable, content-matched captures at a read or pre-write
   boundary (the facade and executor see pre-write content). Without one the
   comparison is `unknown`.
