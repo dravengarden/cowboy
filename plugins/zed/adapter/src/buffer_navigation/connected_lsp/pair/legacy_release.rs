@@ -23,15 +23,7 @@ pub(super) async fn exercise(client: &Client, root: &Path) {
         lease_id: "automatic-fixture".into(),
     };
     client.request(open()).await;
-    let prepared = client
-        .request(Request::PrepareLegacyRelease {
-            worktree: workspace.clone(),
-            path: "file.txt".into(),
-            lease_id: "automatic-fixture".into(),
-        })
-        .await;
-    assert_eq!(prepared["state"], "prepared");
-    let release: Reference = serde_json::from_value(prepared["release"].clone()).unwrap();
+    let release = delayed_preparation(client, &workspace).await;
     let mut disconnected = tokio::net::UnixStream::connect(&client.0).await.unwrap();
     let mut bytes = serde_json::to_vec(&Request::LegacyRelease {
         release: release.clone(),
@@ -86,8 +78,29 @@ pub(super) async fn exercise(client: &Client, root: &Path) {
         })
         .await;
     println!(
-        "immutable legacy release: real discarded Close reply, original-reference Query, recreated owner survives old Execute, explicit receipt retirement passed"
+        "immutable legacy release: delayed preparation and discarded Prepare reply preserve reference, real discarded Close reply, original-reference Query, recreated owner survives old Execute, explicit receipt retirement passed"
     );
+}
+
+async fn delayed_preparation(client: &Client, workspace: &Path) -> Reference {
+    let prepare = || Request::PrepareLegacyRelease {
+        worktree: workspace.into(),
+        path: "file.txt".into(),
+        lease_id: "automatic-fixture".into(),
+    };
+    let first = client.request(prepare()).await;
+    assert_eq!(first["state"], "prepared");
+    let mut disconnected = tokio::net::UnixStream::connect(&client.0).await.unwrap();
+    let mut bytes = serde_json::to_vec(&prepare()).unwrap();
+    bytes.push(b'\n');
+    disconnected.write_all(&bytes).await.unwrap();
+    drop(disconnected);
+    // Exceed the old expiry using the real immutable adapter's clock.
+    tokio::time::sleep(Duration::from_secs(31)).await;
+    let retry = client.request(prepare()).await;
+    assert_eq!(retry["release"], first["release"]);
+    assert_eq!(retry["state"], "prepared");
+    serde_json::from_value(retry["release"].clone()).unwrap()
 }
 
 async fn await_release(client: &Client, release: &Reference) {

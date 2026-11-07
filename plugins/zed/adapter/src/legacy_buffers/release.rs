@@ -10,6 +10,15 @@ pub(crate) struct Capture {
     incarnation: Arc<()>,
 }
 
+impl Capture {
+    pub(crate) fn same_owner(&self, other: &Self) -> bool {
+        self.requested == other.requested
+            && self.key == other.key
+            && self.buffer_id == other.buffer_id
+            && Arc::ptr_eq(&self.incarnation, &other.incarnation)
+    }
+}
+
 impl Registry {
     pub(crate) fn capture(&self, requested: RequestKey) -> Result<Capture> {
         let pin = self

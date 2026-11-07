@@ -356,7 +356,7 @@ A temporary production Go probe matched its exact source SHA and returned
 The probe was removed after checking its bytes. That summary alone is not
 original Close receipt evidence; lost-reply recovery was tested in isolation.
 
-The next Controller/Machine candidate separates Controller observation-cache
+The Controller/Machine release separates Controller observation-cache
 retirement from native resource release. Repeated acquisitions request
 `refreshOnly`, which renews only a confirmed owner on its original live route;
 it cannot Ensure/Open or recreate an idle-reclaimed owner. Unknown, released,
@@ -372,17 +372,44 @@ Renewal itself does not sample resources or select a runtime: the existing
 owner remains charged, and only new acquisitions need resource admission.
 An original Open that is still unconfirmed returns an error rather than the
 absent-owner reply, preserving the Controller's original idle Close attempt.
-Production acceptance is pending.
+Hawk activated source `649f034c6aec034b0e18f4aae715fceed342e7ce`: Machine
+transaction `1794035146041326035-649f034c6aec` and Controller transaction
+`1794035632700203074-649f034c6aec` both succeeded/committed. Health and SPA
+returned HTTP 200, the SPA remained `no-store`, all four Machines were online,
+and both existing Hawk worker PIDs, executables and arguments were unchanged.
+The first post-restart probe returned `not_open`; the next three returned
+`document_current` / `matching` with the same native instance, buffer and exact
+source SHA. Warm round trips were 259 and 270 ms in this small observation,
+not a performance benchmark or proof that no native Open was issued. The latter
+property is covered by the refresh-only implementation and isolated fixture.
+After more than five idle minutes, passive summary reported `tracked: 0` and
+`unobserved`, accepting Controller observation retirement rather than native
+Close completion. The probe was removed after verifying its exact SHA.
 
-The Zed 1.34.0 candidate adds the missing unresolved-Open check to the common
+Zed 1.34.0 adds the missing unresolved-Open check to the common
 native Close admission used by legacy, owned-buffer and navigation releases.
 An unobserved Open can return an existing native ID, so the last native owner
 must survive until that original Open is resolved. Releasing a shared local
 owner without native Close remains allowed. Recovery of an already dispatched
 Close still queries only its original receipt and does not clear another
 Open's fence. Legacy release preparation also refuses while Open is unresolved.
-A regression failed against 1.33.0 and passed after this guard; native pair,
-full gate and production acceptance for 1.34.0 remain pending.
+A regression failed against 1.33.0 and passed after this guard. The full gate,
+166 adapter tests (two ignored), immutable native pair, signed install/drain,
+Catalog readers, signature and published URL hashes passed. Installation
+`hawk-zed-1-34-0-open-close-fence` completed/applied and inventory confirmed
+1.34.0 active, composite digest
+`sha256:f568d3e395c52c83184243f8c584294ab8c21fea3afd9b4f90c9214ecaeb1e07`.
+
+The 1.35.0 candidate removes the effect-free preparation's time expiry. A
+preparation remains valid while its exact original legacy pin exists; a lost
+Prepare reply returns the same reference on retry, including at capacity.
+Only preparations whose original pin disappeared or changed can be pruned.
+Unknown and completed receipts still require their original recovery/retirement
+path. This prevents delayed execution from permanently stranding a Machine
+holding behind an expired reference. Full gate and production acceptance for
+this candidate remain pending. The immutable 1.34.0 adapter failed the new
+31-second/discarded-Prepare-reply regression by replacing reference 1 with 3;
+the new artifact must preserve the original reference through the same test.
 
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction

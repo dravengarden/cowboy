@@ -178,7 +178,7 @@ async fn prepared_reference_rejects_replaced_pin_even_when_native_id_is_reused()
     assert_eq!(f.buffers.active.read().await.len(), 1);
     assert_eq!(
         state(&f.act(&r, Action::Query).await.unwrap()),
-        State::Prepared
+        State::Retired
     );
     let foreign = Reference {
         instance: "f".repeat(32),
@@ -284,18 +284,65 @@ async fn lost_close_reply_queries_only_the_original_close_and_blocks_legacy_repl
 }
 
 #[tokio::test]
-async fn capacity_and_expiry_apply_only_to_effect_free_preparations() {
+async fn preparation_retries_reuse_the_original_reference_even_at_capacity() {
     let f = Fixture::new().await;
     let first = f.prepare().await;
-    for _ in 1..CAPACITY {
-        f.prepare().await;
+    for _ in 0..CAPACITY {
+        let retry = f.prepare().await;
+        assert_eq!(retry.instance, first.instance);
+        assert_eq!(retry.id, first.id);
     }
+    {
+        let mut registry = f.buffers.legacy_releases.lock().await;
+        let legacy = f.buffers.legacy.lock().await;
+        for id in 2..=CAPACITY as u64 {
+            registry.entries.insert(
+                id,
+                Entry {
+                    captured: legacy
+                        .capture((f.root.clone(), "file".into(), "owner".into()))
+                        .unwrap(),
+                    state: State::Unknown,
+                    buffer: None,
+                },
+            );
+        }
+        registry.last = CAPACITY as u64;
+    }
+    assert_eq!(f.prepare().await.id, first.id);
+    assert_eq!(
+        state(&f.act(&first, Action::Query).await.unwrap()),
+        State::Prepared
+    );
+    assert_eq!(
+        f.buffers.legacy_releases.lock().await.entries.len(),
+        CAPACITY
+    );
+    assert_eq!(
+        state(&f.act(&first, Action::Execute).await.unwrap()),
+        State::Released
+    );
+    // Removing the original pin must not prune unknown or completed receipts.
+    assert_eq!(
+        state(&f.act(&first, Action::Query).await.unwrap()),
+        State::Released
+    );
+    assert_eq!(
+        f.buffers.legacy_releases.lock().await.entries.len(),
+        CAPACITY
+    );
+    let unknown = Reference {
+        instance: first.instance.clone(),
+        id: format!("{:016x}", 2),
+    };
+    assert!(f.act(&unknown, Action::Retire).await.is_err());
+    f.open().await;
     assert!(
         respond(
             Request::PrepareLegacyRelease {
                 worktree: f.root.clone(),
                 path: "file".into(),
-                lease_id: "owner".into()
+                lease_id: "owner".into(),
             },
             &f.buffers,
             None
@@ -303,22 +350,4 @@ async fn capacity_and_expiry_apply_only_to_effect_free_preparations() {
         .await
         .is_err()
     );
-    {
-        let mut registry = f.buffers.legacy_releases.lock().await;
-        for entry in registry.entries.values_mut() {
-            entry.created = Instant::now().checked_sub(PREPARE_TTL).unwrap();
-        }
-        registry.entries.get_mut(&2).unwrap().state = State::Unknown;
-    }
-    assert_eq!(
-        state(&f.act(&first, Action::Query).await.unwrap()),
-        State::Retired
-    );
-    assert_eq!(f.buffers.legacy_releases.lock().await.entries.len(), 1);
-    assert_eq!(f.buffers.active.read().await.len(), 1);
-    let unknown = Reference {
-        instance: first.instance.clone(),
-        id: format!("{:016x}", 2),
-    };
-    assert!(f.act(&unknown, Action::Retire).await.is_err());
 }

@@ -5,10 +5,8 @@ use anyhow::{Context as _, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
 
 const CAPACITY: usize = 1024;
-const PREPARE_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +34,6 @@ pub(crate) enum State {
 
 struct Entry {
     captured: legacy_buffers::Capture,
-    created: Instant,
     state: State,
     buffer: Option<Box<Value>>,
 }
@@ -60,9 +57,14 @@ pub(crate) async fn respond(
         });
     }
     let mut registry = buffers.legacy_releases.lock().await;
-    registry
-        .entries
-        .retain(|_, entry| entry.state != State::Prepared || entry.created.elapsed() < PREPARE_TTL);
+    {
+        let legacy = buffers.legacy.lock().await;
+        // A live preparation must survive a delayed or lost reply. Only an
+        // effect-free record whose exact original pin is gone can be pruned.
+        registry.entries.retain(|_, entry| {
+            entry.state != State::Prepared || legacy.check_release(&entry.captured, None).is_ok()
+        });
+    }
     match request {
         Request::PrepareLegacyRelease {
             worktree,
@@ -73,10 +75,6 @@ pub(crate) async fn respond(
             ensure!(
                 worktree.as_os_str().len() <= 4096 && path.as_os_str().len() <= 4096,
                 "legacy release path exceeds limit"
-            );
-            ensure!(
-                registry.entries.len() < CAPACITY,
-                "legacy release capacity exhausted"
             );
             let legacy = buffers.legacy.lock().await;
             let captured = legacy.capture((worktree, path, lease_id))?;
@@ -93,6 +91,22 @@ pub(crate) async fn respond(
                 "original legacy buffer owner changed"
             );
             crate::sync_owners::ensure_readable(buffer)?;
+            if let Some((&id, entry)) = registry.entries.iter().find(|(_, entry)| {
+                entry.state == State::Prepared && entry.captured.same_owner(&captured)
+            }) {
+                return Ok(reply(
+                    Reference {
+                        instance: registry.instance.clone().unwrap(),
+                        id: format!("{id:016x}"),
+                    },
+                    entry.state,
+                    None,
+                ));
+            }
+            ensure!(
+                registry.entries.len() < CAPACITY,
+                "legacy release capacity exhausted"
+            );
             if registry.instance.is_none() {
                 let mut nonce = [0; 16];
                 getrandom::fill(&mut nonce)?;
@@ -107,7 +121,6 @@ pub(crate) async fn respond(
                 id,
                 Entry {
                     captured,
-                    created: Instant::now(),
                     state: State::Prepared,
                     buffer: None,
                 },
@@ -186,10 +199,6 @@ impl Entry {
         let mut legacy = buffers.legacy.lock().await;
         legacy.check_release(&self.captured, None)?;
         let mut active = buffers.active.write().await;
-        ensure!(
-            self.created.elapsed() < PREPARE_TTL,
-            "legacy release preparation expired"
-        );
         let owner = BufferOwner::Legacy(self.captured.requested.2.clone());
         let buffer = active
             .get(&self.captured.key)
