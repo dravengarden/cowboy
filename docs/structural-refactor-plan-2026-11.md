@@ -528,6 +528,28 @@ crate below `cowboy-store`; `agent_model` is among them and is a hashed worker
 input, which is one reason the crate moves stay a worker-generation
 maintenance.
 
+Decision (2026-11-07): Phase 5 stops at boundaries enforced inside the base
+crate. Measured on branch `codex/phase5-crates`, the crate split of 5.4–5.6 is
+not a move of the 8 store and 4 Hub modules: everything above the store
+cluster is 34 modules / 114k lines, and properly the base crate's whole
+Controller surface leaves it, 68 `full`-only modules (134k lines) plus 234
+`cfg(feature = "full")` sites inside 41 shared modules (`managed_calls`,
+`telemetry_plugin`, `otlp`, `observability`, …) whose `full` halves depend on
+the store or Hub. That is weeks of moves against modules other sessions
+change daily, behind a worker-generation maintenance for every `Cargo.toml`
+step. The goals the crates were meant to secure hold without them: `store`
+does not depend on the Hub, the largest cycle is 8 modules, and
+`tools/check-module-layers.ts` refuses any new or larger cycle in CI.
+
+The branch keeps one finished commit, `515ed7b55`: the worker
+(`worker`, `worker_execution`, `acp`, `agent_model`) no longer depends on the
+store or Hub, because its artifact digests come from `crate::artifact_refs`
+and its call rounds from the root-declared `managed_call_round`;
+`artifact_refs.rs` joins the hashed worker inputs. It changes the worker
+generation, so it merges at the next worker-generation maintenance rather
+than on its own. Revisit the crate split only if compile time or ownership
+problems return that the in-crate boundaries do not address.
+
 7.3 landed on 2026-11-06 with one deviation: the 98 unreferenced releases
 moved to a single `components/registry-archive.json` rather than one file per
 version, so the Rust reader needs one `include_str!` and `build.rs` (a hashed
