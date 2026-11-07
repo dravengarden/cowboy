@@ -400,16 +400,28 @@ Catalog readers, signature and published URL hashes passed. Installation
 1.34.0 active, composite digest
 `sha256:f568d3e395c52c83184243f8c584294ab8c21fea3afd9b4f90c9214ecaeb1e07`.
 
-The 1.35.0 candidate removes the effect-free preparation's time expiry. A
+Zed 1.35.0 removes the effect-free preparation's time expiry. A
 preparation remains valid while its exact original legacy pin exists; a lost
 Prepare reply returns the same reference on retry, including at capacity.
 Only preparations whose original pin disappeared or changed can be pruned.
 Unknown and completed receipts still require their original recovery/retirement
 path. This prevents delayed execution from permanently stranding a Machine
-holding behind an expired reference. Full gate and production acceptance for
-this candidate remain pending. The immutable 1.34.0 adapter failed the new
+holding behind an expired reference. The immutable 1.34.0 adapter failed the new
 31-second/discarded-Prepare-reply regression by replacing reference 1 with 3;
-the new artifact must preserve the original reference through the same test.
+the exact 1.35.0 artifact passed the same test with its original reference.
+Source `3056f09dd5dfde8819f0d126934320b9da82035b` passed the full gate,
+166 adapter tests (two ignored), immutable native pair and signed installation/
+drain. Both actual active/recovery Controller Catalog readers accepted the
+publication; independent production signature and all public URL hashes passed.
+Installation `hawk-zed-1-35-0-prepared-release` completed/applied with revision
+`installation-85115af72b7fc502386c275092b56e1ac0634fd06922d10baa8b205d0e0627ca`.
+Hawk inventory reports 1.35.0 active, composite digest
+`sha256:f00af7bdef6261b0c2cd6bdcbf9c3d74f034f1f6503fdda76ab3d633cb406734`.
+The production Go probe returned `document_current` / `matching`, exact SHA
+`e9d99d3a5185fc16770f7794a78c25ed715d2a2f0060371a63c4eab7f044ce5b`, and
+`UndeclaredName`; it was removed after checking those bytes. Health remained
+HTTP 200 and both existing Hawk workers retained their PIDs, executables and
+arguments. No Controller or Machine restart was needed for this Plugin update.
 
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction
