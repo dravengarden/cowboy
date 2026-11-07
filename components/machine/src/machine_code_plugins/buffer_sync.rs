@@ -41,6 +41,7 @@ struct Registry {
 
 pub(super) struct Operations {
     registry: parking_lot::Mutex<Registry>,
+    observation_cursor: parking_lot::Mutex<Option<OperationRef>>,
     capacity: Arc<Semaphore>,
     commands: Semaphore,
 }
@@ -48,6 +49,7 @@ pub(super) struct Operations {
 impl Default for Operations {
     fn default() -> Self {
         Self {
+            observation_cursor: parking_lot::Mutex::default(),
             registry: parking_lot::Mutex::new(Registry {
                 instance: uuid::Uuid::new_v4().simple().to_string(),
                 last_id: 0,
@@ -320,7 +322,19 @@ impl Operations {
             &json!({"type":"bufferSync","operation":slot.native,"action":action}),
         )
         .await?;
-        let observed = reply(&value, &slot.content)?;
+        self.accept_observation(id, &entry, &mut slot, action, &value)?;
+        Ok(snapshot(slot.state.clone()))
+    }
+
+    fn accept_observation(
+        &self,
+        id: &OperationRef,
+        entry: &Arc<Mutex<Slot>>,
+        slot: &mut Slot,
+        action: NativeAction,
+        value: &Value,
+    ) -> Result<()> {
+        let observed = reply(value, &slot.content)?;
         ensure!(
             observed.operation == slot.native,
             "synchronization reply owner changed"
@@ -346,16 +360,17 @@ impl Operations {
             "synchronization retirement not observed"
         );
         if observed.state == (State::Retired {}) {
-            self.registry.lock().retire(id, &entry, &mut slot);
+            self.registry.lock().retire(id, entry, slot);
         } else {
             slot.state = observed.state;
             if slot.state.terminal() {
                 slot.fence = None;
             }
         }
-        Ok(snapshot(slot.state.clone()))
+        Ok(())
     }
 }
 
+mod recovery;
 #[cfg(test)]
 mod tests;

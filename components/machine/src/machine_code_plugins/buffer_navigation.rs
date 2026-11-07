@@ -14,6 +14,7 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
 mod codec;
+mod recovery;
 mod registry;
 use codec::{NativeRef, NativeState, reply};
 use registry::Registry;
@@ -69,6 +70,7 @@ impl Slot {
 
 pub(super) struct Operations {
     registry: parking_lot::Mutex<Registry>,
+    observation_cursor: parking_lot::Mutex<Option<NavigationRef>>,
     capacity: Arc<Semaphore>,
     commands: Semaphore,
 }
@@ -77,6 +79,7 @@ impl Default for Operations {
     fn default() -> Self {
         Self {
             registry: parking_lot::Mutex::default(),
+            observation_cursor: parking_lot::Mutex::default(),
             capacity: Arc::new(Semaphore::new(MAX_NAVIGATIONS)),
             commands: Semaphore::new(MAX_COMMANDS),
         }
@@ -298,7 +301,19 @@ impl Operations {
             "navigation":slot.native,"action":action.native()?}),
         )
         .await?;
-        let observed = reply(&value)?;
+        self.accept_observation(id, &entry, &mut slot, &mut route, &value)?;
+        Ok(slot.snapshot(id))
+    }
+
+    fn accept_observation(
+        &self,
+        id: &NavigationRef,
+        entry: &Arc<Mutex<Slot>>,
+        slot: &mut Slot,
+        route: &mut super::WorktreeRoute,
+        value: &serde_json::Value,
+    ) -> Result<()> {
+        let observed = reply(value)?;
         ensure!(
             observed.navigation == slot.native,
             "navigation reply owner changed"
@@ -311,13 +326,11 @@ impl Operations {
             }
             (Phase::ReleaseUnknown, NativeState::ReleaseUnknown {}) => {}
             (Phase::ReleaseUnknown, NativeState::Released {}) => {
-                self.registry
-                    .lock()
-                    .retire(id, &entry, &mut slot, &mut route);
+                self.registry.lock().retire(id, entry, slot, route);
             }
             _ => anyhow::bail!("navigation outcome unavailable"),
         }
-        Ok(slot.snapshot(id))
+        Ok(())
     }
 }
 

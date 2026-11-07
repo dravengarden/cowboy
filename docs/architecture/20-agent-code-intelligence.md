@@ -280,6 +280,20 @@ Go file acquired successfully and returned gopls `document_current`. The
 Controller and both existing worker PIDs remained unchanged, the Machine
 reconnected ready, and health and public SPA checks passed.
 
+Machine maintenance observes retained synchronization and navigation operations
+through their original runtime and native reference, independently of whether
+the initiating control connection remains alive. Each 30-second pass selects
+at most four operations per registry in round-robin order, with a two-second
+query deadline per operation. Busy operations and routes are skipped. The
+maintenance path sends only Query; it never repeats Apply, Execute, Retire or
+Release, selects a replacement runtime, or delivers a result to a connection.
+Public queries still require the original owner. Valid terminal evidence uses
+the same validation as foreground queries and can clear the original sync fence
+or confirm a previously dispatched retirement/release. Missing evidence retains
+the original ownership and capacity. Terminal results are not automatically
+retired, and this does not recover state lost with the Machine process or solve
+unknown legacy Opens and Closes.
+
 ### Baselines, attribution, matching
 
 - Baselines are immutable, content-matched captures at a read or pre-write

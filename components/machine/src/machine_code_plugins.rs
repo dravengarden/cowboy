@@ -27,6 +27,7 @@ mod buffer_navigation;
 mod buffer_sync;
 #[cfg(test)]
 mod navigation_fixture;
+mod observation;
 mod process_tree;
 mod resource_budget;
 pub use resource_budget::Policy as CodeAgentResourcePolicy;

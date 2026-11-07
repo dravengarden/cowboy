@@ -182,6 +182,8 @@ impl CodeRuntimeHost {
                 let Some(host) = host.upgrade() else {
                     break;
                 };
+                host.buffer_sync.observe_pending().await;
+                host.buffer_navigation.observe_pending().await;
                 host.release_idle_agents().await;
             }
         })

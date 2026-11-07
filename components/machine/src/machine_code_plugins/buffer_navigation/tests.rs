@@ -408,6 +408,54 @@ async fn lost_release_keeps_target_evidence_and_never_resends_release() {
 }
 
 #[tokio::test]
+async fn maintenance_observes_original_navigation_without_granting_new_connection_access() {
+    let mut f = Fixture::new("navigation-lost").await;
+    let id = f.prepare().await;
+    assert!(
+        f.act(Action::Execute {
+            navigation: id.clone()
+        })
+        .await
+        .is_err()
+    );
+    let entry = f.host.buffer_navigation.registry.lock().find(&id).unwrap();
+    f.scope = PluginExecutionScope::new(Some(&f.service), "hawk");
+    f.host.buffer_navigation.observe_pending().await;
+    assert_eq!(entry.lock().await.phase, Phase::Retained);
+    assert_eq!(entry.lock().await.locations.len(), 2);
+    assert!(f.act(Action::Query { navigation: id }).await.is_err());
+    assert_eq!(f.count("nav-executes"), 1);
+    assert!(!f.home.join("nav-releases").exists());
+    assert_eq!(
+        f.host.buffer_navigation.capacity.available_permits(),
+        MAX_NAVIGATIONS - 1
+    );
+}
+
+#[tokio::test]
+async fn maintenance_observes_lost_release_without_releasing_again() {
+    let f = Fixture::new("navigation-lost-release").await;
+    let id = f.retained().await;
+    assert!(
+        f.act(Action::Release {
+            navigation: id.clone()
+        })
+        .await
+        .is_err()
+    );
+    f.host.buffer_navigation.observe_pending().await;
+    assert_eq!(
+        f.act(Action::Query { navigation: id }).await.unwrap().phase,
+        Phase::Released
+    );
+    assert_eq!(f.count("nav-releases"), 1);
+    assert_eq!(
+        f.host.buffer_navigation.capacity.available_permits(),
+        MAX_NAVIGATIONS
+    );
+}
+
+#[tokio::test]
 async fn cancellation_after_dispatch_retains_unknown_and_original_runtime() {
     let f = Fixture::new("navigation-pause").await;
     let id = f.prepare().await;
@@ -587,6 +635,12 @@ async fn bounded_capacity_only_expires_preparations_never_unknown_effects() {
         .phase,
         Phase::Unknown
     );
+    f.host.buffer_navigation.observe_pending().await;
+    let entry = f.host.buffer_navigation.registry.lock().find(&id).unwrap();
+    assert_eq!(entry.lock().await.phase, Phase::Unknown);
+    assert_eq!(f.count("nav-executes"), 1);
+    assert_eq!(f.count("nav-queries"), 1);
+    assert!(!f.home.join("nav-releases").exists());
     for _ in 1..MAX_NAVIGATIONS {
         f.prepare().await;
     }
