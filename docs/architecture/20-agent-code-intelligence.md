@@ -365,7 +365,7 @@ release neither reloads the buffer nor compares it with the current source.
 Source mismatch must downgrade the agent-facing state before baseline capture;
 it must not borrow synchronization authority or promote file quiet to freshness.
 
-The Zed 1.31.0 source candidate checks that distinction on the execution
+Zed 1.31.0 checks that distinction on the execution
 Machine. Its bounded reader resolves a regular file beneath an opened worktree
 directory, refusing symlinks, mount crossings and non-UTF-8/oversized inputs.
 It compares two bounded reads and file identity/metadata, using the same line
@@ -376,7 +376,23 @@ language snapshot is revalidated after this observation. `sourceState` is
 `stale`, and unavailable source evidence cannot produce `document_current`.
 Per-server analysis and the captured native snapshot remain visible. No file
 is saved or reloaded, and source equality is not a project input frontier or
-an automatic synchronization grant. Release acceptance is still pending.
+an automatic synchronization grant.
+
+On 2026-11-07, Hawk installed that release from commit
+`998f199b52c12d27ade6439c4fb7b34e0bbf5c7b`, composite digest
+`722f143bbfbe5889a3a55196177ed4260a114f2d87f663b00ee536800bf6e64d`,
+through `hawk-zed-1-31-0-source-state` (completed/applied). Controller
+activation `1794027421589112874-998f199b52c1` succeeded and committed.
+The full gate, 155 adapter tests, exact native pair (including a real bind
+mount refusal), signed installation/drain, active/recovery Catalog readers
+and all three published URL digests passed. Actual MCP reads first matched
+a temporary CRLF/Unicode Go file's independently computed 75-byte normalized
+content, then reported `stale`/`changed` after a disk edit while retaining
+the old native snapshot and diagnostic. The passive summary retained that
+reason. The source bytes were unchanged by observation and the fixture was
+removed. Health and SPA checks passed, all four Machines were online, and
+both existing Hawk worker PIDs and arguments were unchanged. This accepts
+source mismatch detection, not watcher frontiers or automatic baselines.
 
 - Baselines are immutable, content-matched captures at a read or pre-write
   boundary (the facade and executor see pre-write content). Without one the
