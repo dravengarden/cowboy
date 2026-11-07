@@ -127,8 +127,16 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   cleanup. The exact protocol-42 candidate passed native Codex/Claude execution,
   recovery, Provider coexistence, logs and connected Code acceptance
   ([receipts](../experiments/code-observer-worker-pin-2026-11-07.json)).
-  Production activation remains pending; event pages are not yet analysis
-  baselines or model delivery authority.
+  Hawk Machine and Controller activation of `84b6e45bf` both recorded
+  `succeeded` / `committed`. Running executables matched the exact releases;
+  all four Machines reconnected. A temporary Go probe returned its exact
+  content hash, `document_current` and the expected `UndeclaredName`; Machine
+  fd inspection separately confirmed an inotify observer of this Session root.
+  The probe was removed after verifying its hash. Two retained Hawk Sessions
+  underwent managed generation cutover and returned to `running`, unpaused
+  with empty queues; their old worker PIDs were not preserved. A third earlier
+  worker PID had also ended, without evidence here attributing its exit.
+  Event pages are not yet analysis baselines or model delivery authority.
 - **Trust lifetime.** Agent diagnostic reads capture the Session and the
   language-server policy lifetime before asynchronous work. A policy change,
   including off/on before the result arrives, discards old diagnostic content

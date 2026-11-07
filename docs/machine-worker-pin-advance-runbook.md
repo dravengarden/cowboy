@@ -7,6 +7,13 @@ reasoned, not observed.
 
 ## What it does
 
+**Observed on 2026-11-07:** advancing to protocol-42 source `a9b8d77b0`
+through release `84b6e45bf` did trigger managed generation cutovers for two
+retained Hawk Sessions. Both returned to `running`, unpaused with empty queues,
+using the accepted new worker binary. Their old PIDs ended. The October 7
+observation below is historical, not a guarantee that a restart preserves worker
+PIDs. Verify the current broker behavior and Session outcomes for each advance.
+
 **Observed on 2026-10-07, correcting the paragraph below:** activating a Machine
 release with a new worker generation restarted only the Machine. All 7 live workers
 and 22 keepers kept their PIDs and sessions, and no drain or "rollout started" line
