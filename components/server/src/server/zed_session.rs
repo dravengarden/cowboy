@@ -158,6 +158,7 @@ pub(super) async fn agent_buffer_request(
     control: &MachineControl,
     scope: &SessionCodeScope,
     request: BufferRequest<'_>,
+    refresh_only: bool,
 ) -> anyhow::Result<ZedAdapterResponse> {
     anyhow::ensure!(
         request.open && hub.language_servers_allowed(scope.session_id()),
@@ -168,12 +169,14 @@ pub(super) async fn agent_buffer_request(
         "automatic warming requires Machine resource ownership"
     );
     let mut operation = Operation::connect(hub, control, None, scope).await?;
-    operation
-        .request(serde_json::json!({
-            "type":"acquireAgentBuffer", "ownerProtocol":2, "worktree":request.worktree,
-            "path":request.path, "leaseId":request.lease_id,
-        }))
-        .await
+    let mut payload = serde_json::json!({
+        "type":"acquireAgentBuffer", "ownerProtocol":2, "worktree":request.worktree,
+        "path":request.path, "leaseId":request.lease_id,
+    });
+    if refresh_only {
+        payload["refreshOnly"] = true.into();
+    }
+    operation.request(payload).await
 }
 
 pub(super) async fn buffer_request(

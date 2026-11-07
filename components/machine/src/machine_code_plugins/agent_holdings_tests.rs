@@ -4,6 +4,107 @@ use serde_json::json;
 const OWNER: &str = "cowboy-agent-3f3af1ecebbd1410ab417ec0d27bbfcb5d340e177ae159b59fc8626c2dfd9175-00000000000000000000000000000001";
 
 #[tokio::test]
+async fn refresh_never_opens_reclaimed_unknown_or_releasing_owners() {
+    let root = PrivateRuntimeDirectory::create().unwrap();
+    let host = CodeRuntimeHost::default();
+    let (target, generation) = host
+        .target(CodeRuntimeSelection::Installed(
+            super::super::tests::fixture_plan(&root.0, "refresh-agent"),
+        ))
+        .await
+        .unwrap();
+    // A successful refresh must not exchange any native request at all.
+    fs::remove_file(target.socket()).unwrap();
+    let key = ("file.rs".to_owned(), OWNER.to_owned());
+    let mut held = Holding::opening(root.0.to_str().unwrap(), true);
+    held.confirm();
+    held.last_used = Instant::now() - IDLE;
+    let mut route = WorktreeRoute {
+        target: Some(target),
+        generation,
+        ..Default::default()
+    };
+    route.buffers.insert(key.clone());
+    route.agent_buffers.insert(key.clone(), held);
+    let route = Arc::new(Mutex::new(route));
+    host.routes
+        .lock()
+        .await
+        .insert(("zed".into(), root.0.clone()), Arc::clone(&route));
+    let payload = json!({"type":"acquireAgentBuffer", "ownerProtocol":2, "refreshOnly":true,
+        "worktree":root.0, "path":"file.rs", "leaseId":OWNER});
+    let reply = host.refresh_agent("zed", &root.0, &payload).await.unwrap();
+    assert_eq!(reply["type"], "agentBufferRefreshed");
+    assert_eq!(reply["leaseId"], OWNER);
+    assert!(route.lock().await.agent_buffers[&key].last_used.elapsed() < IDLE);
+    route
+        .lock()
+        .await
+        .agent_buffers
+        .get_mut(&key)
+        .unwrap()
+        .confirmed = false;
+    assert_eq!(
+        host.refresh_agent("zed", &root.0, &payload).await.unwrap()["state"],
+        "unavailable"
+    );
+    {
+        let mut r = route.lock().await;
+        let h = r.agent_buffers.get_mut(&key).unwrap();
+        h.confirm();
+        h.releasing = true;
+    }
+    assert_eq!(
+        host.refresh_agent("zed", &root.0, &payload).await.unwrap()["state"],
+        "unavailable"
+    );
+    assert_eq!(
+        route.lock().await.agent_buffers.len(),
+        1,
+        "unknown ownership remains charged"
+    );
+    route.lock().await.agent_buffers.remove(&key);
+    assert_eq!(
+        host.refresh_agent("zed", &root.0, &payload).await.unwrap()["state"],
+        "unavailable"
+    );
+    assert!(
+        route.lock().await.agent_buffers.is_empty(),
+        "refresh did not recreate the owner"
+    );
+    host.routes.lock().await.clear();
+    assert_eq!(
+        host.refresh_agent("zed", &root.0, &payload).await.unwrap()["state"],
+        "unavailable"
+    );
+    assert!(host.routes.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn refresh_requires_explicit_version_two_true_without_runtime_selection() {
+    let host = CodeRuntimeHost::default();
+    for (protocol, refresh) in [
+        (json!(2), json!(false)),
+        (json!(2), json!("true")),
+        (json!(1), json!(true)),
+    ] {
+        let payload = json!({"type":"acquireAgentBuffer", "ownerProtocol":protocol, "refreshOnly":refresh,
+            "worktree":"/tmp", "path":"file.rs", "leaseId":OWNER});
+        assert!(
+            host.acquire_agent(
+                "zed",
+                &payload,
+                None,
+                resource_budget::Policy::from_config(None),
+                || panic!("invalid refresh cannot select a runtime")
+            )
+            .await
+            .is_err()
+        );
+    }
+}
+
+#[tokio::test]
 async fn passive_observation_cannot_start_a_backend_before_acquisition_admission() {
     let root = PrivateRuntimeDirectory::create().unwrap();
     let host = CodeRuntimeHost::default();

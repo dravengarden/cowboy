@@ -248,6 +248,11 @@ pub(super) struct ServerAnalysis {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(super) enum ZedAdapterResponse {
+    AgentBufferRefreshed {
+        api_version: u8,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+    },
     AgentBufferBudget {
         api_version: u8,
         state: String,
@@ -310,6 +315,7 @@ pub(super) fn validate_zed_adapter_response(
     response: ZedAdapterResponse,
 ) -> anyhow::Result<ZedAdapterResponse> {
     match response {
+        response @ ZedAdapterResponse::AgentBufferRefreshed { api_version: 1, .. } => Ok(response),
         response @ (ZedAdapterResponse::Worktree { api_version: 1, .. }
         | ZedAdapterResponse::Buffer { api_version: 1, .. }
         | ZedAdapterResponse::BufferLanguage { api_version: 1, .. }
@@ -328,7 +334,8 @@ pub(super) fn validate_zed_adapter_response(
         ZedAdapterResponse::AgentBufferBudget { .. } => {
             anyhow::bail!("invalid Code resource admission receipt")
         }
-        ZedAdapterResponse::Worktree { api_version, .. }
+        ZedAdapterResponse::AgentBufferRefreshed { api_version, .. }
+        | ZedAdapterResponse::Worktree { api_version, .. }
         | ZedAdapterResponse::Buffer { api_version, .. }
         | ZedAdapterResponse::BufferLanguage { api_version, .. }
         | ZedAdapterResponse::BufferHover { api_version, .. }

@@ -320,7 +320,7 @@ PID 1875594 and both existing Hawk workers were unchanged, health and SPA
 checks passed, and all four Machines were online. Unknown failure injection
 is isolated native-fixture evidence, not a production-session experiment.
 
-The Zed 1.33.0 source candidate adds prepared release references for confirmed
+Zed 1.33.0 adds prepared release references for confirmed
 automatic legacy owners. The Machine retains the original runtime and reference
 before sending Execute; after uncertainty it queries that reference, never a
 replacement runtime or owner. A preparation is bound to the legacy pin's
@@ -337,7 +337,40 @@ generations retain the previous one-use Close and its deadline; an uncertain
 legacy fallback is not replayed. Generic Code RPC cannot enter this internal
 release protocol. This does not recover uncertain legacy Open/EnsureWorktree,
 Machine-process loss, or a Controller receipt lost after the Machine completed
-and forgot its holding. Release acceptance remains pending.
+and forgot its holding.
+
+The exact `db286dddca7035b01708c742f782c66ce3a8b54d` release passed the full
+gate, 163 adapter tests (two ignored), 84 focused Machine tests (four ignored),
+and the immutable native pair. The latter discarded an actual Close reply,
+queried its original reference, reopened the same owner, and proved that the
+old Execute preserved the replacement. Signed install/drain, both actual
+Controller Catalog readers and all published URL hashes passed. Hawk activated
+the resident Machine in transaction `1794031492207402104-db286dddca70`, retaining
+worker generation `worker-39e0360cdcbff26cfa61`; the two existing worker PIDs,
+executables and arguments and Controller PID were unchanged. Installation
+`hawk-zed-1-33-0-legacy-release` completed/applied, and inventory reports 1.33.0
+active with composite digest
+`sha256:a3c81fb50d05b536ef4d4b1fd9090c199a6af9059cbe37cea271fe1f0da50b15`.
+A temporary production Go probe matched its exact source SHA and returned
+`UndeclaredName`; a passive summary after 320 seconds reported `not_open`.
+The probe was removed after checking its bytes. That summary alone is not
+original Close receipt evidence; lost-reply recovery was tested in isolation.
+
+The next Controller/Machine candidate separates Controller observation-cache
+retirement from native resource release. Repeated acquisitions request
+`refreshOnly`, which renews only a confirmed owner on its original live route;
+it cannot Ensure/Open or recreate an idle-reclaimed owner. Unknown, released,
+foreign or replaced owners fail without a fallback Open. The Controller retires
+explicitly unavailable refresh observations and completed/cancelled cleanup observations, with
+nonce checks and pending-opener accounting. A later acquisition uses a fresh
+nonce and remains subject to Machine quotas, which still count all old unknown
+owners. Forgetting a Controller observation is not evidence of native release.
+This also bounds Controller cache retention after a lost Close reply without
+claiming to recover that lost result. Uncertain refresh transport outcomes keep
+the original nonce for harmless retries without refreshing its idle deadline.
+Renewal itself does not sample resources or select a runtime: the existing
+owner remains charged, and only new acquisitions need resource admission.
+Production acceptance is pending.
 
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction

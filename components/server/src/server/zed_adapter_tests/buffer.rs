@@ -11,6 +11,50 @@ pub(super) fn open_request() -> BufferRequest<'static> {
     }
 }
 
+#[tokio::test]
+async fn automatic_refresh_is_one_explicit_request_without_fallback_open() {
+    for refresh_only in [false, true] {
+        let hub = Hub::new();
+        scope::create(&hub, "machine-test");
+        let scope = hub.session_code_scope("session").unwrap();
+        let control = MachineControl::default();
+        let (sender, mut commands) = mpsc::unbounded_channel();
+        let connection = control.install("machine-test".into(), "epoch".into(), false, 19, sender);
+        let mut operation = std::pin::pin!(crate::server::zed_session::agent_buffer_request(
+            &hub,
+            &control,
+            &scope,
+            open_request(),
+            refresh_only,
+        ));
+        assert!(futures::poll!(&mut operation).is_pending());
+        let command = commands.try_recv().unwrap();
+        let MachineCommand::AdapterRequest { payload, .. } = &command else {
+            panic!("adapter request expected")
+        };
+        assert_eq!(payload["type"], "acquireAgentBuffer");
+        assert_eq!(payload["ownerProtocol"], 2);
+        assert_eq!(
+            payload.get("refreshOnly"),
+            refresh_only.then_some(&serde_json::Value::Bool(true))
+        );
+        respond(
+            &control,
+            &connection,
+            command,
+            serde_json::json!({"type":"error", "message":"refresh unavailable"}),
+        );
+        assert!(matches!(
+            futures::poll!(&mut operation),
+            std::task::Poll::Ready(Err(_))
+        ));
+        assert!(
+            commands.try_recv().is_err(),
+            "refusal never sends Ensure/Open"
+        );
+    }
+}
+
 pub(super) fn respond(
     control: &MachineControl,
     connection: &crate::machine_control::ConnectionToken,

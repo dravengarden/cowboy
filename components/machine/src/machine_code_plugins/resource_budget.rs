@@ -179,19 +179,28 @@ impl CodeRuntimeHost {
             .as_object()
             .context("invalid agent warming request")?;
         ensure!(
-            (fields.len() == 4 || fields.len() == 5)
+            (4..=6).contains(&fields.len())
                 && fields.keys().all(|key| matches!(
                     key.as_str(),
-                    "type" | "worktree" | "path" | "leaseId" | "ownerProtocol"
+                    "type" | "worktree" | "path" | "leaseId" | "ownerProtocol" | "refreshOnly"
                 ))
                 && fields
                     .get("ownerProtocol")
-                    .is_none_or(|value| value.as_u64() == Some(2)),
+                    .is_none_or(|value| value.as_u64() == Some(2))
+                && fields.get("refreshOnly").is_none_or(|value| {
+                    value.as_bool() == Some(true) && payload["ownerProtocol"] == 2
+                }),
             "invalid agent warming request fields"
         );
         // Only automatic callers queue here. Interactive requests and releases
         // do not acquire this mutex or wait for CPU sampling.
         let _admission = self.agent_admission.lock().await;
+        if payload["refreshOnly"] == true {
+            let worktree = request_worktree(payload)?.context("agent worktree is missing")?;
+            // This renews existing ownership only: no runtime selection,
+            // resource acquisition, filesystem-file probe or native request.
+            return self.refresh_agent(plugin_id, &worktree, payload).await;
+        }
         match self
             .resource_observation()
             .await

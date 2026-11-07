@@ -55,18 +55,58 @@ pub(super) fn observed_paths(scope: &crate::core::SessionCodeScope) -> Vec<Strin
     paths
 }
 
-struct Opening(Key, bool);
+struct Opening {
+    key: Key,
+    lease: String,
+    possibly_open: bool,
+    retire: bool,
+    touch: bool,
+}
+
+impl Opening {
+    fn new(key: Key, lease: String, possibly_open: bool) -> Self {
+        Self {
+            key,
+            lease,
+            possibly_open,
+            retire: false,
+            touch: possibly_open,
+        }
+    }
+}
 
 impl Drop for Opening {
     fn drop(&mut self) {
         let mut held = HELD.lock();
-        if let Some(holding) = held.get_mut(&self.0) {
+        if let Some(holding) = held.get_mut(&self.key)
+            && holding.lease == self.lease
+        {
             holding.opening -= 1;
-            holding.possibly_open |= self.1;
-            holding.last_used = Instant::now();
-            if holding.opening == 0 && !holding.possibly_open {
-                held.remove(&self.0);
+            holding.possibly_open |= self.possibly_open;
+            holding.releasing |= self.retire;
+            if self.touch {
+                holding.last_used = Instant::now();
             }
+            if holding.opening == 0 && (holding.releasing || !holding.possibly_open) {
+                held.remove(&self.key);
+            }
+        }
+    }
+}
+
+/// Controller observations are not Machine resource ownership. Once this
+/// one-use cleanup ends (including cancellation), retire only its observation.
+/// Unknown native resources remain charged to the Machine's original owner.
+struct RetiringObservation(Key, String);
+
+impl Drop for RetiringObservation {
+    fn drop(&mut self) {
+        let mut held = HELD.lock();
+        if held
+            .get(&self.0)
+            .is_some_and(|h| h.lease == self.1 && h.opening == 0)
+        {
+            held.remove(&self.0);
         }
     }
 }
@@ -114,7 +154,7 @@ pub(super) async fn acquire(
         })
         .ok_or("refused")?;
     let key = (session.to_owned(), target.clone());
-    let lease = {
+    let (lease, refresh_only) = {
         let mut held = HELD.lock();
         if let Some(holding) = held.get_mut(&key) {
             if holding.releasing
@@ -124,11 +164,10 @@ pub(super) async fn acquire(
             {
                 return Err("unavailable");
             }
-            // Still sent: the open is idempotent for this owner and restores a
-            // holding a replaced code runtime lost.
-            holding.last_used = Instant::now();
+            // Never recreate an owner that Machine idle maintenance may have
+            // released while a delayed Controller Close still names it.
             holding.opening += 1;
-            holding.lease.clone()
+            (holding.lease.clone(), true)
         } else if !fits(&held, session, &context.machine_id, &worktree) {
             return Err("budget");
         } else {
@@ -147,10 +186,10 @@ pub(super) async fn acquire(
                     possibly_open: false,
                 },
             );
-            lease
+            (lease, false)
         }
     };
-    let mut opening = Opening(key, true);
+    let mut opening = Opening::new(key, lease.clone(), !refresh_only);
     let opened = zed_session::agent_buffer_request(
         &state.hub,
         &state.machine_control,
@@ -161,12 +200,27 @@ pub(super) async fn acquire(
             lease_id: &lease,
             open: true,
         },
+        refresh_only,
     )
     .await;
+    if refresh_only {
+        if matches!(&opened, Ok(ZedAdapterResponse::AgentBufferRefreshed { lease_id, .. }) if lease_id == &lease)
+        {
+            opening.touch = true;
+            return Ok(());
+        }
+        // No fallback Open, even on an older Machine or a lost refresh reply.
+        // A future acquisition gets a new nonce and remains subject to Machine
+        // quotas, including every old uncertain owner still retained there.
+        opening.retire = matches!(opened, Ok(ZedAdapterResponse::AgentBufferBudget { .. }));
+        // A transport failure is not an ownership observation. Retain this
+        // nonce for harmless refresh retries, without extending its idle time.
+        return Err("unavailable");
+    }
     if let Ok(ZedAdapterResponse::AgentBufferBudget { state, .. }) = &opened {
         // This typed reply precedes every ensure/open effect. It cannot clear
         // an older unknown Open or another in-flight request's reservation.
-        opening.1 = false;
+        opening.possibly_open = false;
         return Err(if state == "saturated" {
             "budget"
         } else {
@@ -176,9 +230,8 @@ pub(super) async fn acquire(
     if matches!(opened, Ok(ZedAdapterResponse::Buffer { .. })) {
         Ok(())
     } else {
-        // Whatever the adapter kept is re-adopted by the same owner next time.
-        // An unknown Open may still own native resources. Keep its budget
-        // reservation until the same owner's release is confirmed.
+        // An unknown Open remains owned and charged by the Machine. A later
+        // refresh only observes a confirmed holding; it cannot replay Open.
         Err("unavailable")
     }
 }
@@ -208,9 +261,10 @@ pub(super) async fn release_stale(state: &AppState) {
             }
             holding.clone()
         };
+        let _retiring = RetiringObservation(key.clone(), holding.lease.clone());
         let (session, path) = &key;
-        // Missing or replaced context cannot authorize release of the old
-        // native owner. Keep its reservation until lifecycle recovery.
+        // Missing or replaced context cannot authorize a native Close. The
+        // original Machine retains its owner, quota and idle cleanup anyway.
         let Some(context) = session_code_context(state, session) else {
             continue;
         };
@@ -234,10 +288,8 @@ pub(super) async fn release_stale(state: &AppState) {
             },
         )
         .await;
-        if matches!(result, Ok(ZedAdapterResponse::Buffer { .. })) {
-            HELD.lock().remove(&key);
-        } else {
-            tracing::warn!(%session, "agent code buffer release remains unconfirmed");
+        if !matches!(result, Ok(ZedAdapterResponse::Buffer { .. })) {
+            tracing::warn!(%session, "Machine-owned agent code release remains unconfirmed; retiring Controller observation");
         }
     }
 }
@@ -245,6 +297,87 @@ pub(super) async fn release_stale(state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn opening(key: Key, possibly_open: bool) -> Opening {
+        let lease = HELD.lock()[&key].lease.clone();
+        Opening::new(key, lease, possibly_open)
+    }
+
+    #[test]
+    fn refused_refresh_retires_observation_after_all_original_openers_leave() {
+        let key = (uuid::Uuid::new_v4().to_string(), "file.rs".into());
+        let mut entry = holding("m", "/a");
+        entry.opening = 2;
+        HELD.lock().insert(key.clone(), entry);
+        let original = opening(key.clone(), true);
+        let mut refresh = opening(key.clone(), false);
+        refresh.retire = true;
+        drop(refresh);
+        assert!(HELD.lock()[&key].releasing);
+        assert_eq!(HELD.lock()[&key].opening, 1);
+        drop(original);
+        assert!(!HELD.lock().contains_key(&key));
+    }
+
+    #[test]
+    fn uncertain_refresh_preserves_nonce_without_extending_idle_time() {
+        let key = (uuid::Uuid::new_v4().to_string(), "file.rs".into());
+        let mut entry = holding("m", "/a");
+        entry.last_used = Instant::now() - IDLE;
+        let last_used = entry.last_used;
+        entry.opening = 1;
+        HELD.lock().insert(key.clone(), entry);
+        drop(opening(key.clone(), false));
+        let mut held = HELD.lock();
+        let original = held.get_mut(&key).unwrap();
+        assert_eq!(original.last_used, last_used);
+        assert!(
+            original.begin_release(true),
+            "retry errors cannot defer cleanup forever"
+        );
+        held.remove(&key);
+    }
+
+    #[test]
+    fn cleanup_observation_never_removes_a_replacement_nonce() {
+        let key = (uuid::Uuid::new_v4().to_string(), "file.rs".into());
+        let old = holding("m", "/a");
+        let old_lease = old.lease.clone();
+        HELD.lock().insert(key.clone(), old);
+        drop(RetiringObservation(key.clone(), old_lease.clone()));
+        assert!(
+            !HELD.lock().contains_key(&key),
+            "unknown native outcome is Machine-owned"
+        );
+        let new = holding("m", "/a");
+        let new_lease = new.lease.clone();
+        HELD.lock().insert(key.clone(), new);
+        drop(RetiringObservation(key.clone(), old_lease.clone()));
+        drop(Opening::new(key.clone(), old_lease, true));
+        assert_eq!(HELD.lock()[&key].lease, new_lease);
+        assert_eq!(HELD.lock()[&key].opening, 0);
+        HELD.lock().remove(&key);
+    }
+
+    #[tokio::test]
+    async fn canceled_close_retires_only_controller_observation() {
+        let key = (uuid::Uuid::new_v4().to_string(), "file.rs".into());
+        let mut entry = holding("m", "/a");
+        assert!(entry.begin_release(false));
+        let lease = entry.lease.clone();
+        HELD.lock().insert(key.clone(), entry);
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let task_key = key.clone();
+        let task = tokio::spawn(async move {
+            let _retiring = RetiringObservation(task_key, lease);
+            started.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        ready.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(!HELD.lock().contains_key(&key));
+    }
 
     #[test]
     fn new_acquisition_never_reuses_a_delayed_close_owner() {
@@ -315,13 +448,13 @@ mod tests {
         entry.possibly_open = false;
         entry.opening = 2;
         HELD.lock().insert(key.clone(), entry);
-        drop(Opening(key.clone(), false));
+        drop(opening(key.clone(), false));
         assert_eq!(
             HELD.lock()[&key].opening,
             1,
             "another caller is still pending"
         );
-        drop(Opening(key.clone(), false));
+        drop(opening(key.clone(), false));
         assert!(
             !HELD.lock().contains_key(&key),
             "both requests refused before effects"
@@ -330,8 +463,8 @@ mod tests {
         entry.possibly_open = false;
         entry.opening = 2;
         HELD.lock().insert(key.clone(), entry);
-        drop(Opening(key.clone(), true));
-        drop(Opening(key.clone(), false));
+        drop(opening(key.clone(), true));
+        drop(opening(key.clone(), false));
         assert!(
             HELD.lock()[&key].possibly_open,
             "a refusal cannot erase another unknown Open"
@@ -389,7 +522,7 @@ mod tests {
         let (started, ready) = tokio::sync::oneshot::channel();
         let task_key = key.clone();
         let task = tokio::spawn(async move {
-            let _opening = Opening(task_key, true);
+            let _opening = opening(task_key, true);
             let _ = started.send(());
             std::future::pending::<()>().await;
         });

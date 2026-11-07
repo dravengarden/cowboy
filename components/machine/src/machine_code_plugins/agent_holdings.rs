@@ -143,6 +143,56 @@ impl Holding {
 }
 
 impl CodeRuntimeHost {
+    /// The signed native fixture intentionally hides writable host cgroups.
+    /// It accepts no real resource admission; exercise only the post-admission
+    /// lifecycle on the already installed/opened disposable route.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) async fn fixture_acquire_admitted(&self, plugin: &str, payload: &Value) -> Value {
+        let worktree = request_worktree(payload).unwrap().unwrap();
+        let route = self.routes.lock().await[&(plugin.to_owned(), worktree)].clone();
+        let mut route = route.lock().await;
+        let socket = route.target.as_ref().unwrap().socket().to_owned();
+        self.acquire_admitted(&mut route, &socket, payload)
+            .await
+            .unwrap()
+    }
+
+    /// Renew only a confirmed owner on its original live route. In particular,
+    /// an idle-reclaimed owner can never be recreated by a delayed refresh.
+    pub(super) async fn refresh_agent(
+        &self,
+        plugin: &str,
+        worktree: &Path,
+        payload: &Value,
+    ) -> Result<Value> {
+        let key = WorktreeRoute::buffer_key(payload)?;
+        owner(&key.1, true)?;
+        let route = self
+            .routes
+            .lock()
+            .await
+            .get(&(plugin.to_owned(), worktree.to_owned()))
+            .cloned();
+        let Some(route) = route else {
+            return Ok(resource_budget::unavailable());
+        };
+        let mut route = route.lock().await;
+        if !matches!(route.target.as_ref(), Some(CodeTarget::Installed(runtime)) if matches!(runtime.is_running(), Ok(true)))
+            || !route.buffers.contains(&key)
+        {
+            return Ok(resource_budget::unavailable());
+        }
+        let Some(held) = route.agent_buffers.get_mut(&key) else {
+            return Ok(resource_budget::unavailable());
+        };
+        held.check_worktree(payload)?;
+        if !held.recoverable_release() || held.releasing {
+            return Ok(resource_budget::unavailable());
+        }
+        held.last_used = Instant::now();
+        Ok(serde_json::json!({"type":"agentBufferRefreshed", "api_version":1, "leaseId":key.1}))
+    }
+
     /// Called under agent_admission, so two automatic Opens cannot both use
     /// the final slot. Busy interactive routes make admission unavailable.
     pub(super) async fn agent_holding_capacity(

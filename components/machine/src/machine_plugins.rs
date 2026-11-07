@@ -16,6 +16,8 @@ mod artifact_cache;
 mod auth_refresh;
 pub mod auth_watch;
 #[cfg(all(test, target_os = "linux"))]
+mod code_agent_conformance;
+#[cfg(all(test, target_os = "linux"))]
 mod code_navigation_conformance;
 mod code_runtime;
 #[cfg(all(test, target_os = "linux"))]
@@ -7273,9 +7275,7 @@ mod tests {
         server.await.unwrap();
         let navigation_root =
             code_navigation_conformance::configure(&store, &release.artifact_digest, &root);
-        let worktree = root.join("worktree");
-        fs::create_dir_all(&worktree).unwrap();
-        fs::write(worktree.join("fixture.txt"), "real isolated Zed buffer\n").unwrap();
+        let worktree = code_agent_conformance::exercise(&store, &root).await;
         let open = serde_json::json!({"type": "openWorktree", "path": worktree, "trusted": true});
         assert_eq!(
             store.code_request("zed", &open, None).await.unwrap()["leases"],
