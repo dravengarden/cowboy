@@ -294,6 +294,16 @@ the original ownership and capacity. Terminal results are not automatically
 retired, and this does not recover state lost with the Machine process or solve
 unknown legacy Opens and Closes.
 
+Hawk activated this maintenance observation from
+`bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction
+`1794018627362793557-bc6262f79936` (`succeeded` / `committed`). The complete
+pinned gate passed. The host release retained `worker-39e0360cdcbff26cfa61`;
+the Controller PID and both existing workers' PIDs, executables and arguments
+remained unchanged. All four Machines reported ready, health returned `ok`, and the public
+SPA returned HTTP 200 with `no-store`. Lost-reply recovery, original-owner
+refusal, persistent uncertainty and fair bounded selection are fixture evidence;
+this activation did not inject failures into production sessions.
+
 ### Baselines, attribution, matching
 
 - Baselines are immutable, content-matched captures at a read or pre-write
