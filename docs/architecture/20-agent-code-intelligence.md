@@ -124,9 +124,11 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   connection. Pending cleanup prevents a fresh instance for that parent;
   cleanup visits are bounded and rotate past unconfirmed outcomes. Transport
   loss abandons the old route without claiming native thread exit or redirecting
-  cleanup. This integration still requires worker-generation acceptance and
-  production activation; event pages are not yet analysis baselines or model
-  delivery authority.
+  cleanup. The exact protocol-42 candidate passed native Codex/Claude execution,
+  recovery, Provider coexistence, logs and connected Code acceptance
+  ([receipts](../experiments/code-observer-worker-pin-2026-11-07.json)).
+  Production activation remains pending; event pages are not yet analysis
+  baselines or model delivery authority.
 - **Trust lifetime.** Agent diagnostic reads capture the Session and the
   language-server policy lifetime before asynchronous work. A policy change,
   including off/on before the result arrives, discards old diagnostic content
