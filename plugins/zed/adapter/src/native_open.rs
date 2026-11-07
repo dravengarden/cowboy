@@ -190,6 +190,8 @@ async fn recover_observed(
         }
     } else if outcome == Outcome::Pending as i32 {
         return Err(unresolved("still pending"));
+    } else if outcome == Outcome::Forgotten as i32 {
+        return Err(unresolved("original outcome was forgotten"));
     } else if outcome != Outcome::Unknown as i32 && outcome != Outcome::Failed as i32 {
         return Err(unresolved("outcome unavailable"));
     }

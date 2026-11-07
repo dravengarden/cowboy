@@ -164,7 +164,8 @@ message CowboyAnalysisFrontierResponse {
 
 // The outcome this exact server process recorded for one of the peer's own
 // `OpenBufferByPath` requests, by its message ID. `UNKNOWN` means it was never
-// received before this query on the same connection. Querying has no effect.
+// admitted before this query on the same connection. `FORGOTTEN` means an old
+// result may have existed and is never evidence of no effect. Querying has no effect.
 message CowboyOpenAttempt {
   uint64 project_id = 1;
   uint32 protocol = 2;
@@ -179,6 +180,7 @@ message CowboyOpenAttemptResponse {
     PENDING = 2;
     OPENED = 3;
     FAILED = 4;
+    FORGOTTEN = 5;
   }
   Outcome outcome = 2;
   uint64 buffer_id = 3;

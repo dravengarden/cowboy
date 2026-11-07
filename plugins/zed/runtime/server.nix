@@ -17,6 +17,7 @@ let
   };
   cargoDeps = rustPlatform.fetchCargoVendor {
     pname = "cowboy-private-zed-server";
+    # Dependency snapshot is unchanged by the private journal protocol update.
     version = "1.13.0";
     inherit src;
     patches = [ ./server/dependencies.patch ];
@@ -39,7 +40,7 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.13.0";
+  version = "1.14.0";
   inherit src cargoDeps;
   patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ./server/acquisition-bounds.patch ./server/replacement-bounds.patch ./server/snapshot-lifetimes.patch ./server/remote-edits.patch ];
   postPatch = ''
@@ -255,7 +256,7 @@ in platform.buildRustPackage {
                     .read(cx)
                     .cowboy_open_attempts()
                     .begin(message.sender_id, message.message_id)
-            });
+            })?;
             let worktree_id = WorktreeId::from_proto(message.payload.worktree_id);
             let path = RelPath::from_unix_str(&message.payload.path)?.into();' \
       --replace-fail 'buffer_store.open_buffer(ProjectPath { worktree_id, path }, cx)

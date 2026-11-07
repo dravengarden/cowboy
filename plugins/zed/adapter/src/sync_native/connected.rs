@@ -3,6 +3,7 @@ use super::*;
 use sha2::{Digest as _, Sha256};
 
 mod acquisition;
+mod open_journal;
 mod reload;
 mod remote_edits;
 mod replacement;
@@ -461,6 +462,11 @@ async fn restart_does_not_adopt_old_ticket(
     stop(&replacement).await;
 }
 
+async fn acquisition_journals(server: &Path, root: &Path) {
+    acquisition::exercise(server, root).await;
+    open_journal::exercise(server, root).await;
+}
+
 async fn private_extensions(zed: &ZedRuntime, buffer: u64, worktree: u64, workspace: &Path) {
     analysis_frontier_answers(zed, buffer).await;
     recovers_an_abandoned_open(zed, worktree, workspace).await;
@@ -613,7 +619,7 @@ async fn native_process_child() {
     native_source_regressions(&zed, &instance, &workspace, worktree).await;
     owned_resources(&zed, &root).await;
     restart_does_not_adopt_old_ticket(&zed, &server, &root, &instance, id2).await;
-    acquisition::exercise(&server, &root).await;
+    acquisition_journals(&server, &root).await;
     crate::buffer_navigation::connected_lsp::immutable_pair(&root, &server).await;
     println!(
         "native sync identity, edit/undo/close refusal, source validation and lost-reply checks passed"

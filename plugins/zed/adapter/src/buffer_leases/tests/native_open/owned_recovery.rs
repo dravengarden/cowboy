@@ -25,6 +25,7 @@ async fn query_observes_original_open_without_replaying_or_starting_cleanup() {
         Outcome::Unknown,
         Outcome::Pending,
         Outcome::Opened,
+        Outcome::Forgotten,
     ] {
         let f = Fixture::new().await;
         let (sync, mut private, mut closed) = crate::native_close::tests::fixture();

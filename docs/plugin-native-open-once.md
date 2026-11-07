@@ -60,12 +60,12 @@ write lock:
 1. An upstream `Ping` round trip proves the original request, queued earlier
    on the same connection, was received: the adapter's writer interleaves the
    upstream and private channels, so only this barrier orders them.
-2. `CowboyOpenAttempt` then reports the outcome. `UNKNOWN` (never received) and
+2. `CowboyOpenAttempt` then reports the outcome. `UNKNOWN` (never admitted) and
    `FAILED` clear the fence with no effect. `OPENED` with a buffer ID another
    committed owner already holds is an alias and clears it. Any other opened
    buffer is an orphan: it is released through the confirmed
    [native close](plugin-native-close-confirmation.md), and only a `Closed`
-   receipt clears the fence. `PENDING`, an unreachable server or an
+   receipt clears the fence. `PENDING`, `FORGOTTEN`, an unreachable server or an
    unconfirmed close keep it latched.
 
 Recovery never replays the open, never uses upstream `CloseBuffer` and never
@@ -73,6 +73,18 @@ adopts the orphan for the abandoned owner: that lease stays Unknown. It is
 bound to the exact native process by the connection itself; a replaced server
 starts a new adapter runtime with no latched attempt. The owner chose this
 automatic, query-only recovery (2026-11-05), so no Operator step is involved.
+
+The private server 1.14.0 candidate distinguishes forgotten outcomes from
+requests never admitted. The journal retains at most 1,024 attempts and 1,024
+peer histories. It never evicts Pending; a table containing only Pending
+requests refuses a new Open before effects. Evicting a settled result advances
+that peer's forgotten watermark. A missing ID at or below the watermark returns
+`FORGOTTEN`, retaining uncertainty even when the ID was a gap. Later IDs not
+recorded still return `UNKNOWN`. Peer histories never expire within the process.
+Repeated or decreasing Open IDs are refused before native acquisition, so an old
+attempt cannot settle a replacement record. ID wrap and exhausted peer history
+fail closed. This does not recover a forgotten result or authorize a restart.
+The exact native build and production acceptance remain pending.
 
 ## Reservations confined to the open target (Zed 1.24.0)
 
