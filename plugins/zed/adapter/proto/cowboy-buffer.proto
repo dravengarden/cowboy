@@ -206,3 +206,37 @@ message CowboyOpenTargetResponse {
   State state = 2;
   uint64 buffer_id = 3;
 }
+
+// Read-only result of this peer's original worktree request. A completed Add
+// proves registration, while its upstream early `AddWorktreeResponse` does not.
+// UNKNOWN means no admission; UNCERTAIN/FORGOTTEN never prove no effect.
+message CowboyWorktreeAttempt {
+  uint64 project_id = 1;
+  uint32 protocol = 2;
+  // Zero probes support only; it never identifies an operation.
+  uint32 message_id = 3;
+}
+
+message CowboyWorktreeAttemptResponse {
+  uint32 protocol = 1;
+  enum Kind {
+    UNSPECIFIED = 0;
+    ADD = 1;
+    TRUST = 2;
+    RESTRICT = 3;
+    REMOVE = 4;
+  }
+  enum Outcome {
+    OUTCOME_UNSPECIFIED = 0;
+    UNKNOWN = 1;
+    PENDING = 2;
+    COMPLETED = 3;
+    UNCERTAIN = 4;
+    FORGOTTEN = 5;
+    SUPPORTED = 6;
+  }
+  Kind kind = 2;
+  Outcome outcome = 3;
+  // Original Add/Remove ID, or the sole Trust/Restrict ID (0 for other scopes).
+  uint64 worktree_id = 4;
+}

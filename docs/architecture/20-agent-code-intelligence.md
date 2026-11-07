@@ -479,6 +479,27 @@ probe returned `document_current`, matching source SHA and the expected
 not inject reply loss; the fixture's synthetic resource admission does not prove
 host resource admission, and none of this accepts Machine-process-loss recovery.
 
+The next Zed 1.38.0 contract prepares an automatic acquisition reference before
+EnsureWorktree, then retains the original native Add, Trust/Restrict and Remove
+request identities. The native journal reports Add completion only after store
+registration; the upstream early response is insufficient. Pending and uncertain
+entries retain their fences, bounded history eviction reports Forgotten, and a
+replacement connection cannot supply the original result. Queries observe only;
+explicit release continues the original buffer and worktree cleanup in order.
+The last automatic owner removes the native worktree only when no interactive
+worktree lease or buffer owner remains. A captured incarnation and positive
+retirement evidence prevent an old request from closing a later replacement.
+
+Machine saves the prepared reference before execution, keeps uncertain worktree
+acquisitions charged, and can reclaim them after the existing idle interval.
+Its bounded retirement queue retains the original runtime and capacity permit
+until retirement is confirmed or that runtime exits. Only an explicit old-codec
+unknown-variant refusal selects the older release path; unsupported native
+journals, malformed support replies and transport errors do not. These private
+requests are denied by generic Code RPC. Deploy the compatible Machine host
+before installing this Plugin. This is a process-local protocol, not durable
+Machine restart recovery, project freshness, or production release evidence.
+
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction
 `1794018627362793557-bc6262f79936` (`succeeded` / `committed`). The complete

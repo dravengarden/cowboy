@@ -147,6 +147,8 @@ pub(super) struct Transport {
     pending: Pending,
     navigation_sequence: AtomicU64,
     #[cfg(test)]
+    pub(crate) worktree_fault: super::worktree_recovery::fault::Fault,
+    #[cfg(test)]
     close_fault: std::sync::atomic::AtomicU8,
     #[cfg(test)]
     navigation_fault: std::sync::atomic::AtomicU8,
@@ -175,6 +177,8 @@ impl Transport {
                 outbound,
                 pending: Arc::default(),
                 navigation_sequence: AtomicU64::new(1),
+                #[cfg(test)]
+                worktree_fault: super::worktree_recovery::fault::Fault::default(),
                 #[cfg(test)]
                 close_fault: std::sync::atomic::AtomicU8::new(0),
                 #[cfg(test)]
@@ -212,13 +216,15 @@ impl Transport {
                     | Payload::CloseResponse(_)
                     | Payload::AnalysisResponse(_)
                     | Payload::OpenAttemptResponse(_)
-                    | Payload::OpenTargetResponse(_)) => Some(response),
+                    | Payload::OpenTargetResponse(_)
+                    | Payload::WorktreeAttemptResponse(_)) => Some(response),
                     Payload::Request(_)
                     | Payload::NavigationRequest(_)
                     | Payload::CloseRequest(_)
                     | Payload::AnalysisRequest(_)
                     | Payload::OpenAttemptRequest(_)
-                    | Payload::OpenTargetRequest(_) => None,
+                    | Payload::OpenTargetRequest(_)
+                    | Payload::WorktreeAttemptRequest(_) => None,
                 }
             });
         // Test-only loss of an actual native acknowledgement, never a synthetic

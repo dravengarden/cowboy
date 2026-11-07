@@ -16,7 +16,11 @@ impl CodeRuntimeHost {
         let proxy = directory.0.join("proxy.sock");
         let listener = tokio::net::UnixListener::bind(&proxy).unwrap();
         let mut relay = tokio::spawn(async move {
-            for expected in ["ensureWorktree", "openBuffer"] {
+            for expected in [
+                "agentAcquisitionSupport",
+                "prepareAgentAcquisition",
+                "agentAcquisition",
+            ] {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut line = String::new();
                 BufReader::new(&mut stream)
@@ -26,11 +30,16 @@ impl CodeRuntimeHost {
                 let request: Value = serde_json::from_str(&line).unwrap();
                 assert_eq!(request["type"], expected);
                 let response = exchange(&original, &request).await.unwrap();
-                if expected == "openBuffer" {
-                    assert_eq!(response["type"], "buffer");
-                    assert_eq!(response["leases"], 1);
-                    assert!(response["buffer_id"].as_u64().is_some_and(|id| id != 0));
-                    return response; // Drop this successful reply on the wire.
+                if expected == "agentAcquisition" {
+                    assert_eq!(request["action"], "execute");
+                    assert_eq!(response["state"], "ready");
+                    assert_eq!(response["buffer"]["leases"], 1);
+                    assert!(
+                        response["buffer"]["buffer_id"]
+                            .as_u64()
+                            .is_some_and(|id| id != 0)
+                    );
+                    return response["buffer"].clone(); // Drop this successful reply on the wire.
                 }
                 let mut bytes = serde_json::to_vec(&response).unwrap();
                 bytes.push(b'\n');

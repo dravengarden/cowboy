@@ -21,6 +21,7 @@ use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+mod agent_acquisition;
 #[cfg(all(test, target_os = "linux"))]
 mod agent_acquisition_conformance;
 mod agent_holdings;
@@ -175,6 +176,7 @@ impl WorktreeRoute {
 
 #[derive(Default)]
 pub struct CodeRuntimeHost {
+    agent_acquisitions: agent_acquisition::Retirements,
     agent_admission: Mutex<()>,
     agent_retirements: agent_release::Retirements,
     agent_release_cursor: std::sync::atomic::AtomicUsize,
@@ -269,6 +271,9 @@ impl CodeRuntimeHost {
                 Some(
                     "prepareBufferSync"
                         | "legacyReleaseSupport"
+                        | "agentAcquisitionSupport"
+                        | "prepareAgentAcquisition"
+                        | "agentAcquisition"
                         | "prepareLegacyRelease"
                         | "legacyRelease"
                         | "bufferSync"
@@ -800,6 +805,7 @@ mod tests {
         let mut synchronization = super::sync_fixture::Fixture::default();
         let mut navigation = super::navigation_fixture::Fixture::default();
         let mut agent_release = super::agent_release::tests::Fixture::default();
+        let mut acquisition = super::agent_acquisition::tests::Fixture::default();
         let mut next_lease = 0_u64;
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
@@ -809,6 +815,18 @@ mod tests {
                 .unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
             let kind = request["type"].as_str().unwrap();
+            if let Some(response) = acquisition.reply(&request, &home, generation) {
+                if let Some(response) = response {
+                    let _ = writeln!(stream, "{response}");
+                }
+                continue;
+            }
+            if kind == "agentAcquisitionSupport" {
+                let response =
+                    json!({"type":"error","message":"unknown variant `agentAcquisitionSupport`"});
+                let _ = writeln!(stream, "{response}");
+                continue;
+            }
             if let Some(response) = agent_release.reply(&request, &home, generation) {
                 if let Some(response) = response {
                     let _ = writeln!(stream, "{response}");

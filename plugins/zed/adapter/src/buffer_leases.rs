@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{BufferOwner, Buffers, Response, WorktreeState, Worktrees, Zed};
 
+mod acquisition;
 mod navigation;
 
 pub(super) async fn respond(
@@ -223,7 +224,9 @@ impl Registry {
         let all = worktrees.read().await;
         let current = all.get(&worktree).context("worktree is not open")?;
         ensure!(
-            matches!(current.state, WorktreeState::Ready),
+            current.pending.is_none()
+                && !current.retired.load(std::sync::atomic::Ordering::Acquire)
+                && matches!(current.state, WorktreeState::Ready),
             "worktree is not ready"
         );
         self.insert(Slot {
@@ -335,6 +338,8 @@ impl Registry {
             .context("worktree is no longer open")?;
         ensure!(
             Arc::ptr_eq(&current.incarnation, worktree_incarnation)
+                && current.pending.is_none()
+                && !current.retired.load(std::sync::atomic::Ordering::Acquire)
                 && matches!(current.state, WorktreeState::Ready),
             "buffer worktree incarnation changed"
         );

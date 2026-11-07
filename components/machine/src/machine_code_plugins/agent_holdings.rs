@@ -71,6 +71,7 @@ pub(super) struct Holding {
     confirmed: bool,
     pub(super) releasing: bool,
     pub(super) release: Option<super::agent_release::Attempt>,
+    pub(super) acquisition: Option<super::agent_acquisition::Attempt>,
 }
 
 impl Holding {
@@ -108,6 +109,7 @@ impl Holding {
             confirmed: false,
             releasing: false,
             release: None,
+            acquisition: None,
         }
     }
 
@@ -158,9 +160,17 @@ impl Holding {
 
     fn idle_due(&self) -> bool {
         self.idle_reclaimable
-            && self.worktree_confirmed
+            && (self.worktree_confirmed || self.acquisition.is_some())
             && !self.releasing
             && self.last_used.elapsed() >= IDLE
+    }
+
+    fn cleanup_pending(&self) -> bool {
+        self.release.is_some()
+            || self
+                .acquisition
+                .as_ref()
+                .is_some_and(|attempt| attempt.releasing)
     }
 }
 
@@ -277,6 +287,7 @@ impl CodeRuntimeHost {
                 host.buffer_sync.observe_pending().await;
                 host.buffer_navigation.observe_pending().await;
                 host.agent_retirements.observe().await;
+                host.agent_acquisitions.observe().await;
                 host.release_idle_agents().await;
             }
         })
@@ -291,7 +302,7 @@ impl CodeRuntimeHost {
         for route in routes {
             if let Ok(held) = route.try_lock() {
                 for (key, holding) in &held.agent_buffers {
-                    if holding.release.is_some() || holding.idle_due() {
+                    if holding.cleanup_pending() || holding.idle_due() {
                         candidates.push((Arc::clone(&route), key.clone()));
                     }
                 }
@@ -316,7 +327,7 @@ impl CodeRuntimeHost {
             let Some(holding) = route.agent_buffers.get(&(path.clone(), lease.clone())) else {
                 continue;
             };
-            if holding.release.is_none() && !holding.idle_due() {
+            if !holding.cleanup_pending() && !holding.idle_due() {
                 continue;
             }
             let worktree = holding.worktree.clone();

@@ -40,9 +40,9 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.14.0";
+  version = "1.15.0";
   inherit src cargoDeps;
-  patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ./server/acquisition-bounds.patch ./server/replacement-bounds.patch ./server/snapshot-lifetimes.patch ./server/remote-edits.patch ];
+  patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ./server/acquisition-bounds.patch ./server/replacement-bounds.patch ./server/snapshot-lifetimes.patch ./server/remote-edits.patch ./server/worktree-attempts.patch ];
   postPatch = ''
     cp ${../adapter/proto/cowboy-buffer.proto} crates/proto/proto/cowboy-buffer.proto
     mkdir -p crates/project/src/buffer_store/cowboy_sync
@@ -54,6 +54,9 @@ in platform.buildRustPackage {
     mkdir -p crates/project/src/buffer_store/cowboy_open_attempts
     cp ${./server/cowboy_open_attempts.rs} crates/project/src/buffer_store/cowboy_open_attempts.rs
     cp ${./server/open_attempts_tests.rs} crates/project/src/buffer_store/cowboy_open_attempts/tests.rs
+    mkdir -p crates/project/src/buffer_store/cowboy_worktree_attempts
+    cp ${./server/cowboy_worktree_attempts.rs} crates/project/src/buffer_store/cowboy_worktree_attempts.rs
+    cp ${./server/worktree_attempts_tests.rs} crates/project/src/buffer_store/cowboy_worktree_attempts/tests.rs
     cp ${./server/reload_tests.rs} crates/project/src/buffer_store/cowboy_reload_tests.rs
     cp ${./server/acquisition_tests.rs} crates/project/src/buffer_store/cowboy_acquisition_tests.rs
     cp ${./server/cowboy_buffer_budget.rs} crates/language/src/cowboy_buffer_budget.rs
@@ -87,7 +90,9 @@ in platform.buildRustPackage {
         CowboyOpenAttempt cowboy_open_attempt = 1008;
         CowboyOpenAttemptResponse cowboy_open_attempt_response = 1009;
         CowboyOpenTarget cowboy_open_target = 1010;
-        CowboyOpenTargetResponse cowboy_open_target_response = 1011;'
+        CowboyOpenTargetResponse cowboy_open_target_response = 1011;
+        CowboyWorktreeAttempt cowboy_worktree_attempt = 1012;
+        CowboyWorktreeAttemptResponse cowboy_worktree_attempt_response = 1013;'
     substituteInPlace crates/proto/src/proto.rs \
       --replace-fail '(ReloadBuffers, Foreground),' '(ReloadBuffers, Foreground),
         (CowboyBufferSync, Foreground),
@@ -101,21 +106,25 @@ in platform.buildRustPackage {
         (CowboyOpenAttempt, Foreground),
         (CowboyOpenAttemptResponse, Foreground),
         (CowboyOpenTarget, Foreground),
-        (CowboyOpenTargetResponse, Foreground),' \
+        (CowboyOpenTargetResponse, Foreground),
+        (CowboyWorktreeAttempt, Foreground),
+        (CowboyWorktreeAttemptResponse, Foreground),' \
       --replace-fail '(ReloadBuffers, ReloadBuffersResponse),' '(ReloadBuffers, ReloadBuffersResponse),
         (CowboyBufferSync, CowboyBufferSyncResponse),
         (CowboyNavigation, CowboyNavigationResponse),
         (CowboyCloseBuffers, CowboyCloseBuffersResponse),
         (CowboyAnalysisFrontier, CowboyAnalysisFrontierResponse),
         (CowboyOpenAttempt, CowboyOpenAttemptResponse),
-        (CowboyOpenTarget, CowboyOpenTargetResponse),' \
+        (CowboyOpenTarget, CowboyOpenTargetResponse),
+        (CowboyWorktreeAttempt, CowboyWorktreeAttemptResponse),' \
       --replace-fail '    ReloadBuffers,' '    ReloadBuffers,
         CowboyBufferSync,
         CowboyNavigation,
         CowboyCloseBuffers,
         CowboyAnalysisFrontier,
         CowboyOpenAttempt,
-        CowboyOpenTarget,'
+        CowboyOpenTarget,
+        CowboyWorktreeAttempt,'
     substituteInPlace crates/project/src/lsp_store.rs \
       --replace-fail '                version: 0,
                     snapshot: initial_snapshot.clone(),' '                version: 1,
@@ -198,6 +207,7 @@ in platform.buildRustPackage {
       --replace-fail '/// A set of open buffers.' 'mod cowboy_sync;
     mod cowboy_close;
     pub mod cowboy_open_attempts;
+    pub mod cowboy_worktree_attempts;
     #[cfg(test)]
     #[path = "buffer_store/cowboy_reload_tests.rs"]
     mod cowboy_reload_tests;
@@ -214,16 +224,19 @@ in platform.buildRustPackage {
       --replace-fail 'pub struct BufferStore {' 'pub struct BufferStore {
         cowboy_sync: cowboy_sync::State,
         cowboy_close: cowboy_close::State,
-        cowboy_open_attempts: cowboy_open_attempts::State,' \
+        cowboy_open_attempts: cowboy_open_attempts::State,
+        cowboy_worktree_attempts: cowboy_worktree_attempts::State,' \
       --replace-fail 'project_search: Default::default(),' 'project_search: Default::default(),
             cowboy_sync: Default::default(),
             cowboy_close: Default::default(),
-            cowboy_open_attempts: Default::default(),' \
+            cowboy_open_attempts: Default::default(),
+            cowboy_worktree_attempts: Default::default(),' \
       --replace-fail 'client.add_entity_request_handler(Self::handle_reload_buffers);' 'client.add_entity_request_handler(Self::handle_reload_buffers);
         client.add_entity_request_handler(Self::handle_cowboy_buffer_sync);
         client.add_entity_request_handler(Self::handle_cowboy_close_buffers);
         client.add_entity_request_handler(Self::handle_cowboy_open_attempt);
-        client.add_entity_request_handler(Self::handle_cowboy_open_target);' \
+        client.add_entity_request_handler(Self::handle_cowboy_open_target);
+        client.add_entity_request_handler(Self::handle_cowboy_worktree_attempt);' \
       --replace-fail '    pub fn has_shared_buffers(&self) -> bool {' '    pub(crate) fn cowboy_navigation_owner(&self, peer: proto::PeerId, buffer: &Entity<Buffer>, cx: &App) -> bool {
             self.shared_buffers.get(&peer)
                 .and_then(|values| values.get(&buffer.read(cx).remote_id()))

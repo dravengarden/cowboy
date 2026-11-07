@@ -297,17 +297,47 @@ impl CodeRuntimeHost {
         // worktree cannot lose its original route or admission ownership.
         let key = WorktreeRoute::buffer_key(&open)?;
         agent_holdings::owner(&key.1, payload["ownerProtocol"] == 2)?;
+        let prepared = payload["ownerProtocol"] == 2
+            && (route
+                .agent_buffers
+                .get(&key)
+                .is_some_and(|held| held.acquisition.is_some())
+                || super::agent_acquisition::supported(socket).await?);
         let worktree = payload["worktree"]
             .as_str()
             .context("agent worktree is missing")?;
-        route
-            .agent_buffers
-            .entry(key.clone())
-            .or_insert_with(|| {
-                agent_holdings::Holding::opening(worktree, payload["ownerProtocol"] == 2)
-            })
-            .refresh(worktree)?;
+        let reserved = if prepared
+            && route
+                .agent_buffers
+                .get(&key)
+                .is_none_or(|held| held.acquisition.is_none())
+        {
+            Some(self.reserve_acquisition()?)
+        } else {
+            None
+        };
+        let holding = route.agent_buffers.entry(key.clone()).or_insert_with(|| {
+            agent_holdings::Holding::opening(worktree, payload["ownerProtocol"] == 2)
+        });
+        if holding.acquisition.is_none() {
+            holding.refresh(worktree)?;
+        } else {
+            holding.check_worktree(&open)?;
+        }
+        if let Some(attempt) = reserved {
+            holding.acquisition = Some(attempt);
+        }
         route.dispatching(&open)?;
+        if prepared {
+            let response = self.acquire_prepared(route, socket, payload).await?;
+            route.observe(&open, &response)?;
+            route
+                .agent_buffers
+                .get_mut(&key)
+                .expect("reserved before dispatch")
+                .confirm();
+            return Ok(response);
+        }
         let ensure = serde_json::json!({"type":"ensureWorktree", "path":payload["worktree"], "trusted":true});
         let ready = exchange(socket, &ensure).await?;
         route.observe(&ensure, &ready)?;

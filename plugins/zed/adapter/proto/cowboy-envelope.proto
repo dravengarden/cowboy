@@ -20,5 +20,7 @@ message CowboyBufferSyncEnvelope {
     CowboyOpenAttemptResponse open_attempt_response = 1009;
     CowboyOpenTarget open_target_request = 1010;
     CowboyOpenTargetResponse open_target_response = 1011;
+    CowboyWorktreeAttempt worktree_attempt_request = 1012;
+    CowboyWorktreeAttemptResponse worktree_attempt_response = 1013;
   }
 }

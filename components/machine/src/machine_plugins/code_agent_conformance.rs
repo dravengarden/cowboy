@@ -113,5 +113,6 @@ async fn lost_open_reply(store: &MachinePluginStore, worktree: &Path) {
         "path":"automatic.txt", "leaseId":owner});
     let released = store.code_request("zed", &close, None).await.unwrap();
     assert_eq!(released["leases"], 0);
-    assert_eq!(released["buffer_id"], lost["buffer_id"]);
+    assert!(lost["buffer_id"].as_u64().is_some_and(|id| id != 0));
+    assert_eq!(released["buffer_id"], 0); // Entire acquisition scope released.
 }

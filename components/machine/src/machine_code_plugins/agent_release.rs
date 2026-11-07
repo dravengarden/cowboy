@@ -151,6 +151,9 @@ impl CodeRuntimeHost {
         runtime: &Arc<RunningCodeRuntime>,
         payload: &Value,
     ) -> Result<Option<Value>> {
+        if let Some(response) = self.release_acquisition(route, runtime, payload).await? {
+            return Ok(Some(response));
+        }
         let key = WorktreeRoute::buffer_key(payload)?;
         let Some(held) = route.agent_buffers.get_mut(&key) else {
             return Ok(None);

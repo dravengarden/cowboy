@@ -40,11 +40,13 @@ mod native_close;
 mod native_open;
 mod navigation_native;
 pub(crate) use navigation_native::navigation_request;
+mod agent_acquisition;
 mod source_snapshot;
 mod sync_native;
 mod sync_owners;
 mod text_reads;
 mod trust;
+mod worktree_recovery;
 
 #[derive(Parser)]
 struct Cli {
@@ -131,6 +133,17 @@ enum Request {
         lease_id: String,
     },
     LegacyReleaseSupport {},
+    AgentAcquisitionSupport {},
+    PrepareAgentAcquisition {
+        worktree: PathBuf,
+        path: PathBuf,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+    },
+    AgentAcquisition {
+        acquisition: agent_acquisition::Reference,
+        action: agent_acquisition::Action,
+    },
     PrepareLegacyRelease {
         worktree: PathBuf,
         path: PathBuf,
@@ -212,6 +225,16 @@ enum Response {
     BufferNavigationSupport {
         api_version: u8,
         protocol: u8,
+    },
+    AgentAcquisitionSupport {
+        api_version: u8,
+        protocol: u8,
+    },
+    AgentAcquisition {
+        api_version: u8,
+        acquisition: agent_acquisition::Reference,
+        state: agent_acquisition::State,
+        buffer: Option<Box<serde_json::Value>>,
     },
     BufferSync {
         api_version: u8,
@@ -310,6 +333,8 @@ struct WorktreeLease {
     incarnation: Arc<()>,
     /// Once trusted, Zed may run this worktree's servers until it is removed.
     trusted_once: bool,
+    pending: Option<Arc<Mutex<trust::lifecycle::Pending>>>,
+    retired: Arc<std::sync::atomic::AtomicBool>,
 }
 
 type Worktrees = Arc<RwLock<HashMap<PathBuf, WorktreeLease>>>;
@@ -390,6 +415,7 @@ type Buffers = Arc<BufferState>;
 
 #[derive(Default)]
 struct BufferState {
+    acquisitions: Mutex<agent_acquisition::Registry>,
     active: RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>,
     legacy: Mutex<legacy_buffers::Registry>,
     legacy_releases: Mutex<legacy_release::Registry>,
@@ -599,6 +625,7 @@ impl ZedRuntime {
         Ok(response)
     }
 
+    #[cfg(test)]
     async fn open_worktree(&self, path: &Path, trusted: bool) -> Result<(u64, WorktreeState)> {
         let response = self
             .request(proto::envelope::Payload::AddWorktree(proto::AddWorktree {
@@ -620,6 +647,7 @@ impl ZedRuntime {
         Ok((worktree_id, state))
     }
 
+    #[cfg(test)]
     async fn set_trust(&self, worktree_id: u64, trusted: bool) -> Result<WorktreeState> {
         Ok(if trusted {
             let trust = proto::TrustWorktrees {
@@ -648,14 +676,6 @@ impl ZedRuntime {
             }
             WorktreeState::Restricted
         })
-    }
-
-    fn remove_worktree(&self, worktree_id: u64) -> Result<()> {
-        let message = self.message(
-            proto::envelope::Payload::RemoveWorktree(proto::RemoveWorktree { worktree_id }),
-            None,
-        );
-        self.send(message)
     }
 
     async fn register_buffer(&self, buffer_id: u64) -> Result<()> {
@@ -1115,6 +1135,22 @@ async fn write_messages(
     }
 }
 
+fn deliver_native_response(
+    response: oneshot::Sender<proto::Envelope>,
+    envelope: proto::Envelope,
+    sync: &sync_native::Transport,
+) {
+    let _ = sync;
+    #[cfg(test)]
+    if envelope
+        .responding_to
+        .is_some_and(|id| sync.worktree_fault.discard(id))
+    {
+        return;
+    }
+    let _ = response.send(envelope);
+}
+
 async fn read_messages(
     mut output: UnixStream,
     outbound: mpsc::UnboundedSender<proto::Envelope>,
@@ -1167,7 +1203,7 @@ async fn read_messages(
         if let Some(request_id) = envelope.responding_to
             && let Some(response) = pending.lock().await.remove(&request_id)
         {
-            let _ = response.send(envelope);
+            deliver_native_response(response, envelope, &sync);
             continue;
         }
 
@@ -1246,6 +1282,11 @@ async fn respond(
     zed: Option<&Zed>,
 ) -> Result<Response> {
     Ok(match request {
+        request @ (Request::AgentAcquisitionSupport {}
+        | Request::PrepareAgentAcquisition { .. }
+        | Request::AgentAcquisition { .. }) => {
+            agent_acquisition::respond(request, worktrees, buffers, zed).await?
+        }
         request @ (Request::LegacyReleaseSupport {}
         | Request::PrepareLegacyRelease { .. }
         | Request::LegacyRelease { .. }) => legacy_release::respond(request, buffers, zed).await?,
@@ -1351,25 +1392,26 @@ async fn close_worktree(
     let Some(lease) = all.get_mut(&path) else {
         bail!("worktree is not open");
     };
+    anyhow::ensure!(
+        lease.pending.is_none() && !lease.retired.load(Ordering::Acquire),
+        "original worktree transition remains unconfirmed"
+    );
     lease.leases = lease.leases.saturating_sub(1);
-    let remote_id = lease.remote_id;
     let response = Response::Worktree {
         api_version: ADAPTER_VERSION,
         path: path.clone(),
         state: lease.state,
         leases: lease.leases,
     };
-    let has_buffers = buffers
-        .active
-        .read()
-        .await
-        .keys()
-        .any(|(root, _)| root == &path);
+    let active = buffers.active.read().await;
+    let has_buffers = active.keys().any(|(root, _)| root == &path);
     if lease.leases == 0 && !has_buffers {
-        all.remove(&path);
         if let Some(zed) = zed {
-            zed.remove_worktree(remote_id)?;
+            sync_owners::ensure_unfenced(buffers, &active)?;
+            trust::lifecycle::apply(lease, trust::lifecycle::Change::Remove, zed).await?;
         }
+        lease.retired.store(true, Ordering::Release);
+        all.remove(&path);
     }
     Ok(response)
 }

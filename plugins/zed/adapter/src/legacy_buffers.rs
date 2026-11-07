@@ -20,10 +20,12 @@ pub(super) async fn open_buffer(
     let mut legacy = buffers.legacy.lock().await;
     let (worktree, path) = buffer_key(worktree, path).await?;
     let trees = worktrees.read().await;
-    let worktree_id = trees
-        .get(&worktree)
-        .context("worktree is not open")?
-        .remote_id;
+    let tree = trees.get(&worktree).context("worktree is not open")?;
+    anyhow::ensure!(
+        tree.pending.is_none() && !tree.retired.load(Ordering::Acquire) && tree.remote_id != 0,
+        "original worktree transition remains unconfirmed"
+    );
+    let worktree_id = tree.remote_id;
     legacy.pin(requested.clone(), (worktree.clone(), path.clone()))?;
     let expected_id = legacy.get(&requested).and_then(|pin| pin.buffer_id);
     let recovery = legacy
