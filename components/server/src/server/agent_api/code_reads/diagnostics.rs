@@ -104,6 +104,17 @@ pub(super) const MAX_PATHS: usize = 20;
 const MAX_PER_PATH: usize = 50;
 const MAX_MESSAGE_CHARS: usize = 500;
 
+fn identities_match(
+    diagnostics: &[super::super::super::CodeDiagnostic],
+    snapshot: Option<&super::super::super::BufferSnapshot>,
+) -> bool {
+    diagnostics.iter().all(|diagnostic| {
+        diagnostic.provenance.as_ref().is_none_or(|provenance| {
+            provenance.bounded() && snapshot.is_none_or(|snapshot| provenance.belongs_to(snapshot))
+        })
+    })
+}
+
 fn severity(value: i32) -> &'static str {
     match value {
         1 => "error",
@@ -114,7 +125,10 @@ fn severity(value: i32) -> &'static str {
     }
 }
 
-fn diagnostic(value: &super::super::super::CodeDiagnostic) -> Value {
+fn diagnostic(
+    value: &super::super::super::CodeDiagnostic,
+    snapshot: Option<&super::super::super::BufferSnapshot>,
+) -> Value {
     json!({
         "severity": severity(value.severity),
         "line": value.start.row + 1,
@@ -124,7 +138,7 @@ fn diagnostic(value: &super::super::super::CodeDiagnostic) -> Value {
         "source": value.source,
         // Never truncate identity strings into a different identity.
         "code": value.code.as_ref().filter(|value| value.len() <= 256),
-        "provenance": value.provenance.as_ref().filter(|value| value.bounded()),
+        "provenance": value.provenance.as_ref().filter(|value| snapshot.is_some_and(|snapshot| value.belongs_to(snapshot))),
         "message": value.message.chars().take(MAX_MESSAGE_CHARS).collect::<String>(),
     })
 }
@@ -185,6 +199,13 @@ async fn read_with_acquisition(
             }) => {
                 let analysis = analysis.filter(|servers| servers.len() <= MAX_SERVERS);
                 let buffer_snapshot = buffer_snapshot.filter(|value| value.bounded());
+                // A conflicting identity invalidates the entire observation,
+                // including counts. Dropping only provenance could still label
+                // another buffer's diagnostics as document_current.
+                if !identities_match(&diagnostics, buffer_snapshot.as_deref()) {
+                    files.push(json!({"path":path,"state":"unavailable"}));
+                    continue;
+                }
                 let source_state = if buffer_snapshot.is_some() { source_state } else { SourceState::Unavailable };
                 let mut counts = json!({"error":0,"warning":0,"information":0,"hint":0});
                 for diagnostic in &diagnostics {
@@ -198,7 +219,7 @@ async fn read_with_acquisition(
                 let listed: Vec<Value> = listed
                     .into_iter()
                     .take(MAX_PER_PATH)
-                    .map(diagnostic)
+                    .map(|value| diagnostic(value, buffer_snapshot.as_deref()))
                     .collect();
                 let mut file = json!({"path":path,"state":file_state(analysis.as_deref(), source_state),
                     "counts":counts,"diagnostics":listed,"truncated":truncated,
@@ -306,7 +327,10 @@ mod tests {
     fn provenance_and_codes_survive_projection_without_inventing_missing_identity() {
         let old = json!({"start":{"row":0,"column":1},"end":{"row":2,"column":3},
             "severity":1,"source":"compiler","message":"wording"});
-        let project = |value| diagnostic(&serde_json::from_value(value).unwrap());
+        let snapshot = serde_json::from_value(json!({"instance":"a".repeat(32),"buffer":"7",
+            "bufferEpoch":"1","version":[],"content":{"sha256":"b".repeat(64),"utf8Bytes":0}}))
+        .unwrap();
+        let project = |value| diagnostic(&serde_json::from_value(value).unwrap(), Some(&snapshot));
         let historical = project(old.clone());
         assert!(historical["code"].is_null());
         assert!(historical["provenance"].is_null());
@@ -329,6 +353,51 @@ mod tests {
         let oversized = project(current);
         assert!(oversized["code"].is_null());
         assert!(oversized["provenance"].is_null());
+    }
+
+    #[test]
+    fn diagnostic_identity_requires_the_original_bounded_buffer_snapshot() {
+        let snapshot_value = json!({"instance":"a".repeat(32),"buffer":"7",
+            "bufferEpoch":"1","version":[],"content":{"sha256":"b".repeat(64),"utf8Bytes":10}});
+        let snapshot = serde_json::from_value(snapshot_value.clone()).unwrap();
+        let value = json!({"start":{"row":0,"column":1},"end":{"row":0,"column":3},
+            "severity":1,"source":"compiler","message":"diagnostic",
+            "provenance":{"instance":"a".repeat(32),"buffer":"7","bufferEpoch":"1",
+                "server":"0","sourceKind":1,"registration":null}});
+        let original = serde_json::from_value(value.clone()).unwrap();
+        assert!(!diagnostic(&original, Some(&snapshot))["provenance"].is_null());
+        assert!(diagnostic(&original, None)["provenance"].is_null());
+        assert!(identities_match(
+            std::slice::from_ref(&original),
+            Some(&snapshot)
+        ));
+        for (field, replacement) in [
+            ("instance", json!("c".repeat(32))),
+            ("instance", json!("A".repeat(32))),
+            ("buffer", json!("8")),
+            ("bufferEpoch", json!("2")),
+            ("buffer", json!("07")),
+            ("bufferEpoch", json!("+1")),
+            ("server", json!("00")),
+            ("server", json!("+0")),
+        ] {
+            let mut changed = value.clone();
+            changed["provenance"][field] = replacement;
+            let changed = serde_json::from_value(changed).unwrap();
+            assert!(
+                !identities_match(std::slice::from_ref(&changed), Some(&snapshot)),
+                "{field}"
+            );
+            let projected = diagnostic(&changed, Some(&snapshot));
+            assert!(projected["provenance"].is_null(), "{field}");
+            assert_eq!(projected["message"], "diagnostic");
+        }
+        let mut invalid = snapshot_value;
+        invalid["content"]["sha256"] = json!("invalid");
+        assert!(
+            diagnostic(&original, Some(&serde_json::from_value(invalid).unwrap()))["provenance"]
+                .is_null()
+        );
     }
 
     #[test]

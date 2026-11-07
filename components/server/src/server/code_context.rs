@@ -6,7 +6,7 @@ use super::*;
 mod diagnostics;
 mod snapshot;
 pub(super) use diagnostics::{CodeDiagnostic, CodePoint};
-pub(super) use snapshot::SourceState;
+pub(super) use snapshot::{BufferSnapshot, SourceState};
 
 pub(super) fn projected_work_items(columbus: &std::path::Path) -> Vec<WorkspaceWorkItem> {
     let output = std::process::Command::new("harness-cli")

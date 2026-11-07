@@ -30,6 +30,13 @@ struct Content {
 }
 
 impl BufferSnapshot {
+    pub(super) fn identifies(&self, instance: &str, buffer: &str, epoch: &str) -> bool {
+        self.bounded()
+            && self.instance == instance
+            && self.buffer == buffer
+            && self.buffer_epoch == epoch
+    }
+
     pub fn bounded(&self) -> bool {
         let hex = |value: &str, length| {
             value.len() == length

@@ -610,6 +610,12 @@ this activation did not inject failures into production sessions.
 
 ### Baselines, attribution, matching
 
+Agent diagnostic projection requires canonical native identities. An explicit
+provenance that conflicts with the response's bounded buffer snapshot refuses
+the whole file observation, including counts. Missing snapshots cannot establish
+provenance equality; legacy diagnostic text remains historical evidence.
+This identity check does not establish a text-version mapping or causality.
+
 Zed 1.29.0 preserves the native diagnostic code and
 provenance (observation-stream instance, buffer ID and incarnation, server ID, source kind and
 registration) for agent language observations. Native u64 IDs are decimal

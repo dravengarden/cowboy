@@ -34,10 +34,12 @@ pub(in crate::server) struct Provenance {
 
 impl Provenance {
     pub fn bounded(&self) -> bool {
-        let identity =
-            |value: &str| !value.is_empty() && value.len() <= 20 && value.parse::<u64>().is_ok();
+        let identity = |value: &str| value.parse::<u64>().is_ok_and(|id| id.to_string() == value);
         self.instance.len() == 32
-            && self.instance.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && self
+                .instance
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             && identity(&self.buffer)
             && identity(&self.buffer_epoch)
             && identity(&self.server)
@@ -46,5 +48,10 @@ impl Provenance {
                 .registration
                 .as_ref()
                 .is_none_or(|value| value.len() <= 256)
+    }
+
+    /// Identity equality is not analysis freshness or a text-version mapping.
+    pub fn belongs_to(&self, snapshot: &super::snapshot::BufferSnapshot) -> bool {
+        self.bounded() && snapshot.identifies(&self.instance, &self.buffer, &self.buffer_epoch)
     }
 }
