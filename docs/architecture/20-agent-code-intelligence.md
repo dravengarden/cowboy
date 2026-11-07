@@ -126,6 +126,25 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   hints only. Intermediate versions are superseded; delete/recreate is a new
   identity.
 
+On 2026-11-07 the Controller activated
+`1ad869c5fed6f033583b75a5c2db09869b60b678` through transaction
+`1794056365894580054-1ad869c5fed6` (`succeeded` / `committed`). The full pinned
+gate passed, including the six native observer-worker lifecycle fixtures and
+the off/on diagnostic-result regression. The clean Nix artifact's source
+receipt and the running Controller executable matched the candidate. Both
+existing ACP workers retained their PIDs, start times, executables and argument
+digests; all four Machines remained online, health returned `ok`, and the SPA
+returned HTTP 200 with `no-store`.
+
+A real MCP diagnostic read of a temporary 66-byte Go file returned the expected
+`UndeclaredName` finding from gopls, `document_current`, and matching source
+SHA-256 `f4b93bc006a6002314d7e446062ffe9dba1ca3c83cd21b6c7a9cdf71879ffd44`.
+The file and empty directory were removed after verifying that digest. The
+policy-revocation and cancellation fault cases are isolated fixture evidence;
+production policies were not toggled for this acceptance. This release enables
+the Controller read fence only: the Machine observer library is not yet wired
+to a standing continuation or enabled as production background watching.
+
 ### Freshness and coverage
 
 - `fresh` requires causal evidence, per participating server, that it analyzed
