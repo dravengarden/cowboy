@@ -1,6 +1,6 @@
 # Agent Code Intelligence from the Code Review Engine
 
-**Status: partially implemented; remaining gates below (2026-11-06).** r3 folds in two
+**Status: partially implemented; remaining gates below (2026-11-07).** r3 folds in two
 static design reviews (Fable 5.1, then Codex Astra Max). Agents become
 consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
 "Language engine" means the Engine's LSP-backed implementation, the
@@ -306,7 +306,7 @@ this activation did not inject failures into production sessions.
 
 ### Baselines, attribution, matching
 
-The Zed 1.29.0 source candidate preserves the native diagnostic code and
+Zed 1.29.0 preserves the native diagnostic code and
 provenance (observation-stream instance, buffer ID and incarnation, server ID, source kind and
 registration) for agent language observations. Native u64 IDs are decimal
 strings so JavaScript cannot round them. A replacement stream gets a new
@@ -316,7 +316,26 @@ identity as null, including over-budget codes/registrations; it never truncates
 an identity or derives one from message text. Owned-read protocol one retains
 its existing closed diagnostic shape. These fields are inputs to future
 content-matched comparison, not a baseline or proof that an edit caused a
-diagnostic. Publication and production installation require separate acceptance.
+diagnostic.
+
+Hawk installed signed Zed 1.29.0 on 2026-11-07 from
+`b54c20327552a414b528339510331e60cf8e511a`, composite digest
+`7d6b7ac044e6b3a1fef3a73c14abd67c24a9057d364acf60f898a24f20258f35`.
+The installation operation `hawk-zed-1-29-0-diagnostic-provenance` completed
+with an applied Machine receipt. The exact static adapter/server passed native
+navigation, diagnostic identity, old owned-read compatibility and signed
+installation/drain fixtures. Active and rollback Controller readers accepted
+the exact publication; all three published artifact URLs matched their digests.
+The integrated Controller `8d6b390f19c697d495177f64a55e62437276e957` was
+activated by a concurrent task, transaction
+`1794021841732582984-8d6b390f19c6` (`succeeded` / `committed`); this task
+verified that receipt instead of restarting it again. A temporary file in this
+session's worktree produced a real MCP diagnostic with code `UndeclaredName`,
+complete end position and native provenance, with gopls `document_current`.
+The fixture was removed afterward. Existing Worker PIDs, executables and
+arguments remained unchanged; four Machines were ready and health/SPA checks
+passed. This verifies the deployed metadata path, not baseline matching,
+project freshness, automatic observation or push delivery.
 
 - Baselines are immutable, content-matched captures at a read or pre-write
   boundary (the facade and executor see pre-write content). Without one the
