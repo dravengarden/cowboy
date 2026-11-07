@@ -365,6 +365,19 @@ release neither reloads the buffer nor compares it with the current source.
 Source mismatch must downgrade the agent-facing state before baseline capture;
 it must not borrow synchronization authority or promote file quiet to freshness.
 
+The Zed 1.31.0 source candidate checks that distinction on the execution
+Machine. Its bounded reader resolves a regular file beneath an opened worktree
+directory, refusing symlinks, mount crossings and non-UTF-8/oversized inputs.
+It compares two bounded reads and file identity/metadata, using the same line
+ending normalization as the native mirror. There are at most two actual reads
+in flight; timed-out blocking jobs keep their permits until they exit. The
+language snapshot is revalidated after this observation. `sourceState` is
+`matching`, `changed` or `unavailable`: changed source makes the agent result
+`stale`, and unavailable source evidence cannot produce `document_current`.
+Per-server analysis and the captured native snapshot remain visible. No file
+is saved or reloaded, and source equality is not a project input frontier or
+an automatic synchronization grant. Release acceptance is still pending.
+
 - Baselines are immutable, content-matched captures at a read or pre-write
   boundary (the facade and executor see pre-write content). Without one the
   comparison is `unknown`.

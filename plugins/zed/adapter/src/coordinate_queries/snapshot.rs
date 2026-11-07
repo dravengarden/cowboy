@@ -45,36 +45,47 @@ async fn language_snapshot_uses_current_mirror_not_open_version_or_disk() {
             closing: false,
         },
     );
-    let task = {
-        let zed = zed.clone();
-        tokio::spawn(
-            async move { buffer_language(root, "file.txt".into(), &buffers, Some(&zed)).await },
-        )
+    std::os::unix::fs::symlink("file.txt", root.join("alias.txt")).unwrap();
+    let regular = if cfg!(target_os = "linux") {
+        "changed"
+    } else {
+        "unavailable"
     };
-    for _ in 0..3 {
-        let request = outbound.recv().await.unwrap();
-        reply(&zed, request, Vec::new()).await;
+    for (path, source_state) in [("file.txt", regular), ("alias.txt", "unavailable")] {
+        let task = {
+            let zed = zed.clone();
+            let root = root.clone();
+            let buffers = buffers.clone();
+            tokio::spawn(
+                async move { buffer_language(root, path.into(), &buffers, Some(&zed)).await },
+            )
+        };
+        for _ in 0..3 {
+            let request = outbound.recv().await.unwrap();
+            reply(&zed, request, Vec::new()).await;
+        }
+        let request = frontier.recv().await.unwrap();
+        assert!(matches!(request.payload, Some(Payload::AnalysisRequest(_))));
+        let response = wire::CowboyBufferSyncEnvelope {
+            responding_to: Some(request.id),
+            payload: Some(Payload::AnalysisResponse(
+                wire::CowboyAnalysisFrontierResponse {
+                    protocol: 1,
+                    servers: Vec::new(),
+                },
+            )),
+            ..Default::default()
+        };
+        assert!(zed.sync.response(request.id, &response.encode_to_vec()));
+        let response = serde_json::to_value(task.await.unwrap().unwrap()).unwrap();
+        assert_eq!(response["bufferSnapshot"], expected);
+        assert_eq!(response["sourceState"], source_state);
+        assert_eq!(response["version"], expected["version"]);
+        assert_eq!(response["diagnostics"], serde_json::json!([]));
+        let mirrored = coordinates::Mirror::new(1, "汉\na🙂z\n").unwrap();
+        assert_eq!(
+            response["bufferSnapshot"]["content"],
+            serde_json::to_value(mirrored.content()).unwrap()
+        );
     }
-    let request = frontier.recv().await.unwrap();
-    assert!(matches!(request.payload, Some(Payload::AnalysisRequest(_))));
-    let response = wire::CowboyBufferSyncEnvelope {
-        responding_to: Some(request.id),
-        payload: Some(Payload::AnalysisResponse(
-            wire::CowboyAnalysisFrontierResponse {
-                protocol: 1,
-                servers: Vec::new(),
-            },
-        )),
-        ..Default::default()
-    };
-    assert!(zed.sync.response(request.id, &response.encode_to_vec()));
-    let response = serde_json::to_value(task.await.unwrap().unwrap()).unwrap();
-    assert_eq!(response["bufferSnapshot"], expected);
-    assert_eq!(response["version"], expected["version"]);
-    assert_eq!(response["diagnostics"], serde_json::json!([]));
-    let mirrored = coordinates::Mirror::new(1, "汉\na🙂z\n").unwrap();
-    assert_eq!(
-        response["bufferSnapshot"]["content"],
-        serde_json::to_value(mirrored.content()).unwrap()
-    );
 }

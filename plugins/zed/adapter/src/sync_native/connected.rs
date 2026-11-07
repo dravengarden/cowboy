@@ -27,6 +27,8 @@ fn immutable_native_sync() {
     let root = std::env::temp_dir().join(format!("cw-native-{:032x}", u128::from_be_bytes(random)));
     std::fs::create_dir(&root).unwrap();
     let scratch = Scratch(root);
+    #[cfg(target_os = "linux")]
+    crate::source_snapshot::tests::bind_mount_is_refused(&scratch.0);
     for dir in [
         "home", "config", "data", "cache", "state", "runtime", "worktree", "tmp",
     ] {

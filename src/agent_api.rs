@@ -617,20 +617,20 @@ export type CodeDiagnostic = {severity:"error"|"warning"|"information"|"hint";li
 export interface Cowboy {
   code: { // language engine's diagnostics; opens files no Code pane holds (acquired:true) when Project language servers is on
     diagnostics(paths:string[]): Promise<{coverage:"open_buffers";files:({path:string;acquired?:true;
-      state:"document_current"|"stale"|"last_observed";counts:Record<"error"|"warning"|"information"|"hint",number>;diagnostics:CodeDiagnostic[];truncated:boolean;
+      state:"document_current"|"stale"|"last_observed";sourceState?:"matching"|"changed"|"unavailable";counts:Record<"error"|"warning"|"information"|"hint",number>;diagnostics:CodeDiagnostic[];truncated:boolean;
       analysis?:{server:string;state:"document_current"|"stale"|"unknown";reason:string|null}[];bufferSnapshot?:{instance:string;buffer:string;bufferEpoch:string;version:{replicaId:number;timestamp:number}[];content:{sha256:string;utf8Bytes:number}}|null}
       | {path:string;state:"not_open"|"restricted"|"refused"|"unavailable"})[]}>; // 1..20 paths, <=50 per file, 1-based
   };
 }
-// document_current: every language server analysed exactly this text (other files/config may differ); stale: one analysed
-// an older version; last_observed: no such evidence (a just-opened file may need another read).
+// document_current: source matches the buffer and every server analysed its text (other inputs may differ); stale: changed source or older analysis.
+// last_observed: analysis or source equality is unverified (a just-opened file may need another read).
 // not_open (agent share full) /unavailable is never "clean". Compile to confirm.
 export interface Cowboy {
   code: { // passive counts over files this session tracked; never opens or refreshes a holding
     summary(): Promise<{coverage:"agent_observed_files";
       state:"unobserved"|"partial"|"document_current"|"stale"|"last_observed";
       tracked:number;observed:number;counts:Record<"error"|"warning"|"information"|"hint",number>|null;
-      files:{path:string;state:string;counts?:Record<"error"|"warning"|"information"|"hint",number>}[]}>;
+      files:{path:string;state:string;sourceState?:"matching"|"changed"|"unavailable";counts?:Record<"error"|"warning"|"information"|"hint",number>}[]}>;
   };
 }
 // counts:null means no usable observations; partial counts cover only observed files, never the project.

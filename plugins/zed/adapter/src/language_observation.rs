@@ -1,5 +1,8 @@
 //! The native text actually observed, independently of the original Open reply.
+use crate::{ADAPTER_VERSION, Buffers, Response, Zed, buffer_key, source_snapshot, sync_owners};
+use anyhow::{Context as _, Result};
 use serde::Serialize;
+use std::path::PathBuf;
 
 use crate::{BufferVersionEntry, LanguageDiagnostic, LanguageInlayHint, analysis, diagnostics};
 
@@ -19,6 +22,8 @@ pub(crate) struct LanguageObservation {
     pub(crate) version: Option<Vec<BufferVersionEntry>>,
     #[serde(skip)]
     pub(crate) snapshot: Option<Box<BufferSnapshot>>,
+    #[serde(skip)]
+    pub(crate) revision: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -29,4 +34,54 @@ pub(crate) struct BufferSnapshot {
     pub(crate) buffer_epoch: String,
     pub(crate) version: Vec<BufferVersionEntry>,
     pub(crate) content: crate::content_reads::Content,
+}
+
+pub(crate) async fn buffer_language(
+    worktree: PathBuf,
+    path: PathBuf,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    let source_path = path.clone();
+    let (worktree, path) = buffer_key(worktree, path).await?;
+    let all = buffers.active.read().await;
+    let lease = all
+        .get(&(worktree.clone(), path.clone()))
+        .context("buffer is not open")?;
+    sync_owners::ensure_readable(lease)?;
+    let observation = if let Some(zed) = zed {
+        zed.language(lease.remote_id).await?
+    } else {
+        LanguageObservation::default()
+    };
+    let buffer_id = lease.remote_id;
+    let version = observation.version.unwrap_or_else(|| lease.version.clone());
+    drop(all);
+    let source_state = source_snapshot::check(
+        &worktree,
+        &source_path,
+        observation
+            .snapshot
+            .as_ref()
+            .map(|snapshot| &snapshot.content),
+    )
+    .await;
+    if let (Some(zed), Some(revision)) = (zed, observation.revision) {
+        zed.diagnostics
+            .lock()
+            .expect("diagnostic cache poisoned")
+            .check(buffer_id, revision)?;
+    }
+    Ok(Response::BufferLanguage {
+        api_version: ADAPTER_VERSION,
+        worktree,
+        path,
+        version,
+        buffer_snapshot: observation.snapshot,
+        source_state,
+        diagnostics: observation.diagnostics,
+        inlay_hints: observation.inlay_hints,
+        semantic_tokens: observation.semantic_tokens,
+        analysis: observation.analysis,
+    })
 }

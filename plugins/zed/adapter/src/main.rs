@@ -32,12 +32,13 @@ mod language_observation;
 mod legacy_buffers;
 #[cfg(test)]
 use extensions::extension_manifest;
-use language_observation::LanguageObservation;
+use language_observation::{LanguageObservation, buffer_language};
 use legacy_buffers::{close_buffer, open_buffer};
 mod native_close;
 mod native_open;
 mod navigation_native;
 pub(crate) use navigation_native::navigation_request;
+mod source_snapshot;
 mod sync_native;
 mod sync_owners;
 mod text_reads;
@@ -238,6 +239,8 @@ enum Response {
         version: Vec<BufferVersionEntry>,
         #[serde(rename = "bufferSnapshot", skip_serializing_if = "Option::is_none")]
         buffer_snapshot: Option<Box<language_observation::BufferSnapshot>>,
+        #[serde(rename = "sourceState")]
+        source_state: source_snapshot::State,
         diagnostics: Vec<LanguageDiagnostic>,
         inlay_hints: Vec<LanguageInlayHint>,
         semantic_tokens: Vec<u32>,
@@ -756,6 +759,7 @@ impl ZedRuntime {
             .collect();
 
         Ok(LanguageObservation {
+            revision: Some(revision),
             snapshot: cache.snapshot(buffer_id)?.map(Box::new),
             version: Some(version),
             diagnostics_state,
@@ -1343,36 +1347,6 @@ async fn close_worktree(
     Ok(response)
 }
 
-async fn buffer_language(
-    worktree: PathBuf,
-    path: PathBuf,
-    buffers: &Buffers,
-    zed: Option<&Zed>,
-) -> Result<Response> {
-    let (worktree, path) = buffer_key(worktree, path).await?;
-    let all = buffers.active.read().await;
-    let lease = all
-        .get(&(worktree.clone(), path.clone()))
-        .context("buffer is not open")?;
-    sync_owners::ensure_readable(lease)?;
-    let observation = if let Some(zed) = zed {
-        zed.language(lease.remote_id).await?
-    } else {
-        LanguageObservation::default()
-    };
-    Ok(Response::BufferLanguage {
-        api_version: ADAPTER_VERSION,
-        worktree,
-        path,
-        version: observation.version.unwrap_or_else(|| lease.version.clone()),
-        buffer_snapshot: observation.snapshot,
-        diagnostics: observation.diagnostics,
-        inlay_hints: observation.inlay_hints,
-        semantic_tokens: observation.semantic_tokens,
-        analysis: observation.analysis,
-    })
-}
-
 #[cfg(test)]
 fn offset_to_utf16_point(text: &str, offset: u64) -> Option<LanguagePoint> {
     let offset = usize::try_from(offset).ok()?;
@@ -1944,6 +1918,7 @@ mod tests {
     fn buffer_versions_use_the_stable_camel_case_contract() {
         let value = serde_json::to_value(Response::BufferLanguage {
             api_version: ADAPTER_VERSION,
+            source_state: source_snapshot::State::Unavailable,
             buffer_snapshot: None,
             worktree: PathBuf::from("/tmp"),
             path: PathBuf::from("file.rs"),

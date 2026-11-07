@@ -14,6 +14,9 @@ pub(super) fn project(observation: Value) -> Value {
     let mut listed = Vec::with_capacity(files.len());
     for file in files {
         let mut item = json!({"path":file["path"],"state":file["state"]});
+        if file["sourceState"].is_string() {
+            item["sourceState"] = file["sourceState"].clone();
+        }
         if file["counts"].is_object() {
             observed += 1;
             all_current &= file["state"] == "document_current";
@@ -90,5 +93,15 @@ mod tests {
             assert_eq!(result["state"], expected);
             assert_eq!(result["counts"]["error"], 3);
         }
+    }
+
+    #[test]
+    fn source_mismatch_remains_visible_in_passive_counts() {
+        let mut changed = file("stale", 1);
+        changed["sourceState"] = json!("changed");
+        let result = project(json!({"files":[changed]}));
+        assert_eq!(result["state"], "stale");
+        assert_eq!(result["files"][0]["sourceState"], "changed");
+        assert_eq!(result["counts"]["error"], 1);
     }
 }

@@ -330,6 +330,7 @@ async fn diagnostic_identity(client: &Client, workspace: &Path, lease: &LeaseRef
                 assert!(origin["server"].as_str().unwrap().parse::<u64>().is_ok());
                 assert!(origin["buffer"].as_str().unwrap().parse::<u64>().is_ok());
                 let snapshot = &reply["bufferSnapshot"];
+                assert_eq!(reply["sourceState"], "matching");
                 assert_eq!(snapshot["instance"], origin["instance"]);
                 assert_eq!(snapshot["buffer"], origin["buffer"]);
                 assert_eq!(snapshot["bufferEpoch"], origin["bufferEpoch"]);

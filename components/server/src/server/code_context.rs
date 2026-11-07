@@ -6,6 +6,7 @@ use super::*;
 mod diagnostics;
 mod snapshot;
 pub(super) use diagnostics::{CodeDiagnostic, CodePoint};
+pub(super) use snapshot::SourceState;
 
 pub(super) fn projected_work_items(columbus: &std::path::Path) -> Vec<WorkspaceWorkItem> {
     let output = std::process::Command::new("harness-cli")
@@ -266,6 +267,8 @@ pub(super) enum ZedAdapterResponse {
         version: Vec<CodeBufferVersion>,
         #[serde(default, rename = "bufferSnapshot")]
         buffer_snapshot: Option<Box<snapshot::BufferSnapshot>>,
+        #[serde(default, rename = "sourceState")]
+        source_state: SourceState,
         diagnostics: Vec<CodeDiagnostic>,
         inlay_hints: Vec<CodeInlayHint>,
         semantic_tokens: Vec<u32>,

@@ -11,7 +11,9 @@
 use serde_json::{Value, json};
 
 use super::super::super::code_reads::language::observe_open_buffer;
-use super::super::super::{AnalysisState, AppState, ServerAnalysis, ZedAdapterResponse};
+use super::super::super::{
+    AnalysisState, AppState, ServerAnalysis, SourceState, ZedAdapterResponse,
+};
 use crate::machine_control::SessionReadScope;
 
 const MAX_SERVERS: usize = 32;
@@ -54,7 +56,10 @@ async fn observe(
 }
 
 /// One file's freshness from its per-server evidence.
-fn file_state(analysis: Option<&[ServerAnalysis]>) -> &'static str {
+fn file_state(analysis: Option<&[ServerAnalysis]>, source: SourceState) -> &'static str {
+    if source == SourceState::Changed {
+        return "stale";
+    }
     let Some(analysis) = analysis.filter(|servers| !servers.is_empty()) else {
         return "last_observed";
     };
@@ -63,9 +68,10 @@ fn file_state(analysis: Option<&[ServerAnalysis]>) -> &'static str {
         .any(|server| server.state == AnalysisState::Stale)
     {
         "stale"
-    } else if analysis
-        .iter()
-        .all(|server| server.state == AnalysisState::DocumentCurrent)
+    } else if source == SourceState::Matching
+        && analysis
+            .iter()
+            .all(|server| server.state == AnalysisState::DocumentCurrent)
     {
         "document_current"
     } else {
@@ -157,9 +163,12 @@ async fn read_with_acquisition(
                 diagnostics,
                 analysis,
                 buffer_snapshot,
+                source_state,
                 ..
             }) => {
                 let analysis = analysis.filter(|servers| servers.len() <= MAX_SERVERS);
+                let buffer_snapshot = buffer_snapshot.filter(|value| value.bounded());
+                let source_state = if buffer_snapshot.is_some() { source_state } else { SourceState::Unavailable };
                 let mut counts = json!({"error":0,"warning":0,"information":0,"hint":0});
                 for diagnostic in &diagnostics {
                     if let Some(count) = counts.get_mut(severity(diagnostic.severity)) {
@@ -174,9 +183,9 @@ async fn read_with_acquisition(
                     .take(MAX_PER_PATH)
                     .map(diagnostic)
                     .collect();
-                let mut file = json!({"path":path,"state":file_state(analysis.as_deref()),
+                let mut file = json!({"path":path,"state":file_state(analysis.as_deref(), source_state),
                     "counts":counts,"diagnostics":listed,"truncated":truncated,
-                    "bufferSnapshot":buffer_snapshot.filter(|value| value.bounded())});
+                    "bufferSnapshot":buffer_snapshot,"sourceState":source_state});
                 if acquired {
                     file["acquired"] = json!(true);
                 }
@@ -255,17 +264,41 @@ mod tests {
     #[test]
     fn a_file_is_current_only_when_every_server_analysed_its_exact_text() {
         use AnalysisState::{DocumentCurrent, Stale, Unknown};
-        assert_eq!(file_state(None), "last_observed");
-        assert_eq!(file_state(Some(&[])), "last_observed");
+        assert_eq!(file_state(None, SourceState::Matching), "last_observed");
         assert_eq!(
-            file_state(Some(&[server(DocumentCurrent)])),
+            file_state(Some(&[]), SourceState::Matching),
+            "last_observed"
+        );
+        assert_eq!(
+            file_state(Some(&[server(DocumentCurrent)]), SourceState::Matching),
             "document_current"
         );
         assert_eq!(
-            file_state(Some(&[server(DocumentCurrent), server(Unknown)])),
+            file_state(
+                Some(&[server(DocumentCurrent), server(Unknown)]),
+                SourceState::Matching
+            ),
             "last_observed"
         );
-        assert_eq!(file_state(Some(&[server(Unknown), server(Stale)])), "stale");
+        assert_eq!(
+            file_state(
+                Some(&[server(Unknown), server(Stale)]),
+                SourceState::Matching
+            ),
+            "stale"
+        );
+        assert_eq!(
+            file_state(Some(&[server(DocumentCurrent)]), SourceState::Changed),
+            "stale"
+        );
+        assert_eq!(
+            file_state(Some(&[server(DocumentCurrent)]), SourceState::Unavailable),
+            "last_observed"
+        );
+        assert_eq!(
+            file_state(Some(&[server(Stale)]), SourceState::Unavailable),
+            "stale"
+        );
     }
 
     #[test]

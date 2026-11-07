@@ -3,6 +3,15 @@ use serde::{Deserialize, Serialize};
 
 use super::super::CodeBufferVersion;
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::server) enum SourceState {
+    Matching,
+    Changed,
+    #[default]
+    Unavailable,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(in crate::server) struct BufferSnapshot {
