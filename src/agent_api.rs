@@ -613,7 +613,7 @@ export interface Cowboy {
       result:{symbols:{path:string;name:string;kind:number;selectionStart:Pos;text:string}[];stopped:null|"limit"|"files"|"bytes"|"deadline";filesParsed:number}}>;
   };
 }
-export type CodeDiagnostic = {severity:"error"|"warning"|"information"|"hint";line:number;column:number;endLine:number;source:string|null;message:string};
+export type CodeDiagnostic = {severity:"error"|"warning"|"information"|"hint";line:number;column:number;endLine:number;endColumn?:number;source:string|null;message:string;code?:string|null;provenance?:{instance:string;buffer:string;bufferEpoch:string;server:string;sourceKind:number;registration:string|null}|null};
 export interface Cowboy {
   code: { // language engine's diagnostics; opens files no Code pane holds (acquired:true) when Project language servers is on
     diagnostics(paths:string[]): Promise<{coverage:"open_buffers";files:({path:string;acquired?:true;

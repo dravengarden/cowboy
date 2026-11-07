@@ -2141,23 +2141,6 @@ struct CodeBufferVersion {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CodePoint {
-    row: u32,
-    column: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeDiagnostic {
-    start: CodePoint,
-    end: CodePoint,
-    severity: i32,
-    source: Option<String>,
-    message: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct CodeInlayHint {
     offset: u64,
     label: String,

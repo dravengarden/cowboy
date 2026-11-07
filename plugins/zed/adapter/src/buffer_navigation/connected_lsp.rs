@@ -147,6 +147,14 @@ where
                 && diagnostics.len() == 1
             {
                 assert_eq!(analysis[0].reason, None);
+                assert_eq!(diagnostics[0].code.as_deref(), Some("fixture-code-1"));
+                assert_eq!(diagnostics[0].source.as_deref(), Some("fixture-lsp"));
+                let origin = diagnostics[0]
+                    .provenance
+                    .as_ref()
+                    .expect("native provenance");
+                assert_eq!(origin.server, analysis[0].server_id.to_string());
+                assert_eq!(origin.source_kind, 1);
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;

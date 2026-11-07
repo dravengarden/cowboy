@@ -306,22 +306,7 @@ struct BufferVersionEntry {
     timestamp: u32,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LanguagePoint {
-    row: u32,
-    column: u32,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LanguageDiagnostic {
-    start: LanguagePoint,
-    end: LanguagePoint,
-    severity: i32,
-    source: Option<String>,
-    message: String,
-}
+use diagnostics::{LanguageDiagnostic, LanguagePoint};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -392,6 +377,7 @@ type DiagnosticCache = Arc<std::sync::Mutex<diagnostics::Cache>>;
 #[serde(rename_all = "camelCase")]
 struct LanguageObservation {
     diagnostics_state: diagnostics::Status,
+    #[serde(serialize_with = "diagnostics::serialize_legacy")]
     diagnostics: Vec<LanguageDiagnostic>,
     inlay_hints: Vec<LanguageInlayHint>,
     semantic_tokens: Vec<u32>,

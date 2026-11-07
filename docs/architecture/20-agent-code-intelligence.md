@@ -306,6 +306,18 @@ this activation did not inject failures into production sessions.
 
 ### Baselines, attribution, matching
 
+The Zed 1.29.0 source candidate preserves the native diagnostic code and
+provenance (observation-stream instance, buffer ID and incarnation, server ID, source kind and
+registration) for agent language observations. Native u64 IDs are decimal
+strings so JavaScript cannot round them. A replacement stream gets a new
+instance; message or severity changes do not create a new provenance identity.
+The agent projection adds the complete end position and returns unavailable
+identity as null, including over-budget codes/registrations; it never truncates
+an identity or derives one from message text. Owned-read protocol one retains
+its existing closed diagnostic shape. These fields are inputs to future
+content-matched comparison, not a baseline or proof that an edit caused a
+diagnostic. Publication and production installation require separate acceptance.
+
 - Baselines are immutable, content-matched captures at a read or pre-write
   boundary (the facade and executor see pre-write content). Without one the
   comparison is `unknown`.

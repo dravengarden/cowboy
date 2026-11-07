@@ -101,6 +101,21 @@ fn severity(value: i32) -> &'static str {
     }
 }
 
+fn diagnostic(value: &super::super::super::CodeDiagnostic) -> Value {
+    json!({
+        "severity": severity(value.severity),
+        "line": value.start.row + 1,
+        "column": value.start.column + 1,
+        "endLine": value.end.row + 1,
+        "endColumn": value.end.column + 1,
+        "source": value.source,
+        // Never truncate identity strings into a different identity.
+        "code": value.code.as_ref().filter(|value| value.len() <= 256),
+        "provenance": value.provenance.as_ref().filter(|value| value.bounded()),
+        "message": value.message.chars().take(MAX_MESSAGE_CHARS).collect::<String>(),
+    })
+}
+
 pub(super) async fn read(
     state: &AppState,
     observed: &SessionReadScope,
@@ -156,16 +171,7 @@ async fn read_with_acquisition(
                 let listed: Vec<Value> = listed
                     .into_iter()
                     .take(MAX_PER_PATH)
-                    .map(|diagnostic| {
-                        json!({
-                            "severity": severity(diagnostic.severity),
-                            "line": diagnostic.start.row + 1,
-                            "column": diagnostic.start.column + 1,
-                            "endLine": diagnostic.end.row + 1,
-                            "source": diagnostic.source,
-                            "message": diagnostic.message.chars().take(MAX_MESSAGE_CHARS).collect::<String>(),
-                        })
-                    })
+                    .map(diagnostic)
                     .collect();
                 let mut file = json!({"path":path,"state":file_state(analysis.as_deref()),
                     "counts":counts,"diagnostics":listed,"truncated":truncated});
@@ -213,6 +219,35 @@ mod tests {
             state,
             reason: None,
         }
+    }
+
+    #[test]
+    fn provenance_and_codes_survive_projection_without_inventing_missing_identity() {
+        let old = json!({"start":{"row":0,"column":1},"end":{"row":2,"column":3},
+            "severity":1,"source":"compiler","message":"wording"});
+        let project = |value| diagnostic(&serde_json::from_value(value).unwrap());
+        let historical = project(old.clone());
+        assert!(historical["code"].is_null());
+        assert!(historical["provenance"].is_null());
+        let mut current = old;
+        current["code"] = json!("E0123");
+        current["provenance"] = json!({"instance":"a".repeat(32),"buffer":"7","bufferEpoch":"1",
+            "server":"18446744073709551615","sourceKind":1,"registration":"r"});
+        let projected = project(current.clone());
+        assert_eq!(projected["code"], "E0123");
+        assert_eq!(projected["provenance"], current["provenance"]);
+        assert_eq!(projected["endColumn"], 4);
+        current["message"] = json!("different wording");
+        current["severity"] = json!(2);
+        assert_eq!(
+            project(current.clone())["provenance"],
+            projected["provenance"]
+        );
+        current["code"] = json!("x".repeat(257));
+        current["provenance"]["registration"] = json!("x".repeat(257));
+        let oversized = project(current);
+        assert!(oversized["code"].is_null());
+        assert!(oversized["provenance"].is_null());
     }
 
     #[test]
