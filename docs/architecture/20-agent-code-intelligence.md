@@ -429,7 +429,7 @@ or decreasing IDs cannot admit another Open. The exact native regression,
 production installation and limits are recorded in
 [single-use native acquisition](../plugin-native-open-once.md).
 
-The next Machine candidate tracks EnsureWorktree confirmation separately from
+Machine revision `1d47b85e08f65f19d2fa28c2818647b692c129eb` tracks EnsureWorktree confirmation separately from
 Open confirmation for nonce-scoped automatic owners. Once the worktree is
 confirmed, a lost Open reply may use the
 original prepared-release protocol; the Plugin must still prove that original
@@ -439,7 +439,17 @@ legacy Close, since an empty buffer reply cannot account for the worktree effect
 Old Plugins' idle fallback still requires confirmed Open. Refresh continues to
 require confirmed Open and never treats release eligibility as readiness.
 This does not recover an unfinished native Open or an unknown worktree effect.
-Full gate and production acceptance for this Machine candidate remain pending.
+The complete pinned gate passed, as did the installed native fault-injection
+fixture that discards the successful Open reply and releases that original,
+nonzero buffer ID. Its resource admission is synthetic; it does not prove host
+resource admission. Hawk activated the host release on 2026-11-07, transaction
+`1794040894952929953-1d47b85e08f6` (`succeeded` / `committed`), retaining
+`worker-39e0360cdcbff26cfa61`. Both existing worker PIDs, executables and arguments,
+and the Controller PID, were unchanged. Health, version and SPA checks passed;
+all four Machines were online and Zed 1.36.0 remained active. A temporary Go file
+returned `document_current`, matching source SHA and the expected `UndeclaredName`
+diagnostic; it was removed after verifying its exact SHA. Production did not
+inject reply loss, and this acceptance does not cover Machine-process loss.
 
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction
