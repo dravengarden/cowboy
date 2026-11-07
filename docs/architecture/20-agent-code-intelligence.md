@@ -320,6 +320,25 @@ PID 1875594 and both existing Hawk workers were unchanged, health and SPA
 checks passed, and all four Machines were online. Unknown failure injection
 is isolated native-fixture evidence, not a production-session experiment.
 
+The Zed 1.33.0 source candidate adds prepared release references for confirmed
+automatic legacy owners. The Machine retains the original runtime and reference
+before sending Execute; after uncertainty it queries that reference, never a
+replacement runtime or owner. A preparation is bound to the legacy pin's
+incarnation and native ID. Admitted native Close fences legacy aliases; only
+the same native Close receipt can complete it. Query never starts a Close.
+Released references retain their original result until explicit retirement;
+Retired is a separate state and is not release evidence. Effect-free
+preparations expire after 30 seconds; unknown and completed records do not.
+Both adapter records and Machine retirement permits are bounded to 1,024.
+Machine maintenance rotates at most four holdings and four retirements per
+pass, with two-second private exchanges. Cancelled retirement observations
+return their original reference and permit to the queue. Older Plugin
+generations retain the previous one-use Close and its deadline; an uncertain
+legacy fallback is not replayed. Generic Code RPC cannot enter this internal
+release protocol. This does not recover uncertain legacy Open/EnsureWorktree,
+Machine-process loss, or a Controller receipt lost after the Machine completed
+and forgot its holding. Release acceptance remains pending.
+
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction
 `1794018627362793557-bc6262f79936` (`succeeded` / `committed`). The complete

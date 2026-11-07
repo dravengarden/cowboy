@@ -5,7 +5,9 @@ use crate::sync_native::wire::{self, cowboy_buffer_sync_envelope::Payload};
 use std::sync::atomic::{AtomicBool, AtomicU32};
 use wire::cowboy_open_attempt_response::Outcome;
 
+mod buffer;
 mod recovery;
+pub(super) use buffer::open_buffer_at;
 pub(super) use recovery::{Admission, Recovery};
 
 #[derive(Default)]

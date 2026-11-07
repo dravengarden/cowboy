@@ -7,6 +7,8 @@ use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
 
 struct Client(PathBuf);
 
+mod legacy_release;
+
 fn target_text() -> String {
     let padding = 65_535 - A.len();
     // Keep the real server's 20,000-character LSP line limit intact.
@@ -109,6 +111,7 @@ pub(crate) async fn immutable_pair(parent: &Path, server: &Path) {
     );
     exercise(&client, &root).await;
     failed_open_is_recovered_for_replacement(&client, &root).await;
+    legacy_release::exercise(&client, &root).await;
     child.kill().await.unwrap();
     // The owning PID namespace, not this kill or local Released, owns final
     // descendant teardown. No native close ACK or recovery is claimed here.

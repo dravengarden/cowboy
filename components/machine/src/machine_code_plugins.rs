@@ -22,6 +22,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 mod agent_holdings;
+mod agent_release;
 mod buffer_leases;
 mod buffer_navigation;
 mod buffer_sync;
@@ -173,6 +174,8 @@ impl WorktreeRoute {
 #[derive(Default)]
 pub struct CodeRuntimeHost {
     agent_admission: Mutex<()>,
+    agent_retirements: agent_release::Retirements,
+    agent_release_cursor: std::sync::atomic::AtomicUsize,
     retiring_processes: Arc<process_tree::retirement::Retirement>,
     routes: Mutex<WorktreeRoutes>,
     engines: Mutex<BTreeMap<(String, String), Weak<RunningCodeRuntime>>>,
@@ -263,6 +266,9 @@ impl CodeRuntimeHost {
                 payload["type"].as_str(),
                 Some(
                     "prepareBufferSync"
+                        | "legacyReleaseSupport"
+                        | "prepareLegacyRelease"
+                        | "legacyRelease"
                         | "bufferSync"
                         | "prepareBufferNavigation"
                         | "bufferNavigation"
@@ -363,6 +369,14 @@ impl CodeRuntimeHost {
                 return Ok(resource_budget::unavailable());
             }
             return self.acquire_admitted(&mut route, &socket, payload).await;
+        }
+        if payload["type"] == "closeBuffer"
+            && let Some(CodeTarget::Installed(runtime)) = route.target.as_ref()
+        {
+            let runtime = Arc::clone(runtime);
+            if let Some(response) = self.release_agent(&mut route, &runtime, payload).await? {
+                return Ok(response);
+            }
         }
         route.dispatching(payload)?;
         let response = exchange(&socket, payload).await?;
@@ -783,6 +797,7 @@ mod tests {
         let mut owned = BTreeMap::new();
         let mut synchronization = super::sync_fixture::Fixture::default();
         let mut navigation = super::navigation_fixture::Fixture::default();
+        let mut agent_release = super::agent_release::tests::Fixture::default();
         let mut next_lease = 0_u64;
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
@@ -792,6 +807,12 @@ mod tests {
                 .unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
             let kind = request["type"].as_str().unwrap();
+            if let Some(response) = agent_release.reply(&request, &home, generation) {
+                if let Some(response) = response {
+                    let _ = writeln!(stream, "{response}");
+                }
+                continue;
+            }
             if kind == "closeBuffer" && generation == "generation-lost-agent-close" {
                 let marker = home.join("close-count");
                 let count: u32 = fs::read_to_string(&marker)

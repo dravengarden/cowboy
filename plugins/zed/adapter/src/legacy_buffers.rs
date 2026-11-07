@@ -4,6 +4,9 @@
 //! cancellation preserves its pin, including an unresolved native Open.
 use super::*;
 
+mod release;
+pub(super) use release::Capture;
+
 pub(super) async fn open_buffer(
     worktree: PathBuf,
     path: PathBuf,
@@ -70,6 +73,10 @@ pub(super) async fn close_buffer(
             version: Vec::new(),
         });
     };
+    anyhow::ensure!(
+        pin.release.is_none(),
+        "original legacy release remains fenced"
+    );
     // An interrupted Open may have acquired a native object before the
     // owner was committed. Resolve that exact attempt before claiming release.
     if let Some(zed) = zed {
@@ -130,10 +137,18 @@ pub(super) struct Registry(HashMap<RequestKey, Pin>);
 struct Pin {
     key: NativeKey,
     buffer_id: Option<u64>,
+    incarnation: Arc<()>,
+    release: Option<u64>,
 }
 
 impl Registry {
     pub(super) fn pin(&mut self, request: RequestKey, key: NativeKey) -> Result<()> {
+        anyhow::ensure!(
+            !self.0.iter().any(|((_, _, owner), pin)| owner == &request.2
+                && pin.key == key
+                && pin.release.is_some()),
+            "original legacy release remains fenced"
+        );
         if let Some(original) = self.0.get(&request) {
             anyhow::ensure!(
                 original.key == key,
@@ -146,6 +161,8 @@ impl Registry {
                 Pin {
                     key,
                     buffer_id: None,
+                    incarnation: Arc::default(),
+                    release: None,
                 },
             );
         }

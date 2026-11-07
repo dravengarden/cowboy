@@ -68,20 +68,26 @@ pub(super) struct Holding {
     idle_reclaimable: bool,
     last_used: Instant,
     confirmed: bool,
-    releasing: bool,
+    pub(super) releasing: bool,
+    pub(super) release: Option<super::agent_release::Attempt>,
 }
 
 impl Holding {
     pub(super) fn dispatching(&mut self, request: &Value) -> Result<()> {
-        ensure!(
-            request["worktree"].as_str() == Some(self.worktree.as_str()),
-            "original automatic worktree spelling changed"
-        );
+        self.check_worktree(request)?;
         ensure!(
             !self.releasing,
             "original automatic buffer release remains unconfirmed"
         );
         self.releasing = request["type"] == "closeBuffer";
+        Ok(())
+    }
+
+    pub(super) fn check_worktree(&self, request: &Value) -> Result<()> {
+        ensure!(
+            request["worktree"].as_str() == Some(self.worktree.as_str()),
+            "original automatic worktree spelling changed"
+        );
         Ok(())
     }
     pub(super) fn opening(worktree: &str, reclaimable: bool) -> Self {
@@ -93,6 +99,7 @@ impl Holding {
             last_used: Instant::now(),
             confirmed: false,
             releasing: false,
+            release: None,
         }
     }
 
@@ -115,16 +122,23 @@ impl Holding {
         self.last_used = Instant::now();
     }
 
+    pub(super) fn recoverable_release(&self) -> bool {
+        self.confirmed && self.idle_reclaimable
+    }
+
     fn begin_release(&mut self) -> bool {
-        if !self.idle_reclaimable
-            || !self.confirmed
-            || self.releasing
-            || self.last_used.elapsed() < IDLE
-        {
+        if !self.idle_due() {
             return false;
         }
         self.releasing = true;
         true
+    }
+
+    fn idle_due(&self) -> bool {
+        self.idle_reclaimable
+            && self.confirmed
+            && !self.releasing
+            && self.last_used.elapsed() >= IDLE
     }
 }
 
@@ -184,55 +198,83 @@ impl CodeRuntimeHost {
                 };
                 host.buffer_sync.observe_pending().await;
                 host.buffer_navigation.observe_pending().await;
+                host.agent_retirements.observe().await;
                 host.release_idle_agents().await;
             }
         })
     }
 
-    async fn release_idle_agents(&self) {
+    pub(super) async fn release_idle_agents(&self) {
         if let Err(error) = self.reap_retired_processes().await {
             tracing::warn!(%error, "Code process retirement remains unconfirmed");
         }
-        // Do not hold the registry while waiting on a native exchange. The
-        // route lock serializes maintenance with both new Opens and UI work.
         let routes: Vec<_> = self.routes.lock().await.values().map(Arc::clone).collect();
+        let mut candidates = Vec::new();
         for route in routes {
+            if let Ok(held) = route.try_lock() {
+                for (key, holding) in &held.agent_buffers {
+                    if holding.release.is_some() || holding.idle_due() {
+                        candidates.push((Arc::clone(&route), key.clone()));
+                    }
+                }
+            }
+        }
+        if candidates.is_empty() {
+            return;
+        }
+        let start = self
+            .agent_release_cursor
+            .fetch_add(4, std::sync::atomic::Ordering::Relaxed)
+            % candidates.len();
+        let mut attempted = 0;
+        for offset in 0..candidates.len() {
+            if attempted == 4 {
+                break;
+            }
+            let (route, (path, lease)) = &candidates[(start + offset) % candidates.len()];
             let Ok(mut route) = route.try_lock() else {
                 continue;
             };
-            if route.agent_buffers.is_empty() {
+            let Some(holding) = route.agent_buffers.get(&(path.clone(), lease.clone())) else {
+                continue;
+            };
+            if holding.release.is_none() && !holding.idle_due() {
                 continue;
             }
+            let worktree = holding.worktree.clone();
             let Some(CodeTarget::Installed(runtime)) = route.target.as_ref() else {
                 continue;
             };
-            // Leader loss is not evidence that descendants released resources.
+            // Leader loss never proves descendant cleanup or a released owner.
             if !matches!(runtime.is_running(), Ok(true)) {
                 continue;
             }
-            let socket = runtime.socket.clone();
-            let keys: Vec<_> = route.agent_buffers.keys().cloned().collect();
-            for (path, lease) in keys {
-                let Some(holding) = route.agent_buffers.get_mut(&(path.clone(), lease.clone()))
-                else {
-                    continue;
-                };
-                if !holding.begin_release() {
+            let runtime = Arc::clone(runtime);
+            attempted += 1;
+            let close = serde_json::json!({"type":"closeBuffer", "worktree":worktree, "path":path, "leaseId":lease});
+            match self.release_agent(&mut route, &runtime, &close).await {
+                Ok(Some(_)) => continue,
+                Err(_) => {
+                    tracing::warn!("automatic Code original release remains unconfirmed");
                     continue;
                 }
-                let worktree = holding.worktree.clone();
-                let close = serde_json::json!({"type":"closeBuffer", "worktree":worktree, "path":path, "leaseId":lease});
-                match exchange(&socket, &close).await {
-                    Ok(response) => match route.observe(&close, &response) {
-                        Ok(true) => {
-                            *route = WorktreeRoute::default();
-                            break;
-                        }
-                        Ok(false) => {}
-                        Err(_) => tracing::warn!("automatic Code idle release remains unconfirmed"),
-                    },
+                Ok(None) => {}
+            }
+            if !route
+                .agent_buffers
+                .get_mut(&(path.clone(), lease.clone()))
+                .is_some_and(Holding::begin_release)
+            {
+                continue;
+            }
+            // Older Plugins retain their existing one-use Close deadline.
+            match exchange(&runtime.socket, &close).await {
+                Ok(response) => match route.observe(&close, &response) {
+                    Ok(true) => *route = WorktreeRoute::default(),
+                    Ok(false) => {}
                     Err(_) => tracing::warn!("automatic Code idle release remains unconfirmed"),
-                }
+                },
+                Err(_) => tracing::warn!("automatic Code idle release remains unconfirmed"),
             }
         }
     }

@@ -30,10 +30,12 @@ mod diagnostics;
 mod extensions;
 mod language_observation;
 mod legacy_buffers;
+mod legacy_release;
 #[cfg(test)]
 use extensions::extension_manifest;
 use language_observation::{LanguageObservation, buffer_language};
 use legacy_buffers::{close_buffer, open_buffer};
+use native_open::open_buffer_at;
 mod native_close;
 mod native_open;
 mod navigation_native;
@@ -128,6 +130,17 @@ enum Request {
         #[serde(rename = "leaseId")]
         lease_id: String,
     },
+    LegacyReleaseSupport {},
+    PrepareLegacyRelease {
+        worktree: PathBuf,
+        path: PathBuf,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+    },
+    LegacyRelease {
+        release: legacy_release::Reference,
+        action: legacy_release::Action,
+    },
     PrepareBuffer {
         worktree: PathBuf,
         path: PathBuf,
@@ -171,6 +184,16 @@ enum Request {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Response {
+    LegacyReleaseSupport {
+        api_version: u8,
+        protocol: u8,
+    },
+    LegacyRelease {
+        api_version: u8,
+        release: legacy_release::Reference,
+        state: legacy_release::State,
+        buffer: Option<Box<serde_json::Value>>,
+    },
     OwnedBufferNavigation {
         api_version: u8,
         navigation: buffer_navigation::NavigationRef,
@@ -369,6 +392,7 @@ type Buffers = Arc<BufferState>;
 struct BufferState {
     active: RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>,
     legacy: Mutex<legacy_buffers::Registry>,
+    legacy_releases: Mutex<legacy_release::Registry>,
     native_open: native_open::Fence,
     leases: Mutex<buffer_leases::Registry>,
     syncs: Mutex<sync_owners::Registry>,
@@ -1222,6 +1246,9 @@ async fn respond(
     zed: Option<&Zed>,
 ) -> Result<Response> {
     Ok(match request {
+        request @ (Request::LegacyReleaseSupport {}
+        | Request::PrepareLegacyRelease { .. }
+        | Request::LegacyRelease { .. }) => legacy_release::respond(request, buffers, zed).await?,
         Request::Health => Response::Health {
             api_version: ADAPTER_VERSION,
             zed_version: ZED_VERSION,
@@ -1463,69 +1490,6 @@ async fn buffer_key(worktree: PathBuf, relative: PathBuf) -> Result<(PathBuf, Pa
     }
     let relative = file.strip_prefix(&worktree)?.to_path_buf();
     Ok((worktree, relative))
-}
-
-async fn open_buffer_at(
-    worktree: PathBuf,
-    path: PathBuf,
-    worktree_id: u64,
-    owner: BufferOwner,
-    buffers: &Buffers,
-    zed: Option<&Zed>,
-    admission: native_open::Admission<'_>,
-) -> Result<Response> {
-    let key = (worktree.clone(), path.clone());
-    let mut all = buffers.active.write().await;
-    if let Some(id) = admission.expected_id {
-        anyhow::ensure!(
-            all.get(&key).is_some_and(|buffer| buffer.remote_id == id),
-            "original legacy buffer is no longer retained"
-        );
-    }
-    if let Some(zed) = zed {
-        native_open::recover(&buffers.native_open, &all, zed).await?;
-    }
-    native_open::admit(buffers, &all, zed, &key, worktree_id).await?;
-    let mut attempt = None;
-    if !all.contains_key(&key) {
-        let (remote_id, version) = if let Some(zed) = zed {
-            // Arm before any native I/O. Cancellation or an error leaves the
-            // process-wide fence latched until `recover` learns the outcome.
-            let armed = attempt.insert(buffers.native_open.begin()?);
-            if let Some(receipt) = admission.recovery {
-                armed.track(receipt);
-            }
-            zed.open_buffer_tracked(worktree_id, &path, |id| armed.dispatching(id))
-                .await?
-        } else {
-            (u64::try_from(all.len() + 1)?, Vec::new())
-        };
-        all.insert(
-            key.clone(),
-            BufferLease {
-                lease_ids: HashSet::new(),
-                remote_id,
-                version,
-                sync: None,
-                closing: false,
-            },
-        );
-    }
-    let lease = all.get_mut(&key).expect("buffer was just inserted");
-    lease.lease_ids.insert(owner);
-    let response = Response::Buffer {
-        api_version: ADAPTER_VERSION,
-        worktree,
-        path,
-        leases: lease.lease_ids.len(),
-        buffer_id: lease.remote_id,
-        version: lease.version.clone(),
-    };
-    // No await between original-ID owner commit and ending its admission fence.
-    if let Some(attempt) = attempt {
-        attempt.complete();
-    }
-    Ok(response)
 }
 
 // Release the already captured native resource. Do not resolve a filesystem
