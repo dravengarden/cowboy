@@ -370,7 +370,19 @@ claiming to recover that lost result. Uncertain refresh transport outcomes keep
 the original nonce for harmless retries without refreshing its idle deadline.
 Renewal itself does not sample resources or select a runtime: the existing
 owner remains charged, and only new acquisitions need resource admission.
+An original Open that is still unconfirmed returns an error rather than the
+absent-owner reply, preserving the Controller's original idle Close attempt.
 Production acceptance is pending.
+
+The Zed 1.34.0 candidate adds the missing unresolved-Open check to the common
+native Close admission used by legacy, owned-buffer and navigation releases.
+An unobserved Open can return an existing native ID, so the last native owner
+must survive until that original Open is resolved. Releasing a shared local
+owner without native Close remains allowed. Recovery of an already dispatched
+Close still queries only its original receipt and does not clear another
+Open's fence. Legacy release preparation also refuses while Open is unresolved.
+A regression failed against 1.33.0 and passed after this guard; native pair,
+full gate and production acceptance for 1.34.0 remain pending.
 
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction

@@ -81,6 +81,7 @@ pub(crate) async fn respond(
             let legacy = buffers.legacy.lock().await;
             let captured = legacy.capture((worktree, path, lease_id))?;
             let active = buffers.active.read().await;
+            buffers.native_open.check()?;
             let buffer = active
                 .get(&captured.key)
                 .context("original legacy buffer is absent")?;
@@ -210,6 +211,7 @@ impl Entry {
             &owner,
             &mut active,
             zed,
+            &buffers.native_open,
             || {
                 legacy.mark_release(&self.captured, id);
                 self.state = State::Unknown;

@@ -7,6 +7,37 @@ use crate::sync_native::wire::{
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[tokio::test]
+async fn preparation_and_execution_refuse_an_unresolved_native_open() {
+    let f = Fixture::new().await;
+    let prepared = f.prepare().await;
+    let pending = f.buffers.native_open.begin().unwrap();
+    assert!(
+        respond(
+            Request::PrepareLegacyRelease {
+                worktree: f.root.clone(),
+                path: "file".into(),
+                lease_id: "owner".into(),
+            },
+            &f.buffers,
+            None
+        )
+        .await
+        .is_err()
+    );
+    assert!(f.act(&prepared, Action::Execute).await.is_err());
+    assert_eq!(
+        state(&f.act(&prepared, Action::Query).await.unwrap()),
+        State::Prepared
+    );
+    assert_eq!(f.buffers.active.read().await.len(), 1);
+    pending.complete();
+    assert_eq!(
+        state(&f.act(&prepared, Action::Execute).await.unwrap()),
+        State::Released
+    );
+}
+
 struct Fixture {
     root: PathBuf,
     buffers: Buffers,

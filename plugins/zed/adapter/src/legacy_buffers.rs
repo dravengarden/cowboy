@@ -107,6 +107,7 @@ pub(super) async fn close_buffer(
                 &owner,
                 &mut active,
                 zed,
+                &buffers.native_open,
                 || {},
             )
             .await?;

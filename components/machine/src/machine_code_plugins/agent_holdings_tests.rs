@@ -44,9 +44,9 @@ async fn refresh_never_opens_reclaimed_unknown_or_releasing_owners() {
         .get_mut(&key)
         .unwrap()
         .confirmed = false;
-    assert_eq!(
-        host.refresh_agent("zed", &root.0, &payload).await.unwrap()["state"],
-        "unavailable"
+    assert!(
+        host.refresh_agent("zed", &root.0, &payload).await.is_err(),
+        "unknown Open keeps the Controller's original idle cleanup observation"
     );
     {
         let mut r = route.lock().await;

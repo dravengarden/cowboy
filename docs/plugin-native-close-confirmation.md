@@ -25,6 +25,13 @@ release during uncertainty and leave recovery dropping the final local pin
 for an ID excluded from the original native close batch. Safe reads of those
 shared buffers remain available; independent release resumes after recovery.
 
+Adapter 1.34.0 also checks the original Open fence before admitting any new
+native Close. An unresolved Open can return a retained ID even when its pathname
+differs, so known legacy, owned-buffer and navigation owners must not drop the
+last pin prematurely. Shared local-owner removal remains available when another
+owner keeps the native ID alive. This check does not block Query of an already
+dispatched Close, authorize orphan cleanup, or clear a different Open's fence.
+
 The adapter retains at most 2,048 pending receipts plus queued retirements.
 The server admits at most 4,096 receipts and 64 peer histories, without
 eviction. After confirmed local cleanup, a separate Forget frame retires the

@@ -2,6 +2,113 @@
 use super::*;
 
 #[tokio::test]
+async fn original_close_query_still_recovers_while_another_open_is_unresolved() {
+    let (mut zed, _) = coordinate_queries::fixture().await;
+    let (transport, mut receiver) = sync_native::Transport::new();
+    Arc::get_mut(&mut zed).unwrap().sync = transport;
+    let buffers: Buffers = Arc::default();
+    let key = (PathBuf::from("/root"), PathBuf::from("file"));
+    let owner = BufferOwner::Owned(1);
+    buffers.active.write().await.insert(
+        key.clone(),
+        BufferLease {
+            remote_id: 7,
+            lease_ids: HashSet::from([owner.clone()]),
+            closing: true,
+            version: Vec::new(),
+            sync: None,
+        },
+    );
+    let original = zed
+        .closes
+        .begin(
+            Owner::buffer(&owner, &HashSet::from([key.clone()])),
+            request(vec![3; 16], vec![7]),
+            BTreeMap::from([(key.clone(), 7)]),
+        )
+        .unwrap();
+    let _pending = buffers.native_open.begin().unwrap();
+    let (released, ()) = tokio::join!(
+        crate::close_buffer_at(key.0, key.1, owner, &buffers, Some(&zed), || panic!(
+            "recovery cannot start a new Close"
+        )),
+        async {
+            let envelope = receiver.recv().await.unwrap();
+            let Some(Payload::CloseRequest(request)) = &envelope.payload else {
+                panic!("not close query")
+            };
+            assert_eq!(request.action, Action::Query as i32);
+            assert_eq!(request.operation_id, original.request.operation_id);
+            assert_eq!(request.instance, original.request.instance);
+            assert_eq!(request.buffer_ids, [7]);
+            reply(&zed.sync, envelope, Outcome::Closed);
+        }
+    );
+    released.unwrap();
+    assert!(buffers.active.read().await.is_empty());
+    assert!(
+        buffers.native_open.check().is_err(),
+        "original Close did not clear another Open"
+    );
+}
+
+#[tokio::test]
+async fn unresolved_open_prevents_last_owner_release_but_allows_shared_owner_drop() {
+    let buffers: Buffers = Arc::default();
+    let key = (PathBuf::from("/root"), PathBuf::from("file"));
+    buffers.active.write().await.insert(
+        key.clone(),
+        BufferLease {
+            remote_id: 7,
+            lease_ids: HashSet::from([BufferOwner::Owned(1), BufferOwner::Owned(2)]),
+            closing: false,
+            version: Vec::new(),
+            sync: None,
+        },
+    );
+    let pending = buffers.native_open.begin().unwrap();
+    crate::close_buffer_at(
+        key.0.clone(),
+        key.1.clone(),
+        BufferOwner::Owned(1),
+        &buffers,
+        None,
+        || panic!("local shared release cannot dispatch native Close"),
+    )
+    .await
+    .unwrap();
+    assert!(
+        crate::close_buffer_at(
+            key.0.clone(),
+            key.1.clone(),
+            BufferOwner::Owned(2),
+            &buffers,
+            None,
+            || panic!("unresolved Open cannot admit native Close")
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        buffers.active.read().await[&key]
+            .lease_ids
+            .contains(&BufferOwner::Owned(2))
+    );
+    pending.complete();
+    crate::close_buffer_at(
+        key.0.clone(),
+        key.1.clone(),
+        BufferOwner::Owned(2),
+        &buffers,
+        None,
+        || {},
+    )
+    .await
+    .unwrap();
+    assert!(buffers.active.read().await.is_empty());
+}
+
+#[tokio::test]
 async fn orphan_observation_requires_the_original_close_and_never_starts_one() {
     let (mut zed, _) = coordinate_queries::fixture().await;
     let (transport, mut receiver) = sync_native::Transport::new();
@@ -96,6 +203,7 @@ fn unknown_navigation_keeps_possible_target_alive_until_original_result_recovers
 
 #[tokio::test]
 async fn shared_alias_cannot_drop_its_last_independent_owner_during_recovery() {
+    let open_fence = native_open::Fence::default();
     let (mut zed, _) = coordinate_queries::fixture().await;
     let (transport, mut receiver) = sync_native::Transport::new();
     Arc::get_mut(&mut zed).unwrap().sync = transport;
@@ -127,6 +235,7 @@ async fn shared_alias_cannot_drop_its_last_independent_owner_during_recovery() {
             &BufferOwner::Owned(2),
             &mut active,
             Some(&zed),
+            &open_fence,
             || panic!("shared alias admitted")
         )
         .await
@@ -161,6 +270,7 @@ async fn shared_alias_cannot_drop_its_last_independent_owner_during_recovery() {
             &BufferOwner::Owned(2),
             &mut active,
             Some(&zed),
+            &open_fence,
             || {}
         ),
         async {

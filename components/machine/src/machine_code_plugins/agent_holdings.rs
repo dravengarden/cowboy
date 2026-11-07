@@ -186,9 +186,15 @@ impl CodeRuntimeHost {
             return Ok(resource_budget::unavailable());
         };
         held.check_worktree(payload)?;
-        if !held.recoverable_release() || held.releasing {
+        if held.releasing {
             return Ok(resource_budget::unavailable());
         }
+        // Keep the Controller's idle cleanup observation for an uncertain
+        // Open. Unlike an absent owner, it may still need its original Close.
+        ensure!(
+            held.recoverable_release(),
+            "original automatic Open remains unconfirmed"
+        );
         held.last_used = Instant::now();
         Ok(serde_json::json!({"type":"agentBufferRefreshed", "api_version":1, "leaseId":key.1}))
     }

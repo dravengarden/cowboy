@@ -1527,7 +1527,15 @@ async fn close_buffer_at(
         buffer_id: lease.remote_id,
         version: lease.version.clone(),
     };
-    native_close::release(HashSet::from([key]), &owner, &mut all, zed, on_admit).await?;
+    native_close::release(
+        HashSet::from([key]),
+        &owner,
+        &mut all,
+        zed,
+        &buffers.native_open,
+        on_admit,
+    )
+    .await?;
     Ok(response)
 }
 

@@ -82,7 +82,15 @@ async fn unknown_native_open_fences_both_handoff_stages_without_erasing_the_grou
         State::Retained { .. }
     ));
     assert!(f.outbound.try_recv().is_err());
-    f.request(action(&nav, Action::Release)).await.unwrap();
+    assert!(f.request(action(&nav, Action::Release)).await.is_err());
+    assert!(matches!(
+        state(f.request(action(&nav, Action::Query)).await.unwrap()),
+        State::Retained { .. }
+    ));
+    assert!(
+        f.closed.try_recv().is_err(),
+        "unknown Open can alias the last target owner"
+    );
     assert!(f.buffers.native_open.check().is_err());
 }
 

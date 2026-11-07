@@ -113,8 +113,15 @@ impl Plan {
         owner: &BufferOwner,
         active: &mut Active,
         zed: Option<&Zed>,
+        open_fence: &native_open::Fence,
         on_admit: impl FnOnce(),
     ) -> Result<()> {
+        if !self.native_ids.is_empty() {
+            // An unresolved Open can return any existing native ID. Keep its
+            // possible target alive until that original outcome is resolved.
+            // Dropping a shared local owner without native Close remains safe.
+            open_fence.check()?;
+        }
         if !self.native_ids.is_empty()
             && let Some(zed) = zed
         {
@@ -251,6 +258,7 @@ pub(super) async fn release(
     owner: &BufferOwner,
     active: &mut Active,
     zed: Option<&Zed>,
+    open_fence: &native_open::Fence,
     on_admit: impl FnOnce(),
 ) -> Result<()> {
     if let Some(zed) = zed {
@@ -265,7 +273,7 @@ pub(super) async fn release(
         )?;
     }
     Plan::checked(keys, owner, active)?
-        .release(owner, active, zed, on_admit)
+        .release(owner, active, zed, open_fence, on_admit)
         .await
 }
 

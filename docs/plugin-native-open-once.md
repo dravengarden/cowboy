@@ -39,8 +39,11 @@ replacement opens retain Prepared. The original attempted owned lease remains
 Unknown on Query, repeated Open and Release. Editing the source file or releasing
 an unrelated owner cannot clear uncertainty.
 
-Existing safe content-bound reads and explicit release of other known owners
-remain available. Adding an explicit owner to an already committed key requires
+Existing safe content-bound reads and local release of a shared owner remain
+available. Since adapter 1.34.0, a release that would close the last native owner
+waits for the unresolved Open: its eventual ID could alias that buffer. Querying
+an already dispatched Close still recovers its original result. Adding an
+explicit owner to an already committed key requires
 no native I/O in the healthy case, but does not bypass an unresolved Open fence.
 This conservative availability tradeoff is intentional: pathname inequality
 cannot prove that an unobserved native ID is independent.

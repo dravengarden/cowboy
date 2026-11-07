@@ -523,6 +523,7 @@ async fn release(slot: &mut Slot, id: u64, buffers: &Buffers, zed: &Zed) -> Resu
         &BufferOwner::Navigation(id),
         &mut active,
         Some(zed),
+        &buffers.native_open,
         || slot.phase = Phase::ReleaseUnknown,
     )
     .await
