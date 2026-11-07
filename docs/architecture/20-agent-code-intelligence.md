@@ -479,16 +479,19 @@ probe returned `document_current`, matching source SHA and the expected
 not inject reply loss; the fixture's synthetic resource admission does not prove
 host resource admission, and none of this accepts Machine-process-loss recovery.
 
-The next Zed 1.38.0 contract prepares an automatic acquisition reference before
+Zed 1.38.0 prepares an automatic acquisition reference before
 EnsureWorktree, then retains the original native Add, Trust/Restrict and Remove
 request identities. The native journal reports Add completion only after store
 registration; the upstream early response is insufficient. Pending and uncertain
 entries retain their fences, bounded history eviction reports Forgotten, and a
 replacement connection cannot supply the original result. Queries observe only;
-explicit release continues the original buffer and worktree cleanup in order.
+absence from the journal is not a no-effect receipt, even after Ping succeeds.
+Explicit release continues the original buffer and worktree cleanup in order.
 The last automatic owner removes the native worktree only when no interactive
 worktree lease or buffer owner remains. A captured incarnation and positive
 retirement evidence prevent an old request from closing a later replacement.
+The prepared buffer's worktree incarnation must match the captured acquisition
+before Open; replacement between Ensure and preparation is refused.
 
 Machine saves the prepared reference before execution, keeps uncertain worktree
 acquisitions charged, and can reclaim them after the existing idle interval.
@@ -498,7 +501,36 @@ unknown-variant refusal selects the older release path; unsupported native
 journals, malformed support replies and transport errors do not. These private
 requests are denied by generic Code RPC. Deploy the compatible Machine host
 before installing this Plugin. This is a process-local protocol, not durable
-Machine restart recovery, project freshness, or production release evidence.
+Machine restart recovery or project freshness.
+
+Source `7c8a73a493104ca214491e8c83934bd019393a61` passed the complete pinned
+gate, including 175 adapter tests, and the exact static 1.38.0 adapter / 1.15.0
+server pair passed native and signed installation/drain acceptance. Actual
+native Add, Trust and Remove replies were discarded in isolated fixtures;
+queries recovered only original outcomes, and retired worktree IDs refused
+new buffer opens. Machine fixtures additionally cover lost prepare/execute/
+release/retirement replies, foreign references, unsupported native recovery,
+unfinished acquisition cleanup and receipt-capacity exhaustion before ownership.
+The temporary installed fixture discards the actual successful acquisition
+reply and confirms original cleanup plus maintenance retirement. Its synthetic
+resource admission does not prove host resource admission.
+
+Hawk activated the compatible Machine host first, transaction
+`1794048124208384270-7c8a73a49310` (`succeeded` / `committed`), retaining
+`worker-39e0360cdcbff26cfa61` and both journal writers disabled. Actual Controller
+active/recovery Catalog readers accepted the signed publication; the signature
+and all public artifact hashes were verified independently. Operation
+`hawk-zed-1-38-0-worktree-acquisition` then completed with Machine receipt
+`applied`, installation
+`installation-38f3a3e9813e7c3bd9a66465e54f6e97257a4fc462a8173c12bdfee8dc6a6646`,
+composite digest
+`sha256:e204b7f6179f61accd756f3a02b77028f8a846aee76b500b6a372dd48d33d81e`.
+Zed 1.37.0 remains the rollback generation. A temporary Go probe returned
+`document_current`, matching independently computed source SHA and the expected
+`UndeclaredName`, then was removed after verifying its exact SHA. Both existing
+worker PIDs, executables and arguments and the Controller PID were unchanged;
+health, version and SPA checks passed and four Machines were online. Production
+did not inject reply loss, and this does not accept Machine-process-loss recovery.
 
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction
