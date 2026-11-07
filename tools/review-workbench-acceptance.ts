@@ -193,7 +193,7 @@ async function emptyOverview(p: FixturePage, controls: string[]) {
     controls.filter((selector) => selector !== "[data-review-unread]"),
   );
   await p.evaluate(
-    `(()=>{const r=document.querySelector('[data-review-repository-controls]').getBoundingClientRect();if(r.height>52)throw new Error('Empty review uses more than one repository toolbar row')})()`,
+    `(()=>{const r=document.querySelector('[data-review-repository-controls]').getBoundingClientRect();if(r.height>64)throw new Error('Empty review uses more than one repository toolbar row')})()`,
   );
   await p.evaluate(
     `(()=>{const card=document.querySelector('[data-review-empty-state] > div').getBoundingClientRect();const reader=document.querySelector('[data-review-empty-state]').parentElement.getBoundingClientRect();if(Math.abs(card.top+card.height/2-reader.top-reader.height/2)>30)throw new Error('Empty overview is not centered');if(!document.querySelector('[data-review-context-branch]')?.textContent.includes('main'))throw new Error('Branch is missing from bottom context');})()`,
@@ -206,7 +206,7 @@ async function emptyOverview(p: FixturePage, controls: string[]) {
     controls.filter((selector) => selector !== "[data-review-unread]"),
   );
   await p.evaluate(
-    `(()=>{const r=document.querySelector('[data-review-repository-controls]').getBoundingClientRect();if(r.height>52)throw new Error('Empty narrow review should fit one repository row')})()`,
+    `(()=>{const r=document.querySelector('[data-review-repository-controls]').getBoundingClientRect();if(r.height>118)throw new Error('Narrow review should use at most two repository rows')})()`,
   );
   await p.evaluate(`(() => {
     const content=document.querySelector('[data-review-empty-state]').textContent;
@@ -323,6 +323,22 @@ async function workbenchTouchTargets(p: FixturePage) {
       for (const section of ["history", "worktrees", "changes"]) {
         await tapPadding(`[data-segmented-tab="${section}"]`, section === "worktrees");
         await until(`document.querySelector('[data-segmented-tab="${section}"]')?.getAttribute('aria-selected')==='true'`);
+        if (section === "worktrees") {
+          await p.evaluate(`(() => {
+            const tabs=document.querySelector('[data-mobile-repository-tabs]');
+            const r=tabs.getBoundingClientRect();
+            const workbench=document.querySelector('[data-review-workbench]').getBoundingClientRect();
+            if(workbench.top-r.bottom<8)throw new Error('Repository tabs crowd the context row');
+            for(const tab of tabs.querySelectorAll('button')) {
+              const label=document.createTreeWalker(tab,NodeFilter.SHOW_TEXT).nextNode();
+              if(!label)throw new Error('Repository tab lost its label');
+              const range=document.createRange();range.selectNodeContents(label);
+              const text=range.getBoundingClientRect(), target=tab.getBoundingClientRect();
+              if(text.left-target.left<11.5 || target.right-text.right<11.5)throw new Error('Repository label crowds its target edge');
+            }
+          })()`);
+          await capture(`worktrees-spacing-${width}-${scale * 100}`, ['[data-mobile-repository-tabs]', '[data-review-context-button]']);
+        }
       }
       await tapPadding("[data-review-compare]", true);
       await until("!!document.querySelector('[aria-label=\"Comparison scenarios\"]')");

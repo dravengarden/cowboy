@@ -21,9 +21,10 @@ export function ReviewRepositoryControls({
       sx={{
         flexShrink: 0,
         flexWrap: "wrap",
-        columnGap: 0.25,
-        px: 0.75,
-        py: 0.25,
+        columnGap: mobile ? 1 : 0.25,
+        rowGap: mobile ? 0.75 : 0,
+        px: mobile ? 1 : 0.75,
+        py: mobile ? 1 : 0.25,
         bgcolor: "background.default",
       }}
     >
@@ -39,11 +40,11 @@ export function ReviewRepositoryControls({
           borderRadius: mobile ? "24px" : 1,
           bgcolor: "action.hover",
           "& .MuiTabs-indicator": { display: "none" },
-          "& .MuiTabs-list": { flexWrap: "wrap" },
+          "& .MuiTabs-list": { flexWrap: "wrap", gap: mobile ? 0.25 : 0 },
           "& .MuiTab-root": {
             minHeight: 48,
-            minWidth: 48,
-            px: 0.5,
+            minWidth: mobile ? 56 : 48,
+            px: mobile ? 1.5 : 0.5,
             borderRadius: mobile ? "999px" : 1,
             fontSize: "0.8125rem",
             textTransform: "none",
