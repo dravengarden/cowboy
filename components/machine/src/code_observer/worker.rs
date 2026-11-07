@@ -50,13 +50,13 @@ pub struct Worker {
     requests: mpsc::SyncSender<Request>,
     stop: Arc<AtomicBool>,
     owner: Option<oneshot::Sender<()>>,
+    finished: Arc<AtomicBool>,
     ended: Option<oneshot::Receiver<()>>,
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        let _ = self.requests.try_send(Request::Wake);
+        self.cancel();
         self.owner.take();
     }
 }
@@ -79,6 +79,8 @@ impl Worker {
         let stop = Arc::new(AtomicBool::new(false));
         let (owner, dropped) = oneshot::channel();
         let (finished, ended) = oneshot::channel();
+        let cleaned = Arc::new(AtomicBool::new(false));
+        let thread_cleaned = Arc::clone(&cleaned);
         let thread_stop = Arc::clone(&stop);
         let thread_grant = Arc::clone(&grant);
         let thread_current = Arc::clone(&current);
@@ -96,6 +98,7 @@ impl Worker {
                 );
                 // Drop native descriptors and release capacity before confirming.
                 drop(_permit);
+                thread_cleaned.store(true, Ordering::Release);
                 let _ = finished.send(());
             })
             .context("starting observer thread")?;
@@ -119,6 +122,7 @@ impl Worker {
             requests,
             stop,
             owner: Some(owner),
+            finished: cleaned,
             ended: Some(ended),
         })
     }
@@ -147,8 +151,20 @@ impl Worker {
         Ok(page)
     }
 
-    fn is_current(&self) -> bool {
-        !self.stop.load(Ordering::Acquire) && self.grant.current() && (self.current)()
+    pub fn is_current(&self) -> bool {
+        !self.finished()
+            && !self.stop.load(Ordering::Acquire)
+            && self.grant.current()
+            && (self.current)()
+    }
+
+    pub fn cancel(&self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = self.requests.try_send(Request::Wake);
+    }
+
+    pub fn finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
     }
 
     /// Unlike dropping an async task, success confirms native collection and

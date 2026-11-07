@@ -86,6 +86,7 @@ pub(super) async fn read(
         }
     };
     if let Request::Diagnostics(paths) = request {
+        super::super::managed_calls::touch_code_observation(state, observed).await;
         let value = diagnostics::read(state, observed, paths).await;
         if !session::current(&state.hub, &state.machine_control, observed) {
             return Err("code_context_changed".into());

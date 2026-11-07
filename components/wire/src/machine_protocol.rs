@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod code_buffer_navigation;
 pub mod code_buffer_sync;
+pub mod code_observer;
 pub mod execution;
 pub mod installation_revision;
 pub mod memory_relay;
@@ -28,7 +29,7 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 41;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 42;
 /// A Machine relays its sessions' memory requests over this channel, and a
 /// home Machine answers them from its local memory backend.
 pub const MEMORY_RELAY_PROTOCOL_VERSION: u16 = 41;
@@ -45,23 +46,8 @@ pub const NATIVE_FORK_PROTOCOL_VERSION: u16 = 39;
 pub const NAMED_RELEASE_CARRY_PROTOCOL_VERSION: u16 = 38;
 /// Read-only quota collection in a verified named native profile.
 pub const NATIVE_USAGE_PROTOCOL_VERSION: u16 = 37;
-/// Closed diagnostics for native observations; arbitrary subprocess output is
-/// never an account API error or a log field.
-pub fn native_usage_error_code(value: &str) -> &'static str {
-    match value {
-        "native_usage_busy" => "native_usage_busy",
-        "native_usage_admission_expired" => "native_usage_admission_expired",
-        "native_usage_profile_changed" => "native_usage_profile_changed",
-        "native_usage_collector_unavailable" => "native_usage_collector_unavailable",
-        "native_usage_home_unsupported" => "native_usage_home_unsupported",
-        "native_usage_installation_changed" => "native_usage_installation_changed",
-        "native_usage_authentication_required" => "native_usage_authentication_required",
-        "native_usage_collector_failed" => "native_usage_collector_failed",
-        "machine_usage_update_required" => "machine_usage_update_required",
-        "machine_connection_changed" => "machine_connection_changed",
-        _ => "native_usage_unavailable",
-    }
-}
+mod native_usage;
+pub use native_usage::native_usage_error_code;
 
 pub const CURRENT_TURN_PROTOCOL_VERSION: u16 = 34;
 pub const DELIVERY_CONTROLS_PROTOCOL_VERSION: u16 = 35;
@@ -1303,6 +1289,9 @@ impl MachineCommand {
             }
             Self::AdapterRequest { adapter, .. } if adapter == session_code::ADAPTER => {
                 session_code::PROTOCOL_VERSION
+            }
+            Self::AdapterRequest { adapter, .. } if adapter == code_observer::ADAPTER => {
+                code_observer::PROTOCOL_VERSION
             }
             Self::Projects { .. } => PROJECT_REGISTRY_PROTOCOL_VERSION,
             Self::Execution { request, .. }

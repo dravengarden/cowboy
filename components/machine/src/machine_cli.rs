@@ -38,8 +38,13 @@ mod liveness;
 mod login_process;
 mod native_login;
 mod native_logout;
+#[cfg(target_os = "linux")]
+mod observation;
 mod projects;
 mod reconnect;
+mod resident_state;
+use resident_state::{durable_state_reply, resident_provider_generations};
+mod session_code;
 use reconnect::Backoff;
 pub mod telemetry_binding;
 pub mod telemetry_export;
@@ -182,6 +187,8 @@ struct WorkspaceConfig {
     identities: workspace_identity::SharedRootIdentities,
     session_identities: workspace_identity::SharedSessionRootIdentities,
     updates: tokio::sync::watch::Sender<WorkspaceSnapshot>,
+    #[cfg(target_os = "linux")]
+    observers: observation::Registry,
 }
 
 impl WorkspaceConfig {
@@ -202,6 +209,8 @@ impl WorkspaceConfig {
             identities: workspace_identity::SharedRootIdentities::default(),
             session_identities: workspace_identity::SharedSessionRootIdentities::default(),
             updates,
+            #[cfg(target_os = "linux")]
+            observers: observation::Registry::default(),
         };
         config.reload()?;
         Ok(config)
@@ -2656,6 +2665,7 @@ fn accepted_component_restart(requested: bool, events: &[MachineEvent]) -> bool 
 }
 
 struct AdapterRequestContext {
+    observer_grant: Option<Arc<crate::managed_calls::host::LiveGrant>>,
     providers: Arc<MachinePluginStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
@@ -2676,36 +2686,6 @@ struct ProviderCacheStatusRequest {
     session_id: String,
 }
 
-/// Content-free counts and writer flags for diagnostics. The request carries
-/// nothing and the reply names no Session, lineage or path.
-fn durable_state_reply(
-    payload: &serde_json::Value,
-    view: &crate::machine_broker::DurableStateView,
-) -> anyhow::Result<serde_json::Value> {
-    anyhow::ensure!(
-        payload.as_object().is_some_and(serde_json::Map::is_empty),
-        "invalid durable state request"
-    );
-    let status = view
-        .status()
-        .context("durable state is not available yet")?;
-    serde_json::to_value(status).context("encoding durable state")
-}
-
-/// Generations the Controller's retention request must keep besides its own
-/// pins: every one a resident Session here was launched with. The Controller
-/// pins describe recoverable Sessions, but a worker generation cutover
-/// relaunches each registered declaration on its exact Provider generation,
-/// and a surviving worker keeps running the one it started on, whichever
-/// release the Controller has meanwhile pinned. Without a broker nothing can
-/// vouch for the resident Sessions, so retention refuses rather than guesses.
-fn resident_provider_generations(
-    view: &crate::machine_broker::DurableStateView,
-) -> anyhow::Result<BTreeMap<String, BTreeSet<String>>> {
-    view.resident_provider_generations()
-        .context("generation retention needs the Machine broker's Session registry")
-}
-
 async fn run_adapter_request(
     request_id: String,
     adapter: String,
@@ -2713,6 +2693,7 @@ async fn run_adapter_request(
     context: AdapterRequestContext,
 ) {
     let AdapterRequestContext {
+        observer_grant,
         providers,
         zed_adapter_socket,
         code_adapter_socket,
@@ -2756,44 +2737,38 @@ async fn run_adapter_request(
     // Plugin/native adapters. Apply core Code's trusted-root admission first.
     let mut session_read = None;
     let result = async {
-        let payload = if adapter == crate::machine_protocol::session_code::ADAPTER {
-            use crate::machine_protocol::session_code::Request;
+        if adapter == crate::machine_protocol::code_observer::ADAPTER {
             anyhow::ensure!(workspace_incarnation.is_none(), "mixed root identities");
-            let request: Request = serde_json::from_value(payload)
-                .context("invalid Session Code request")?;
-            let root = match &request {
-                Request::Observe { root } | Request::Verify { root, .. } | Request::Read { root, .. } => root,
-            };
-            anyhow::ensure!(root.len() <= 4096 && Path::new(root).is_absolute(), "invalid Session root");
-            let canonical = PathBuf::from(root).canonicalize()?;
-            // Serialize admission/minting with configuration retirement. An
-            // enqueued request cannot revive a withdrawn configuration snapshot.
-            let _configuration = root_identities.lock();
-            let live_workspaces = session_workspaces.snapshot().workspaces;
-            anyhow::ensure!(workspace_path_allowed(&canonical, &live_workspaces, &worktree_roots), "Session root is not trusted");
-            match &request {
-                Request::Verify { incarnation, .. } | Request::Read { incarnation, .. } => {
-                    anyhow::ensure!(incarnation.len() == 32 && incarnation.bytes().all(|b| b.is_ascii_hexdigit()), "invalid Session root identity");
-                }
-                Request::Observe { .. } => {}
+            #[cfg(target_os = "linux")]
+            return observation::handle(
+                payload,
+                &session_workspaces,
+                &worktree_roots,
+                observer_grant.as_ref(),
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = observer_grant;
+                anyhow::bail!("code observation is unavailable on this Machine");
             }
-            match request {
-                Request::Observe { root } => {
-                    return Ok(serde_json::json!({"incarnation": session_identities.lock().observe(&root)?}));
-                }
-                Request::Verify { root, incarnation } => {
-                    return Ok(serde_json::json!({"current": session_identities.lock().verify(&root, &incarnation)}));
-                }
-                Request::Read { root, incarnation, operation } => {
-                    anyhow::ensure!(session_identities.lock().verify(&root, &incarnation), "Session root changed");
-                    session_read = Some((root.clone(), incarnation));
-                    let mut operation = operation.as_object().context("invalid Code operation")?.clone();
-                    anyhow::ensure!(!operation.contains_key("root"), "operation cannot replace Session root");
-                    operation.insert("root".into(), serde_json::Value::String(root));
-                    serde_json::Value::Object(operation)
+        }
+        let payload = if adapter == crate::machine_protocol::session_code::ADAPTER {
+            anyhow::ensure!(workspace_incarnation.is_none(), "mixed root identities");
+            match session_code::admit(payload, &session_workspaces, &worktree_roots)? {
+                session_code::Envelope::Reply(reply) => return Ok(reply),
+                session_code::Envelope::Read {
+                    operation,
+                    root,
+                    incarnation,
+                } => {
+                    session_read = Some((root, incarnation));
+                    operation
                 }
             }
-        } else { payload };
+        } else {
+            payload
+        };
         if adapter == crate::generation_retention::UNINSTALLED_ADAPTER {
             let request: crate::generation_retention::UninstalledRequest =
                 serde_json::from_value(payload)
@@ -2817,10 +2792,12 @@ async fn run_adapter_request(
             return serde_json::to_value(outcomes).context("encoding generation retention");
         }
         if adapter == crate::generation_retention::AUTH_ADAPTER {
-            let request: crate::generation_retention::AuthRequest =
-                serde_json::from_value(payload)
-                    .context("decoding credential generation retention request")?;
-            anyhow::ensure!(request.is_valid(), "invalid credential generation retention request");
+            let request: crate::generation_retention::AuthRequest = serde_json::from_value(payload)
+                .context("decoding credential generation retention request")?;
+            anyhow::ensure!(
+                request.is_valid(),
+                "invalid credential generation retention request"
+            );
             let mut referenced = request.referenced;
             let resident = durable_state
                 .resident_provider_auth_generations()
@@ -2843,8 +2820,8 @@ async fn run_adapter_request(
             return serde_json::to_value(outcome).context("encoding credential retention");
         }
         if adapter == crate::generation_retention::ADAPTER {
-            let request: crate::generation_retention::Request = serde_json::from_value(payload)
-                .context("decoding generation retention request")?;
+            let request: crate::generation_retention::Request =
+                serde_json::from_value(payload).context("decoding generation retention request")?;
             anyhow::ensure!(request.is_valid(), "invalid generation retention request");
             let mut referenced = request.referenced;
             if let Some(resident) =
@@ -2892,7 +2869,9 @@ async fn run_adapter_request(
                 serde_json::from_value(payload)
                     .context("decoding workspace preparation request")?;
             validate_session_workspace_root(&request.root, &workspaces)?;
-            let root = worktree_roots.for_source(&request.session_id, Path::new(&request.root))?.to_path_buf();
+            let root = worktree_roots
+                .for_source(&request.session_id, Path::new(&request.root))?
+                .to_path_buf();
             if let Some(base) = &request.base_session_id {
                 request.base_worktree = Some(
                     worktree_roots
@@ -2900,10 +2879,8 @@ async fn run_adapter_request(
                         .join(base),
                 );
             }
-            return serde_json::to_value(
-                crate::session_workspace::prepare(request, &root).await?,
-            )
-            .context("encoding prepared workspace");
+            return serde_json::to_value(crate::session_workspace::prepare(request, &root).await?)
+                .context("encoding prepared workspace");
         }
         validate_adapter_workspace(&payload, &workspaces, &worktree_roots)?;
         if adapter == "workspace-extension" {

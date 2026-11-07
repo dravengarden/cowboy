@@ -42,8 +42,12 @@ struct GrantEntry {
     retry_after: Option<Instant>,
 }
 
+mod observation;
+pub(in crate::server) use observation::touch as touch_code_observation;
+
 #[derive(Default)]
 pub(in crate::server) struct Coordinator {
+    observations: observation::Observations,
     grants: Mutex<HashMap<String, GrantEntry>>,
     installing: Mutex<HashSet<String>>,
     pub(super) runners: Mutex<HashSet<String>>,
@@ -73,11 +77,18 @@ fn current_authority(
     state: &AppState,
     parent: &str,
 ) -> Option<(crate::core::SessionMeta, Authority)> {
-    let info = state.hub.session_info(parent)?;
-    let runtime = state.runtime_router.runtime(&info.meta.machine_id)?;
-    let authority = runtime
-        .managed_call_authority(&state.service_id, &info.meta)
-        .ok()?;
+    current_authority_in(&state.hub, &state.runtime_router, &state.service_id, parent)
+}
+
+fn current_authority_in(
+    hub: &crate::core::Hub,
+    router: &crate::runtime_router::RuntimeRouter,
+    service: &str,
+    parent: &str,
+) -> Option<(crate::core::SessionMeta, Authority)> {
+    let info = hub.session_info(parent)?;
+    let runtime = router.runtime(&info.meta.machine_id)?;
+    let authority = runtime.managed_call_authority(service, &info.meta).ok()?;
     Some((info.meta, authority))
 }
 
@@ -93,6 +104,7 @@ impl Coordinator {
 
     /// Reconcile installed grants with live parent workers until shutdown.
     pub(in crate::server) fn start(state: &Arc<AppState>) {
+        observation::spawn(state);
         let weak = Arc::downgrade(state);
         tokio::spawn(async move {
             loop {

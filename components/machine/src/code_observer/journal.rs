@@ -13,13 +13,7 @@ const PAGE_EVENTS: usize = 64;
 // Even worst-case JSON escaping stays below the Machine wire response bound.
 const PAGE_BYTES: usize = 16 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Cursor {
-    pub instance: String,
-    /// Decimal text preserves u64 positions through JavaScript consumers.
-    pub position: String,
-}
+pub use crate::machine_protocol::code_observer::Cursor;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

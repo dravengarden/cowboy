@@ -133,19 +133,7 @@ pub(super) fn handle(
             });
         }
         MachineCommand::QueryWorkerExit { request_id, worker } => {
-            let observation = (protocol
-                >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION)
-                .then(|| {
-                    providers
-                        .observe_account_worker_exit(&worker)
-                        .ok()
-                        .flatten()
-                })
-                .flatten();
-            let _ = events.send(MachineEvent::WorkerExitObserved {
-                request_id,
-                observation,
-            });
+            query_worker_exit(protocol, &providers, &events, request_id, &worker);
         }
         MachineCommand::AdapterRequest {
             request_id,
@@ -153,11 +141,18 @@ pub(super) fn handle(
             payload,
             workspace_incarnation,
         } => {
+            #[cfg(target_os = "linux")]
+            let observer_grant = (adapter == crate::machine_protocol::code_observer::ADAPTER)
+                .then(|| observation::capture(&payload, execution_manager.calls()))
+                .flatten();
+            #[cfg(not(target_os = "linux"))]
+            let observer_grant = None;
             tokio::spawn(run_adapter_request(
                 request_id,
                 adapter,
                 payload,
                 AdapterRequestContext {
+                    observer_grant,
                     providers,
                     zed_adapter_socket,
                     code_adapter_socket,
@@ -244,4 +239,20 @@ pub(super) fn handle(
             "machine command routed to the wrong family (command_sessions)"
         ),
     }
+}
+
+fn query_worker_exit(
+    protocol: u16,
+    providers: &MachinePluginStore,
+    events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    request_id: String,
+    worker: &crate::provider_account::WorkerExitRequest,
+) {
+    let observation = (protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION)
+        .then(|| providers.observe_account_worker_exit(worker).ok().flatten())
+        .flatten();
+    let _ = events.send(MachineEvent::WorkerExitObserved {
+        request_id,
+        observation,
+    });
 }

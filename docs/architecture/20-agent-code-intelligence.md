@@ -112,8 +112,21 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   request queue and retains capacity through actual collection/descriptor
   cleanup. Revocation wakes cancellation; a timed-out close cannot release a
   still-running scan's reservation. Failed idle scans do not retry forever.
-  The Controller-to-Machine standing continuation and runtime registry are
-  still required before this library can enable production background watching.
+  The private protocol-42 integration binds Machine requests to the grant
+  captured before async dispatch and clones the original pinned root handle.
+  A bounded process-local receipt registry prevents uncertain Start retries,
+  Close-before-Start and completed observations from creating another worker.
+  Close reports `closing` until collection and descriptor cleanup are confirmed.
+  Receipt exhaustion refuses admission instead of evicting replay fences.
+  Controller diagnostic demand captures the original Session, worker authority,
+  connection and language-server policy; passive summaries do not prolong it.
+  Invalid or five-minute-idle continuations retire through their original
+  connection. Pending cleanup prevents a fresh instance for that parent;
+  cleanup visits are bounded and rotate past unconfirmed outcomes. Transport
+  loss abandons the old route without claiming native thread exit or redirecting
+  cleanup. This integration still requires worker-generation acceptance and
+  production activation; event pages are not yet analysis baselines or model
+  delivery authority.
 - **Trust lifetime.** Agent diagnostic reads capture the Session and the
   language-server policy lifetime before asynchronous work. A policy change,
   including off/on before the result arrives, discards old diagnostic content

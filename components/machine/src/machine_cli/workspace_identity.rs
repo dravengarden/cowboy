@@ -63,6 +63,8 @@ struct TrackedRoot {
     /// Kept open only to reserve the inode. It is never read or written, and
     /// grants this Machine no access it did not already have.
     _handle: std::fs::File,
+    #[cfg(target_os = "linux")]
+    lifetime: Arc<()>,
     object: ObservedObject,
     incarnation: String,
     admitted_path: PathBuf,
@@ -177,6 +179,8 @@ impl SessionRootIdentities {
             path,
             TrackedRoot {
                 _handle: handle,
+                #[cfg(target_os = "linux")]
+                lifetime: Arc::new(()),
                 object,
                 incarnation: incarnation.clone(),
                 admitted_path: admitted_path.expect("observable canonical root"),
@@ -201,6 +205,23 @@ impl SessionRootIdentities {
         self.order.retain(|entry| entry != &path);
         false
     }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn pin(&mut self, root: &str, incarnation: &str) -> anyhow::Result<SessionRootPin> {
+        anyhow::ensure!(self.verify(root, incarnation), "Session root changed");
+        let tracked = self.roots.get(Path::new(root)).expect("verified root");
+        let lifetime = Arc::downgrade(&tracked.lifetime);
+        Ok(SessionRootPin {
+            file: tracked._handle.try_clone()?,
+            current: Arc::new(move || lifetime.strong_count() != 0),
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) struct SessionRootPin {
+    pub(super) file: std::fs::File,
+    pub(super) current: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl RootIdentities {
@@ -269,6 +290,8 @@ impl RootIdentities {
                 _ => match mint() {
                     Ok(incarnation) => TrackedRoot {
                         _handle: handle,
+                        #[cfg(target_os = "linux")]
+                        lifetime: Arc::new(()),
                         object,
                         incarnation,
                         admitted_path: path.clone(),
@@ -382,6 +405,32 @@ mod tests {
         assert!(!identities.verify(root, &second));
         assert!(!identities.verify(root, &first));
         assert_ne!(identities.observe(root).unwrap(), first);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cloned_root_handle_does_not_keep_retired_authority_alive() {
+        use std::os::unix::fs::MetadataExt as _;
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        let path = root.to_str().unwrap();
+        let mut identities = SessionRootIdentities::default();
+        let incarnation = identities.observe(path).unwrap();
+        let pin = identities.pin(path, &incarnation).unwrap();
+        assert!((pin.current)());
+        let original_inode = pin.file.metadata().unwrap().ino();
+        std::fs::rename(&root, parent.path().join("old")).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        assert!(!identities.verify(path, &incarnation));
+        assert!(!(pin.current)());
+        assert_eq!(pin.file.metadata().unwrap().ino(), original_inode);
+        assert_ne!(std::fs::metadata(&root).unwrap().ino(), original_inode);
+        let next = identities.observe(path).unwrap();
+        assert!(!(pin.current)());
+        let next_pin = identities.pin(path, &next).unwrap();
+        drop(identities);
+        assert!(!(next_pin.current)());
     }
 
     #[test]
