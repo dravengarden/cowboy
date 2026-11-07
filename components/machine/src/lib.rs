@@ -32,6 +32,8 @@ pub use cowboy::{machine_components, provider_usage_spool, session_workspace};
 mod boot_identity;
 
 #[cfg(feature = "machine-host")]
+pub mod code_observer;
+#[cfg(feature = "machine-host")]
 pub mod execution_host;
 #[cfg(feature = "machine-host")]
 pub mod machine_broker;

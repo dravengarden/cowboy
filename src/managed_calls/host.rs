@@ -39,14 +39,26 @@ pub fn context_file(state_dir: &Path, session_id: &str) -> Option<PathBuf> {
 
 struct Installed {
     grant_id: String,
+    agent_api: bool,
+    agent_actions: bool,
+    lifetime: Arc<live_grant::Lifetime>,
     _gateway: Gateway,
+}
+
+mod live_grant;
+pub use live_grant::LiveGrant;
+
+struct Connection {
+    id: u64,
+    events: mpsc::UnboundedSender<MachineEvent>,
+    lifetime: Arc<live_grant::Lifetime>,
 }
 
 pub struct CallHost {
     sockets: PathBuf,
     sessions: PathBuf,
     installed: Mutex<HashMap<String, Installed>>,
-    uplink: Mutex<Option<(u64, mpsc::UnboundedSender<MachineEvent>)>>,
+    uplink: Mutex<Option<Connection>>,
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
     next: AtomicU64,
     instance: String,
@@ -65,7 +77,10 @@ impl Drop for Uplink {
             return;
         };
         let mut uplink = host.uplink.lock();
-        if uplink.as_ref().is_some_and(|(id, _)| *id == self.id) {
+        if uplink
+            .as_ref()
+            .is_some_and(|connection| connection.id == self.id)
+        {
             *uplink = None;
             drop(uplink);
             host.pending.lock().clear();
@@ -138,7 +153,11 @@ impl CallHost {
 
     pub fn attach(self: &Arc<Self>, events: mpsc::UnboundedSender<MachineEvent>) -> Uplink {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
-        *self.uplink.lock() = Some((id, events));
+        *self.uplink.lock() = Some(Connection {
+            id,
+            events,
+            lifetime: Arc::new(live_grant::Lifetime::default()),
+        });
         self.pending.lock().clear();
         Uplink {
             host: Arc::downgrade(self),
@@ -156,10 +175,14 @@ impl CallHost {
     pub fn install(self: &Arc<Self>, grant: &Grant) -> Result<()> {
         ensure!(grant.validate(), "invalid managed call grant");
         let mut installed = self.installed.lock();
-        if installed
-            .get(&grant.parent_session_id)
-            .is_some_and(|current| current.grant_id == grant.grant_id)
+        if let Some(current) = installed.get(&grant.parent_session_id)
+            && current.grant_id == grant.grant_id
         {
+            ensure!(
+                current.agent_api == grant.agent_api
+                    && current.agent_actions == grant.agent_actions,
+                "managed call grant identity has conflicting capabilities"
+            );
             return Ok(());
         }
         // Revoke first: a tool must never read a context that names a socket
@@ -207,6 +230,9 @@ impl CallHost {
             grant.parent_session_id.clone(),
             Installed {
                 grant_id: grant.grant_id.clone(),
+                agent_api: grant.agent_api,
+                agent_actions: grant.agent_actions,
+                lifetime: Arc::new(live_grant::Lifetime::default()),
                 _gateway: gateway,
             },
         );
@@ -256,11 +282,12 @@ impl CallHost {
         let (sender, receiver) = oneshot::channel();
         {
             let uplink = self.uplink.lock();
-            let Some((_, events)) = uplink.as_ref() else {
+            let Some(connection) = uplink.as_ref() else {
                 return refusal("gateway_unavailable", "not_submitted");
             };
             self.pending.lock().insert(request_id.clone(), sender);
-            if events
+            if connection
+                .events
                 .send(MachineEvent::ManagedCall {
                     request_id: request_id.clone(),
                     grant,

@@ -96,6 +96,18 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   attribution of dependent comparisons are invalidated, including unchanged
   open files. Scan exclusions (13-code-review "Scan policy") are not
   invalidation exclusions: ignored generated inputs still affect analysis.
+- Linux inotify continuity is **event-stream-only** coverage. Its documented
+  blind spots include memory-mapped writes and remote network-filesystem
+  modifications; an empty reconciled page is not evidence of unchanged file
+  contents or complete project inputs. Native source identities and analyzer
+  frontiers remain separate requirements. See the
+  [Linux inotify limitations](https://man7.org/linux/man-pages/man7/inotify.7.html).
+  Observer pages carry this coverage explicitly, including reset and gap pages.
+  The bounded Linux source watches regular-file inodes as well as directories
+  to observe external hard-link writes, follows no repository symlinks, and
+  invalidates its window on structural ambiguity, root/mount changes, queue
+  overflow or resource exhaustion. Structural reconciliation cannot make a
+  comparison from before the gap valid again.
 - **Executor receipts** are latency accelerators: binding incarnation, turn,
   tool identity, monotonic sequence, operation kind and before/after content
   identities, emitted after durability. ACP `locations`/`diff` are unverified
