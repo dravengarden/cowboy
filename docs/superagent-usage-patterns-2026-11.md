@@ -123,3 +123,26 @@ Cowboy profile 显式替换 delivery.procedure。不要把 Suger profile
 带反例和证据引用，经源文件审核与重新导入后才成为生效规则。
 使用 [提炼模板](examples/superagent-patterns/learning-candidate-template.md)
 区分支持案例、反例、未测量效果和采用决定；模板本身不是可导入 pattern。
+
+## 2026-11-07 Observe 受控验收
+
+首次试点配置成功，但没有自动评估。根因是监督证据只接受 `end_turn`，
+而真实 native worker 持久化正常结束为 `EndTurn`。修复 `55f9c6567`
+同时接受这两个明确的正常结束值；取消、达到 token 上限和未知原因继续拒绝。
+8 项 Super-agent 回归、结构检查和 Controller release 构建通过。
+集成版本 `8d6b390f19c697d495177f64a55e62437276e957` 于 03:24 UTC
+取得 Hawk Controller succeeded/committed 回执，健康检查正常；未更新 Machine。
+
+一个临时参与 session 的限定任务是回答 2+2。旧版本在其正常结束后无评估；
+更新后自动评估该已完成回合，协调者读取 scoped catalog/context 后确认完成，
+没有 follow-up，也没有学习提案。检查时同一回合只有一次 evaluation，
+另有一条将评估交给协调者的 delivery 回执；delivery 不是向 worker 跟进。
+验收后移除临时参与配置并确认其 worker 已 Exited，历史保留。
+原试点 session 继续 Observe，配置 revision 4。
+
+Provider 报告的这次评估回合 usage（不含初始化）为：input 222,323，
+其中 cached input 214,656、uncached input 7,667，output 1,004。
+这些是一个包含多次模型请求的回合累计值，不是单请求 context 大小。
+缓存输入占比约 96.6%，但仍有显著绝对成本；不能推导整体节省比例。
+简单受控任务只证明触发、读取、结束和不跟进的链路，不能证明复杂任务的
+判断质量、长期不重复、压缩后缓存效果或 Coordinate 交付成功。
