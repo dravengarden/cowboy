@@ -103,6 +103,64 @@ async fn lost_execute_queries_original_reference_without_reselection_or_replay()
 }
 
 #[tokio::test]
+async fn lost_open_confirmation_uses_prepared_release_and_recovers_lost_close() {
+    let root = PrivateRuntimeDirectory::create().unwrap();
+    let (host, runtime, mut route, close, home) = setup(&root.0, "recover-agent-lost-open").await;
+    let held = route.agent_buffers.values_mut().next().unwrap();
+    held.refresh(root.0.to_str().unwrap()).unwrap();
+    held.confirm_worktree();
+    assert!(
+        host.release_agent(&mut route, &runtime, &close)
+            .await
+            .is_err()
+    );
+    assert_eq!(route.agent_buffers.len(), 1);
+    assert!(
+        host.release_agent(&mut route, &runtime, &close)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(route.agent_buffers.is_empty());
+    let requests = log(&home);
+    assert_eq!(
+        requests.iter().filter(|r| r["action"] == "execute").count(),
+        1
+    );
+    assert_eq!(
+        requests.iter().filter(|r| r["action"] == "query").count(),
+        1
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|r| r["type"] != "closeBuffer" && r["type"] != "openBuffer")
+    );
+}
+
+#[tokio::test]
+async fn unknown_worktree_refuses_before_release_or_legacy_close_and_stays_charged() {
+    let root = PrivateRuntimeDirectory::create().unwrap();
+    let (host, runtime, mut route, close, home) =
+        setup(&root.0, "recover-agent-unknown-tree").await;
+    *route.agent_buffers.values_mut().next().unwrap() =
+        agent_holdings::Holding::opening(root.0.to_str().unwrap(), true);
+    for _ in 0..3 {
+        assert!(
+            host.release_agent(&mut route, &runtime, &close)
+                .await
+                .is_err()
+        );
+        assert!(route.dispatching(&close).is_err());
+    }
+    assert_eq!(route.agent_buffers.len(), 1);
+    assert_eq!(route.buffers.len(), 1);
+    assert!(!route.is_idle());
+    assert!(!home.join("release-log").exists());
+    assert_eq!(host.agent_retirements.permits.available_permits(), CAPACITY);
+}
+
+#[tokio::test]
 async fn cancelled_retirement_preserves_reference_and_its_capacity_permit() {
     let root = PrivateRuntimeDirectory::create().unwrap();
     let (host, runtime, mut route, close, home) =

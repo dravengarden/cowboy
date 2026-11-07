@@ -155,7 +155,7 @@ impl CodeRuntimeHost {
         let Some(held) = route.agent_buffers.get_mut(&key) else {
             return Ok(None);
         };
-        if !held.recoverable_release() {
+        if !held.recoverable_release()? {
             return Ok(None);
         }
         held.check_worktree(payload)?;

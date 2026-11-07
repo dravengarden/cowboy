@@ -192,6 +192,19 @@ fn uncertain_effects_and_aliases_never_free_or_reuse_an_owner() {
         !held.begin_release(),
         "unknown Open cannot be guessed complete"
     );
+    assert!(
+        !held.idle_due(),
+        "unconfirmed Ensure retains its reservation"
+    );
+    held.confirm_worktree();
+    assert!(
+        held.idle_due(),
+        "a lost Open reply can query prepared release"
+    );
+    assert!(
+        !held.begin_release(),
+        "old Plugin fallback still needs confirmed Open"
+    );
     held.confirm();
     assert!(!held.begin_release(), "fresh observations retain ownership");
     held.last_used = Instant::now() - IDLE;

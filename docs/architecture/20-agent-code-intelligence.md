@@ -423,6 +423,24 @@ The production Go probe returned `document_current` / `matching`, exact SHA
 HTTP 200 and both existing Hawk workers retained their PIDs, executables and
 arguments. No Controller or Machine restart was needed for this Plugin update.
 
+Zed 1.36.0 subsequently accepted the bounded native Open journal correction:
+evicted results are `FORGOTTEN`, pending requests are never evicted, and reused
+or decreasing IDs cannot admit another Open. The exact native regression,
+production installation and limits are recorded in
+[single-use native acquisition](../plugin-native-open-once.md).
+
+The next Machine candidate tracks EnsureWorktree confirmation separately from
+Open confirmation for nonce-scoped automatic owners. Once the worktree is
+confirmed, a lost Open reply may use the
+original prepared-release protocol; the Plugin must still prove that original
+owner exists. Maintenance can attempt that same recovery after idle. Unknown
+EnsureWorktree retains its reservation and refuses both prepared release and
+legacy Close, since an empty buffer reply cannot account for the worktree effect.
+Old Plugins' idle fallback still requires confirmed Open. Refresh continues to
+require confirmed Open and never treats release eligibility as readiness.
+This does not recover an unfinished native Open or an unknown worktree effect.
+Full gate and production acceptance for this Machine candidate remain pending.
+
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction
 `1794018627362793557-bc6262f79936` (`succeeded` / `committed`). The complete

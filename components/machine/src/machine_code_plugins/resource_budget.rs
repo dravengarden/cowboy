@@ -315,6 +315,11 @@ impl CodeRuntimeHost {
             ready["state"] == "ready",
             "agent Code worktree is not ready"
         );
+        route
+            .agent_buffers
+            .get_mut(&key)
+            .expect("reserved before dispatch")
+            .confirm_worktree();
         let response = exchange(socket, &open).await?;
         route.observe(&open, &response)?;
         route

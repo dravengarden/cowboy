@@ -70,6 +70,7 @@ pub(super) async fn exercise(store: &MachinePluginStore, root: &Path) -> PathBuf
             .unwrap()["leases"],
         0
     );
+    lost_open_reply(store, &worktree).await;
     // Exercise the production maintenance pass, including original receipt
     // retirement. This task owns only disposable namespace fixtures.
     store
@@ -92,7 +93,25 @@ pub(super) async fn exercise(store: &MachinePluginStore, root: &Path) -> PathBuf
     settled.expect("automatic receipt retirement did not drain");
     std::fs::remove_file(worktree.join("automatic.txt")).unwrap();
     println!(
-        "installed automatic owners after synthetic resource admission: refresh never reopens released nonce, replacement survives old refresh, original prepared Close and maintenance retirement drained"
+        "installed automatic owners after synthetic resource admission: refresh never reopens released nonce, replacement survives old refresh, actual successful Open reply discarded and original buffer released, prepared Close and maintenance retirement drained"
     );
     worktree
+}
+
+async fn lost_open_reply(store: &MachinePluginStore, worktree: &Path) {
+    let owner = format!("cowboy-agent-{:064x}-{:032x}", 1, 3);
+    let acquire = json!({"type":"acquireAgentBuffer", "ownerProtocol":2,
+        "worktree":worktree, "path":"automatic.txt", "leaseId":owner});
+    let lost = store
+        .code_runtimes
+        .fixture_acquire_with_lost_open_reply("zed", &acquire)
+        .await;
+    let mut refresh = acquire;
+    refresh["refreshOnly"] = true.into();
+    assert!(store.code_request("zed", &refresh, None).await.is_err());
+    let close = json!({"type":"closeBuffer", "worktree":worktree,
+        "path":"automatic.txt", "leaseId":owner});
+    let released = store.code_request("zed", &close, None).await.unwrap();
+    assert_eq!(released["leases"], 0);
+    assert_eq!(released["buffer_id"], lost["buffer_id"]);
 }

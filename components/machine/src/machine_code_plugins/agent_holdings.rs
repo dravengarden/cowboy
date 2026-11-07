@@ -1,5 +1,5 @@
-//! Machine-local automatic holdings outlive a Controller connection. Only
-//! confirmed idle Opens are closed automatically, on their original route.
+//! Machine-local automatic holdings outlive a Controller connection. Worktree
+//! confirmation permits original prepared release after a lost Open reply.
 //! An uncertain Open/Close retains its reservation; absence is never success.
 use super::*;
 use std::time::Instant;
@@ -67,6 +67,7 @@ pub(super) struct Holding {
     worktree: String,
     idle_reclaimable: bool,
     last_used: Instant,
+    worktree_confirmed: bool,
     confirmed: bool,
     pub(super) releasing: bool,
     pub(super) release: Option<super::agent_release::Attempt>,
@@ -75,6 +76,12 @@ pub(super) struct Holding {
 impl Holding {
     pub(super) fn dispatching(&mut self, request: &Value) -> Result<()> {
         self.check_worktree(request)?;
+        if request["type"] == "closeBuffer" && self.idle_reclaimable {
+            ensure!(
+                self.worktree_confirmed,
+                "original automatic worktree remains unconfirmed"
+            );
+        }
         ensure!(
             !self.releasing,
             "original automatic buffer release remains unconfirmed"
@@ -97,6 +104,7 @@ impl Holding {
             // their original cleanup behavior even during a rollback.
             idle_reclaimable: reclaimable,
             last_used: Instant::now(),
+            worktree_confirmed: false,
             confirmed: false,
             releasing: false,
             release: None,
@@ -113,21 +121,35 @@ impl Holding {
             "original automatic buffer release remains unconfirmed"
         );
         self.last_used = Instant::now();
+        self.worktree_confirmed = false;
         self.confirmed = false;
         Ok(())
     }
 
+    pub(super) fn confirm_worktree(&mut self) {
+        self.worktree_confirmed = true;
+    }
+
     pub(super) fn confirm(&mut self) {
+        self.confirm_worktree();
         self.confirmed = true;
         self.last_used = Instant::now();
     }
 
-    pub(super) fn recoverable_release(&self) -> bool {
-        self.confirmed && self.idle_reclaimable
+    pub(super) fn recoverable_release(&self) -> Result<bool> {
+        if self.idle_reclaimable {
+            ensure!(
+                self.worktree_confirmed,
+                "original automatic worktree remains unconfirmed"
+            );
+        }
+        Ok(self.idle_reclaimable)
     }
 
     fn begin_release(&mut self) -> bool {
-        if !self.idle_due() {
+        // Old Plugins have no recoverable prepared reference. Keep their
+        // one-use fallback limited to positively confirmed Opens.
+        if !self.confirmed || !self.idle_due() {
             return false;
         }
         self.releasing = true;
@@ -136,7 +158,7 @@ impl Holding {
 
     fn idle_due(&self) -> bool {
         self.idle_reclaimable
-            && self.confirmed
+            && self.worktree_confirmed
             && !self.releasing
             && self.last_used.elapsed() >= IDLE
     }
@@ -192,7 +214,7 @@ impl CodeRuntimeHost {
         // Keep the Controller's idle cleanup observation for an uncertain
         // Open. Unlike an absent owner, it may still need its original Close.
         ensure!(
-            held.recoverable_release(),
+            held.idle_reclaimable && held.confirmed,
             "original automatic Open remains unconfirmed"
         );
         held.last_used = Instant::now();

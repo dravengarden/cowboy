@@ -21,6 +21,8 @@ use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+#[cfg(all(test, target_os = "linux"))]
+mod agent_acquisition_conformance;
 mod agent_holdings;
 mod agent_release;
 mod buffer_leases;
