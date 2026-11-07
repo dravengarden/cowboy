@@ -27,6 +27,10 @@ primary phone/desktop product path.
 - [`agent-api.md`](agent-api.md) — Cowboy MCP: dynamic product control catalog, session/history/usage reads, durable receipts, coverage ledger and protocol 30–32 compatibility
 - [`superagent-patterns.md`](superagent-patterns.md) — Proposed global/workspace/project pattern profiles, Markdown contracts, evidence-based refinement, adoption and supervision boundaries
 - [`examples/superagent-patterns/global.md`](examples/superagent-patterns/global.md) — Inactive example: owner-global pattern selection
+- [`examples/superagent-patterns/observed-columbus.md`](examples/superagent-patterns/observed-columbus.md) — Inactive observed-pattern setup or learning template
+- [`examples/superagent-patterns/observed-suger.md`](examples/superagent-patterns/observed-suger.md) — Inactive observed-pattern setup or learning template
+- [`examples/superagent-patterns/observed-cowboy.md`](examples/superagent-patterns/observed-cowboy.md) — Inactive observed-pattern setup or learning template
+- [`examples/superagent-patterns/learning-candidate-template.md`](examples/superagent-patterns/learning-candidate-template.md) — Inactive observed-pattern setup or learning template
 - [`examples/superagent-patterns/patterns/scope-continuation.md`](examples/superagent-patterns/patterns/scope-continuation.md) — Inactive historical-usage pattern candidate or analysis
 - [`examples/superagent-patterns/patterns/failure-recovery.md`](examples/superagent-patterns/patterns/failure-recovery.md) — Inactive historical-usage pattern candidate or analysis
 - [`examples/superagent-patterns/patterns/review-follow-through.md`](examples/superagent-patterns/patterns/review-follow-through.md) — Inactive historical-usage pattern candidate or analysis

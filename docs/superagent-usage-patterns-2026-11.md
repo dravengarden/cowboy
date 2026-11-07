@@ -98,9 +98,12 @@ Global 放通用识别和停止条件。Columbus workspace 负责项目归属、
 Cowboy project 负责组件发布证据。具体发布命令和权力来源仍取自
 当前项目 guidance，不复制到各个 pattern，避免规则过时或互相矛盾。
 
-采用候选根 profile 时，将现有 workspace 示例的 extends 改为
-global.observed，并从实际项目 source root 提供自己的 guidance。
-Cowboy 项目仍可显式替换 delivery.procedure。不要把 Suger profile
+配套配置已分别提供
+[Columbus](examples/superagent-patterns/observed-columbus.md)、
+[Suger](examples/superagent-patterns/observed-suger.md) 和
+[Cowboy](examples/superagent-patterns/observed-cowboy.md) profile，
+无需再手工改写示例继承 ID。从实际项目 source root 提供自己的 guidance。
+Cowboy profile 显式替换 delivery.procedure。不要把 Suger profile
 放在 Cowboy root 下打包，再误认为读到了 Suger 的真实规则。
 按 [配置契约](superagent-patterns.md) 导入完整来源闭包后，才配置项目、
 模型与 session 参与方式；本次没有执行这些操作。
@@ -118,3 +121,5 @@ Cowboy 项目仍可显式替换 delivery.procedure。不要把 Suger profile
 稳定 guidance 前缀和按需证据可以减少重复上下文，但本轮没有运行
 缓存实验，也不能保证压缩后成本不增加。新案例先提案，
 带反例和证据引用，经源文件审核与重新导入后才成为生效规则。
+使用 [提炼模板](examples/superagent-patterns/learning-candidate-template.md)
+区分支持案例、反例、未测量效果和采用决定；模板本身不是可导入 pattern。
