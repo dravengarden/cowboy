@@ -261,6 +261,7 @@ async fn exercise(client: &Client, root: &Path) {
         })
         .await;
     opened(root, "navigation.rs").await;
+    diagnostic_identity(client, &workspace, &lease).await;
     let (navigation, destination, content) = acquire(client, root, &lease).await;
     let handoff = lost_handoff_reply(client, &navigation, destination, &content).await;
     client.request(Request::ReleaseBufferLease { lease }).await;
@@ -305,6 +306,67 @@ async fn exercise(client: &Client, root: &Path) {
         .request(Request::CloseWorktree { path: workspace })
         .await;
     check_closed(root).await;
+}
+
+async fn diagnostic_identity(client: &Client, workspace: &Path, lease: &LeaseRef) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let reply = client
+                .request(Request::BufferLanguage {
+                    worktree: workspace.to_path_buf(),
+                    path: "navigation.rs".into(),
+                })
+                .await;
+            if reply["diagnostics"]
+                .as_array()
+                .is_some_and(|values| values.len() == 1)
+            {
+                let value = &reply["diagnostics"][0];
+                assert_eq!(value["code"], "fixture-code-1");
+                assert_eq!(value["source"], "fixture-lsp");
+                let origin = &value["provenance"];
+                assert_eq!(origin["sourceKind"], 1);
+                assert_eq!(origin["instance"].as_str().unwrap().len(), 32);
+                assert!(origin["server"].as_str().unwrap().parse::<u64>().is_ok());
+                assert!(origin["buffer"].as_str().unwrap().parse::<u64>().is_ok());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("immutable adapter did not preserve diagnostic identity");
+    let owned = client
+        .request(Request::ReadBufferLease {
+            lease: lease.clone(),
+            request: buffer_leases::ReadRequest::Language {},
+        })
+        .await;
+    let values = owned["result"]["diagnostics"].as_array().unwrap();
+    assert_eq!(values.len(), 1);
+    assert!(values[0].get("code").is_none());
+    assert!(values[0].get("provenance").is_none());
+    assert_eq!(values[0].as_object().unwrap().len(), 5);
+    let content = crate::coordinates::Mirror::new(1, SOURCE)
+        .unwrap()
+        .content()
+        .clone();
+    let conditional = client
+        .request(Request::ReadBufferLease {
+            lease: lease.clone(),
+            request: buffer_leases::ReadRequest::Content {
+                content,
+                query: crate::content_reads::Query::Language {},
+            },
+        })
+        .await;
+    let values = conditional["result"]["result"]["observation"]["diagnostics"]
+        .as_array()
+        .unwrap();
+    assert_eq!(values.len(), 1);
+    assert!(values[0].get("code").is_none());
+    assert!(values[0].get("provenance").is_none());
+    assert_eq!(values[0].as_object().unwrap().len(), 5);
 }
 
 async fn read_target_text(client: &Client, handoff: &LeaseRef, content: &Content, target: &str) {

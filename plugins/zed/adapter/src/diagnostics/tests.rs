@@ -57,6 +57,89 @@ fn diagnostic() -> proto::Diagnostic {
 }
 
 #[test]
+fn diagnostic_identity_preserves_native_codes_servers_and_observation_lifetimes() {
+    let mut cache = Cache::default();
+    base(&mut cache, "a🙂z\n");
+    let mut value = diagnostic();
+    value.code = Some("E0123".into());
+    value.source = Some("same-source".into());
+    value.registration_id = Some("registration-one".into());
+    value.source_kind = 1;
+    update(&mut cache, 1, 1, vec![value.clone()]);
+    update(&mut cache, u64::MAX, 1, vec![value.clone()]);
+    let read = |cache: &Cache| {
+        serde_json::to_value(cache.read(7, cache.revision(7).unwrap()).unwrap().1).unwrap()
+    };
+    let first = read(&cache);
+    assert_eq!(first[0]["code"], "E0123");
+    assert_eq!(first[0]["provenance"]["server"], "1");
+    assert_eq!(first[1]["provenance"]["server"], u64::MAX.to_string());
+    assert_eq!(first[0]["provenance"]["registration"], "registration-one");
+    assert_eq!(first[0]["provenance"]["sourceKind"], 1);
+    value.message = "different wording".into();
+    value.severity = 2;
+    update(&mut cache, 1, 2, vec![value.clone()]);
+    let changed = read(&cache);
+    assert_eq!(first[0]["provenance"], changed[0]["provenance"]);
+    assert_eq!(first[0]["code"], changed[0]["code"]);
+    let legacy = cache
+        .read(7, cache.revision(7).unwrap())
+        .unwrap()
+        .1
+        .remove(0)
+        .legacy();
+    let legacy = serde_json::to_value(legacy).unwrap();
+    assert!(legacy.get("code").is_none());
+    assert!(legacy.get("provenance").is_none());
+    assert_eq!(legacy.as_object().unwrap().len(), 5);
+    let conditional = crate::LanguageObservation {
+        diagnostics: cache.read(7, cache.revision(7).unwrap()).unwrap().1,
+        ..Default::default()
+    };
+    let conditional = serde_json::to_value(conditional).unwrap();
+    assert_eq!(conditional["diagnostics"][0].as_object().unwrap().len(), 5);
+    assert!(conditional["diagnostics"][0].get("provenance").is_none());
+    base(&mut cache, "a🙂z\n");
+    update(&mut cache, 1, 1, vec![value.clone()]);
+    let new_buffer = read(&cache);
+    assert_eq!(
+        first[0]["provenance"]["instance"],
+        new_buffer[0]["provenance"]["instance"]
+    );
+    assert_ne!(
+        first[0]["provenance"]["bufferEpoch"],
+        new_buffer[0]["provenance"]["bufferEpoch"]
+    );
+    let mut replacement = Cache::default();
+    base(&mut replacement, "a🙂z\n");
+    value.code = None;
+    update(&mut replacement, 1, 1, vec![value]);
+    let replacement = read(&replacement);
+    assert!(replacement[0].get("code").is_none());
+    assert_ne!(
+        first[0]["provenance"]["instance"],
+        replacement[0]["provenance"]["instance"]
+    );
+}
+
+#[test]
+fn identity_text_counts_against_the_same_diagnostic_budget() {
+    for code in [true, false] {
+        let mut cache = Cache::default();
+        base(&mut cache, "a🙂z\n");
+        let revision = cache.revision(7).unwrap();
+        let mut value = diagnostic();
+        if code {
+            value.code = Some("x".repeat(MAX_DIAGNOSTIC_TEXT));
+        } else {
+            value.registration_id = Some("x".repeat(MAX_DIAGNOSTIC_TEXT));
+        }
+        update(&mut cache, 1, 1, vec![value]);
+        assert!(cache.read(7, revision).is_err());
+    }
+}
+
+#[test]
 fn native_events_distinguish_unobserved_empty_and_observed_diagnostics() {
     let mut cache = Cache::default();
     base(&mut cache, "a🙂z\n");
@@ -184,7 +267,7 @@ fn batched_coordinates_match_utf16_boundaries_including_eof() {
     let converted: Vec<_> = capture(&values)
         .unwrap()
         .iter()
-        .map(|value| convert(&mirror, value).unwrap())
+        .map(|value| convert(&mirror, value, None).unwrap())
         .collect();
     for (entry, offset) in converted.iter().zip(offsets) {
         let expected = crate::offset_to_utf16_point(text, offset).unwrap();

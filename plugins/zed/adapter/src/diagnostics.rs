@@ -5,9 +5,11 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::{Context as _, Result, ensure};
 use serde::Serialize;
 
-use crate::{
-    BufferVersionEntry, LanguageDiagnostic, LanguagePoint, MAX_DIAGNOSTICS, coordinates::Mirror,
-};
+use crate::{BufferVersionEntry, MAX_DIAGNOSTICS, coordinates::Mirror};
+
+mod schema;
+use schema::Provenance;
+pub(crate) use schema::{LanguageDiagnostic, LanguagePoint, serialize_legacy};
 
 const MAX_TEXT: usize = crate::coordinates::MAX_HISTORY;
 const MAX_TOTAL_TEXT: usize = 32 * 1024 * 1024;
@@ -25,6 +27,7 @@ pub(crate) enum Status {
 struct Buffer {
     text: Option<Mirror>,
     shared: bool,
+    incarnation: u64,
     revision: u64,
     servers: BTreeMap<u64, Server>,
     diagnostic_bytes: usize,
@@ -42,6 +45,9 @@ struct Diagnostic {
     severity: i32,
     source: Option<String>,
     message: String,
+    code: Option<String>,
+    registration: Option<String>,
+    source_kind: i32,
 }
 
 /// Private query continuation, never serialized or reconstructed from a path.
@@ -51,13 +57,29 @@ pub(crate) struct Position {
     pub(crate) version: Vec<BufferVersionEntry>,
 }
 
-#[derive(Default)]
 pub(crate) struct Cache {
+    instance: Option<String>,
     buffers: HashMap<u64, Buffer>,
     // Retained base + encoded text history, not just currently visible bytes.
     text_bytes: usize,
     diagnostic_bytes: usize,
     sequence: u64,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        let mut bytes = [0_u8; 16];
+        let instance = getrandom::fill(&mut bytes)
+            .ok()
+            .map(|()| format!("{:032x}", u128::from_be_bytes(bytes)));
+        Self {
+            instance,
+            buffers: HashMap::new(),
+            text_bytes: 0,
+            diagnostic_bytes: 0,
+            sequence: 0,
+        }
+    }
 }
 
 impl Cache {
@@ -97,6 +119,7 @@ impl Cache {
                         Buffer {
                             text,
                             shared: false,
+                            incarnation: sequence,
                             revision: sequence,
                             servers: BTreeMap::new(),
                             diagnostic_bytes: 0,
@@ -187,12 +210,16 @@ impl Cache {
                     for diagnostic in others.flat_map(|(_, server)| &server.diagnostics) {
                         count += 1;
                         bytes += diagnostic.message.len()
-                            + diagnostic.source.as_ref().map_or(0, String::len);
+                            + diagnostic.source.as_ref().map_or(0, String::len)
+                            + diagnostic.code.as_ref().map_or(0, String::len)
+                            + diagnostic.registration.as_ref().map_or(0, String::len);
                     }
                     for diagnostic in &update.diagnostics {
                         count += 1;
                         bytes += diagnostic.message.len()
-                            + diagnostic.source.as_ref().map_or(0, String::len);
+                            + diagnostic.source.as_ref().map_or(0, String::len)
+                            + diagnostic.code.as_ref().map_or(0, String::len)
+                            + diagnostic.registration_id.as_ref().map_or(0, String::len);
                     }
                     self.diagnostic_bytes -= buffer.diagnostic_bytes;
                     buffer.diagnostic_bytes = 0;
@@ -295,9 +322,21 @@ impl Cache {
         let buffer = &self.buffers[&id];
         let diagnostics = buffer
             .servers
-            .values()
-            .flat_map(|server| &server.diagnostics)
-            .map(|diagnostic| convert(text, diagnostic))
+            .iter()
+            .flat_map(|(server, values)| {
+                values.diagnostics.iter().map(move |value| (server, value))
+            })
+            .map(|(server, diagnostic)| {
+                let provenance = self.instance.as_ref().map(|instance| Provenance {
+                    instance: instance.clone(),
+                    buffer: id.to_string(),
+                    buffer_epoch: buffer.incarnation.to_string(),
+                    server: server.to_string(),
+                    source_kind: diagnostic.source_kind,
+                    registration: diagnostic.registration.clone(),
+                });
+                convert(text, diagnostic, provenance)
+            })
             .collect::<Result<_>>()?;
         Ok((
             if buffer.servers.is_empty() {
@@ -348,12 +387,19 @@ fn capture(values: &[proto::Diagnostic]) -> Result<Vec<Diagnostic>> {
                 severity: value.severity,
                 source: value.source.clone(),
                 message: value.message.clone(),
+                code: value.code.clone(),
+                registration: value.registration_id.clone(),
+                source_kind: value.source_kind,
             })
         })
         .collect()
 }
 
-fn convert(text: &Mirror, diagnostic: &Diagnostic) -> Result<LanguageDiagnostic> {
+fn convert(
+    text: &Mirror,
+    diagnostic: &Diagnostic,
+    provenance: Option<Provenance>,
+) -> Result<LanguageDiagnostic> {
     ensure!(
         text.offset(&diagnostic.start)? <= text.offset(&diagnostic.end)?,
         "reversed diagnostic range"
@@ -364,6 +410,8 @@ fn convert(text: &Mirror, diagnostic: &Diagnostic) -> Result<LanguageDiagnostic>
         severity: diagnostic.severity,
         source: diagnostic.source.clone(),
         message: diagnostic.message.clone(),
+        code: diagnostic.code.clone(),
+        provenance,
     })
 }
 

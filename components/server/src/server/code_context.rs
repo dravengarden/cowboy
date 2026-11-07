@@ -3,6 +3,9 @@
 
 use super::*;
 
+mod diagnostics;
+pub(super) use diagnostics::{CodeDiagnostic, CodePoint};
+
 pub(super) fn projected_work_items(columbus: &std::path::Path) -> Vec<WorkspaceWorkItem> {
     let output = std::process::Command::new("harness-cli")
         .args([

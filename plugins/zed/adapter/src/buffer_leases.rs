@@ -421,7 +421,11 @@ impl Registry {
                 };
                 ReadOutput::Language {
                     diagnostics_state: observation.diagnostics_state,
-                    diagnostics: observation.diagnostics,
+                    diagnostics: observation
+                        .diagnostics
+                        .into_iter()
+                        .map(crate::LanguageDiagnostic::legacy)
+                        .collect(),
                     inlay_hints: observation.inlay_hints,
                     semantic_tokens: observation.semantic_tokens,
                 }
