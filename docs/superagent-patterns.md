@@ -172,7 +172,8 @@ Use a private request file, a stable operation ID and the exact observed dataset
 do not replace projects or sessions when only importing a library. After an
 uncertain response, inspect current state and reuse the identical request if
 needed. Compact HTTP responses omit source content; verify the imported profile
-IDs and hashes through MCP `preferences.get("superagent").source_catalog`.
+IDs and hashes in the MCP `preferences.get("superagent")` response's
+`preferences.source_catalog` field.
 The owner-wide activity/export view is GUI-only: its historical candidates can
 span projects, while coordinator MCP remains scoped to participation and its own
 receipts. This exception does not limit the shared settings writer.
