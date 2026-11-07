@@ -158,8 +158,21 @@ are retained. For example, changing `sessions` need not resend `sources` or
 `source_catalog` metadata instead, keeping Markdown out of routine settings
 traffic. The library editor retains the complete editable snapshot; session
 Tools requests a compact snapshot and writes only changed fields.
-Large library imports use Settings; MCP retains its existing 256 KiB request
-envelope. Routine project/session edits do not need to carry the library.
+Large library imports use Settings or the authenticated `cowboy api` HTTP route.
+MCP action arguments are limited to 32 KiB, within the outer 256 KiB request
+envelope; that envelope is not the usable import size. Routine project/session
+edits do not need to carry the library. The HTTP preferences route accepts up to
+1 MiB, while source-library limits and the editor's bundle limit still apply.
+
+For CLI import, first read `GET /api/preferences/superagent`. Preserve its
+revision and dataset ID, and submit `PUT /api/preferences?compact=true` with
+`{operation,dataset,scope:"superagent",expected_revision,changes:{configuration:{sources}}}`
+using `cowboy api PUT '/api/preferences?compact=true' --data - < request.json`.
+Use a private request file, a stable operation ID and the exact observed dataset;
+do not replace projects or sessions when only importing a library. After an
+uncertain response, inspect current state and reuse the identical request if
+needed. Compact HTTP responses omit source content; verify the imported profile
+IDs and hashes through MCP `preferences.get("superagent").source_catalog`.
 The owner-wide activity/export view is GUI-only: its historical candidates can
 span projects, while coordinator MCP remains scoped to participation and its own
 receipts. This exception does not limit the shared settings writer.
