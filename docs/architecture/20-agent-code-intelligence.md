@@ -294,6 +294,19 @@ the original ownership and capacity. Terminal results are not automatically
 retired, and this does not recover state lost with the Machine process or solve
 unknown legacy Opens and Closes.
 
+The Zed 1.32.0 source candidate additionally retains a process-local recovery
+receipt on each owned Open before its first await. Admission binds that receipt
+to the original native attempt before dispatch; a later attempt cannot satisfy
+or replace it. Query may retire an abandoned lease when no Open was admitted,
+the original peer confirms failure/non-dispatch, or the original cleanup was
+confirmed. It never sends another Open or starts orphan cleanup. An acquired
+orphan without a dispatched cleanup remains Unknown; pending/unreachable native
+operations retain their fence. Once independently authorized recovery has
+confirmed cleanup, the old lease can retire even if a later attempt is pending,
+without querying or clearing the later attempt. This is an owned-reference
+recovery improvement, not Machine restart persistence or legacy maintenance.
+Release acceptance remains pending.
+
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction
 `1794018627362793557-bc6262f79936` (`succeeded` / `committed`). The complete

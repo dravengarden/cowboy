@@ -33,6 +33,7 @@ impl Registry {
             },
             prepared_at: Instant::now(),
             state: Phase::Prepared,
+            open_recovery: None,
         })
     }
 }

@@ -190,6 +190,23 @@ pub(super) async fn release_unowned(zed: &ZedRuntime, buffer_id: u64) -> Result<
 }
 
 /// Query the same process and operation only. An absent/failed receipt does
+/// not permit starting an orphan's cleanup during a read-only observation.
+pub(super) async fn observe_unowned(zed: &ZedRuntime, buffer_id: u64) -> Result<bool> {
+    let owner = Owner::Unowned(buffer_id);
+    let Some(mut receipt) = zed.closes.get(&owner) else {
+        return Ok(false);
+    };
+    receipt.request.action = Action::Query as i32;
+    exchange(zed, receipt.request).await?;
+    zed.diagnostics
+        .lock()
+        .expect("diagnostic cache poisoned")
+        .remove(buffer_id);
+    zed.closes.confirm(&owner, zed);
+    Ok(true)
+}
+
+/// Query the same process and operation only. An absent/failed receipt does
 /// not authorize cleanup, a replacement owner, or another Close request.
 pub(super) async fn recover(
     keys: &HashSet<Key>,

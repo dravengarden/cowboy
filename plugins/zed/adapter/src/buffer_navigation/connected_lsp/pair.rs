@@ -165,22 +165,41 @@ async fn failed_open_is_recovered_for_replacement(client: &Client, root: &Path) 
     );
     // Fixing the fixture source cannot authorize replay or replacement adoption.
     std::fs::write(workspace.join("oversized.txt"), "now small\n").unwrap();
-    for request in [
-        Request::QueryBufferLease {
-            lease: uncertain.clone(),
-        },
-        Request::OpenBufferLease {
-            lease: uncertain.clone(),
-        },
-        Request::ReleaseBufferLease {
-            lease: uncertain.clone(),
-        },
-    ] {
-        assert_eq!(client.request(request).await["state"], "unknown");
-    }
-    // The same server recorded that open as failed: the next acquisition
-    // resolves the fence without replaying it, and the original lease stays
-    // Unknown. The fixed path and a second owner of the known key both open.
+    assert_eq!(
+        client
+            .request(Request::OpenBufferLease {
+                lease: uncertain.clone(),
+            })
+            .await["state"],
+        "unknown"
+    );
+    // The same server recorded this exact Open as failed. Query retires its
+    // original lease; changing the file never authorizes replay under that ID.
+    assert_eq!(
+        client
+            .request(Request::QueryBufferLease {
+                lease: uncertain.clone(),
+            })
+            .await["state"],
+        "released"
+    );
+    assert_eq!(
+        client
+            .exchange(Request::OpenBufferLease {
+                lease: uncertain.clone(),
+            })
+            .await["type"],
+        "error"
+    );
+    assert_eq!(
+        client
+            .request(Request::ReleaseBufferLease {
+                lease: uncertain.clone(),
+            })
+            .await["state"],
+        "released"
+    );
+    // The fixed path and a second owner of the known key both open independently.
     for path in ["oversized.txt", "known.txt"] {
         let replacement = prepared_buffer(client, &workspace, path).await;
         let opened = client
@@ -201,11 +220,11 @@ async fn failed_open_is_recovered_for_replacement(client: &Client, root: &Path) 
         client
             .request(Request::QueryBufferLease { lease: uncertain })
             .await["state"],
-        "unknown"
+        "released"
     );
     client.request(Request::BufferNavigationSupport {}).await;
     println!(
-        "immutable socket native-open failure: real input refusal, original Unknown without replay, same-process recovery of the failed open, changed-source/known-key replacement opens and independent text read/release passed"
+        "immutable socket native-open failure: real input refusal, original-ID query retires confirmed failed Open without replay, changed-source/known-key replacement opens and independent text read/release passed"
     );
 }
 

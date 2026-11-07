@@ -7,6 +7,8 @@ use wire::cowboy_open_attempt_response::Outcome;
 
 type Outbound = tokio::sync::mpsc::UnboundedReceiver<proto::Envelope>;
 
+mod owned_recovery;
+
 /// Run `work` while answering recovery's reachability barrier with an error:
 /// the outcome stays unresolved. Any other native dispatch fails the test.
 async fn unreachable_recovery<T>(

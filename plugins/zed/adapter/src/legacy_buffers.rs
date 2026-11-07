@@ -30,7 +30,10 @@ pub(super) async fn open_buffer(
         BufferOwner::Legacy(lease_id),
         buffers,
         zed,
-        expected_id,
+        native_open::Admission {
+            expected_id,
+            ..Default::default()
+        },
     )
     .await?;
     if let Response::Buffer { buffer_id, .. } = &response {

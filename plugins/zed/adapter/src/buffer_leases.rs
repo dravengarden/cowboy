@@ -140,6 +140,7 @@ struct Slot {
     origin: Origin,
     prepared_at: Instant,
     state: Phase,
+    open_recovery: Option<super::native_open::Recovery>,
 }
 
 #[derive(Default)]
@@ -231,6 +232,7 @@ impl Registry {
             origin: Origin::Path(Arc::clone(&current.incarnation)),
             prepared_at: Instant::now(),
             state: Phase::Prepared,
+            open_recovery: None,
         })
     }
 
@@ -281,15 +283,20 @@ impl Registry {
         let id = self.resolve(&lease)?;
         if let Some(slot) = self.slots.get(&id)
             && slot.state == Phase::Unknown
-            && let Some(zed) = zed
         {
             let keys =
                 std::collections::HashSet::from([(slot.worktree.clone(), slot.path.clone())]);
             let mut active = buffers.active.write().await;
-            if super::native_close::recover(&keys, &BufferOwner::Owned(id), &mut active, zed)
-                .await
-                .unwrap_or(false)
-            {
+            let released = if let Some(recovery) = &slot.open_recovery {
+                recovery.observe(&buffers.native_open, &active, zed).await
+            } else if let Some(zed) = zed {
+                super::native_close::recover(&keys, &BufferOwner::Owned(id), &mut active, zed)
+                    .await
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if released {
                 self.slots.remove(&id);
             }
         }
@@ -475,6 +482,7 @@ async fn open_prevalidated(
     // open or claim successful release without a native buffer ID. The caller
     // holds the checked worktree incarnation's read lock through this step.
     slot.state = Phase::Unknown;
+    slot.open_recovery = Some(super::native_open::Recovery::new());
     super::open_buffer_at(
         slot.worktree.clone(),
         slot.path.clone(),
@@ -482,10 +490,14 @@ async fn open_prevalidated(
         BufferOwner::Owned(id),
         buffers,
         zed,
-        None,
+        super::native_open::Admission {
+            expected_id: None,
+            recovery: slot.open_recovery.as_ref(),
+        },
     )
     .await?;
     slot.state = Phase::Open;
+    slot.open_recovery = None;
     Ok(())
 }
 

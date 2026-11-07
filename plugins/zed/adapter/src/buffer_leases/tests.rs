@@ -79,7 +79,7 @@ async fn disconnected_observer_does_not_lose_the_native_open_record() {
 }
 
 #[tokio::test]
-async fn cancelled_native_open_is_unknown_and_never_replayed() {
+async fn cancelled_before_admission_can_retire_without_replaying_open() {
     let fixture = Fixture::new().await;
     let lease = fixture.prepare().await;
     let held = fixture.buffers.active.write().await;
@@ -105,14 +105,11 @@ async fn cancelled_native_open_is_unknown_and_never_replayed() {
         Request::QueryBufferLease {
             lease: lease.clone(),
         },
-        Request::OpenBufferLease {
-            lease: lease.clone(),
-        },
         Request::ReleaseBufferLease { lease },
     ] {
         assert_eq!(
             state(fixture.request(request).await.unwrap()),
-            LeaseState::Unknown
+            LeaseState::Released
         );
     }
     assert!(fixture.buffers.active.read().await.is_empty());

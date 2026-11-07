@@ -5,11 +5,15 @@ use crate::sync_native::wire::{self, cowboy_buffer_sync_envelope::Payload};
 use std::sync::atomic::{AtomicBool, AtomicU32};
 use wire::cowboy_open_attempt_response::Outcome;
 
+mod recovery;
+pub(super) use recovery::{Admission, Recovery};
+
 #[derive(Default)]
 pub(super) struct Fence {
     latched: AtomicBool,
     /// Message ID of the latched attempt's `OpenBufferByPath`; 0 before dispatch.
     request: AtomicU32,
+    receipt: std::sync::Mutex<Option<Arc<AtomicBool>>>,
 }
 
 // Deliberately no Drop-based reset: cancellation is uncertainty, not rollback.
@@ -36,12 +40,21 @@ impl Fence {
     }
 
     fn clear(&self) {
+        if let Some(receipt) = self.receipt.lock().expect("open receipt poisoned").take() {
+            receipt.store(true, Ordering::Release);
+        }
         self.request.store(0, Ordering::Release);
         self.latched.store(false, Ordering::Release);
     }
 }
 
 impl Attempt<'_> {
+    pub(super) fn track(&self, receipt: &Recovery) {
+        let mut retained = self.0.receipt.lock().expect("open receipt poisoned");
+        assert!(retained.is_none(), "one receipt per original attempt");
+        receipt.0.store(false, Ordering::Release);
+        *retained = Some(Arc::clone(&receipt.0));
+    }
     /// Called with the request's message ID before it is queued.
     pub(super) fn dispatching(&self, message_id: u32) {
         self.0.request.store(message_id, Ordering::Release);
@@ -117,6 +130,15 @@ pub(super) async fn recover(
     active: &HashMap<(PathBuf, PathBuf), BufferLease>,
     zed: &ZedRuntime,
 ) -> Result<()> {
+    recover_observed(fence, active, zed, true).await
+}
+
+async fn recover_observed(
+    fence: &Fence,
+    active: &HashMap<(PathBuf, PathBuf), BufferLease>,
+    zed: &ZedRuntime,
+    allow_cleanup: bool,
+) -> Result<()> {
     if !fence.latched.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -155,7 +177,14 @@ pub(super) async fn recover(
             .values()
             .any(|buffer| buffer.remote_id == reply.buffer_id)
         {
-            crate::native_close::release_unowned(zed, reply.buffer_id).await?;
+            if allow_cleanup {
+                crate::native_close::release_unowned(zed, reply.buffer_id).await?;
+            } else {
+                anyhow::ensure!(
+                    crate::native_close::observe_unowned(zed, reply.buffer_id).await?,
+                    unresolved("orphan cleanup has not been dispatched")
+                );
+            }
         }
     } else if outcome == Outcome::Pending as i32 {
         return Err(unresolved("still pending"));

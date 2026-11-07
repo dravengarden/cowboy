@@ -1,6 +1,44 @@
 //! Synthetic private transport; final acceptance also uses the real static pair.
 use super::*;
 
+#[tokio::test]
+async fn orphan_observation_requires_the_original_close_and_never_starts_one() {
+    let (mut zed, _) = coordinate_queries::fixture().await;
+    let (transport, mut receiver) = sync_native::Transport::new();
+    Arc::get_mut(&mut zed).unwrap().sync = transport;
+    assert!(!observe_unowned(&zed, 8).await.unwrap());
+    assert!(receiver.try_recv().is_err());
+    let original = zed
+        .closes
+        .begin(
+            Owner::Unowned(8),
+            request(vec![3; 16], vec![8]),
+            BTreeMap::default(),
+        )
+        .unwrap();
+    for outcome in [Outcome::Unknown, Outcome::Closed] {
+        let (result, ()) = tokio::join!(observe_unowned(&zed, 8), async {
+            let envelope = receiver.recv().await.unwrap();
+            let Some(Payload::CloseRequest(request)) = &envelope.payload else {
+                panic!("not a close observation")
+            };
+            assert_eq!(request.action, Action::Query as i32);
+            assert_eq!(request.operation_id, original.request.operation_id);
+            assert_eq!(request.instance, original.request.instance);
+            assert_eq!(request.buffer_ids, [8]);
+            reply(&zed.sync, envelope, outcome);
+        });
+        if outcome == Outcome::Unknown {
+            assert!(result.is_err());
+            assert!(zed.closes.get(&Owner::Unowned(8)).is_some());
+            assert!(receiver.try_recv().is_err());
+        } else {
+            assert!(result.unwrap());
+            assert!(zed.closes.get(&Owner::Unowned(8)).is_none());
+        }
+    }
+}
+
 #[test]
 fn unknown_navigation_keeps_possible_target_alive_until_original_result_recovers() {
     let source = (PathBuf::from("/root"), PathBuf::from("source"));

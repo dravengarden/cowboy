@@ -1472,11 +1472,11 @@ async fn open_buffer_at(
     owner: BufferOwner,
     buffers: &Buffers,
     zed: Option<&Zed>,
-    expected_id: Option<u64>,
+    admission: native_open::Admission<'_>,
 ) -> Result<Response> {
     let key = (worktree.clone(), path.clone());
     let mut all = buffers.active.write().await;
-    if let Some(id) = expected_id {
+    if let Some(id) = admission.expected_id {
         anyhow::ensure!(
             all.get(&key).is_some_and(|buffer| buffer.remote_id == id),
             "original legacy buffer is no longer retained"
@@ -1492,6 +1492,9 @@ async fn open_buffer_at(
             // Arm before any native I/O. Cancellation or an error leaves the
             // process-wide fence latched until `recover` learns the outcome.
             let armed = attempt.insert(buffers.native_open.begin()?);
+            if let Some(receipt) = admission.recovery {
+                armed.track(receipt);
+            }
             zed.open_buffer_tracked(worktree_id, &path, |id| armed.dispatching(id))
                 .await?
         } else {
