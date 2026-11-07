@@ -74,7 +74,7 @@ bound to the exact native process by the connection itself; a replaced server
 starts a new adapter runtime with no latched attempt. The owner chose this
 automatic, query-only recovery (2026-11-05), so no Operator step is involved.
 
-The private server 1.14.0 candidate distinguishes forgotten outcomes from
+Private server 1.14.0 distinguishes forgotten outcomes from
 requests never admitted. The journal retains at most 1,024 attempts and 1,024
 peer histories. It never evicts Pending; a table containing only Pending
 requests refuses a new Open before effects. Evicting a settled result advances
@@ -84,7 +84,25 @@ recorded still return `UNKNOWN`. Peer histories never expire within the process.
 Repeated or decreasing Open IDs are refused before native acquisition, so an old
 attempt cannot settle a replacement record. ID wrap and exhausted peer history
 fail closed. This does not recover a forgotten result or authorize a restart.
-The exact native build and production acceptance remain pending.
+Zed 1.36.0 source `23a6aafc7f163a68a47d7798630f48bfe7bb1052` passed the
+complete Cowboy gate, 166 adapter tests (two ignored), and the server's native
+GPUI/filesystem/LSP gates (66/3/4 tests). A real server fixture issued 1,024
+additional Opens of the same native buffer, evicted the original result and
+required `FORGOTTEN`. Server 1.13.0 failed that regression with `UNKNOWN`;
+1.14.0 passed and the adapter kept its original fence and buffer without Close
+or replay. The final immutable adapter/server pair, signed installation/drain,
+actual active/recovery Controller Catalog readers, independent signature and
+all public artifact URL hashes passed.
+
+Hawk installation `hawk-zed-1-36-0-open-journal` completed/applied with revision
+`installation-66249a3562aeb8f4cba568799e744b7eecc5a85b3d5609cab9335e45efbe7aa6`.
+Inventory confirmed 1.36.0 active, composite digest
+`sha256:4371ab163f3f4237d39327ab2b3faf12923525a54c627bdfb9b312662ea988e4`.
+A production Go probe returned `document_current` / `matching`, exact SHA
+`12f14ff6dc26178131dc7b8707daa2efca96532f8186e943abc922b86bd9c0ed` and
+`UndeclaredName`. It was removed after verifying its bytes. Health remained
+HTTP 200 and the two existing Hawk workers retained their PIDs, executables
+and arguments; no Controller or Machine restart was required.
 
 ## Reservations confined to the open target (Zed 1.24.0)
 
