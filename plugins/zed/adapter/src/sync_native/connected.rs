@@ -3,6 +3,7 @@ use super::*;
 use sha2::{Digest as _, Sha256};
 
 mod acquisition;
+mod legacy_recovery;
 mod open_journal;
 mod reload;
 mod remote_edits;
@@ -465,6 +466,7 @@ async fn restart_does_not_adopt_old_ticket(
 async fn acquisition_journals(server: &Path, root: &Path) {
     acquisition::exercise(server, root).await;
     open_journal::exercise(server, root).await;
+    legacy_recovery::exercise(server, root).await;
 }
 
 async fn private_extensions(zed: &ZedRuntime, buffer: u64, worktree: u64, workspace: &Path) {

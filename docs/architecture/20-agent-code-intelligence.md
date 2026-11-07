@@ -451,6 +451,19 @@ returned `document_current`, matching source SHA and the expected `UndeclaredNam
 diagnostic; it was removed after verifying its exact SHA. Production did not
 inject reply loss, and this acceptance does not cover Machine-process loss.
 
+The next Zed candidate extends prepared release to an unfinished legacy Open.
+Its pin retains that exact acquisition's recovery evidence before native I/O;
+repeating the unresolved Open cannot replace it. Preparation is effect-free.
+Execution queries the original native Open and, if necessary, releases its
+unowned result through one original native Close. Pending or forgotten Open
+results keep the reservation. Cleanup admission marks the prepared reference
+unknown; subsequent queries only observe the same Open/Close receipts, without
+replaying either effect. A confirmed no-effect Open can release without Close.
+The native fixture verifies an actual uncommitted Open and a fresh share after
+its release; synthetic transport tests additionally discard the cleanup reply.
+This remains process-local and does not recover unknown EnsureWorktree effects.
+Full gate, immutable adapter acceptance and production installation are pending.
+
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction
 `1794018627362793557-bc6262f79936` (`succeeded` / `committed`). The complete

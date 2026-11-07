@@ -7,6 +7,8 @@ use crate::sync_native::wire::{
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod unfinished;
+
 #[tokio::test]
 async fn preparation_and_execution_refuse_an_unresolved_native_open() {
     let f = Fixture::new().await;

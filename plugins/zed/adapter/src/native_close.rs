@@ -171,7 +171,16 @@ impl Plan {
 
 /// Confirmed release of a native buffer the peer holds without any owner,
 /// such as one a recovered open acquired after its caller went away.
+#[cfg(test)]
 pub(super) async fn release_unowned(zed: &ZedRuntime, buffer_id: u64) -> Result<()> {
+    release_unowned_with(zed, buffer_id, || {}).await
+}
+
+pub(super) async fn release_unowned_with(
+    zed: &ZedRuntime,
+    buffer_id: u64,
+    dispatching: impl FnOnce(),
+) -> Result<()> {
     let owner = Owner::Unowned(buffer_id);
     let request = if let Some(mut receipt) = zed.closes.get(&owner) {
         receipt.request.action = Action::Query as i32;
@@ -187,6 +196,7 @@ pub(super) async fn release_unowned(zed: &ZedRuntime, buffer_id: u64) -> Result<
             )?
             .request
     };
+    dispatching();
     exchange(zed, request).await?;
     zed.diagnostics
         .lock()

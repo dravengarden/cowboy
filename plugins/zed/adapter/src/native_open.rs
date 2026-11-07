@@ -69,7 +69,7 @@ impl Attempt<'_> {
 
 /// Resolve a latched open from the same native process, without replaying it.
 /// An upstream round trip first proves the original request reached the
-/// server, so `UNKNOWN` means it was never sent. A buffer it opened that no
+/// server, so `UNKNOWN` means it was never admitted. A buffer it opened that no
 /// owner holds is released through the confirmed native close.
 /// Admission of one open: the process-wide fences, then reservations confined
 /// to what this open could return. Without a native runtime every
@@ -141,6 +141,16 @@ async fn recover_observed(
     zed: &ZedRuntime,
     allow_cleanup: bool,
 ) -> Result<()> {
+    recover_with(fence, active, zed, allow_cleanup, || {}).await
+}
+
+async fn recover_with(
+    fence: &Fence,
+    active: &HashMap<(PathBuf, PathBuf), BufferLease>,
+    zed: &ZedRuntime,
+    allow_cleanup: bool,
+    dispatching: impl FnOnce(),
+) -> Result<()> {
     if !fence.latched.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -180,7 +190,8 @@ async fn recover_observed(
             .any(|buffer| buffer.remote_id == reply.buffer_id)
         {
             if allow_cleanup {
-                crate::native_close::release_unowned(zed, reply.buffer_id).await?;
+                crate::native_close::release_unowned_with(zed, reply.buffer_id, dispatching)
+                    .await?;
             } else {
                 anyhow::ensure!(
                     crate::native_close::observe_unowned(zed, reply.buffer_id).await?,

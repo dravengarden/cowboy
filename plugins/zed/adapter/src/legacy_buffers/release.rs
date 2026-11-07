@@ -6,7 +6,8 @@ use std::sync::Arc;
 pub(crate) struct Capture {
     pub(crate) requested: RequestKey,
     pub(crate) key: NativeKey,
-    pub(crate) buffer_id: u64,
+    pub(crate) buffer_id: Option<u64>,
+    pub(crate) recovery: crate::native_open::Recovery,
     incarnation: Arc<()>,
 }
 
@@ -31,7 +32,8 @@ impl Registry {
         Ok(Capture {
             requested,
             key: pin.key.clone(),
-            buffer_id: pin.buffer_id.context("legacy Open remains unconfirmed")?,
+            buffer_id: pin.buffer_id,
+            recovery: pin.recovery.clone(),
             incarnation: Arc::clone(&pin.incarnation),
         })
     }
@@ -43,7 +45,7 @@ impl Registry {
         ensure!(
             Arc::ptr_eq(&pin.incarnation, &captured.incarnation)
                 && pin.key == captured.key
-                && pin.buffer_id == Some(captured.buffer_id)
+                && pin.buffer_id == captured.buffer_id
                 && pin.release == operation,
             "original legacy owner or release changed"
         );

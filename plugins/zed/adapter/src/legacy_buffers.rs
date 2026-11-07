@@ -26,6 +26,11 @@ pub(super) async fn open_buffer(
         .remote_id;
     legacy.pin(requested.clone(), (worktree.clone(), path.clone()))?;
     let expected_id = legacy.get(&requested).and_then(|pin| pin.buffer_id);
+    let recovery = legacy
+        .get(&requested)
+        .expect("pin retained")
+        .recovery
+        .clone();
     let response = open_buffer_at(
         worktree,
         path,
@@ -35,7 +40,7 @@ pub(super) async fn open_buffer(
         zed,
         native_open::Admission {
             expected_id,
-            ..Default::default()
+            recovery: Some(&recovery),
         },
     )
     .await?;
@@ -140,6 +145,7 @@ struct Pin {
     buffer_id: Option<u64>,
     incarnation: Arc<()>,
     release: Option<u64>,
+    recovery: native_open::Recovery,
 }
 
 impl Registry {
@@ -151,6 +157,10 @@ impl Registry {
             "original legacy release remains fenced"
         );
         if let Some(original) = self.0.get(&request) {
+            anyhow::ensure!(
+                original.buffer_id.is_some(),
+                "original legacy Open remains unconfirmed"
+            );
             anyhow::ensure!(
                 original.key == key,
                 "legacy buffer target changed before release"
@@ -164,6 +174,7 @@ impl Registry {
                     buffer_id: None,
                     incarnation: Arc::default(),
                     release: None,
+                    recovery: native_open::Recovery::new(),
                 },
             );
         }

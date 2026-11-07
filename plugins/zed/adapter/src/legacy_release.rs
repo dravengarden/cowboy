@@ -79,18 +79,22 @@ pub(crate) async fn respond(
             let legacy = buffers.legacy.lock().await;
             let captured = legacy.capture((worktree, path, lease_id))?;
             let active = buffers.active.read().await;
-            buffers.native_open.check()?;
-            let buffer = active
-                .get(&captured.key)
-                .context("original legacy buffer is absent")?;
-            ensure!(
-                buffer.remote_id == captured.buffer_id
-                    && buffer
-                        .lease_ids
-                        .contains(&BufferOwner::Legacy(captured.requested.2.clone())),
-                "original legacy buffer owner changed"
-            );
-            crate::sync_owners::ensure_readable(buffer)?;
+            if let Some(buffer_id) = captured.buffer_id {
+                buffers.native_open.check()?;
+                let buffer = active
+                    .get(&captured.key)
+                    .context("original legacy buffer is absent")?;
+                ensure!(
+                    buffer.remote_id == buffer_id
+                        && buffer
+                            .lease_ids
+                            .contains(&BufferOwner::Legacy(captured.requested.2.clone())),
+                    "original legacy buffer owner changed"
+                );
+                crate::sync_owners::ensure_readable(buffer)?;
+            } else {
+                ensure_uncommitted(&captured, &active)?;
+            }
             if let Some((&id, entry)) = registry.entries.iter().find(|(_, entry)| {
                 entry.state == State::Prepared && entry.captured.same_owner(&captured)
             }) {
@@ -199,12 +203,26 @@ impl Entry {
         let mut legacy = buffers.legacy.lock().await;
         legacy.check_release(&self.captured, None)?;
         let mut active = buffers.active.write().await;
+        if self.captured.buffer_id.is_none() {
+            ensure_uncommitted(&self.captured, &active)?;
+            let recovered = self
+                .captured
+                .recovery
+                .release(&buffers.native_open, &active, zed, || {
+                    legacy.mark_release(&self.captured, id);
+                    self.state = State::Unknown;
+                })
+                .await?;
+            ensure!(recovered, "original legacy Open remains unconfirmed");
+            self.finish_uncommitted(&mut legacy)?;
+            return Ok(());
+        }
         let owner = BufferOwner::Legacy(self.captured.requested.2.clone());
         let buffer = active
             .get(&self.captured.key)
             .context("original legacy buffer disappeared")?;
         ensure!(
-            buffer.remote_id == self.captured.buffer_id && buffer.lease_ids.contains(&owner),
+            Some(buffer.remote_id) == self.captured.buffer_id && buffer.lease_ids.contains(&owner),
             "original legacy buffer owner changed"
         );
         self.buffer = Some(Box::new(serde_json::to_value(Response::Buffer {
@@ -239,6 +257,18 @@ impl Entry {
         let mut legacy = buffers.legacy.lock().await;
         legacy.check_release(&self.captured, Some(id))?;
         let mut active = buffers.active.write().await;
+        if self.captured.buffer_id.is_none() {
+            ensure_uncommitted(&self.captured, &active)?;
+            if self
+                .captured
+                .recovery
+                .observe(&buffers.native_open, &active, Some(zed))
+                .await
+            {
+                self.finish_uncommitted(&mut legacy)?;
+            }
+            return Ok(());
+        }
         if native_close::recover(
             &HashSet::from([self.captured.key.clone()]),
             &BufferOwner::Legacy(self.captured.requested.2.clone()),
@@ -252,6 +282,33 @@ impl Entry {
         }
         Ok(())
     }
+
+    fn finish_uncommitted(&mut self, legacy: &mut legacy_buffers::Registry) -> Result<()> {
+        self.buffer = Some(Box::new(serde_json::to_value(Response::Buffer {
+            api_version: 1,
+            worktree: self.captured.key.0.clone(),
+            path: self.captured.key.1.clone(),
+            leases: 0,
+            buffer_id: 0,
+            version: Vec::new(),
+        })?));
+        legacy.released(&self.captured.key, &self.captured.requested.2);
+        self.state = State::Released;
+        Ok(())
+    }
+}
+
+fn ensure_uncommitted(
+    captured: &legacy_buffers::Capture,
+    active: &HashMap<(std::path::PathBuf, std::path::PathBuf), crate::BufferLease>,
+) -> Result<()> {
+    ensure!(
+        active.get(&captured.key).is_none_or(|buffer| !buffer
+            .lease_ids
+            .contains(&BufferOwner::Legacy(captured.requested.2.clone()))),
+        "unconfirmed legacy owner cannot be released"
+    );
+    Ok(())
 }
 
 fn reply(release: Reference, state: State, buffer: Option<Box<Value>>) -> Response {
