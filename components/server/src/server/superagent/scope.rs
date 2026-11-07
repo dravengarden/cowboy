@@ -172,7 +172,9 @@ fn evidence_from_log(
         .find(|e| matches!(e.event, crate::core::Event::TurnEnd { .. }))
         .filter(|e| e.seq > human.seq)
         .ok_or("completed_turn_required")?;
-    if !matches!(&end.event, crate::core::Event::TurnEnd { stop_reason, .. } if stop_reason == "end_turn")
+    // Native workers persist the ACP enum's Debug spelling; older records use
+    // its wire spelling. Neither cancellation nor an unknown reason completes work.
+    if !matches!(&end.event, crate::core::Event::TurnEnd { stop_reason, .. } if matches!(stop_reason.as_str(), "end_turn" | "EndTurn"))
     {
         return Err("turn_not_completed");
     }

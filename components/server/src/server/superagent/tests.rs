@@ -206,6 +206,43 @@ fn superagent_causal_budget_only_resets_on_a_human_and_cancel_never_resumes() {
 }
 
 #[test]
+fn superagent_native_and_wire_completion_spellings_are_eligible() {
+    use crate::core::Event;
+    for reason in [
+        "EndTurn",
+        "end_turn",
+        "Cancelled",
+        "cancelled",
+        "MaxTokens",
+        "unknown",
+    ] {
+        let hub = crate::core::Hub::new();
+        add_session(&hub, "worker", "owner", "hawk");
+        hub.push(
+            "worker",
+            Event::Update {
+                update: json!({"sessionUpdate":"user_message_chunk",
+                "content":{"type":"text","text":"task"},
+                "promptOrigin":{"actor":"human","source":"composer"}}),
+            },
+        );
+        hub.push(
+            "worker",
+            Event::TurnEnd {
+                stop_reason: reason.into(),
+                usage: None,
+            },
+        );
+        let result = evidence(&hub, "worker");
+        if matches!(reason, "EndTurn" | "end_turn") {
+            assert!(result.is_ok(), "{reason}");
+        } else {
+            assert_eq!(result.err(), Some("turn_not_completed"), "{reason}");
+        }
+    }
+}
+
+#[test]
 fn superagent_context_pages_preserve_unicode_and_bound_reads() {
     assert_eq!(
         page("中文🚀abc", &json!({"offset":1,"chars":2})).unwrap()["text"],
