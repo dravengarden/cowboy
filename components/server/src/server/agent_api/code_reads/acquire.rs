@@ -143,11 +143,15 @@ pub(super) async fn acquire(
     state: &AppState,
     session: &str,
     path: &str,
+    trust: &crate::core::LanguageServerTrust,
 ) -> Result<(), &'static str> {
-    if !state.hub.language_servers_allowed(session) {
+    if !trust.current(&state.hub) || trust.scope().session_id() != session {
         return Err("restricted");
     }
     let context = session_code_context(state, session).ok_or("unavailable")?;
+    if trust.scope() != &context.scope {
+        return Err("restricted");
+    }
     let (worktree, target) = zed_language_target(&context.machine_id, &context.cwd, path)
         .filter(|(worktree, _)| {
             std::path::Path::new(worktree) == std::path::Path::new(&context.cwd)
@@ -190,6 +194,13 @@ pub(super) async fn acquire(
         }
     };
     let mut opening = Opening::new(key, lease.clone(), !refresh_only);
+    if !trust.current(&state.hub) {
+        // No native request has been sent. Existing holders keep their own
+        // possibly-open evidence; a new reservation has no side effect yet.
+        opening.possibly_open = false;
+        opening.touch = false;
+        return Err("restricted");
+    }
     let opened = zed_session::agent_buffer_request(
         &state.hub,
         &state.machine_control,

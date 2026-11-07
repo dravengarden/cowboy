@@ -28,23 +28,30 @@ async fn observe(
     state: &AppState,
     observed: &SessionReadScope,
     path: &str,
+    trust: &crate::core::LanguageServerTrust,
 ) -> (anyhow::Result<ZedAdapterResponse>, bool) {
     let first = observe_open_buffer(state, observed, path).await;
+    if !trust.current(&state.hub) {
+        return (Err(anyhow::anyhow!("restricted")), false);
+    }
     let session = observed.session().session_id();
     if !matches!(&first, Err(error) if error.to_string().contains("not open")) {
         if first.is_ok() {
             // Track an open file under the agent's own owner too, within its
             // share: a holding left by an earlier Controller is then released
             // when idle instead of pinning its code runtime indefinitely.
-            let _ = super::acquire::acquire(state, session, path).await;
+            let _ = super::acquire::acquire(state, session, path, trust).await;
         }
         return (first, false);
     }
-    if let Err(reason) = super::acquire::acquire(state, session, path).await {
+    if let Err(reason) = super::acquire::acquire(state, session, path, trust).await {
         return (Err(anyhow::anyhow!("not open: {reason}")), false);
     }
     let deadline = tokio::time::Instant::now() + ANALYSIS_WAIT;
     loop {
+        if !trust.current(&state.hub) {
+            return (Err(anyhow::anyhow!("restricted")), true);
+        }
         let reply = observe_open_buffer(state, observed, path).await;
         let analysed = matches!(&reply, Ok(ZedAdapterResponse::BufferLanguage { analysis: Some(servers), .. })
             if !servers.is_empty() && servers.iter().all(|server| server.state != AnalysisState::Unknown));
@@ -144,17 +151,27 @@ async fn read_with_acquisition(
     paths: Vec<String>,
     acquire: bool,
 ) -> Value {
-    let allowed = state
+    let trust = state
         .hub
-        .language_servers_allowed(observed.session().session_id());
+        .observe_language_server_trust(observed.session().session_id())
+        .filter(|trust| trust.scope() == observed.session());
     let mut files = Vec::with_capacity(paths.len());
     for path in paths {
-        if !allowed {
+        if trust
+            .as_ref()
+            .is_none_or(|trust| !trust.current(&state.hub))
+        {
             files.push(json!({"path":path,"state":"restricted"}));
             continue;
         }
         let (reply, acquired) = if acquire {
-            observe(state, observed, &path).await
+            observe(
+                state,
+                observed,
+                &path,
+                trust.as_ref().expect("admitted trust"),
+            )
+            .await
         } else {
             (observe_open_buffer(state, observed, &path).await, false)
         };
@@ -204,24 +221,77 @@ async fn read_with_acquisition(
             Err(_) => json!({"path":path,"state":"unavailable"}),
         });
     }
-    // Revocation during an asynchronous query discards its observation too.
-    if !state
-        .hub
-        .language_servers_allowed(observed.session().session_id())
-    {
-        for file in &mut files {
-            *file = json!({"path":file["path"],"state":"restricted"});
-        }
-    }
+    // Revocation during an asynchronous query discards its observation even
+    // when the owner re-enabled language servers before the reply arrived.
+    fence_files(&state.hub, trust.as_ref(), &mut files);
     json!({
         "coverage": "open_buffers",
         "files": files,
     })
 }
 
+fn fence_files(
+    hub: &crate::core::Hub,
+    trust: Option<&crate::core::LanguageServerTrust>,
+    files: &mut [Value],
+) {
+    if trust.is_none_or(|trust| !trust.current(hub)) {
+        for file in files {
+            *file = json!({"path":file["path"],"state":"restricted"});
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reenabled_policy_does_not_publish_a_reply_from_before_revocation() {
+        let hub = crate::core::Hub::new();
+        hub.create_local_session(
+            "diagnostic-policy".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "fixture".into(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        hub.sync_apply(
+            "folders",
+            "create".into(),
+            "create",
+            &json!({"id":"folder","name":"F","project":null}),
+        )
+        .unwrap();
+        hub.sync_apply(
+            "folders",
+            "place".into(),
+            "place",
+            &json!({"session_ids":["diagnostic-policy"],"folder":"folder"}),
+        )
+        .unwrap();
+        let original = hub
+            .observe_language_server_trust("diagnostic-policy")
+            .unwrap();
+        let pending_reply = async {
+            for value in ["off", "on"] {
+                hub.sync_apply(
+                    "folders",
+                    value.into(),
+                    "defaults",
+                    &json!({"id":"folder","values":{"language_servers":value}}),
+                )
+                .unwrap();
+            }
+            vec![json!({"path":"file.rs","state":"document_current",
+                "counts":{"error":0},"diagnostics":[],"bufferSnapshot":{"private":"old"}})]
+        };
+        let mut files = pending_reply.await;
+        assert!(hub.language_servers_allowed("diagnostic-policy"));
+        fence_files(&hub, Some(&original), &mut files);
+        assert_eq!(files, vec![json!({"path":"file.rs","state":"restricted"})]);
+    }
 
     fn server(state: AnalysisState) -> ServerAnalysis {
         ServerAnalysis {

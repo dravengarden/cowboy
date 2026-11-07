@@ -5,3 +5,5 @@ mod journal;
 pub use journal::{Change, Coverage, Cursor, Gap, Journal, Page, PageState, Scan};
 #[cfg(target_os = "linux")]
 pub mod linux;
+#[cfg(target_os = "linux")]
+pub mod worker;

@@ -29,6 +29,7 @@ use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 
 mod code_scope;
 mod review_defaults;
+pub use review_defaults::LanguageServerTrust;
 mod session_continuation;
 mod session_fork;
 pub use session_fork::{FORK_ORIGIN_UPDATE, ForkPoint, ForkRecord, ForkState};
@@ -2282,18 +2283,6 @@ impl Hub {
             serde_json::json!({ owner: { id: metadata } }),
             Vec::new(),
         );
-    }
-
-    pub fn restore_session_folders(&self, folders: Vec<crate::session_folders::SessionFolder>) {
-        self.inner.folders.lock().set_folders(folders);
-    }
-
-    pub fn folder_defaults(
-        &self,
-        actor: &crate::session_folders::FolderActor,
-        id: &str,
-    ) -> Result<crate::session_folders::defaults::ResolvedDefaults, String> {
-        self.inner.folders.lock().resolve_defaults(actor, id)
     }
 
     /// Restore persisted sessions while reconciling detached runtime workers.

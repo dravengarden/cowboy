@@ -108,6 +108,18 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   invalidates its window on structural ambiguity, root/mount changes, queue
   overflow or resource exhaustion. Structural reconciliation cannot make a
   comparison from before the gap valid again.
+  The native worker library reserves two roots per resident owner, bounds its
+  request queue and retains capacity through actual collection/descriptor
+  cleanup. Revocation wakes cancellation; a timed-out close cannot release a
+  still-running scan's reservation. Failed idle scans do not retry forever.
+  The Controller-to-Machine standing continuation and runtime registry are
+  still required before this library can enable production background watching.
+- **Trust lifetime.** Agent diagnostic reads capture the Session and the
+  language-server policy lifetime before asynchronous work. A policy change,
+  including off/on before the result arrives, discards old diagnostic content
+  and counts. Folder rename preserves trust; placement, order, hierarchy and
+  relevant default changes invalidate it. This is a read fence, not a worker
+  grant or a Machine observation continuation.
 - **Executor receipts** are latency accelerators: binding incarnation, turn,
   tool identity, monotonic sequence, operation kind and before/after content
   identities, emitted after durability. ACP `locations`/`diff` are unverified

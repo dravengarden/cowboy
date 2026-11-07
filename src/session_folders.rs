@@ -88,6 +88,19 @@ pub struct FolderEffects {
 pub struct SessionFolders {
     folders: Vec<SessionFolder>,
     placement: HashMap<String, String>,
+    observation: std::sync::Arc<()>,
+}
+
+/// Process-local configuration lifetime. Returning to equal folder values
+/// cannot restore a previously revoked language-server trust observation.
+#[derive(Clone)]
+pub(crate) struct FolderObservation(std::sync::Weak<()>);
+
+impl FolderObservation {
+    pub(crate) fn current(&self, folders: &SessionFolders) -> bool {
+        self.0
+            .ptr_eq(&std::sync::Arc::downgrade(&folders.observation))
+    }
 }
 
 fn valid_key(value: &str) -> bool {
@@ -153,6 +166,13 @@ fn project_arg(args: &serde_json::Value) -> Result<Option<String>, String> {
 }
 
 impl SessionFolders {
+    pub(crate) fn observe(&self) -> FolderObservation {
+        FolderObservation(std::sync::Arc::downgrade(&self.observation))
+    }
+
+    fn changed(&mut self) {
+        self.observation = std::sync::Arc::new(());
+    }
     /// Match the sidebar's visible folders, preserving absent vs explicit Global.
     /// Visibility never grants mutation: an untouchable match is an error.
     pub fn effective_folder(
@@ -278,6 +298,9 @@ impl SessionFolders {
     /// Pin sessions to explicit placements (`None` = explicit top level) and
     /// return the rows to persist.
     pub fn pin(&mut self, pins: &[(String, Option<String>)]) -> Vec<(String, Option<String>)> {
+        if !pins.is_empty() {
+            self.changed();
+        }
         pins.iter()
             .map(|(session, folder)| {
                 let target = folder.clone().unwrap_or_else(|| TOP_LEVEL.to_owned());
@@ -353,6 +376,7 @@ impl SessionFolders {
                 }
             }
         }
+        self.changed();
         for folder in &mut self.folders {
             if trashed.contains(&folder.id) {
                 folder.trashed_at_ms = Some(now_ms);
@@ -393,6 +417,7 @@ impl SessionFolders {
         }
         // Roots whose parent stays in Trash (or is gone) step out to the
         // nearest live ancestor, after its existing children.
+        self.changed();
         let mut notes = Vec::new();
         for id in &roots {
             let parent = self.find(id).and_then(|folder| folder.parent.clone());
@@ -491,6 +516,9 @@ impl SessionFolders {
             }
         }
         let owners = self.owners_of(&removed);
+        if !removed.is_empty() {
+            self.changed();
+        }
         self.folders.retain(|folder| !removed.contains(&folder.id));
         self.placement.retain(|_, folder| !removed.contains(folder));
         (removed, owners)
@@ -544,12 +572,14 @@ impl SessionFolders {
     }
     /// Replace the folder set (startup restore), keeping placements.
     pub fn set_folders(&mut self, mut folders: Vec<SessionFolder>) {
+        self.changed();
         folders.sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.id.cmp(&b.id)));
         self.folders = folders;
     }
 
     /// Record a restored explicit placement.
     pub fn restore_placement(&mut self, session_id: String, folder_id: String) {
+        self.changed();
         self.placement.insert(session_id, folder_id);
     }
 
@@ -570,7 +600,9 @@ impl SessionFolders {
 
     /// Drop a deleted session's explicit placement (its row is gone).
     pub fn forget_session(&mut self, session_id: &str) {
-        self.placement.remove(session_id);
+        if self.placement.remove(session_id).is_some() {
+            self.changed();
+        }
     }
 
     /// The `"folders"` sync value: every folder (with its owner, for the
@@ -682,7 +714,7 @@ impl SessionFolders {
         mutation: &str,
         args: &serde_json::Value,
     ) -> Result<FolderEffects, String> {
-        match mutation {
+        let result = match mutation {
             "defaults" => {
                 let id = key_arg(args, "id")?;
                 let patch = defaults::parse(args.get("values").ok_or("missing values")?)?;
@@ -745,7 +777,21 @@ impl SessionFolders {
             "place" => self.place(actor, args),
             "remove" => self.remove(actor, args),
             _ => Err(format!("unknown folders mutation {mutation}")),
+        };
+        let policy_change = mutation != "rename"
+            && (mutation != "defaults"
+                || args
+                    .get("values")
+                    .and_then(|v| v.get("language_servers"))
+                    .is_some()
+                || args
+                    .get("inherit")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|keys| keys.iter().any(|key| key == "language_servers")));
+        if result.is_ok() && policy_change {
+            self.changed();
         }
+        result
     }
 
     /// Whether `create` with these arguments already produced exactly this
