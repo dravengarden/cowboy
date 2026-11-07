@@ -294,7 +294,7 @@ the original ownership and capacity. Terminal results are not automatically
 retired, and this does not recover state lost with the Machine process or solve
 unknown legacy Opens and Closes.
 
-The Zed 1.32.0 source candidate additionally retains a process-local recovery
+Zed 1.32.0 additionally retains a process-local recovery
 receipt on each owned Open before its first await. Admission binds that receipt
 to the original native attempt before dispatch; a later attempt cannot satisfy
 or replace it. Query may retire an abandoned lease when no Open was admitted,
@@ -305,7 +305,20 @@ operations retain their fence. Once independently authorized recovery has
 confirmed cleanup, the old lease can retire even if a later attempt is pending,
 without querying or clearing the later attempt. This is an owned-reference
 recovery improvement, not Machine restart persistence or legacy maintenance.
-Release acceptance remains pending.
+On 2026-11-07 Hawk installed this release from
+`941b6b790dd8fddace7467d67260f71c6424b97e`, composite digest
+`64fbaff7169bbe9b82f89cd222ff46bfb19bf0abd11205f9b08e52148ed44dba`,
+through `hawk-zed-1-32-0-open-recovery` (completed/applied). The complete
+gate passed, including 159 adapter tests. The exact static native pair proved
+that querying a real failed Open retires its original lease without replay,
+while independently prepared replacement and known-buffer owners still work.
+Signed installation/drain, actual active/recovery Catalog readers and all
+three published URL digests passed. A production MCP probe retained matching
+content/diagnostics initially and `stale`/`changed` after a disk edit; its
+summary preserved the reason and its temporary file was removed. Controller
+PID 1875594 and both existing Hawk workers were unchanged, health and SPA
+checks passed, and all four Machines were online. Unknown failure injection
+is isolated native-fixture evidence, not a production-session experiment.
 
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction
