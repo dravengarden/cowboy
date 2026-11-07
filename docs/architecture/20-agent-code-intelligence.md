@@ -451,7 +451,7 @@ returned `document_current`, matching source SHA and the expected `UndeclaredNam
 diagnostic; it was removed after verifying its exact SHA. Production did not
 inject reply loss, and this acceptance does not cover Machine-process loss.
 
-The next Zed candidate extends prepared release to an unfinished legacy Open.
+Zed 1.37.0 extends prepared release to an unfinished legacy Open.
 Its pin retains that exact acquisition's recovery evidence before native I/O;
 repeating the unresolved Open cannot replace it. Preparation is effect-free.
 Execution queries the original native Open and, if necessary, releases its
@@ -462,7 +462,22 @@ replaying either effect. A confirmed no-effect Open can release without Close.
 The native fixture verifies an actual uncommitted Open and a fresh share after
 its release; synthetic transport tests additionally discard the cleanup reply.
 This remains process-local and does not recover unknown EnsureWorktree effects.
-Full gate, immutable adapter acceptance and production installation are pending.
+Source `a1aee90dc2196245bc26fc422f4ff670665d3171` passed the complete pinned gate,
+the exact static 1.37.0 adapter / 1.14.0 server pair and temporary signed
+installation/drain conformance. Actual Controller active/recovery Catalog readers
+accepted the bound release; its signature and public package/runtime hashes were
+verified independently. Hawk operation `hawk-zed-1-37-0-unfinished-open` completed
+with Machine receipt `applied`, installation
+`installation-77598a26bb6c52c2ba125a796647c60b143502a1a662afdf984e8f918a437163`,
+composite digest
+`sha256:8def344c6232e521f1860ac2b52ad7ef1f3b3c8d2e5a5e910940f15fc56e3b79`.
+Zed 1.36.0 remains the rollback generation. Both existing worker PIDs,
+executables and arguments, and the Controller PID, were unchanged; health,
+version and SPA checks passed and all four Machines were online. A temporary Go
+probe returned `document_current`, matching source SHA and the expected
+`UndeclaredName`, then was removed after verifying its exact SHA. Production did
+not inject reply loss; the fixture's synthetic resource admission does not prove
+host resource admission, and none of this accepts Machine-process-loss recovery.
 
 Hawk activated this maintenance observation from
 `bc6262f79936e1b75d7cc0ccc3d6af8a6afb9c60` on 2026-11-07, transaction
