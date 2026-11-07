@@ -337,7 +337,7 @@ arguments remained unchanged; four Machines were ready and health/SPA checks
 passed. This verifies the deployed metadata path, not baseline matching,
 project freshness, automatic observation or push delivery.
 
-The Zed 1.30.0 source candidate adds `bufferSnapshot`: the original mirror
+Zed 1.30.0 adds `bufferSnapshot`: the original mirror
 instance, buffer incarnation, exact text clock and SHA-256/UTF-8 byte count of
 its LF-normalized text. The same revision check protects diagnostics and this
 snapshot across asynchronous language queries. Language responses now return
@@ -346,7 +346,24 @@ diagnostic sets can carry this text identity too; missing or over-budget
 identity remains unavailable. Owned-read protocol one stays unchanged.
 This identifies the native mirror, which may differ from disk; it is not an
 immutable baseline capture, an analyzed-input frontier or causal attribution.
-Publication and production acceptance remain separate from these source tests.
+Hawk installed the signed release from
+`4b9bfee86af161d3b8b4dd827638fa5cbd3a4675`, composite digest
+`6256172e22e016268d90392458a71610c3c57d68636f6faa4146bdaeb1b4dd03`,
+through operation `hawk-zed-1-30-0-buffer-snapshot` (completed/applied).
+Controller activation `1794024532993336903-4b9bfee86af1` succeeded and
+committed. The full pinned gate, exact static native pair, signed install/drain,
+active/recovery Catalog readers and published URL digest checks passed.
+An actual MCP read of a temporary CRLF/Unicode file returned the independently
+computed LF-normalized SHA-256 and 74-byte length, together with its native
+version and diagnostic provenance. The fixture was removed; existing workers
+were unchanged and health, SPA and all four Machine readiness checks passed.
+
+The subsequent disk-edit probe exposed a remaining distinction: the native
+mirror and its `document_current` analysis still described the old text after
+the file changed. The new snapshot made that mismatch observable, but this
+release neither reloads the buffer nor compares it with the current source.
+Source mismatch must downgrade the agent-facing state before baseline capture;
+it must not borrow synchronization authority or promote file quiet to freshness.
 
 - Baselines are immutable, content-matched captures at a read or pre-write
   boundary (the facade and executor see pre-write content). Without one the
