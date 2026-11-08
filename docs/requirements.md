@@ -236,19 +236,23 @@ separate native-owned lifecycle passes acceptance; it is not that implementation
 Owner-operated Machine browser, decided 2026-11-08: the owner may sign in
 through a real, unmodified browser that runs on the account's Machine beside
 the native login, operated from the owner's device through Cowboy's
-authenticated remote display ([machine-browser.md](machine-browser.md)). Cowboy
-relays the display and the owner's own input between the owner's device and
-that Machine-local browser while the owner is attached; it never reads,
-stores, forwards or persists page content, cookies, session tokens or typed
-input as data, and the Controller keeps no copy of the stream. The browser
-profile is Machine-local, account-owned state under the same directory and
-revocation lifecycle as the native credentials. The authorization code still
-reaches the native login only through the existing owner-submitted input
-path. This is the owner's remote-display path to their own browser on their
-own Machine, not third-party collection or intermediation of credentials;
-Anthropic's rule does not explicitly address it, and the owner accepted this
-reading. It is enabled per account, off by default, and is revisited if the
-vendor's terms change.
+authenticated remote display ([machine-browser.md](machine-browser.md)). This
+is a narrow, owner-authorized transit exception: while the owner is attached,
+Cowboy forwards their keystrokes, pointer events and explicitly copied
+clipboard text to that Machine-local browser and the browser's display back.
+The Controller and the web client do not persist, index or log that transit,
+do not extract credentials from it, and the only content the client examines
+is clipboard text the owner explicitly chooses to use as the authorization
+code, which then travels the existing owner-submitted native login input path.
+The OAuth bundle prohibition above is unchanged: no native credential enters
+the Controller, and the browser profile (cookies included) is Machine-local,
+account-owned state that is visible only inside that browser's own isolated
+view and is deleted with the account. The owner accepts this as their
+remote-display path to their own browser on their own Machine rather than
+third-party collection or intermediation of credentials; Anthropic's rule does
+not explicitly address the arrangement, so this is an accepted interpretation,
+not established vendor permission. It is enabled per account, off by default,
+and is revisited if the vendor's terms change.
 
 Directory separation prevents accidental mixing but is not a security boundary
 against an agent with host filesystem access. Strong instance isolation needs
@@ -714,7 +718,10 @@ timeouts and paused checks retain an explicit recovery action. Success exposes
 details and an explicit choice to sign in on another Machine, without starting
 that login automatically.
 Named account authorization opens an external browser rather than replacing the
-native shell's shared authentication sheet. A failed OS-browser launch offers
+native shell's shared authentication sheet; when the
+[Machine browser](machine-browser.md) is enabled for the account, the dialog
+may instead open the challenge in that browser's viewer, which is the only
+path that isolates the sign-in cookies. A failed OS-browser launch offers
 copy-link recovery, without silently navigating that shared sheet. Browser/PWA
 links use a fresh `noopener noreferrer` tab. These presentation choices do not
 isolate Provider cookies: the UI offers an explicit copy-link path to a separate
