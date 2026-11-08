@@ -1,23 +1,17 @@
 # Cowboy Widgets: agent-authored structured UI over Cowboy MCP
 
-Status: design for review, revision 5 (2026-11-08); nothing here is built or
-activated. Revision 1 received an Astra Max design review ("request changes",
-16 findings, 6 blocking); revision 2 a second ("request changes", 15
-findings, 4 blocking); revision 3 a third ("request changes", 14 findings,
-5 blocking); revision 4 a fourth ("request changes", 13 findings, 5
-blocking); revision 5 a fifth ("request changes", 10 findings, 3 blocking);
-revision 6 a sixth ("request changes", 6 findings, 1 blocking); revision 7
-a seventh ("request changes", 6 findings, 1 blocking); revision 8 an eighth
-("request changes", 6 findings, 2 blocking); revision 9 a ninth ("request
-changes", 7 findings, 3 blocking); revision 10 a tenth ("request changes",
-7 findings, 2 blocking; its first run was cut off by a Controller restart);
-revision 11 an eleventh ("request changes", 7 findings, 1 blocking; twelve
-of the design decisions approved); revision 12 a twelfth ("request
-changes", 6 findings, 2 blocking; the same twelve decisions approved). The
-owner chose to keep the full interactive design (2026-11-08) rather than
-narrow Phase 1 to display-only widgets. Every finding is resolved below and
-none was rejected ([§1](#1-review-findings-and-resolutions)); revision 13
-is the current text. Statements marked
+Status: design closed for implementation planning, revision 13 (2026-11-08);
+nothing here is built or activated. Thirteen Astra Max design review rounds
+ran (findings and resolutions in [§1](#1-review-findings-and-resolutions));
+by agreement with the owner the thirteenth was the last design round. Its
+verdict was "request changes" with three blocking findings, all in the
+interactive delivery protocol; they and its four P2 findings are recorded
+**open** in [§1.13](#113-revision-13-astra-max-fb9cedf2e--open-phase-1-freeze-prerequisites)
+as prerequisites that must be resolved, with fixtures, before the Phase 1
+interaction contract is frozen. Display widgets (document model,
+presentation, transport, storage, inline carrier) are not affected by them.
+Twelve decisions (17, 18, 20–24, 26, 27, 30–32) were approved as design
+choices. Statements marked
 **[unverified]** are inferred from code or history and still need evidence.
 
 Related: [`agent-api.md`](agent-api.md) (the MCP read/execute/receipt surface
@@ -239,6 +233,26 @@ wire domains for counters and timestamps (`maxCounter`, `maxTimestampMs`).
 | R4 | Delivery reduction incomplete; duplicate detection disagreed between text and contract (P2) | One exhaustive reduction (`reduceSettlement`): completing `finished` decides delivery; every possibly executed recipient (`finished` any reason, `submitted_failed`, `terminated`) counts toward duplication; the remaining combinations are enumerated and tested | §8.3 'Settlement rules', contract |
 | R5 | Supersession did not establish the one-per-node invariant for ungrouped nodes and could drop held records (P2) | Every interactive node without a `group` is its own implicit group; admitting a new decision on a node supersedes that node's released, retryable records; supersession only clears retryability and never removes a held record; `superseded_by` is in the schema sketch | §8.4, §8.6, §6.3 |
 | R6 | The record limit no longer left room for read-response overhead (P2) | `readPageBytes` is a target; a page may exceed it only for a single item and never the 16 KiB cap; one record plus ≤ 2 KiB of metadata always fits; the remaining 10 KiB statements are corrected | §6.1, contract |
+
+### 1.13 Revision 13 (Astra Max, `fb9cedf2e`) — open, Phase 1 freeze prerequisites
+
+These are not resolved in this document. Each must be resolved and encoded in
+transition or boundary fixtures before the interaction part of the Phase 1
+contract is frozen; implementation of display widgets may proceed.
+
+| # | Finding (severity) | Required resolution |
+|---|---|---|
+| F1 | Controller rollback admission misses held interactions: Clear can turn a held one `uncertain`; Pause still permits manual dispatch and `Supervisor::send → prompt_traced` bypasses the queue hold; additive migrations do not stop an older Controller from starting (P1) | Refuse lower Controller readers whenever an interaction is admitted/dispatched **or any attempt is held**, serialized with admission and enforced on automatic recovery and cold start; specify the exact durable hold key with atomic acquisition/release that every prompt producer of an older Controller honours (a queue hold alone is insufficient) |
+| F2 | A sealed `rejected` loses a Controller-local Stop: Stop during configuration withdraws the command before the broker sees it, so no recipient reports `aborted {stopped}` and the reduction yields `returned` (P1) | Persist an attempt-bound Stop intent before withdrawal; apply it when reducing a sealed rejection so the record settles `cancelled (stopped)`; define recovery between the two commits; fix the crash-matrix row that still releases by `turn_end` |
+| F3 | `submitted_failed` does not prove execution stopped: the provider may keep running after the response channel fails (P1) | Treat `submitted_failed` as delivery-uncertain but **not** ownership-terminal; keep ownership held until a response, an authoritative cancellation completion or a retained termination proof; add a live-provider/failed-channel vector |
+| F4 | `rejected` carries no recipients, so a recovering Controller cannot compute `duplicate_execution` (P2) | Carry the sealed inventory on `rejected`; reduce the full settlement including unavailable history; align the `duplicate_execution` comment |
+| F5 | Moving a node to another group bypasses supersession (P2) | Supersede by stable node identity as well as group; one effective-group resolver shared by validator and admission; group-move fixtures; the test validator must model implicit standalone groups |
+| F6 | `submitted_failed {reason}` (≤ 200 chars) makes the maximal record 12,684 B, above the 12 KiB bound (P2) | Bound and normalize `reason`; compute the estimator maximum across every disposition variant and attempt history; test those variants independently |
+| F7 | The 16 KiB read cap was applied to HTTP lookup pages that carry ≤ 48 KiB snapshots (P2) | Scope the 12/16 KiB target/cap to MCP list/read; keep `lookupBytes` for HTTP lookup; test encoded responses |
+
+Rulings: approve 17, 18, 20, 21, 22, 23 (Controller write-once), 24, 26, 27,
+30, 31, 32; request changes 19 (F5), 25 (F2), 28, 34 (F2/F3), 29, 33, 36
+(F2–F4), 35, 37 (F1).
 
 Rulings on decisions are folded into §14.
 
