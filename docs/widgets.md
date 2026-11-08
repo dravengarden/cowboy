@@ -67,8 +67,17 @@ typing-free, auditable decisions within measured bounds.
   and images show their `alt` (event-source resolution is not wired yet).
   Tested by `web/src/widgets/*.test.ts` and the `widgets` browser
   conformance suite (320/375/768/1100 px, light and dark).
-- Not built yet: the `widgets.*` MCP domain, the Controller tables and
-  anchored rows, interactions, the inspector, table sort and image sources.
+- **Slice 2 (Controller + Web): agent-published widgets.** `widgets.publish`
+  and `widgets.update` (replace, patch, close; revision CAS) run through the
+  idempotent Agent API operation ledger with `widgets` receipts; `widgets.list`
+  and `widgets.read` expose current state (`help("widgets")`). The
+  `session_widgets` table stores each widget, and one notice row anchored by
+  `widget:<id>` projects it into the transcript, replaced in place on every
+  write; older clients render its plain-text description. Clear tombstones
+  widgets with the transcript. The Web renders widget notices through the
+  slice 1 renderer with the handle and a closed chip
+  (`web/src/NoticeRow.tsx`, `web/src/widgets/widgetRows.ts`).
+- Not built yet: interactions, the inspector, table sort and image sources.
 
 ## 1. Review findings and resolutions
 

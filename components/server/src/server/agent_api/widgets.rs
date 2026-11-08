@@ -64,12 +64,14 @@ fn push(state: &AppState, session_id: &str, widget: &StoredWidget, operation: &s
     state.hub.push(session_id, Event::Update { update });
 }
 
+// Every result carries `schema`: the call gateway reports a reply without it as
+// `outcome_unknown`, hiding a definite refusal the ledger already recorded.
 fn invalid(error: &widgets::Invalid) -> Value {
-    json!({"state":"error","error":{"code":"invalid_widget","path":error.path,"message":error.message}})
+    json!({"schema":1,"state":"error","error":{"code":"invalid_widget","path":error.path,"message":error.message}})
 }
 
 fn outcome(code: &str, extra: Value) -> Value {
-    let mut value = json!({"state":"error","error":{"code":code}});
+    let mut value = json!({"schema":1,"state":"error","error":{"code":code}});
     if let (Some(map), Value::Object(extra)) = (value.as_object_mut(), extra) {
         map.extend(extra);
     }
@@ -328,4 +330,18 @@ pub(super) async fn read(
     value["document"] = json!(serde_json::to_string(&widget.document).map_err(|_| "unavailable")?);
     text_window(&mut value, "document", args)?;
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refusals_keep_the_gateway_schema() {
+        let refusal = outcome("revision_conflict", json!({"current": 2}));
+        assert_eq!(refusal["schema"], 1);
+        assert_eq!(refusal["current"], 2);
+        let error = widgets::validate(&json!({})).unwrap_err();
+        assert_eq!(invalid(&error)["schema"], 1);
+    }
 }

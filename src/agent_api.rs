@@ -691,7 +691,7 @@ const WIDGETS_TYPES: &str = r##"
 //   -> committed{revision,state_version,closed} | error revision_conflict{current}|unknown_widget|closed|invalid_widget
 // PatchOp: {op:"set"|"append",path,value} | {op:"remove",path}; path = JSON Pointer "/summary" or "#<node id>/steps/1/state".
 // All ops apply or none; a missing path is invalid. Receipts: cowboy_receipt({domain:"widgets",operation}).
-// widgets.list -> {widgets:{widget_id,handle,title,summary,revision,state_version,closed,updated_at_ms}[],next}
+// widgets.list({after?,limit?,include_closed?}) -> {widgets:{widget_id,handle,title,summary,revision,state_version,closed,updated_at_ms}[],next}
 // widgets.read(id,{offset,chars}) -> that meta + document (compact JSON text window) + range.
 type Id = string; // [A-Za-z0-9_-]{1,64}
 type Tone = "neutral"|"info"|"success"|"warning"|"error"|"running";
