@@ -653,7 +653,8 @@ it); macOS Chrome binds none of them.
   to…, `n` creates a folder (inside a folder, beside a session), `a` creates
   a session in the row's directory (nvim-tree's add), `r` (or `i`)
   renames, `x` moves to Trash (an idle session at once with Undo, a working
-  session or a folder after confirmation), and `,` opens the row's
+  session or a folder after confirmation), `f` opens Replace or fork for a
+  session that can still choose its next agent, and `,` opens the row's
   settings (Session Settings, or a folder's directory defaults). They match
   the letters of the actions modal `s` opens. All are region-scoped bare
   letters resolved from physical codes, and a key strip at the foot of the
@@ -878,6 +879,11 @@ Every Desktop menu, listbox and Select popup speaks the Vim list grammar:
 Arrow/Home/End/Enter/Escape keys MUI handles (`menuNavigation.ts`), so disabled
 rows, wrap and focus-visible stay MUI's and no menu adds a local key handler.
 Letters resolve from physical codes; a text field inside a popup owns its keys.
+Desktop never renders a native `<select>`: its popup belongs to the operating
+system and no page key reaches it. A Select that keeps the platform picker on
+touch switches to a list on Desktop. A panel that places its cursor while it
+loads stops at the first user input and never takes focus from an open list,
+or the menu's focus trap parks it on the popup frame where `j/k` start nowhere.
 A keyboard-first picker (the delivery picker) always paints its cursor row and
 names its keys in a quiet hint line, without a divider. In the Composer,
 `Ctrl-n`/`Ctrl-p` walk a visible completion list, as in Vim Insert mode.

@@ -1058,19 +1058,23 @@ export async function runSessionContextBrowserConformance(
     });
     flushSync(() => root.render(<Fixture desktop />));
     await openForm();
-    const forkOption = (id: string) => container.querySelector<HTMLSelectElement>(`[data-fork-option="${id}"]`);
+    const forkOption = (id: string) => container.querySelector<HTMLElement>(`[data-fork-option="${id}"]`);
     check(forkOption("model") && forkOption("effort") && !forkOption("fast"), "fork: model and reasoning are visible before expanding");
     await observe?.("fork-core");
     const beforeDraft = writes.length;
-    const selectOption = (id: string, value: string) => {
-      const input = forkOption(id)!;
-      input.value = value;
-      input.dispatchEvent(new Event("change", { bubbles: true }));
+    // Desktop options are lists (Vim menu keys reach them), not native selects.
+    const selectOption = async (id: string, label: string) => {
+      forkOption(id)!.closest(".MuiFormControl-root")!
+        .querySelector<HTMLElement>("[role='combobox']")!
+        .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      await until(() => Boolean(option(label)));
+      option(label)!.click();
+      await until(() => !document.querySelector("[role='listbox']"));
     };
-    selectOption("effort", "max");
+    await selectOption("effort", "Max");
     button("More options").click();
     await until(() => Boolean(forkOption("fast")));
-    selectOption("fast", "true");
+    await selectOption("fast", "On");
     await until(() => continueRun().disabled);
     check(writes.length === beforeDraft, "fork: configuration edits stay local");
     await observe?.("fork-advanced");

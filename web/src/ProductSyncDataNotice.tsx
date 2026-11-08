@@ -1,7 +1,8 @@
-import { Alert, Button, Stack, TextField, Typography } from "@mui/material";
+import { Alert, Button, MenuItem, Stack, TextField, Typography } from "@mui/material";
 import { useEffect, useId, useRef, useState } from "react";
 import { productSyncDatabase } from "./productSyncDatabase.ts";
 import { PRODUCT_SESSION_END_EVENT } from "./productSessionEnd.ts";
+import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
 /** An explicit local export, not a migration grant. Never sends a saved draft. */
 export function ProductSyncDataNotice(): React.JSX.Element | null {
@@ -184,22 +185,12 @@ export function ProductSyncDataNotice(): React.JSX.Element | null {
                 record at a time for private review; it may contain prompts or
                 attachments. Downloading does not restore, resend or delete it.
               </Typography>
-              <TextField
-                select
-                fullWidth
-                size="small"
-                label="Retained record"
-                value={selected}
+              <RetainedRecordPicker
+                count={keys.length}
+                selected={selected}
                 disabled={busy}
-                slotProps={{ select: { native: true } }}
-                onChange={(event) => select(Number(event.target.value))}
-              >
-                {keys.map((key, index) => (
-                  <option key={key} value={index}>
-                    Record {index + 1} of {keys.length}
-                  </option>
-                ))}
-              </TextField>
+                onSelect={select}
+              />
               <Stack direction="row" justifyContent="space-between" spacing={1}>
                 <Button
                   size="small"
@@ -284,5 +275,35 @@ export function ProductSyncDataNotice(): React.JSX.Element | null {
         </>
       )}
     </Stack>
+  );
+}
+
+/** Desktop lists answer the Vim menu keys; a native popup never does, so
+ *  only touch keeps the platform picker. */
+function RetainedRecordPicker({ count, selected, disabled, onSelect }: {
+  count: number;
+  selected: number;
+  disabled: boolean;
+  onSelect: (index: number) => void;
+}): React.JSX.Element {
+  const native = useSurfaceProfile().kind !== "desktop";
+  const Choice = native ? "option" : MenuItem;
+  return (
+    <TextField
+      select
+      fullWidth
+      size="small"
+      label="Retained record"
+      value={selected}
+      disabled={disabled}
+      slotProps={{ select: { native } }}
+      onChange={(event) => onSelect(Number(event.target.value))}
+    >
+      {Array.from({ length: count }, (_, index) => (
+        <Choice key={index} value={index}>
+          Record {index + 1} of {count}
+        </Choice>
+      ))}
+    </TextField>
   );
 }
