@@ -138,17 +138,8 @@ pub(super) fn handle(command: MachineCommand, context: MachineCommandContext) {
                     });
                     return;
                 };
-                entry.insert(LoginSession {
-                    cancel: cancel_tx,
-                    input: input_tx,
-                    candidate: None,
-                    account: None,
-                    provider: provider.clone(),
-                    expires_at_ms: unix_ms()
-                        .saturating_add(login_process::TIMEOUT.as_millis() as i64),
-                    verification_url: None,
-                    browser: None,
-                });
+                let session = LoginSession::new(cancel_tx, input_tx, None, provider.clone());
+                entry.insert(session);
             }
             tokio::spawn(run_login(
                 request_id,

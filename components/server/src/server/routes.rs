@@ -93,44 +93,7 @@ pub(super) fn provider_routes() -> Router<Arc<AppState>> {
                 .post(provider_accounts::login::start)
                 .layer(DefaultBodyLimit::max(16 * 1024)),
         )
-        .route(
-            "/api/provider-accounts/{account_id}/browser",
-            get(provider_accounts::browser::http_state),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/open",
-            post(provider_accounts::browser::http_open).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/navigate",
-            post(provider_accounts::browser::http_navigate).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/resize",
-            post(provider_accounts::browser::http_resize).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/snapshot",
-            post(provider_accounts::browser::http_snapshot).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/hibernate",
-            post(provider_accounts::browser::http_hibernate)
-                .layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/reset",
-            post(provider_accounts::browser::http_reset).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/browser/stream",
-            get(provider_accounts::browser::viewer::upgrade),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/logins/{request}/browser",
-            post(provider_accounts::browser::http_open_sign_in)
-                .layer(DefaultBodyLimit::max(16 * 1024)),
-        )
+        .merge(provider_browser_routes())
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
         .route("/api/usage/executors", get(api_usage_executors))
         .route(
@@ -198,6 +161,50 @@ pub(super) fn provider_routes() -> Router<Arc<AppState>> {
         .route(
             "/provider-artifacts/{digest}/{name}",
             get(plugin_release_artifact),
+        )
+}
+
+/// Owner-operated Machine browsers for named accounts: state, lifecycle
+/// commands, the viewer's display stream and the sign-in browser.
+fn provider_browser_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route(
+            "/api/provider-accounts/{account_id}/browser",
+            get(provider_accounts::browser::http_state),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/open",
+            post(provider_accounts::browser::http_open).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/navigate",
+            post(provider_accounts::browser::http_navigate).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/resize",
+            post(provider_accounts::browser::http_resize).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/snapshot",
+            post(provider_accounts::browser::http_snapshot).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/hibernate",
+            post(provider_accounts::browser::http_hibernate)
+                .layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/reset",
+            post(provider_accounts::browser::http_reset).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/stream",
+            get(provider_accounts::browser::viewer::upgrade),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/logins/{request}/browser",
+            post(provider_accounts::browser::http_open_sign_in)
+                .layer(DefaultBodyLimit::max(16 * 1024)),
         )
 }
 

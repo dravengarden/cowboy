@@ -37,6 +37,9 @@ pub mod host_resources;
 mod installation;
 mod liveness;
 mod login_process;
+mod login_sessions;
+use login_sessions::{LoginConnection, LoginIo, request_login_cancel, submit_login_code};
+pub(crate) use login_sessions::{LoginSession, LoginSessions};
 mod native_login;
 mod native_logout;
 #[cfg(target_os = "linux")]
@@ -54,93 +57,6 @@ mod workspace_identity;
 
 #[cfg(test)]
 mod preflight_tests;
-
-pub(crate) struct LoginSession {
-    cancel: tokio::sync::watch::Sender<bool>,
-    input: tokio::sync::mpsc::Sender<String>,
-    candidate: Option<crate::machine_plugins::AuthCandidateCleanup>,
-    /// The named account of a native login; `None` for Service-owned logins,
-    /// which no Machine browser may bind to.
-    pub(crate) account: Option<crate::provider_account::ProviderAccountId>,
-    pub(crate) provider: String,
-    pub(crate) expires_at_ms: i64,
-    /// The verification URL this Machine emitted for the login, once known.
-    pub(crate) verification_url: Option<String>,
-    /// The Machine browser instance and incarnation bound to this login.
-    pub(crate) browser: Option<(String, u64)>,
-}
-
-pub(crate) type LoginSessions =
-    Arc<parking_lot::Mutex<std::collections::HashMap<String, LoginSession>>>;
-
-/// Accept cancellation intent, never report process exit. Keep an active
-/// task's reservation until its own cleanup so the request cannot be reused
-/// while that task can still remove or mutate its registry entry.
-fn request_login_cancel(sessions: &LoginSessions, request: &str) -> bool {
-    let mut entries = sessions.lock();
-    let Some(session) = entries.get_mut(request) else {
-        // No live task accepts input for this request. Cancellation is
-        // idempotent intent, NOT proof of process exit or credential cleanup.
-        // Durable native profiles/candidate receipts still fence redispatch
-        // and any new login whose predecessor has not conclusively exited.
-        return true;
-    };
-    if let Some(candidate) = session.candidate.as_mut() {
-        session.cancel.send_replace(true);
-        // Candidate ownership transfers only after the login process exits.
-        // Drop is best-effort only. Preserve the entry if explicit cleanup
-        // fails so cancellation can retry rather than acknowledge a lost task.
-        if let Err(error) = candidate.discard() {
-            tracing::warn!(%error, "login candidate cancellation cleanup is unconfirmed");
-            return false;
-        }
-        entries.remove(request);
-        return true;
-    }
-    session.cancel.send(true).is_ok()
-}
-
-fn submit_login_code(sessions: &LoginSessions, request: &str, code: &str) -> bool {
-    crate::provider_account::login_code(code).is_ok_and(|code| {
-        sessions.lock().get(request).is_some_and(|session| {
-            !*session.cancel.borrow() && session.input.try_send(code.to_owned()).is_ok()
-        })
-    })
-}
-
-struct LoginConnection(LoginSessions);
-
-impl Drop for LoginConnection {
-    fn drop(&mut self) {
-        for (_, login) in self.0.lock().drain() {
-            let _ = login.cancel.send(true);
-        }
-    }
-}
-
-struct LoginIo {
-    cancel: tokio::sync::watch::Receiver<bool>,
-    input: tokio::sync::mpsc::Receiver<String>,
-    sessions: LoginSessions,
-}
-
-impl LoginIo {
-    fn spawn(
-        &self,
-        request: &str,
-        deadline: tokio::time::Instant,
-        command: &mut tokio::process::Command,
-    ) -> Result<tokio::process::Child, String> {
-        let sessions = self.sessions.lock();
-        if !sessions.contains_key(request) {
-            return Err(login_process::Failure::Cancelled.detail().into());
-        }
-        login_process::check(&self.cancel, deadline).map_err(|error| error.detail().to_owned())?;
-        // Cancellation signals under this registry lock; disconnect drains it.
-        // Keep the guard until spawn returns, so a revoked task cannot launch.
-        command.spawn().map_err(|error| error.to_string())
-    }
-}
 
 struct ControllerConfig {
     memory_relay: Option<Arc<crate::memory_relay::MemoryRelay>>,
@@ -165,6 +81,56 @@ struct ControllerConfig {
     provider_usage: crate::provider_usage_spool::ProviderUsageSpool,
     device_config: crate::config::Handle,
     durable_state: crate::machine_broker::DurableStateView,
+}
+
+impl ControllerConfig {
+    /// Open this connection's login registry and point the browser manager at
+    /// the connection. Browser state events and display streams follow it; a
+    /// replaced connection re-announces every running instance.
+    fn attach_browsers(
+        &self,
+        events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+        endpoint: &reqwest::Url,
+    ) -> (
+        LoginSessions,
+        LoginConnection,
+        crate::machine_browser::UplinkGuard,
+    ) {
+        let login_sessions: LoginSessions = Arc::default();
+        let login_connection = LoginConnection(Arc::clone(&login_sessions));
+        let uplink = self
+            .browsers
+            .attach(events.clone(), endpoint.clone(), &login_sessions);
+        (login_sessions, login_connection, uplink)
+    }
+
+    /// The command-family handlers' view of one connection.
+    fn command_context(
+        &self,
+        protocol: u16,
+        events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+        login_sessions: &LoginSessions,
+        runtime_commands: &tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
+    ) -> MachineCommandContext {
+        MachineCommandContext {
+            protocol,
+            execution_manager: Arc::clone(&self.execution),
+            service_id: self.service_id.clone(),
+            machine_id: self.machine_id.clone(),
+            plugin_operation_admission: self.plugin_operation_admission,
+            events: events.clone(),
+            components: Arc::clone(&self.components),
+            providers: Arc::clone(&self.providers),
+            browsers: Arc::clone(&self.browsers),
+            zed_adapter_socket: self.zed_adapter_socket.clone(),
+            code_adapter_socket: self.code_adapter_socket.clone(),
+            worktree_roots: self.worktree_roots.clone(),
+            workspaces: Arc::clone(&self.workspaces),
+            login_sessions: Arc::clone(login_sessions),
+            runtime_commands: runtime_commands.clone(),
+            durable_state: self.durable_state.clone(),
+        }
+    }
 }
 
 const DEFAULT_WORKSPACE_CONFIG: &str = "/etc/cowboy-machine/workspaces.json";
@@ -556,20 +522,8 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         args.artifact_public_key.as_deref(),
         bootstrap_acp_generation.clone(),
     )?);
-    let providers = Arc::new(MachinePluginStore::new(
-        &args.state_dir,
-        current_platform(),
-        std::env::consts::ARCH.to_owned(),
-    )?);
-    let _code_maintenance = providers.configure_code_maintenance(device_config.clone());
-    let browsers = crate::machine_browser::BrowserManager::new(
-        &args.state_dir,
-        Arc::clone(&providers),
-        Some(device_config.clone()),
-    )?;
-    // Units of a previous Machine process are adopted or stopped before any
-    // Controller can address them.
-    browsers.reconcile_at_start().await;
+    let (providers, _code_maintenance, browsers) =
+        start_plugin_runtime(&args.state_dir, &device_config).await?;
     // Reader floor 6a420ff5 is accepted for both components and Hawk's cold
     // bootstrap. Unadmitted Machines still open read-only without adoption.
     const INSTALLATION_TRACKING_ENABLED: bool = true;
@@ -806,6 +760,33 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     )
     .map(|_| ());
     log_guard.finish(result)
+}
+
+/// Open the Plugin store, start its Code maintenance and bring up the browser
+/// manager on top of it. Units of a previous Machine process are adopted or
+/// stopped before any Controller can address them.
+async fn start_plugin_runtime(
+    state_dir: &Path,
+    device_config: &crate::config::Handle,
+) -> anyhow::Result<(
+    Arc<MachinePluginStore>,
+    tokio::task::JoinHandle<()>,
+    Arc<crate::machine_browser::BrowserManager>,
+)> {
+    let providers = Arc::new(MachinePluginStore::new(
+        state_dir,
+        current_platform(),
+        std::env::consts::ARCH.to_owned(),
+    )?);
+    let code_maintenance = providers.configure_code_maintenance(device_config.clone());
+    let browsers = crate::machine_browser::BrowserManager::new(
+        state_dir,
+        Arc::clone(&providers),
+        Some(device_config.clone()),
+        host_resources::memory_headroom_bytes,
+    )?;
+    browsers.reconcile_at_start().await;
+    Ok((providers, code_maintenance, browsers))
 }
 
 fn managed_provider_environment(
@@ -1418,14 +1399,8 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
     // read loop non-blocking; the writer timeout still fences a stalled broker
     // and dropping this connection discards the short-lived queue.
     let (runtime_write_tx, runtime_write_rx) = tokio::sync::mpsc::unbounded_channel();
-    let login_sessions: LoginSessions = Arc::default();
-    let login_connection = LoginConnection(Arc::clone(&login_sessions));
-    // Browser state events and display streams follow this connection; a
-    // replaced connection re-announces every running instance.
-    let _browser_uplink =
-        config
-            .browsers
-            .attach(event_tx.clone(), lane_endpoint.clone(), &login_sessions);
+    let (login_sessions, login_connection, _browser_uplink) =
+        config.attach_browsers(&event_tx, &lane_endpoint);
     let (socket_sink, mut socket_stream) = socket.split();
     // Runtime streams can produce more than a small frame-count bound while the
     // WebSocket sink is flushing one large message. Keep the read/heartbeat loop
@@ -1628,24 +1603,10 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
                                         config.provider_usage.acknowledge(producer_id, *sequence)?;
                                         continue;
                                     }
-                                    handle_machine_command(command, MachineCommandContext {
-                                        protocol,
-                                        execution_manager: Arc::clone(&config.execution),
-                                        service_id: config.service_id.clone(),
-                                        machine_id: config.machine_id.clone(),
-                                        plugin_operation_admission: config.plugin_operation_admission,
-                                        events: event_tx.clone(),
-                                        components: Arc::clone(&config.components),
-                                        providers: Arc::clone(&config.providers),
-                                        browsers: Arc::clone(&config.browsers),
-                                        zed_adapter_socket: config.zed_adapter_socket.clone(),
-                                        code_adapter_socket: config.code_adapter_socket.clone(),
-                                        worktree_roots: config.worktree_roots.clone(),
-                                        workspaces: Arc::clone(&config.workspaces),
-                                        login_sessions: Arc::clone(&login_sessions),
-                                        runtime_commands: runtime_write_tx.clone(),
-                                        durable_state: config.durable_state.clone(),
-                                    }, &plugin_execution);
+                                    let context = config.command_context(
+                                        protocol, &event_tx, &login_sessions, &runtime_write_tx,
+                                    );
+                                    handle_machine_command(command, context, &plugin_execution);
                                 }
                                 _ => {}
                             }

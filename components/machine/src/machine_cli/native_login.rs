@@ -24,16 +24,12 @@ pub(super) fn start(
             });
             return;
         };
-        entry.insert(LoginSession {
-            cancel: cancel_tx,
-            input: input_tx,
-            candidate: None,
-            account: Some(providers.account_id().clone()),
-            provider: provider.clone(),
-            expires_at_ms: unix_ms().saturating_add(login_process::TIMEOUT.as_millis() as i64),
-            verification_url: None,
-            browser: None,
-        });
+        entry.insert(LoginSession::new(
+            cancel_tx,
+            input_tx,
+            Some(providers.account_id().clone()),
+            provider.clone(),
+        ));
     }
     tokio::spawn(async move {
         let mut login = LoginIo {
@@ -262,9 +258,13 @@ mod tests {
             input,
             sessions: Default::default(),
         };
-        let browsers =
-            crate::machine_browser::BrowserManager::new(temp.path(), Arc::new(root.clone()), None)
-                .unwrap();
+        let browsers = crate::machine_browser::BrowserManager::new(
+            temp.path(),
+            Arc::new(root.clone()),
+            None,
+            || None,
+        )
+        .unwrap();
         assert_eq!(
             run(
                 "request",

@@ -377,29 +377,8 @@ impl Host for SessionHost<'_> {
                     .await
                     .map_err(str::to_owned)
             }
-            "accounts.usage" => {
-                only_keys(&args, &["account_id"])?;
-                let owner = actions::account_owner(self.state, self.meta).await?;
-                let account = arg_str(&args, "account_id")?
-                    .parse()
-                    .map_err(str::to_owned)?;
-                let value = super::provider_accounts::usage::read_one(self.state, &owner, &account)
-                    .await
-                    .map_err(str::to_owned)?;
-                actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
-                Ok(value)
-            }
-            "accounts.browser" => {
-                only_keys(&args, &["account_id"])?;
-                let owner = actions::account_owner(self.state, self.meta).await?;
-                let account = crate::provider_account::ProviderAccountId::try_from(
-                    arg_str(&args, "account_id")?.to_owned(),
-                )
-                .map_err(|_| "invalid_argument".to_owned())?;
-                super::provider_accounts::browser::state_value(self.state, &owner, &account)
-                    .await
-                    .map_err(str::to_owned)
-            }
+            "accounts.usage" => self.account_usage(&args).await,
+            "accounts.browser" => self.account_browser(&args).await,
             "accounts.login_options" => {
                 only_keys(&args, &["account_id", "machine_id"])?;
                 let owner = actions::account_owner(self.state, self.meta).await?;
@@ -557,6 +536,31 @@ impl SessionHost<'_> {
     /// Call observations share the gateway's exact contract.
     async fn code(&self, op: &str, args: &Value) -> Result<Value, String> {
         code_reads::read(self.state, self.meta, op, args).await
+    }
+
+    async fn account_usage(&self, args: &Value) -> Result<Value, String> {
+        only_keys(args, &["account_id"])?;
+        let owner = actions::account_owner(self.state, self.meta).await?;
+        let account = arg_str(args, "account_id")?
+            .parse()
+            .map_err(str::to_owned)?;
+        let value = super::provider_accounts::usage::read_one(self.state, &owner, &account)
+            .await
+            .map_err(str::to_owned)?;
+        actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
+        Ok(value)
+    }
+
+    async fn account_browser(&self, args: &Value) -> Result<Value, String> {
+        only_keys(args, &["account_id"])?;
+        let owner = actions::account_owner(self.state, self.meta).await?;
+        let account = crate::provider_account::ProviderAccountId::try_from(
+            arg_str(args, "account_id")?.to_owned(),
+        )
+        .map_err(|_| "invalid_argument".to_owned())?;
+        super::provider_accounts::browser::state_value(self.state, &owner, &account)
+            .await
+            .map_err(str::to_owned)
     }
 
     async fn calls(&self, action: Action) -> Result<Value, String> {

@@ -579,16 +579,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         revision: Arc::new(AtomicU64::new(0)),
         service_config: service_config.clone(),
     };
-    let machine_presence_task = store.as_ref().map(|store| {
-        let store = store.clone();
-        let machine_snapshots = machine_snapshots.clone();
-        let shutdown = shutdown_rx.clone();
-        tokio::spawn(run_machine_presence_sweeper(
-            store,
-            machine_snapshots,
-            shutdown,
-        ))
-    });
+    let machine_presence_task =
+        spawn_machine_presence_sweeper(store.as_ref(), &machine_snapshots, &shutdown_rx);
     restore_provider_reset_schedules(&usage, store.as_ref()).await;
     let reset_task = spawn_provider_reset_timer(usage.clone(), store.clone(), shutdown_rx.clone());
     let supervisor = Arc::new(
@@ -1330,18 +1322,7 @@ async fn serve_axum(
     state: Arc<AppState>,
     shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
-    {
-        // Browser observations name accounts; the coordinator, not the shared
-        // diagnostics history, consumes them.
-        let weak = Arc::downgrade(&state);
-        state
-            .machine_control
-            .set_browser_observer(Arc::new(move |machine_id, event| {
-                if let Some(state) = weak.upgrade() {
-                    state.browsers.observe(machine_id, event);
-                }
-            }));
-    }
+    provider_accounts::browser::install_observer(&state);
     session_maintenance::start(&state);
     session_reclaim::listen_for_wakes(&state);
     memory_reclaim::start(&state);

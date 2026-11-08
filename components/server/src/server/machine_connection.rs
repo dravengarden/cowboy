@@ -385,6 +385,21 @@ pub(super) async fn run_machine_presence_sweeper(
     }
 }
 
+/// Runs the presence sweeper for as long as a durable store exists; without
+/// one there is no recorded reconnect grace to expire.
+pub(super) fn spawn_machine_presence_sweeper(
+    store: Option<&Store>,
+    machine_snapshots: &MachineSnapshots,
+    shutdown: &watch::Receiver<bool>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let store = store?.clone();
+    Some(tokio::spawn(run_machine_presence_sweeper(
+        store,
+        machine_snapshots.clone(),
+        shutdown.clone(),
+    )))
+}
+
 pub(super) fn is_transient_machine_disconnect(error: &str) -> bool {
     error.contains("is not connected") || error.contains("disconnected")
 }
@@ -817,12 +832,7 @@ pub(super) async fn handle_machine_ws(
         protocol,
         machine_command_tx,
     );
-    state
-        .session_maintenance
-        .observe_capacity(&hello.machine_id, hello.capacity.clone());
-    state
-        .browsers
-        .observe_capability(&hello.machine_id, hello.browser.clone());
+    observe_hello_capabilities(&state, &hello);
     let lanes = Arc::new(crate::machine_lanes::LaneSet::default());
     // Dropped when this connection ends, which refuses further lanes.
     let _lane_registration = lane_token.map(|token| {
@@ -1114,6 +1124,17 @@ pub(super) async fn handle_machine_ws(
         tracing::warn!(%error, machine = %hello.machine_id, "marking Machine offline");
     }
     state.machine_snapshots.publish().await;
+}
+
+/// Records what the connecting Machine offers: its session capacity for
+/// maintenance and its browser capability for owner-operated browsers.
+fn observe_hello_capabilities(state: &AppState, hello: &crate::machine_protocol::MachineHello) {
+    state
+        .session_maintenance
+        .observe_capacity(&hello.machine_id, hello.capacity.clone());
+    state
+        .browsers
+        .observe_capability(&hello.machine_id, hello.browser.clone());
 }
 
 /// Converges a reconnected Machine's account grants, interrupted plugin

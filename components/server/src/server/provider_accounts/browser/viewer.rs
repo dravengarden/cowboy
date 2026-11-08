@@ -247,7 +247,6 @@ async fn serve(
         .await;
 }
 
-#[allow(clippy::too_many_lines)] // One select loop owns both hops and every authorization deadline.
 async fn relay<S, R>(
     state: &Arc<AppState>,
     session: &ViewerSession,
@@ -279,22 +278,39 @@ where
     {
         return "viewer_closed";
     }
-    let initial_deadline_ms = if let Some(token) = session.cookie_token.as_deref() {
-        let Some(snapshot) = product_auth_session_message(state, token).await else {
-            let _ = viewer_sink.send(ws_close_auth_required()).await;
-            return "auth_required";
-        };
-        if send_json(viewer_sink, &snapshot.message).await.is_err() {
-            return "viewer_closed";
-        }
-        if !snapshot.valid || snapshot.user_id != session.principal.user_id {
-            let _ = viewer_sink.send(ws_close_auth_required()).await;
-            return "auth_required";
-        }
-        snapshot.next_due_at_ms
-    } else {
-        i64::MAX
+    let initial_deadline_ms = match session.cookie_token.as_deref() {
+        Some(token) => match renew_auth(state, session, viewer_sink, token).await {
+            Ok(next_due_at_ms) => next_due_at_ms,
+            Err(end) => return end,
+        },
+        None => i64::MAX,
     };
+    relay_frames(
+        state,
+        session,
+        (viewer_sink, viewer_stream),
+        (&mut machine_sink, &mut machine_stream),
+        cancelled,
+        initial_deadline_ms,
+    )
+    .await
+}
+
+/// One select loop owns both hops and every authorization deadline.
+async fn relay_frames<S, R, MS, MR>(
+    state: &Arc<AppState>,
+    session: &ViewerSession,
+    (viewer_sink, viewer_stream): (&mut S, &mut R),
+    (machine_sink, machine_stream): (&mut MS, &mut MR),
+    cancelled: &mut tokio::sync::watch::Receiver<bool>,
+    initial_deadline_ms: i64,
+) -> &'static str
+where
+    S: SinkExt<Message> + Unpin,
+    R: StreamExt<Item = Result<Message, axum::Error>> + Unpin,
+    MS: SinkExt<Message> + Unpin,
+    MR: StreamExt<Item = Result<Message, axum::Error>> + Unpin,
+{
     let auth_deadline =
         tokio::time::sleep_until(product_auth_deadline_instant(initial_deadline_ms));
     tokio::pin!(auth_deadline);
@@ -314,57 +330,8 @@ where
                         }
                     }
                     Some(Ok(Message::Text(text))) => {
-                        if !principal_still_valid(
-                            state,
-                            session.via_cookie,
-                            session.cookie_token.as_deref(),
-                            session.bearer.as_deref(),
-                            session.device_identity.as_ref(),
-                            &session.principal,
-                        )
-                        .await
-                        {
-                            let _ = viewer_sink.send(ws_close_auth_required()).await;
-                            return "auth_required";
-                        }
-                        let Ok(control) = serde_json::from_str::<ViewerControl>(&text) else {
-                            return "viewer_protocol_error";
-                        };
-                        match control {
-                            ViewerControl::Lease => {
-                                let expires_at_ms = super::now_ms().saturating_add(LEASE_EXPIRY_MS);
-                                if state.machine_control.browser_lease(
-                                    &session.connection,
-                                    session.instance.clone(),
-                                    session.attachment_id.clone(),
-                                    expires_at_ms,
-                                ).is_err() {
-                                    return "machine_connection_changed";
-                                }
-                            }
-                            ViewerControl::Resize { width, height } => {
-                                let result = state.machine_control.browser_command(
-                                    &session.connection,
-                                    super::request_id("browser-resize"),
-                                    Command::Resize {
-                                        instance: session.instance.clone(),
-                                        attachment_id: session.attachment_id.clone(),
-                                        width,
-                                        height,
-                                    },
-                                    std::time::Duration::from_secs(15),
-                                ).await;
-                                let reply = match result {
-                                    Ok(event) => json!({"type":"state","state":event}),
-                                    Err(error) => {
-                                        tracing::info!(%error, "browser resize failed");
-                                        json!({"type":"error","code":"resize_failed"})
-                                    }
-                                };
-                                if send_json(viewer_sink, &reply).await.is_err() {
-                                    return "viewer_closed";
-                                }
-                            }
+                        if let Err(end) = viewer_control(state, session, viewer_sink, &text).await {
+                            return end;
                         }
                     }
                     Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
@@ -393,18 +360,12 @@ where
                     let _ = viewer_sink.send(ws_close_auth_required()).await;
                     return "auth_required";
                 };
-                let Some(snapshot) = product_auth_session_message(state, token).await else {
-                    let _ = viewer_sink.send(ws_close_auth_required()).await;
-                    return "auth_required";
-                };
-                if send_json(viewer_sink, &snapshot.message).await.is_err() {
-                    return "viewer_closed";
+                match renew_auth(state, session, viewer_sink, token).await {
+                    Ok(next_due_at_ms) => {
+                        auth_deadline.as_mut().reset(product_auth_deadline_instant(next_due_at_ms));
+                    }
+                    Err(end) => return end,
                 }
-                if !snapshot.valid || snapshot.user_id != session.principal.user_id {
-                    let _ = viewer_sink.send(ws_close_auth_required()).await;
-                    return "auth_required";
-                }
-                auth_deadline.as_mut().reset(product_auth_deadline_instant(snapshot.next_due_at_ms));
             }
             _ = heartbeat.tick() => {
                 if !principal_still_valid(
@@ -429,4 +390,103 @@ where
             }
         }
     }
+}
+
+/// One text frame from the viewer: a lease renewal or a resize request,
+/// accepted only while the principal is still valid. `Err` ends the stream.
+async fn viewer_control<S>(
+    state: &Arc<AppState>,
+    session: &ViewerSession,
+    viewer_sink: &mut S,
+    text: &str,
+) -> Result<(), &'static str>
+where
+    S: SinkExt<Message> + Unpin,
+{
+    if !principal_still_valid(
+        state,
+        session.via_cookie,
+        session.cookie_token.as_deref(),
+        session.bearer.as_deref(),
+        session.device_identity.as_ref(),
+        &session.principal,
+    )
+    .await
+    {
+        let _ = viewer_sink.send(ws_close_auth_required()).await;
+        return Err("auth_required");
+    }
+    let Ok(control) = serde_json::from_str::<ViewerControl>(text) else {
+        return Err("viewer_protocol_error");
+    };
+    match control {
+        ViewerControl::Lease => {
+            let expires_at_ms = super::now_ms().saturating_add(LEASE_EXPIRY_MS);
+            if state
+                .machine_control
+                .browser_lease(
+                    &session.connection,
+                    session.instance.clone(),
+                    session.attachment_id.clone(),
+                    expires_at_ms,
+                )
+                .is_err()
+            {
+                return Err("machine_connection_changed");
+            }
+        }
+        ViewerControl::Resize { width, height } => {
+            let result = state
+                .machine_control
+                .browser_command(
+                    &session.connection,
+                    super::request_id("browser-resize"),
+                    Command::Resize {
+                        instance: session.instance.clone(),
+                        attachment_id: session.attachment_id.clone(),
+                        width,
+                        height,
+                    },
+                    std::time::Duration::from_secs(15),
+                )
+                .await;
+            let reply = match result {
+                Ok(event) => json!({"type":"state","state":event}),
+                Err(error) => {
+                    tracing::info!(%error, "browser resize failed");
+                    json!({"type":"error","code":"resize_failed"})
+                }
+            };
+            if send_json(viewer_sink, &reply).await.is_err() {
+                return Err("viewer_closed");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Replays the product session snapshot to the viewer and closes the stream
+/// unless it still belongs to the attached principal; `Ok` carries when the
+/// next check is due.
+async fn renew_auth<S>(
+    state: &Arc<AppState>,
+    session: &ViewerSession,
+    viewer_sink: &mut S,
+    token: &str,
+) -> Result<i64, &'static str>
+where
+    S: SinkExt<Message> + Unpin,
+{
+    let Some(snapshot) = product_auth_session_message(state, token).await else {
+        let _ = viewer_sink.send(ws_close_auth_required()).await;
+        return Err("auth_required");
+    };
+    if send_json(viewer_sink, &snapshot.message).await.is_err() {
+        return Err("viewer_closed");
+    }
+    if !snapshot.valid || snapshot.user_id != session.principal.user_id {
+        let _ = viewer_sink.send(ws_close_auth_required()).await;
+        return Err("auth_required");
+    }
+    Ok(snapshot.next_due_at_ms)
 }

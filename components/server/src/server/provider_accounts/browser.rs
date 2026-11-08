@@ -43,6 +43,19 @@ fn request_id(prefix: &str) -> String {
     )
 }
 
+/// Routes the Machines' browser observations to the coordinator. They name
+/// accounts, so the shared diagnostics history never consumes them.
+pub(in crate::server) fn install_observer(state: &Arc<AppState>) {
+    let weak = Arc::downgrade(state);
+    state
+        .machine_control
+        .set_browser_observer(Arc::new(move |machine_id, event| {
+            if let Some(state) = weak.upgrade() {
+                state.browsers.observe(machine_id, event);
+            }
+        }));
+}
+
 /// Whether the owner may operate a browser for the account: ownership, the
 /// Service gate, the account's availability and its browser enablement.
 pub(in crate::server) async fn admit(

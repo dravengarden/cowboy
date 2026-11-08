@@ -1334,6 +1334,10 @@ export function validateProviderManifest(input: unknown): asserts input is Provi
     sidecarAuthEnvironment,
     input.sdk_version,
   );
+  validateProviderCompatibility(compatibility);
+}
+
+function validateProviderCompatibility(compatibility: Record<string, unknown>): void {
   if (
     typeof compatibility.min_controller_contract !== "number" ||
     typeof compatibility.max_controller_contract !== "number" ||
@@ -1477,42 +1481,7 @@ function validateAuthentication(
     }
     methods.add(method.id);
     if (method.native_identity !== undefined && method.native_identity !== null) {
-      const identity = method.native_identity;
-      const fieldPath = (path: unknown): boolean =>
-        Array.isArray(path) &&
-        path.length > 0 &&
-        path.length <= 16 &&
-        path.every(
-          (part) =>
-            typeof part === "string" &&
-            part.length > 0 &&
-            new TextEncoder().encode(part).length <= 128 &&
-            !/[\p{Cc}]/u.test(part),
-        );
-      if (
-        compareProviderVersions(sdkVersion, "3.1.15") < 0 ||
-        method.executor.kind !== "command_v1" ||
-        !isRecord(identity) ||
-        !hasOnlyKeys(identity, [
-          "kind",
-          "authority",
-          "relative_path",
-          "subject_path",
-          "tenant_path",
-        ]) ||
-        identity.kind !== "fresh_login_json_v1" ||
-        typeof identity.authority !== "string" ||
-        !isIdentifier(identity.authority) ||
-        typeof identity.relative_path !== "string" ||
-        new TextEncoder().encode(identity.relative_path).length > 512 ||
-        !isSafeRelativePath(identity.relative_path) ||
-        !fieldPath(identity.subject_path) ||
-        (identity.tenant_path !== undefined &&
-          identity.tenant_path !== null &&
-          !fieldPath(identity.tenant_path))
-      ) {
-        throw new Error("Invalid Provider native identity recipe");
-      }
+      validateNativeIdentityRecipe(method.native_identity, method.executor, sdkVersion);
     }
     if (method.native_logout !== undefined && method.native_logout !== null) {
       const logout = method.native_logout;
@@ -1571,6 +1540,42 @@ function validateAuthentication(
         throw new Error("Provider authentication executor is unavailable on a platform");
       }
     }
+  }
+}
+
+function validateNativeIdentityRecipe(
+  identity: unknown,
+  executor: Record<string, unknown>,
+  sdkVersion: string,
+): void {
+  const fieldPath = (path: unknown): boolean =>
+    Array.isArray(path) &&
+    path.length > 0 &&
+    path.length <= 16 &&
+    path.every(
+      (part) =>
+        typeof part === "string" &&
+        part.length > 0 &&
+        new TextEncoder().encode(part).length <= 128 &&
+        !/[\p{Cc}]/u.test(part),
+    );
+  if (
+    compareProviderVersions(sdkVersion, "3.1.15") < 0 ||
+    executor.kind !== "command_v1" ||
+    !isRecord(identity) ||
+    !hasOnlyKeys(identity, ["kind", "authority", "relative_path", "subject_path", "tenant_path"]) ||
+    identity.kind !== "fresh_login_json_v1" ||
+    typeof identity.authority !== "string" ||
+    !isIdentifier(identity.authority) ||
+    typeof identity.relative_path !== "string" ||
+    new TextEncoder().encode(identity.relative_path).length > 512 ||
+    !isSafeRelativePath(identity.relative_path) ||
+    !fieldPath(identity.subject_path) ||
+    (identity.tenant_path !== undefined &&
+      identity.tenant_path !== null &&
+      !fieldPath(identity.tenant_path))
+  ) {
+    throw new Error("Invalid Provider native identity recipe");
   }
 }
 
@@ -1810,28 +1815,7 @@ function validateProviderUiManifestContract(
   if (input.host.tool_presentations.length > 64) {
     throw new Error("Too many Provider tool presentations");
   }
-  const toolPresentationNames = new Set<string>();
-  for (const raw of input.host.tool_presentations) {
-    if (
-      !isRecord(raw) ||
-      typeof raw.tool_name !== "string" ||
-      !hasOnlyKeys(raw, ["tool_name", "renderer"]) ||
-      !raw.tool_name.trim() ||
-      raw.tool_name.trim() !== raw.tool_name ||
-      raw.tool_name.length > 128 ||
-      ![...raw.tool_name].every((character) => {
-        const code = character.codePointAt(0) ?? 0;
-        return code >= 0x20 && code <= 0x7e;
-      }) ||
-      raw.renderer !== "todo_list_v1"
-    ) {
-      throw new Error("Invalid Provider tool presentation");
-    }
-    if (toolPresentationNames.has(raw.tool_name)) {
-      throw new Error("Duplicate Provider tool presentation");
-    }
-    toolPresentationNames.add(raw.tool_name);
-  }
+  validateToolPresentations(input.host.tool_presentations);
   if (input.configuration.presets.length > 32) {
     throw new Error("Too many Provider presets");
   }
@@ -2032,6 +2016,31 @@ function validateProviderUiManifestContract(
     );
   }
   if (nodes.count > 2_048) throw new Error("Provider UI has too many nodes");
+}
+
+function validateToolPresentations(presentations: unknown[]): void {
+  const toolPresentationNames = new Set<string>();
+  for (const raw of presentations) {
+    if (
+      !isRecord(raw) ||
+      typeof raw.tool_name !== "string" ||
+      !hasOnlyKeys(raw, ["tool_name", "renderer"]) ||
+      !raw.tool_name.trim() ||
+      raw.tool_name.trim() !== raw.tool_name ||
+      raw.tool_name.length > 128 ||
+      ![...raw.tool_name].every((character) => {
+        const code = character.codePointAt(0) ?? 0;
+        return code >= 0x20 && code <= 0x7e;
+      }) ||
+      raw.renderer !== "todo_list_v1"
+    ) {
+      throw new Error("Invalid Provider tool presentation");
+    }
+    if (toolPresentationNames.has(raw.tool_name)) {
+      throw new Error("Duplicate Provider tool presentation");
+    }
+    toolPresentationNames.add(raw.tool_name);
+  }
 }
 
 const SURFACE_SLOTS: readonly SurfaceSlot[] = [

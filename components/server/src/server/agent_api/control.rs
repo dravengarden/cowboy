@@ -14,6 +14,8 @@ use axum::{
 use serde::Deserialize;
 use tower::ServiceExt as _;
 
+mod browser_routes;
+
 static EFFECTS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(16)));
 
 async fn identity(
@@ -430,31 +432,6 @@ fn write_gate(
 
 fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<AppState>>)> {
     Some(match name {
-        "accounts.browser_open" => (
-            "POST",
-            "/api/provider-accounts/{account}/browser/open",
-            post(web::provider_accounts::browser::http_open),
-        ),
-        "accounts.browser_navigate" => (
-            "POST",
-            "/api/provider-accounts/{account}/browser/navigate",
-            post(web::provider_accounts::browser::http_navigate),
-        ),
-        "accounts.browser_snapshot" => (
-            "POST",
-            "/api/provider-accounts/{account}/browser/snapshot",
-            post(web::provider_accounts::browser::http_snapshot),
-        ),
-        "accounts.browser_hibernate" => (
-            "POST",
-            "/api/provider-accounts/{account}/browser/hibernate",
-            post(web::provider_accounts::browser::http_hibernate),
-        ),
-        "accounts.browser_reset" => (
-            "POST",
-            "/api/provider-accounts/{account}/browser/reset",
-            post(web::provider_accounts::browser::http_reset),
-        ),
         "machines.refresh" => (
             "POST",
             "/api/machines/{machine}/refresh",
@@ -736,7 +713,7 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/drafts/{id}/history/{revision}",
             get(web::draft_documents::history_snapshot),
         ),
-        _ => return None,
+        _ => return browser_routes::browser_route(name),
     })
 }
 
