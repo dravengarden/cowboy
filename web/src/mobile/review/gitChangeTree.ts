@@ -23,9 +23,30 @@ function directory(name: string, path: string): MutableDirectory {
   };
 }
 
+// Numeric-aware, so `file-2` precedes `file-10` as in desktop file managers.
+const names = new Intl.Collator(undefined, { numeric: true });
+
+/**
+ * The depth-first order in which the change tree lists two paths: at their
+ * first differing segment a directory precedes a file, then names compare.
+ * Sorting a review queue with it keeps Next/Previous on the visible order.
+ */
+export function compareGitTreePaths(left: string, right: string): number {
+  const a = left.split("/").filter(Boolean);
+  const b = right.split("/").filter(Boolean);
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    if (a[index] === b[index]) continue;
+    const leftIsFile = index === a.length - 1;
+    const rightIsFile = index === b.length - 1;
+    if (leftIsFile !== rightIsFile) return leftIsFile ? 1 : -1;
+    return names.compare(a[index] ?? "", b[index] ?? "");
+  }
+  return a.length - b.length;
+}
+
 function finish(node: MutableDirectory): GitChangeTreeNode[] {
   const directories = [...node.directories.values()]
-    .sort((left, right) => left.name.localeCompare(right.name))
+    .sort((left, right) => names.compare(left.name, right.name))
     .map((child) =>
       compactDirectory({
         kind: child.kind,
@@ -35,7 +56,7 @@ function finish(node: MutableDirectory): GitChangeTreeNode[] {
       })
     );
   const files = node.children.sort((left, right) =>
-    left.name.localeCompare(right.name)
+    names.compare(left.name, right.name)
   );
   return [...directories, ...files];
 }

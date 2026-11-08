@@ -1,4 +1,5 @@
 import type { CodeChange, CodeDiffScope } from "./codeApi.ts";
+import { compareGitTreePaths } from "./gitChangeTree.ts";
 
 export type GitReviewSectionKind =
   | "comparison"
@@ -18,10 +19,18 @@ export interface GitReviewSection {
   entries: GitReviewEntry[];
 }
 
+/**
+ * Group changes by review scope. Each section lists its entries in the change
+ * tree's visible order, so the review queue, Next/Previous and the windowed
+ * list follow what the reader sees rather than Git's status order.
+ */
 export function groupGitChanges(
-  changes: CodeChange[],
+  input: CodeChange[],
   comparison?: string,
 ): GitReviewSection[] {
+  const changes = input.toSorted((left, right) =>
+    compareGitTreePaths(left.path, right.path)
+  );
   if (comparison) {
     return [{
       kind: "comparison",
