@@ -65,6 +65,14 @@ const MEMORY_POLL: Duration = Duration::from_secs(1);
 const UNIT_START_TIMEOUT: Duration = Duration::from_secs(20);
 /// Ordinary launcher commands.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
+/// A navigation: the launcher lets its helper run 20 s, kills it, and
+/// replies within its kill grace; waiting past that means every reply
+/// reports a settled navigation. No reply by then is an uncertain
+/// outcome the instance cannot be reused across.
+#[cfg(not(test))]
+const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const NAVIGATE_TIMEOUT: Duration = Duration::from_millis(500);
 /// A frozen or stop-time profile copy.
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long the launcher waits for the browser to exit on `SIGTERM` before a

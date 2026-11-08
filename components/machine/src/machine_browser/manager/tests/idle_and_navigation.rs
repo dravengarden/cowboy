@@ -330,3 +330,43 @@ async fn a_rebinding_never_retries_a_navigation_that_failed_under_another_bindin
     let sent = tokio::time::timeout(Duration::from_millis(300), reader.read_line(&mut line)).await;
     assert!(sent.is_err(), "a stale URL reached the launcher: {line}");
 }
+
+#[tokio::test]
+async fn an_unanswered_sign_in_navigation_stops_the_instance_instead_of_reusing_it() {
+    let fixture = fixture().await;
+    fixture
+        .manager
+        .trust_confinement
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let logins: LoginSessions = Arc::default();
+    let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+    let _uplink = fixture.manager.attach(
+        events,
+        reqwest::Url::parse("https://controller.invalid/").unwrap(),
+        &logins,
+    );
+    let mut session = login(&fixture.account, unix_ms() + 60_000);
+    session.verification_url = Some("https://claude.ai/oauth/authorize?a".into());
+    logins.lock().insert("login-a".into(), session);
+    // The launcher reads the navigation but never answers: its helper may
+    // still navigate later, so the instance must not serve another login.
+    let answer = fixture
+        .manager
+        .open(
+            "o1",
+            fixture.account.clone(),
+            "inst-1".into(),
+            Purpose::SignIn {
+                login_request_id: "login-a".into(),
+            },
+            Viewport {
+                width: 1280,
+                height: 800,
+                scale: 1,
+            },
+        )
+        .await;
+    assert_ne!(answer.reason, None);
+    assert_eq!(fixture.instance.live.lock().phase, Phase::Stopping);
+    assert!(fixture.instance.live.lock().failed_navigation.is_none());
+}

@@ -383,8 +383,16 @@ impl BrowserManager {
             .control
             .lock()
             .await
-            .navigate(url, COMMAND_TIMEOUT)
+            .navigate(url, NAVIGATE_TIMEOUT)
             .await;
+        if let Err(error) = &navigated
+            && error.downcast_ref::<LauncherRefusal>().is_none()
+        {
+            // No reply: the helper may still navigate later, under whatever
+            // binding the instance has by then. The instance is not reused.
+            tracing::warn!(%error, instance = %instance.instance_id, "browser navigation outcome unknown");
+            return Err(Navigation::Violation(Reason::Failed));
+        }
         let mut live = instance.live.lock();
         if let Err(error) = navigated {
             tracing::warn!(%error, instance = %instance.instance_id, "browser navigation failed");
@@ -399,10 +407,11 @@ impl BrowserManager {
 /// Why [`BrowserManager::navigate_checked`] did not navigate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Navigation {
-    /// Confinement failed before the navigation: the instance must stop.
+    /// Confinement failed before the navigation, or the launcher never
+    /// answered it (its effect is unsettled): the instance must stop.
     Violation(Reason),
-    /// The launcher rejected the navigation or did not answer in time; the
-    /// instance is intact and a later navigation may succeed.
+    /// The launcher answered with a refusal (its helper ended or was
+    /// killed); the instance is intact and a later navigation may succeed.
     Rejected,
     /// The instance no longer serves the binding the navigation was
     /// requested under, or is stopping: nothing was sent.
