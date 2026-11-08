@@ -155,7 +155,7 @@ maintenance/pin churn.
 | Workspace symbols                                                           | structure (implemented)              | Bounded tag scan per request (`cowboy.code.symbols`); an index and language-engine refinement when measured gaps justify them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Hover, definition, declaration, type definition, implementation, references | language engine                      | Keep Zed (server lifecycle, project settings, multi-server). Re-evaluate per language against a direct LSP host or content-matched SCIP only on measured gaps.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Diagnostics                                                                 | language engine, per open buffer     | Extend per [20](20-agent-code-intelligence.md): analysis-frontier evidence, observed-scope summaries.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Project checks (`check@1`)                                                  | core (implemented)                   | A worktree declares up to eight checks in `.cowboy/checks.json` (`schemaVersion` 1; `id`, `argv`, `format` `cargo-json`/`tsc`/`lines`, `timeoutSeconds`). Agents run one explicitly with the `code.check` action; it needs "Project language servers" on and starts the command through the session's own execution keeper (`process/start`: the session's execution unit and budget, never the Controller), bounded by its timeout (≤30 min) and 16 MiB of output. Results become anchored diagnostics (≤1,000), kept per session in memory and read with `cowboy.code.checks()`; they are evidence for the inputs the command saw. Review annotates an open source file with them and dates each run (`GET /checks`); diff annotations follow. |
+| Project checks (`check@1`)                                                  | core (implemented)                   | A worktree declares up to eight checks in `.cowboy/checks.json` (`schemaVersion` 1; `id`, `argv`, `format` `cargo-json`/`tsc`/`lines`, `timeoutSeconds`). Agents run one explicitly with the `code.check` action; it needs "Project language servers" on and starts the command through the session's own execution keeper (`process/start`: the session's execution unit and budget, never the Controller), bounded by its timeout (≤30 min) and 16 MiB of output. Results become anchored diagnostics (≤1,000), kept per session in memory and read with `cowboy.code.checks()`; they are evidence for the inputs the command saw. Review annotates source files and verified working-tree diff projections and dates each run (`GET /checks`); staged history and unmatched projections carry no current-file marks. The UI can explicitly start a declared check (`POST /checks`) under current product Operator and session-mutation authority. Requests carry the Controller epoch and an operation ID: retries cannot re-execute after a restart or an unresolved request. Up to 64 compact receipts per session and 4,096 per process are retained without eviction; exhaustion refuses new requests. Definite pre-execution refusals release their reservation. This receipt is not durable run recovery. Failed, timed-out and truncated runs never appear as green empty results. |
 | Semantic tokens, inlay hints                                                | language engine                      | Keep; enrichment only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | AI review findings                                                          | Calls `review.start`                 | Render as annotations anchored to the call's `input_revision`, file identity and diff side; stale or unmapped otherwise.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
@@ -177,6 +177,43 @@ each worktree starts its own language servers. Before any automatic warming:
 
 Buffer-mirror accounting is not an RSS bound
 (`docs/plugin-owned-buffer-reads.md`).
+
+Automatic buffer acquisition uses Machine-side admission before native
+`ensureWorktree` or `openBuffer`. Device settings `code.agent_rss_budget`
+(default 2 GiB), `code.agent_process_budget` (32), and
+`code.agent_cpu_millicores` (2000) apply live. Zero disables automatic warming.
+The Machine sums actual process RSS across its original contained Code trees
+and reads kernel subtree CPU usage over a fresh 250 ms window. Shared resident
+pages can count more than once. Missing ownership, legacy sockets, changing
+membership, unsupported hosts, busy interactive routes, or stale observations
+refuse warming; none is interpreted as zero consumption. Automatic admissions
+serialize with each other, while interactive requests bypass their queue and
+resource thresholds. The observation retains the exact runtime instances and
+expires after two seconds before any native buffer effect.
+
+These are **admission thresholds**, not kernel memory or CPU limits. Language
+servers can grow after admission, and interactive use remains available over
+the thresholds. No process is killed to make an automatic request fit. A
+retained Machine without this operation cannot silently fall back to unbudgeted
+automatic warming. Controller buffer/worktree count reservations remain in
+addition to these measured thresholds; a definite resource refusal can release
+only a reservation with no prior possible native effect.
+
+Worktree runtime and readiness-probe groups reserve a bounded retirement slot before
+spawn (at most 4096 live or retiring groups). Dropping the last runtime owner
+signals its original group but transfers its opened containment descriptor to
+Machine-owned retirement tracking. Pending exits remain in resource samples;
+failed observations refuse warming. Only confirmed removal of that original
+group releases tracking, closing the late-membership race too. Cold readiness
+failure is a definite pre-buffer refusal, while its process cleanup is still
+owned independently. No missing group or replacement path is treated as a new
+cleanup target.
+
+The settings use the shared typed Device schema. Device writes currently have
+no remote configuration writer, so scoped AI control uses the host-owned
+`cowboy config show/check/diff/apply --scope device --format json` boundary;
+Service configuration mutations cannot authorize a Device policy edit. This
+exception ends when authenticated Device configuration mutation is available.
 
 ## Removing the implementation name from the product
 

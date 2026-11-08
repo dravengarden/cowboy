@@ -451,7 +451,7 @@ App's own splitter and drawer bindings have no dedicated browser fixture.
 |---|---|
 | 4.1 | The pure parts left first: timeline reducers (`storeTimeline.ts`), mobile Review sync state (`mobileReviewState.ts`) and session derivation (`sessionDerivation.ts`); `store.ts` 6,105 → 5,785 lines. The rest is one call cycle (queue → send → socket → handle → queue), `setState` publishes connection status, and opening a socket first awaits the IndexedDB dataset, so a unit-level transport seam needs a fake socket, dataset and clock together; the browser fixtures already substitute `WebSocket` for these traces. That harness now exists without a production seam: `web/src/storeConnection.isolated.ts` runs the unchanged store against the real product sync database over `FakeIndexedDb`, a fixed device proof, and fake `WebSocket`/`location`/`document`/frame stand-ins, in its own `bun test` process (module mocks would leak across files); it pins the retry socket, superseded-close and first-backoff traces, and fails when the superseded-close guard is removed (checked). Splitting connection state out of `store.ts` can now be done against it. Done against it (2026-11-06): the reconnect timer and countdown (`reconnectScheduler.ts`), stale-socket watch (`livenessWatch.ts`), outage accounting (`outageTracker.ts`), close-code classification (`classifySocketClose` in `connectionRecovery.ts`) and the per-socket upgrade/bootstrap/session-list deadlines (`socketGuards.ts`) moved out with injected clocks and unit tests; the harness grew to eight traces (capacity queue and 4429 back-off, 4001 auth pause, manual retry clearing the countdown, bootstrap-gated `live`). One real bug fell out: a manual retry left the previous countdown visible. `store.ts` is 5,757 lines and `openBoundSocket` 239. The socket variables themselves stay in `store.ts`: wrapping them in an object renames ~170 references without isolating behaviour, and the remaining body (admission replay, subscription resend) reads store-private state, so further moves grow the file under the ratchet |
 | 4.2 | The `impl Hub` file layout is split by concern without changing ownership or lock order: `core/hub_queue.rs` (send queue, drafts, dispatch), `core/hub_sync.rs`, `core/hub_provider_pins.rs` and `core/hub_config.rs`; core.rs's inline tests moved to files. `core.rs` falls from 8,037 to 5,150 measured lines. Queue policy is now separate from its effects: `Hub::drain_decision` is a pure function returning a `DrainDecision`, the dispatch/persist/fan-out effects stay in the caller under the same lock order, and `core/hub_queue/drain_policy_tests.rs` tables every decision |
-| 4.3 | Not started (Machine code: a Machine maintenance boundary) |
+| 4.3 | `handle_machine_command` (881 lines) only routes now: each command family (sessions, telemetry, Plugins, Provider authentication, login) owns its arms in `machine_cli/command_*.rs`, all 37 moved byte for byte, and the routing match keeps the exhaustiveness proof. `spawn_worker` (559 → 340) keeps spawning, PID ownership under the launch lock, cancellation and reaping; `machine_broker/worker_launch.rs` owns its launch preparation (exact Provider generation and install-fence wait, placement checks, session environment, previous direct owner), moved verbatim. Machine tests 581 passed. Released to Hawk on 2026-11-06 as a host-only Machine maintenance at `816ba6225` (worker generation unchanged, `worker-4f248c87703274b63cd9`); Falcon and OVH take it at their next Machine maintenance |
 
 ### Phase 7 status (2026-11-05)
 
@@ -460,6 +460,108 @@ paths, of which only nine state their own exit condition. Both protocol
 floors are still 1 (current runtime 5, Machine 41), so every older-Machine
 branch waits on one Machine maintenance that raises them. 7.2 and 7.3 are
 Machine maintenance boundaries and wait for that explicit window.
+
+7.2 landed on 2026-11-06: `flake.nix` reads the five Machine release outputs
+from one `machine-release-matrix` table (`bootstrap`, `retainWorkers`,
+`writer`, `check`) instead of positional booleans and hand-kept package and
+check lists; `retainWorkers` rows keep the retained-worker interface
+assertion and the writer row stays out of `nix flake check` because it needs a
+clean revision. The plan's "eight outputs" predates the retired variants: the
+matrix has five rows beside the Controller and Web releases. Proof: the full
+derivation closure of every row (2,699–2,706 derivations) is identical before
+and after with the revision and store hashes masked, and the check set is
+unchanged. No variant was added or retired.
+
+### Phase 5 status (2026-11-06)
+
+5.1 landed as [`history/module-cycle-edges-2026-11.md`](history/module-cycle-edges-2026-11.md):
+126 edges inside the 37-module cycle, 46 type-only, 3 constant or
+type-and-constant, 68 behavioural and 9 for manual review. Most behavioural
+back-edges were small pure helpers above their callers, so the first ports are
+leaf moves inside the base crate, which change no `Cargo.toml` and no worker
+generation input: `crate::digest` (`hex_sha256`), `crate::credentials`
+(username and password rules, argon2id hashing, identifiers, session tokens,
+cookie parsing, secret-safe JSON decoding) and `crate::core_passkeys_contract`
+(the frozen legacy Passkey storage check). The old paths re-export them for the
+Controller crate. The cycle split into 15 modules (`store`, `core`,
+`persistence`, `managed_calls`, `session_*`, `scheduler`, `admin`,
+`product_auth`, `core_passkeys`, `plugin_storage`, `provider_service`,
+`machine_control`, `telemetry_binding`, `artifacts`) and 13 (Plugin activation,
+catalog and runtime, CLI, usage and provider info, telemetry Plugin), plus
+`otlp` ↔ `observability`; `oidc`, `passkey`, `client_auth*`, `core_security`,
+`agent_api` and `product_cli` left every cycle. The 15-module cluster is the
+5.4/5.5 store and Hub scope. Slices 5.3–5.7 add crates and so remain one
+worker-generation maintenance.
+
+5.2 landed the same day: the server and Machine crates list the base modules
+they name instead of `pub use cowboy::*` (Machine grouped by the base feature
+gates; the server under the always-on `full`). Within hours main added two
+base modules the server uses (`superagent`, `prompt_origin`), so the list now
+carries a note that a server module starting to use another base module adds
+it there. Controller `9e5f1d46d` runs the 5.1/5.2 state; the worker generation
+is unchanged.
+
+Sizing 5.3 before starting it: `Inbound` (295 lines, 129 type names, and a
+`crate::supervisor` dependency), `Outbound` (75 type names), `Envelope` and
+`SessionMeta` (an inherent impl, plus `agent_model`, `execution_environment`
+and `provider_account`) have about 950 references. A crate boundary forbids
+inherent impls on moved types, so their type graph moves down layer by layer
+first. With `Cargo.toml` edits blocking host-only Machine releases until a
+worker-generation maintenance, 5.3–5.7 run as one dedicated branch with its
+own maintenance window rather than piecemeal on main.
+
+The type-graph layering then landed inside the base crate, without a
+`Cargo.toml` change. `crate::model` holds the session record and its plain
+neighbours (`SessionMeta`, `SessionOrigin`, `SessionAttention`, `Envelope`,
+`QueuedMessage`, `DraftSchedule`, `Delivery`, Provider update records), the
+hot-tail and history budgets with their pure trimming helpers, and the
+settings key registry, which now owns the admin setting keys; `core` and
+`admin` re-export every moved path. `store` no longer depends on `core`.
+`crate::serve_args` holds the `serve`/`serve-acp` arguments, so nothing below
+`cli` depends on it. The cycles are now the store cluster (8: `store`,
+`persistence`, `artifacts`, `core_passkeys`, `managed_calls`,
+`plugin_storage`, `provider_service`, `telemetry_binding`), the Plugin cluster
+(6) and the Hub (`core`, `scheduler`, `session_context`, `machine_control`):
+each fits inside one planned crate. The 25 modules the store cluster reaches
+outside itself reach neither the Hub nor the Plugin cluster, so they form the
+crate below `cowboy-store`; `agent_model` is among them and is a hashed worker
+input, which is one reason the crate moves stay a worker-generation
+maintenance.
+
+Decision (2026-11-07): Phase 5 stops at boundaries enforced inside the base
+crate. Measured on branch `codex/phase5-crates`, the crate split of 5.4–5.6 is
+not a move of the 8 store and 4 Hub modules: everything above the store
+cluster is 34 modules / 114k lines, and properly the base crate's whole
+Controller surface leaves it, 68 `full`-only modules (134k lines) plus 234
+`cfg(feature = "full")` sites inside 41 shared modules (`managed_calls`,
+`telemetry_plugin`, `otlp`, `observability`, …) whose `full` halves depend on
+the store or Hub. That is weeks of moves against modules other sessions
+change daily, behind a worker-generation maintenance for every `Cargo.toml`
+step. The goals the crates were meant to secure hold without them: `store`
+does not depend on the Hub, the largest cycle is 8 modules, and
+`tools/check-module-layers.ts` refuses any new or larger cycle in CI.
+
+The branch keeps one finished commit, `515ed7b55`: the worker
+(`worker`, `worker_execution`, `acp`, `agent_model`) no longer depends on the
+store or Hub, because its artifact digests come from `crate::artifact_refs`
+and its call rounds from the root-declared `managed_call_round`;
+`artifact_refs.rs` joins the hashed worker inputs. It changes the worker
+generation, so it merges at the next worker-generation maintenance rather
+than on its own. Revisit the crate split only if compile time or ownership
+problems return that the in-crate boundaries do not address.
+
+7.3 landed on 2026-11-06 with one deviation: the 98 unreferenced releases
+moved to a single `components/registry-archive.json` rather than one file per
+version, so the Rust reader needs one `include_str!` and `build.rs` (a hashed
+worker input) stays untouched. `registry.json` keeps eight releases (2.0.4,
+2.4.0 and 2.9.0 for the authentication and telemetry examples, 3.72.0, 3.79.0,
+3.82.0, the 3.83.0 worker pin and the active 3.84.0) and shrinks from 1.3 MB to
+90 KB. Runtime validation still embeds the whole history: a Catalog package
+pinned to an archived release must keep validating, and in-tree manifests
+cannot list every published pin. The merged encoding is byte-identical to the
+previous file, `components/worker-registry-input.json` is unchanged and the
+worker generation stays `worker-7c0b0aa9c3f8aaa3bee4`, so this is not a worker
+maintenance; the next routine Machine release carries it.
 
 ## 6. Not worth doing
 
@@ -495,7 +597,7 @@ the time and conflict metrics come from CI timing and `git log`.
 
 | Metric | Baseline (2026-11-05) | Target (end of Q1 2027) |
 |---|---|---|
-| Largest module cycle in the base crate | 37 modules (`tools/module-edges-baseline.json`) | ≤ 6 modules |
+| Largest module cycle in the base crate | 37 modules (`tools/module-edges-baseline.json`); 8 on 2026-11-06 after the 5.1 leaf moves and the in-crate 5.3 layering | ≤ 6 modules |
 | `cfg(feature = "full")` sites in `src/` | 220 | 0 |
 | Filtered release closures compile in the gate | no (`.#cowboy-machine` broken on baseline) | yes, every commit |
 | Files over 3,000 lines | 21 | 0 |

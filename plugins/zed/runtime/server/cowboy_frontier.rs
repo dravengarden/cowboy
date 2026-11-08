@@ -82,6 +82,25 @@ fn version(value: &clock::Global) -> Vec<proto::CowboyBufferSyncVersion> {
         .collect()
 }
 
+/// A named version is evidence only while its exact snapshot is retained.
+/// Upstream accepts version zero without snapshots as an unversioned update;
+/// that compatibility fallback must not become a freshness proof.
+pub(super) fn tracked_version(
+    local: &LocalLspStore,
+    buffer: &Entity<Buffer>,
+    server: LanguageServerId,
+    version: Option<i32>,
+    cx: &App,
+) -> bool {
+    version.is_some_and(|version| {
+        local
+            .buffer_snapshots
+            .get(&buffer.read(cx).remote_id())
+            .and_then(|servers| servers.get(&server))
+            .is_some_and(|snapshots| snapshots.iter().any(|snapshot| snapshot.version == version))
+    })
+}
+
 pub(super) fn server(
     id: LanguageServerId,
     name: &str,

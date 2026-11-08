@@ -72,6 +72,15 @@ async fn show(unit: &str) -> Result<String> {
     String::from_utf8(output.stdout).context("invalid unit encoding")
 }
 
+/// True when no incarnation of `unit` is loaded or running.
+pub(super) async fn unit_inactive(unit: &str) -> Result<bool> {
+    let text = show(unit).await?;
+    let fields = fields(&text)?;
+    Ok(fields.get("LoadState") == Some(&"not-found")
+        || (matches!(fields.get("ActiveState"), Some(&"inactive" | &"failed"))
+            && fields.get("Job").is_none_or(|job| job.is_empty())))
+}
+
 fn boot() -> Result<uuid::Uuid> {
     Ok(std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?
         .trim()

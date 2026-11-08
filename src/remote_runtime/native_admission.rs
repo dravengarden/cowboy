@@ -94,7 +94,7 @@ pub(super) async fn snapshot(
     };
     let profile = &completion.profile;
     if !shared.auth_recipient_key.as_ref().is_some_and(|key| {
-        crate::admin::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
+        crate::digest::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
     }) || meta.provider != profile.provider_id
         // A compatible later release keeps the login (see native_generation);
         // the Machine re-verifies the authentication contract at launch.
@@ -134,7 +134,7 @@ static DECLINED: std::sync::LazyLock<Mutex<HashMap<String, String>>> =
 /// A declined snapshot leaves the worker unknown to this Controller, so its
 /// execution requests are refused as retryable until startup times out. Say
 /// so once per worker epoch instead of failing silently for minutes.
-fn warn_declined_launch(meta: &crate::core::SessionMeta, worker: &WorkerSnapshot) {
+fn warn_declined_launch(meta: &crate::model::SessionMeta, worker: &WorkerSnapshot) {
     // A running worker awaiting its reload stop is expected to lag the new
     // declaration; only a starting one waits on admission it cannot get.
     let (WorkerState::Starting, Some(launch)) = (worker.state, worker.launch.as_ref()) else {
@@ -165,7 +165,7 @@ fn launch(command: &CoreCommand) -> Option<&StartSession> {
     }
 }
 
-fn matches(meta: &crate::core::SessionMeta, session: &StartSession) -> bool {
+fn matches(meta: &crate::model::SessionMeta, session: &StartSession) -> bool {
     meta.id == session.session_id
         && meta.provider == session.provider
         && meta.provider_account_id == session.provider_account_id
@@ -178,7 +178,7 @@ fn matches(meta: &crate::core::SessionMeta, session: &StartSession) -> bool {
         && meta.provider_behavior == session.provider_behavior
 }
 
-fn unchanged(before: &crate::core::SessionMeta, current: &crate::core::SessionMeta) -> bool {
+fn unchanged(before: &crate::model::SessionMeta, current: &crate::model::SessionMeta) -> bool {
     current.owner_user_id == before.owner_user_id
         && current.machine_id == before.machine_id
         && current.provider_account_id == before.provider_account_id
@@ -261,7 +261,7 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
         return Ok(false);
     };
     if !shared.auth_recipient_key.as_ref().is_some_and(|key| {
-        crate::admin::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
+        crate::digest::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
     }) {
         return Ok(false);
     }

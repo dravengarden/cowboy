@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { useCallback, useEffect, useId, useState } from "react";
 import {
   alpha,
@@ -200,7 +201,7 @@ function ChoicePreview({ preview }: { preview: string }): React.JSX.Element {
           }}
         >
           {preview}
-        </Box>
+        <ScrollEdges /></Box>
       )}
     </Box>
   );
@@ -457,6 +458,6 @@ export function ElicitationFields({
             />
           </Box>
         ))}
-    </Stack>
+    <ScrollEdges /></Stack>
   );
 }

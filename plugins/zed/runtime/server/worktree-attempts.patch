@@ -1,0 +1,122 @@
+--- a/crates/remote_server/src/headless_project.rs
++++ b/crates/remote_server/src/headless_project.rs
+@@ -480,10 +480,15 @@
+     pub async fn handle_add_worktree(
+         this: Entity<Self>,
+         message: TypedEnvelope<proto::AddWorktree>,
+         mut cx: AsyncApp,
+     ) -> Result<proto::AddWorktreeResponse> {
++        let cowboy_attempt = this.read_with(&cx, |this, cx| {
++            this.buffer_store.read(cx).cowboy_worktree_attempts()
++                .begin(message.sender_id, message.message_id,
++                    proto::cowboy_worktree_attempt_response::Kind::Add)
++        })?;
+         use client::ErrorCodeExt;
+         let fs = this.read_with(&cx, |this, _| this.fs.clone());
+         let path = PathBuf::from(shellexpand::tilde(&message.payload.path).to_string());
+ 
+         let canonicalized = match fs.canonicalize(&path).await {
+@@ -553,13 +558,16 @@
+         // and immediately dropping the reference of the new client, causing it
+         // to be dropped on the headless project, and the client only then
+         // receiving a response to AddWorktree.
+         cx.spawn(async move |cx| {
+             this.update(cx, |this, cx| {
++                let cowboy_id = worktree.read(cx).id().to_proto();
+                 this.worktree_store.update(cx, |worktree_store, cx| {
+                     worktree_store.add(&worktree, cx);
+                 });
++                // AddWorktree's response is deliberately earlier than registration.
++                cowboy_attempt.complete(cowboy_id);
+             });
+         })
+         .detach();
+ 
+         Ok(response)
+@@ -568,16 +576,22 @@
+     pub async fn handle_remove_worktree(
+         this: Entity<Self>,
+         envelope: TypedEnvelope<proto::RemoveWorktree>,
+         mut cx: AsyncApp,
+     ) -> Result<proto::Ack> {
++        let cowboy_attempt = this.read_with(&cx, |this, cx| {
++            this.buffer_store.read(cx).cowboy_worktree_attempts()
++                .begin(envelope.sender_id, envelope.message_id,
++                    proto::cowboy_worktree_attempt_response::Kind::Remove)
++        })?;
+         let worktree_id = WorktreeId::from_proto(envelope.payload.worktree_id);
+         this.update(&mut cx, |this, cx| {
+             this.worktree_store.update(cx, |worktree_store, cx| {
+                 worktree_store.remove_worktree(worktree_id, cx);
+             });
+         });
++        cowboy_attempt.complete(worktree_id.to_proto());
+         Ok(proto::Ack {})
+     }
+ 
+     pub async fn handle_open_buffer_by_path(
+         this: Entity<Self>,
+@@ -675,10 +689,22 @@
+     pub async fn handle_trust_worktrees(
+         this: Entity<Self>,
+         envelope: TypedEnvelope<proto::TrustWorktrees>,
+         mut cx: AsyncApp,
+     ) -> Result<proto::Ack> {
++        let cowboy_attempt = this.read_with(&cx, |this, cx| {
++            this.buffer_store.read(cx).cowboy_worktree_attempts()
++                .begin(envelope.sender_id, envelope.message_id,
++                    proto::cowboy_worktree_attempt_response::Kind::Trust)
++        })?;
++        let cowboy_target = match envelope.payload.trusted_paths.as_slice() {
++            [path] => match &path.content {
++                Some(proto::path_trust::Content::WorktreeId(id)) => *id,
++                _ => 0,
++            },
++            _ => 0,
++        };
+         let trusted_worktrees = cx
+             .update(|cx| TrustedWorktrees::try_get_global(cx))
+             .context("missing trusted worktrees")?;
+         let worktree_store = this.read_with(&cx, |project, _| project.worktree_store.clone());
+         trusted_worktrees.update(&mut cx, |trusted_worktrees, cx| {
+@@ -691,18 +717,28 @@
+                     .filter_map(PathTrust::from_proto)
+                     .collect(),
+                 cx,
+             );
+         });
++        cowboy_attempt.complete(cowboy_target);
+         Ok(proto::Ack {})
+     }
+ 
+     pub async fn handle_restrict_worktrees(
+         this: Entity<Self>,
+         envelope: TypedEnvelope<proto::RestrictWorktrees>,
+         mut cx: AsyncApp,
+     ) -> Result<proto::Ack> {
++        let cowboy_attempt = this.read_with(&cx, |this, cx| {
++            this.buffer_store.read(cx).cowboy_worktree_attempts()
++                .begin(envelope.sender_id, envelope.message_id,
++                    proto::cowboy_worktree_attempt_response::Kind::Restrict)
++        })?;
++        let cowboy_target = match envelope.payload.worktree_ids.as_slice() {
++            [id] => *id,
++            _ => 0,
++        };
+         let trusted_worktrees = cx
+             .update(|cx| TrustedWorktrees::try_get_global(cx))
+             .context("missing trusted worktrees")?;
+         let worktree_store = this.read_with(&cx, |project, _| project.worktree_store.downgrade());
+         trusted_worktrees.update(&mut cx, |trusted_worktrees, cx| {
+@@ -713,10 +749,11 @@
+                 .map(WorktreeId::from_proto)
+                 .map(PathTrust::Worktree)
+                 .collect::<HashSet<_>>();
+             trusted_worktrees.restrict(worktree_store, restricted_paths, cx);
+         });
++        cowboy_attempt.complete(cowboy_target);
+         Ok(proto::Ack {})
+     }
+ 
+     pub async fn handle_download_file_by_path(
+         this: Entity<Self>,

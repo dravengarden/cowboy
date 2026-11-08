@@ -91,76 +91,23 @@ test("Code chrome uses Agent instead of a local settings sheet", () => {
   {
     const switcher = reviewAppSource.slice(
       reviewAppSource.indexOf("function ReviewModeSwitcher("),
-      reviewAppSource.indexOf("function sessionStatusColor("),
+      reviewAppSource.indexOf("function ReviewMoreActions("),
     );
     assertEquals(switcher.includes("translateX"), false);
     assertEquals(switcher.includes("boxShadow"), false);
-    assert(switcher.includes('transform: "none"'));
-    assert(switcher.includes("height: 40"));
-    assert(switcher.includes('alignItems: "center"'));
-    assert(switcher.includes('boxSizing: "border-box"'));
-    assert(switcher.includes('fontSize: "1.125rem"'));
-    assert(switcher.includes("theme.palette.primary.main"));
-    assert(switcher.includes("disableRipple"));
-    assert(switcher.includes("dataset.touchActivated"));
-    assert(switcher.includes("&[aria-pressed='true']"));
-    assert(switcher.includes("&&[aria-pressed='true']"));
-    assert(
-      switcher.includes(
-        "[data-touch-activated='true'][aria-pressed='false']:hover",
-      ),
-    );
-    assert(switcher.includes("COARSE_POINTER_ROOT_CLASS"));
-    assert(
-      switcher.includes(
-        "&&[aria-pressed='true']:hover",
-      ),
-    );
-    assertEquals(switcher.includes("fontSize: 17"), false);
-    assertEquals(
-      switcher.includes('bgcolor: mode === "git" ? "background.paper"'),
-      false,
-    );
+    // Native selection, font scaling and padded touch hits are exercised by
+    // review-context and review-workbench-acceptance in the real theme.
   }
   assert(reviewAppSource.includes('data-mobile-review-sidebar="true"'));
   assert(
     reviewAppSource.indexOf('data-mobile-open-agent="true"') >
       reviewAppSource.indexOf('aria-label="Code Review controls"'),
   );
-  {
-    const header = reviewAppSource.slice(
-      reviewAppSource.indexOf("minHeight: 52"),
-      reviewAppSource.indexOf('aria-label="Code Review controls"'),
-    );
-    const controls = reviewAppSource.slice(
-      reviewAppSource.indexOf('aria-label="Code Review controls"'),
-      reviewAppSource.indexOf("data-review-tab-close-confirm"),
-    );
-    assert(header.includes("<ReviewModeSwitcher"));
-    assertEquals(controls.includes("data-mobile-review-mode-switcher"), false);
-    assertEquals(controls.includes("<ReviewModeSwitcher"), false);
-  }
   assert(reviewAppSource.includes("ChatBubbleOutline"));
-  assert(
-    reviewAppSource.includes('pl: "env(safe-area-inset-left, 0px)"'),
-  );
-  assert(
-    reviewAppSource.includes('pr: "env(safe-area-inset-right, 0px)"'),
-  );
-  assertEquals(
-    reviewAppSource.includes(
-      'pr: "max(env(safe-area-inset-right, 0px), 10px)"',
-    ),
-    false,
-  );
-  {
-    const toolbar = reviewAppSource.slice(
-      reviewAppSource.indexOf('aria-label="Code Review controls"'),
-      reviewAppSource.indexOf('data-mobile-open-agent="true"'),
-    );
-    assert(toolbar.includes("px: 2"));
-    assertEquals(toolbar.includes("px: 1"), false);
-  }
+  assert(reviewAppSource.includes("pb: BOTTOM_NAV_PADDING"));
+  assert(appSource.includes("pb: navbarAtBottom ? BOTTOM_NAV_PADDING : 0"));
+  assert(fileTreeSource.includes("(48px + ${BOTTOM_NAV_PADDING})"));
+  assert(reviewAppSource.indexOf("<ReviewModeSwitcher") > reviewAppSource.indexOf('aria-label="Code Review controls"'));
   assertEquals(reviewAppSource.includes("ArrowBackIosNew"), false);
   assertEquals(reviewSettingsSource.includes("SettingsSheet"), false);
   assert(

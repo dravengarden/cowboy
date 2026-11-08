@@ -485,7 +485,7 @@ impl Store {
         mutation: &DraftMutation,
         shared: &[crate::session_folders::SessionFolder],
     ) -> Result<DraftResult> {
-        let request_hash = crate::admin::hex_sha256(&serde_json::to_vec(mutation)?);
+        let request_hash = crate::digest::hex_sha256(&serde_json::to_vec(mutation)?);
         macro_rules! write { ($db:expr, $newest_snapshot_at:expr) => {{
             let mut tx = $db.pool.begin().await?;
             // The first statement acquires the owner's writer lock on BOTH

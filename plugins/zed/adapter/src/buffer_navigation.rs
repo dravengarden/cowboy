@@ -103,6 +103,7 @@ struct Slot {
     // Retain the original evidence even if close enqueue fails partway through.
     // A phase transition must not discard handles for possibly live resources.
     targets: Vec<Target>,
+    native: Option<crate::navigation_native::Ticket>,
 }
 
 #[derive(Default)]
@@ -208,6 +209,7 @@ pub(super) async fn prepare(
             prepared_at: Instant::now(),
             phase: Phase::Prepared,
             targets: Vec::new(),
+            native: None,
         },
     );
     Ok(registry.response(
@@ -286,8 +288,32 @@ impl Registry {
         zed: Option<&Zed>,
     ) -> Result<Response> {
         let id = self.resolve(&navigation)?;
+        if let Some(slot) = self.slots.get(&id)
+            && matches!(slot.phase, Phase::ReleaseUnknown)
+            && matches!(action, Action::Query | Action::Release)
+            && let Some(zed) = zed
+        {
+            let mut keys = std::collections::HashSet::from([slot.key.clone()]);
+            keys.extend(slot.targets.iter().map(|target| target.key.clone()));
+            let mut active = buffers.active.write().await;
+            if crate::native_close::recover(&keys, &BufferOwner::Navigation(id), &mut active, zed)
+                .await
+                .unwrap_or(false)
+            {
+                self.slots.remove(&id);
+            }
+        }
         if let Some(slot) = self.slots.get_mut(&id) {
             match action {
+                Action::Query if matches!(slot.phase, Phase::Unknown) => {
+                    recover(
+                        slot,
+                        id,
+                        buffers,
+                        zed.context("native navigation unavailable")?,
+                    )
+                    .await?;
+                }
                 Action::Execute if matches!(slot.phase, Phase::Prepared) => {
                     execute(
                         slot,
@@ -392,33 +418,64 @@ async fn execute(slot: &mut Slot, id: u64, buffers: &Buffers, zed: &Zed) -> Resu
         .lock()
         .expect("diagnostic cache poisoned")
         .check(slot.remote_id, slot.position.revision)?;
+    slot.native = Some(
+        crate::navigation_native::Ticket::prepare(
+            zed,
+            crate::navigation_request(
+                slot.remote_id,
+                &slot.position.version,
+                slot.position.anchor.clone(),
+                slot.kind,
+            ),
+        )
+        .await?,
+    );
     // Native navigation may open unknown target IDs. Retain a process-wide
     // admission fence BEFORE the first native await, including cancellation.
     source.lease_ids.insert(BufferOwner::NavigationPending(id));
     slot.phase = Phase::Unknown;
-    let responses = crate::navigation_native::query(
-        zed,
-        crate::navigation_request(
-            slot.remote_id,
-            &slot.position.version,
-            slot.position.anchor.clone(),
-            slot.kind,
-        ),
-    )
-    .await?;
-    let (targets, unregistered) = targets::retain(slot, id, responses, &mut active, zed).await?;
-    // LSP navigation shares native buffers but does NOT register them for
-    // subsequent language reads. Registration is part of this one-use effect,
-    // never a read side effect. Save every pin before awaiting its native ACK.
+    if let Some(responses) = slot
+        .native
+        .as_ref()
+        .expect("prepared native operation")
+        .observe(zed, true)
+        .await?
+    {
+        retain_result(slot, id, responses, &mut active, zed).await?;
+    }
+    Ok(())
+}
+
+async fn recover(slot: &mut Slot, id: u64, buffers: &Buffers, zed: &Zed) -> Result<()> {
+    let mut active = buffers.active.write().await;
+    let source = active
+        .get(&slot.key)
+        .context("original source unavailable")?;
+    ensure!(
+        source.remote_id == slot.remote_id
+            && source
+                .lease_ids
+                .contains(&BufferOwner::NavigationPending(id)),
+        "original navigation fence unavailable"
+    );
+    if let Some(ticket) = &slot.native
+        && let Some(responses) = ticket.observe(zed, false).await?
+    {
+        retain_result(slot, id, responses, &mut active, zed).await?;
+    }
+    Ok(())
+}
+
+async fn retain_result(
+    slot: &mut Slot,
+    id: u64,
+    responses: Vec<proto::LspResponse>,
+    active: &mut HashMap<Key, crate::BufferLease>,
+    zed: &Zed,
+) -> Result<()> {
+    let (targets, _) = targets::retain(slot, id, responses, active, zed).await?;
+    // Native protocol two already registered targets before saving its receipt.
     slot.targets = targets;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        for remote_id in unregistered {
-            zed.register_buffer(remote_id).await?;
-        }
-        anyhow::Ok(())
-    })
-    .await
-    .context("navigation target registration timed out")??;
     let cache = zed.diagnostics.lock().expect("diagnostic cache poisoned");
     cache.check(slot.remote_id, slot.position.revision)?;
     for target in &slot.targets {
@@ -434,6 +491,12 @@ async fn execute(slot: &mut Slot, id: u64, buffers: &Buffers, zed: &Zed) -> Resu
 }
 
 async fn release(slot: &mut Slot, id: u64, buffers: &Buffers, zed: &Zed) -> Result<()> {
+    // Queue receipt-only retirement before losing the last local ticket. A full
+    // queue leaves this retained operation retryable without another close.
+    if let Some(ticket) = &slot.native {
+        ticket.forget(zed)?;
+        slot.native = None;
+    }
     let mut active = buffers.active.write().await;
     let Phase::Retained = slot.phase else {
         unreachable!()
@@ -460,6 +523,7 @@ async fn release(slot: &mut Slot, id: u64, buffers: &Buffers, zed: &Zed) -> Resu
         &BufferOwner::Navigation(id),
         &mut active,
         Some(zed),
+        &buffers.native_open,
         || slot.phase = Phase::ReleaseUnknown,
     )
     .await

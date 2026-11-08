@@ -1,5 +1,5 @@
 import { Close, Refresh, SettingsOutlined } from "@mui/icons-material";
-import { Box, CircularProgress, IconButton } from "@mui/material";
+import { Box, Button, CircularProgress } from "@mui/material";
 import {
   type MobileSheetAction,
   MobileSheetActionGroup,
@@ -8,6 +8,9 @@ import { createPortal } from "react-dom";
 import { openAppSettings } from "../../appSettings";
 import { HintTooltip } from "../../HintTooltip";
 import { useNetworkActionState } from "../../NetworkActionFeedback";
+import { dismissReviewActions } from "./ReviewMoreActions";
+
+type ReviewAction = MobileSheetAction & { opensDialog?: boolean };
 
 /** The navigator owns its actions even when they live in the page's bottom
  * bar. Moving between overview and sidebar never duplicates the navigator or
@@ -26,7 +29,7 @@ export function ReviewNavigationActions({
   embedded: boolean;
   container?: HTMLElement | null | undefined;
   label: string;
-  actions?: readonly MobileSheetAction[];
+  actions?: readonly ReviewAction[];
   refreshLabel: string;
   onRefresh: () => Promise<void> | void;
   disabled: boolean;
@@ -34,7 +37,7 @@ export function ReviewNavigationActions({
   onClose: () => void;
 }): React.JSX.Element | null {
   const refresh = useNetworkActionState();
-  const items: MobileSheetAction[] = [
+  const items: ReviewAction[] = [
     ...actions,
     {
       key: "refresh",
@@ -60,21 +63,26 @@ export function ReviewNavigationActions({
         aria-label={label}
         data-review-navigation-actions="inline"
         onClick={(event) => event.stopPropagation()}
-        sx={{ display: "flex", alignItems: "center", gap: 0.5 }}
+        sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.5 }}
       >
-        {items.filter((action) => action.visible !== false).map((action) => (
+        {items.filter((action) => action.visible !== false && action.key !== "settings").map((action) => (
           <HintTooltip key={action.key} title={action.label}>
             <span>
-              <IconButton
+              <Button
                 aria-label={action.label}
+                aria-haspopup={action.opensDialog ? "dialog" : undefined}
                 aria-busy={action.key === "refresh" && refresh.pending ||
                   undefined}
                 disabled={action.disabled}
-                onClick={action.onPress}
-                sx={{ width: 44, height: 44, color: "text.secondary" }}
+                onClick={() => {
+                  action.onPress();
+                  if (action.opensDialog) dismissReviewActions(container);
+                }}
+                startIcon={action.icon}
+                sx={{ minHeight: 44, color: "text.secondary", textTransform: "none" }}
               >
-                {action.icon}
-              </IconButton>
+                {action.label}
+              </Button>
             </span>
           </HintTooltip>
         ))}
@@ -88,11 +96,8 @@ export function ReviewNavigationActions({
       aria-label={label}
       data-review-navigation-actions="sidebar"
       sx={{
-        position: "absolute",
-        zIndex: 3,
-        left: 0,
-        right: 0,
-        bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+        flexShrink: 0,
+        pb: "max(env(safe-area-inset-bottom, 0px), 12px)",
         display: "flex",
         justifyContent: "flex-start",
         px: 0.75,

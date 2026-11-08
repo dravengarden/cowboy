@@ -1,5 +1,6 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { KeyboardArrowDown, KeyboardArrowUp, Refresh } from "@mui/icons-material";
-import { Box, Button, ButtonBase, Chip, CircularProgress, IconButton, Popover, Stack, Typography } from "@mui/material";
+import { Box, Button, ButtonBase, Chip, CircularProgress, Popover, Stack, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { navigationHaptic } from "../../haptic";
@@ -16,9 +17,9 @@ import { ReviewNavigation } from "./ReviewNavigation";
 import { type ReviewBufferMode } from "./ownedReviewBuffer";
 import { reviewDisplayText, useOwnedReviewBuffer } from "./useOwnedReviewBuffer";
 import { ReviewCodeStatus } from "./ReviewCodeStatus";
-import { ReviewCheckStatus } from "./ReviewCheckStatus";
 import { markdownPreviewSx } from "./reviewMarkdownPreview";
 import { ReviewDiffCodeStatus } from "./ReviewDiffCodeStatus";
+import { ReviewDocumentFooter } from "./ReviewDocumentFooter";
 import { useOwnedReviewDiff } from "./useOwnedReviewDiff";
 import { captureTextScrollAnchor, DOCUMENT_REFRESH_RESUME_GRACE_MS, documentRefreshDecision, restoreTextScrollAnchor, type TextScrollAnchor } from "./documentRefreshModel";
 import { ReviewMediaPreview } from "./ReviewMediaPreview";
@@ -33,7 +34,6 @@ import type { CodeLanguage } from "./codeApi";
 import type { GitReviewEntry } from "./gitReviewModel";
 import { restoreReviewScrollTop } from "./reviewScrollPosition";
 import { HintTooltip } from "../../HintTooltip";
-
 export const SYMBOL_NAVIGATION_KINDS = [
   "definition",
   "declaration",
@@ -1221,7 +1221,7 @@ export function DocumentView({
                 </HintTooltip>
               );
             })}
-          </Box>
+          <ScrollEdges /></Box>
         )}
       </Box>
     )
@@ -1376,7 +1376,7 @@ export function DocumentView({
     </Stack>
   );
   return (
-    <Stack sx={{ flex: 1, minHeight: 0, position: "relative" }}>
+    <Stack sx={{ flex: 1, minHeight: 0, position: "relative", pl: "env(safe-area-inset-left, 0px)", pr: "env(safe-area-inset-right, 0px)" }}>
       {pendingUpdate && (
         <Box
           role="status"
@@ -1424,84 +1424,12 @@ export function DocumentView({
           </Button>
         </Box>
       )}
-      {(truncated || counts || nextCursor || loadMoreError) && (
-        <Stack
-          direction="row"
-          spacing={1}
-          alignItems="center"
-          sx={{ px: 1.5, py: 0.75, borderBottom: 1, borderColor: "divider" }}
-        >
-          {counts && (
-            <>
-              <Typography variant="caption" color="success.main">
-                +{counts.added}
-              </Typography>
-              <Typography variant="caption" color="error.main">
-                −{counts.removed}
-              </Typography>
-            </>
-          )}
-          {hunks.length > 0 && (
-            <>
-              <Box sx={{ flex: 1 }} />
-              <IconButton
-                size="small"
-                aria-label="Previous hunk"
-                disabled={hunkIndex <= 0}
-                onClick={() => setHunkIndex((value) => value - 1)}
-              >
-                <KeyboardArrowUp fontSize="small" />
-              </IconButton>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ minWidth: 36, textAlign: "center" }}
-              >
-                {hunkIndex + 1}/{hunks.length}
-              </Typography>
-              <IconButton
-                size="small"
-                aria-label="Next hunk"
-                disabled={hunkIndex >= hunks.length - 1}
-                onClick={() => setHunkIndex((value) => value + 1)}
-              >
-                <KeyboardArrowDown fontSize="small" />
-              </IconButton>
-            </>
-          )}
-          {nextCursor && (
-            <Button
-              size="small"
-              variant="outlined"
-              disabled={loadingMore}
-              onClick={loadMore}
-              startIcon={loadingMore
-                ? <CircularProgress size={12} />
-                : undefined}
-            >
-              {loadMoreError ? "Retry" : "Load more"}
-            </Button>
-          )}
-          {limited && !nextCursor && (
-            <Chip
-              size="small"
-              color="warning"
-              label={target.kind === "diff"
-                ? "Preview limited to 16 MB"
-                : "Preview limited to 32 MB"}
-            />
-          )}
-        </Stack>
-      )}
       {usingOwned && !mediaPreview && !markdownPreview &&
         previewKind !== "mermaid" && (isPatch
           ? <ReviewDiffCodeStatus diff={diff} intelligence={owned} />
           : target.kind === "source" && (
             <ReviewCodeStatus intelligence={owned} />
           ))}
-      {target.kind === "source" && !markdownPreview && (
-        <ReviewCheckStatus sessionId={sessionId} path={target.path} />
-      )}
       {target.kind === "source" && (
         <ReviewOutline
           open={outlineOpen}
@@ -1523,6 +1451,7 @@ export function DocumentView({
       )}
       <Box
         ref={outerScrollRef}
+        data-review-document-content
         data-mobile-overflow-layer={markdownPreview ||
             previewKind === "mermaid" || mediaPreview ||
             settings.softWrap
@@ -1740,10 +1669,19 @@ export function DocumentView({
                 }}
               >
                 {symbolContent}
-              </Box>
+              <ScrollEdges /></Box>
             </Popover>
           )}
       </Box>
+        <ReviewDocumentFooter sessionId={sessionId} path={target.path}
+          checks={(target.kind === "source" || target.kind === "diff") && !markdownPreview}
+          visible={!!(truncated || counts || nextCursor || loadMoreError)}
+          counts={counts} hunkCount={hunks.length} hunkIndex={hunkIndex}
+          onPrevious={() => setHunkIndex((value) => value - 1)}
+          onNext={() => setHunkIndex((value) => value + 1)}
+          hasMore={!!nextCursor} loadingMore={loadingMore} loadMoreError={loadMoreError}
+          onLoadMore={loadMore} limited={limited} diff={target.kind === "diff"}
+        />
     </Stack>
   );
 }

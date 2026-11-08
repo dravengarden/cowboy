@@ -3,6 +3,11 @@
 
 use super::*;
 
+mod diagnostics;
+mod snapshot;
+pub(super) use diagnostics::{CodeDiagnostic, CodePoint};
+pub(super) use snapshot::{BufferSnapshot, SourceState};
+
 pub(super) fn projected_work_items(columbus: &std::path::Path) -> Vec<WorkspaceWorkItem> {
     let output = std::process::Command::new("harness-cli")
         .args([
@@ -243,6 +248,15 @@ pub(super) struct ServerAnalysis {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(super) enum ZedAdapterResponse {
+    AgentBufferRefreshed {
+        api_version: u8,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+    },
+    AgentBufferBudget {
+        api_version: u8,
+        state: String,
+    },
     Worktree {
         api_version: u8,
         state: String,
@@ -256,6 +270,10 @@ pub(super) enum ZedAdapterResponse {
         api_version: u8,
         path: String,
         version: Vec<CodeBufferVersion>,
+        #[serde(default, rename = "bufferSnapshot")]
+        buffer_snapshot: Option<Box<snapshot::BufferSnapshot>>,
+        #[serde(default, rename = "sourceState")]
+        source_state: SourceState,
         diagnostics: Vec<CodeDiagnostic>,
         inlay_hints: Vec<CodeInlayHint>,
         semantic_tokens: Vec<u32>,
@@ -297,13 +315,27 @@ pub(super) fn validate_zed_adapter_response(
     response: ZedAdapterResponse,
 ) -> anyhow::Result<ZedAdapterResponse> {
     match response {
+        response @ ZedAdapterResponse::AgentBufferRefreshed { api_version: 1, .. } => Ok(response),
         response @ (ZedAdapterResponse::Worktree { api_version: 1, .. }
         | ZedAdapterResponse::Buffer { api_version: 1, .. }
         | ZedAdapterResponse::BufferLanguage { api_version: 1, .. }
         | ZedAdapterResponse::BufferHover { api_version: 1, .. }
         | ZedAdapterResponse::BufferNavigation { api_version: 1, .. }
         | ZedAdapterResponse::BufferSymbols { api_version: 1, .. }) => Ok(response),
-        ZedAdapterResponse::Worktree { api_version, .. }
+        ZedAdapterResponse::AgentBufferBudget {
+            api_version: 1,
+            state,
+        } if matches!(state.as_str(), "saturated" | "unavailable") => {
+            Ok(ZedAdapterResponse::AgentBufferBudget {
+                api_version: 1,
+                state,
+            })
+        }
+        ZedAdapterResponse::AgentBufferBudget { .. } => {
+            anyhow::bail!("invalid Code resource admission receipt")
+        }
+        ZedAdapterResponse::AgentBufferRefreshed { api_version, .. }
+        | ZedAdapterResponse::Worktree { api_version, .. }
         | ZedAdapterResponse::Buffer { api_version, .. }
         | ZedAdapterResponse::BufferLanguage { api_version, .. }
         | ZedAdapterResponse::BufferHover { api_version, .. }

@@ -12,6 +12,7 @@ export const SPLIT_SOURCES = {
     "./App.tsx",
     "./DeleteSessionShell.tsx",
     "./SettingsShell.tsx",
+    "./MobileSettingsNavigation.tsx",
     "./SessionList.tsx",
     "./sessionFocusLifecycle.ts",
     "./desktopSplitters.tsx",
@@ -32,6 +33,10 @@ export const SPLIT_SOURCES = {
   ],
   "mobile/review/ReviewApp.tsx": [
     "./mobile/review/ReviewApp.tsx",
+    "./mobile/review/ReviewModeSwitcher.tsx",
+    "./mobile/review/ReviewMoreActions.tsx",
+    "./mobile/review/ReviewContextButton.tsx",
+    "./mobile/review/ReviewProjectCheckoutRow.tsx",
     "./mobile/review/DocumentView.tsx",
     "./mobile/review/reviewMarkdownPreview.ts",
   ],

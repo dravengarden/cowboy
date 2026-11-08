@@ -65,8 +65,20 @@ pub fn origin_from_cmid(cmid: Option<&str>) -> PromptOrigin {
         Some(value) if value.starts_with(WAKEUP_PREFIX) || value.starts_with(SCHED_PREFIX) => {
             PromptOrigin::cowboy("schedule")
         }
-        Some(value) if value.starts_with(CALL_NOTICE_PREFIX) => {
+        Some(value)
+            if value.starts_with(CALL_NOTICE_PREFIX) || value.starts_with("managed-call:") =>
+        {
             PromptOrigin::cowboy("managed_call")
+        }
+        Some(value) if value.starts_with("cowboy-superagent:") => {
+            PromptOrigin::cowboy("superagent")
+        }
+        Some(value)
+            if value
+                .strip_prefix("agent-")
+                .is_some_and(|id| id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit())) =>
+        {
+            PromptOrigin::cowboy("agent_message")
         }
         _ => PromptOrigin::human_composer(),
     }
@@ -251,6 +263,12 @@ pub fn is_human_prompt_update(update: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn managed_call_prompts_do_not_start_a_new_human_budget() {
+        let origin = super::origin_from_cmid(Some("managed-call:call-fixture:round-1"));
+        assert!(!origin.is_human());
+        assert_eq!(origin.source, "managed_call");
+    }
     use super::*;
 
     #[test]

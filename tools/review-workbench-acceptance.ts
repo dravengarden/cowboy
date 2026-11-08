@@ -1,0 +1,576 @@
+/** Render the actual Review/store in anonymous Hawk Chrome, then exercise the
+ * bottom workbench with trusted clicks. No product endpoints or credentials. */
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { type FixturePage, openFixturePage } from "./cdp-fixture.ts";
+
+const output = process.argv[2] ?? ".review-assets";
+const theme = process.argv[3] ?? "light";
+await mkdir(output, { recursive: true });
+await rm(join(output, `${theme}-failure.png`), { force: true });
+const page = await openFixturePage(
+  "http://127.0.0.1:9222",
+  "review-context",
+  () =>
+    `<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<script>localStorage.setItem("cowboy:theme-system-default-v1","1");localStorage.setItem("cowboy-theme-mode",${JSON.stringify(
+      theme,
+    )});
+globalThis.CowboyDeviceProof={proof:async()=>"fixture",resetChallenge(){},install(){}};</script>
+<script type="module">const m=await import('/fixture.js');globalThis.preview=m.renderReviewContextPreview;</script>`,
+);
+const measurements: { name: string; theme: string; measure: unknown }[] = [];
+let screenshotCount = 0;
+async function until(expression: string) {
+  for (let i = 0; i < 250; i++) {
+    if (await page.evaluate(expression)) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out: ${expression}`);
+}
+async function click(selector: string) {
+  const point = await page.evaluate<{ x: number; y: number }>(`(() => {
+    const node=document.querySelector(${JSON.stringify(selector)});
+    if(!node) throw new Error('Missing '+${JSON.stringify(selector)});
+    const r=node.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
+  })()`);
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    button: "left",
+    clickCount: 1,
+    ...point,
+  });
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    button: "left",
+    clickCount: 1,
+    ...point,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 350));
+}
+async function capture(name: string, selectors: string[], sideInset = 0) {
+  const measure = await page.evaluate(`(() => {
+    const selectors=${JSON.stringify(selectors)};
+    const controls=selectors.map(selector=>{
+      const n=document.querySelector(selector);if(!n)throw new Error('Missing '+selector);
+      const r=n.getBoundingClientRect();
+      if(r.top<innerHeight/2 || r.bottom>innerHeight+1 || r.left<${sideInset} || r.right>innerWidth-${sideInset}+1) throw new Error('Unreachable '+selector+' '+JSON.stringify(r));
+      if(n.matches('button') && (r.height<44 || r.width<44))throw new Error('Small target '+selector+' '+JSON.stringify(r));
+      return {selector,x:r.x,y:r.y,width:r.width,height:r.height};
+    });
+    if(document.documentElement.scrollWidth>innerWidth)throw new Error('Page overflow');
+    const reading=${/^(document|diff)(-|$)/.test(name)} ? document.querySelector('[data-review-document-content]')?.getBoundingClientRect() : undefined;
+    if(reading && reading.height<180)throw new Error('Reading area too short: '+reading.height);
+    if(reading && (reading.left<${sideInset} || reading.right>innerWidth-${sideInset}+1))throw new Error('Reading content crosses the safe-area edge');
+    return {width:innerWidth,height:innerHeight,controls,readingHeight:reading?.height};
+  })()`);
+  measurements.push({ name, theme, measure });
+  const shot = await page.send("Page.captureScreenshot", { format: "png" });
+  await writeFile(join(output, `${theme}-${name}.png`), Buffer.from(shot.data, "base64"));
+  screenshotCount++;
+}
+async function viewport(width: number, height: number, mobile = true) {
+  await page.send("Emulation.setDeviceMetricsOverride", {
+    width,
+    height,
+    deviceScaleFactor: 1,
+    mobile,
+  });
+  await page.send("Emulation.setTouchEmulationEnabled", {
+    enabled: mobile,
+    maxTouchPoints: mobile ? 5 : 1,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+}
+async function readingSizes(name: string, controls: string[]) {
+  await capture(name, controls);
+  await viewport(320, 568);
+  await capture(`${name}-narrow`, controls);
+  await viewport(844, 390);
+  await capture(`${name}-landscape`, controls);
+  await page.send("Emulation.setSafeAreaInsetsOverride", {
+    insets: { left: 44, right: 44, bottom: 21 },
+  });
+  await capture(`${name}-landscape-safe-area`, controls, 44);
+  await viewport(390, 844);
+  await page.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 34 } });
+  await capture(`${name}-safe-area`, controls);
+  await page.send("Emulation.setSafeAreaInsetsOverride", { insets: {} });
+}
+async function navigationActions() {
+  await click('[aria-label="More review actions"]');
+  await click('[aria-label="Open extensions"]');
+  await until(
+    "!!document.querySelector('[data-detent-sheet]') && !document.querySelector('[aria-label=\"Close review actions\"]')",
+  );
+  await capture("extensions", ['[data-detent-sheet] [aria-label="Close"]']);
+  await click('[data-detent-sheet] [aria-label="Close"]');
+  await until("!document.querySelector('[data-detent-sheet]')");
+  await page.evaluate("fixture.select('project')");
+  await until(
+    "document.querySelector('[data-review-context-button]')?.textContent.includes('Suger project')",
+  );
+  await click('[aria-label="More review actions"]');
+  await click('[aria-label="Back to session Improve review"]');
+  await until(
+    "document.querySelector('[data-review-context-button]')?.textContent.includes('Improve review') && !document.querySelector('[aria-label=\"Close review actions\"]')",
+  );
+}
+async function run(p: FixturePage) {
+  await viewport(390, 844);
+  await until("typeof preview==='function'");
+  await p.evaluate("void(globalThis.fixture=preview(true,false,true,false,false,true))");
+  await until(
+    "document.querySelector('[data-review-unread]')?.getAttribute('aria-label')==='51 unread'",
+  );
+  const controls = [
+    "[data-review-compare]",
+    "[data-review-unread]",
+    "[data-mobile-repository-tabs]",
+    "[data-review-context-button]",
+    '[aria-label="Git changes"]',
+  ];
+  await capture("changes", controls);
+  await p.evaluate("document.documentElement.style.fontSize='10px'");
+  await capture("small-text", controls);
+  await p.evaluate(
+    `(()=>{const icon=document.querySelector('[data-mobile-review-mode-switcher] svg').getBoundingClientRect();if(icon.width!==15||icon.height!==15)throw new Error('Review mode glyph ignores the small root font');if(document.querySelector('[data-repository-change-target]'))throw new Error('Mobile retained a duplicate top branch header');})()`,
+  );
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
+  await click('[aria-label="More review actions"]');
+  await click('[aria-label="Repository details"]');
+  await until(
+    "document.querySelector('[data-repository-project-path]')?.textContent==='/tasks/cowboy/feature' && !document.querySelector('[aria-label=\"Close review actions\"]')",
+  );
+  await capture("repository-details", ['[aria-label="Close repository details"]']);
+  await click('[aria-label="Close repository details"]');
+  await click("[data-review-compare]");
+  await click('[aria-label="Other branches"] [role="button"]:last-child');
+  await until(
+    "document.querySelector('[data-review-compare]')?.getAttribute('aria-label')?.includes('long-review-comparison-name')",
+  );
+  await capture("long-branch", controls);
+  await viewport(320, 568);
+  await capture("long-branch-narrow", controls);
+  await viewport(390, 844);
+  await p.evaluate("document.documentElement.style.fontSize='20px'");
+  await capture("large-text", controls);
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
+  await click("[data-review-compare]");
+  await click('[aria-label="Comparison scenarios"] [role="button"]:last-child');
+  await until(
+    "document.querySelector('[data-review-compare]')?.getAttribute('aria-label')?.includes('Ready to merge · origin/main')",
+  );
+  await p.evaluate(
+    `(()=>{const n=document.querySelector('[data-review-navigation-inline] [data-mobile-overflow-layer]');n.scrollTop=n.scrollHeight})()`,
+  );
+  await capture("changes-end", controls);
+  await click('[data-segmented-tab="history"]');
+  await until("document.body.textContent.includes('Fixture')");
+  await capture("history", controls.slice(2));
+  await click('[data-segmented-tab="worktrees"]');
+  await capture("worktrees", controls.slice(2));
+  await click('[data-segmented-tab="changes"]');
+  await viewport(320, 568);
+  await capture("narrow", controls);
+  await viewport(844, 390);
+  await capture("landscape", controls);
+  await emptyOverview(p, controls);
+  await p.evaluate("fixture.select('worktree')");
+  await until("!!document.querySelector('[data-review-unread]')");
+  await reviewFilesAndDiff(p);
+}
+
+async function emptyOverview(p: FixturePage, controls: string[]) {
+  await viewport(390, 844);
+  await p.evaluate("fixture.select('project')");
+  await until(
+    "document.body.textContent.includes('No changes to review') && document.body.textContent.includes('20 commits behind')",
+  );
+  await capture(
+    "empty",
+    controls.filter((selector) => selector !== "[data-review-unread]"),
+  );
+  await p.evaluate(
+    `(()=>{const r=document.querySelector('[data-review-repository-controls]').getBoundingClientRect();if(r.height>64)throw new Error('Empty review uses more than one repository toolbar row')})()`,
+  );
+  await p.evaluate(
+    `(()=>{const card=document.querySelector('[data-review-empty-state] > div').getBoundingClientRect();const reader=document.querySelector('[data-review-empty-state]').parentElement.getBoundingClientRect();if(Math.abs(card.top+card.height/2-reader.top-reader.height/2)>30)throw new Error('Empty overview is not centered');if(!document.querySelector('[data-review-context-branch]')?.textContent.includes('main'))throw new Error('Branch is missing from bottom context');})()`,
+  );
+  await overviewFontScales(p, controls);
+  await workbenchTouchTargets(p);
+  await viewport(320, 568);
+  await capture(
+    "empty-narrow",
+    controls.filter((selector) => selector !== "[data-review-unread]"),
+  );
+  await p.evaluate(
+    `(()=>{const r=document.querySelector('[data-review-repository-controls]').getBoundingClientRect();if(r.height>118)throw new Error('Narrow review should use at most two repository rows')})()`,
+  );
+  await p.evaluate(`(() => {
+    const content=document.querySelector('[data-review-empty-state]').textContent;
+    if(content.includes('Browse files') || content.includes('View history'))throw new Error('Empty review duplicates the persistent navigation');
+  })()`);
+  await capture("empty-narrow-actions", [
+    '[data-segmented-tab="history"]',
+    '[aria-label="Worktree files"]',
+    "[data-review-context-button]",
+  ]);
+  await click('[data-segmented-tab="history"]');
+  await until(
+    "document.querySelector('[data-segmented-tab=\"history\"]')?.getAttribute('aria-selected')==='true'",
+  );
+  await click('[data-segmented-tab="changes"]');
+  await until("!!document.querySelector('[data-review-empty-state]')");
+  await viewport(844, 390);
+  await capture("empty-landscape-actions", [
+    '[data-segmented-tab="history"]',
+    '[aria-label="Worktree files"]',
+    "[data-review-context-button]",
+  ]);
+  await viewport(390, 844);
+  await p.evaluate(
+    "document.querySelector('[aria-label=\"Recent repository activity\"] [role=\"button\"]').scrollIntoView({block:'nearest'})",
+  );
+  await click('[aria-label="Recent repository activity"] [role="button"]');
+  await until("!!document.querySelector('[data-review-commit]')");
+  await click('[aria-label="Git changes"]');
+  await until("!!document.querySelector('[data-review-empty-state]')");
+}
+
+async function overviewFontScales(p: FixturePage, controls: string[]) {
+  // The global reading setting applies a percentage at the document root.
+  // Measure actual text, not only whether its CSS mentions rem: pixel floors
+  // silently stopped scaling below 100% and a rem width shrank the facts card.
+  const text =
+    "[data-review-empty-state] .MuiTypography-root, [data-review-empty-state] button, [data-review-context-button] .MuiTypography-root, [data-segmented-tab]";
+  await p.evaluate("document.documentElement.style.fontSize='100%'");
+  const sizes = await p.evaluate<number[]>(
+    `Array.from(document.querySelectorAll(${JSON.stringify(text)}), n=>parseFloat(getComputedStyle(n).fontSize))`,
+  );
+  for (const scale of [0.5, 0.65, 1.25]) {
+    await p.evaluate(`document.documentElement.style.fontSize='${scale * 100}%'`);
+    const measure = await p.evaluate(`(() => {
+      const nodes=Array.from(document.querySelectorAll(${JSON.stringify(text)}));
+      const sizes=${JSON.stringify(sizes)};
+      if(nodes.length!==sizes.length)throw new Error('Review text changed during font scaling');
+      const fonts=nodes.map((node,i)=>{
+        const size=parseFloat(getComputedStyle(node).fontSize);
+        if(Math.abs(size-sizes[i]*${scale})>0.05)throw new Error('Text ignores global font scale: '+node.textContent+' '+size);
+        return {text:node.textContent,size};
+      });
+      const icons=Array.from(document.querySelectorAll('[data-review-workbench] .MuiIconButton-root > svg, [data-mobile-review-mode-switcher] svg'));
+      if(icons.length<4)throw new Error('Missing workbench icons');
+      for(const icon of icons) {
+        const r=icon.getBoundingClientRect();
+        if(Math.abs(r.width-24*${scale})>0.05 || Math.abs(r.height-24*${scale})>0.05)throw new Error('Workbench icon ignores global font size');
+      }
+      const facts=document.querySelector('[data-review-empty-facts]').getBoundingClientRect();
+      const overview=document.querySelector('[data-review-empty-state]').parentElement.getBoundingClientRect();
+      if(overview.width-facts.width>24.5)throw new Error('Empty overview wastes available width');
+      for(const node of document.querySelectorAll('[data-review-workbench] button, [data-review-repository-controls] button')) {
+        const r=node.getBoundingClientRect();
+        if(r.width<48 || r.height<48)throw new Error('Font scaling shrank a workbench touch target');
+      }
+      return {scale:${scale},factsWidth:facts.width,overviewWidth:overview.width,fonts};
+    })()`);
+    measurements.push({ name: "font-scale", theme, measure });
+    await capture(
+      `empty-font-${scale * 100}`,
+      controls.filter((selector) => selector !== "[data-review-unread]"),
+    );
+  }
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
+}
+
+async function tapPadding(selector: string, trailing = false) {
+  const point = await page.evaluate<{ x: number; y: number }>(`(() => {
+    const button=document.querySelector(${JSON.stringify(selector)});
+    if(!button)throw new Error('Missing touch target '+${JSON.stringify(selector)});
+    const r=button.getBoundingClientRect();
+    if(r.width<48 || r.height<48)throw new Error('Touch target smaller than 48px: '+button.outerHTML);
+    const x=${trailing} ? r.right-4 : r.left+4, y=r.y+r.height/2;
+    if(!button.contains(document.elementFromPoint(x,y)))throw new Error('Touch padding is covered: '+button.outerHTML);
+    return {x,y};
+  })()`);
+  await page.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ ...point, id: 1 }],
+  });
+  await page.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+}
+
+async function workbenchTouchTargets(p: FixturePage) {
+  for (const width of [390, 320]) {
+    await viewport(width, 844);
+    for (const scale of [0.5, 0.65, 1, 1.25, 2]) {
+      await p.evaluate(`document.documentElement.style.fontSize='${scale * 100}%'`);
+      const measure = await p.evaluate(`(() => {
+        const buttons=Array.from(document.querySelectorAll('[data-review-workbench] button, [data-review-repository-controls] button'));
+        return buttons.map(button=>{
+          const r=button.getBoundingClientRect();
+          if(r.width<48 || r.height<48 || r.left<0 || r.right>innerWidth || r.bottom>innerHeight)throw new Error('Unusable workbench target: '+button.outerHTML);
+          if(button.matches('[data-segmented-tab], [data-review-compare], .MuiToggleButton-root')) {
+            const s=getComputedStyle(button);
+            if(parseFloat(s.borderTopLeftRadius)<r.height/2 || parseFloat(s.borderTopRightRadius)<r.height/2)throw new Error('Mobile Review control lost its rounded shape');
+            if(parseFloat(s.borderTopWidth)>0 || s.boxShadow!=='none')throw new Error('Mobile Review retained a hard border or shadow');
+          }
+          return {label:button.getAttribute('aria-label')||button.textContent,width:r.width,height:r.height};
+        });
+      })()`);
+      for (const section of ["history", "worktrees", "changes"]) {
+        await tapPadding(`[data-segmented-tab="${section}"]`, section === "worktrees");
+        await until(`document.querySelector('[data-segmented-tab="${section}"]')?.getAttribute('aria-selected')==='true'`);
+        if (section === "worktrees") {
+          await p.evaluate(`(() => {
+            const tabs=document.querySelector('[data-mobile-repository-tabs]');
+            const r=tabs.getBoundingClientRect();
+            const workbench=document.querySelector('[data-review-workbench]').getBoundingClientRect();
+            if(workbench.top-r.bottom<8)throw new Error('Repository tabs crowd the context row');
+            for(const tab of tabs.querySelectorAll('button')) {
+              const label=document.createTreeWalker(tab,NodeFilter.SHOW_TEXT).nextNode();
+              if(!label)throw new Error('Repository tab lost its label');
+              const range=document.createRange();range.selectNodeContents(label);
+              const text=range.getBoundingClientRect(), target=tab.getBoundingClientRect();
+              if(text.left-target.left<11.5 || target.right-text.right<11.5)throw new Error('Repository label crowds its target edge');
+            }
+          })()`);
+          await capture(`worktrees-spacing-${width}-${scale * 100}`, ['[data-mobile-repository-tabs]', '[data-review-context-button]']);
+        }
+      }
+      await tapPadding("[data-review-compare]", true);
+      await until("!!document.querySelector('[aria-label=\"Comparison scenarios\"]')");
+      await click('[aria-label="Comparison scenarios"] .Mui-selected');
+      await until("!document.querySelector('[aria-label=\"Comparison scenarios\"]')");
+      await tapPadding('[aria-label="Worktree files"]', true);
+      await until("!!document.querySelector('[data-review-find-bar]')");
+      // An exclusive mode cannot be toggled off by tapping its selected button.
+      await tapPadding('[aria-label="Worktree files"]');
+      await until("document.querySelector('[aria-label=\"Worktree files\"]')?.getAttribute('aria-pressed')==='true'");
+      await tapPadding('[aria-label="Git changes"]');
+      await until("!!document.querySelector('[data-review-empty-state]')");
+      measurements.push({ name: `touch-padding-${width}-${scale * 100}`, theme, measure });
+      await capture(`touch-padding-${width}-${scale * 100}`, [
+        '[data-segmented-tab="worktrees"]', "[data-review-compare]", '[aria-label="Git changes"]',
+      ]);
+    }
+  }
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
+}
+
+async function reviewFilesAndDiff(p: FixturePage) {
+  await click('[aria-label="Worktree files"]');
+  await until("!!document.querySelector('[data-code-tree-path=\"README.md\"]')");
+  await fileSearchBar(p);
+  await capture("files", ["[data-review-find-bar]", "[data-review-context-button]"]);
+  await click('[aria-label="More review actions"]');
+  await until("!!document.querySelector('[aria-label=\"Refresh files\"]')");
+  await capture("more-actions", [
+    '[aria-label="Refresh files"]',
+    '[aria-label="Close review actions"]',
+  ]);
+  await click('[aria-label="Expand folders"]');
+  await click('[aria-label="Refresh files"]');
+  await click('[aria-label="Close review actions"]');
+  await viewport(390, 430);
+  await click("input");
+  await capture("keyboard-sized", ["[data-review-find-bar]", "[data-review-context-button]"]);
+  await viewport(390, 844);
+  await click('[data-code-tree-path="README.md"]');
+  await until("!!document.querySelector('[data-markdown-review-preview]')");
+  await readingSizes("document", [
+    '[aria-label="Show Markdown source"]',
+    '[aria-label="Open file outline"]',
+    '[aria-label="Open file tree sidebar"]',
+    "[data-review-context-button]",
+  ]);
+  await click('[aria-label="Open file tree sidebar"]');
+  await capture("sidebar", ["[data-review-find-bar]", '[aria-label="Close worktree"]']);
+  await click('[aria-label="Close worktree"]');
+  await until("!document.querySelector('[data-mobile-drawer-presented=\"true\"]')");
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await click('[aria-label="Git changes"]');
+  await until("!!document.querySelector('[data-review-compare]')");
+  await p.evaluate(
+    `(()=>{const n=document.querySelector('[data-review-navigation-inline] [data-mobile-overflow-layer]');n.scrollTop=0})()`,
+  );
+  await p.evaluate(
+    `Array.from(document.querySelectorAll('[role="button"]')).find(n=>n.textContent?.startsWith('app.ts'))?.click()`,
+  );
+  await until("!!document.querySelector('[aria-label=\"Mark reviewed\"]')");
+  await until("!!document.querySelector('[data-review-check-action=\"lint\"]')");
+  await readingSizes("diff", [
+    '[data-review-check-action="lint"]',
+    '[aria-label="Next hunk"]',
+    '[aria-label="Mark reviewed"]',
+    '[aria-label="Next change"]',
+    '[aria-label="Open Git changes sidebar"]',
+  ]);
+  await click('[data-review-check-action="lint"]');
+  await until("fixture.requests.some(r=>r.startsWith('POST ') && r.endsWith('/checks'))");
+  await until("!!document.querySelector('[data-review-check-status]')");
+  await capture("diff-check-completed", ['[data-review-check-action="lint"]']);
+  await click('[aria-label="Mark reviewed"]');
+  await until("!!document.querySelector('[aria-label=\"Mark unreviewed\"]')");
+  await click('[aria-label="Next change"]');
+  await capture("diff-next", ['[aria-label="Previous change"]', '[aria-label="Next change"]']);
+  await navigationActions();
+  await contextPickerLayout(p);
+  await viewport(1280, 900, false);
+  await p.evaluate(
+    "fixture.cleanup(); void(globalThis.fixture=preview(true,false,true,false,true))",
+  );
+  await until("!!document.querySelector('[aria-label=\"Refresh repository\"]')");
+  await capture("desktop", ["[data-review-workbench]"]);
+  await viewport(600, 900, false);
+  await capture("desktop-narrow", ["[data-review-workbench]"]);
+  await writeFile(
+    join(output, `${theme}-design.html`),
+    await p.evaluate<string>("document.documentElement.outerHTML"),
+  );
+}
+
+async function fileSearchBar(p: FixturePage) {
+  for (const width of [390, 320]) {
+    await viewport(width, 844);
+    for (const scale of [0.5, 0.65, 1, 1.25]) {
+      await p.evaluate(`document.documentElement.style.fontSize='${scale * 100}%'`);
+      await p.evaluate(`(() => {
+        const bar=document.querySelector('[data-review-search-surface]');
+        const input=bar.querySelector('input');
+        const size=parseFloat(getComputedStyle(input).fontSize);
+        if(Math.abs(size-14*${scale})>0.05)throw new Error('Search text ignores global font size');
+        const r=input.getBoundingClientRect();
+        if(r.width<90 || r.right>bar.getBoundingClientRect().right)throw new Error('Search input has too little space');
+        for(const option of bar.querySelectorAll('[aria-pressed]')) {
+          const r=option.getBoundingClientRect();
+          if(r.height<48 || r.width<48 || r.right>bar.getBoundingClientRect().right)throw new Error('Search option is not reachable');
+          if(Math.abs(parseFloat(getComputedStyle(option).fontSize)-13*${scale})>0.05)throw new Error('Search option ignores global font size');
+        }
+      })()`);
+      await capture(`search-${width}-font-${scale * 100}`, [
+        "[data-review-find-bar]",
+        "[data-review-context-button]",
+      ]);
+      await viewport(width, 430);
+      await click("[data-review-find-bar] input");
+      await p.evaluate(`(() => {
+        const surface=document.querySelector('[data-review-search-surface]');
+        if(document.activeElement!==surface.querySelector('input'))throw new Error('Search did not focus');
+        const boundaries=[surface,...surface.querySelectorAll('input, .MuiInputBase-root, fieldset')].filter(node=>{
+          const s=getComputedStyle(node);
+          return (s.outlineStyle!=='none' && parseFloat(s.outlineWidth)>0) || (s.borderTopStyle!=='none' && parseFloat(s.borderTopWidth)>0);
+        });
+        if(boundaries.length!==1 || boundaries[0]!==surface)throw new Error('Search must have one focus boundary: '+boundaries.map(n=>n.tagName+' '+n.className).join());
+      })()`);
+      await capture(`search-focused-${width}-font-${scale * 100}`, ["[data-review-find-bar]"]);
+      await viewport(width, 844);
+    }
+  }
+  await viewport(390, 844);
+  await p.evaluate("document.documentElement.style.fontSize='65%'");
+  await click("[data-review-text-search]");
+  await until("document.querySelector('input')?.placeholder==='Find text'");
+  await p.evaluate(`(() => {
+    const option=document.querySelector('[data-review-text-search]');
+    if(option.getAttribute('aria-pressed')!=='true' || getComputedStyle(option).backgroundColor==='rgba(0, 0, 0, 0)')throw new Error('Selected text search has no visible state');
+    if(document.activeElement?.matches('input'))throw new Error('Search mode opened the keyboard');
+  })()`);
+  await capture("search-text-selected", ["[data-review-find-bar]"]);
+  await click("[data-review-text-search]");
+  await click("[data-review-changed-documents]");
+  await until(
+    "document.querySelector('[data-review-changed-documents]')?.getAttribute('aria-pressed')==='true'",
+  );
+  await capture("search-changed-selected", ["[data-review-find-bar]"]);
+  await click("[data-review-changed-documents]");
+  await click('input[aria-label="Find a file"]');
+  await p.send("Input.insertText", { text: "README" });
+  await until("document.querySelector('input')?.value==='README'");
+  await capture("search-query", ['[aria-label="Clear file search"]', "[data-review-find-bar]"]);
+  await click('[aria-label="Clear file search"]');
+  await until("document.querySelector('input')?.value===''");
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
+}
+
+async function contextPickerLayout(p: FixturePage) {
+  await viewport(390, 844);
+  await p.evaluate("fixture.addWorktrees(16)");
+  for (const width of [390, 320]) {
+    await viewport(width, 844);
+    for (const scale of [0.5, 0.65, 1, 1.25]) {
+      await p.evaluate(`document.documentElement.style.fontSize='${scale * 100}%'`);
+      await click("[data-review-context-button]");
+      await until("document.querySelectorAll('[data-review-worktree]').length>=17");
+      const measure = await p.evaluate(`(() => {
+        const list=document.querySelector('[data-review-context-list]');
+        const section=list.querySelector('[data-session-review-directory]');
+        const r=section.getBoundingClientRect();
+        if(r.height<48)throw new Error('Long context list collapsed directory settings');
+        for(const button of section.querySelectorAll('button,[role="button"]')) {
+          const b=button.getBoundingClientRect();
+          if(b.top<r.top || b.bottom>r.bottom+1)throw new Error('Directory action escaped its section');
+          if(b.height<48)throw new Error('Directory action has a small touch target');
+        }
+        if(section.nextElementSibling.getBoundingClientRect().top<r.bottom)throw new Error('Context sections overlap');
+        if(list.querySelector('[data-use-review-default]'))throw new Error('Opening the current default is redundant');
+        let bottom=list.querySelector('[data-review-project-checkout]').getBoundingClientRect().bottom;
+        for(const row of list.querySelectorAll('[data-review-worktree]')) {
+          const b=row.getBoundingClientRect();
+          if(b.height<48 || b.top<bottom)throw new Error('Context rows overlap or are too small');
+          bottom=b.bottom;
+        }
+        if(list.scrollHeight<=list.clientHeight)throw new Error('Dense context fixture must scroll');
+        return {width:innerWidth,scale:${scale},sectionHeight:r.height,rows:list.querySelectorAll('[data-review-worktree]').length};
+      })()`);
+      measurements.push({ name: "context-layout", theme, measure });
+      await capture(`context-${width}-font-${scale * 100}`, ['[data-detent-sheet] [aria-label="Close"]']);
+      await click('[data-detent-sheet] [aria-label="Close"]');
+      await until("!document.querySelector('[data-review-context-list]')");
+    }
+  }
+  await viewport(390, 844);
+  await p.evaluate("document.documentElement.style.fontSize='65%'");
+  await click("[data-review-context-button]");
+  await until("!!document.querySelector('[data-review-project-checkout]')");
+  await click("[data-review-project-checkout]");
+  await until("document.querySelector('[data-review-context-button]')?.textContent.includes('Project code · Cowboy')");
+  await click("[data-review-context-button]");
+  await until("!!document.querySelector('[data-use-review-default]')");
+  await p.evaluate(`(() => {
+    const button=document.querySelector('[data-use-review-default]');
+    const b=button.getBoundingClientRect(), s=button.closest('[data-session-review-directory]').getBoundingClientRect();
+    if(b.bottom>s.bottom || b.height<48)throw new Error('Open default escaped its section');
+    if(!button.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)))throw new Error('Open default is covered');
+  })()`);
+  await capture("context-default-available", ['[data-detent-sheet] [aria-label="Close"]']);
+  await click("[data-use-review-default]");
+  await until("document.querySelector('[data-review-context-button]')?.textContent.includes('Worktree · Cowboy')");
+  await click("[data-review-context-button]");
+  await until("!!document.querySelector('[data-review-context-list]')");
+  await p.evaluate("if(document.querySelector('[data-use-review-default]'))throw new Error('Open default should disappear after applying it')");
+  await click('[data-detent-sheet] [aria-label="Close"]');
+  await until("!document.querySelector('[data-review-context-list]')");
+  await p.evaluate("document.documentElement.style.removeProperty('font-size')");
+}
+try {
+  await run(page);
+  await writeFile(join(output, `${theme}-measure.json`), JSON.stringify(measurements, null, 2));
+  console.log(
+    JSON.stringify({
+      ok: true,
+      theme,
+      screenshots: screenshotCount,
+      browser: page.browser,
+      output,
+    }),
+  );
+} catch (error) {
+  const shot = await page.send("Page.captureScreenshot", { format: "png" });
+  await writeFile(join(output, `${theme}-failure.png`), Buffer.from(shot.data, "base64"));
+  throw error;
+} finally {
+  await page.close();
+}

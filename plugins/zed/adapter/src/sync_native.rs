@@ -145,8 +145,13 @@ fn validate_response(
 pub(super) struct Transport {
     outbound: mpsc::Sender<wire::CowboyBufferSyncEnvelope>,
     pending: Pending,
+    navigation_sequence: AtomicU64,
+    #[cfg(test)]
+    pub(crate) worktree_fault: super::worktree_recovery::fault::Fault,
     #[cfg(test)]
     close_fault: std::sync::atomic::AtomicU8,
+    #[cfg(test)]
+    navigation_fault: std::sync::atomic::AtomicU8,
 }
 
 struct PendingGuard<'a> {
@@ -171,8 +176,13 @@ impl Transport {
             Arc::new(Self {
                 outbound,
                 pending: Arc::default(),
+                navigation_sequence: AtomicU64::new(1),
+                #[cfg(test)]
+                worktree_fault: super::worktree_recovery::fault::Fault::default(),
                 #[cfg(test)]
                 close_fault: std::sync::atomic::AtomicU8::new(0),
+                #[cfg(test)]
+                navigation_fault: std::sync::atomic::AtomicU8::new(0),
             }),
             receiver,
         )
@@ -206,13 +216,15 @@ impl Transport {
                     | Payload::CloseResponse(_)
                     | Payload::AnalysisResponse(_)
                     | Payload::OpenAttemptResponse(_)
-                    | Payload::OpenTargetResponse(_)) => Some(response),
+                    | Payload::OpenTargetResponse(_)
+                    | Payload::WorktreeAttemptResponse(_)) => Some(response),
                     Payload::Request(_)
                     | Payload::NavigationRequest(_)
                     | Payload::CloseRequest(_)
                     | Payload::AnalysisRequest(_)
                     | Payload::OpenAttemptRequest(_)
-                    | Payload::OpenTargetRequest(_) => None,
+                    | Payload::OpenTargetRequest(_)
+                    | Payload::WorktreeAttemptRequest(_) => None,
                 }
             });
         // Test-only loss of an actual native acknowledgement, never a synthetic
@@ -223,6 +235,16 @@ impl Transport {
             if value.outcome == wire::cowboy_close_buffers_response::Outcome::Closed as i32)
             && self
                 .close_fault
+                .compare_exchange(1, 2, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            return true;
+        }
+        #[cfg(test)]
+        if matches!(response.as_ref(), Some(Payload::NavigationResponse(value))
+            if value.protocol == 2 && value.outcome == wire::cowboy_navigation_response::Outcome::Complete as i32)
+            && self
+                .navigation_fault
                 .compare_exchange(1, 2, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
         {
@@ -242,6 +264,11 @@ impl Transport {
         self.close_fault.load(Ordering::Relaxed) == 2
     }
 
+    #[cfg(test)]
+    pub(crate) fn discard_next_navigation_response(&self) {
+        assert_eq!(self.navigation_fault.swap(1, Ordering::Relaxed), 0);
+    }
+
     pub async fn request(
         &self,
         zed: &ZedRuntime,
@@ -259,12 +286,7 @@ impl Transport {
     }
 
     pub(super) async fn exchange(&self, zed: &ZedRuntime, payload: Payload) -> Result<Payload> {
-        let id = zed
-            .next_message_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
-                (id > 0 && id < 1_000_000_000).then_some(id + 1)
-            })
-            .map_err(|_| anyhow::anyhow!("native request IDs exhausted"))?;
+        let id = Self::message_id(zed)?;
         let (sender, receiver) = oneshot::channel();
         {
             let mut pending = self.pending.lock().expect("native sync pending poisoned");
@@ -295,6 +317,53 @@ impl Transport {
         .await
         .context("native sync observation timed out")??;
         Ok(response)
+    }
+
+    fn message_id(zed: &ZedRuntime) -> Result<u32> {
+        zed.next_message_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+                (id > 0 && id < 1_000_000_000).then_some(id + 1)
+            })
+            .map_err(|_| anyhow::anyhow!("native request IDs exhausted"))
+    }
+
+    pub(super) fn navigation_id(&self) -> Result<u64> {
+        self.navigation_sequence
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| anyhow::anyhow!("navigation operation IDs exhausted"))
+    }
+
+    pub(super) fn forget_navigation(
+        &self,
+        zed: &ZedRuntime,
+        mut request: wire::CowboyNavigation,
+    ) -> Result<()> {
+        request.action = wire::cowboy_navigation::Action::Forget as i32;
+        self.outbound
+            .try_send(wire::CowboyBufferSyncEnvelope {
+                id: Self::message_id(zed)?,
+                responding_to: None,
+                payload: Some(Payload::NavigationRequest(request)),
+            })
+            .context("native navigation retirement queue unavailable")
+    }
+
+    /// Receipt GC only, after a matching Closed observation. This cannot
+    /// remove native buffers and allocates no reply waiter. A full queue
+    /// leaves the retirement with its caller for a later attempt.
+    pub(super) fn forget_close(
+        &self,
+        zed: &ZedRuntime,
+        mut request: wire::CowboyCloseBuffers,
+    ) -> Result<()> {
+        request.action = wire::cowboy_close_buffers::Action::Forget as i32;
+        self.outbound
+            .try_send(wire::CowboyBufferSyncEnvelope {
+                id: Self::message_id(zed)?,
+                responding_to: None,
+                payload: Some(Payload::CloseRequest(request)),
+            })
+            .context("native close retirement queue unavailable")
     }
 
     pub async fn probe(&self, zed: &ZedRuntime) -> Result<[u8; 16]> {

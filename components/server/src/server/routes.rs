@@ -15,9 +15,10 @@ pub(super) fn platform_routes() -> Router<Arc<AppState>> {
         .route("/api/metrics", get(api_metrics))
         .route("/api/sync/dataset", get(sync_dataset::get_dataset))
         .route("/api/preferences/{scope}", get(preferences::read))
+        .route("/api/superagent/activity", get(superagent::activity))
         .route(
             "/api/preferences",
-            put(preferences::update).layer(DefaultBodyLimit::max(64 * 1024)),
+            put(preferences::update).layer(DefaultBodyLimit::max(1024 * 1024)),
         )
         .route(
             "/api/observability/batches",

@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Box, CssBaseline, Stack } from "@mui/material";
 import { MobileSheetContextDock } from "@cowboy/app-shell";
+import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import {
   buildTaskSummaries,
   CALLS_DOCK_LEGACY_KEY,
@@ -427,6 +428,9 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
       () => document.querySelector("[data-mobile-task-level='list']"),
       "Back from the lead's details shows the list",
     );
+    check(!document.querySelector("[data-sheet-context-summary]"), "Task list footer omits the redundant title");
+    const listDock = document.querySelector<HTMLElement>("[data-sheet-context-dock]")!;
+    check(listDock.getBoundingClientRect().left >= 16, "Task navigation retains comfortable screen-edge clearance");
     document.querySelector<HTMLElement>("[data-task-option='call:call-1']")!.click();
     await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "a call opens its transcript first");
     check(location.hash === taskHash("call:call-1"), "the detail level is deep-linkable");
@@ -440,12 +444,26 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
         .getBoundingClientRect();
       const details = document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.getBoundingClientRect();
       const transcript = document.querySelector<HTMLElement>("[data-call-transcript]")!.getBoundingClientRect();
-      check(chip.left - level.left >= 12, `T16 the state chip keeps the gutter (${String(chip.left - level.left)}px)`);
+      const scroller = document.querySelector<HTMLElement>("[data-call-transcript] [data-transcript-session]")!;
+      const fade = getComputedStyle(scroller.parentElement!, "::after");
+      check(fade.backgroundImage.includes("linear-gradient") && fade.pointerEvents === "none", "Transcript top gradient paints without intercepting gestures");
+      const dialog = scroller.closest<HTMLElement>('[role="dialog"]')!;
+      dialog.style.setProperty("--cowboy-system-top-clearance", "47px");
+      check(Math.abs(scroller.getBoundingClientRect().top - dialog.getBoundingClientRect().top) < 1, "Cover transcript reaches the top behind the system status area");
+      check(parseFloat(getComputedStyle(scroller).paddingTop) === 67 && parseFloat(getComputedStyle(scroller.parentElement!, "::after").height) === 67, "Safe inset and fade adapt together without hiding the first message");
+      dialog.style.removeProperty("--cowboy-system-top-clearance");
+      check(chip.left - level.left >= 8, `T16 the context dock keeps its compact gutter (${String(chip.left - level.left)}px)`);
       check(details.right <= level.right, "T16 Details stays inside the sheet");
-      const island = document.querySelector<HTMLElement>("[data-sheet-context-dock] > div")!.getBoundingClientRect();
+      const island = document.querySelector<HTMLElement>("[data-sheet-context-summary]")!.getBoundingClientRect();
       check(details.width >= 44 && details.height >= 44, "The floating details button retains its touch target");
-      check(island.width > details.width * 3, "The information surface is independent from the floating buttons");
-      check(chip.height <= 180, "Identity and supporting information remain compact");
+      const buttons = document.querySelector<HTMLElement>("[data-sheet-context-dock] > div:first-child")!.getBoundingClientRect();
+      check(buttons.right <= island.left && island.top < buttons.bottom && buttons.top < island.bottom, "Round navigation is on the left beside the information surface");
+      check(island.height >= 56 && getComputedStyle(document.querySelector("[data-sheet-context-summary]")!).boxShadow !== "none", "Summary shares the controls' minimum height and floating surface depth");
+      check(chip.height <= 112, "The dock does not stack information over a second navigation row");
+      const dock = document.querySelector<HTMLElement>("[data-sheet-context-dock]")!;
+      const footer = dock.closest<HTMLElement>("[data-detent-sheet-footer]")!;
+      const measured = Number.parseFloat(getComputedStyle(dock.closest('[role="dialog"]')!).getPropertyValue("--cowboy-sheet-dock-clearance"));
+      check(Math.abs(measured - footer.getBoundingClientRect().height) < 1, "Transcript clearance follows the actual compact footer");
       check(Boolean(document.querySelector("[data-context-facts]")), "Execution facts stay visible beside navigation");
       check(document.querySelector("[data-context-facts]")?.textContent?.includes("gpt-6.1-sol"), "The model is visible without opening Details");
       check(Math.abs(transcript.bottom - level.bottom) < 1, "T16 the transcript reaches the island");
@@ -454,6 +472,19 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     const conversationNode = document.querySelector("[data-call-transcript]");
     document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.click();
     await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "call details open separately");
+    {
+      const coarse = document.documentElement.classList.contains(COARSE_POINTER_ROOT_CLASS);
+      document.documentElement.classList.add(COARSE_POINTER_ROOT_CLASS);
+      const summary = document.querySelector<HTMLElement>("[data-sheet-context-summary]")!;
+      const action = summary.querySelector<HTMLElement>("button")!;
+      action.focus({ preventScroll: true });
+      action.classList.add("Mui-focusVisible");
+      check(getComputedStyle(action).backgroundColor === "rgba(0, 0, 0, 0)", "Touch theme still clears the inner button background");
+      check(/^rgb\(/.test(getComputedStyle(summary).backgroundColor), "Focused summary keeps an opaque surface over the detail body");
+      action.classList.remove("Mui-focusVisible");
+      action.blur();
+      if (!coarse) document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
+    }
     check(history.length > historyBefore, "each level is a history entry");
     history.back();
     await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "Back returns to transcript");

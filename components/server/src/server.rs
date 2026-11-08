@@ -101,6 +101,7 @@ mod execution;
 mod local_operator;
 mod machine_lanes;
 mod managed_calls;
+mod native_configuration;
 mod notifications;
 mod operator_approval;
 #[cfg(test)]
@@ -108,6 +109,7 @@ mod persistence_tests;
 mod plugin_install;
 mod preferences;
 mod provider_accounts;
+mod superagent;
 mod workspace_extensions;
 use plugin_install::api_machine_plugin_install;
 mod plugin_history;
@@ -653,14 +655,14 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         device_access: Arc::new(crate::client_auth::DeviceAccessSessions::default()),
         capacity_runtime: Arc::new(ActiveCapacityRuntime::default()),
     });
-    let web_push_task = tokio::spawn(notifications::run(
-        Arc::clone(&state),
-        state.shutdown.clone(),
-    ));
+    let web_push_task = spawn_notifications(&state);
     let dispatcher_task = spawn_dispatcher(&state, dispatch_rx);
+    let code_holdings_task = tokio::spawn(agent_api::maintain_holdings(Arc::clone(&state)));
 
     let runtime_router = Arc::clone(&state.runtime_router);
     let result = serve_axum(args.bind, args.data_dir.clone(), state, shutdown_tx).await;
+    code_holdings_task.abort();
+    let _ = code_holdings_task.await;
     // Persistence closes below; events consumed after this point would be
     // acknowledged but never stored.
     runtime_router.disconnect_all();
@@ -1348,6 +1350,7 @@ async fn serve_axum(
     let trash_retention_task = tokio::spawn(session_trash::run_retention(Arc::clone(&state)));
     let account_recovery_task = tokio::spawn(provider_accounts::run_recovery(Arc::clone(&state)));
     let usage_broadcast_task = tokio::spawn(run_usage_broadcast(Arc::clone(&state)));
+    let superagent_task = tokio::spawn(superagent::run(Arc::clone(&state)));
     let native_usage_task = tokio::spawn(provider_accounts::usage::run(Arc::clone(&state)));
     let code_buffers = Arc::clone(&state.code_buffers);
     let result = axum::serve(
@@ -1366,6 +1369,7 @@ async fn serve_axum(
     trash_retention_task.abort();
     account_recovery_task.abort();
     usage_broadcast_task.abort();
+    superagent_task.abort();
     native_usage_task.abort();
     code_buffers.shutdown().await;
     result?;
@@ -1525,14 +1529,7 @@ struct ResetRequest {
     expected_credit_id: String,
 }
 
-fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-        })
-}
+use crate::usage::now_ms;
 
 #[derive(Debug, Default, Deserialize)]
 struct DiagnosticLogsQuery {
@@ -2068,28 +2065,11 @@ struct CodeLanguageCapabilities {
     outline: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct CodeBufferVersion {
     replica_id: u32,
     timestamp: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodePoint {
-    row: u32,
-    column: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeDiagnostic {
-    start: CodePoint,
-    end: CodePoint,
-    severity: i32,
-    source: Option<String>,
-    message: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

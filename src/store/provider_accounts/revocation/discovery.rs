@@ -88,6 +88,46 @@ impl Store {
             .transpose()
     }
 
+    /// Accounts whose permanent revocation finished locally. Display only:
+    /// the registry fence stays, and this is never upstream logout evidence.
+    pub async fn completed_provider_account_revocations(
+        &self,
+        owner: &str,
+    ) -> Result<Vec<crate::provider_account::ProviderAccountId>> {
+        macro_rules! read {
+            ($db:expr, $has_plan:literal) => {
+                sqlx::query_scalar::<_, String>(concat!(
+                    "SELECT result FROM provider_account_operations WHERE owner_user_id=$1 AND ",
+                    $has_plan
+                ))
+                .bind(owner)
+                .fetch_all(&$db.pool)
+                .await?
+            };
+        }
+        let rows = match &self.backend {
+            StorageBackend::Postgres(db) => read!(
+                db,
+                "result::jsonb -> 'revocation' IS NOT NULL AND result::jsonb -> 'revocation' <> 'null'::jsonb"
+            ),
+            StorageBackend::Sqlite(db) => read!(
+                db,
+                "json_type(result, '$.revocation') IS NOT NULL AND json_type(result, '$.revocation') <> 'null'"
+            ),
+        };
+        let mut accounts = Vec::new();
+        for row in rows {
+            let receipt: Receipt = serde_json::from_str(&row)?;
+            if receipt.revocation.is_some()
+                && receipt.revocation_completed
+                && !accounts.contains(&receipt.account_id)
+            {
+                accounts.push(receipt.account_id);
+            }
+        }
+        Ok(accounts)
+    }
+
     /// Scan at most 32 journal rows per page. Replay locators carry no vault,
     /// process-exit or remote-dispatch authority. Each stage rechecks admission.
     pub async fn provider_account_revocations(&self, after: Option<&Cursor>) -> Result<Page> {

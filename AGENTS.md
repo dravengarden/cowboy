@@ -22,8 +22,11 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   repository root is one Bun workspace (`web` plus the `components/*` packages
   it links): `just install` creates `node_modules`, `bun.lock` is the only
   lockfile, and a dependency change needs a new `depsHash` in `flake.nix`.
-  Tests import `test` from `bun:test` and assertions backed by `node:assert/strict` in `tools/test-assert.ts`;
-  scripts use `node:` and `Bun` APIs and spawn through `tools/lib/command.ts`.
+  Tests import `test` from `bun:test`. Repository-local tests reuse assertions
+  backed by `node:assert/strict` in `tools/test-assert.ts`; tests shipped inside
+  component packages import Node's built-in assertions directly to keep the
+  package self-contained.
+  Scripts use `node:` and `Bun` APIs and spawn through `tools/lib/command.ts`.
   Do not use `jsr:`/`npm:` specifiers.
 - Signed Plugin collectors (`plugins/*/collector/`) run on the Machine's
   bundled Bun with no host-provided globals. A package is self-contained, so
@@ -100,8 +103,8 @@ require the exact successful build receipt and published SideStore version.
   `docs/structural-refactor-plan-2026-11.md`.
 - **Module layering ratchet** (same recipe): no Rust module may join or enlarge
   a dependency cycle, and no new edge may be added between two modules of the
-  same cycle (`tools/module-edges-baseline.json`; the base crate's 37-module
-  cycle is being taken apart). Depend on a narrower module or move the shared
+  same cycle (`tools/module-edges-baseline.json`; the base crate's former
+  37-module cycle is down to 8 (store), 6 (Plugins) and 4 (Hub) modules). Depend on a narrower module or move the shared
   type into a contract module instead. Run `bun tools/check-module-layers.ts
   --update` after a change that removes edges.
 - **Reboot convergence is a core requirement**: after any Machine (Hawk, OVH,
@@ -192,6 +195,11 @@ require the exact successful build receipt and published SideStore version.
   lifecycle or binds it to the session.
 
 ## Frontend
+Efficiency is the core UX criterion. Follow [the core UX principles](docs/ux-principles.md):
+Mobile keeps frequent controls in a bottom workbench and content above;
+Desktop keeps commands visible and keyboard reachable. Verify rendered task
+flows, not just static source or visual tidiness.
+
 Composer (mdlive / CM6), optimistic-send, transcript (column-reverse scroll),
 the Tauri native shell — see `web/AGENTS.md` and the
 `cowboy-*` memories.

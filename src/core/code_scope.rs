@@ -71,7 +71,7 @@ impl SessionCodeScope {
                 .map_or(0, crate::execution_environment::BindingV1::string_bytes)
     }
 
-    fn observe(session: &Session) -> Option<Self> {
+    pub(super) fn observe(session: &Session) -> Option<Self> {
         let execution_binding = session
             .meta
             .execution_binding

@@ -1548,8 +1548,8 @@ export function SessionList({
                     } : {}),
                     flex: 1,
                     overflowY: "auto",
-                    // A drag slides the lifted row sideways to its target
-                    // indent; that must never open a horizontal scroller.
+                    pt: mobileDrawer ? "calc(var(--cowboy-system-top-clearance, 0px) + 20px)" : undefined,
+                    scrollPaddingTop: mobileDrawer ? "calc(var(--cowboy-system-top-clearance, 0px) + 20px)" : undefined,
                     overflowX: "hidden",
                     ...(desktop ? desktopScrollbarSx : {}),
                     // The dismiss island overlays rows during ordinary scrolling,

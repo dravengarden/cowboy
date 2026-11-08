@@ -14,10 +14,9 @@ import { toolCopyText, toolHeading, toolUsesRawOnly, toolVariantLabel } from "./
 import { type ToolItem, type ToolRun } from "./tools/runs";
 import { type ContentChunk, isHumanPrompt, type RenderItem } from "./derive";
 import { ToolStatusChip, toolStatusLabel } from "./tools/ToolStatusChip";
-import { FloatingActionIsland } from "@cowboy/app-shell";
+import { ScrollEdges, FloatingActionIsland } from "@cowboy/app-shell";
 import { Sheet } from "./Sheet";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
-
 export function toolIcon(kind: string): React.ReactElement {
   // The tool-card leading icon tracks the theme accent (`color="primary"`,
   // was the default text colour) and the reading-size setting
@@ -925,7 +924,7 @@ export function ToolDetailsBrowser({
           );
         })}
       </Stack>
-    </Box>
+    <ScrollEdges top={false} /></Box>
   );
 
   return createPortal(
@@ -1048,7 +1047,7 @@ export function ToolDetailsBrowser({
                 }}
               >
                 {details}
-              </DialogContent>
+              <ScrollEdges /></DialogContent>
             </Box>
             <DesktopShortcutBar
               groups={[

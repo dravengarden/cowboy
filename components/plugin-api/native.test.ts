@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { assertEquals, assertRejects } from "../../tools/test-assert.ts";
+import { deepStrictEqual as assertEquals, rejects } from "node:assert/strict";
 import {
   type CowboyNativePluginHost,
   installPluginRuntimeHosts,
@@ -36,14 +36,8 @@ test("native plugin ABI intersects signed and shell capabilities", async () => {
   };
 
   try {
-    assertEquals(
-      await supportsNativePluginCapability("passkey", "webauthn"),
-      true,
-    );
-    assertEquals(
-      await supportsNativePluginCapability("passkey", "camera"),
-      false,
-    );
+    assertEquals(await supportsNativePluginCapability("passkey", "webauthn"), true);
+    assertEquals(await supportsNativePluginCapability("passkey", "camera"), false);
     assertEquals(
       await invokeNativePluginCapability("passkey", "webauthn", {
         action: "capabilities",
@@ -51,10 +45,9 @@ test("native plugin ABI intersects signed and shell capabilities", async () => {
       { ok: true },
     );
     assertEquals(calls, [["webauthn", { action: "capabilities" }]]);
-    await assertRejects(
+    await rejects(
       () => invokeNativePluginCapability("passkey", "camera", {}),
-      Error,
-      "unavailable",
+      (error: unknown) => error instanceof Error && error.message.includes("unavailable"),
     );
   } finally {
     installPluginRuntimeHosts([], true);
@@ -75,10 +68,7 @@ test("native plugin ABI rejects incompatible shell versions", async () => {
     invoke: () => Promise.resolve({ ok: true }),
   };
   try {
-    assertEquals(
-      await supportsNativePluginCapability("passkey", "webauthn"),
-      false,
-    );
+    assertEquals(await supportsNativePluginCapability("passkey", "webauthn"), false);
   } finally {
     installPluginRuntimeHosts([], true);
     if (previous === undefined) delete root.__COWBOY_NATIVE_PLUGIN_HOST;
@@ -98,36 +88,23 @@ test("runtime host inventory rejects mutable and duplicate generations", async (
   };
   try {
     installPluginRuntimeHosts([{ ...descriptor, generation: undefined }], true);
-    assertEquals(
-      await supportsNativePluginCapability("passkey", "webauthn"),
-      false,
-    );
+    assertEquals(await supportsNativePluginCapability("passkey", "webauthn"), false);
     installPluginRuntimeHosts([{ ...descriptor, generation: "latest" }], true);
-    assertEquals(
-      await supportsNativePluginCapability("passkey", "webauthn"),
-      false,
-    );
-    installPluginRuntimeHosts([{
-      ...descriptor,
-      native_capabilities: ["webauthn", "webauthn"],
-    }], true);
-    assertEquals(
-      await supportsNativePluginCapability("passkey", "webauthn"),
-      false,
-    );
+    assertEquals(await supportsNativePluginCapability("passkey", "webauthn"), false);
     installPluginRuntimeHosts(
-      [{ ...descriptor, generation: "a".repeat(64) }],
+      [
+        {
+          ...descriptor,
+          native_capabilities: ["webauthn", "webauthn"],
+        },
+      ],
       true,
     );
-    assertEquals(
-      await supportsNativePluginCapability("passkey", "webauthn"),
-      true,
-    );
+    assertEquals(await supportsNativePluginCapability("passkey", "webauthn"), false);
+    installPluginRuntimeHosts([{ ...descriptor, generation: "a".repeat(64) }], true);
+    assertEquals(await supportsNativePluginCapability("passkey", "webauthn"), true);
     installPluginRuntimeHosts([descriptor, descriptor]);
-    assertEquals(
-      await supportsNativePluginCapability("passkey", "webauthn"),
-      false,
-    );
+    assertEquals(await supportsNativePluginCapability("passkey", "webauthn"), false);
   } finally {
     installPluginRuntimeHosts([], true);
     if (previous === undefined) delete root.__COWBOY_NATIVE_PLUGIN_HOST;

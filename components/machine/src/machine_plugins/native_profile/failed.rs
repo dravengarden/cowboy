@@ -155,4 +155,50 @@ mod tests {
         );
         assert!(home.is_dir());
     }
+
+    #[test]
+    fn a_retired_failed_login_is_logged_out_without_a_command() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(
+            temp.path(),
+            crate::machine_protocol::Platform::Linux,
+            "x86_64".into(),
+        )
+        .unwrap();
+        let scoped = store
+            .for_account(&uuid::Uuid::new_v4().to_string().try_into().unwrap())
+            .unwrap();
+        let home = super::super::tests::ready(&scoped, &super::super::tests::package());
+        let path = home.parent().unwrap().join("profile.json");
+        let mut failed: Profile = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let login = failed.request.clone();
+        failed.identity = None;
+        failed.login_succeeded = false;
+        fs::write(&path, serde_json::to_vec(&failed).unwrap()).unwrap();
+        scoped
+            .retire_failed_native_logins("claude-code", "new-login")
+            .unwrap();
+        assert!(!home.exists());
+        for _ in 0..2 {
+            assert!(matches!(
+                scoped
+                    .prepare_native_logout("claude-code", 1, &login, "logout-1")
+                    .unwrap(),
+                super::super::LogoutPreparation::Observed(Some(true))
+            ));
+        }
+        assert!(
+            scoped
+                .native_auth_trees_exited("claude-code", 1, &login, "logout-1")
+                .unwrap()
+        );
+        scoped
+            .cleanup_logged_out_native_profile("claude-code", 1, &login, "logout-1")
+            .unwrap();
+        assert!(
+            scoped
+                .prepare_native_logout("claude-code", 1, &login, "logout-2")
+                .is_err()
+        );
+    }
 }

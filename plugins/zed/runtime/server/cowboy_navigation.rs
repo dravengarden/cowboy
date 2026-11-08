@@ -14,11 +14,18 @@ const MAX_LOCATIONS: usize = 256;
 const MAX_TARGETS: usize = 32;
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 
+#[path = "navigation_receipts.rs"]
+mod receipts;
 #[cfg(test)]
 mod tests;
 
 #[derive(Default)]
-pub(super) struct State(Arc<AtomicBool>, #[cfg(test)] usize);
+pub(super) struct State {
+    busy: Arc<AtomicBool>,
+    #[cfg(test)]
+    acquisitions: usize,
+    receipts: receipts::Registry,
+}
 
 struct Admission(Arc<AtomicBool>);
 impl Drop for Admission {
@@ -28,10 +35,10 @@ impl Drop for Admission {
 }
 impl State {
     fn admit(&self) -> Result<Admission, Refusal> {
-        self.0
+        self.busy
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| Refusal::Budget)?;
-        Ok(Admission(self.0.clone()))
+        Ok(Admission(self.busy.clone()))
     }
 }
 
@@ -221,21 +228,35 @@ impl LspStore {
     pub(super) async fn handle_cowboy_navigation(
         this: Entity<Self>,
         envelope: TypedEnvelope<proto::CowboyNavigation>,
-        mut cx: AsyncApp,
+        cx: AsyncApp,
     ) -> Result<proto::CowboyNavigationResponse> {
+        let peer = envelope.sender_id;
         let sender = envelope.original_sender_id().unwrap_or_default();
         let request = envelope.payload;
         anyhow::ensure!(
-            request.protocol == 1
+            matches!(request.protocol, 1 | 2)
                 && request.project_id == proto::REMOTE_SERVER_PROJECT_ID
                 && request.query.len() <= 8192,
             "invalid private navigation request"
         );
-        let mut response = proto::CowboyNavigationResponse {
-            protocol: 1,
-            ..Default::default()
+        let registry = this.read_with(&cx, |this, _| this.cowboy_navigation.receipts.clone());
+        let mut response = if request.protocol == 2 {
+            registry.probe()
+        } else {
+            anyhow::ensure!(
+                request.instance.is_empty() && request.operation_id == 0 && request.action == 0,
+                "invalid legacy navigation operation"
+            );
+            proto::CowboyNavigationResponse {
+                protocol: 1,
+                ..Default::default()
+            }
         };
         if request.query.is_empty() {
+            anyhow::ensure!(
+                request.instance.is_empty() && request.operation_id == 0 && request.action == 0,
+                "invalid navigation probe"
+            );
             anyhow::ensure!(
                 this.read_with(&cx, |this, _| this.as_local().is_some()),
                 "navigation requires local store"
@@ -250,70 +271,24 @@ impl LspStore {
                 && query.lsp_request_id == 0,
             "invalid private navigation shape"
         );
-        let admission = this.read_with(&cx, |this, _| this.cowboy_navigation.admit());
-        let outcome = match admission {
-            Err(reason) => Err(reason),
-            Ok(_admission) => {
-                let timer = cx.background_executor().timer(Duration::from_secs(20));
-                let work = async {
-                    use proto::lsp_query::Request;
-                    match query.request.ok_or(Refusal::Source)? {
-                        Request::GetDefinition(v) => {
-                            Self::cowboy_navigate::<GetDefinitions>(
-                                this.clone(),
-                                v,
-                                sender,
-                                &mut cx,
-                            )
-                            .await
-                        }
-                        Request::GetDeclaration(v) => {
-                            Self::cowboy_navigate::<GetDeclarations>(
-                                this.clone(),
-                                v,
-                                sender,
-                                &mut cx,
-                            )
-                            .await
-                        }
-                        Request::GetTypeDefinition(v) => {
-                            Self::cowboy_navigate::<GetTypeDefinitions>(
-                                this.clone(),
-                                v,
-                                sender,
-                                &mut cx,
-                            )
-                            .await
-                        }
-                        Request::GetImplementation(v) => {
-                            Self::cowboy_navigate::<GetImplementations>(
-                                this.clone(),
-                                v,
-                                sender,
-                                &mut cx,
-                            )
-                            .await
-                        }
-                        Request::GetReferences(v) => {
-                            Self::cowboy_navigate::<GetReferences>(this.clone(), v, sender, &mut cx)
-                                .await
-                        }
-                        _ => Err(Refusal::Source),
-                    }
-                };
-                futures::pin_mut!(work, timer);
-                match select(work, timer).await {
-                    Either::Left((result, _)) => result,
-                    Either::Right(_) => Err(Refusal::Deadline),
-                }
+        let ticket = if request.protocol == 2 {
+            response.operation_id = request.operation_id;
+            match registry.begin(&request, peer)? {
+                receipts::Decision::Reply(saved) => return Ok(saved),
+                receipts::Decision::Execute(ticket) => Some(ticket),
             }
+        } else {
+            None
         };
-        match outcome {
+        match Self::run_cowboy_navigation(this, query, sender, ticket.as_ref(), cx).await {
             Ok(result) => {
                 response.outcome = Outcome::Complete as i32;
                 response.result = result;
             }
             Err(reason) => {
+                if let Some(ticket) = &ticket {
+                    ticket.refused(reason);
+                }
                 response.outcome = Outcome::Refused as i32;
                 response.refusal = reason as i32;
             }
@@ -321,11 +296,84 @@ impl LspStore {
         Ok(response)
     }
 
+    async fn run_cowboy_navigation(
+        this: Entity<Self>,
+        query: proto::LspQuery,
+        sender: PeerId,
+        receipt: Option<&receipts::Ticket>,
+        mut cx: AsyncApp,
+    ) -> Result<Vec<u8>, Refusal> {
+        let _admission = this.read_with(&cx, |this, _| this.cowboy_navigation.admit())?;
+        let timer = cx.background_executor().timer(Duration::from_secs(20));
+        let work = async {
+            use proto::lsp_query::Request;
+            match query.request.ok_or(Refusal::Source)? {
+                Request::GetDefinition(v) => {
+                    Self::cowboy_navigate::<GetDefinitions>(
+                        this.clone(),
+                        v,
+                        sender,
+                        &mut cx,
+                        receipt,
+                    )
+                    .await
+                }
+                Request::GetDeclaration(v) => {
+                    Self::cowboy_navigate::<GetDeclarations>(
+                        this.clone(),
+                        v,
+                        sender,
+                        &mut cx,
+                        receipt,
+                    )
+                    .await
+                }
+                Request::GetTypeDefinition(v) => {
+                    Self::cowboy_navigate::<GetTypeDefinitions>(
+                        this.clone(),
+                        v,
+                        sender,
+                        &mut cx,
+                        receipt,
+                    )
+                    .await
+                }
+                Request::GetImplementation(v) => {
+                    Self::cowboy_navigate::<GetImplementations>(
+                        this.clone(),
+                        v,
+                        sender,
+                        &mut cx,
+                        receipt,
+                    )
+                    .await
+                }
+                Request::GetReferences(v) => {
+                    Self::cowboy_navigate::<GetReferences>(
+                        this.clone(),
+                        v,
+                        sender,
+                        &mut cx,
+                        receipt,
+                    )
+                    .await
+                }
+                _ => Err(Refusal::Source),
+            }
+        };
+        futures::pin_mut!(work, timer);
+        match select(work, timer).await {
+            Either::Left((result, _)) => result,
+            Either::Right(_) => Err(Refusal::Deadline),
+        }
+    }
+
     async fn cowboy_navigate<T>(
         this: Entity<Self>,
         request: T::ProtoRequest,
         sender: PeerId,
         cx: &mut AsyncApp,
+        receipt: Option<&receipts::Ticket>,
     ) -> Result<Vec<u8>, Refusal>
     where
         T: Navigation,
@@ -473,7 +521,7 @@ impl LspStore {
                         check(this, cx)?;
                         #[cfg(test)]
                         {
-                            this.cowboy_navigation.1 += 1;
+                            this.cowboy_navigation.acquisitions += 1;
                         }
                         Ok::<_, Refusal>(this.buffer_store.update(cx, |store, cx| {
                             store.open_buffer(
@@ -532,12 +580,45 @@ impl LspStore {
                     )),
                 })
                 .collect();
-            Ok(proto::LspQueryResponse {
-                project_id: proto::REMOTE_SERVER_PROJECT_ID,
-                lsp_request_id: 0,
-                responses,
-            }
-            .encode_to_vec())
+            let result = navigation_result(responses);
+            this.commit_navigation(targets.values(), sender, receipt, &result, cx);
+            Ok(result)
         })
     }
+
+    fn commit_navigation<'a>(
+        &mut self,
+        targets: impl Iterator<Item = &'a Entity<Buffer>>,
+        sender: PeerId,
+        receipt: Option<&receipts::Ticket>,
+        result: &[u8],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(receipt) = receipt else {
+            return;
+        };
+        // Protocol two includes registration in the original effect. A recovered
+        // reply must not require another mutating RPC. Complete is saved in the
+        // same GPUI update as sharing/registration, including caller cancellation.
+        for target in targets {
+            let buffer_id = target.read(cx).remote_id();
+            let handle =
+                self.register_buffer_with_language_servers(target, HashSet::default(), false, cx);
+            self.pull_diagnostics_for_buffer(target.clone(), cx)
+                .detach();
+            self.buffer_store.update(cx, |store, _| {
+                store.register_shared_lsp_handle(sender, buffer_id, handle);
+            });
+        }
+        receipt.complete_result(result);
+    }
+}
+
+fn navigation_result(responses: Vec<proto::LspResponse>) -> Vec<u8> {
+    proto::LspQueryResponse {
+        project_id: proto::REMOTE_SERVER_PROJECT_ID,
+        lsp_request_id: 0,
+        responses,
+    }
+    .encode_to_vec()
 }

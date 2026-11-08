@@ -30,6 +30,7 @@ import { SessionControls } from "./Composer";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { MobileComposer } from "./mobile/MobileComposer";
 import { openMobileProduct } from "./mobile/appPagerMotion";
+import { BOTTOM_NAV_PADDING } from "./mobile/bottomNavigation";
 import {
     OPEN_APP_SETTINGS_EVENT,
     appSettingsFromEvent,
@@ -78,6 +79,7 @@ import {
     mobilePresentationMovingRootSx,
 } from "./mobilePresentationMotion";
 import { frostedChrome, frostedStatusChrome } from "./frostedGlass";
+import { readerTopEdge } from "./readerTopEdge";
 import { clampComposerColWidth, composerColWidthStore, DESKTOP_COMPACT_WIDTH_QUERY, DESKTOP_CONVERSATION_MIN, DESKTOP_PROMPT_MIN, clampPromptRatio, collapsedSessionsPromptRatioStore, dragCollapses } from "./desktopLayout";
 
 import { useNavbarAtBottom } from "./navbarSettings";
@@ -1282,7 +1284,7 @@ export function App({
                             overflow: "hidden",
                             bgcolor: "background.default",
                             pointerEvents: "auto",
-                            pt: "var(--cowboy-system-top-clearance)",
+                            position: "relative", ...readerTopEdge(theme, "var(--cowboy-system-top-clearance, 0px)"),
                             pl: "env(safe-area-inset-left, 0px)",
                             "@media (min-width: 768px)": {
                                 width:
@@ -1624,14 +1626,9 @@ export function App({
                         }}
                     />
                 )}
-                {/* Top system-chrome material. Bottom-mode Transcript uses the real
-                    safe-area inset plus the iPad-PWA floor only: its
-                    continuous scrolling content can pass beneath this quiet,
-                    theme-aware glass. The iPad floor is the same 24px clearance as
-                    titles/sheets, so it is one band, not a second pad stacked on
-                    the frost. The material is a dedicated drawer follower, so it
-                    moves off with the Agent page instead of blurring the revealed
-                    Sessions rail. Top mode (desktop): a solid, full navbar-height
+                {/* Mobile Transcript owns its paint-only safe-area gradient;
+                    keep this follower unpainted there to avoid doubling the veil.
+                    Top mode (desktop): a solid, full navbar-height
                     slab behind the transparent top AppBar, so Desktop keeps its
                     dense, stable chrome. Height tracks the measured
                     --navbar-h. pointer-events:none so taps reach the (lifted) navbar.
@@ -1661,7 +1658,7 @@ export function App({
                         // bleeds through as a bright band under the status bar.
                         transition: "opacity 200ms ease",
                         ...(navbarAtBottom
-                            ? frostedStatusChrome(t)
+                            ? (mobile ? {} : frostedStatusChrome(t))
                             : { backgroundColor: t.palette.background.default }),
                         // Desktop: a hairline delineates the navbar. In LIGHT mode the
                         // old `0 1px 24px` down-shadow smeared a gray cloud across the
@@ -1821,24 +1818,10 @@ export function App({
                         // the composer (1) — for a mobile-browser bottom-bar feel.
                         // Top mode: order 0, first child.
                         order: navbarAtBottom ? 2 : 0,
-                        // Own the safe-area inset of whichever edge the bar hugs.
-                        // Top: clear the status bar / notch. Bottom: the bar's buttons
-                        // must clear the home-indicator zone — an earlier `home-inset −
-                        // 20px` dropped the bar so low that the bottom-RIGHT buttons
-                        // (settings gear, send) landed ON the iPad home indicator /
-                        // rounded corner and were very hard to tap. Reserve the FULL
-                        // safe-area inset (floored to 10px off-device) so the buttons
-                        // sit just ABOVE the indicator — the standard, tappable iOS
-                        // placement. Landscape rounded-corner side insets (pl/pr) keep
-                        // the bar clear of the iPhone/iPad R角. env() insets are 0
-                        // off-device + when hosted.
+                        // Agent and Review share the established bottom navigation
+                        // baseline. Landscape side insets clear the rounded corners.
                         pt: navbarAtBottom ? 0 : "var(--cowboy-system-top-clearance)",
-                        // Bottom gap = the home-indicator zone. The FULL inset (~34px)
-                        // read as a big, lopsided gap vs the slim composer→navbar gap
-                        // above; shave it so the bar sits closer to the edge while the
-                        // 44px buttons still clear the indicator (an earlier `inset−20`
-                        // ≈14px dropped them ONTO it — keep ≥ ~20px).
-                        pb: navbarAtBottom ? "max(calc(env(safe-area-inset-bottom) - 18px), 12px)" : 0,
+                        pb: navbarAtBottom ? BOTTOM_NAV_PADDING : 0,
                         pl: navbarAtBottom ? "env(safe-area-inset-left, 0px)" : 0,
                         pr: navbarAtBottom ? "env(safe-area-inset-right, 0px)" : 0,
                         ...(mobile && draftRoute.id && { display: "none" }),

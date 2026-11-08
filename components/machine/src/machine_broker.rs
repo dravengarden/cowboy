@@ -34,6 +34,7 @@ mod mcp_launch;
 mod namespace;
 mod systemd_exit;
 mod worker_environment;
+mod worker_launch;
 
 /// Consecutive failed cleanup attempts (about three minutes of backoff) after
 /// which a nominated Session stops holding its handles in this process.
@@ -2341,17 +2342,8 @@ impl Broker {
             && match &session {
                 Some(session) => session.provider_account_id == account_id,
                 None => {
-                    self.args
-                        .provider_store
-                        .account_stop_matches(&session_id, &account_id)
-                        .unwrap_or(false)
-                        || self
-                            .args
-                            .provider_store
-                            .account_worker_exit(&session_id)
-                            .ok()
-                            .flatten()
-                            .is_some_and(|receipt| receipt.account == account_id)
+                    self.absent_account_session_matches(&session_id, &account_id)
+                        .await
                 }
             };
         if !scope_matches {
@@ -3321,83 +3313,7 @@ impl Broker {
         &self,
         session: &StartSession,
     ) -> Result<oneshot::Receiver<std::result::Result<std::process::ExitStatus, String>>> {
-        // Verification reads and hashes the retained runtime; keep that file
-        // work off the broker's async workers so other sessions keep flowing.
-        let verification_started = Instant::now();
-        anyhow::ensure!(
-            session.provider_account_id.is_default()
-                || (!session.provider_generation_digest.is_empty()
-                    && session.provider_auth_generation.is_some()),
-            "Named account requires an exact authenticated Provider generation"
-        );
-        let provider = if session.provider_generation_digest.is_empty() {
-            None
-        } else {
-            let store = Arc::new(
-                self.args
-                    .provider_store
-                    .for_account(&session.provider_account_id)?,
-            );
-            let (provider_id, digest, auth_generation) = (
-                session.provider.clone(),
-                session.provider_generation_digest.clone(),
-                session.provider_auth_generation,
-            );
-            // An Operator install fences the Plugin until it resolves (about a
-            // minute for a Provider upgrade). A start in that window waits for
-            // the install rather than reporting a crashed Agent; a fence with
-            // no live installer still fails at once for reconciliation.
-            let install_deadline = Instant::now() + PROVIDER_INSTALL_LAUNCH_WAIT;
-            loop {
-                let launch = {
-                    let (store, provider_id, digest) =
-                        (Arc::clone(&store), provider_id.clone(), digest.clone());
-                    tokio::task::spawn_blocking(move || {
-                        store.launch_context(&provider_id, &digest, auth_generation)
-                    })
-                    .await
-                    .context("Provider launch verification task failed")?
-                };
-                match launch {
-                    Ok(launch) => break Some(launch),
-                    Err(error)
-                        if store.install_in_progress(&provider_id)
-                            && Instant::now() < install_deadline
-                            && !self.cancelled_sessions.lock().contains(&session.session_id) =>
-                    {
-                        tracing::info!(
-                            session = %session.session_id,
-                            provider = %provider_id,
-                            %error,
-                            "worker launch waiting for Provider installation"
-                        );
-                        tokio::time::sleep(PROVIDER_INSTALL_LAUNCH_POLL).await;
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-        };
-        tracing::info!(
-            session = %session.session_id,
-            provider = %session.provider,
-            verification_ms = verification_started.elapsed().as_millis(),
-            "worker launch context prepared"
-        );
-        if let (Some(declared), Some(installed)) =
-            (session.provider_behavior.as_ref(), provider.as_ref())
-        {
-            ensure!(
-                declared == &installed.behavior,
-                "session Provider behavior does not match the installed generation"
-            );
-        }
-        mcp_launch::validate(session, provider.as_ref())?;
-        if let Some(installed) = &provider {
-            ensure!(
-                session.provider_version == installed.version,
-                "session Provider version does not match the installed generation"
-            );
-        }
+        let provider = self.resolve_launch_provider(session).await?;
         let behavior = provider.as_ref().map_or_else(
             || {
                 session
@@ -3407,92 +3323,8 @@ impl Broker {
             },
             |provider| provider.behavior.clone(),
         );
-        let managed_child = session
-            .execution_binding
-            .as_ref()
-            .and_then(|binding| binding.managed_child());
-        if let Some(child) = &managed_child {
-            ensure!(
-                child.session_id == session.session_id && child.cwd == session.cwd,
-                "managed child placement mismatch"
-            );
-            let installed = provider
-                .as_ref()
-                .context("managed child requires an exact Provider generation")?;
-            let bytes = std::fs::read(&installed.package_path)?;
-            let package = cowboy_provider_sdk::ProviderPackage::from_bytes(&bytes)?;
-            package
-                .manifest
-                .runtime
-                .launch_arguments(Some(child.profile))?;
-        }
-        if let Some(binding) = &session.execution_binding
-            && managed_child.is_none()
-        {
-            let binding = binding.decode().map_err(anyhow::Error::msg)?;
-            if let Some(managed) = &binding.managed {
-                // A remote managed child launches only its signed profile.
-                ensure!(
-                    binding.workspace.worktree_id == session.session_id,
-                    "managed child placement mismatch"
-                );
-                let installed = provider
-                    .as_ref()
-                    .context("managed child requires an exact Provider generation")?;
-                let bytes = std::fs::read(&installed.package_path)?;
-                let package = cowboy_provider_sdk::ProviderPackage::from_bytes(&bytes)?;
-                package
-                    .manifest
-                    .runtime
-                    .launch_arguments(Some(managed.profile))?;
-            }
-            ensure!(
-                behavior
-                    .execution
-                    .as_ref()
-                    .is_some_and(|execution| execution.accepts(
-                        binding.environment.protocol,
-                        &binding.environment.executor_digest
-                    )),
-                "Provider has not accepted this exact execution component"
-            );
-            ensure!(
-                binding.runtime.cwd == session.cwd
-                    && provider
-                        .as_ref()
-                        .is_some_and(|provider| provider.execution_jsonrpc),
-                "Provider generation cannot launch this execution binding"
-            );
-        }
-        let mut session_environment =
-            session_context_environment(session, &behavior.configuration)?;
-        // Local parents run their tools in this worker's process tree. Remote
-        // parents receive the context from their target keeper instead, and
-        // managed children never receive one: delegation is not recursive.
-        if session.execution_binding.is_none()
-            && !session.system
-            && let Some(path) = self.args.call_context_root.as_deref().and_then(|root| {
-                crate::managed_calls::host::context_file(root, &session.session_id)
-            })
-        {
-            session_environment.push((
-                crate::execution_protocol::CALL_CONTEXT_ENV,
-                path.display().to_string(),
-            ));
-        }
-        if let Some(value) = self.launch_extensions_environment(session)? {
-            session_environment.push((crate::machine_plugins::SESSION_EXTENSIONS_ENV, value));
-        }
-        if let Some(provider) = &provider {
-            session_environment.push((
-                "COWBOY_PROVIDER_PACKAGE_PATH",
-                provider.package_path.display().to_string(),
-            ));
-            session_environment.push(("COWBOY_PROVIDER_ENTRYPOINT", provider.command.clone()));
-            if let Some(home) = &provider.home {
-                session_environment.push(("HOME", home.display().to_string()));
-            }
-        }
+        worker_launch::validate_launch_placement(session, &provider, &behavior)?;
+        let session_environment = self.launch_session_environment(session, &provider, &behavior)?;
         let worker_command = self
             .generation_commands
             .lock()
@@ -3505,34 +3337,7 @@ impl Broker {
                 )
             })?;
         if self.args.spawn_mode == SpawnMode::Direct {
-            let workers = Arc::clone(&self.direct_worker_pids);
-            let existing_pid = workers.lock().get(&session.session_id).copied();
-            if let Some(existing_pid) = existing_pid {
-                tracing::warn!(
-                    session = %session.session_id,
-                    pid = existing_pid,
-                    "waiting for previous direct worker owner before launch"
-                );
-                ensure!(
-                    enforce_direct_worker_exit(
-                        Arc::clone(&workers),
-                        session.session_id.clone(),
-                        existing_pid,
-                        DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT,
-                        DIRECT_WORKER_TERM_TIMEOUT,
-                        DIRECT_WORKER_KILL_TIMEOUT,
-                    )
-                    .await,
-                    "previous direct worker {} pid {} did not exit before replacement",
-                    session.session_id,
-                    existing_pid
-                );
-            }
-            ensure!(
-                !workers.lock().contains_key(&session.session_id),
-                "direct worker {} still has a live process owner",
-                session.session_id
-            );
+            self.await_previous_direct_worker(session).await?;
         }
         // A bound worker is only the runtime; its cwd may belong to another
         // Machine. The target Manager owns that binding's cache environment.
@@ -3661,22 +3466,7 @@ impl Broker {
             .arg(&session.cwd)
             .arg("--generation")
             .arg(&session.generation);
-        if let Some(auth_generation) = session.provider_auth_generation {
-            command
-                .arg("--provider-auth-generation")
-                .arg(auth_generation.to_string());
-        }
-        if !session.provider_account_id.is_default() {
-            command
-                .arg("--provider-account-id")
-                .arg(session.provider_account_id.as_str());
-            if self.args.spawn_mode == SpawnMode::SystemdUser {
-                command.arg("--launch-gate");
-            }
-        }
-        if let Some(plan) = &session.mcp_plan {
-            command.arg("--mcp-plan").arg(serde_json::to_string(plan)?);
-        }
+        self.push_launch_identity_args(&mut command, session)?;
         if let Some(binding) = &session.execution_binding {
             command
                 .arg("--execution-binding")
@@ -6542,6 +6332,54 @@ mod tests {
             crashed.exit_detail.as_deref(),
             Some("Plugin requires install attempt reconciliation")
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn account_quiesce_fences_a_session_that_never_launched_here() {
+        let (mut broker, _launch, _worker_rx) = reconnecting_worker_fixture();
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            crate::machine_plugins::MachinePluginStore::new(
+                temp.path(),
+                crate::machine_protocol::Platform::Linux,
+                "x86_64".into(),
+            )
+            .unwrap(),
+        );
+        broker.args.provider_store = store.clone();
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let broker = Arc::new(broker);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        while rx.try_recv().is_ok() {}
+        broker
+            .quiesce_account_session("never".into(), "stop".into(), account.clone())
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(Frame::CommandAck { accepted: true, .. })
+        ));
+        assert!(store.account_stop_matches("never", &account).unwrap());
+        assert!(
+            store
+                .account_worker_exit("never")
+                .unwrap()
+                .is_some_and(|receipt| receipt.unlaunched && receipt.tree_exited)
+        );
+        // A launch still in flight is not proof of absence.
+        broker.launching.lock().insert("starting".into());
+        broker
+            .quiesce_account_session("starting".into(), "stop".into(), account.clone())
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(Frame::CommandAck {
+                accepted: false,
+                ..
+            })
+        ));
+        assert!(store.account_worker_exit("starting").unwrap().is_none());
     }
 
     #[tokio::test(start_paused = true)]

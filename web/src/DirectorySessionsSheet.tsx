@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -353,7 +354,7 @@ export function DirectorySessionsView(
                 {query ? "No matching sessions." : "No sessions in this scope."}
               </Typography>
             )}
-          </Box>
+          <ScrollEdges /></Box>
         </Stack>
       </DirectoryWorkbench>
       <ConfirmSheet
@@ -405,7 +406,7 @@ export function DirectorySessionsView(
                 </Typography>
               </li>
             ))}
-          </Box>
+          <ScrollEdges /></Box>
         </Stack>
       </ConfirmSheet>
     </InAppRoot>

@@ -93,7 +93,7 @@ impl Config {
         );
         let bytes = read_private(path)?.context("CoreSecurity configuration is missing")?;
         let config: Self =
-            crate::auth_plugins::decode_private_json(&bytes, "CoreSecurity configuration")?;
+            crate::credentials::decode_private_json(&bytes, "CoreSecurity configuration")?;
         ensure!(
             config.schema == CONFIG_SCHEMA,
             "unsupported CoreSecurity configuration"
@@ -183,7 +183,7 @@ impl Authority {
         read_private(&dir.root().join(MARKER))?
             .map(|bytes| {
                 let record: Self =
-                    crate::auth_plugins::decode_private_json(&bytes, "CoreSecurity authority")?;
+                    crate::credentials::decode_private_json(&bytes, "CoreSecurity authority")?;
                 record.validate()?;
                 Ok(record)
             })

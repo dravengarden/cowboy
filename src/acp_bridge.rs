@@ -41,8 +41,8 @@ use tokio_tungstenite::{
 };
 
 use crate::acp::STARTUP_PHASE_TIMEOUT;
-use crate::cli::ServeAcpArgs;
 use crate::core::{Envelope, Event, Inbound, Outbound, SessionMeta, Status};
+use crate::serve_args::ServeAcpArgs;
 
 #[path = "acp_bridge_subagents.rs"]
 mod subagents;
@@ -2950,7 +2950,7 @@ mod tests {
             cwd: "/tmp".to_owned(),
             title: "test".to_owned(),
             status: Status::Busy,
-            origin: crate::core::SessionOrigin::Api,
+            origin: crate::model::SessionOrigin::Api,
             agent_session_id: None,
             paused: false,
             closing: false,

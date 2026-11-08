@@ -136,7 +136,7 @@ impl RemoteRuntime {
         self.shared
             .auth_recipient_key
             .as_ref()
-            .map(|key| crate::admin::hex_sha256(key.as_bytes()))
+            .map(|key| crate::digest::hex_sha256(key.as_bytes()))
     }
 
     /// The caller must authorize the durable revocation operation and exact
@@ -178,6 +178,17 @@ impl RemoteRuntime {
             receiver,
         })
     }
+}
+
+/// Stops still reach the Machine for a session the Hub cannot project: an
+/// account revocation must fence a named session that never became launchable.
+pub(super) fn delivered_without_projection(command: &CoreCommand) -> bool {
+    matches!(
+        command,
+        CoreCommand::StopSession { .. }
+            | CoreCommand::Cancel { .. }
+            | CoreCommand::QuiesceAccountSession { .. }
+    )
 }
 
 fn command_supported_for_readmission(

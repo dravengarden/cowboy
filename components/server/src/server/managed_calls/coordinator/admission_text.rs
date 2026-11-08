@@ -15,6 +15,11 @@ pub(super) fn error_view(error: Option<&crate::managed_calls::lifecycle::CallErr
             "the child runtime crashed or was interrupted before configuration was confirmed; inspect its lifecycle events for memory admission or authentication failures before retrying; do not change the requested preset to work around a startup failure"
         );
     }
+    if error.code == "configuration_unconfirmed" {
+        value["hint"] = json!(
+            "no prompt was sent: compare expected and observed configuration in detail and inspect the child's configuration/lifecycle events; check the exact Provider generation before retrying; do not switch models or lower effort to hide the mismatch"
+        );
+    }
     value
 }
 
@@ -75,7 +80,7 @@ pub(in crate::server) fn input_hint(detail: &str) -> Option<&'static str> {
         "not_a_repository" => "root must be a Git worktree",
         "unborn_head" => "root needs at least one commit",
         "submodule_unsupported" => {
-            "the worktree contains a submodule, which a snapshot cannot carry"
+            "a submodule has local changes or an unsupported path; clean submodules are retained only as commit pointers, so review submodule contents from that submodule's own Git root"
         }
         "symlink_unsupported" => {
             "the worktree contains a symlink pointing outside root, which a snapshot cannot carry"

@@ -16,7 +16,10 @@ mod artifact_cache;
 mod auth_refresh;
 pub mod auth_watch;
 #[cfg(all(test, target_os = "linux"))]
+mod code_agent_conformance;
+#[cfg(all(test, target_os = "linux"))]
 mod code_navigation_conformance;
+mod code_runtime;
 #[cfg(all(test, target_os = "linux"))]
 mod code_sync_conformance;
 mod extensions;
@@ -1309,54 +1312,6 @@ impl MachinePluginStore {
                 .join(digest_generation_name(digest)?)
                 .join("home"),
         }))
-    }
-
-    pub async fn navigate_code_buffer(
-        &self,
-        invocation: CodeNavigationInvocation,
-    ) -> Result<crate::machine_protocol::code_buffer_navigation::Snapshot> {
-        self.code_runtimes.navigate(invocation).await
-    }
-
-    pub async fn synchronize_code_buffer(
-        &self,
-        invocation: CodeBufferSyncInvocation,
-    ) -> Result<crate::machine_protocol::code_buffer_sync::Snapshot> {
-        self.code_runtimes.synchronize(invocation).await
-    }
-
-    /// Resolve the selected Plugin by capability id, never a global server
-    /// executable. Existing routes keep their immutable generation on uninstall.
-    pub async fn code_request(
-        &self,
-        plugin_id: &str,
-        payload: &serde_json::Value,
-        legacy_socket: Option<&Path>,
-    ) -> Result<serde_json::Value> {
-        validate_plugin_id(plugin_id)?;
-        let root = self.plugin_root(plugin_id);
-        let active = read_link_name(&root.join("active")).map(|g| format!("sha256:{g}"));
-        self.code_runtimes
-            .request_active(plugin_id, payload, active.clone(), || {
-                self.operations.ensure_unfenced(plugin_id)?;
-                if let Some(digest) = active {
-                    let (package, _, content) =
-                        self.verified_plugin_generation(plugin_id, &digest)?;
-                    if let Some(plan) = self.code_launch_plan(&package, &digest, &content)? {
-                        return Ok(CodeRuntimeSelection::Installed(plan));
-                    }
-                }
-                ensure!(
-                    !root.join(".code-runtime-owned-v2").exists(),
-                    "code-intelligence Plugin is not installed; legacy fallback is disabled"
-                );
-                Ok(CodeRuntimeSelection::Legacy(
-                    legacy_socket
-                        .context("code-intelligence Plugin is not installed")?
-                        .to_path_buf(),
-                ))
-            })
-            .await
     }
 
     pub async fn invoke_host(
@@ -7318,9 +7273,7 @@ mod tests {
         server.await.unwrap();
         let navigation_root =
             code_navigation_conformance::configure(&store, &release.artifact_digest, &root);
-        let worktree = root.join("worktree");
-        fs::create_dir_all(&worktree).unwrap();
-        fs::write(worktree.join("fixture.txt"), "real isolated Zed buffer\n").unwrap();
+        let worktree = code_agent_conformance::exercise(&store, &root).await;
         let open = serde_json::json!({"type": "openWorktree", "path": worktree, "trusted": true});
         assert_eq!(
             store.code_request("zed", &open, None).await.unwrap()["leases"],

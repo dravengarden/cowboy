@@ -6,6 +6,10 @@ const serviceWorker = await readFile(new URL("../public/sw.js", import.meta.url)
 const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
 const settings = await readFile(new URL("./NotificationSettings.tsx", import.meta.url), "utf8");
 const server = await readFile(new URL("../../components/server/src/server.rs", import.meta.url), "utf8");
+const startupTasks = await readFile(
+  new URL("../../components/server/src/server/startup_tasks.rs", import.meta.url),
+  "utf8",
+);
 
 test("service worker owns Apple push display and bounded session navigation", () => {
   assert(serviceWorker.includes('self.addEventListener("push"'));
@@ -16,7 +20,8 @@ test("service worker owns Apple push display and bounded session navigation", ()
 });
 
 test("controller, not a visible page or Hermes, delivers session events", () => {
-  assert(server.includes("notifications::run("));
+  assert(server.includes("spawn_notifications(&state)"));
+  assert(startupTasks.includes("notifications::run("));
   assertEquals(server.toLowerCase().includes("hermes"), false);
   assertEquals(store.includes("presentSessionNotification"), false);
 });

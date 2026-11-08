@@ -25,6 +25,29 @@ primary phone/desktop product path.
 - [`remote-session-disaster-recovery.md`](remote-session-disaster-recovery.md) — Proposed recovery contract, October 24 incident audit, durable ACK gaps, per-session reconciliation and fault acceptance matrix; not implemented or activated
 - [`session-start-latency-2026-10-09.md`](session-start-latency-2026-10-09.md) — Remote Claude start stalls: single-flow Machine transport saturated by bulk writes, credit pacing, one-command startup survey and measurements
 - [`agent-api.md`](agent-api.md) — Cowboy MCP: dynamic product control catalog, session/history/usage reads, durable receipts, coverage ledger and protocol 30–32 compatibility
+- [`superagent-patterns.md`](superagent-patterns.md) — Proposed global/workspace/project pattern profiles, Markdown contracts, evidence-based refinement, adoption and supervision boundaries
+- [`examples/superagent-patterns/global.md`](examples/superagent-patterns/global.md) — Inactive example: owner-global pattern selection
+- [`examples/superagent-patterns/observed-columbus.md`](examples/superagent-patterns/observed-columbus.md) — Inactive observed-pattern setup or learning template
+- [`examples/superagent-patterns/observed-suger.md`](examples/superagent-patterns/observed-suger.md) — Inactive observed-pattern setup or learning template
+- [`examples/superagent-patterns/observed-cowboy.md`](examples/superagent-patterns/observed-cowboy.md) — Inactive observed-pattern setup or learning template
+- [`examples/superagent-patterns/learning-candidate-template.md`](examples/superagent-patterns/learning-candidate-template.md) — Inactive observed-pattern setup or learning template
+- [`examples/superagent-patterns/patterns/scope-continuation.md`](examples/superagent-patterns/patterns/scope-continuation.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/failure-recovery.md`](examples/superagent-patterns/patterns/failure-recovery.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/review-follow-through.md`](examples/superagent-patterns/patterns/review-follow-through.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/delivery-evidence.md`](examples/superagent-patterns/patterns/delivery-evidence.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/dependency-handoff.md`](examples/superagent-patterns/patterns/dependency-handoff.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/review-ready.md`](examples/superagent-patterns/patterns/review-ready.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/patterns/resource-closeout.md`](examples/superagent-patterns/patterns/resource-closeout.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/observed-global.md`](examples/superagent-patterns/observed-global.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/observed-routing.md`](examples/superagent-patterns/observed-routing.md) — Inactive historical-usage pattern candidate or analysis
+- [`superagent-usage-patterns-2026-11.md`](superagent-usage-patterns-2026-11.md) — Inactive historical-usage pattern candidate or analysis
+- [`examples/superagent-patterns/suger.md`](examples/superagent-patterns/suger.md) — Inactive example: Suger workspace profile
+- [`examples/superagent-patterns/columbus.md`](examples/superagent-patterns/columbus.md) — Inactive example: Columbus workspace profile
+- [`examples/superagent-patterns/cowboy.md`](examples/superagent-patterns/cowboy.md) — Inactive example: Cowboy project procedure replacement
+- [`examples/superagent-patterns/patterns/follow-through.md`](examples/superagent-patterns/patterns/follow-through.md) — Inactive example: generic authorized-delivery supervision
+- [`examples/superagent-patterns/patterns/suger-delivery.md`](examples/superagent-patterns/patterns/suger-delivery.md) — Inactive example: Suger company-project delivery ownership
+- [`examples/superagent-patterns/patterns/columbus-delivery.md`](examples/superagent-patterns/patterns/columbus-delivery.md) — Inactive example: Columbus and external-project delivery routing
+- [`examples/superagent-patterns/patterns/cowboy-delivery.md`](examples/superagent-patterns/patterns/cowboy-delivery.md) — Inactive example: Cowboy component release evidence
 - [`session-context.md`](session-context.md) — Multiple session links, staged fresh-agent selection, account isolation and first-send recovery
 - [`session-fork.md`](session-fork.md) — Native ACP session fork from a whole conversation or a turn-final message, forked worktree state, admission and retries
 - [`background-tasks.md`](background-tasks.md) — Background tasks: one compact row, inspector and bar for subagents and Calls; durable transcript anchors, terminal-state reconciliation, approval binding, diagnostics (Phase 1 implemented) and the later notification/native-work/capability phases
@@ -183,6 +206,7 @@ primary phone/desktop product path.
 - [`releases/plugin-zed-operation-scopes-2026-09-15.md`](releases/plugin-zed-operation-scopes-2026-09-15.md) — Connection-bound Zed operations and verified Controller activation with 12 workers retained; cross-request resource recovery remains separate
 - [`releases/plugin-service-sites-2026-09-15.md`](releases/plugin-service-sites-2026-09-15.md) — Accepted Controller Site isolation, 807 immutable checks and production activation
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Master target design for components, Plugins, Service/Machine scopes, authority, generations, state, effects, migration and acceptance gates
+- [`history/module-cycle-edges-2026-11.md`](history/module-cycle-edges-2026-11.md) — Phase 5.1 inventory of the former 37-module base-crate cycle: edges classified type, constant or behavioural, the port or move for each behavioural group
 - [`history/plugin-refactor-completion.md`](history/plugin-refactor-completion.md) — Current implementation, production-acceptance and independent-recovery exit checklist
 - [`plugin-domain-executor-binding.md`](plugin-domain-executor-binding.md) — The rule for binding resolved results to domain executors as the telemetry code states it, an inventory of which domains have it, and why no generic mechanism is built
 - [`plugin-state-lease-design.md`](plugin-state-lease-design.md) — Design (unimplemented, deliberately): the contract a state lease must satisfy, and the finding that no dataset has multiple holders so there is no consumer to build it for yet
@@ -220,6 +244,7 @@ primary phone/desktop product path.
 - [`releases/plugin-session-cleanup-root-2026-10-05.md`](releases/plugin-session-cleanup-root-2026-10-05.md) — Hawk cleanup-root activation, integrated Rust checks, 32 native writer groups and 18 retained worker/keeper processes
 - [`releases/plugin-session-worktree-containment-2026-10-04.md`](releases/plugin-session-worktree-containment-2026-10-04.md) — Hawk writer-host activation, 535 Machine tests, 32 native writer groups and 18 retained worker/keeper processes
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop information density and interaction contract
+- [`ux-principles.md`](ux-principles.md) — Core efficiency contract: bottom controls on Mobile, visible keyboard commands on Desktop, state continuity and rendered acceptance
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore's read-only transcript projection
 - [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Jank-free drawers, pager, transcript, CodeMirror, iPhone PWA status material, iPad standalone chrome, and iOS compositor contract
 - [`offline-first-sync.md`](offline-first-sync.md) — Offline-first design: local replica boot, prioritized hydration, one sync status, outbox classes, conflict catalog and required server changes
@@ -442,6 +467,8 @@ primary phone/desktop product path.
 - [`releases/zed-snapshot-install-2026-09-19.md`](releases/zed-snapshot-install-2026-09-19.md) — Hawk Zed snapshot-lifetime installation — 2026-09-19
 - [`releases/zed-open-target-admission-2026-11-06.md`](releases/zed-open-target-admission-2026-11-06.md) — Zed 1.24.0 open admission confined to the target, publication and Hawk installation
 - [`releases/zed-pulled-versions-2026-11-06.md`](releases/zed-pulled-versions-2026-11-06.md) — Zed 1.25.0 pulled diagnostics attributed to the version pulled, publication and Hawk installation
+- [`releases/zed-initial-version-2026-11-06.md`](releases/zed-initial-version-2026-11-06.md) — Zed 1.26.0 nonzero initial LSP versions, exact native ownership and production document-current evidence
+- [`releases/review-call-failures-2026-11-06.md`](releases/review-call-failures-2026-11-06.md) — Retained review failure audit and exact Fable continuation configuration equivalence
 - [`releases/worker-pin-code-routing-2026-11-06.md`](releases/worker-pin-code-routing-2026-11-06.md) — Worker pin advance to bc6efdbea so idle code worktrees follow new Zed generations; Hawk Machine maintenance
 - [`releases/zed-open-recovery-2026-11-06.md`](releases/zed-open-recovery-2026-11-06.md) — Zed 1.23.0 same-process native open recovery publication and Hawk installation
 - [`releases/zed-analysis-frontier-2026-11-05.md`](releases/zed-analysis-frontier-2026-11-05.md) — Zed 1.22.0 analysis-frontier evidence publication and Hawk installation

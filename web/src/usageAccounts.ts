@@ -42,11 +42,12 @@ export function registeredUsageAccounts(
   sessions: readonly SessionMeta[],
   observations: readonly NativeAccountUsage[] = [],
 ): UsageAccountCard[] {
-  const named = accounts?.registry.accounts ?? [];
+  // Revocation is a permanent fence; its cleanup status lives in Subscriptions.
+  const named = (accounts?.registry.accounts ?? []).filter((account) => !account.revoking);
   const cards: UsageAccountCard[] = [];
   const added = new Set<string>();
   const namedCard = (account: typeof named[number]): UsageAccountCard => {
-    const enabled = account.enabled && !account.revoking;
+    const enabled = account.enabled;
     const reports = enabled ? sessions.filter((session) =>
       session.provider_account_id === account.id && session.provider === account.provider_id &&
       session.owner_user_id === accounts?.dataset.user_id && !session.closing
@@ -66,9 +67,8 @@ export function registeredUsageAccounts(
       subtitle: `${accountProviderLabel(provider)}${defaultLabel}`,
       usage: usage ?? { provider, status: "unavailable", source: "", observed_at_ms: 0 },
       ...(native ? { native } : {}),
-      ...(!collected ? { statusLabel: account.revoking ? "REVOKING" : !account.enabled ? "DISABLED" : usage ? "SESSION" : native?.refreshing ? "REFRESHING" : native?.reason === "native_login_outdated" ? "SIGN IN AGAIN" : native?.reason === "native_login_pending" ? "SIGN-IN PENDING" : native?.reason === "native_login_required" ? "NOT SIGNED IN" : "NOT REPORTED" } : {}),
-      emptyMessage: account.revoking ? "Access revocation is in progress."
-        : !account.enabled ? "This account is disabled."
+      ...(!collected ? { statusLabel: !account.enabled ? "DISABLED" : usage ? "SESSION" : native?.refreshing ? "REFRESHING" : native?.reason === "native_login_outdated" ? "SIGN IN AGAIN" : native?.reason === "native_login_pending" ? "SIGN-IN PENDING" : native?.reason === "native_login_required" ? "NOT SIGNED IN" : "NOT REPORTED" } : {}),
+      emptyMessage: !account.enabled ? "This account is disabled."
         : native?.message ?? (native?.refreshing ? "Refreshing this account’s usage…" : "No quota reported for this account yet."),
     };
   };
@@ -100,4 +100,16 @@ export function orderUsageAccounts(cards: UsageAccountCard[], order: string[]): 
   const rank = new Map(order.map((id, index) => [id, index]));
   const position = (card: UsageAccountCard) => rank.get(card.id) ?? rank.get(card.group) ?? Infinity;
   return [...cards].sort((a, b) => position(a) - position(b));
+}
+
+/** Claude reports `max` for both Max and Ultra. When the collector could not
+ * read the tier, a reported quota without any 5-hour window is Ultra; this uses
+ * only the already-collected usage and never requests anything. */
+export function displayPlan(usage: ProviderUsage, plan: string | undefined): string | undefined {
+  if (plan !== "max" || usage.provider !== "anthropic") return plan;
+  const limits = usage.rate_limits?.rateLimitsByLimitId;
+  const windows = limits && typeof limits === "object" ? Object.values(limits) : [];
+  if (windows.length === 0) return plan;
+  const minutes = (limit: unknown) => (limit as { primary?: { windowDurationMins?: unknown } } | null)?.primary?.windowDurationMins;
+  return windows.some((limit) => minutes(limit) === 300) ? plan : "ultra";
 }

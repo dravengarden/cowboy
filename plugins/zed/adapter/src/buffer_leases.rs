@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{BufferOwner, Buffers, Response, WorktreeState, Worktrees, Zed};
 
+mod acquisition;
 mod navigation;
 
 pub(super) async fn respond(
@@ -36,7 +37,7 @@ pub(super) async fn respond(
         }
         Request::OpenBufferLease { lease } => registry.open(lease, worktrees, buffers, zed).await,
         Request::ReleaseBufferLease { lease } => registry.release(lease, buffers, zed).await,
-        Request::QueryBufferLease { lease } => registry.query(lease),
+        Request::QueryBufferLease { lease } => registry.query_recovered(lease, buffers, zed).await,
         Request::ReadBufferLease { lease, request } => {
             registry.read(lease, request, worktrees, buffers, zed).await
         }
@@ -140,6 +141,7 @@ struct Slot {
     origin: Origin,
     prepared_at: Instant,
     state: Phase,
+    open_recovery: Option<super::native_open::Recovery>,
 }
 
 #[derive(Default)]
@@ -222,7 +224,9 @@ impl Registry {
         let all = worktrees.read().await;
         let current = all.get(&worktree).context("worktree is not open")?;
         ensure!(
-            matches!(current.state, WorktreeState::Ready),
+            current.pending.is_none()
+                && !current.retired.load(std::sync::atomic::Ordering::Acquire)
+                && matches!(current.state, WorktreeState::Ready),
             "worktree is not ready"
         );
         self.insert(Slot {
@@ -231,6 +235,7 @@ impl Registry {
             origin: Origin::Path(Arc::clone(&current.incarnation)),
             prepared_at: Instant::now(),
             state: Phase::Prepared,
+            open_recovery: None,
         })
     }
 
@@ -272,6 +277,35 @@ impl Registry {
         Ok(reply(lease, state))
     }
 
+    async fn query_recovered(
+        &mut self,
+        lease: LeaseRef,
+        buffers: &Buffers,
+        zed: Option<&Zed>,
+    ) -> Result<Response> {
+        let id = self.resolve(&lease)?;
+        if let Some(slot) = self.slots.get(&id)
+            && slot.state == Phase::Unknown
+        {
+            let keys =
+                std::collections::HashSet::from([(slot.worktree.clone(), slot.path.clone())]);
+            let mut active = buffers.active.write().await;
+            let released = if let Some(recovery) = &slot.open_recovery {
+                recovery.observe(&buffers.native_open, &active, zed).await
+            } else if let Some(zed) = zed {
+                super::native_close::recover(&keys, &BufferOwner::Owned(id), &mut active, zed)
+                    .await
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if released {
+                self.slots.remove(&id);
+            }
+        }
+        self.query(lease)
+    }
+
     pub(super) async fn open(
         &mut self,
         lease: LeaseRef,
@@ -304,6 +338,8 @@ impl Registry {
             .context("worktree is no longer open")?;
         ensure!(
             Arc::ptr_eq(&current.incarnation, worktree_incarnation)
+                && current.pending.is_none()
+                && !current.retired.load(std::sync::atomic::Ordering::Acquire)
                 && matches!(current.state, WorktreeState::Ready),
             "buffer worktree incarnation changed"
         );
@@ -341,7 +377,7 @@ impl Registry {
             return Ok(reply(lease, LeaseState::Released));
         };
         match slot.state {
-            Phase::Unknown => return Ok(reply(lease, LeaseState::Unknown)),
+            Phase::Unknown => return self.query_recovered(lease, buffers, zed).await,
             Phase::Open => {
                 super::close_buffer_at(
                     slot.worktree.clone(),
@@ -397,7 +433,11 @@ impl Registry {
                 };
                 ReadOutput::Language {
                     diagnostics_state: observation.diagnostics_state,
-                    diagnostics: observation.diagnostics,
+                    diagnostics: observation
+                        .diagnostics
+                        .into_iter()
+                        .map(crate::LanguageDiagnostic::legacy)
+                        .collect(),
                     inlay_hints: observation.inlay_hints,
                     semantic_tokens: observation.semantic_tokens,
                 }
@@ -447,6 +487,7 @@ async fn open_prevalidated(
     // open or claim successful release without a native buffer ID. The caller
     // holds the checked worktree incarnation's read lock through this step.
     slot.state = Phase::Unknown;
+    slot.open_recovery = Some(super::native_open::Recovery::new());
     super::open_buffer_at(
         slot.worktree.clone(),
         slot.path.clone(),
@@ -454,9 +495,14 @@ async fn open_prevalidated(
         BufferOwner::Owned(id),
         buffers,
         zed,
+        super::native_open::Admission {
+            expected_id: None,
+            recovery: slot.open_recovery.as_ref(),
+        },
     )
     .await?;
     slot.state = Phase::Open;
+    slot.open_recovery = None;
     Ok(())
 }
 

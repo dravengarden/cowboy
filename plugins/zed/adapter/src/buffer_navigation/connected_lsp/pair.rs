@@ -7,6 +7,8 @@ use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
 
 struct Client(PathBuf);
 
+mod legacy_release;
+
 fn target_text() -> String {
     let padding = 65_535 - A.len();
     // Keep the real server's 20,000-character LSP line limit intact.
@@ -109,6 +111,7 @@ pub(crate) async fn immutable_pair(parent: &Path, server: &Path) {
     );
     exercise(&client, &root).await;
     failed_open_is_recovered_for_replacement(&client, &root).await;
+    legacy_release::exercise(&client, &root).await;
     child.kill().await.unwrap();
     // The owning PID namespace, not this kill or local Released, owns final
     // descendant teardown. No native close ACK or recovery is claimed here.
@@ -165,22 +168,41 @@ async fn failed_open_is_recovered_for_replacement(client: &Client, root: &Path) 
     );
     // Fixing the fixture source cannot authorize replay or replacement adoption.
     std::fs::write(workspace.join("oversized.txt"), "now small\n").unwrap();
-    for request in [
-        Request::QueryBufferLease {
-            lease: uncertain.clone(),
-        },
-        Request::OpenBufferLease {
-            lease: uncertain.clone(),
-        },
-        Request::ReleaseBufferLease {
-            lease: uncertain.clone(),
-        },
-    ] {
-        assert_eq!(client.request(request).await["state"], "unknown");
-    }
-    // The same server recorded that open as failed: the next acquisition
-    // resolves the fence without replaying it, and the original lease stays
-    // Unknown. The fixed path and a second owner of the known key both open.
+    assert_eq!(
+        client
+            .request(Request::OpenBufferLease {
+                lease: uncertain.clone(),
+            })
+            .await["state"],
+        "unknown"
+    );
+    // The same server recorded this exact Open as failed. Query retires its
+    // original lease; changing the file never authorizes replay under that ID.
+    assert_eq!(
+        client
+            .request(Request::QueryBufferLease {
+                lease: uncertain.clone(),
+            })
+            .await["state"],
+        "released"
+    );
+    assert_eq!(
+        client
+            .exchange(Request::OpenBufferLease {
+                lease: uncertain.clone(),
+            })
+            .await["type"],
+        "error"
+    );
+    assert_eq!(
+        client
+            .request(Request::ReleaseBufferLease {
+                lease: uncertain.clone(),
+            })
+            .await["state"],
+        "released"
+    );
+    // The fixed path and a second owner of the known key both open independently.
     for path in ["oversized.txt", "known.txt"] {
         let replacement = prepared_buffer(client, &workspace, path).await;
         let opened = client
@@ -201,11 +223,11 @@ async fn failed_open_is_recovered_for_replacement(client: &Client, root: &Path) 
         client
             .request(Request::QueryBufferLease { lease: uncertain })
             .await["state"],
-        "unknown"
+        "released"
     );
     client.request(Request::BufferNavigationSupport {}).await;
     println!(
-        "immutable socket native-open failure: real input refusal, original Unknown without replay, same-process recovery of the failed open, changed-source/known-key replacement opens and independent text read/release passed"
+        "immutable socket native-open failure: real input refusal, original-ID query retires confirmed failed Open without replay, changed-source/known-key replacement opens and independent text read/release passed"
     );
 }
 
@@ -261,6 +283,7 @@ async fn exercise(client: &Client, root: &Path) {
         })
         .await;
     opened(root, "navigation.rs").await;
+    diagnostic_identity(client, &workspace, &lease).await;
     let (navigation, destination, content) = acquire(client, root, &lease).await;
     let handoff = lost_handoff_reply(client, &navigation, destination, &content).await;
     client.request(Request::ReleaseBufferLease { lease }).await;
@@ -305,6 +328,82 @@ async fn exercise(client: &Client, root: &Path) {
         .request(Request::CloseWorktree { path: workspace })
         .await;
     check_closed(root).await;
+}
+
+async fn diagnostic_identity(client: &Client, workspace: &Path, lease: &LeaseRef) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let reply = client
+                .request(Request::BufferLanguage {
+                    worktree: workspace.to_path_buf(),
+                    path: "navigation.rs".into(),
+                })
+                .await;
+            if reply["diagnostics"]
+                .as_array()
+                .is_some_and(|values| values.len() == 1)
+            {
+                let value = &reply["diagnostics"][0];
+                assert_eq!(value["code"], "fixture-code-1");
+                assert_eq!(value["source"], "fixture-lsp");
+                let origin = &value["provenance"];
+                assert_eq!(origin["sourceKind"], 1);
+                assert_eq!(origin["instance"].as_str().unwrap().len(), 32);
+                assert!(origin["server"].as_str().unwrap().parse::<u64>().is_ok());
+                assert!(origin["buffer"].as_str().unwrap().parse::<u64>().is_ok());
+                let snapshot = &reply["bufferSnapshot"];
+                assert_eq!(reply["sourceState"], "matching");
+                assert_eq!(snapshot["instance"], origin["instance"]);
+                assert_eq!(snapshot["buffer"], origin["buffer"]);
+                assert_eq!(snapshot["bufferEpoch"], origin["bufferEpoch"]);
+                assert_eq!(snapshot["version"], reply["version"]);
+                assert_eq!(
+                    snapshot["content"],
+                    serde_json::to_value(
+                        crate::coordinates::Mirror::new(1, SOURCE)
+                            .unwrap()
+                            .content()
+                    )
+                    .unwrap()
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("immutable adapter did not preserve diagnostic identity");
+    let owned = client
+        .request(Request::ReadBufferLease {
+            lease: lease.clone(),
+            request: buffer_leases::ReadRequest::Language {},
+        })
+        .await;
+    let values = owned["result"]["diagnostics"].as_array().unwrap();
+    assert_eq!(values.len(), 1);
+    assert!(values[0].get("code").is_none());
+    assert!(values[0].get("provenance").is_none());
+    assert_eq!(values[0].as_object().unwrap().len(), 5);
+    let content = crate::coordinates::Mirror::new(1, SOURCE)
+        .unwrap()
+        .content()
+        .clone();
+    let conditional = client
+        .request(Request::ReadBufferLease {
+            lease: lease.clone(),
+            request: buffer_leases::ReadRequest::Content {
+                content,
+                query: crate::content_reads::Query::Language {},
+            },
+        })
+        .await;
+    let values = conditional["result"]["result"]["observation"]["diagnostics"]
+        .as_array()
+        .unwrap();
+    assert_eq!(values.len(), 1);
+    assert!(values[0].get("code").is_none());
+    assert!(values[0].get("provenance").is_none());
+    assert_eq!(values[0].as_object().unwrap().len(), 5);
 }
 
 async fn read_target_text(client: &Client, handoff: &LeaseRef, content: &Content, target: &str) {

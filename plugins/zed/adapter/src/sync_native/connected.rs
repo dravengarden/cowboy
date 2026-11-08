@@ -3,6 +3,8 @@ use super::*;
 use sha2::{Digest as _, Sha256};
 
 mod acquisition;
+mod legacy_recovery;
+mod open_journal;
 mod reload;
 mod remote_edits;
 mod replacement;
@@ -27,6 +29,8 @@ fn immutable_native_sync() {
     let root = std::env::temp_dir().join(format!("cw-native-{:032x}", u128::from_be_bytes(random)));
     std::fs::create_dir(&root).unwrap();
     let scratch = Scratch(root);
+    #[cfg(target_os = "linux")]
+    crate::source_snapshot::tests::bind_mount_is_refused(&scratch.0);
     for dir in [
         "home", "config", "data", "cache", "state", "runtime", "worktree", "tmp",
     ] {
@@ -52,6 +56,14 @@ fn immutable_native_sync() {
         .env("TMPDIR", scratch.0.join("tmp"))
         .env("PATH", "/nonexistent-cowboy-test-tools")
         .env("COWBOY_TEST_NATIVE_SYNC_SERVER", server)
+        .env(
+            "COWBOY_TEST_NAVIGATION_LSP",
+            std::fs::canonicalize(
+                std::env::var_os("COWBOY_TEST_NAVIGATION_LSP")
+                    .expect("explicit test LSP fixture is required"),
+            )
+            .unwrap(),
+        )
         .env("COWBOY_TEST_NATIVE_SYNC_ROOT", &scratch.0)
         .current_dir(&scratch.0);
     if let Some(adapter) = std::env::var_os("COWBOY_TEST_NATIVE_NAVIGATION_ADAPTER") {
@@ -451,6 +463,12 @@ async fn restart_does_not_adopt_old_ticket(
     stop(&replacement).await;
 }
 
+async fn acquisition_journals(server: &Path, root: &Path) {
+    acquisition::exercise(server, root).await;
+    open_journal::exercise(server, root).await;
+    legacy_recovery::exercise(server, root).await;
+}
+
 async fn private_extensions(zed: &ZedRuntime, buffer: u64, worktree: u64, workspace: &Path) {
     analysis_frontier_answers(zed, buffer).await;
     recovers_an_abandoned_open(zed, worktree, workspace).await;
@@ -603,7 +621,7 @@ async fn native_process_child() {
     native_source_regressions(&zed, &instance, &workspace, worktree).await;
     owned_resources(&zed, &root).await;
     restart_does_not_adopt_old_ticket(&zed, &server, &root, &instance, id2).await;
-    acquisition::exercise(&server, &root).await;
+    acquisition_journals(&server, &root).await;
     crate::buffer_navigation::connected_lsp::immutable_pair(&root, &server).await;
     println!(
         "native sync identity, edit/undo/close refusal, source validation and lost-reply checks passed"
@@ -616,6 +634,7 @@ async fn owned_resources(zed: &Zed, root: &Path) {
     crate::buffer_navigation::connected::exercise(zed, &workspace).await;
     crate::buffer_navigation::connected_lsp::exercise(zed, root).await;
     crate::native_close::connected::exercise(zed, root).await;
+    crate::agent_acquisition::connected::exercise(zed, root).await;
 }
 
 async fn native_source_regressions(zed: &Zed, instance: &[u8], workspace: &Path, worktree: u64) {

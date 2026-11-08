@@ -56,6 +56,9 @@ pub(super) fn validate(
 }
 
 impl Broker {
+    /// Session extensions are resolved from this Machine's own active Plugins.
+    /// Without a required MCP plan a failure disables them explicitly: the
+    /// session starts without memory and never falls back to a host enrollment.
     pub(super) fn launch_extensions_environment(
         &self,
         session: &StartSession,

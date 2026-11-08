@@ -109,6 +109,13 @@ iOS acceptance (web/AGENTS.md pitfall #69).
   `ComposerModal`. The stop confirmation and the non-modal clear-draft popper
   joined the same day; the picker and `composeFs` wait for physical iOS
   acceptance.
+- 2026-11-06 (later): the delivery picker joined the slot and the full-screen
+  editor became the reducer's `fullscreen` flag beside it; a context reset is
+  one `contextReset` event. Expand, collapse and the picker's close still
+  dispatch inside `flushSync` at their call sites. The picker's Stop now only
+  opens the stop confirmation, which replaces the picker; a late picker close
+  cannot dismiss it (reducer test). Physical iOS acceptance of this change is
+  requested from the user; the browser suites cannot establish it.
 - `just cdp-browser-conformance <endpoint> composer-surfaces` drives these
   surfaces in the real App (Desktop and touch layouts, in-page fake socket and
   fetch): schedule open/dismiss, picker Stop replacing the picker with the stop
@@ -116,10 +123,19 @@ iOS acceptance (web/AGENTS.md pitfall #69).
   draft, confirm clears it), the clear-conversation confirmation, the mobile
   toolbar options and the move-draft picker (the fake socket acknowledges
   `add_draft` with a `sync_patch`; dismissing moves nothing, a destination
-  sends `move_draft`). Removing the picker's Stop transition, the popper's
+  sends `move_draft`) and a full-screen round trip (the draft carries in, an
+  edit carries back inline). In that environment the inline editor follows
+  `text`, so the round trip does not guard the uncontrolled-editor reseed on
+  collapse (`initialDraftText`); removing it still passes. Removing the picker's Stop transition, the popper's
   Escape close, the move entry or the toolbar options close fails it (checked).
   Synthetic Escape is not trusted input for the Desktop key dispatcher or the
-  move sheet, so those two are dismissed by backdrop or Close instead.
+  move sheet, so that suite dismisses those two by backdrop or Close.
+- `bun tools/cdp-keyboard-acceptance.ts <endpoint> <out> surfaces` (also part of
+  `just desktop-keyboard-acceptance`) mounts the same Desktop App and sends a
+  trusted Escape to the schedule sheet, the delivery picker and the move-draft
+  picker. Closing the picker must return focus to the Prompt editor and keep
+  the draft; removing `closeDeliveryPicker`'s focus restoration fails it
+  (checked).
   The older desktop-composer suite renders the toolbar alone and never mounted
   `ComposerWorkspace`.
 

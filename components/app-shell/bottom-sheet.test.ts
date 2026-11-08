@@ -1,10 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assert, assertEquals } from "../../tools/test-assert.ts";
+import { ok as assert, deepStrictEqual as assertEquals } from "node:assert/strict";
 
-const source = await readFile(
-  new URL("bottom-sheet.tsx", import.meta.url), "utf8",
-);
+const source = await readFile(new URL("bottom-sheet.tsx", import.meta.url), "utf8");
 
 test("touch dismiss consumes compatibility events before closing", () => {
   const down = source.slice(
@@ -36,13 +34,20 @@ test("mobile sheet dismiss rim includes the whole centred tap target", () => {
 });
 
 test("floating footer alignment rows pass hits through while islands retain them", () => {
-  assert(source.includes('data-mobile-sheet-footer-shield'));
+  assert(source.includes("data-mobile-sheet-footer-shield"));
   assert(source.includes("swallowRetargetedClicks()"));
   assertEquals(source.includes('pointerEvents: "none"'), true);
   for (const name of ["MobileSheetActionGroup", "MobileSheetBackDismiss", "MobileSheetDismiss"]) {
     const row = source.slice(source.indexOf(`export function ${name}`));
-    assert(row.slice(0, row.indexOf('pointerEvents: "none"')).includes("data-mobile-sheet-footer-shield"));
+    assert(
+      row
+        .slice(0, row.indexOf('pointerEvents: "none"'))
+        .includes("data-mobile-sheet-footer-shield"),
+    );
   }
-  const island = source.slice(source.indexOf("export function FloatingActionIsland"), source.indexOf("export interface MobileSheetAction"));
+  const island = source.slice(
+    source.indexOf("export function FloatingActionIsland"),
+    source.indexOf("export interface MobileSheetAction"),
+  );
   assert(island.includes('pointerEvents: "auto"'));
 });

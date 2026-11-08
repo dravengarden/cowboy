@@ -120,7 +120,7 @@ test("mobile Settings lives on the Sessions island and Code takes the old slot",
       .test(appSource),
   );
   const newSessionAt = appSource.indexOf('key: "new"');
-  const closeAt = appSource.indexOf('key: "close"');
+  const closeAt = appSource.indexOf('key: "close"', newSessionAt);
   const infoAt = appSource.indexOf('key: "info"');
   const settingsAt = appSource.indexOf('key: "settings"');
   assert(

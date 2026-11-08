@@ -45,6 +45,20 @@ impl MachinePluginStore {
             );
             return Ok(LogoutPreparation::Observed(record.succeeded));
         }
+        if retired_failed_login(&directory, &profile)? {
+            // A failed login retired before this logout never produced an
+            // identity, and its home is already deleted: nothing remains to
+            // log out. Record that outcome under this operation without
+            // running a command.
+            profile.logout = Some(Record {
+                request: operation.into(),
+                succeeded: Some(true),
+                process_tree_exited: true,
+                process: None,
+            });
+            persist(&directory, &profile)?;
+            return Ok(LogoutPreparation::Observed(Some(true)));
+        }
         ensure_no_revocation(&self.native_profile_root(provider))?;
         ensure!(!profile.revoked, "native profile was revoked");
         let (package, path) = self.package_for_generation(provider, &profile.digest)?;
@@ -216,6 +230,21 @@ impl MachinePluginStore {
         remove_projection::remove(&directory.join("home"))?;
         fs::File::open(&directory)?.sync_all()?;
         Ok(())
+    }
+}
+
+fn retired_failed_login(directory: &Path, profile: &Profile) -> Result<bool> {
+    if !(profile.revoked
+        && profile.identity.is_none()
+        && !profile.login_succeeded
+        && profile.leader_exited
+        && profile.process_tree_exited)
+    {
+        return Ok(false);
+    }
+    match fs::symlink_metadata(directory.join("home")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        result => result.map(|_| false).map_err(Into::into),
     }
 }
 

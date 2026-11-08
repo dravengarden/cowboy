@@ -75,7 +75,7 @@ import { QuotaMeter } from "./InfoMetricVisuals";
 import { ClientStorageInfoSection, ServiceStorageInfoSection } from "./InfoRuntimeMetrics";
 import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
-import { orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard } from "./usageAccounts";
 import { useProviderCatalog } from "./providerCatalog";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
 import { formatCompactCurrency, usageBalanceForAccount } from "./usageWidget";
@@ -224,7 +224,7 @@ function ProviderUsageCardBody({
   });
   delete detailsContext.refreshLabel;
   const account = record(usage.account?.account);
-  const plan = account ? str(account.planType) : undefined;
+  const plan = displayPlan(usage, account ? str(account.planType) : undefined);
   const resetCredits = record(usage.rate_limits?.rateLimitResetCredits);
   const availableCredits = resetCredits
     ? num(resetCredits.availableCount)

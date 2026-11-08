@@ -44,6 +44,12 @@ replay; this does not add independent recovery or background-task quiescence.
 
 ## Finite ownership contract
 
+The `1.28.0` release uses private server `1.13.0` navigation protocol
+two. Its original-operation receipts recover a lost completed reply through
+Query; source changes, malformed results and actual native Unknown outcomes
+remain fenced. This source change alone establishes neither publication nor
+production installation, public navigation authority or native conformance.
+
 `prepareBufferNavigation` accepts an existing open buffer lease, complete
 content identity, an exact UTF-16 point and one of the five existing navigation
 kinds. It validates the original native mirror and allocates a non-recycled
@@ -54,8 +60,11 @@ IDs are not grants.
 
 `bufferNavigation` accepts only Execute, Query or Release. Execute rechecks the
 original owner, native ID and captured epoch, retains a source pin, and records
-Unknown before dispatching the one native query. Repeated Execute and Query
-return saved state; neither reopens a path nor dispatches another LSP request.
+Unknown before dispatching the one native query. Repeated Execute returns saved
+state. Query may observe the original native receipt, bound to its server
+instance, transport peer, operation ID and exact query bytes; neither reopens a
+path nor dispatches another LSP request. A recovered complete response passes
+the same source-epoch, target-share and ownership checks as the initial reply.
 Lost socket observers do not cancel an admitted handler. Actual task
 cancellation, timeout, malformed or oversized results keep Unknown and the
 original pin.
@@ -74,14 +83,13 @@ rechecking the source epoch. Missing shares, stream loss or timeout retain
 Unknown; no fallback open or LSP retry fills the gap. Target-count limits are
 checked before waiting, and incomplete/invalid mirrors cannot become success.
 
-Native navigation shares targets but does not register them with language
-servers. Execute now registers each newly retained native ID once, with one
-five-second budget for the complete registration set. Existing native-ID owners
-and repeated locations do not trigger another registration. All target pins and
-evidence are saved before that await; a missing/invalid ACK, cancellation or late
-source/target epoch change keeps Unknown. Retained requires a final epoch check
-under the mirror lock. Registration is never hidden in a read. Its ACK is not a
-promise that every production language server has finished initialization.
+Protocol two shares and registers the complete target set in the same native
+state update that stores its completed receipt. Existing language-server
+registrations retain their native reference counting. Recovery needs no extra
+registration RPC; Query does not register or pull diagnostics. Retained requires
+a final epoch check under the mirror lock. Registration is never hidden in a
+read, and completion does not promise that every language server has finished
+initialization. The earlier protocol-one route used separate registration ACKs.
 
 There are at most 32 live navigation groups, 256 result locations and 32
 distinct target native IDs per group. Duplicate locations share a resource pin.
@@ -93,10 +101,14 @@ an uncertain acquisition, and background work may outlive the query handler.
 
 Unknown acquisition retains a process-wide admission fence because an unobserved
 target ID could alias another buffer. New opens, navigation and synchronization
-are refused. Existing safe reads and release of other known pins remain
-possible. No timeout or Release silently clears uncertainty. The native LSP
-protocol has no saved-query recovery operation; independent recovery remains
-unimplemented.
+are refused. Existing safe reads and releases that retain another native owner
+remain possible. Last-owner native removal waits for navigation recovery, so
+it cannot invalidate an unknown target. No timeout or Release silently clears
+uncertainty. Native receipts are bounded to 64, with no eviction and monotonic
+per-peer operation histories. Receipt retirement happens only after local
+retention, before group release; a full retirement queue preserves the local
+ticket. Retired operations can never execute again. Refused or truly unknown
+acquisitions still need independent cleanup; absence is not proof of no effect.
 
 ## Reading and releasing a destination
 
@@ -190,8 +202,16 @@ Before production cutover, still required:
 - Bound aggregate retained history/background effects and provide independently
   authorized native recovery; local release is not verified native cleanup.
 
-This source candidate does not publish a signed Catalog release, install a
-Plugin or authorize resident Machine maintenance. General DAG execution, state
+Zed `1.28.0` was published and installed on Hawk on 2026-11-06. The composite
+digest is `sha256:dad653c9635f6fb850e22dea62840ccb9b1a55dbc24453cc25215d17b71a36b7`;
+the fixed install operation `hawk-zed-1-28-0-converge` completed with Machine
+receipt `applied`. Public artifact bytes matched the signed package, adapter
+and server digests. The final immutable pair passed native navigation and
+actual install/drain conformance before publication. Production diagnostics
+returned gopls `document_current`, and the running adapter and server executable
+paths selected that exact generation. This verifies installation and ordinary
+diagnostics, not the pending production owned-navigation consumer acceptance
+listed above. General DAG execution, state
 leases and independent recovery remain in the
 [completion ledger](history/plugin-refactor-completion.md).
 

@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { type ReactNode, useLayoutEffect } from "react";
 import {
   alpha,
@@ -170,7 +171,7 @@ export function DesktopPermissionDock({
         }}
       >
         {item.title}
-      </Box>
+      <ScrollEdges /></Box>
         )}
     </ApprovalDock>
   );

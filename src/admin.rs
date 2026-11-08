@@ -19,22 +19,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-pub const REGISTRATION_SETTING: &str = "cowboy.registration";
-pub const PERMISSIONS_SETTING: &str = "cowboy.permissions";
-pub const SESSION_LIMITS_SETTING: &str = "cowboy.session_limits";
-pub const ADMIN_IDENTITIES_SETTING: &str = "cowboy.admin.identities";
-
-/// Keys that persist on the Hub but must never appear on product `/ws`.
-#[must_use]
-pub fn is_admin_setting_key(key: &str) -> bool {
-    matches!(
-        key,
-        REGISTRATION_SETTING
-            | PERMISSIONS_SETTING
-            | SESSION_LIMITS_SETTING
-            | ADMIN_IDENTITIES_SETTING
-    )
-}
+/// The admin setting keys live in the settings key registry; these paths stay
+/// for existing callers.
+pub use crate::model::settings_keys::{
+    ADMIN_IDENTITIES_SETTING, PERMISSIONS_SETTING, REGISTRATION_SETTING, SESSION_LIMITS_SETTING,
+    is_admin_setting_key,
+};
 
 pub const ADMIN_SESSION_COOKIE: &str = "cowboy_admin";
 /// One-time Portainer-style proof that the caller can read the host data dir.
@@ -311,16 +301,9 @@ pub fn disable_registration_token(policy: &mut RegistrationPolicy, token_id: &st
     Ok(())
 }
 
-pub fn hex_sha256(value: &[u8]) -> String {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(value)
-        .iter()
-        .fold(String::with_capacity(64), |mut output, byte| {
-            use std::fmt::Write as _;
-            write!(output, "{byte:02x}").expect("writing to a String cannot fail");
-            output
-        })
-}
+/// Kept for the Controller crate's existing paths; base-crate code names
+/// `crate::digest` directly so it does not depend on `admin`.
+pub use crate::digest::hex_sha256;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -595,7 +578,7 @@ impl AdminIdentities {
                 .any(|existing| existing.account == account),
             "admin account already exists"
         );
-        let password_hash = crate::product_auth::hash_password(&request.password)
+        let password_hash = crate::credentials::hash_password(&request.password)
             .context("hashing admin password")?;
         self.accounts.push(AdminAccount {
             account,
@@ -611,7 +594,7 @@ impl AdminIdentities {
 
     pub fn login(&mut self, request: &AdminCredentials, now_ms: i64) -> Result<String> {
         let Ok(account) = normalize_admin_account(&request.account) else {
-            let _ = crate::product_auth::verify_unknown_user_password(&request.password);
+            let _ = crate::credentials::verify_unknown_user_password(&request.password);
             anyhow::bail!("invalid admin credentials");
         };
         let Some(index) = self
@@ -619,14 +602,14 @@ impl AdminIdentities {
             .iter()
             .position(|existing| existing.account == account)
         else {
-            let _ = crate::product_auth::verify_unknown_user_password(&request.password);
+            let _ = crate::credentials::verify_unknown_user_password(&request.password);
             anyhow::bail!("invalid admin credentials");
         };
         if !verify_stored_admin_password(&self.accounts[index], &request.password) {
             anyhow::bail!("invalid admin credentials");
         }
         if !is_argon2id_phc(&self.accounts[index].password_hash)
-            && let Ok(hash) = crate::product_auth::hash_password(&request.password)
+            && let Ok(hash) = crate::credentials::hash_password(&request.password)
         {
             self.accounts[index].password_salt.clear();
             self.accounts[index].password_hash = hash;
@@ -771,10 +754,10 @@ fn is_argon2id_phc(password_hash: &str) -> bool {
 
 fn verify_stored_admin_password(account: &AdminAccount, password: &str) -> bool {
     if is_argon2id_phc(&account.password_hash) {
-        return crate::product_auth::verify_password(password, &account.password_hash);
+        return crate::credentials::verify_password(password, &account.password_hash);
     }
     let Ok(salt) = decode_hex(&account.password_salt) else {
-        let _ = crate::product_auth::verify_unknown_user_password(password);
+        let _ = crate::credentials::verify_unknown_user_password(password);
         return false;
     };
     hashes_equal(
@@ -822,7 +805,7 @@ fn decode_hex(value: &str) -> Result<Vec<u8>> {
 }
 
 pub fn cookie_token(headers: &axum::http::HeaderMap) -> Option<String> {
-    crate::product_auth::cookie_value(headers, ADMIN_SESSION_COOKIE)
+    crate::credentials::cookie_value(headers, ADMIN_SESSION_COOKIE)
 }
 
 #[must_use]
@@ -848,7 +831,7 @@ pub fn clear_session_cookie(secure: bool) -> String {
 
 #[must_use]
 pub fn setup_cookie_token(headers: &axum::http::HeaderMap) -> Option<String> {
-    crate::product_auth::cookie_value(headers, ADMIN_SETUP_COOKIE)
+    crate::credentials::cookie_value(headers, ADMIN_SETUP_COOKIE)
 }
 
 #[must_use]
@@ -1033,7 +1016,7 @@ impl Default for SessionLimits {
         Self {
             max_sessions: None,
             max_retention_days: None,
-            last_n: Some(u32::try_from(crate::core::HOT_TAIL).unwrap_or(1_000)),
+            last_n: Some(u32::try_from(crate::model::HOT_TAIL).unwrap_or(1_000)),
             last_time_hours: None,
         }
     }

@@ -9,6 +9,7 @@ import { toolRuns } from "./tools/runs";
 import { ToolBody } from "./tools/registry";
 import { CodeView } from "./tools/blocks";
 import { Markdown } from "./Markdown";
+import { checkScrollEdges } from "./scrollEdgesBrowserChecks";
 
 // 1x1 opaque PNG.
 const PNG =
@@ -199,6 +200,7 @@ export async function runToolInspectorBrowserConformance(
     await wait(700);
   };
   try {
+    await checkScrollEdges();
     await show("t35");
     const nav = document.querySelector<HTMLElement>(
       "nav[aria-label='Tool run history']",
@@ -408,6 +410,10 @@ export async function runToolInspectorBrowserConformance(
               </BrowserProductTheme>,
             ));
             await wait(250);
+            fixture.style.setProperty("--cowboy-reader-sticky-top", "67px");
+            const collapsedToolbar = fixture.querySelector<HTMLElement>("[data-fold-toolbar]");
+            if (collapsedToolbar) check(getComputedStyle(collapsedToolbar).top === "0px", "Safe-area inset must not shift a non-sticky toolbar");
+            fixture.style.removeProperty("--cowboy-reader-sticky-top");
             const expand = fixture.querySelector<HTMLButtonElement>("button[aria-expanded='false']");
             check(expand, "long code has no expand action");
             expand.focus();
@@ -441,6 +447,11 @@ export async function runToolInspectorBrowserConformance(
             separated();
             check(Math.abs(toolbar.getBoundingClientRect().top - fixture.getBoundingClientRect().top) < 2,
               "expanded code toolbar did not stay reachable while scrolling");
+            fixture.style.setProperty("--cowboy-reader-sticky-top", "67px");
+            check(Math.abs(toolbar.getBoundingClientRect().top - fixture.getBoundingClientRect().top - 67) < 2,
+              "Sticky code actions must clear the safe-area gradient");
+            separated();
+            fixture.style.removeProperty("--cowboy-reader-sticky-top");
             copy.click();
             await wait(50);
             check(copied === code, "copy lost exact highlighted or lightweight source");
@@ -514,6 +525,12 @@ export async function runToolInspectorBrowserConformance(
       cards.remove();
       document.documentElement.style.fontSize = rootFont;
     }
+    await show("long-result", false);
+    const cover = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    cover.style.setProperty("--cowboy-system-top-clearance", "47px");
+    const veil = getComputedStyle(cover, "::after");
+    check(veil.backgroundImage.includes("linear-gradient") && veil.height === "67px" && veil.pointerEvents === "none", "Tool reader owns a theme-aware safe-area veil");
+    cover.style.removeProperty("--cowboy-system-top-clearance");
     if (keepFixture) await show("long-result", window.innerWidth >= 1000);
     return [
       "long history descriptions ellipsize without panning the rail",

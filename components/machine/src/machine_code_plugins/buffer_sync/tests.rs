@@ -123,6 +123,71 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn maintenance_recovers_original_evidence_without_adopting_a_disconnected_owner() {
+    let mut fixture = Fixture::new("sync-lost").await;
+    let id = fixture.prepare().await.operation;
+    assert!(
+        fixture
+            .act(Action::Apply {
+                operation: id.clone()
+            })
+            .await
+            .is_err()
+    );
+    let entry = fixture.host.buffer_sync.registry.lock().active[&id].clone();
+    fixture.scope = PluginExecutionScope::new(Some(&fixture.service), "hawk");
+    let route = Arc::clone(&entry.lock().await.target.as_ref().unwrap().route);
+    let held = route.lock().await;
+    fixture.host.buffer_sync.observe_pending().await;
+    assert_eq!(entry.lock().await.state, State::Unknown {});
+    drop(held);
+    fixture.host.buffer_sync.observe_pending().await;
+    assert!(matches!(entry.lock().await.state, State::Applied { .. }));
+    assert!(entry.lock().await.fence.is_none());
+    assert!(fixture.act(Action::Query { operation: id }).await.is_err());
+    assert_eq!(fixture.count("sync-applies"), 1);
+    assert!(!fixture.home.join("sync-retires").exists());
+    assert_eq!(
+        fixture.host.buffer_sync.capacity.available_permits(),
+        MAX_OPERATIONS - 1
+    );
+}
+
+#[tokio::test]
+async fn maintenance_confirms_lost_retirement_without_repeating_it() {
+    let fixture = Fixture::new("sync-lost-retire").await;
+    let id = fixture.prepare().await.operation;
+    fixture
+        .act(Action::Apply {
+            operation: id.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        fixture
+            .act(Action::Retire {
+                operation: id.clone()
+            })
+            .await
+            .is_err()
+    );
+    fixture.host.buffer_sync.observe_pending().await;
+    assert_eq!(
+        fixture
+            .act(Action::Query { operation: id })
+            .await
+            .unwrap()
+            .state,
+        State::Retired {}
+    );
+    assert_eq!(fixture.count("sync-retires"), 1);
+    assert_eq!(
+        fixture.host.buffer_sync.capacity.available_permits(),
+        MAX_OPERATIONS
+    );
+}
+
+#[tokio::test]
 async fn exact_owner_support_is_required_before_preparation_or_effect() {
     let fixture = Fixture::new("sync-old").await;
     assert!(fixture.act(fixture.preparation()).await.is_err());
@@ -727,6 +792,10 @@ async fn a_dead_original_process_is_not_replaced_even_when_a_new_generation_exis
     );
     assert!(!home.join("sync-prepares").exists());
     assert!(!home.join("sync-applies").exists());
+    fixture.host.buffer_sync.observe_pending().await;
+    assert_eq!(entry.lock().await.state, State::Unknown {});
+    assert!(entry.lock().await.fence.is_some());
+    assert!(!home.join("sync-queries").exists());
 }
 
 #[tokio::test]

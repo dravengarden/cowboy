@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { glyphSize } from "./surface/desktopSize";
 import { shortcutKey } from "./desktop/commands/imeShortcut";
 import { useMemo, useState } from "react";
@@ -473,7 +474,7 @@ export function WorkspacePicker(
               }),
             ]
             : matches.map((entry) => entryRow(entry))}
-        </MenuList>
+        <ScrollEdges /></MenuList>
         {clearable && entries.length === 0 && !query && (
           <Typography sx={{ p: 2 }} color="text.secondary">
             No directories available

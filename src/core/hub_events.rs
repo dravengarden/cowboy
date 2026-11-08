@@ -40,6 +40,7 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            Self::annotate_dispatched_prompt(s, &mut event, cmid.as_deref());
             // A permission answered on two devices at once resolves once. The
             // second answer is the same fact: the first row stays and no
             // duplicate is appended (docs/offline-first-sync.md, conflict 7).

@@ -3,7 +3,7 @@ import { assertEquals } from "../../tools/test-assert.ts";
 import type { SessionMeta } from "./protocol";
 import { applyUsageHostPlugins, type UsageSnapshot, usageLimits } from "./usageLimits";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
-import { orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota } from "./usageAccounts";
 import { loadProviderCatalog, resetProviderCatalog } from "./providerCatalogRegistry";
 import { providerUiManifestFixture } from "./providerUiContract.fixture";
 
@@ -122,9 +122,9 @@ test("named quota requires exact account, owner, Provider and signed generation"
   }
   assertEquals(registeredUsageAccounts(snapshot, registry, [session])[0].usage, snapshot.providers[0]);
 });
-test("disabled, revoked and unsupported accounts remain visible without borrowed quota", () => {
+test("disabled and unsupported accounts remain visible without borrowed quota", () => {
   setup();
-  for (const change of [{ enabled: false }, { revoking: true }, { provider_id: "unknown" }]) {
+  for (const change of [{ enabled: false }, { provider_id: "unknown" }]) {
     const accounts = { ...registry, registry: { ...registry.registry, accounts: [{ ...registry.registry.accounts[0], ...change }] } };
     const card = registeredUsageAccounts(snapshot, accounts, [session]).find((c) => c.id === "otter")!;
     assertEquals(card.usage.rate_limits, undefined);
@@ -133,6 +133,12 @@ test("disabled, revoked and unsupported accounts remain visible without borrowed
   }
   const removed = { ...registry, registry: { ...registry.registry, accounts: [] } };
   assertEquals(registeredUsageAccounts(snapshot, removed, [session]).some((c) => c.id === "otter"), false);
+});
+test("revoked accounts leave the usage cards", () => {
+  setup();
+  const revoked = { ...registry, registry: { ...registry.registry,
+    accounts: [{ ...registry.registry.accounts[0], enabled: false, revoking: true }] } };
+  assertEquals(registeredUsageAccounts(snapshot, revoked, [session]).some((c) => c.id === "otter"), false);
 });
 test("newest valid quota wins; context-only reports do not erase or fabricate quota", () => {
   setup();
@@ -168,3 +174,16 @@ test("sign-in states name the action instead of an unreported status", () => {
     assertEquals(registeredUsageAccounts(snapshot, registry, [], [observation])[1].statusLabel, label);
   }
 });
+test("a Max report without a 5-hour window is shown as Ultra; nothing else is inferred", () => {
+  const window = (minutes: number) => ({ primary: { usedPercent: 1, windowDurationMins: minutes } });
+  const usage = (limits?: Record<string, unknown>) => ({ provider: "anthropic", status: "available", source: "", observed_at_ms: 1,
+    ...(limits ? { rate_limits: { rateLimitsByLimitId: limits } } : {}) }) as never;
+  assertEquals(displayPlan(usage({ "claude-seven_day": window(10080) }), "max"), "ultra");
+  assertEquals(displayPlan(usage({ "claude-five_hour": window(300), "claude-seven_day": window(10080) }), "max"), "max");
+  assertEquals(displayPlan(usage(), "max"), "max");
+  assertEquals(displayPlan(usage({}), "max"), "max");
+  assertEquals(displayPlan(usage({ "claude-seven_day": window(10080) }), "pro"), "pro");
+  assertEquals(displayPlan(usage({ "claude-seven_day": window(10080) }), "ultra"), "ultra");
+  assertEquals(displayPlan({ ...usage({ "x": window(10080) }), provider: "openai" } as never, "max"), "max");
+});
+

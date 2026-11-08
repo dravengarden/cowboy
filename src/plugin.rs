@@ -28,6 +28,15 @@ struct ComponentRegistry {
     releases: Vec<ComponentRelease>,
 }
 
+/// Releases no in-tree Plugin or worker pin references any more. They stay
+/// part of the one ordered history every reader validates.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ComponentRegistryArchive {
+    schema_version: u16,
+    releases: Vec<ComponentRelease>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ComponentRelease {
@@ -96,6 +105,7 @@ enum ComponentPackageKind {
 const FIRST_PARTY_PLUGIN_SOURCES: &[&str] =
     include!(concat!(env!("OUT_DIR"), "/first_party_plugins.rs"));
 const COMPONENT_REGISTRY_SOURCE: &str = include_str!("../components/registry.json");
+const COMPONENT_REGISTRY_ARCHIVE_SOURCE: &str = include_str!("../components/registry-archive.json");
 
 pub fn first_party_plugins() -> &'static [PluginManifest] {
     static PLUGINS: OnceLock<Vec<PluginManifest>> = OnceLock::new();
@@ -123,8 +133,8 @@ pub fn active_component_release() -> &'static str {
 fn component_registry() -> &'static ComponentRegistry {
     static REGISTRY: OnceLock<ComponentRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| {
-        let registry: ComponentRegistry =
-            serde_json::from_str(COMPONENT_REGISTRY_SOURCE).expect("component registry must parse");
+        let registry =
+            merged_component_registry(COMPONENT_REGISTRY_SOURCE, COMPONENT_REGISTRY_ARCHIVE_SOURCE);
         assert!(
             matches!(registry.schema_version, 2 | 3),
             "component registry schema must be supported"
@@ -139,6 +149,43 @@ fn component_registry() -> &'static ComponentRegistry {
         );
         registry
     })
+}
+
+/// The live registry plus its archive, as one history ordered by release.
+fn merged_component_registry(live: &str, archive: &str) -> ComponentRegistry {
+    let mut registry: ComponentRegistry =
+        serde_json::from_str(live).expect("component registry must parse");
+    let archive: ComponentRegistryArchive =
+        serde_json::from_str(archive).expect("component registry archive must parse");
+    assert_eq!(
+        archive.schema_version, registry.schema_version,
+        "component registry archive schema must match the live registry"
+    );
+    let active = registry
+        .releases
+        .last()
+        .map(|release| release.version.clone());
+    registry.releases.extend(archive.releases);
+    let version = |release: &ComponentRelease| {
+        semver::Version::parse(&release.version).expect("component release must be a version")
+    };
+    registry.releases.sort_by_key(version);
+    assert!(
+        registry
+            .releases
+            .windows(2)
+            .all(|pair| version(&pair[0]) < version(&pair[1])),
+        "component releases must be unique"
+    );
+    assert_eq!(
+        registry
+            .releases
+            .last()
+            .map(|release| release.version.clone()),
+        active,
+        "the active component release must be the newest live release"
+    );
+    registry
 }
 
 fn validate_against_active_release(manifest: &PluginManifest) -> Result<()> {
@@ -643,6 +690,32 @@ mod tests {
             if case == "reintroduced" {
                 assert!(error.contains("reuses an identity"), "{error}");
             }
+        }
+    }
+
+    #[test]
+    fn archived_releases_rejoin_one_ordered_history() {
+        let live: ComponentRegistry = serde_json::from_str(COMPONENT_REGISTRY_SOURCE).unwrap();
+        let archive: ComponentRegistryArchive =
+            serde_json::from_str(COMPONENT_REGISTRY_ARCHIVE_SOURCE).unwrap();
+        let merged = component_registry();
+        assert_eq!(
+            merged.releases.len(),
+            live.releases.len() + archive.releases.len()
+        );
+        assert_eq!(
+            merged.releases.last().unwrap().version,
+            merged.active_release
+        );
+        for release in live.releases.iter().chain(&archive.releases) {
+            assert_eq!(
+                merged
+                    .releases
+                    .iter()
+                    .filter(|candidate| candidate.version == release.version)
+                    .count(),
+                1
+            );
         }
     }
 

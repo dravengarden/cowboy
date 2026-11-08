@@ -42,7 +42,7 @@ fn main() -> Result<()> {
                     "uri": document, "version": message["params"]["textDocument"]["version"],
                     "diagnostics": [{"range": {"start": {"line": 0, "character": 3},
                         "end": {"line": 0, "character": 9}}, "severity": 2,
-                        "message": "fixture analysis"}]
+                        "message": "fixture analysis", "source":"fixture-lsp", "code":"fixture-code-1"}]
                 }}),
             )?;
         }

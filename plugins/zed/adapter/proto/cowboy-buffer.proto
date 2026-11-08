@@ -61,6 +61,11 @@ message CowboyNavigation {
   uint64 project_id = 1;
   uint32 protocol = 2;
   bytes query = 3;
+  // Protocol 2: exact process/peer operation, recorded before native work.
+  bytes instance = 4;
+  uint64 operation_id = 5;
+  enum Action { EXECUTE = 0; QUERY = 1; FORGET = 2; }
+  Action action = 6;
 }
 
 message CowboyNavigationResponse {
@@ -70,6 +75,10 @@ message CowboyNavigationResponse {
     SUPPORTED = 1;
     COMPLETE = 2;
     REFUSED = 3;
+    PENDING = 4;
+    UNKNOWN = 5;
+    FORGOTTEN = 6;
+    CAPACITY = 7;
   }
   Outcome outcome = 2;
   // Complete pinned `LspQueryResponse`; absent on probe/refusal. Refusal is not
@@ -84,17 +93,24 @@ message CowboyNavigationResponse {
     DEADLINE = 5;
   }
   Refusal refusal = 4;
+  bytes instance = 5;
+  uint64 operation_id = 6;
 }
 
 // Empty instance/IDs probe the exact process. Otherwise close the complete
 // sorted, unique, bounded set for the authenticated native peer in one update.
-// This is not a saved operation or replay grant. The adapter owns one dispatch;
-// an unobserved reply remains Unknown and must never fall back to `CloseBuffer`.
+// Protocol 1 has no recovery. Protocol 2 records an exact per-peer operation;
+// an unobserved reply is queried, never retried via upstream `CloseBuffer`.
 message CowboyCloseBuffers {
   uint64 project_id = 1;
   uint32 protocol = 2;
   bytes instance = 3;
   repeated uint64 buffer_ids = 4;
+  // Protocol 2 only: non-recycled, increasing per-peer operation identity.
+  // QUERY observes the original outcome; FORGET retires only its receipt.
+  uint64 operation_id = 5;
+  enum Action { CLOSE = 0; QUERY = 1; FORGET = 2; }
+  Action action = 6;
 }
 
 message CowboyCloseBuffersResponse {
@@ -105,9 +121,13 @@ message CowboyCloseBuffersResponse {
     SUPPORTED = 1;
     CLOSED = 2;
     REFUSED = 3;
+    UNKNOWN = 4;
+    FORGOTTEN = 5;
+    CAPACITY = 6;
   }
   Outcome outcome = 3;
   repeated uint64 buffer_ids = 4;
+  uint64 operation_id = 5;
 }
 
 // Which document version each language server's current diagnostics set for a
@@ -144,7 +164,8 @@ message CowboyAnalysisFrontierResponse {
 
 // The outcome this exact server process recorded for one of the peer's own
 // `OpenBufferByPath` requests, by its message ID. `UNKNOWN` means it was never
-// received before this query on the same connection. Querying has no effect.
+// admitted before this query on the same connection. `FORGOTTEN` means an old
+// result may have existed and is never evidence of no effect. Querying has no effect.
 message CowboyOpenAttempt {
   uint64 project_id = 1;
   uint32 protocol = 2;
@@ -159,6 +180,7 @@ message CowboyOpenAttemptResponse {
     PENDING = 2;
     OPENED = 3;
     FAILED = 4;
+    FORGOTTEN = 5;
   }
   Outcome outcome = 2;
   uint64 buffer_id = 3;
@@ -183,4 +205,38 @@ message CowboyOpenTargetResponse {
   }
   State state = 2;
   uint64 buffer_id = 3;
+}
+
+// Read-only result of this peer's original worktree request. A completed Add
+// proves registration, while its upstream early `AddWorktreeResponse` does not.
+// UNKNOWN means no admission; UNCERTAIN/FORGOTTEN never prove no effect.
+message CowboyWorktreeAttempt {
+  uint64 project_id = 1;
+  uint32 protocol = 2;
+  // Zero probes support only; it never identifies an operation.
+  uint32 message_id = 3;
+}
+
+message CowboyWorktreeAttemptResponse {
+  uint32 protocol = 1;
+  enum Kind {
+    UNSPECIFIED = 0;
+    ADD = 1;
+    TRUST = 2;
+    RESTRICT = 3;
+    REMOVE = 4;
+  }
+  enum Outcome {
+    OUTCOME_UNSPECIFIED = 0;
+    UNKNOWN = 1;
+    PENDING = 2;
+    COMPLETED = 3;
+    UNCERTAIN = 4;
+    FORGOTTEN = 5;
+    SUPPORTED = 6;
+  }
+  Kind kind = 2;
+  Outcome outcome = 3;
+  // Original Add/Remove ID, or the sole Trust/Restrict ID (0 for other scopes).
+  uint64 worktree_id = 4;
 }

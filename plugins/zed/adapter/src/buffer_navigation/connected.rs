@@ -146,7 +146,7 @@ async fn acquire(
     );
     assert_eq!(
         zed.next_message_id.load(crate::Ordering::Relaxed),
-        before + 1
+        before + 2 // effect-free identity probe, then the single execution
     );
     for action in [Action::Query, Action::Execute] {
         request(Request::BufferNavigation {
@@ -158,7 +158,7 @@ async fn acquire(
     }
     assert_eq!(
         zed.next_message_id.load(crate::Ordering::Relaxed),
-        before + 1
+        before + 2
     );
     assert_eq!(
         zed.next_lsp_request_id.load(crate::Ordering::Relaxed),

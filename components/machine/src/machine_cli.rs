@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context as _, bail};
+use anyhow::{Context as _, Result, bail};
 use clap::{Parser, ValueEnum};
 use futures::{SinkExt as _, StreamExt as _};
 use serde::{Deserialize, Serialize};
@@ -21,13 +21,18 @@ use crate::machine_components::ComponentStore;
 use crate::machine_plugins::{MachinePluginStore, PluginExecutionScope, UninstallAccess};
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation};
 use crate::machine_protocol::{
-    AuthState, CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS, ComponentId, ComponentInventory,
-    ComponentKind, ComponentState, ComponentUpdate, ConnectionMode, MACHINE_PROTOCOL_VERSION,
-    MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity, MachineCommand, MachineEvent, MachineFrame,
-    MachineHello, MachineWorkspace, Platform, ProviderMaterializationState,
+    AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState, ComponentUpdate,
+    ConnectionMode, MACHINE_PROTOCOL_VERSION, MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity,
+    MachineCommand, MachineEvent, MachineFrame, MachineHello, MachineWorkspace, Platform,
+    ProviderMaterializationState,
 };
 
 mod auth_watch;
+mod command_login;
+mod command_plugins;
+mod command_provider_auth;
+mod command_sessions;
+mod command_telemetry;
 pub mod execution;
 pub mod host_resources;
 mod installation;
@@ -35,7 +40,14 @@ mod liveness;
 mod login_process;
 mod native_login;
 mod native_logout;
+#[cfg(target_os = "linux")]
+mod observation;
 mod projects;
+mod reconnect;
+mod resident_state;
+use resident_state::{durable_state_reply, resident_provider_generations};
+mod session_code;
+use reconnect::Backoff;
 pub mod telemetry_binding;
 pub mod telemetry_export;
 pub mod telemetry_recovery;
@@ -177,6 +189,8 @@ struct WorkspaceConfig {
     identities: workspace_identity::SharedRootIdentities,
     session_identities: workspace_identity::SharedSessionRootIdentities,
     updates: tokio::sync::watch::Sender<WorkspaceSnapshot>,
+    #[cfg(target_os = "linux")]
+    observers: observation::Registry,
 }
 
 impl WorkspaceConfig {
@@ -197,6 +211,8 @@ impl WorkspaceConfig {
             identities: workspace_identity::SharedRootIdentities::default(),
             session_identities: workspace_identity::SharedSessionRootIdentities::default(),
             updates,
+            #[cfg(target_os = "linux")]
+            observers: observation::Registry::default(),
         };
         config.reload()?;
         Ok(config)
@@ -535,7 +551,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         current_platform(),
         std::env::consts::ARCH.to_owned(),
     )?);
-    providers.use_device_config(device_config.clone());
+    let _code_maintenance = providers.configure_code_maintenance(device_config.clone());
     // Reader floor 6a420ff5 is accepted for both components and Hawk's cold
     // bootstrap. Unadmitted Machines still open read-only without adoption.
     const INSTALLATION_TRACKING_ENABLED: bool = true;
@@ -701,7 +717,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     let execution = Arc::new(execution);
     let deletion_service_id = args.service_id.clone();
     let durable_state = crate::machine_broker::DurableStateView::default();
-    let controller = controller_loop(ControllerConfig {
+    let controller = reconnect::run(ControllerConfig {
         memory_relay,
         execution,
         controller_url,
@@ -1188,21 +1204,7 @@ fn resolve_runtime_machine_id(
     load_enrolled_machine_id(state_dir).unwrap_or_else(|| cli_machine_id.to_owned())
 }
 
-async fn controller_loop(config: ControllerConfig) -> anyhow::Result<()> {
-    let mut retry = Duration::from_secs(1);
-    loop {
-        match controller_connection(&config).await {
-            Ok(()) => retry = Duration::from_secs(1),
-            Err(error) => tracing::warn!(%error, "Machine controller disconnected"),
-        }
-        tokio::time::sleep(retry).await;
-        retry = (retry * 2).min(Duration::from_secs(
-            CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS,
-        ));
-    }
-}
-
-async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> {
+async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -> Result<()> {
     config.workspaces.reload()?;
     let mut endpoint =
         reqwest::Url::parse(&config.controller_url).context("parsing controller URL")?;
@@ -1442,9 +1444,9 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let state_dir = config.state_dir.clone();
     let mut resources_due = tokio::time::Instant::now();
     let mut decoder = crate::machine_transport::Decoder::new((chunked, compressed, paced, stream));
-    // The Controller may stop hearing this Machine while its frames still
-    // arrive here; record how the socket ended and how long it was silent.
+    // Record disconnect and silence even when only one direction fails.
     let connected_at = tokio::time::Instant::now();
+    retry.connected(connected_at);
     let mut last_inbound = connected_at;
     let mut liveness_probe = liveness::Probe::default();
     let result: anyhow::Result<()> = async {
@@ -2564,872 +2566,54 @@ fn handle_machine_command(
     context: MachineCommandContext,
     execution: &PluginExecutionScope,
 ) {
-    let MachineCommandContext {
-        protocol,
-        execution_manager,
-        service_id,
-        machine_id,
-        plugin_operation_admission,
-        events,
-        components,
-        providers,
-        zed_adapter_socket,
-        code_adapter_socket,
-        worktree_roots,
-        workspaces,
-        login_sessions,
-        runtime_commands,
-        durable_state,
-    } = context;
-    let query_only = matches!(&command, MachineCommand::QueryPluginUninstallStep { .. });
+    // Each family owns its arms verbatim; this match only routes, so the
+    // compiler still proves every command reaches exactly one family.
     match command {
-        MachineCommand::Execution {
-            request_id,
-            request,
-        } => {
-            let workspaces = workspaces.snapshot().workspaces;
-            tokio::spawn(async move {
-                let response = execution_manager.request(*request, &workspaces).await;
-                let _ = events.send(MachineEvent::ExecutionResponse {
-                    request_id,
-                    response: Box::new(response),
-                });
-            });
+        command @ (MachineCommand::Execution { .. }
+        | MachineCommand::CodeBufferNavigation { .. }
+        | MachineCommand::CodeBufferSync { .. }
+        | MachineCommand::Projects { .. }
+        | MachineCommand::QueryWorkerExit { .. }
+        | MachineCommand::AdapterRequest { .. }
+        | MachineCommand::InvokePluginHost { .. }
+        | MachineCommand::Reconcile { .. }) => {
+            command_sessions::handle(command, context, execution)
         }
-        MachineCommand::CodeBufferNavigation {
-            request_id,
-            request,
-        } => {
-            let invocation = execution.code_navigation(*request);
-            tokio::spawn(async move {
-                let result = async {
-                    Ok::<_, anyhow::Error>(serde_json::to_value(
-                        providers.navigate_code_buffer(invocation?).await?,
-                    )?)
-                }
-                .await;
-                let _ = events.send(MachineEvent::AdapterResponse {
-                    request_id,
-                    accepted: result.is_ok(),
-                    payload: result.ok(),
-                    detail: None,
-                    refusal: None,
-                });
-            });
+        command @ (MachineCommand::RecoverTelemetryBinding { .. }
+        | MachineCommand::QueryTelemetryRecovery { .. }
+        | MachineCommand::QueryTelemetryRecoveryAudit { .. }
+        | MachineCommand::ExportBoundTelemetry { .. }
+        | MachineCommand::CommitTelemetryBinding { .. }
+        | MachineCommand::QueryTelemetryBinding { .. }) => {
+            command_telemetry::handle(command, context, execution)
         }
-        MachineCommand::CodeBufferSync {
-            request_id,
-            request,
-        } => {
-            // Capture the actual connection before spawning or waiting. Wire
-            // data and a read lease alone cannot construct an invocation.
-            let invocation = execution.code_buffer_sync(*request);
-            tokio::spawn(async move {
-                let result = async {
-                    Ok::<_, anyhow::Error>(serde_json::to_value(
-                        providers.synchronize_code_buffer(invocation?).await?,
-                    )?)
-                }
-                .await;
-                let _ = events.send(MachineEvent::AdapterResponse {
-                    request_id,
-                    accepted: result.is_ok(),
-                    payload: result.ok(),
-                    detail: None,
-                    refusal: None,
-                });
-            });
+        command @ (MachineCommand::QueryPluginUninstallRecovery { .. }
+        | MachineCommand::UninstallPluginStep { .. }
+        | MachineCommand::QueryPluginUninstallStep { .. }
+        | MachineCommand::RefreshInventory { .. }
+        | MachineCommand::ObservePluginInstallation { .. }
+        | MachineCommand::QueryPluginInstallStep { .. }
+        | MachineCommand::InstallPluginStep { .. }
+        | MachineCommand::InstallPlugin { .. }
+        | MachineCommand::UninstallPlugin { .. }
+        | MachineCommand::ReactivatePlugin { .. }
+        | MachineCommand::UpdateNpmComponent { .. }) => {
+            command_plugins::handle(command, context, execution)
         }
-        MachineCommand::RecoverTelemetryBinding {
-            request_id,
-            recovery,
-        } => {
-            telemetry_recovery::recover(request_id, *recovery, providers, execution, events);
+        command @ (MachineCommand::ApplyProviderAuth { .. }
+        | MachineCommand::FinalizeProviderAuthCandidate { .. }
+        | MachineCommand::QueryNativeProfile { .. }
+        | MachineCommand::CollectNativeUsage { .. }
+        | MachineCommand::PrepareNativeBinding { .. }) => {
+            command_provider_auth::handle(command, context, execution)
         }
-        MachineCommand::QueryTelemetryRecovery {
-            request_id,
-            recovery,
-        } => {
-            telemetry_recovery::query(
-                request_id, *recovery, providers, service_id, machine_id, events,
-            );
-        }
-        MachineCommand::QueryTelemetryRecoveryAudit { request_id, query } => {
-            telemetry_recovery::query_audit(
-                request_id, *query, providers, service_id, machine_id, events,
-            );
-        }
-        MachineCommand::ExportBoundTelemetry {
-            request_id,
-            attempt,
-        } => {
-            telemetry_export::export(request_id, *attempt, providers, execution, events);
-        }
-        MachineCommand::CommitTelemetryBinding { request_id, step } => {
-            telemetry_binding::commit(request_id, *step, providers, execution, events);
-        }
-        MachineCommand::QueryTelemetryBinding { request_id, step } => {
-            tokio::spawn(async move {
-                let observation = providers
-                    .telemetry_binding_observation(&step, service_id.as_deref(), &machine_id)
-                    .await;
-                let _ = events.send(MachineEvent::TelemetryBindingObservation {
-                    request_id,
-                    observation: Box::new(observation),
-                });
-            });
-        }
-        MachineCommand::QueryPluginUninstallRecovery { request_id, step } => {
-            tokio::spawn(async move {
-                let observation = providers
-                    .uninstall_recovery_observation(&step, service_id.as_deref(), &machine_id)
-                    .await;
-                let _ = events.send(MachineEvent::PluginUninstallRecovery {
-                    request_id,
-                    observation: Box::new(observation),
-                });
-            });
-        }
-        MachineCommand::UninstallPluginStep { request_id, step }
-        | MachineCommand::QueryPluginUninstallStep { request_id, step } => {
-            // Capture the deadline on receipt, not after detached scheduling or
-            // lifecycle-lock acquisition. Queries never mint execution leases.
-            let lease = if query_only {
-                None
-            } else {
-                match execution.uninstall(&step) {
-                    Ok(lease) => Some(lease),
-                    Err(reason) => {
-                        let _ = events.send(MachineEvent::PluginUninstallStep {
-                            request_id,
-                            observation: Box::new(StepObservation {
-                                admission_enabled: false,
-                                result: StepLookup::Unavailable { reason },
-                            }),
-                        });
-                        return;
-                    }
-                }
-            };
-            tokio::spawn(async move {
-                let observation = providers
-                    .uninstall_step(
-                        &step,
-                        service_id.as_deref(),
-                        &machine_id,
-                        plugin_operation_admission,
-                        lease
-                            .as_ref()
-                            .map_or(UninstallAccess::Observe, UninstallAccess::Execute),
-                    )
-                    .await;
-                if !query_only {
-                    // An inventory read failure must not advertise an empty
-                    // installation as proof of a completed uninstall.
-                    if let Ok(plugins) = providers.inventory() {
-                        let _ = events.send(MachineEvent::PluginInventory {
-                            plugins,
-                            observed_at_ms: unix_ms(),
-                        });
-                    }
-                }
-                let _ = events.send(MachineEvent::PluginUninstallStep {
-                    request_id,
-                    observation: Box::new(observation),
-                });
-            });
-        }
-        MachineCommand::Projects {
-            request_id,
-            service_id: requested_service,
-            machine_id: requested_machine,
-            request,
-        } => {
-            if service_id.as_deref() != Some(requested_service.as_str())
-                || machine_id != requested_machine
-            {
-                let _ = events.send(MachineEvent::AdapterResponse {
-                    request_id,
-                    accepted: false,
-                    payload: None,
-                    detail: Some("Project request site mismatch".into()),
-                    refusal: None,
-                });
-                return;
-            }
-            tokio::spawn(async move {
-                let mutation = matches!(
-                    request,
-                    crate::machine_protocol::projects::Request::Upsert { .. }
-                        | crate::machine_protocol::projects::Request::Remove { .. }
-                        | crate::machine_protocol::projects::Request::Adopt { .. }
-                );
-                let registry = Arc::clone(&workspaces);
-                let result = tokio::task::spawn_blocking(move || registry.project_request(request))
-                    .await
-                    .map_err(anyhow::Error::from)
-                    .and_then(std::convert::identity);
-                if mutation && result.is_ok() {
-                    let components =
-                        collect_inventory(&components, zed_adapter_socket.as_deref()).await;
-                    let (snapshot, identities) = workspaces.advertisement();
-                    let _ = events.send(MachineEvent::Inventory {
-                        components,
-                        workspace_identities: Some(identities),
-                        workspaces: Some(snapshot.workspaces),
-                        workspace_revision: snapshot.revision,
-                        workspace_owner: Some(snapshot.owner),
-                        observed_at_ms: unix_ms(),
-                    });
-                }
-                let _ = events.send(MachineEvent::AdapterResponse {
-                    request_id,
-                    accepted: result.is_ok(),
-                    payload: result.as_ref().ok().cloned(),
-                    detail: result.err().map(|error| format!("{error:#}")),
-                    refusal: None,
-                });
-            });
-        }
-        MachineCommand::RefreshInventory { request_id } => {
-            tokio::spawn(async move {
-                let components =
-                    collect_inventory(&components, zed_adapter_socket.as_deref()).await;
-                let workspace_result = workspaces.reload();
-                if workspace_result.is_ok() {
-                    let (snapshot, workspace_identities) = workspaces.advertisement();
-                    let _ = events.send(MachineEvent::Inventory {
-                        components,
-                        workspace_identities: Some(workspace_identities),
-                        workspaces: Some(snapshot.workspaces.clone()),
-                        workspace_revision: snapshot.revision.clone(),
-                        workspace_owner: Some(snapshot.owner),
-                        observed_at_ms: unix_ms(),
-                    });
-                    let _ = events.send(MachineEvent::PluginInventory {
-                        plugins: providers.inventory().unwrap_or_default(),
-                        observed_at_ms: unix_ms(),
-                    });
-                }
-                let _ = events.send(MachineEvent::CommandResult {
-                    request_id,
-                    accepted: workspace_result.is_ok(),
-                    detail: workspace_result
-                        .err()
-                        .map(|error| format!("workspace configuration reload failed: {error:#}")),
-                });
-            });
-        }
-        MachineCommand::ObservePluginInstallation { request_id, query } => {
-            tokio::spawn(async move {
-                let observation = providers
-                    .installation_target(
-                        &query,
-                        service_id.as_deref(),
-                        &machine_id,
-                        installation::WRITER_ENABLED && plugin_operation_admission,
-                    )
-                    .await;
-                let _ = events.send(MachineEvent::PluginInstallationTarget {
-                    request_id,
-                    observation: Box::new(observation),
-                });
-            });
-        }
-        MachineCommand::QueryPluginInstallStep { request_id, step } => {
-            tokio::spawn(async move {
-                let observation = providers
-                    .query_installation_step(
-                        &step,
-                        service_id.as_deref(),
-                        &machine_id,
-                        installation::WRITER_ENABLED && plugin_operation_admission,
-                    )
-                    .await;
-                let _ = events.send(MachineEvent::PluginInstallationStep {
-                    request_id,
-                    observation: Box::new(observation),
-                });
-            });
-        }
-        MachineCommand::InstallPluginStep {
-            request_id,
-            step,
-            plugin,
-        } => {
-            installation::install(
-                request_id,
-                *step,
-                *plugin,
-                providers,
-                execution,
-                installation::WRITER_ENABLED && plugin_operation_admission,
-                events,
-            );
-        }
-        MachineCommand::InstallPlugin { request_id, plugin } => {
-            tokio::spawn(async move {
-                let result = providers.install(&plugin).await;
-                let accepted = result.is_ok();
-                let detail = result.as_ref().err().map(|error| format!("{error:#}"));
-                if let Ok(plugins) = providers.inventory() {
-                    let _ = events.send(MachineEvent::PluginInventory {
-                        plugins,
-                        observed_at_ms: unix_ms(),
-                    });
-                }
-                let _ = events.send(MachineEvent::CommandResult {
-                    request_id,
-                    accepted,
-                    detail,
-                });
-            });
-        }
-        MachineCommand::UninstallPlugin {
-            request_id,
-            plugin_id,
-            generation_digest,
-        } => {
-            tokio::spawn(async move {
-                let result = providers.uninstall(&plugin_id, &generation_digest).await;
-                let accepted = result.is_ok();
-                let detail = result.err().map(|error| format!("{error:#}"));
-                let _ = events.send(MachineEvent::PluginInventory {
-                    plugins: providers.inventory().unwrap_or_default(),
-                    observed_at_ms: unix_ms(),
-                });
-                let _ = events.send(MachineEvent::CommandResult {
-                    request_id,
-                    accepted,
-                    detail,
-                });
-            });
-        }
-        MachineCommand::ReactivatePlugin {
-            request_id,
-            plugin_id,
-            generation_digest,
-        } => {
-            tokio::spawn(async move {
-                let result = providers.reactivate(&plugin_id, &generation_digest).await;
-                let accepted = result.is_ok();
-                let detail = result.err().map(|error| format!("{error:#}"));
-                let _ = events.send(MachineEvent::PluginInventory {
-                    plugins: providers.inventory().unwrap_or_default(),
-                    observed_at_ms: unix_ms(),
-                });
-                let _ = events.send(MachineEvent::CommandResult {
-                    request_id,
-                    accepted,
-                    detail,
-                });
-            });
-        }
-        MachineCommand::ApplyProviderAuth {
-            request_id,
-            envelope,
-        } => {
-            // Storage can verify account-bound envelopes before the runtime
-            // supports account-scoped refresh, rolling and worker admission.
-            // Do not let an early sender reach the legacy Provider-wide path.
-            if !envelope.account_id.is_default() {
-                let _ = events.send(MachineEvent::CommandResult {
-                    request_id,
-                    accepted: false,
-                    detail: Some(
-                        "Named Provider account runtime admission is not available".into(),
-                    ),
-                });
-                return;
-            }
-            tokio::spawn(async move {
-                match providers.apply_auth(&envelope).await {
-                    Ok(receipt) => {
-                        let roll_provider = provider_auth_roll_target(&receipt, envelope.action);
-                        let _ = events.send(MachineEvent::ProviderAuthReceipt {
-                            request_id: request_id.clone(),
-                            provider_id: receipt.provider_id,
-                            account_id: envelope.account_id.clone(),
-                            auth_generation: receipt.auth_generation,
-                            replica_state: receipt.replica_state,
-                            materialization_state: receipt.materialization_state,
-                            detail: None,
-                        });
-                        // Applying an authoritative generation can migrate a
-                        // complete legacy refresh into the writable runtime
-                        // projection via an atomic directory rename. Publish
-                        // observations directly instead of relying on a
-                        // platform-specific filesystem event shape.
-                        publish_provider_auth_observations(&providers, &events, true, protocol)
-                            .await;
-                        if let Some(provider) = roll_provider {
-                            let _ =
-                                runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
-                                    command: crate::runtime_wire::CoreCommand::RollProvider {
-                                        provider,
-                                        account_id: Some(envelope.account_id.clone()),
-                                    },
-                                });
-                        }
-                        let _ = events.send(MachineEvent::CommandResult {
-                            request_id,
-                            accepted: true,
-                            detail: None,
-                        });
-                    }
-                    Err(error) => {
-                        let _ = events.send(MachineEvent::ProviderAuthReceipt {
-                            request_id: request_id.clone(),
-                            provider_id: envelope.provider_id.clone(),
-                            account_id: envelope.account_id.clone(),
-                            auth_generation: envelope.auth_generation,
-                            replica_state: crate::machine_protocol::ProviderReplicaState::Failed,
-                            materialization_state:
-                                crate::machine_protocol::ProviderMaterializationState::Failed,
-                            detail: Some(format!("{error:#}")),
-                        });
-                        let _ = events.send(MachineEvent::CommandResult {
-                            request_id,
-                            accepted: false,
-                            detail: Some(format!("{error:#}")),
-                        });
-                    }
-                }
-            });
-        }
-        MachineCommand::FinalizeProviderAuthCandidate {
-            request_id,
-            provider_id,
-            account_id,
-            auth_method,
-            candidate_request_id,
-        } => {
-            let mut sessions = login_sessions.lock();
-            let result =
-                login_account_store(&providers, &account_id, protocol).and_then(|providers| {
-                    if let Some(session) = sessions.get(&candidate_request_id) {
-                        anyhow::ensure!(
-                            session.candidate.as_ref().is_some_and(
-                                |candidate| candidate.matches(&provider_id, &account_id)
-                            ),
-                            "candidate is still running or belongs to another authentication scope"
-                        );
-                    }
-                    providers.finalize_auth_candidate(
-                        &provider_id,
-                        &auth_method,
-                        &candidate_request_id,
-                    )?;
-                    if let Some(candidate) = sessions
-                        .get_mut(&candidate_request_id)
-                        .and_then(|session| session.candidate.as_mut())
-                    {
-                        candidate.discard()?;
-                    }
-                    Ok(())
-                });
-            if result.is_ok() {
-                sessions.remove(&candidate_request_id);
-            }
-            let _ = events.send(MachineEvent::CommandResult {
-                request_id,
-                accepted: result.is_ok(),
-                detail: result.err().map(|error| format!("{error:#}")),
-            });
-        }
-        MachineCommand::QueryNativeProfile {
-            request_id,
-            provider,
-            account_id,
-            generation,
-            login_request_id,
-        } => {
-            let profile = (protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION)
-                .then(|| {
-                    providers
-                        .observe_native_profile(
-                            &account_id,
-                            &provider,
-                            generation,
-                            &login_request_id,
-                        )
-                        .ok()
-                })
-                .flatten()
-                .map(Box::new);
-            let _ = events.send(MachineEvent::NativeProfileObserved {
-                request_id,
-                profile,
-            });
-        }
-        MachineCommand::CollectNativeUsage {
-            request_id,
-            profile,
-        } => {
-            let account = profile.account_id.clone();
-            let provider = profile.provider_id.clone();
-            let generation = profile.generation;
-            let invocation = execution.native_usage(*profile);
-            tokio::spawn(async move {
-                let result = if protocol >= crate::machine_protocol::NATIVE_USAGE_PROTOCOL_VERSION {
-                    providers.collect_native_usage(invocation).await
-                } else {
-                    Err(anyhow::anyhow!("machine_usage_update_required"))
-                };
-                let detail = result.as_ref().err().map(|error| {
-                    let code = crate::machine_protocol::native_usage_error_code(&error.to_string());
-                    tracing::warn!(account = account.as_str(), %provider, generation, reason = code, "Native account usage failed");
-                    code.to_owned()
-                });
-                let _ = events.send(MachineEvent::PluginHostResponse {
-                    request_id,
-                    accepted: result.is_ok(),
-                    started: true,
-                    payload: result.ok(),
-                    detail,
-                });
-            });
-        }
-        MachineCommand::QueryWorkerExit { request_id, worker } => {
-            let observation = (protocol
-                >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION)
-                .then(|| {
-                    providers
-                        .observe_account_worker_exit(&worker)
-                        .ok()
-                        .flatten()
-                })
-                .flatten();
-            let _ = events.send(MachineEvent::WorkerExitObserved {
-                request_id,
-                observation,
-            });
-        }
-        MachineCommand::PrepareNativeBinding {
-            request_id,
-            binding,
-        } => {
-            let accepted = protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION
-                && providers.prepare_native_binding(&binding).is_ok();
-            let _ = events.send(MachineEvent::NativeBindingPrepared {
-                request_id,
-                binding: accepted.then_some(binding),
-            });
-        }
-        MachineCommand::QueryLoginStop { request_id, login } => {
-            let observation = login_account_store(&providers, &login.account_id, protocol)
-                .and_then(|store| {
-                    anyhow::ensure!(!login.account_id.is_default(), "named account required");
-                    store.observe_login_stop(&login)
-                })
-                .ok()
-                .flatten();
-            let _ = events.send(MachineEvent::LoginStopObserved {
-                request_id,
-                observation,
-            });
-        }
-        MachineCommand::NativeLogout { request_id, logout } => {
-            let scoped =
-                login_account_store(&providers, &logout.account_id, protocol).and_then(|store| {
-                    anyhow::ensure!(
-                        !logout.account_id.is_default()
-                            && !login_sessions.lock().contains_key(&logout.login_request_id),
-                        "native login must be stopped before logout"
-                    );
-                    Ok(store)
-                });
-            tokio::spawn(async move {
-                let observation = match scoped {
-                    Ok(store) => {
-                        let _observation = store.native_observation_guard().await;
-                        native_logout::run(
-                            &store,
-                            &logout.provider_id,
-                            logout.generation,
-                            &logout.login_request_id,
-                            &logout.operation_id,
-                        )
-                        .await
-                        .ok()
-                        .map(|succeeded| {
-                            crate::provider_account::NativeLogoutObservation {
-                                process_trees_exited: succeeded.is_some()
-                                    && store
-                                        .native_auth_trees_exited(
-                                            &logout.provider_id,
-                                            logout.generation,
-                                            &logout.login_request_id,
-                                            &logout.operation_id,
-                                        )
-                                        .unwrap_or(false),
-                                request: logout,
-                                succeeded,
-                                profile_cleaned: succeeded == Some(true),
-                            }
-                        })
-                    }
-                    Err(_) => None,
-                };
-                let _ = events.send(MachineEvent::NativeLogoutObserved {
-                    request_id,
-                    observation,
-                });
-            });
-        }
-        MachineCommand::BeginNativeLogin {
-            request_id,
-            provider,
-            account_id,
-            spec,
-        } => {
-            let scoped = login_account_store(&providers, &account_id, protocol).and_then(|store| {
-                anyhow::ensure!(
-                    !account_id.is_default() && provider == "claude-code",
-                    "native account required"
-                );
-                Ok(store)
-            });
-            match scoped {
-                Ok(providers) => native_login::start(
-                    request_id,
-                    provider,
-                    spec,
-                    providers,
-                    events,
-                    login_sessions,
-                ),
-                Err(error) => {
-                    let _ = events.send(MachineEvent::CommandResult {
-                        request_id,
-                        accepted: false,
-                        detail: Some(error.to_string()),
-                    });
-                }
-            }
-        }
-        MachineCommand::BeginLogin {
-            request_id,
-            provider,
-            account_id,
-            auth_method,
-        } => {
-            let providers = match login_account_store(&providers, &account_id, protocol) {
-                Ok(providers) => providers,
-                Err(error) => {
-                    let _ = events.send(MachineEvent::CommandResult {
-                        request_id,
-                        accepted: false,
-                        detail: Some(error.to_string()),
-                    });
-                    return;
-                }
-            };
-            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-            let (input_tx, input_rx) = tokio::sync::mpsc::channel(1);
-            {
-                let mut sessions = login_sessions.lock();
-                let std::collections::hash_map::Entry::Vacant(entry) =
-                    sessions.entry(request_id.clone())
-                else {
-                    let _ = events.send(MachineEvent::CommandResult {
-                        request_id,
-                        accepted: false,
-                        detail: Some("authentication request is already active".into()),
-                    });
-                    return;
-                };
-                entry.insert(LoginSession {
-                    cancel: cancel_tx,
-                    input: input_tx,
-                    candidate: None,
-                });
-            }
-            tokio::spawn(run_login(
-                request_id,
-                provider,
-                auth_method,
-                events,
-                components,
-                providers,
-                zed_adapter_socket,
-                LoginIo {
-                    cancel: cancel_rx,
-                    input: input_rx,
-                    sessions: login_sessions,
-                },
-            ));
-        }
-        MachineCommand::AdapterRequest {
-            request_id,
-            adapter,
-            payload,
-            workspace_incarnation,
-        } => {
-            tokio::spawn(run_adapter_request(
-                request_id,
-                adapter,
-                payload,
-                AdapterRequestContext {
-                    providers,
-                    zed_adapter_socket,
-                    code_adapter_socket,
-                    worktree_roots,
-                    workspaces: workspaces.snapshot().workspaces,
-                    // The live registry, not the advertised snapshot: the root
-                    // may have been replaced since the last advertisement.
-                    root_identities: workspaces.identities(),
-                    session_identities: Arc::clone(&workspaces.session_identities),
-                    session_workspaces: Arc::clone(&workspaces),
-                    workspace_incarnation,
-                    events,
-                    durable_state,
-                },
-            ));
-        }
-        MachineCommand::InvokePluginHost {
-            request_id,
-            plugin_id,
-            plugin_version,
-            generation_digest,
-            auth_generation,
-            operation,
-            payload,
-        } => {
-            let invocation = execution.host(crate::machine_plugins::PluginHostRequest {
-                plugin_id,
-                plugin_version,
-                generation_digest,
-                auth_generation,
-                operation,
-                payload,
-            });
-            tokio::spawn(async move {
-                let result = providers.invoke_host(invocation).await;
-                let event = match result {
-                    Ok(payload) => MachineEvent::PluginHostResponse {
-                        request_id,
-                        accepted: true,
-                        started: true,
-                        payload: Some(payload),
-                        detail: None,
-                    },
-                    Err(failure) => MachineEvent::PluginHostResponse {
-                        request_id,
-                        accepted: false,
-                        started: failure.started,
-                        payload: None,
-                        detail: Some(format!("{:#}", failure.error)),
-                    },
-                };
-                let _ = events.send(event);
-            });
-        }
-        MachineCommand::Reconcile {
-            request_id,
-            components: desired,
-        } => {
-            tokio::spawn(async move {
-                let active = components.active().unwrap_or_default();
-                let restart_host = desired.iter().any(|component| {
-                    component_requires_host_restart(&component.id.kind)
-                        && !active.iter().any(|(current, _)| {
-                            current.id == component.id
-                                && current.digest.eq_ignore_ascii_case(&component.digest)
-                        })
-                });
-                let result = reconcile_components(request_id, desired, components).await;
-                let restart_host = accepted_component_restart(restart_host, &result);
-                for event in result {
-                    let _ = events.send(event);
-                }
-                if restart_host {
-                    // The service manager owns host replacement. Payload
-                    // processes and state survive; exit only after the result
-                    // has had a chance to reach the controller.
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    std::process::exit(75);
-                }
-            });
-        }
-        MachineCommand::CancelLogin { request_id } => {
-            let accepted = request_login_cancel(&login_sessions, &request_id);
-            let _ = events.send(MachineEvent::CommandResult {
-                request_id,
-                accepted,
-                detail: (!accepted).then_some(
-                    "login request is inactive or cleanup remains unconfirmed".to_owned(),
-                ),
-            });
-        }
-        MachineCommand::CancelLoginRequest {
-            request_id,
-            login_request_id,
-        } => {
-            let accepted = request_login_cancel(&login_sessions, &login_request_id);
-            let _ = events.send(MachineEvent::CommandResult {
-                request_id,
-                accepted,
-                detail: (!accepted).then_some(
-                    "login request is inactive or cleanup remains unconfirmed".to_owned(),
-                ),
-            });
-        }
-        MachineCommand::SubmitLoginCode { request_id, code } => {
-            let accepted = submit_login_code(&login_sessions, &request_id, &code);
-            let _ = events.send(MachineEvent::CommandResult {
-                request_id,
-                accepted,
-                detail: (!accepted).then_some("login request is not accepting a code".to_owned()),
-            });
-        }
-        MachineCommand::UpdateNpmComponent {
-            request_id,
-            component,
-        } => {
-            tokio::spawn(async move {
-                let result = update_npm_component(&component).await;
-                let inventory = collect_inventory(&components, zed_adapter_socket.as_deref()).await;
-                let recovered =
-                    result.is_err() && npm_update_is_confirmed_by_inventory(&component, &inventory);
-                let accepted = result.is_ok() || recovered;
-                if recovered && let Err(error) = &result {
-                    tracing::warn!(
-                        component = ?component,
-                        error = %error,
-                        "npm update reported an error but inventory confirms the latest release"
-                    );
-                }
-                if accepted && let Some(provider) = provider_for_component(&component) {
-                    let _ = runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
-                        command: crate::runtime_wire::CoreCommand::RollProvider {
-                            provider: provider.to_owned(),
-                            account_id: None,
-                        },
-                    });
-                }
-                let _ = events.send(MachineEvent::Inventory {
-                    components: inventory,
-                    workspaces: None,
-                    workspace_identities: None,
-                    workspace_revision: None,
-                    workspace_owner: None,
-                    observed_at_ms: unix_ms(),
-                });
-                let _ = events.send(MachineEvent::CommandResult {
-                    request_id,
-                    accepted,
-                    detail: match result {
-                        Ok(()) => None,
-                        Err(_) if recovered => Some(
-                            "npm reported an error, but the installed component is up to date"
-                                .to_owned(),
-                        ),
-                        Err(error) => Some(format!("{error:#}")),
-                    },
-                });
-            });
-        }
+        command @ (MachineCommand::QueryLoginStop { .. }
+        | MachineCommand::NativeLogout { .. }
+        | MachineCommand::BeginNativeLogin { .. }
+        | MachineCommand::BeginLogin { .. }
+        | MachineCommand::CancelLogin { .. }
+        | MachineCommand::CancelLoginRequest { .. }
+        | MachineCommand::SubmitLoginCode { .. }) => command_login::handle(command, context),
         MachineCommand::ProviderUsageAck { .. }
         | MachineCommand::ManagedCallReply { .. }
         | MachineCommand::MemoryRelay { .. }
@@ -3463,6 +2647,7 @@ fn accepted_component_restart(requested: bool, events: &[MachineEvent]) -> bool 
 }
 
 struct AdapterRequestContext {
+    observer_grant: Option<Arc<crate::managed_calls::host::LiveGrant>>,
     providers: Arc<MachinePluginStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
@@ -3483,36 +2668,6 @@ struct ProviderCacheStatusRequest {
     session_id: String,
 }
 
-/// Content-free counts and writer flags for diagnostics. The request carries
-/// nothing and the reply names no Session, lineage or path.
-fn durable_state_reply(
-    payload: &serde_json::Value,
-    view: &crate::machine_broker::DurableStateView,
-) -> anyhow::Result<serde_json::Value> {
-    anyhow::ensure!(
-        payload.as_object().is_some_and(serde_json::Map::is_empty),
-        "invalid durable state request"
-    );
-    let status = view
-        .status()
-        .context("durable state is not available yet")?;
-    serde_json::to_value(status).context("encoding durable state")
-}
-
-/// Generations the Controller's retention request must keep besides its own
-/// pins: every one a resident Session here was launched with. The Controller
-/// pins describe recoverable Sessions, but a worker generation cutover
-/// relaunches each registered declaration on its exact Provider generation,
-/// and a surviving worker keeps running the one it started on, whichever
-/// release the Controller has meanwhile pinned. Without a broker nothing can
-/// vouch for the resident Sessions, so retention refuses rather than guesses.
-fn resident_provider_generations(
-    view: &crate::machine_broker::DurableStateView,
-) -> anyhow::Result<BTreeMap<String, BTreeSet<String>>> {
-    view.resident_provider_generations()
-        .context("generation retention needs the Machine broker's Session registry")
-}
-
 async fn run_adapter_request(
     request_id: String,
     adapter: String,
@@ -3520,6 +2675,7 @@ async fn run_adapter_request(
     context: AdapterRequestContext,
 ) {
     let AdapterRequestContext {
+        observer_grant,
         providers,
         zed_adapter_socket,
         code_adapter_socket,
@@ -3563,44 +2719,38 @@ async fn run_adapter_request(
     // Plugin/native adapters. Apply core Code's trusted-root admission first.
     let mut session_read = None;
     let result = async {
-        let payload = if adapter == crate::machine_protocol::session_code::ADAPTER {
-            use crate::machine_protocol::session_code::Request;
+        if adapter == crate::machine_protocol::code_observer::ADAPTER {
             anyhow::ensure!(workspace_incarnation.is_none(), "mixed root identities");
-            let request: Request = serde_json::from_value(payload)
-                .context("invalid Session Code request")?;
-            let root = match &request {
-                Request::Observe { root } | Request::Verify { root, .. } | Request::Read { root, .. } => root,
-            };
-            anyhow::ensure!(root.len() <= 4096 && Path::new(root).is_absolute(), "invalid Session root");
-            let canonical = PathBuf::from(root).canonicalize()?;
-            // Serialize admission/minting with configuration retirement. An
-            // enqueued request cannot revive a withdrawn configuration snapshot.
-            let _configuration = root_identities.lock();
-            let live_workspaces = session_workspaces.snapshot().workspaces;
-            anyhow::ensure!(workspace_path_allowed(&canonical, &live_workspaces, &worktree_roots), "Session root is not trusted");
-            match &request {
-                Request::Verify { incarnation, .. } | Request::Read { incarnation, .. } => {
-                    anyhow::ensure!(incarnation.len() == 32 && incarnation.bytes().all(|b| b.is_ascii_hexdigit()), "invalid Session root identity");
-                }
-                Request::Observe { .. } => {}
+            #[cfg(target_os = "linux")]
+            return observation::handle(
+                payload,
+                &session_workspaces,
+                &worktree_roots,
+                observer_grant.as_ref(),
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = observer_grant;
+                anyhow::bail!("code observation is unavailable on this Machine");
             }
-            match request {
-                Request::Observe { root } => {
-                    return Ok(serde_json::json!({"incarnation": session_identities.lock().observe(&root)?}));
-                }
-                Request::Verify { root, incarnation } => {
-                    return Ok(serde_json::json!({"current": session_identities.lock().verify(&root, &incarnation)}));
-                }
-                Request::Read { root, incarnation, operation } => {
-                    anyhow::ensure!(session_identities.lock().verify(&root, &incarnation), "Session root changed");
-                    session_read = Some((root.clone(), incarnation));
-                    let mut operation = operation.as_object().context("invalid Code operation")?.clone();
-                    anyhow::ensure!(!operation.contains_key("root"), "operation cannot replace Session root");
-                    operation.insert("root".into(), serde_json::Value::String(root));
-                    serde_json::Value::Object(operation)
+        }
+        let payload = if adapter == crate::machine_protocol::session_code::ADAPTER {
+            anyhow::ensure!(workspace_incarnation.is_none(), "mixed root identities");
+            match session_code::admit(payload, &session_workspaces, &worktree_roots)? {
+                session_code::Envelope::Reply(reply) => return Ok(reply),
+                session_code::Envelope::Read {
+                    operation,
+                    root,
+                    incarnation,
+                } => {
+                    session_read = Some((root, incarnation));
+                    operation
                 }
             }
-        } else { payload };
+        } else {
+            payload
+        };
         if adapter == crate::generation_retention::UNINSTALLED_ADAPTER {
             let request: crate::generation_retention::UninstalledRequest =
                 serde_json::from_value(payload)
@@ -3624,10 +2774,12 @@ async fn run_adapter_request(
             return serde_json::to_value(outcomes).context("encoding generation retention");
         }
         if adapter == crate::generation_retention::AUTH_ADAPTER {
-            let request: crate::generation_retention::AuthRequest =
-                serde_json::from_value(payload)
-                    .context("decoding credential generation retention request")?;
-            anyhow::ensure!(request.is_valid(), "invalid credential generation retention request");
+            let request: crate::generation_retention::AuthRequest = serde_json::from_value(payload)
+                .context("decoding credential generation retention request")?;
+            anyhow::ensure!(
+                request.is_valid(),
+                "invalid credential generation retention request"
+            );
             let mut referenced = request.referenced;
             let resident = durable_state
                 .resident_provider_auth_generations()
@@ -3650,8 +2802,8 @@ async fn run_adapter_request(
             return serde_json::to_value(outcome).context("encoding credential retention");
         }
         if adapter == crate::generation_retention::ADAPTER {
-            let request: crate::generation_retention::Request = serde_json::from_value(payload)
-                .context("decoding generation retention request")?;
+            let request: crate::generation_retention::Request =
+                serde_json::from_value(payload).context("decoding generation retention request")?;
             anyhow::ensure!(request.is_valid(), "invalid generation retention request");
             let mut referenced = request.referenced;
             if let Some(resident) =
@@ -3699,7 +2851,9 @@ async fn run_adapter_request(
                 serde_json::from_value(payload)
                     .context("decoding workspace preparation request")?;
             validate_session_workspace_root(&request.root, &workspaces)?;
-            let root = worktree_roots.for_source(&request.session_id, Path::new(&request.root))?.to_path_buf();
+            let root = worktree_roots
+                .for_source(&request.session_id, Path::new(&request.root))?
+                .to_path_buf();
             if let Some(base) = &request.base_session_id {
                 request.base_worktree = Some(
                     worktree_roots
@@ -3707,10 +2861,8 @@ async fn run_adapter_request(
                         .join(base),
                 );
             }
-            return serde_json::to_value(
-                crate::session_workspace::prepare(request, &root).await?,
-            )
-            .context("encoding prepared workspace");
+            return serde_json::to_value(crate::session_workspace::prepare(request, &root).await?)
+                .context("encoding prepared workspace");
         }
         validate_adapter_workspace(&payload, &workspaces, &worktree_roots)?;
         if adapter == "workspace-extension" {

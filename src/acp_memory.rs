@@ -499,9 +499,14 @@ impl AcpMemory {
                 },
             };
             if remove {
+                // Keep the delivery lock until removal finishes. Otherwise a
+                // concurrent pass can send the already accepted file again.
+                // This pass runs off the turn; it does not block the producer.
                 tokio::task::spawn_blocking(move || {
                     let _ = std::fs::remove_file(path);
-                });
+                })
+                .await
+                .ok();
             }
         }
     }
@@ -551,6 +556,7 @@ mod tests {
         status: AtomicU16,
         stalled: AtomicBool,
         requests: Mutex<Vec<(String, Value)>>,
+        accepted_observations: Mutex<Vec<Value>>,
     }
 
     /// A minimal backend: one request per connection, read until its length.
@@ -562,6 +568,7 @@ mod tests {
             status: AtomicU16::new(200),
             stalled: AtomicBool::new(false),
             requests: Mutex::default(),
+            accepted_observations: Mutex::default(),
         });
         let shared = Arc::clone(&service);
         tokio::spawn(async move {
@@ -598,6 +605,12 @@ mod tests {
                         tokio::time::sleep(Duration::from_secs(60)).await;
                     }
                     let status = service.status.load(Ordering::SeqCst);
+                    if status == 200 && path.ends_with("observe") {
+                        service
+                            .accepted_observations
+                            .lock()
+                            .push(serde_json::from_str(&body).unwrap());
+                    }
                     let reply = if path.ends_with("context") {
                         json!({"text": "[Matrix memory]\nremembered"})
                     } else {
@@ -787,7 +800,13 @@ mod tests {
         let asked = service.requests.lock().len();
         memory.prepare(vec![ContentBlock::from("two")]).await;
         assert_eq!(service.requests.lock().len(), asked);
-        eventually("both turns reached the outbox", || outbox(root.path()) >= 2).await;
+        // Three independent background stores: first user evidence, the
+        // completed first turn, and second user evidence. Seeing only two
+        // does not establish that producers finished publishing their files.
+        eventually("all three observations reached the outbox", || {
+            outbox(root.path()) == 3
+        })
+        .await;
         // Delivery probes, closes the breaker and drains the queue.
         service.status.store(200, Ordering::SeqCst);
         // A background delivery may still hold the lock, and then this one
@@ -805,6 +824,17 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         settle(root.path()).await;
+        let accepted = service.accepted_observations.lock();
+        assert_eq!(
+            accepted.len(),
+            3,
+            "each queued observation is accepted once"
+        );
+        let turns: std::collections::HashSet<_> = accepted
+            .iter()
+            .map(|body| body["payload"]["turn"].as_str().unwrap())
+            .collect();
+        assert_eq!(turns.len(), 3);
     }
 
     #[test]

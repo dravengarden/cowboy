@@ -1,5 +1,6 @@
 //! Actual private server, isolated by the native conformance parent. Fault loss
-//! occurs only after receiving a real Closed response; it grants no recovery.
+//! occurs only after receiving a real Closed response. Recovery queries that
+//! exact operation; it never infers completion from current peer ownership.
 use super::*;
 use crate::buffer_leases::{LeaseRef, LeaseState};
 
@@ -72,12 +73,18 @@ async fn atomic_refusal(zed: &Zed, ids: &[u64]) {
     let instance = exchange(zed, request(vec![], vec![])).await.unwrap();
     let mut missing = ids.to_vec();
     missing.push(u64::MAX);
+    let owner = Owner::Unowned(u64::MAX);
+    let receipt = zed
+        .closes
+        .begin(
+            owner.clone(),
+            request(instance.0.to_vec(), missing.clone()),
+            BTreeMap::default(),
+        )
+        .unwrap();
     let Payload::CloseResponse(refused) = zed
         .sync
-        .exchange(
-            zed,
-            Payload::CloseRequest(request(instance.0.to_vec(), missing.clone())),
-        )
+        .exchange(zed, Payload::CloseRequest(receipt.request))
         .await
         .unwrap()
     else {
@@ -86,6 +93,7 @@ async fn atomic_refusal(zed: &Zed, ids: &[u64]) {
     assert_eq!(refused.outcome, Outcome::Refused as i32);
     assert_eq!(refused.instance, instance.0);
     assert_eq!(refused.buffer_ids, missing);
+    zed.closes.confirm(&owner, zed);
     let mut foreign = instance.0;
     foreign[0] ^= 1;
     assert!(
@@ -98,20 +106,12 @@ async fn atomic_refusal(zed: &Zed, ids: &[u64]) {
     }
 }
 
-async fn retained_uncertainty(
-    zed: &Zed,
-    worktrees: &Worktrees,
-    buffers: &Buffers,
-    lease: &LeaseRef,
-) {
+async fn recovered_release(zed: &Zed, worktrees: &Worktrees, buffers: &Buffers, lease: &LeaseRef) {
     for request in [
         Request::QueryBufferLease {
             lease: lease.clone(),
         },
         Request::ReleaseBufferLease {
-            lease: lease.clone(),
-        },
-        Request::OpenBufferLease {
             lease: lease.clone(),
         },
     ] {
@@ -120,14 +120,23 @@ async fn retained_uncertainty(
                 .await
                 .unwrap(),
             Response::BufferLease {
-                state: LeaseState::Unknown,
+                state: LeaseState::Released,
                 ..
             }
         ));
     }
-    let active = buffers.active.read().await;
-    assert!(active.values().any(|buffer| buffer.closing));
-    assert!(crate::sync_owners::ensure_admission(buffers, &active).is_err());
+    assert!(
+        respond(
+            Request::OpenBufferLease {
+                lease: lease.clone()
+            },
+            worktrees,
+            buffers,
+            Some(zed)
+        )
+        .await
+        .is_err()
+    );
 }
 
 pub(crate) async fn exercise(zed: &Zed, root: &Path) {
@@ -175,11 +184,17 @@ pub(crate) async fn exercise(zed: &Zed, root: &Path) {
         .is_err()
     );
     assert!(zed.sync.discarded_close_response());
-    // Native proves its peer ownership is gone. That observation cannot repair
-    // the adapter's lost original acknowledgement or retire retained authority.
+    // Current ownership alone is insufficient: retain the local fence until
+    // QueryBufferLease retrieves the original operation's exact Closed receipt.
     native_owner(zed, first_id, false).await;
     native_owner(zed, second_id, true).await;
-    retained_uncertainty(zed, &worktrees, &buffers, &first).await;
+    {
+        let active = buffers.active.read().await;
+        assert!(active.values().any(|buffer| buffer.closing));
+        assert!(crate::sync_owners::ensure_admission(&buffers, &active).is_err());
+    }
+    recovered_release(zed, &worktrees, &buffers, &first).await;
+    native_owner(zed, second_id, true).await;
     assert!(matches!(
         respond(
             Request::ReleaseBufferLease { lease: second },
@@ -194,9 +209,9 @@ pub(crate) async fn exercise(zed: &Zed, root: &Path) {
             ..
         }
     ));
-    assert_eq!(buffers.active.read().await.len(), 1);
-    retained_uncertainty(zed, &worktrees, &buffers, &first).await;
-    assert!(zed.diagnostics.lock().unwrap().revision(first_id).is_ok());
+    assert!(buffers.active.read().await.is_empty());
+    recovered_release(zed, &worktrees, &buffers, &first).await;
+    assert!(zed.diagnostics.lock().unwrap().revision(first_id).is_err());
     assert!(zed.diagnostics.lock().unwrap().revision(second_id).is_err());
     for name in ["first.txt", "second.txt"] {
         assert_eq!(
@@ -205,6 +220,6 @@ pub(crate) async fn exercise(zed: &Zed, root: &Path) {
         );
     }
     println!(
-        "native close: atomic missing-member/foreign-instance refusal, actual lost Closed response, original Unknown/no replay and independent confirmed release passed (no restoration or background-drain claim)"
+        "native close: atomic missing-member/foreign-instance refusal, actual lost Closed response, exact original receipt recovery and independent confirmed release passed (no Close replay or background-drain claim)"
     );
 }

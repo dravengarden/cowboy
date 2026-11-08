@@ -140,6 +140,14 @@ async fn cowboy_frontier_records_the_analyzed_version_of_each_publication(cx: &m
         .text_document
         .version;
     let at_open = buffer.read_with(cx, |buffer, _| buffer.version());
+    // gopls omits its diagnostic version when the document version is zero.
+    // Both didOpen and the retained snapshot must begin at the same nonzero ID.
+    assert_eq!(opened, 1);
+    publish(&server, (opened != 0).then_some(opened), "rustc");
+    cx.executor().run_until_parked();
+    let (initial, current) = observed(&project, &buffer, cx);
+    assert!(initial.versioned);
+    assert_eq!(initial.published, current);
     buffer.update(cx, |buffer, cx| buffer.edit([(0..0, "\n")], None, cx));
     let changed = server
         .receive_notification::<lsp::notification::DidChangeTextDocument>()
@@ -269,6 +277,32 @@ async fn cowboy_frontier_attributes_pulled_diagnostics_to_the_version_pulled(
         );
         assert_eq!(evidence.published, current);
     }
+    drop(handle);
+    cx.executor().run_until_parked();
+}
+
+#[gpui::test]
+async fn cowboy_frontier_zero_without_a_snapshot_is_not_versioned(cx: &mut TestAppContext) {
+    let (project, buffer, mut server, handle) = fixture(cx).await;
+    server
+        .receive_notification::<lsp::notification::DidOpenTextDocument>()
+        .await;
+    let store = project.read_with(cx, |project, _| project.lsp_store());
+    store.update(cx, |store, cx| {
+        store
+            .as_local_mut()
+            .unwrap()
+            .buffer_snapshots
+            .remove(&buffer.read(cx).remote_id());
+    });
+    publish(&server, Some(0), "rustc");
+    cx.executor().run_until_parked();
+    let (evidence, current) = observed(&project, &buffer, cx);
+    assert!(
+        !evidence.versioned,
+        "the version-zero fallback has no exact snapshot"
+    );
+    assert_eq!(evidence.published, current);
     drop(handle);
     cx.executor().run_until_parked();
 }

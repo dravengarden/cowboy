@@ -544,6 +544,8 @@ export interface CodeCheckRun {
 }
 
 export interface CodeChecks {
+  runnable?: boolean;
+  epoch?: string;
   apiVersion: 1;
   allowed: boolean;
   declared: {

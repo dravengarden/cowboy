@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use crate::core::SessionMeta;
 use crate::machine_protocol::{PluginHostOperation, PluginInstallationState, PluginInventory};
+use crate::model::SessionMeta;
 use crate::plugin_host::PluginUsageSpec;
 use crate::plugin_process::run_plugin_command;
 

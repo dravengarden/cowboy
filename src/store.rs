@@ -27,7 +27,6 @@
 )]
 
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
 use std::io::Read as _;
 use std::time::Duration;
 
@@ -35,7 +34,6 @@ use anyhow::{Context as _, Result};
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt as _;
-use sha2::Digest as _;
 use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
@@ -63,9 +61,10 @@ use sqlite::SqliteStorage;
 
 pub use copy::postgres_to_sqlite;
 
-use crate::core::{
-    Envelope, Event, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin, Status,
-    bound_history_page, question_summary_title,
+use crate::agent_model::{Event, Status};
+use crate::model::{
+    Envelope, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin, bound_history_page,
+    question_summary_title,
 };
 use crate::session_folders::SessionFolder;
 
@@ -96,7 +95,7 @@ fn valid_product_user_id(value: &str) -> bool {
 }
 
 fn normalized_product_username(username: &str) -> Result<String> {
-    crate::product_auth::normalize_username(username)
+    crate::credentials::normalize_username(username)
 }
 
 fn unique_constraint_error(
@@ -356,15 +355,7 @@ fn ensure_reset_provider(provider: &str) -> Result<()> {
     Ok(())
 }
 
-fn hex_sha256(value: &[u8]) -> String {
-    let digest = sha2::Sha256::digest(value);
-    digest
-        .iter()
-        .fold(String::with_capacity(64), |mut output, byte| {
-            write!(output, "{byte:02x}").expect("writing to a String cannot fail");
-            output
-        })
-}
+use crate::digest::hex_sha256;
 
 /// Strip NUL (`U+0000`) code points from every string (and object key) inside a
 /// JSON value, in place.
@@ -3366,8 +3357,8 @@ impl PostgresStorage {
                  ORDER BY sized.seq DESC",
             )
             .bind(&id)
-            .bind(i64::try_from(crate::core::HOT_TAIL).unwrap_or(i64::MAX))
-            .bind(i64::try_from(crate::core::HOT_TAIL_MAX_BYTES).unwrap_or(i64::MAX))
+            .bind(i64::try_from(crate::model::HOT_TAIL).unwrap_or(i64::MAX))
+            .bind(i64::try_from(crate::model::HOT_TAIL_MAX_BYTES).unwrap_or(i64::MAX))
             .bind(i64::try_from(id.len().saturating_add(64)).unwrap_or(i64::MAX))
             .fetch_all(&self.pool)
             .await
@@ -3384,7 +3375,7 @@ impl PostgresStorage {
                      OR (payload->>'kind' = 'update' \
                          AND payload->'update'->>'sessionUpdate' IN ({})) \
                  ) ORDER BY seq DESC LIMIT 1",
-                crate::core::NON_ACTIVITY_SESSION_UPDATES_SQL,
+                crate::model::NON_ACTIVITY_SESSION_UPDATES_SQL,
             ))
             .bind(&id)
             .fetch_optional(&self.pool)
@@ -3426,7 +3417,7 @@ impl PostgresStorage {
                     cmid,
                 });
             }
-            if crate::core::bound_restored_hot_log(&mut events) {
+            if crate::persistence::bound_restored_hot_log(&mut events) {
                 reached_start = false;
             }
             let next_seq = u64::try_from(row.next_seq).unwrap_or(0);
@@ -4502,7 +4493,7 @@ impl PostgresStorage {
         if claim.enforce && claim.principal_class != "system" {
             let waiter_id = format!(
                 "wait-{}",
-                crate::admin::hex_sha256(claim.client_id.as_bytes())
+                crate::digest::hex_sha256(claim.client_id.as_bytes())
             );
             sqlx::query(
                 "INSERT INTO capacity_waiters (waiter_id, client_id, user_id, principal_class, \
@@ -5797,13 +5788,13 @@ impl PostgresStorage {
                 .context("SELECT Hub settings")?;
         Ok(rows
             .into_iter()
-            .filter(|(key, _)| crate::core::settings_keys::is_persisted_setting_key(key))
+            .filter(|(key, _)| crate::model::settings_keys::is_persisted_setting_key(key))
             .collect())
     }
 
     pub async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         anyhow::ensure!(
-            crate::core::settings_keys::is_persisted_setting_key(key),
+            crate::model::settings_keys::is_persisted_setting_key(key),
             "unsupported Hub setting"
         );
         let mut value = value.clone();
@@ -5827,7 +5818,7 @@ impl PostgresStorage {
         value: &serde_json::Value,
     ) -> Result<bool> {
         anyhow::ensure!(
-            crate::core::settings_keys::is_persisted_setting_key(key),
+            crate::model::settings_keys::is_persisted_setting_key(key),
             "unsupported Hub setting"
         );
         let result = sqlx::query(

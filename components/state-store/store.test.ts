@@ -1,18 +1,13 @@
 import { test } from "bun:test";
 import {
-  assertEquals,
-  assertStrictEquals,
-  assertThrows,
-} from "../../tools/test-assert.ts";
-import {
-  type KvStorage,
-  persisted,
-  type StorageChange,
-  type StorageChanges,
-} from "./store.ts";
+  deepStrictEqual as assertEquals,
+  strictEqual as assertStrictEquals,
+  throws as assertThrows,
+} from "node:assert/strict";
+import { type KvStorage, persisted, type StorageChange, type StorageChanges } from "./store.ts";
 
 const bool = {
-  serialize: (value: boolean) => value ? "1" : "0",
+  serialize: (value: boolean) => (value ? "1" : "0"),
   deserialize: (raw: string) => {
     if (raw !== "1" && raw !== "0") throw new Error("invalid boolean");
     return raw === "1";
@@ -47,10 +42,7 @@ function fixture() {
       };
     },
   };
-  const emit = (
-    key: string | null = "key",
-    storageArea: KvStorage | null = storage,
-  ) => {
+  const emit = (key: string | null = "key", storageArea: KvStorage | null = storage) => {
     for (const listener of [...listeners]) listener({ key, storageArea });
   };
   return {
@@ -127,10 +119,8 @@ test("detached reads and re-subscription refresh with stable object snapshots", 
     serialize: JSON.stringify,
     deserialize: (raw: string): { on: boolean } => {
       const value: unknown = JSON.parse(raw);
-      if (
-        !value || typeof value !== "object" || !("on" in value) ||
-        typeof value.on !== "boolean"
-      ) throw new Error("invalid object");
+      if (!value || typeof value !== "object" || !("on" in value) || typeof value.on !== "boolean")
+        throw new Error("invalid object");
       return { on: value.on };
     },
   };
@@ -171,8 +161,9 @@ test("disposed and retired listener incarnations cannot publish into a replaceme
   assertEquals(calls, 0);
   assertEquals(first.get(), false);
   assertEquals(second.get(), true);
-  assertThrows(() => first.set(true), Error, "disposed");
-  assertThrows(() => first.subscribe(() => {}), Error, "disposed");
+  const disposed = (error: unknown) => error instanceof Error && error.message.includes("disposed");
+  assertThrows(() => first.set(true), disposed);
+  assertThrows(() => first.subscribe(() => {}), disposed);
   second.dispose();
 });
 
@@ -221,10 +212,10 @@ test("quota and serializer failures still commit and notify coherent in-memory s
       changes: f.changes,
       ...(phase === "encode"
         ? {
-          serialize: () => {
-            throw new Error("encode");
-          },
-        }
+            serialize: () => {
+              throw new Error("encode");
+            },
+          }
         : {}),
       onError: (issue) => issues.push(issue),
     });
@@ -244,12 +235,13 @@ test("quota and serializer failures still commit and notify coherent in-memory s
 
 test("explicit memory-only and crossTab:false never install event handlers", () => {
   const f = fixture();
-  for (
-    const options of [{ storage: null }, {
+  for (const options of [
+    { storage: null },
+    {
       storage: f.storage,
       crossTab: false,
-    }]
-  ) {
+    },
+  ]) {
     const store = persisted("key", false, {
       ...bool,
       changes: f.changes,
@@ -293,8 +285,7 @@ test("disposal inside notification or updater fences remaining callbacks and wri
         other.dispose();
         return true;
       }),
-    Error,
-    "disposed",
+    (error: unknown) => error instanceof Error && error.message.includes("disposed"),
   );
   assertEquals(f.data.has("other"), false);
 });
@@ -305,9 +296,7 @@ test("default event adapter filters storage areas and handles clear without DOM-
   let calls = 0;
   const off = store.subscribe(() => calls++);
   f.data.set("key", "1");
-  globalThis.dispatchEvent(
-    Object.assign(new Event("storage"), { key: "key", storageArea: null }),
-  );
+  globalThis.dispatchEvent(Object.assign(new Event("storage"), { key: "key", storageArea: null }));
   assertEquals(store.get(), false);
   globalThis.dispatchEvent(
     Object.assign(new Event("storage"), { key: "key", storageArea: f.storage }),

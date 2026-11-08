@@ -1,6 +1,346 @@
 //! Synthetic private transport; final acceptance also uses the real static pair.
 use super::*;
 
+#[tokio::test]
+async fn original_close_query_still_recovers_while_another_open_is_unresolved() {
+    let (mut zed, _) = coordinate_queries::fixture().await;
+    let (transport, mut receiver) = sync_native::Transport::new();
+    Arc::get_mut(&mut zed).unwrap().sync = transport;
+    let buffers: Buffers = Arc::default();
+    let key = (PathBuf::from("/root"), PathBuf::from("file"));
+    let owner = BufferOwner::Owned(1);
+    buffers.active.write().await.insert(
+        key.clone(),
+        BufferLease {
+            remote_id: 7,
+            lease_ids: HashSet::from([owner.clone()]),
+            closing: true,
+            version: Vec::new(),
+            sync: None,
+        },
+    );
+    let original = zed
+        .closes
+        .begin(
+            Owner::buffer(&owner, &HashSet::from([key.clone()])),
+            request(vec![3; 16], vec![7]),
+            BTreeMap::from([(key.clone(), 7)]),
+        )
+        .unwrap();
+    let _pending = buffers.native_open.begin().unwrap();
+    let (released, ()) = tokio::join!(
+        crate::close_buffer_at(key.0, key.1, owner, &buffers, Some(&zed), || panic!(
+            "recovery cannot start a new Close"
+        )),
+        async {
+            let envelope = receiver.recv().await.unwrap();
+            let Some(Payload::CloseRequest(request)) = &envelope.payload else {
+                panic!("not close query")
+            };
+            assert_eq!(request.action, Action::Query as i32);
+            assert_eq!(request.operation_id, original.request.operation_id);
+            assert_eq!(request.instance, original.request.instance);
+            assert_eq!(request.buffer_ids, [7]);
+            reply(&zed.sync, envelope, Outcome::Closed);
+        }
+    );
+    released.unwrap();
+    assert!(buffers.active.read().await.is_empty());
+    assert!(
+        buffers.native_open.check().is_err(),
+        "original Close did not clear another Open"
+    );
+}
+
+#[tokio::test]
+async fn unresolved_open_prevents_last_owner_release_but_allows_shared_owner_drop() {
+    let buffers: Buffers = Arc::default();
+    let key = (PathBuf::from("/root"), PathBuf::from("file"));
+    buffers.active.write().await.insert(
+        key.clone(),
+        BufferLease {
+            remote_id: 7,
+            lease_ids: HashSet::from([BufferOwner::Owned(1), BufferOwner::Owned(2)]),
+            closing: false,
+            version: Vec::new(),
+            sync: None,
+        },
+    );
+    let pending = buffers.native_open.begin().unwrap();
+    crate::close_buffer_at(
+        key.0.clone(),
+        key.1.clone(),
+        BufferOwner::Owned(1),
+        &buffers,
+        None,
+        || panic!("local shared release cannot dispatch native Close"),
+    )
+    .await
+    .unwrap();
+    assert!(
+        crate::close_buffer_at(
+            key.0.clone(),
+            key.1.clone(),
+            BufferOwner::Owned(2),
+            &buffers,
+            None,
+            || panic!("unresolved Open cannot admit native Close")
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        buffers.active.read().await[&key]
+            .lease_ids
+            .contains(&BufferOwner::Owned(2))
+    );
+    pending.complete();
+    crate::close_buffer_at(
+        key.0.clone(),
+        key.1.clone(),
+        BufferOwner::Owned(2),
+        &buffers,
+        None,
+        || {},
+    )
+    .await
+    .unwrap();
+    assert!(buffers.active.read().await.is_empty());
+}
+
+#[tokio::test]
+async fn orphan_observation_requires_the_original_close_and_never_starts_one() {
+    let (mut zed, _) = coordinate_queries::fixture().await;
+    let (transport, mut receiver) = sync_native::Transport::new();
+    Arc::get_mut(&mut zed).unwrap().sync = transport;
+    assert!(!observe_unowned(&zed, 8).await.unwrap());
+    assert!(receiver.try_recv().is_err());
+    let original = zed
+        .closes
+        .begin(
+            Owner::Unowned(8),
+            request(vec![3; 16], vec![8]),
+            BTreeMap::default(),
+        )
+        .unwrap();
+    for outcome in [Outcome::Unknown, Outcome::Closed] {
+        let (result, ()) = tokio::join!(observe_unowned(&zed, 8), async {
+            let envelope = receiver.recv().await.unwrap();
+            let Some(Payload::CloseRequest(request)) = &envelope.payload else {
+                panic!("not a close observation")
+            };
+            assert_eq!(request.action, Action::Query as i32);
+            assert_eq!(request.operation_id, original.request.operation_id);
+            assert_eq!(request.instance, original.request.instance);
+            assert_eq!(request.buffer_ids, [8]);
+            reply(&zed.sync, envelope, outcome);
+        });
+        if outcome == Outcome::Unknown {
+            assert!(result.is_err());
+            assert!(zed.closes.get(&Owner::Unowned(8)).is_some());
+            assert!(receiver.try_recv().is_err());
+        } else {
+            assert!(result.unwrap());
+            assert!(zed.closes.get(&Owner::Unowned(8)).is_none());
+        }
+    }
+}
+
+#[test]
+fn unknown_navigation_keeps_possible_target_alive_until_original_result_recovers() {
+    let source = (PathBuf::from("/root"), PathBuf::from("source"));
+    let target = (PathBuf::from("/root"), PathBuf::from("target"));
+    let buffer = |remote_id, owners| BufferLease {
+        remote_id,
+        lease_ids: owners,
+        closing: false,
+        version: Vec::new(),
+        sync: None,
+    };
+    let mut active = HashMap::from([
+        (
+            source.clone(),
+            buffer(
+                7,
+                HashSet::from([BufferOwner::Owned(1), BufferOwner::NavigationPending(9)]),
+            ),
+        ),
+        (
+            target.clone(),
+            buffer(8, HashSet::from([BufferOwner::Owned(2)])),
+        ),
+    ]);
+    assert!(
+        Plan::checked(
+            HashSet::from([target.clone()]),
+            &BufferOwner::Owned(2),
+            &active
+        )
+        .is_err()
+    );
+    assert!(
+        Plan::checked(
+            HashSet::from([source.clone()]),
+            &BufferOwner::Owned(1),
+            &active
+        )
+        .unwrap()
+        .native_ids
+        .is_empty()
+    );
+    active
+        .get_mut(&source)
+        .unwrap()
+        .lease_ids
+        .remove(&BufferOwner::NavigationPending(9));
+    assert_eq!(
+        Plan::checked(HashSet::from([target]), &BufferOwner::Owned(2), &active)
+            .unwrap()
+            .native_ids,
+        [8]
+    );
+}
+
+#[tokio::test]
+async fn shared_alias_cannot_drop_its_last_independent_owner_during_recovery() {
+    let open_fence = native_open::Fence::default();
+    let (mut zed, _) = coordinate_queries::fixture().await;
+    let (transport, mut receiver) = sync_native::Transport::new();
+    Arc::get_mut(&mut zed).unwrap().sync = transport;
+    let key = |name: &str| (PathBuf::from("/root"), PathBuf::from(name));
+    let keys = HashSet::from([key("source"), key("target")]);
+    let owner = BufferOwner::Navigation(9);
+    let buffer = |remote_id, owner, closing| BufferLease {
+        remote_id,
+        lease_ids: HashSet::from([owner]),
+        closing,
+        version: Vec::new(),
+        sync: None,
+    };
+    let mut active = HashMap::from([
+        (key("source"), buffer(7, owner.clone(), false)),
+        (key("alias"), buffer(7, BufferOwner::Owned(2), false)),
+        (key("target"), buffer(8, owner.clone(), true)),
+    ]);
+    zed.closes
+        .begin(
+            Owner::buffer(&owner, &keys),
+            request(vec![3; 16], vec![8]),
+            BTreeMap::from([(key("source"), 7), (key("target"), 8)]),
+        )
+        .unwrap();
+    assert!(
+        release(
+            HashSet::from([key("alias")]),
+            &BufferOwner::Owned(2),
+            &mut active,
+            Some(&zed),
+            &open_fence,
+            || panic!("shared alias admitted")
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(active.len(), 3);
+    assert!(receiver.try_recv().is_err());
+    let (recovered, ()) = tokio::join!(recover(&keys, &owner, &mut active, &zed), async {
+        let envelope = receiver.recv().await.unwrap();
+        let Some(Payload::CloseRequest(request)) = &envelope.payload else {
+            panic!("not query")
+        };
+        assert_eq!(request.action, Action::Query as i32);
+        assert_eq!(request.buffer_ids, [8]);
+        reply(&zed.sync, envelope, Outcome::Closed);
+    });
+    assert!(recovered.unwrap());
+    assert_eq!(active.len(), 1);
+    assert!(
+        active[&key("alias")]
+            .lease_ids
+            .contains(&BufferOwner::Owned(2))
+    );
+    reply(
+        &zed.sync,
+        receiver.recv().await.unwrap(),
+        Outcome::Forgotten,
+    );
+    let (released, ()) = tokio::join!(
+        release(
+            HashSet::from([key("alias")]),
+            &BufferOwner::Owned(2),
+            &mut active,
+            Some(&zed),
+            &open_fence,
+            || {}
+        ),
+        async {
+            reply(
+                &zed.sync,
+                receiver.recv().await.unwrap(),
+                Outcome::Supported,
+            );
+            assert_eq!(
+                reply(&zed.sync, receiver.recv().await.unwrap(), Outcome::Closed),
+                [7]
+            );
+        }
+    );
+    released.unwrap();
+    assert!(active.is_empty());
+    reply(
+        &zed.sync,
+        receiver.recv().await.unwrap(),
+        Outcome::Forgotten,
+    );
+    assert!(receiver.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn orphan_close_recovers_only_the_original_receipt_after_cancellation() {
+    let (mut zed, _) = coordinate_queries::fixture().await;
+    let (transport, mut receiver) = sync_native::Transport::new();
+    Arc::get_mut(&mut zed).unwrap().sync = transport;
+    let task = {
+        let zed = zed.clone();
+        tokio::spawn(async move { release_unowned(&zed, 7).await })
+    };
+    reply(
+        &zed.sync,
+        receiver.recv().await.unwrap(),
+        Outcome::Supported,
+    );
+    let effect = receiver.recv().await.unwrap();
+    let Some(Payload::CloseRequest(original)) = effect.payload else {
+        panic!("not original close");
+    };
+    assert_eq!(original.action, Action::Close as i32);
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    let task = {
+        let zed = zed.clone();
+        tokio::spawn(async move { release_unowned(&zed, 7).await })
+    };
+    let query = receiver.recv().await.unwrap();
+    let Some(Payload::CloseRequest(request)) = &query.payload else {
+        panic!("not original close query");
+    };
+    assert_eq!(request.action, Action::Query as i32);
+    assert_eq!(request.operation_id, original.operation_id);
+    assert_eq!(request.instance, original.instance);
+    assert_eq!(request.buffer_ids, original.buffer_ids);
+    reply(&zed.sync, query, Outcome::Closed);
+    task.await.unwrap().unwrap();
+    assert!(zed.closes.get(&Owner::Unowned(7)).is_none());
+    let retirement = receiver.recv().await.unwrap();
+    let Some(Payload::CloseRequest(request)) = &retirement.payload else {
+        panic!("not retirement");
+    };
+    assert_eq!(request.action, Action::Forget as i32);
+    assert_eq!(request.operation_id, original.operation_id);
+    reply(&zed.sync, retirement, Outcome::Forgotten);
+    assert!(receiver.try_recv().is_err());
+}
+
 pub(crate) fn reply(
     transport: &sync_native::Transport,
     envelope: wire::CowboyBufferSyncEnvelope,
@@ -13,7 +353,8 @@ pub(crate) fn reply(
     let encoded = wire::CowboyBufferSyncEnvelope {
         responding_to: Some(envelope.id),
         payload: Some(Payload::CloseResponse(wire::CowboyCloseBuffersResponse {
-            protocol: 1,
+            protocol: request.protocol,
+            operation_id: request.operation_id,
             instance: if request.instance.is_empty() {
                 vec![3; 16]
             } else {
@@ -25,7 +366,8 @@ pub(crate) fn reply(
         ..Default::default()
     }
     .encode_to_vec();
-    assert!(transport.response(envelope.id, &encoded));
+    let observed = transport.response(envelope.id, &encoded);
+    assert_eq!(observed, request.action != Action::Forget as i32);
     ids
 }
 
@@ -43,7 +385,10 @@ pub(crate) fn fixture() -> (
     tokio::spawn(async move {
         while let Some(envelope) = receiver.recv().await {
             if let Some(Payload::CloseRequest(request)) = &envelope.payload {
-                let outcome = if request.buffer_ids.is_empty() {
+                let action = request.action;
+                let outcome = if action == Action::Forget as i32 {
+                    Outcome::Forgotten
+                } else if request.buffer_ids.is_empty() {
                     Outcome::Supported
                 } else {
                     Outcome::Closed
@@ -52,7 +397,7 @@ pub(crate) fn fixture() -> (
                     break;
                 };
                 let ids = reply(&transport, envelope, outcome);
-                if !ids.is_empty() {
+                if !ids.is_empty() && action == Action::Close as i32 {
                     let _ = observed.send(ids);
                 }
             } else if forward.send(envelope).await.is_err() {
@@ -65,9 +410,11 @@ pub(crate) fn fixture() -> (
 
 #[test]
 fn close_confirmation_requires_exact_instance_set_protocol_and_outcome() {
-    let request = request(vec![3; 16], vec![7, 8]);
+    let mut request = request(vec![3; 16], vec![7, 8]);
+    request.operation_id = 1;
     let good = wire::CowboyCloseBuffersResponse {
-        protocol: 1,
+        protocol: 2,
+        operation_id: 1,
         instance: vec![3; 16],
         outcome: Outcome::Closed as i32,
         buffer_ids: vec![7, 8],
@@ -76,7 +423,7 @@ fn close_confirmation_requires_exact_instance_set_protocol_and_outcome() {
     for case in 0..9 {
         let mut bad = good.clone();
         match case {
-            0 => bad.protocol = 2,
+            0 => bad.protocol = 1,
             1 => bad.instance[0] ^= 1,
             2 => bad.instance.clear(),
             3 => bad.buffer_ids.clear(),

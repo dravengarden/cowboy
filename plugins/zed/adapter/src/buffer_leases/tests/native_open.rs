@@ -7,6 +7,8 @@ use wire::cowboy_open_attempt_response::Outcome;
 
 type Outbound = tokio::sync::mpsc::UnboundedReceiver<proto::Envelope>;
 
+mod owned_recovery;
+
 /// Run `work` while answering recovery's reachability barrier with an error:
 /// the outcome stays unresolved. Any other native dispatch fails the test.
 async fn unreachable_recovery<T>(
@@ -249,7 +251,7 @@ async fn commit_ends_fence_only_after_original_owner_is_registered_and_retained(
 }
 
 #[tokio::test]
-async fn unknown_legacy_open_blocks_new_acquisitions_but_not_existing_safe_reads_or_release() {
+async fn unknown_legacy_open_keeps_last_native_owner_and_allows_existing_safe_reads() {
     let f = Fixture::new().await;
     let (zed, mut outbound) = coordinate_queries::fixture().await;
     let known = f.prepare().await;
@@ -334,20 +336,35 @@ async fn unknown_legacy_open_blocks_new_acquisitions_but_not_existing_safe_reads
     );
     assert_text_read(&f, &zed, &known, content).await;
     assert!(outbound.try_recv().is_err());
-    assert_eq!(
-        state(
-            request(&f, &zed, Request::ReleaseBufferLease { lease: known })
-                .await
-                .unwrap()
-        ),
-        LeaseState::Released
-    );
-    assert!(zed.diagnostics.lock().unwrap().revision(7).is_err());
+    assert_release_waits_for_open(&f, &zed, known, 7).await;
     assert!(outbound.try_recv().is_err());
     assert!(
         f.buffers.native_open.check().is_err(),
         "unrelated release cleared uncertainty"
     );
+}
+
+async fn assert_release_waits_for_open(f: &Fixture, zed: &Zed, known: LeaseRef, buffer_id: u64) {
+    assert!(
+        request(
+            f,
+            zed,
+            Request::ReleaseBufferLease {
+                lease: known.clone()
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        state(
+            request(f, zed, Request::QueryBufferLease { lease: known })
+                .await
+                .unwrap()
+        ),
+        LeaseState::Open
+    );
+    assert!(zed.diagnostics.lock().unwrap().revision(buffer_id).is_ok());
 }
 
 async fn assert_text_read(

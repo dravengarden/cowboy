@@ -3,6 +3,7 @@ use super::*;
 use coordinates::tests::{peer, wire};
 
 mod content;
+mod snapshot;
 
 pub(crate) async fn fixture() -> (Arc<ZedRuntime>, mpsc::UnboundedReceiver<proto::Envelope>) {
     fixture_with(native_close::tests::fixture().0).await
@@ -26,6 +27,7 @@ pub(crate) async fn fixture_with(
         next_message_id: AtomicU32::new(1),
         next_lsp_request_id: AtomicU64::new(1),
         frontier: crate::analysis::Frontier,
+        closes: crate::native_close::Registry::default(),
     });
     {
         let mut cache = zed.diagnostics.lock().unwrap();

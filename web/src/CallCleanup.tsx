@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { Button, Checkbox, FormControlLabel, Stack, Typography } from "@mui/material";
 import { useState } from "react";
 import { ConfirmSheet } from "./Sheet";
@@ -66,7 +67,7 @@ export function CallCleanup({ parent, calls, onChange }: {
               </Stack>}
               control={<Checkbox disabled={busy} checked={selected.includes(call.call_id)}
                 onChange={(_, checked) => setSelected((ids) => checked ? [...ids, call.call_id] : ids.filter((id) => id !== call.call_id))} />} />)}
-          </Stack>
+          <ScrollEdges /></Stack>
           {error && <Typography color="error" role="alert">{error}</Typography>}
         </Stack>
       </ConfirmSheet>

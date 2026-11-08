@@ -48,7 +48,7 @@ async fn fixture(store: &Store) -> Evidence {
         )
         .await
         .unwrap();
-    let fingerprint = crate::admin::hex_sha256(key.as_bytes());
+    let fingerprint = crate::digest::hex_sha256(key.as_bytes());
     store
         .with_provider_login_dispatch(
             "owner",

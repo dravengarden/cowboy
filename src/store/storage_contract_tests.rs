@@ -315,7 +315,7 @@ async fn postgres_execution_environment_binding_survives_restore() {
 async fn hub_settings_round_trip_contract(url: &str, root: &std::path::Path) {
     let store = Store::connect(url, root.join("artifacts")).await.unwrap();
     store.migrate().await.unwrap();
-    let keys = crate::core::settings_keys::examples();
+    let keys = crate::model::settings_keys::examples();
     for (index, key) in keys.iter().enumerate() {
         store
             .put_setting(key, &serde_json::json!({"index": index}))
@@ -345,7 +345,7 @@ async fn hub_settings_round_trip_contract(url: &str, root: &std::path::Path) {
     }
     let key = format!(
         "{}cas-session",
-        crate::core::settings_keys::SESSION_DELIVERY_POLICY_PREFIX
+        crate::model::settings_keys::SESSION_DELIVERY_POLICY_PREFIX
     );
     let first = serde_json::json!({"mode":"next_turn","revision":1});
     let second = serde_json::json!({"mode":"steer","revision":2});
@@ -1998,9 +1998,9 @@ async fn assert_restore_hot_tail_is_byte_bounded(store: &Store, session_id: &str
     assert_eq!(loaded.events.last().map(|event| event.seq), Some(4));
     assert!(loaded.events.len() < events.len());
     let restored_bytes = loaded.events.iter().fold(0usize, |size, event| {
-        size.saturating_add(crate::core::estimated_envelope_bytes(event))
+        size.saturating_add(crate::model::estimated_envelope_bytes(event))
     });
-    assert!(restored_bytes <= crate::core::HOT_TAIL_MAX_BYTES);
+    assert!(restored_bytes <= crate::model::HOT_TAIL_MAX_BYTES);
     Ok(())
 }
 
@@ -2466,7 +2466,7 @@ async fn do_shaped_restore_keeps_compact_working_set_contract(store: &Store) {
     assert_eq!(loaded.len(), 17);
     let restored_bytes = loaded.iter().fold(0usize, |size, session| {
         session.events.iter().fold(size, |size, event| {
-            size.saturating_add(crate::core::estimated_envelope_bytes(event))
+            size.saturating_add(crate::model::estimated_envelope_bytes(event))
         })
     });
     assert!(

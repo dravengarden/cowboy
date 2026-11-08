@@ -107,11 +107,21 @@ the peek, or freeze the session list to make a swipe cheaper.
 
 ## Desktop and mobile are separate products
 
+Follow [Cowboy's core UX principles](../docs/ux-principles.md). Efficiency is
+the deciding criterion: Mobile puts frequent control near the bottom without
+covering reading content; Desktop keeps useful commands visible and uses its
+keyboard grammar. The Code Review bottom workbench follows this contract.
+
 Mobile cover readers and inspectors use the shared `Sheet.islandContext` (or
 `MobileSheetContextDock` for direct DetentSheet owners) to place identity and
-status in the reusable `SheetContextSummary` above the independent round
-navigation island. Facts wrap across the available width; excess content scrolls
-within the bounded summary. Use the context action for Details and an action rail when multiple
+status in the reusable `SheetContextSummary` beside the independent round
+navigation island. Place navigation on the left for left-handed access; match
+the summary’s floating surface treatment to the controls, using small corners
+and compact padding for information rather than capsule geometry. Use available
+footer width with safe-area-aware side insets; retain the system bottom safe area.
+Facts wrap across the available width; excess content scrolls
+within the bounded summary. The summary title opens Details; avoid stacking a
+full-width information card over a centered navigation island. Use an action rail when multiple
 commands are useful. Do not hide common information just to shrink the dock.
 Empty rails consume no space. Avoid a duplicate
 top title/status bar. Preserve specialized multi-action navigators such as Tool
@@ -120,6 +130,32 @@ editors, confirmation cards and connectivity notices retain their own surfaces.
 Reader scroll clearance must consume `--cowboy-sheet-dock-clearance` with a
 legacy fallback so large text cannot cover the last item. Details navigation
 must preserve the mounted transcript and its reading position.
+All transcripts and the Mobile Sessions rail share `readerTopEdge.ts` for their top gradient.
+Use the active theme background, never fixed white or a new blur layer. Cover
+readers without a top header opt into `readerTopBleed`; their scroller owns the
+safe-area padding so content can pass behind the status area while scrolling.
+Keep the gradient noninteractive and the first item clear at the scroll boundary.
+Floating sheet footers use the shared `readerBottomEdge` masked frost and theme
+gradient behind controls. Keep this single layer bounded to the footer, never
+on the scrolling body; title-only dock contexts have no empty information card.
+Other native vertical readers use app-shell `ScrollEdges` as their last child:
+settings, tool details, task panels, pickers, logs, approvals and preview panes.
+Only overflowing edges fade; the first/last item is unobscured at its boundary.
+Keep sticky command headers outside the masked reader (or disable its top edge).
+Editing focus suspends the fade; do not decorate textarea/CodeMirror internals or
+image-pan canvases. Those retain their cursor and image-safe-area contracts.
+Full-screen headerless sheets put safe-area clearance inside their scrolling
+body. Never stack a second mask on a Transcript or the Sessions rail.
+Mobile Settings details start with their useful content. The bottom navigation
+groups Back and Close in the shared `FloatingActionIsland` used by Sessions on the left, with a
+separate section name centered across the entire footer over a theme-aware gradient.
+Use `MobileSheetActionGroup` for standard navigation, including Settings and Sessions.
+Floating islands share a 56px minimum shell height, theme material and 1.5rem glyphs;
+standard action targets are 46px. Do not override individual navigation colors or sizes.
+Title-only reader footers center the title across the entire footer, with at least
+16px side clearance. The Background tasks list omits its redundant footer title.
+Do not enclose the
+title and controls in a large capsule. Descriptions belong in the Settings index.
 
 - Mobile is touch-first: single-task focus, large targets, progressive
   disclosure, safe system-keyboard behaviour, and native gestures.

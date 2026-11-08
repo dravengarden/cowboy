@@ -129,12 +129,22 @@ async fn refusal_contract(store: &Store) {
 
 async fn assert_completion(store: &Store, created: &Receipt, before: Receipt) {
     use crate::store::provider_accounts::MutationResult;
+    let revoked = || store.completed_provider_account_revocations("owner");
+    assert!(revoked().await.unwrap().is_empty());
     let (left, right) = tokio::join!(
         store.complete_provider_revocation("owner", "revoke"),
         store.complete_provider_revocation("owner", "revoke")
     );
     assert!(left.unwrap());
     assert!(right.unwrap());
+    assert_eq!(revoked().await.unwrap(), vec![created.account_id.clone()]);
+    assert!(
+        store
+            .completed_provider_account_revocations("other")
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let completed = store
         .provider_account_receipt("owner", "revoke")
         .await

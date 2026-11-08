@@ -17,30 +17,36 @@ use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
 mod analysis;
 mod buffer_leases;
 mod buffer_navigation;
+mod constants;
+use constants::{
+    ADAPTER_VERSION, MAX_DIAGNOSTICS, MAX_DOCUMENT_SYMBOLS, MAX_INLAY_HINTS,
+    MAX_SEMANTIC_TOKEN_WORDS, ZED_REVISION, ZED_VERSION,
+};
 mod content_reads;
 #[cfg(test)]
 mod coordinate_queries;
 mod coordinates;
 mod diagnostics;
 mod extensions;
+mod language_observation;
+mod legacy_buffers;
+mod legacy_release;
 #[cfg(test)]
 use extensions::extension_manifest;
+use language_observation::{LanguageObservation, buffer_language};
+use legacy_buffers::{close_buffer, open_buffer};
+use native_open::open_buffer_at;
 mod native_close;
 mod native_open;
 mod navigation_native;
 pub(crate) use navigation_native::navigation_request;
+mod agent_acquisition;
+mod source_snapshot;
 mod sync_native;
 mod sync_owners;
 mod text_reads;
 mod trust;
-
-const ADAPTER_VERSION: u8 = 1;
-const ZED_VERSION: &str = "1.13.0";
-const ZED_REVISION: &str = "aaf5f57dd36c41cf2ed49b13bcb091d52d5aef45";
-const MAX_DIAGNOSTICS: usize = 1_000;
-const MAX_INLAY_HINTS: usize = 2_000;
-const MAX_SEMANTIC_TOKEN_WORDS: usize = 50_000;
-const MAX_DOCUMENT_SYMBOLS: usize = 2_000;
+mod worktree_recovery;
 
 #[derive(Parser)]
 struct Cli {
@@ -126,6 +132,28 @@ enum Request {
         #[serde(rename = "leaseId")]
         lease_id: String,
     },
+    LegacyReleaseSupport {},
+    AgentAcquisitionSupport {},
+    PrepareAgentAcquisition {
+        worktree: PathBuf,
+        path: PathBuf,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+    },
+    AgentAcquisition {
+        acquisition: agent_acquisition::Reference,
+        action: agent_acquisition::Action,
+    },
+    PrepareLegacyRelease {
+        worktree: PathBuf,
+        path: PathBuf,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+    },
+    LegacyRelease {
+        release: legacy_release::Reference,
+        action: legacy_release::Action,
+    },
     PrepareBuffer {
         worktree: PathBuf,
         path: PathBuf,
@@ -169,6 +197,16 @@ enum Request {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Response {
+    LegacyReleaseSupport {
+        api_version: u8,
+        protocol: u8,
+    },
+    LegacyRelease {
+        api_version: u8,
+        release: legacy_release::Reference,
+        state: legacy_release::State,
+        buffer: Option<Box<serde_json::Value>>,
+    },
     OwnedBufferNavigation {
         api_version: u8,
         navigation: buffer_navigation::NavigationRef,
@@ -187,6 +225,16 @@ enum Response {
     BufferNavigationSupport {
         api_version: u8,
         protocol: u8,
+    },
+    AgentAcquisitionSupport {
+        api_version: u8,
+        protocol: u8,
+    },
+    AgentAcquisition {
+        api_version: u8,
+        acquisition: agent_acquisition::Reference,
+        state: agent_acquisition::State,
+        buffer: Option<Box<serde_json::Value>>,
     },
     BufferSync {
         api_version: u8,
@@ -235,6 +283,10 @@ enum Response {
         worktree: PathBuf,
         path: PathBuf,
         version: Vec<BufferVersionEntry>,
+        #[serde(rename = "bufferSnapshot", skip_serializing_if = "Option::is_none")]
+        buffer_snapshot: Option<Box<language_observation::BufferSnapshot>>,
+        #[serde(rename = "sourceState")]
+        source_state: source_snapshot::State,
         diagnostics: Vec<LanguageDiagnostic>,
         inlay_hints: Vec<LanguageInlayHint>,
         semantic_tokens: Vec<u32>,
@@ -281,6 +333,8 @@ struct WorktreeLease {
     incarnation: Arc<()>,
     /// Once trusted, Zed may run this worktree's servers until it is removed.
     trusted_once: bool,
+    pending: Option<Arc<Mutex<trust::lifecycle::Pending>>>,
+    retired: Arc<std::sync::atomic::AtomicBool>,
 }
 
 type Worktrees = Arc<RwLock<HashMap<PathBuf, WorktreeLease>>>;
@@ -292,7 +346,7 @@ struct BufferLease {
     closing: bool,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum BufferOwner {
     Legacy(String),
     Owned(u64),
@@ -307,22 +361,7 @@ struct BufferVersionEntry {
     timestamp: u32,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LanguagePoint {
-    row: u32,
-    column: u32,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LanguageDiagnostic {
-    start: LanguagePoint,
-    end: LanguagePoint,
-    severity: i32,
-    source: Option<String>,
-    message: String,
-}
+use diagnostics::{LanguageDiagnostic, LanguagePoint};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -376,7 +415,10 @@ type Buffers = Arc<BufferState>;
 
 #[derive(Default)]
 struct BufferState {
+    acquisitions: Mutex<agent_acquisition::Registry>,
     active: RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>,
+    legacy: Mutex<legacy_buffers::Registry>,
+    legacy_releases: Mutex<legacy_release::Registry>,
     native_open: native_open::Fence,
     leases: Mutex<buffer_leases::Registry>,
     syncs: Mutex<sync_owners::Registry>,
@@ -387,18 +429,6 @@ type WorktreePaths = Arc<RwLock<HashMap<u64, PathBuf>>>;
 type Zed = Arc<ZedRuntime>;
 type PendingRequests = Arc<Mutex<HashMap<u32, oneshot::Sender<proto::Envelope>>>>;
 type DiagnosticCache = Arc<std::sync::Mutex<diagnostics::Cache>>;
-
-#[derive(Debug, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LanguageObservation {
-    diagnostics_state: diagnostics::Status,
-    diagnostics: Vec<LanguageDiagnostic>,
-    inlay_hints: Vec<LanguageInlayHint>,
-    semantic_tokens: Vec<u32>,
-    /// Per-server evidence; only `bufferLanguage` carries it (owned reads are strict).
-    #[serde(skip)]
-    analysis: Option<Vec<analysis::ServerAnalysis>>,
-}
 
 struct ZedRuntime {
     _child: Mutex<Child>,
@@ -412,6 +442,7 @@ struct ZedRuntime {
     next_message_id: AtomicU32,
     next_lsp_request_id: AtomicU64,
     frontier: analysis::Frontier,
+    closes: native_close::Registry,
 }
 
 async fn verify_zed_server(path: &Path) -> Result<()> {
@@ -538,6 +569,7 @@ impl ZedRuntime {
             next_message_id: AtomicU32::new(2),
             next_lsp_request_id: AtomicU64::new(1),
             frontier: analysis::Frontier,
+            closes: crate::native_close::Registry::default(),
         })
     }
 
@@ -593,6 +625,7 @@ impl ZedRuntime {
         Ok(response)
     }
 
+    #[cfg(test)]
     async fn open_worktree(&self, path: &Path, trusted: bool) -> Result<(u64, WorktreeState)> {
         let response = self
             .request(proto::envelope::Payload::AddWorktree(proto::AddWorktree {
@@ -614,6 +647,7 @@ impl ZedRuntime {
         Ok((worktree_id, state))
     }
 
+    #[cfg(test)]
     async fn set_trust(&self, worktree_id: u64, trusted: bool) -> Result<WorktreeState> {
         Ok(if trusted {
             let trust = proto::TrustWorktrees {
@@ -642,14 +676,6 @@ impl ZedRuntime {
             }
             WorktreeState::Restricted
         })
-    }
-
-    fn remove_worktree(&self, worktree_id: u64) -> Result<()> {
-        let message = self.message(
-            proto::envelope::Payload::RemoveWorktree(proto::RemoveWorktree { worktree_id }),
-            None,
-        );
-        self.send(message)
     }
 
     async fn register_buffer(&self, buffer_id: u64) -> Result<()> {
@@ -777,6 +803,9 @@ impl ZedRuntime {
             .collect();
 
         Ok(LanguageObservation {
+            revision: Some(revision),
+            snapshot: cache.snapshot(buffer_id)?.map(Box::new),
+            version: Some(version),
             diagnostics_state,
             diagnostics,
             inlay_hints: hints,
@@ -1106,6 +1135,22 @@ async fn write_messages(
     }
 }
 
+fn deliver_native_response(
+    response: oneshot::Sender<proto::Envelope>,
+    envelope: proto::Envelope,
+    sync: &sync_native::Transport,
+) {
+    let _ = sync;
+    #[cfg(test)]
+    if envelope
+        .responding_to
+        .is_some_and(|id| sync.worktree_fault.discard(id))
+    {
+        return;
+    }
+    let _ = response.send(envelope);
+}
+
 async fn read_messages(
     mut output: UnixStream,
     outbound: mpsc::UnboundedSender<proto::Envelope>,
@@ -1158,7 +1203,7 @@ async fn read_messages(
         if let Some(request_id) = envelope.responding_to
             && let Some(response) = pending.lock().await.remove(&request_id)
         {
-            let _ = response.send(envelope);
+            deliver_native_response(response, envelope, &sync);
             continue;
         }
 
@@ -1237,6 +1282,14 @@ async fn respond(
     zed: Option<&Zed>,
 ) -> Result<Response> {
     Ok(match request {
+        request @ (Request::AgentAcquisitionSupport {}
+        | Request::PrepareAgentAcquisition { .. }
+        | Request::AgentAcquisition { .. }) => {
+            agent_acquisition::respond(request, worktrees, buffers, zed).await?
+        }
+        request @ (Request::LegacyReleaseSupport {}
+        | Request::PrepareLegacyRelease { .. }
+        | Request::LegacyRelease { .. }) => legacy_release::respond(request, buffers, zed).await?,
         Request::Health => Response::Health {
             api_version: ADAPTER_VERSION,
             zed_version: ZED_VERSION,
@@ -1339,56 +1392,28 @@ async fn close_worktree(
     let Some(lease) = all.get_mut(&path) else {
         bail!("worktree is not open");
     };
+    anyhow::ensure!(
+        lease.pending.is_none() && !lease.retired.load(Ordering::Acquire),
+        "original worktree transition remains unconfirmed"
+    );
     lease.leases = lease.leases.saturating_sub(1);
-    let remote_id = lease.remote_id;
     let response = Response::Worktree {
         api_version: ADAPTER_VERSION,
         path: path.clone(),
         state: lease.state,
         leases: lease.leases,
     };
-    let has_buffers = buffers
-        .active
-        .read()
-        .await
-        .keys()
-        .any(|(root, _)| root == &path);
+    let active = buffers.active.read().await;
+    let has_buffers = active.keys().any(|(root, _)| root == &path);
     if lease.leases == 0 && !has_buffers {
-        all.remove(&path);
         if let Some(zed) = zed {
-            zed.remove_worktree(remote_id)?;
+            sync_owners::ensure_unfenced(buffers, &active)?;
+            trust::lifecycle::apply(lease, trust::lifecycle::Change::Remove, zed).await?;
         }
+        lease.retired.store(true, Ordering::Release);
+        all.remove(&path);
     }
     Ok(response)
-}
-
-async fn buffer_language(
-    worktree: PathBuf,
-    path: PathBuf,
-    buffers: &Buffers,
-    zed: Option<&Zed>,
-) -> Result<Response> {
-    let (worktree, path) = buffer_key(worktree, path).await?;
-    let all = buffers.active.read().await;
-    let lease = all
-        .get(&(worktree.clone(), path.clone()))
-        .context("buffer is not open")?;
-    sync_owners::ensure_readable(lease)?;
-    let observation = if let Some(zed) = zed {
-        zed.language(lease.remote_id).await?
-    } else {
-        LanguageObservation::default()
-    };
-    Ok(Response::BufferLanguage {
-        api_version: ADAPTER_VERSION,
-        worktree,
-        path,
-        version: lease.version.clone(),
-        diagnostics: observation.diagnostics,
-        inlay_hints: observation.inlay_hints,
-        semantic_tokens: observation.semantic_tokens,
-        analysis: observation.analysis,
-    })
 }
 
 #[cfg(test)]
@@ -1509,106 +1534,6 @@ async fn buffer_key(worktree: PathBuf, relative: PathBuf) -> Result<(PathBuf, Pa
     Ok((worktree, relative))
 }
 
-async fn open_buffer(
-    worktree: PathBuf,
-    path: PathBuf,
-    lease_id: String,
-    worktrees: &Worktrees,
-    buffers: &Buffers,
-    zed: Option<&Zed>,
-) -> Result<Response> {
-    validate_lease_id(&lease_id)?;
-    let (worktree, path) = buffer_key(worktree, path).await?;
-    let worktree_id = worktrees
-        .read()
-        .await
-        .get(&worktree)
-        .context("worktree is not open")?
-        .remote_id;
-    open_buffer_at(
-        worktree,
-        path,
-        worktree_id,
-        BufferOwner::Legacy(lease_id),
-        buffers,
-        zed,
-    )
-    .await
-}
-
-async fn open_buffer_at(
-    worktree: PathBuf,
-    path: PathBuf,
-    worktree_id: u64,
-    owner: BufferOwner,
-    buffers: &Buffers,
-    zed: Option<&Zed>,
-) -> Result<Response> {
-    let key = (worktree.clone(), path.clone());
-    let mut all = buffers.active.write().await;
-    if let Some(zed) = zed {
-        native_open::recover(&buffers.native_open, &all, zed).await?;
-    }
-    native_open::admit(buffers, &all, zed, &key, worktree_id).await?;
-    let mut attempt = None;
-    if !all.contains_key(&key) {
-        let (remote_id, version) = if let Some(zed) = zed {
-            // Arm before any native I/O. Cancellation or an error leaves the
-            // process-wide fence latched until `recover` learns the outcome.
-            let armed = attempt.insert(buffers.native_open.begin()?);
-            zed.open_buffer_tracked(worktree_id, &path, |id| armed.dispatching(id))
-                .await?
-        } else {
-            (u64::try_from(all.len() + 1)?, Vec::new())
-        };
-        all.insert(
-            key.clone(),
-            BufferLease {
-                lease_ids: HashSet::new(),
-                remote_id,
-                version,
-                sync: None,
-                closing: false,
-            },
-        );
-    }
-    let lease = all.get_mut(&key).expect("buffer was just inserted");
-    lease.lease_ids.insert(owner);
-    let response = Response::Buffer {
-        api_version: ADAPTER_VERSION,
-        worktree,
-        path,
-        leases: lease.lease_ids.len(),
-        buffer_id: lease.remote_id,
-        version: lease.version.clone(),
-    };
-    // No await between original-ID owner commit and ending its admission fence.
-    if let Some(attempt) = attempt {
-        attempt.complete();
-    }
-    Ok(response)
-}
-
-async fn close_buffer(
-    worktree: PathBuf,
-    path: PathBuf,
-    lease_id: String,
-    buffers: &Buffers,
-    zed: Option<&Zed>,
-) -> Result<Response> {
-    validate_lease_id(&lease_id)?;
-    let (worktree, path) = buffer_key(worktree, path).await?;
-    close_buffer_at(
-        worktree,
-        path,
-        BufferOwner::Legacy(lease_id),
-        buffers,
-        zed,
-        || {},
-    )
-    .await
-}
-
 // Release the already captured native resource. Do not resolve a filesystem
 // path again: a renamed/deleted file is still a live native buffer.
 async fn close_buffer_at(
@@ -1644,7 +1569,15 @@ async fn close_buffer_at(
         buffer_id: lease.remote_id,
         version: lease.version.clone(),
     };
-    native_close::release(HashSet::from([key]), &owner, &mut all, zed, on_admit).await?;
+    native_close::release(
+        HashSet::from([key]),
+        &owner,
+        &mut all,
+        zed,
+        &buffers.native_open,
+        on_admit,
+    )
+    .await?;
     Ok(response)
 }
 
@@ -2002,6 +1935,8 @@ mod tests {
     fn buffer_versions_use_the_stable_camel_case_contract() {
         let value = serde_json::to_value(Response::BufferLanguage {
             api_version: ADAPTER_VERSION,
+            source_state: source_snapshot::State::Unavailable,
+            buffer_snapshot: None,
             worktree: PathBuf::from("/tmp"),
             path: PathBuf::from("file.rs"),
             version: vec![BufferVersionEntry {

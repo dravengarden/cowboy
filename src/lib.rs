@@ -66,7 +66,11 @@ pub mod core;
 #[cfg(feature = "full")]
 pub mod core_passkeys;
 #[cfg(feature = "full")]
+pub mod core_passkeys_contract;
+#[cfg(feature = "full")]
 pub mod core_security;
+#[cfg(feature = "full")]
+pub mod credentials;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 #[path = "provider/deepseek_cache.rs"]
 pub mod deepseek_cache;
@@ -75,6 +79,8 @@ pub mod deepseek_cache;
 pub mod deepseek_context;
 #[cfg(feature = "full")]
 pub mod diff_snapshot;
+#[cfg(feature = "full")]
+pub mod digest;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod durable_state;
 #[cfg(any(feature = "full", feature = "machine-host"))]
@@ -119,6 +125,8 @@ pub mod managed_calls;
 pub mod managed_config;
 #[cfg(feature = "full")]
 pub mod memory_observability;
+#[cfg(feature = "full")]
+pub mod model;
 #[cfg(feature = "full")]
 pub mod observability;
 #[cfg(feature = "full")]
@@ -199,6 +207,8 @@ pub use cowboy_wire::runtime_wire;
 pub mod scheduler;
 #[cfg(feature = "full")]
 pub mod send_delivery;
+#[cfg(feature = "full")]
+pub mod serve_args;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::service_identity;
 #[cfg(feature = "full")]
@@ -241,6 +251,8 @@ pub mod protocol_contract;
 // Controller-only: the filtered Machine and code-adapter source closures in
 // flake.nix do not carry these files, so an unconditional declaration breaks
 // their release builds while the full checkout still compiles.
+#[cfg(feature = "full")]
+pub mod superagent;
 #[cfg(feature = "full")]
 pub mod task_notifications;
 #[cfg(feature = "full")]

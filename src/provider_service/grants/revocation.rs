@@ -49,7 +49,7 @@ impl ProviderAuthService {
         recipient: &str,
     ) -> Result<SealedProviderAuth> {
         ensure!(
-            crate::admin::hex_sha256(recipient.as_bytes()) == receipt.recipient_fingerprint,
+            crate::digest::hex_sha256(recipient.as_bytes()) == receipt.recipient_fingerprint,
             "Provider revocation recipient changed"
         );
         let Phase::Committed { generation } = receipt.phase else {
@@ -104,7 +104,7 @@ impl ProviderAuthService {
             .lock()
             .iter()
             .find(|(key, _)| {
-                crate::admin::hex_sha256(key.as_bytes()) == receipt.recipient_fingerprint
+                crate::digest::hex_sha256(key.as_bytes()) == receipt.recipient_fingerprint
             })
             .map(|(_, grant)| Arc::clone(grant))
             .context("Provider recipient vault missing")?;

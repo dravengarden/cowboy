@@ -841,21 +841,8 @@ fn read_document(path: &Path) -> Result<AuthenticationDocument> {
     decode_private_json(&bytes, "authentication config")
 }
 
-/// JSON's default errors can echo invalid values and unknown field names from
-/// secret-bearing configuration. Keep only the category and source position.
-pub fn decode_private_json<T: serde::de::DeserializeOwned>(
-    bytes: &[u8],
-    name: &'static str,
-) -> Result<T> {
-    serde_json::from_slice(bytes).map_err(|error| {
-        anyhow::anyhow!(
-            "decoding {name}: {:?} error at line {}, column {}",
-            error.classify(),
-            error.line(),
-            error.column()
-        )
-    })
-}
+/// Moved to the leaf credentials module; kept here for existing paths.
+pub use crate::credentials::decode_private_json;
 
 #[cfg(test)]
 mod tests {

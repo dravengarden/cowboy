@@ -193,7 +193,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
       {snapshot?.registry.defaults[id] && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: id, id: "default" })}>Use by default</Button>}
     </Stack> };
   };
-  const named: SubscriptionCards["named"] = snapshot?.registry.accounts.map((account) => {
+  const named: SubscriptionCards["named"] = snapshot?.registry.accounts.filter((account) => !snapshot.revoked_accounts?.includes(account.id)).map((account) => {
     const entry = providers.find((entry) => entry.provider_id === account.provider_id);
     return { id: account.id, provider: account.provider_id,
     content: <Paper key={`${owner}:${snapshot.dataset.dataset_id}:${account.id}`} variant="outlined" sx={providerAccountCardSx} data-subscription-account={account.id}>

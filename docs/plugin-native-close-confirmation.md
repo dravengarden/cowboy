@@ -1,5 +1,72 @@
 # Original-peer native close confirmation
 
+## Original-operation recovery release
+
+Zed `1.27.0` pairs adapter `1.27.0` with private server `1.12.0` and
+introduces private Close protocol 2. Its signed artifacts were published on
+2026-11-06; Machine maintenance, installation and serving-process acceptance
+remain separate and are not implied by publication. The original protocol-1
+acceptance follows separately.
+
+Before dispatch, the adapter retains a non-recycled operation ID, server
+instance, complete native ID set and original local owner bindings. The
+native handler records Closed or Refused atomically with the peer-map update.
+Query uses the same peer, instance, operation and complete set. It never sends
+Close again or infers success from current absence. Lease Query/Release,
+navigation ReleaseUnknown Query/Release and orphan-open cleanup can retrieve
+the original receipt. Only a matching Closed result and unchanged original
+bindings allow synchronous local pin and mirror removal. Missing, malformed,
+refused or unavailable receipts retain uncertainty; navigation execution and
+synchronization Unknowns are not resolved by this close protocol.
+
+The original group's shared native IDs also reserve their independent owners
+against release, including pathname aliases. Otherwise another owner could
+release during uncertainty and leave recovery dropping the final local pin
+for an ID excluded from the original native close batch. Safe reads of those
+shared buffers remain available; independent release resumes after recovery.
+
+Adapter 1.34.0 also checks the original Open fence before admitting any new
+native Close. An unresolved Open can return a retained ID even when its pathname
+differs, so known legacy, owned-buffer and navigation owners must not drop the
+last pin prematurely. Shared local-owner removal remains available when another
+owner keeps the native ID alive. This check does not block Query of an already
+dispatched Close, authorize orphan cleanup, or clear a different Open's fence.
+
+The adapter retains at most 2,048 pending receipts plus queued retirements.
+The server admits at most 4,096 receipts and 64 peer histories, without
+eviction. After confirmed local cleanup, a separate Forget frame retires the
+receipt; it cannot close buffers and allocates no reply waiter. A full
+transport queue retains that retirement for a later attempt. Per-peer high
+water marks prevent a retired operation from executing again, including after
+the same native IDs have been shared anew. Forget cannot advance that mark.
+Process loss invalidates this process-local evidence; Controller restart does
+not gain authority to adopt a replacement adapter or reconstruct old owners.
+
+The native server passed 68 tests. On 2026-11-06 the final published pair
+passed the isolated `zed-native-navigation-conformance` gate:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Adapter 1.27.0 | `4118af66fa6716b4e02e129178a4c16649ec739e26f00225ba84950a062c4579` |
+| Server 1.12.0 | `a5c55631eaa36492f291745bcd73ec559091a83f1f85edfd8d7f298a4cb7848e` |
+
+The fault fixture discards a real Closed reply, observes retained local
+uncertainty, then recovers by the original receipt. Duplicate open of the
+released lease remains refused. The same gate covers nonempty LSP navigation,
+independent handoff, native input bounds and synchronization recovery. These
+are isolated acceptance results, not evidence of production activation.
+
+Source `5e8dc29f74b81da6ae6c9ac15f4522d73696eb9e` produced signed artifact
+`sha256:856370dffc2f32dbe5a25884510ea68416259147bd65502369b328f9235b4d2f`.
+The active and next-transaction recovery Controller readers accepted its exact
+envelope before publication. The Catalog reported `ready`, and independent
+HTTP reads of the published package, adapter and server matched all three
+content-addressed digests. The publication receipt is
+`zed-1.27.0-856370dffc2f32dbe5a25884510ea68416259147bd65502369b328f9235b4d2f.json`
+in the host Catalog's `receipts/`, recorded at `2026-11-06T11:44:36.145Z`.
+
+## Original protocol-1 acceptance
+
 Zed Plugin/private adapter `1.15.0` selects private server `1.2.0`. Upstream Zed,
 third-party pins, Code API 1, SDK 1.8.1 and Machine protocol 21 are unchanged.
 This extends the [single-use Open](plugin-native-open-once.md) and

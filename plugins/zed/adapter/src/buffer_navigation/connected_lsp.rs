@@ -14,15 +14,11 @@ const A: &str = "// a🙂z\npub fn target() {}\n";
 const B: &str = "// b🙂q\npub struct Target;\n";
 
 pub(crate) fn configure(root: &Path) {
-    let executable = std::env::current_exe().unwrap();
-    let fixture = executable
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples/navigation_lsp")
-        .canonicalize()
-        .expect("build the test-only LSP example first");
+    let fixture = std::fs::canonicalize(
+        std::env::var_os("COWBOY_TEST_NAVIGATION_LSP")
+            .expect("the conformance recipe must supply its exact built LSP fixture"),
+    )
+    .expect("build the test-only LSP example first");
     assert!(fixture.is_file());
     let directory = root.join("config/zed");
     std::fs::create_dir(&directory).unwrap();
@@ -151,6 +147,14 @@ where
                 && diagnostics.len() == 1
             {
                 assert_eq!(analysis[0].reason, None);
+                assert_eq!(diagnostics[0].code.as_deref(), Some("fixture-code-1"));
+                assert_eq!(diagnostics[0].source.as_deref(), Some("fixture-lsp"));
+                let origin = diagnostics[0]
+                    .provenance
+                    .as_ref()
+                    .expect("native provenance");
+                assert_eq!(origin.server, analysis[0].server_id.to_string());
+                assert_eq!(origin.source_kind, 1);
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -261,12 +265,20 @@ async fn acquire_all(
         else {
             panic!("not prepared")
         };
+        let lose_reply = matches!(kind, NavigationKind::Definition);
+        if lose_reply {
+            lose_original_reply(zed, &navigation, worktrees, buffers).await;
+        }
         let Response::OwnedBufferNavigation {
             state: State::Retained { locations },
             ..
         } = request(Request::BufferNavigation {
             navigation: navigation.clone(),
-            action: Action::Execute,
+            action: if lose_reply {
+                Action::Query
+            } else {
+                Action::Execute
+            },
         })
         .await
         .unwrap()
@@ -315,6 +327,34 @@ async fn acquire_all(
         retained.push((navigation, locations));
     }
     retained
+}
+
+async fn lose_original_reply(
+    zed: &Zed,
+    navigation: &NavigationRef,
+    worktrees: &Worktrees,
+    buffers: &Buffers,
+) {
+    zed.sync.discard_next_navigation_response();
+    let execute = || {
+        respond(
+            Request::BufferNavigation {
+                navigation: navigation.clone(),
+                action: Action::Execute,
+            },
+            worktrees,
+            buffers,
+            Some(zed),
+        )
+    };
+    assert!(execute().await.is_err());
+    assert!(matches!(
+        execute().await.unwrap(),
+        Response::OwnedBufferNavigation {
+            state: State::Unknown,
+            ..
+        }
+    ));
 }
 
 async fn exercise_handoff(

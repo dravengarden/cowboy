@@ -235,6 +235,16 @@ impl MachinePluginStore {
             "invalid session identity"
         );
         let _guard = self.auth_candidates.lock();
+        self.persist_account_stop_locked(session, account, command)
+    }
+
+    /// [`Self::persist_account_stop`] for a caller holding `auth_candidates`.
+    fn persist_account_stop_locked(
+        &self,
+        session: &str,
+        account: &ProviderAccountId,
+        command: Option<&str>,
+    ) -> Result<()> {
         let root = self.account_stop_root();
         prepare_private_directory(&root)?;
         // A retry also re-syncs a marker left by an uncertain first commit.

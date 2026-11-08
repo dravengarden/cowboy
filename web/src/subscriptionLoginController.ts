@@ -72,6 +72,21 @@ function restore(value: unknown, scope: LoginScope): Pending {
   }
   return value as unknown as Pending;
 }
+/** A saved attempt that never started, or whose cancellation is recorded,
+ * cannot be continued: it releases its tab pointer to a named sign-in. The
+ * server keeps every receipt and fence. */
+const abandonedAttempt = (observation: LoginObservation) =>
+  observation.status === "not_started" || observation.cancel_requested === true;
+/** The login this account is still running on a Machine, if any. One native
+ * login runs per account and Machine, so a new dispatch would be refused. */
+export function runningLogin(value: unknown, scope: LoginScope, machine: string): string | undefined {
+  if (!object(value) || value.account_id !== scope.account || value.provider_id !== scope.provider || !Array.isArray(value.logins)) {
+    throw new Error("Invalid sign-in list.");
+  }
+  const login = value.logins.find((entry) => object(entry) && entry.machine_id === machine);
+  return object(login) && login.status === "active" && login.cancel_requested !== true && login.native_completion == null && id(login.request_id)
+    ? login.request_id : undefined;
+}
 function sameAttempt(left: Pending, right: Pending): boolean {
   return (["machine", "operation", "request", "version", "digest", "method"] as const).every((field) => left[field] === right[field]);
 }
@@ -189,6 +204,13 @@ export function subscriptionLogin(scope: LoginScope, ports: {
     observe(value, pending);
     await check(pending);
   }
+  async function adopt(reference: string) {
+    const value = await request(`/api/provider-accounts/${scope.account}/logins/${reference}`);
+    if (!object(value) || !id(value.machine_id) || value.request_id !== reference) throw new Error("Sign-in could not be found for this account.");
+    const pending: Pending = { ...scope, request: reference, machine: value.machine_id, cancelling: value.cancel_requested === true };
+    observe(value, pending); publish({ referenceMismatch: false });
+    save(pending); await readEvents(pending); // Only a verified reference is persisted; never a new dispatch selection.
+  }
   return {
     get snapshot() { return state; },
     restore() {
@@ -215,28 +237,19 @@ export function subscriptionLogin(scope: LoginScope, ports: {
     }, true, true); },
     resume(reference: string) { return run(async () => {
       if (!id(reference)) throw new Error("Invalid sign-in reference.");
-      const mismatch = () => {
-        publish({ referenceMismatch: true });
-        return new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first.");
-      };
+      const mismatch = () => { publish({ referenceMismatch: true }); return new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first."); };
       if (state.pending) {
-        if (state.observation?.request_id && state.observation.request_id !== reference) throw mismatch();
-        if (state.pending.request && state.pending.request !== reference) throw mismatch();
-        const value = await request(receiptPath(state.pending));
-        if (!object(value) || !id(value.request_id)) throw new Error("The original sign-in is not confirmed. Check status.");
-        if (value.request_id !== reference) throw mismatch();
-        observe(value, state.pending);
-        publish({ referenceMismatch: false });
-        await readEvents(state.pending);
-        return;
+        let saved = state.observation?.request_id ? state.observation : undefined;
+        if (!saved || saved.request_id === reference) {
+          const value = await request(receiptPath(state.pending));
+          if (!object(value) || !id(value.request_id)) throw new Error("The original sign-in is not confirmed. Check status.");
+          if (value.request_id === reference) { observe(value, state.pending); publish({ referenceMismatch: false }); return await readEvents(state.pending); }
+          saved = value as unknown as LoginObservation;
+        }
+        if (!abandonedAttempt(saved)) throw mismatch();
+        forget(state.pending); publish({ pending: undefined, observation: undefined, events: [] });
       }
-      const value = await request(`/api/provider-accounts/${scope.account}/logins/${reference}`);
-      if (!object(value) || !id(value.machine_id) || value.request_id !== reference) throw new Error("Sign-in could not be found for this account.");
-      const pending: Pending = { ...scope, request: reference, machine: value.machine_id, cancelling: value.cancel_requested === true };
-      observe(value, pending);
-      publish({ referenceMismatch: false });
-      save(pending); // Only a verified reference is persisted; never a new dispatch selection.
-      await readEvents(pending);
+      await adopt(reference);
     }, true); },
     start(options: LoginOptions, method: string) { return run(async () => {
       if (state.pending) throw new Error("Reconcile the existing sign-in first.");
@@ -246,6 +259,8 @@ export function subscriptionLogin(scope: LoginScope, ports: {
         version: options.release.provider_version, digest: options.release.generation_digest, method, cancelling: false };
       save(restore(pending, scope)); // Durable reservation before any POST.
       await send(pending);
+      const running = state.observation?.status === "not_started" && runningLogin(await request(`/api/provider-accounts/${scope.account}/logins?limit=50`), scope, pending.machine);
+      if (running) { forget(pending); publish({ pending: undefined, observation: undefined, events: [] }); await adopt(running); } // One login per account and Machine: continue it.
     }); },
     retry() { return run(async () => { if (state.pending) await send(state.pending); }); },
     check() { return run(async () => { if (state.pending) await check(state.pending); }, true); },

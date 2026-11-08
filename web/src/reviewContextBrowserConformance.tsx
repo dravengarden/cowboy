@@ -3,7 +3,7 @@ import { CssBaseline } from "@mui/material";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { BrowserProductTheme } from "./browserProductTheme";
-import { SurfaceProvider } from "./surface/SurfaceProfile";
+import { SurfaceContext, SurfaceProvider } from "./surface/SurfaceProfile";
 import { ReviewApp } from "./mobile/review/ReviewApp";
 import { ReviewChanges } from "./mobile/review/ReviewChanges";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
@@ -31,7 +31,7 @@ async function until(predicate: () => boolean, message: string) {
   throw new Error(`${message}: ${document.body.textContent?.slice(0, 1500)}`);
 }
 
-export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false) {
+export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false, checksEnabled = false) {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
   const sessions: SessionMeta[] = [
@@ -180,6 +180,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
   }
   globalThis.WebSocket = FixtureSocket as unknown as typeof WebSocket;
   let fetched = false;
+  let checkStarted = false;
   globalThis.fetch = (async (input, init) => {
     const url = new URL(String(input), location.href);
     if (!url.pathname.startsWith("/api/")) return originalFetch(input, init);
@@ -189,6 +190,15 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       }${url.search}`,
     );
     const json = (value: unknown) => Response.json(value);
+    if (checksEnabled && url.pathname.endsWith("/checks")) {
+      const run = { runId: "fixture-check", check: "lint", state: "passed", startedAtMs: Date.now(), diagnostics: [], truncated: false, outputTruncated: false };
+      if (init?.method === "POST") {
+        checkStarted = true;
+        return json({ status: "accepted", run });
+      }
+      return json({ apiVersion: 1, epoch: "fixture-epoch", allowed: true, runnable: true,
+        declared: [{ id: "lint", title: "Lint", format: "lines", timeoutSeconds: 30 }], runs: checkStarted ? [run] : [] });
+    }
     if (url.pathname === "/api/sync/dataset") {
       return json({
         schema: "dravengarden.cowboy.product-sync-dataset/v1",
@@ -252,6 +262,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
             ? [
               { reference: "refs/remotes/origin/main", label: "origin/main" },
               { reference: "refs/remotes/origin/topic", label: "origin/topic" },
+              { reference: "refs/remotes/origin/feature/long-review-comparison-name", label: "origin/feature/long-review-comparison-name" },
             ]
             : [],
           ...(branches
@@ -299,8 +310,13 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
             detached: false,
             current: true,
           }],
-          target: { branch, changeCount: clean ? 0 : 1 },
+          target: { branch, changeCount: clean ? 0 : 1,
+            ...(branches && clean ? { base: { reference: "refs/remotes/origin/main", label: "origin/main", ahead: 0, behind: 20 } } : {}) },
         });
+      }
+      if (url.pathname.endsWith("/commit")) {
+        return json({ apiVersion: 1, oid: "abcdef01", parents: [], author: "Fixture", authorEmail: "fixture@example.test",
+          authoredAt: "2026-10-17T00:00:00Z", message: "Improve review", files: [], filesTruncated: false });
       }
       if (url.pathname.endsWith("/tree")) {
         return json({
@@ -346,6 +362,8 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
           apiVersion: 1,
           path,
           revision: context,
+          added: 1,
+          removed: 1,
           text:
             "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n",
           truncated: false,
@@ -365,7 +383,9 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       <BrowserProductTheme>
         <CssBaseline />
         <SurfaceProvider>
-          <ReviewApp active onDrawerOpenChange={() => {}} />
+          {desktop ? <SurfaceContext.Provider value={{ kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true }}>
+            <DesktopWorkspaceProvider><DesktopCommandProvider><ReviewApp active onDrawerOpenChange={() => {}} /></DesktopCommandProvider></DesktopWorkspaceProvider>
+          </SurfaceContext.Provider> : <ReviewApp active onDrawerOpenChange={() => {}} />}
         </SurfaceProvider>
       </BrowserProductTheme>,
     )
@@ -377,6 +397,17 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
     mutations,
     submits,
     refresh: () => socket?.publish({ type: "sessions", sessions }),
+    addWorktrees: (count: number) => {
+      for (let i = 0; i < count; i++) sessions.push({
+        ...sessions[0]!, id: `extra-${i}`, title: `Review task ${i + 1}`, cwd: `/runtime/extra-${i}`,
+        execution_binding: {
+          schema: 1, runtime: { machine_id: "ovh", cwd: `/runtime/extra-${i}` },
+          environment: { machine_id: "hawk", protocol: 1 },
+          workspace: { cwd: `/tasks/cowboy/task-${i + 1}` },
+        },
+      });
+      socket?.publish({ type: "sessions", sessions });
+    },
     sync: (state: string, value: unknown, version: number) => socket?.publish({ type: "sync_patch", state, value, version, confirmed: [], resync: true }),
     select: (id: string) => flushSync(() => setActiveSessionId(id)),
     cleanup: () => {
@@ -484,25 +515,27 @@ async function checkReviewCompareAndSelection(
     fixture.refresh();
     const compare = () => fixture.container.querySelector("[data-review-compare]");
     await until(
-      () => compare()?.textContent?.includes("Ready to merge · origin/main") === true,
+      () => compare()?.getAttribute("aria-label")?.includes("Ready to merge · origin/main") === true,
       "The default comparison should be named by its scenario",
     );
     await until(
-      () => fixture.container.querySelector("[data-review-unread]")?.textContent === "1 unread",
+      () => fixture.container.querySelector("[data-review-unread]")?.getAttribute("aria-label") === "1 unread",
       "Unread count is missing",
     );
 
+    await press(body.querySelector('[aria-label="More review actions"]'), "more actions");
     await press(body.querySelector("[data-review-fetch]"), "fetch control");
     await until(
-      () => fixture.container.textContent?.includes("Fetched just now") === true,
+      () => body.textContent?.includes("Fetched just now") === true,
       "Fetching should say how fresh the branch is",
     );
+    await press(body.querySelector('[aria-label="Close review actions"]'), "close actions");
 
     await press(compare(), "comparison control");
     await until(() => !!row("Other branches") || !!row("origin/topic"), "Comparison picker did not open");
     await press(row("origin/topic"), "branch row");
     await until(
-      () => compare()?.textContent?.includes("Branch · origin/topic") === true,
+      () => compare()?.getAttribute("aria-label")?.includes("Branch · origin/topic") === true,
       "A chosen branch should become the comparison",
     );
     await until(
@@ -557,7 +590,9 @@ async function checkReviewCompareAndSelection(
 
 export async function runReviewContextBrowserConformance(): Promise<string[]> {
   const loadingResult = await checkReviewLoading();
-  const fixture = renderReviewContextPreview(true, true);
+  // Desktop keeps secondary actions directly visible. The trusted phone
+  // acceptance runner separately exercises their bottom actions sheet.
+  const fixture = renderReviewContextPreview(true, true, false, false, true);
   const tests: string[] = [loadingResult];
   const overview = () =>
     fixture.container.querySelector<HTMLElement>(
@@ -628,10 +663,10 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
       fixture.container.textContent?.includes("Worktree · Cowboy"),
       "Header lost registered project identity to a generated worktree name",
     );
-    check(
-      overview()?.textContent?.includes("/tasks/cowboy/feature"),
-      "Review should show the real worktree path",
-    );
+    await click(labelled("Repository details"));
+    await until(() => !!document.querySelector("[data-repository-project-path]"), "Repository details should open from the bottom");
+    check(document.querySelector("[data-repository-project-path]")?.textContent === "/tasks/cowboy/feature", "Review should show the real worktree path");
+    await click(document.querySelector('[aria-label="Close repository details"]'));
     check(
       !fixture.requests.some((request) => request.includes("workspace::")),
       "Opening a session redirected to the stable project checkout",
@@ -883,7 +918,7 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
       ),
       "The previous context's document was read against the new session",
     );
-    await click(textButton(overview()!, "Browse files"));
+    await click(labelled("Worktree files"));
     await until(
       () => !!files()?.textContent?.includes("README.md"),
       "Clean workspace should offer file browsing",

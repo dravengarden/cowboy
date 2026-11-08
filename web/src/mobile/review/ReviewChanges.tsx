@@ -1,40 +1,23 @@
 import {
-  Add,
-  CallSplit,
   CheckCircleOutline,
-  ChevronRight,
-  CloudDownloadOutlined,
-  DeleteOutline,
-  DescriptionOutlined,
-  ErrorOutline,
-  ExpandMore,
-  FolderOutlined,
   Refresh,
-  UnfoldMore,
-  VisibilityOutlined,
 } from "@mui/icons-material";
 import {
   Alert,
   Box,
   Button,
-  ButtonBase,
   Chip,
   CircularProgress,
-  IconButton,
   List,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
   Stack,
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MobileSheetDismiss } from "@cowboy/app-shell";
+import { MobileSheetDismiss, ScrollEdges } from "@cowboy/app-shell";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import {
   type CodeChanges,
-  type CodeChangeStatus,
   fetchCodeChanges,
   fetchReviewComparison,
   type GitChangeTarget,
@@ -45,9 +28,11 @@ import {
   limitGitSections,
   reviewQueue,
 } from "./gitReviewModel";
-import { buildGitChangeTree, type GitChangeTreeNode } from "./gitChangeTree";
+import { buildGitChangeTree } from "./gitChangeTree";
 import { reviewEntryKey } from "./diffNavigationModel";
 import { useReviewRecovery } from "./useReviewRecovery";
+import { ReviewChangeControls } from "./ReviewChangeControls";
+import { ReviewEmptyState, type EmptyReviewContext } from "./ReviewEmptyState";
 import { ReviewComparePicker } from "./ReviewComparePicker";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
 import {
@@ -56,193 +41,11 @@ import {
   resolveReviewComparison,
   reviewCompareLabel,
   reviewCompareScenarios,
-  reviewFetchAge,
 } from "./reviewCompareModel";
 
-const statusLabel: Record<CodeChangeStatus, string> = {
-  modified: "M",
-  added: "A",
-  deleted: "D",
-  renamed: "R",
-  untracked: "U",
-  conflicted: "!",
-};
-
+import { GitTreeRows } from "./ReviewChangeRows";
 const REVIEW_WINDOW_SIZE = 80;
 const NO_CHANGES: CodeChanges["changes"] = [];
-
-function ChangeIcon(
-  { status }: { status: CodeChangeStatus },
-): React.JSX.Element {
-  if (status === "added" || status === "untracked") return <Add />;
-  if (status === "deleted") return <DeleteOutline />;
-  if (status === "renamed") return <CallSplit />;
-  if (status === "conflicted") return <ErrorOutline />;
-  return <DescriptionOutlined />;
-}
-
-function GitTreeRows({
-  nodes,
-  depth,
-  collapsed,
-  onToggle,
-  onOpenDiff,
-  queue,
-  reviewed,
-  onPreview,
-}: {
-  nodes: GitChangeTreeNode[];
-  depth: number;
-  collapsed: ReadonlySet<string>;
-  onToggle: (path: string) => void;
-  onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
-  queue: GitReviewEntry[];
-  reviewed: ReadonlySet<string>;
-  onPreview?: ((path: string) => void) | undefined;
-}): React.JSX.Element {
-  return (
-    <>
-      {nodes.map((node) => {
-        if (node.kind === "directory") {
-          const isCollapsed = collapsed.has(node.path);
-          return (
-            <Box key={`directory:${node.path}`}>
-              <ListItemButton
-                onClick={() => onToggle(node.path)}
-                sx={{
-                  minHeight: 34,
-                  py: 0,
-                  pl: 0.75 + depth * 1.5,
-                  pr: 1,
-                }}
-              >
-                <ListItemIcon sx={{ minWidth: 26, color: "text.secondary" }}>
-                  {isCollapsed
-                    ? <ChevronRight fontSize="small" />
-                    : <ExpandMore fontSize="small" />}
-                </ListItemIcon>
-                <FolderOutlined
-                  fontSize="small"
-                  sx={{ mr: 0.75, color: "text.secondary" }}
-                />
-                <ListItemText
-                  primary={node.name}
-                  primaryTypographyProps={{
-                    noWrap: true,
-                    fontFamily: "var(--cowboy-font-mono)",
-                    fontSize: "0.8125rem",
-                  }}
-                  sx={{ my: 0 }}
-                />
-              </ListItemButton>
-              {!isCollapsed && (
-                <GitTreeRows
-                  nodes={node.children}
-                  depth={depth + 1}
-                  collapsed={collapsed}
-                  onToggle={onToggle}
-                  onOpenDiff={onOpenDiff}
-                  queue={queue}
-                  reviewed={reviewed}
-                  onPreview={onPreview}
-                />
-              )}
-            </Box>
-          );
-        }
-        const entry = node.entry;
-        if (!entry) return null;
-        const isReviewed = reviewed.has(
-          reviewEntryKey(
-            entry.change.path,
-            entry.scope,
-            entry.comparison,
-          ),
-        );
-        return (
-          <Stack
-            direction="row"
-            alignItems="center"
-            key={`${entry.scope}:${entry.change.path}`}
-          >
-            <ListItemButton
-              key={`${entry.scope}:${entry.change.path}`}
-              onClick={() => onOpenDiff(entry, queue)}
-              sx={{
-                minHeight: 38,
-                py: 0,
-                pl: 0.75 + depth * 1.5,
-                pr: 1.25,
-              }}
-            >
-              <ListItemIcon
-                sx={{
-                  minWidth: 28,
-                  color: isReviewed ? "success.main" : "text.secondary",
-                  "& svg": { fontSize: "1.125rem" },
-                }}
-              >
-                {isReviewed
-                  ? <CheckCircleOutline fontSize="small" />
-                  : <ChangeIcon status={entry.change.status} />}
-              </ListItemIcon>
-              <ListItemText
-                primary={node.name}
-                primaryTypographyProps={{
-                  noWrap: true,
-                  fontFamily: "var(--cowboy-font-mono)",
-                  fontSize: "0.8125rem",
-                }}
-                sx={{ my: 0 }}
-              />
-              {entry.change.additions !== undefined && (
-                <Typography
-                  aria-label={`${entry.change.additions} added, ${
-                    entry.change.deletions ?? 0
-                  } removed`}
-                  variant="caption"
-                  noWrap
-                  sx={{
-                    flexShrink: 0,
-                    ml: 1,
-                    fontFamily: "var(--cowboy-font-mono)",
-                  }}
-                >
-                  <Box component="span" sx={{ color: "success.main" }}>
-                    {`+${entry.change.additions}`}
-                  </Box>{" "}
-                  <Box component="span" sx={{ color: "error.main" }}>
-                    {`−${entry.change.deletions ?? 0}`}
-                  </Box>
-                </Typography>
-              )}
-              <Typography
-                aria-label={entry.change.status}
-                variant="caption"
-                fontWeight={700}
-                color={entry.change.status === "conflicted"
-                  ? "error.main"
-                  : "text.secondary"}
-                sx={{ ml: 1, fontFamily: "var(--cowboy-font-mono)" }}
-              >
-                {statusLabel[entry.change.status]}
-              </Typography>
-            </ListItemButton>
-            {onPreview && isMarkdownReviewPath(entry.change.path) &&
-              entry.change.status !== "deleted" && (
-              <IconButton
-                aria-label={`Preview current file ${entry.change.path}`}
-                onClick={() => onPreview(entry.change.path)}
-              >
-                <VisibilityOutlined fontSize="small" />
-              </IconButton>
-            )}
-          </Stack>
-        );
-      })}
-    </>
-  );
-}
 
 export function ReviewChanges({
   sessionId,
@@ -258,11 +61,13 @@ export function ReviewChanges({
   drawer = false,
   onClose,
   refreshToken = 0,
-  onBrowseFiles,
   linkedSession,
   compact = false,
   documentsOnly = false,
   onPreview,
+  controlsContainer,
+  actionsContainer,
+  repository,
 }: {
   sessionId: string | undefined;
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
@@ -280,12 +85,14 @@ export function ReviewChanges({
   drawer?: boolean;
   onClose?: () => void;
   refreshToken?: number;
-  onBrowseFiles?: () => void;
   /** A linked session's worktree, for a session with nothing of its own. */
   linkedSession?: { title: string; onOpen: () => void } | undefined;
   compact?: boolean;
   documentsOnly?: boolean;
   onPreview?: ((path: string) => void) | undefined;
+  controlsContainer?: HTMLElement | null | undefined;
+  actionsContainer?: HTMLElement | null | undefined;
+  repository?: EmptyReviewContext | undefined;
 }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<{
     sessionId: string;
@@ -552,87 +359,6 @@ export function ReviewChanges({
           />
         </Stack>
       )}
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={1}
-        sx={{ mx: 1.75, mb: 0.5, pt: compact ? 0.5 : 0, minHeight: 36 }}
-      >
-        <ButtonBase
-          data-review-compare
-          aria-haspopup="dialog"
-          aria-label={`Compare: ${
-            reviewCompareLabel(comparison, scenarios, comparisons)
-          }`}
-          disabled={comparison === undefined}
-          onClick={() => setPickerOpen(true)}
-          sx={{
-            flex: 1,
-            minWidth: 0,
-            minHeight: 36,
-            justifyContent: "flex-start",
-            gap: 0.25,
-            borderRadius: 1,
-          }}
-        >
-          <Typography variant="body2" fontWeight={600} noWrap>
-            {reviewCompareLabel(comparison, scenarios, comparisons)}
-          </Typography>
-          <UnfoldMore fontSize="small" sx={{ color: "text.secondary" }} />
-        </ButtonBase>
-        {result?.fetchAvailable && comparisonFetchable(comparison) && (
-          <NetworkIconButton
-            data-review-fetch
-            size="small"
-            aria-label="Fetch this branch"
-            networkAction={fetchComparison}
-          >
-            <CloudDownloadOutlined fontSize="small" />
-          </NetworkIconButton>
-        )}
-        {queue.length > 0 && (
-          <Chip
-            data-review-unread
-            size="small"
-            variant={unreadOnly ? "filled" : "outlined"}
-            color={unreadOnly ? "primary" : "default"}
-            aria-pressed={unreadOnly}
-            label={unreadCount === 0 ? "All viewed" : `${unreadCount} unread`}
-            onClick={() => setUnreadOnly((current) => !current)}
-          />
-        )}
-      </Stack>
-      {fetchError
-        ? (
-          <Typography
-            role="alert"
-            variant="caption"
-            color="error.main"
-            sx={{ mx: 1.75, mb: 0.5 }}
-          >
-            {fetchError}
-          </Typography>
-        )
-        : result?.fetchedAtMs !== undefined && (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ mx: 1.75, mb: 0.5 }}
-          >
-            {reviewFetchAge(result.fetchedAtMs, Date.now())}
-          </Typography>
-        )}
-      <ReviewComparePicker
-        open={pickerOpen}
-        onClose={() => setPickerOpen(false)}
-        comparison={comparison}
-        scenarios={scenarios}
-        comparisons={comparisons}
-        onSelect={(value) => {
-          setPickerOpen(false);
-          if (value !== comparison) onComparisonChange?.(value);
-        }}
-      />
       {truncated && (
         <Alert severity="info" sx={{ mx: 1.5, mb: 1, py: 0 }}>
           Showing the first 1,000 changes
@@ -645,13 +371,13 @@ export function ReviewChanges({
           flex: 1,
           minHeight: 0,
           px: 0.75,
-          pb: compact ? 2 : "calc(80px + env(safe-area-inset-bottom, 0px))",
+          pb: queue.length === 0 ? 0 : 2,
           ...mobileNativeYScrollSx,
         }}
       >
         {(loading && !result) || (!!sessionId && !result && !error)
           ? (
-            <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}>
+            <Box sx={{ display: "grid", placeItems: "center", minHeight: "100%" }}>
               <CircularProgress size={24} />
             </Box>
           )
@@ -674,47 +400,16 @@ export function ReviewChanges({
           )
           : queue.length === 0
           ? (
-            <Stack alignItems="center" spacing={1} sx={{ pt: 10 }}>
-              <DescriptionOutlined color="disabled" />
-              <Typography color="text.secondary">
-                {documentsOnly
-                  ? "No Markdown changes in this comparison"
-                  : comparison
-                  ? "No changes from this branch"
-                  : "Working tree is clean"}
-              </Typography>
-              {linkedSession && (
-                <>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    align="center"
-                    sx={{ px: 3 }}
-                  >
-                    {`This session's worktree doesn't include the changes in ${linkedSession.title}.`}
-                  </Typography>
-                  <Button
-                    data-review-linked-session
-                    variant="outlined"
-                    onClick={linkedSession.onOpen}
-                  >
-                    Review linked session
-                  </Button>
-                </>
-              )}
-              {onBrowseFiles && (
-                <Button startIcon={<FolderOutlined />} onClick={onBrowseFiles}>
-                  Browse files
-                </Button>
-              )}
-            </Stack>
+            <ReviewEmptyState comparisonLabel={reviewCompareLabel(comparison, scenarios, comparisons)}
+              compared={!!comparison} documentsOnly={documentsOnly} target={target} head={head}
+              repository={repository} linkedSession={linkedSession} />
           )
           : listedCount === 0
           ? (
-            <Stack alignItems="center" spacing={1} sx={{ pt: 10 }}>
+            <Stack alignItems="center" spacing={1} sx={{ minHeight: "100%", justifyContent: "center", px: 2, py: 3 }}>
               <CheckCircleOutline color="disabled" />
               <Typography color="text.secondary">All changes viewed</Typography>
-              <Button onClick={() => setUnreadOnly(false)}>
+              <Button onClick={() => setUnreadOnly(false)} sx={{ minHeight: 44, textTransform: "none" }}>
                 Show all changes
               </Button>
             </Stack>
@@ -787,7 +482,25 @@ export function ReviewChanges({
               )}
             </Stack>
           )}
+        <ScrollEdges />
       </Box>
+      <ReviewChangeControls container={controlsContainer} actionsContainer={actionsContainer}
+        label={reviewCompareLabel(comparison, scenarios, comparisons)} disabled={comparison === undefined}
+        onCompare={() => setPickerOpen(true)} hasChanges={queue.length > 0}
+        unreadCount={unreadCount} unreadOnly={unreadOnly} onUnread={() => setUnreadOnly((current) => !current)}
+        fetchAvailable={!!result?.fetchAvailable && comparisonFetchable(comparison)} onFetch={fetchComparison}
+        fetchError={fetchError} fetchedAtMs={result?.fetchedAtMs} />
+      <ReviewComparePicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        comparison={comparison}
+        scenarios={scenarios}
+        comparisons={comparisons}
+        onSelect={(value) => {
+          setPickerOpen(false);
+          if (value !== comparison) onComparisonChange?.(value);
+        }}
+      />
       {drawer && onClose && (
         <Box
           sx={{

@@ -27,6 +27,10 @@ pub struct WorkerExit {
     pub systemd: Option<SystemdWorker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub containment: Option<crate::cgroup::ContainmentIdentity>,
+    /// No worker was ever journaled for this session on this Machine; the
+    /// launch ID names this proof rather than a spawned process.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlaunched: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +121,76 @@ fn bound_launch_survives_restart_and_rejects_generation_changes() {
     let mut legacy = launch.clone();
     legacy.session_id = "legacy".into();
     assert!(!store.account_worker_binding_matches(&legacy).unwrap());
+}
+
+#[test]
+fn an_unlaunched_session_is_fenced_and_observably_exited() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = MachinePluginStore::new(
+        temp.path(),
+        crate::machine_protocol::Platform::Linux,
+        "x86_64".into(),
+    )
+    .unwrap();
+    let account: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+    let other: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+    let observe = |session: &str| {
+        store
+            .observe_account_worker_exit(&crate::provider_account::WorkerExitRequest {
+                stop_command_id: None,
+                account_id: account.clone(),
+                session_id: session.into(),
+            })
+            .unwrap()
+    };
+    store
+        .fence_unlaunched_account_session("never", &account)
+        .unwrap();
+    let proof = observe("never").expect("absence is observable");
+    assert!(!proof.launch_id.is_nil());
+    // Exact retry keeps the original proof; the fence refuses every launch.
+    store
+        .fence_unlaunched_account_session("never", &account)
+        .unwrap();
+    assert_eq!(observe("never").unwrap().launch_id, proof.launch_id);
+    assert!(store.account_session_stopped("never").unwrap());
+    assert!(store.begin_account_worker("never", &account).is_err());
+    assert!(
+        store
+            .fence_unlaunched_account_session("never", &other)
+            .is_err()
+    );
+    // A journaled launch is never rewritten as unlaunched, exited or not.
+    let launch = store.begin_account_worker("ran", &account).unwrap();
+    assert!(
+        store
+            .fence_unlaunched_account_session("ran", &account)
+            .is_err()
+    );
+    store
+        .record_account_worker_exit("ran", &account, launch)
+        .unwrap();
+    assert!(
+        store
+            .fence_unlaunched_account_session("ran", &account)
+            .is_err()
+    );
+    // A fence committed before its receipt still completes on retry.
+    store
+        .stop_account_session_scoped("partial", &account, "stop-1")
+        .unwrap();
+    store
+        .fence_unlaunched_account_session("partial", &account)
+        .unwrap();
+    assert!(observe("partial").is_some());
+    store
+        .stop_account_session_scoped("foreign", &other, "stop-2")
+        .unwrap();
+    assert!(
+        store
+            .fence_unlaunched_account_session("foreign", &account)
+            .is_err()
+    );
 }
 
 #[test]
@@ -446,8 +520,60 @@ impl MachinePluginStore {
             rebooted_into: None,
             systemd: None,
             containment,
+            unlaunched: false,
         })?;
         Ok(launch)
+    }
+
+    /// Fence a named session this Machine never launched. Every named spawn
+    /// journals its launch here before executing, under the same lock, so an
+    /// absent journal proves no worker ran. The stop fence is written first;
+    /// afterwards no launch can be journaled, so a retry after a partial
+    /// commit still proves absence. The exited receipt makes that proof
+    /// observable through the ordinary worker-exit query.
+    pub fn fence_unlaunched_account_session(
+        &self,
+        session: &str,
+        account: &ProviderAccountId,
+    ) -> Result<()> {
+        ensure!(
+            !account.is_default()
+                && !session.is_empty()
+                && session.len() <= 512
+                && !session.contains('\0'),
+            "invalid worker exit scope"
+        );
+        let boot = current_boot()?;
+        let _guard = self.auth_candidates.lock();
+        if let Some(old) = self.account_worker_exit(session)? {
+            ensure!(
+                old.unlaunched && old.tree_exited && old.account == *account,
+                "session has a worker launch journal"
+            );
+            return Ok(());
+        }
+        if self.account_session_stopped(session)? {
+            ensure!(
+                self.account_stop_matches(session, account)?,
+                "account stop scope mismatch"
+            );
+        } else {
+            self.persist_account_stop_locked(session, account, None)?;
+        }
+        self.persist_worker_exit(&WorkerExit {
+            schema: 1,
+            session: session.into(),
+            account: account.clone(),
+            launch: uuid::Uuid::new_v4(),
+            tree_exited: true,
+            binding: None,
+            readmission: None,
+            boot,
+            rebooted_into: None,
+            systemd: None,
+            containment: None,
+            unlaunched: true,
+        })
     }
 
     /// A new kernel boot ends every process from the recorded old boot. The

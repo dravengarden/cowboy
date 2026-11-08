@@ -15,6 +15,8 @@ export interface SubscriptionSnapshot {
   dataset: { dataset_id: string; user_id: string };
   registry: { revision: number; accounts: SubscriptionAccount[]; defaults: Record<string, string> };
   display_preferences?: SubscriptionDisplay;
+  /** Accounts whose permanent revocation finished; they leave account lists. */
+  revoked_accounts?: string[];
   session_admission: string;
   session_providers?: string[];
 }
@@ -31,6 +33,7 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
     typeof registry.revision === "number" && Number.isSafeInteger(registry.revision) && registry.revision >= 0 &&
     (value.display_preferences === undefined || validSubscriptionDisplay(value.display_preferences)) &&
     (value.session_providers === undefined || (Array.isArray(value.session_providers) && value.session_providers.every(text))) &&
+    (value.revoked_accounts === undefined || (Array.isArray(value.revoked_accounts) && value.revoked_accounts.every(text))) &&
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
     Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
       text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean" &&

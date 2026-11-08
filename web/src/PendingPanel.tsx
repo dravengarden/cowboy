@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { DeliveryPicker } from "./DeliveryPicker";
 import { NativeDeliveryRow } from "./NativeDeliveryRow";
@@ -49,7 +50,6 @@ import { useStore as usePrefStore } from "@cowboy/state-store";
 import { PENDING_ARRIVAL_FLASH_MS, type PendingArrival, pendingRowMatchesArrival, scrollPendingRowIntoView, subscribePendingArrival } from "./pendingPanelState";
 import { collapseComposerStackPanel, composerStackExpandedStore, toggleComposerStackPanel } from "./composerStackAccordion";
 import { COMPOSER_STACK_DISCLOSURE_TIMEOUT, composerStackDisclosureSx, swallowStrayDisclosureClick } from "./composerStackDisclosure";
-
 export const DesktopContextShortcut = lazy(async () => {
   const module = await import("./desktop/commands/DesktopContextShortcut");
   return { default: module.DesktopContextShortcut };
@@ -1721,7 +1721,7 @@ export function PendingPanel({
               </Stack>
             );
           })}
-        </Stack>
+        <ScrollEdges /></Stack>
       </Collapse>
       <ConfirmSheet
         open={queueSettingsOpen}

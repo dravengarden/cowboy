@@ -66,7 +66,9 @@ import { Box, Paper } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { markDetentSheetOpen, useIsTopDetentSheet } from "./detent-sheet-open.ts";
 import { haptic as fireHaptic } from "./haptics.ts";
-
+import { ScrollEdges } from "./scroll-edges.tsx";
+import { readerTopEdge } from "./reader-top-edge.ts";
+import { readerBottomEdge } from "./reader-bottom-edge.ts";
 // The sheet sizes to its content but never taller than this fraction of the
 // viewport, so a strip of dimmed page always stays beyond it (it reads as a
 // sheet, not a full-page modal).
@@ -167,7 +169,7 @@ const frostSheen = (mode: "light" | "dark", isTop: boolean): string => {
 // behind the sheet" bug). Keeping the sheet < 1300 lets all those overlays
 // render above it for free — no per-control z-index overrides needed anywhere.
 const Z = 1250;
-const SAFE_BOTTOM = "calc(16px + env(safe-area-inset-bottom, 0px))";
+const SAFE_BOTTOM = "calc(var(--cowboy-sheet-footer-gap, 16px) + env(safe-area-inset-bottom, 0px))";
 // Prefer Cowboy's iPad PWA floor when the host publishes it. Standalone
 // WebKit often reports a zero safe-area while still painting status chrome
 // over the grabber; env() remains the fallback for hosts without the var.
@@ -306,6 +308,7 @@ export interface DetentSheetProps {
   /** The body does not scroll; its child fills it and owns its own scroller
    *  (an embedded transcript). Only meaningful with `cover`. Default false. */
   readonly fillBody?: boolean | undefined;
+  readonly readerTopBleed?: boolean | undefined;
   /** Reserve the drag strip's breathing room above the header. The strip has
    * no visible pill (the whole bar drags); without it a dense, draggable title
    * row sits flush at the edge. Default true. */
@@ -380,6 +383,7 @@ export function DetentSheet(
     haptic = true,
     animateOnOpen = true,
     fillBody = false,
+    readerTopBleed = false,
     grabber = true,
   }: DetentSheetProps,
 ): ReactNode {
@@ -788,16 +792,15 @@ export function DetentSheet(
         // `position: fixed` overlay and makes a nested picker follow the parent's
         // scroll offset (often completely off-screen).
         WebkitOverflowScrolling: "touch",
-        // No horizontal padding: the sheet doesn't impose a side gutter on its
-        // content, so an edge-to-edge body (a full-width list, a chart) works.
-        // Consumers that want a text gutter add their own px (BottomSheet does).
-        pt: isTop ? SAFE_TOP : 0,
+        // Full-bleed readers put their safe-area clearance inside the scroller.
+        pt: isCover && readerTopBleed && !fillBody ? `calc(${SAFE_TOP} + 20px)` : isTop ? SAFE_TOP : 0,
+        scrollPaddingTop: isCover && readerTopBleed ? `calc(${SAFE_TOP} + 20px)` : "16px",
         // A filled body's own scroller passes under the floating footer and
         // reserves that clearance itself.
         pb: fillBody ? 0 : bodyPb,
       }}
     >
-      {contentReady ? children : null}
+      {contentReady ? children : null}{!fillBody && <ScrollEdges top={!readerTopBleed} bottom={!footerOverlay} />}
     </Box>
   );
 
@@ -929,7 +932,8 @@ export function DetentSheet(
             }
           }}
           sx={{
-            position: "fixed",
+            position: "fixed", "--cowboy-reader-sticky-top": "0px",
+            ...(isCover && readerTopBleed && !fillBody ? { "--cowboy-reader-sticky-top": `calc(${SAFE_TOP} + 20px)`, "&::after": (theme) => readerTopEdge(theme, SAFE_TOP)["&::after"] } : {}),
             left: 0,
             right: 0,
             // A bottom COVER lifts above the on-screen keyboard via `--kb-inset` (set
@@ -946,14 +950,11 @@ export function DetentSheet(
             // Otherwise: content-driven height, capped so a scrim strip always shows.
             ...(isCover
               ? {
-                // Shrink by the keyboard inset so the sheet fills exactly the area
-                // ABOVE the keyboard (paired with bottom:--kb-inset above). 0px
-                // fallback → full 100dvh when the keyboard is down.
+                // Keyboard shrinks the viewport; reader content owns its top inset.
                 height: `calc(${COVER_HEIGHT} - var(--kb-inset, 0px))`,
                 maxHeight: `calc(${COVER_HEIGHT} - var(--kb-inset, 0px))`,
-                // The glass bleeds to the very top; the content (grab handle + rows)
-                // is pushed below the notch / Dynamic Island by the safe-area inset.
-                pt: SAFE_TOP,
+                pt: readerTopBleed ? 0 : SAFE_TOP,
+                "--cowboy-reader-top-inset": readerTopBleed ? SAFE_TOP : "0px",
               }
               : { maxHeight: `${String(MAX_FRACTION * 100)}vh` }),
             zIndex: z + 1,
@@ -1049,6 +1050,7 @@ export function DetentSheet(
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={(event) => event.stopPropagation()}
                     sx={{
+                      ...(footerOverlay ? { isolation: "isolate", "&::before": (theme) => readerBottomEdge(theme)["&::before"] } : {}),
                       ...(footerOverlay
                         ? {
                           position: "absolute",
@@ -1061,7 +1063,7 @@ export function DetentSheet(
                       display: "flex",
                       justifyContent: "center",
                       gap: 1,
-                      px: 2,
+                      paddingInline: "max(var(--cowboy-sheet-footer-inline, 16px), env(safe-area-inset-left, 0px)) max(var(--cowboy-sheet-footer-inline, 16px), env(safe-area-inset-right, 0px))",
                       visibility: topMost ? "visible" : "hidden",
                       // Blank overlay space belongs to the scroll body. Ordinary
                       // action shelves remain interactive; floating island rows
@@ -1070,9 +1072,7 @@ export function DetentSheet(
                       "& > :not([data-mobile-sheet-footer-shield])": {
                         pointerEvents: topMost ? "auto" : "none",
                       },
-                      // The circular dismiss island already has its own internal
-                      // glass breathing room; a full 8px footer lead made it look
-                      // detached from the final control. Keep a compact 4px seam.
+                      // Keep a compact 4px seam above the floating controls.
                       pt: 0.5,
                       // A cover lifts itself above the keyboard (bottom:--kb-inset), so
                       // when the keyboard is up the home-indicator clearance is moot —

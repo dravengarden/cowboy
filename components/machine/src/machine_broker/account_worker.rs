@@ -4,6 +4,74 @@ use tokio::process::{Child, Command};
 
 use crate::{machine_plugins::MachinePluginStore, provider_account::ProviderAccountId};
 
+impl super::Broker {
+    /// Stop scope for a session this Machine holds no declaration for: an
+    /// existing fence or launch journal names its account, and a session
+    /// that never launched here is fenced now.
+    pub(super) async fn absent_account_session_matches(
+        &self,
+        session: &str,
+        account: &ProviderAccountId,
+    ) -> bool {
+        let store = &self.args.provider_store;
+        store
+            .account_stop_matches(session, account)
+            .unwrap_or(false)
+            || store
+                .account_worker_exit(session)
+                .ok()
+                .flatten()
+                .is_some_and(|receipt| receipt.account == *account)
+            || self
+                .fence_unlaunched_account_session(session, account)
+                .await
+    }
+
+    /// A revocation can target a session whose worker never started here
+    /// (for example, one that failed before launch). Fence it and record that
+    /// absence only when no launch was journaled and nothing runs for it.
+    async fn fence_unlaunched_account_session(
+        &self,
+        session: &str,
+        account: &ProviderAccountId,
+    ) -> bool {
+        if self.launching.lock().contains(session)
+            || self.workers.lock().contains_key(session)
+            || self.direct_worker_pids.lock().contains_key(session)
+        {
+            return false;
+        }
+        if self.args.spawn_mode == super::SpawnMode::SystemdUser {
+            let unit = format!(
+                "{}.service",
+                super::worker_unit_name(&self.args.socket, session)
+            );
+            match super::systemd_exit::unit_inactive(&unit).await {
+                Ok(true) => {}
+                Ok(false) => return false,
+                Err(error) => {
+                    tracing::warn!(session, %error, "unlaunched worker unit state unconfirmed");
+                    return false;
+                }
+            }
+        }
+        match self
+            .args
+            .provider_store
+            .fence_unlaunched_account_session(session, account)
+        {
+            Ok(()) => {
+                tracing::info!(session, "fenced named session that never launched here");
+                true
+            }
+            Err(error) => {
+                tracing::warn!(session, %error, "unlaunched session fence refused");
+                false
+            }
+        }
+    }
+}
+
 pub(super) fn binding_matches(
     previous: &crate::runtime_wire::StartSession,
     incoming: &crate::runtime_wire::StartSession,

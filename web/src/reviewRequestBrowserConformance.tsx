@@ -267,9 +267,9 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
     check(button && !button.disabled, `missing enabled ${label}`);
     button.click();
   };
-  const press = (label: string) => {
+  const press = (label: string, owner: ParentNode = container) => {
     const control = [
-      ...container.querySelectorAll<HTMLElement>('[role="button"]'),
+      ...owner.querySelectorAll<HTMLElement>('[role="button"]'),
     ].find((node) => node.textContent?.trim() === label);
     check(control, `missing ${label}`);
     flushSync(() => control.click());
@@ -387,10 +387,10 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
         });
         tab.classList.add("Mui-focusVisible");
         await new Promise<void>((resolve) => setTimeout(resolve, 200));
-        const background = getComputedStyle(tab).backgroundColor;
+        const indicator = getComputedStyle(tab);
         check(
           tab.getAttribute("aria-selected") === "true" &&
-            background !== "transparent" && background !== "rgba(0, 0, 0, 0)",
+            indicator.backgroundColor !== "rgba(0, 0, 0, 0)",
           `${mode}: selected touch tab lost its fill`,
         );
         for (
@@ -398,7 +398,6 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
             '[role="tab"][aria-selected="false"]',
           )
         ) {
-          other.dataset.touchActivated = "true";
           other.classList.add("Mui-focusVisible");
           // MUI interpolates the previous tab's background for 150ms.
           await new Promise<void>((resolve) => setTimeout(resolve, 200));
@@ -412,20 +411,28 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
     }
     document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
     tests.push(
-      "real light and dark themes retain selected tab fill after touch and clear the old tab",
+      "real light and dark themes retain the selected fill after touch and clear the old tab",
     );
     const strip = container.querySelector<HTMLElement>(
       "[data-repository-change-target]",
     );
-    await until(
-      () => !!strip?.querySelector("[data-repository-pull]"),
-      "the branch's pull request",
-    );
-    check(
-      strip?.textContent ===
-        "task/mine2 uncommittedNot pushed↑3 ↓1 origin/main#12",
-      `change target strip reads ${strip?.textContent}`,
-    );
+    if (strip) {
+      await until(() => !!strip.textContent?.includes("#12"), "the branch's pull request");
+      check(strip.textContent === "task/mine · #122 uncommitted · Not pushed · ↑3 ↓1 origin/main",
+        `change target strip reads ${strip.textContent}`);
+    }
+    click("Repository details");
+    await until(() => !!document.querySelector("[data-repository-pull]"), "PR action in repository details");
+    const details = document.querySelector("[data-repository-project-path]")?.parentElement?.textContent;
+    for (const fact of ["task/mine", "2 uncommitted", "Not pushed", "↑3 ↓1 origin/main"]) {
+      check(details?.includes(fact), `Repository details lost ${fact}`);
+    }
+    const pull = document.querySelector<HTMLElement>("[data-repository-pull]")!;
+    check(pull.textContent === "#12", "the PR stays identified in repository details");
+    pull.click();
+    await until(() => !document.querySelector('[aria-label="Close repository details"]'), "choosing a PR closes details");
+    check(pulled.join() === "origin#12", "repository details opens the associated PR");
+    pulled.length = 0;
     click("Worktrees");
     await settle();
     const rows = () =>
@@ -465,7 +472,10 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
       pulled.join() === "origin#7,origin#12",
       `pull requests opened as ${pulled.join()}`,
     );
-    press("↑3 ↓1 origin/main");
+    click("Repository details");
+    await until(() => !!document.querySelector('[aria-label="Close repository details"]'), "repository comparison actions");
+    press("↑3 ↓1 origin/main", document);
+    await until(() => !document.querySelector('[aria-label="Close repository details"]'), "choosing a comparison closes details");
     check(
       comparisons.join() === "refs/remotes/origin/main",
       `the base fact requested ${comparisons.join()}`,

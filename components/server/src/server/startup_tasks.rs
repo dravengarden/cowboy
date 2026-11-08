@@ -192,6 +192,14 @@ pub(super) fn spawn_runtime_reconciliation(
     })
 }
 
+/// Starts notification delivery with the Controller's shutdown signal.
+pub(super) fn spawn_notifications(state: &Arc<AppState>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(notifications::run(
+        Arc::clone(state),
+        state.shutdown.clone(),
+    ))
+}
+
 /// Starts the prompt dispatcher that drains the Hub's ready queue into
 /// agents, and records its liveness in runtime health.
 pub(super) fn spawn_dispatcher(

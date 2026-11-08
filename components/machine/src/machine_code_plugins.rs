@@ -7,7 +7,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Weak};
@@ -22,11 +21,22 @@ use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+mod agent_acquisition;
+#[cfg(all(test, target_os = "linux"))]
+mod agent_acquisition_conformance;
+mod agent_holdings;
+mod agent_release;
 mod buffer_leases;
 mod buffer_navigation;
 mod buffer_sync;
 #[cfg(test)]
 mod navigation_fixture;
+mod observation;
+mod process_tree;
+mod resource_budget;
+pub use resource_budget::Policy as CodeAgentResourcePolicy;
+#[cfg(test)]
+mod route_recovery_tests;
 #[cfg(test)]
 mod sync_fixture;
 
@@ -42,6 +52,7 @@ pub struct CodeLaunchPlan {
     pub home: PathBuf,
 }
 
+#[derive(Clone)]
 pub enum CodeRuntimeSelection {
     Installed(CodeLaunchPlan),
     Legacy(PathBuf),
@@ -67,35 +78,82 @@ struct WorktreeRoute {
     /// Installed generation of `target`; `None` for a legacy socket.
     generation: Option<String>,
     worktree_leases: u64,
+    /// An in-flight or unobserved non-idempotent open must pin its peer even
+    /// before any lease count is observed. Later observations cannot prove
+    /// that the original handler finished.
+    pending_worktree_open: bool,
     buffers: BTreeSet<(String, String)>,
+    agent_buffers: BTreeMap<(String, String), agent_holdings::Holding>,
     owned_buffers: BTreeSet<buffer_leases::LeaseRef>,
     owned_navigations: BTreeSet<crate::machine_protocol::code_buffer_navigation::NavigationRef>,
 }
 
 impl WorktreeRoute {
+    fn dispatching(&mut self, request: &Value) -> Result<()> {
+        if matches!(request["type"].as_str(), Some("openBuffer" | "closeBuffer"))
+            && let Some(held) = self.agent_buffers.get_mut(&Self::buffer_key(request)?)
+        {
+            held.dispatching(request)?;
+        }
+        match request["type"].as_str() {
+            Some("openWorktree") => {
+                ensure!(
+                    !self.pending_worktree_open,
+                    "original worktree open remains unconfirmed"
+                );
+                self.pending_worktree_open = true;
+            }
+            Some("openBuffer") => {
+                // Reserve before I/O, including cancellation. This owner is
+                // idempotent; only its confirmed close removes the reservation.
+                self.buffers.insert(Self::buffer_key(request)?);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn buffer_key(request: &Value) -> Result<(String, String)> {
+        Ok((
+            request["path"]
+                .as_str()
+                .context("buffer path is missing")?
+                .to_owned(),
+            request["leaseId"]
+                .as_str()
+                .context("buffer lease is missing")?
+                .to_owned(),
+        ))
+    }
+
     fn observe(&mut self, request: &Value, response: &Value) -> Result<bool> {
         match request.get("type").and_then(Value::as_str) {
             Some("openWorktree" | "closeWorktree" | "ensureWorktree") => {
+                ensure!(
+                    response["type"] == "worktree" && response["api_version"] == 1,
+                    "code runtime returned invalid worktree confirmation"
+                );
                 self.worktree_leases = response
                     .get("leases")
                     .and_then(Value::as_u64)
                     .context("code runtime returned invalid worktree leases")?;
+                if request["type"] == "openWorktree" {
+                    self.pending_worktree_open = false;
+                }
             }
             Some("openBuffer" | "closeBuffer") => {
-                let key = (
-                    request["path"]
-                        .as_str()
-                        .context("buffer path is missing")?
-                        .to_owned(),
-                    request["leaseId"]
-                        .as_str()
-                        .context("buffer lease is missing")?
-                        .to_owned(),
+                ensure!(
+                    response["type"] == "buffer"
+                        && response["api_version"] == 1
+                        && response["leases"].as_u64().is_some(),
+                    "code runtime returned invalid buffer confirmation"
                 );
+                let key = Self::buffer_key(request)?;
                 if request["type"] == "openBuffer" {
                     self.buffers.insert(key);
                 } else {
                     self.buffers.remove(&key);
+                    self.agent_buffers.remove(&key);
                 }
             }
             _ => {}
@@ -108,7 +166,9 @@ impl WorktreeRoute {
 
     fn is_idle(&self) -> bool {
         self.worktree_leases == 0
+            && !self.pending_worktree_open
             && self.buffers.is_empty()
+            && self.agent_buffers.is_empty()
             && self.owned_buffers.is_empty()
             && self.owned_navigations.is_empty()
     }
@@ -116,8 +176,16 @@ impl WorktreeRoute {
 
 #[derive(Default)]
 pub struct CodeRuntimeHost {
+    agent_acquisitions: agent_acquisition::Retirements,
+    agent_admission: Mutex<()>,
+    agent_retirements: agent_release::Retirements,
+    agent_release_cursor: std::sync::atomic::AtomicUsize,
+    retiring_processes: Arc<process_tree::retirement::Retirement>,
     routes: Mutex<WorktreeRoutes>,
     engines: Mutex<BTreeMap<(String, String), Weak<RunningCodeRuntime>>>,
+    /// Old owners stay on their original incarnation after a leader exits.
+    /// Keep weak discovery for their still-owned descendant accounting.
+    retired_engines: Mutex<Vec<Weak<RunningCodeRuntime>>>,
     buffer_leases: buffer_leases::Routes,
     buffer_navigation: buffer_navigation::Operations,
     buffer_sync: buffer_sync::Operations,
@@ -126,6 +194,11 @@ pub struct CodeRuntimeHost {
 type WorktreeRoutes = BTreeMap<(String, PathBuf), Arc<Mutex<WorktreeRoute>>>;
 
 impl CodeRuntimeHost {
+    pub(super) async fn reap_retired_processes(&self) -> Result<()> {
+        let retiring = Arc::clone(&self.retiring_processes);
+        tokio::task::spawn_blocking(move || retiring.observe().map(|_| ())).await?
+    }
+
     pub async fn navigate(
         &self,
         invocation: crate::machine_plugins::CodeNavigationInvocation,
@@ -174,6 +247,22 @@ impl CodeRuntimeHost {
         active: Option<String>,
         select: impl FnOnce() -> Result<CodeRuntimeSelection>,
     ) -> Result<Value> {
+        self.request_with_admission(plugin_id, payload, active, select, None)
+            .await
+    }
+
+    async fn request_with_admission(
+        &self,
+        plugin_id: &str,
+        payload: &Value,
+        active: Option<String>,
+        select: impl FnOnce() -> Result<CodeRuntimeSelection>,
+        admission: Option<resource_budget::Admission>,
+    ) -> Result<Value> {
+        ensure!(
+            payload["type"] != "acquireAgentBuffer" || admission.is_some(),
+            "agent warming requires resource admission"
+        );
         // Private synchronization is never a generic Code RPC. Only the
         // separate connection-issued core invocation can enter that executor.
         ensure!(
@@ -181,6 +270,12 @@ impl CodeRuntimeHost {
                 payload["type"].as_str(),
                 Some(
                     "prepareBufferSync"
+                        | "legacyReleaseSupport"
+                        | "agentAcquisitionSupport"
+                        | "prepareAgentAcquisition"
+                        | "agentAcquisition"
+                        | "prepareLegacyRelease"
+                        | "legacyRelease"
                         | "bufferSync"
                         | "prepareBufferNavigation"
                         | "bufferNavigation"
@@ -232,12 +327,25 @@ impl CodeRuntimeHost {
             && route.is_idle()
             && matches!(
                 payload["type"].as_str(),
-                Some("ensureWorktree" | "openWorktree")
+                Some("ensureWorktree" | "openWorktree" | "acquireAgentBuffer")
             )
             && active.is_some()
             && route.generation != active;
         if route.target.is_none() || follow {
-            let (target, generation) = self.target(select()?).await?;
+            let selection = select()?;
+            // Looking for an existing observation must not cold-start an
+            // installed backend before the agent's acquisition budget runs.
+            // A configured legacy socket already belongs to another process;
+            // retain that read-only compatibility path without launching one.
+            ensure!(
+                !matches!(selection, CodeRuntimeSelection::Installed(_))
+                    || !matches!(
+                        payload["type"].as_str(),
+                        Some("bufferLanguage" | "bufferHover" | "bufferNavigate" | "bufferSymbols")
+                    ),
+                "buffer not open"
+            );
+            let (target, generation) = self.target(selection).await?;
             route.target = Some(target);
             route.generation = generation;
         }
@@ -262,7 +370,23 @@ impl CodeRuntimeHost {
                 .prepare(plugin_id, reservation, retained_route, &mut route, payload)
                 .await;
         }
-        let response = exchange(target.socket(), payload).await?;
+        let socket = target.socket().to_owned();
+        if let Some(admission) = admission {
+            if !matches!(target, CodeTarget::Installed(runtime) if admission.allows(runtime)) {
+                return Ok(resource_budget::unavailable());
+            }
+            return self.acquire_admitted(&mut route, &socket, payload).await;
+        }
+        if payload["type"] == "closeBuffer"
+            && let Some(CodeTarget::Installed(runtime)) = route.target.as_ref()
+        {
+            let runtime = Arc::clone(runtime);
+            if let Some(response) = self.release_agent(&mut route, &runtime, payload).await? {
+                return Ok(response);
+            }
+        }
+        route.dispatching(payload)?;
+        let response = exchange(&socket, payload).await?;
         if route.observe(payload, &response)? {
             *route = WorktreeRoute::default();
         }
@@ -280,10 +404,32 @@ impl CodeRuntimeHost {
                 engines.retain(|_, engine| engine.strong_count() > 0);
                 let key = (plan.plugin_id.clone(), plan.generation_digest.clone());
                 let generation = Some(plan.generation_digest.clone());
-                if let Some(engine) = engines.get(&key).and_then(Weak::upgrade) {
-                    return Ok((CodeTarget::Installed(engine), generation));
+                let previous = engines.get(&key).and_then(Weak::upgrade);
+                if let Some(engine) = &previous
+                    && engine.is_running()?
+                {
+                    return Ok((CodeTarget::Installed(Arc::clone(engine)), generation));
                 }
-                let engine = Arc::new(RunningCodeRuntime::start(&plan).await?);
+                let mut retired = self.retired_engines.lock().await;
+                retired.retain(|runtime| runtime.strong_count() > 0);
+                ensure!(
+                    retired.len() < MAX_WORKTREE_ROUTES,
+                    "too many retained Code runtime incarnations"
+                );
+                // Cleanup failures keep their reservations and accounting.
+                // Interactive starts may use remaining slots; automatic
+                // warming separately refuses an unknown resource observation.
+                let _ = self.reap_retired_processes().await;
+                let engine = Arc::new(
+                    RunningCodeRuntime::start_tracked(
+                        &plan,
+                        Some(Arc::clone(&self.retiring_processes)),
+                    )
+                    .await?,
+                );
+                if let Some(previous) = previous {
+                    retired.push(Arc::downgrade(&previous));
+                }
                 engines.insert(key, Arc::downgrade(&engine));
                 Ok((CodeTarget::Installed(engine), generation))
             }
@@ -348,13 +494,20 @@ impl Drop for PrivateRuntimeDirectory {
 
 struct RunningCodeRuntime {
     child: parking_lot::Mutex<Child>,
-    process_group: parking_lot::Mutex<Option<PluginProcessGroup>>,
+    process_group: parking_lot::Mutex<Option<process_tree::ProcessTree>>,
     socket: PathBuf,
     _directory: PrivateRuntimeDirectory,
 }
 
 impl RunningCodeRuntime {
     async fn start(plan: &CodeLaunchPlan) -> Result<Self> {
+        Self::start_tracked(plan, None).await
+    }
+
+    async fn start_tracked(
+        plan: &CodeLaunchPlan,
+        retirement: Option<Arc<process_tree::retirement::Retirement>>,
+    ) -> Result<Self> {
         let directory = PrivateRuntimeDirectory::create()?;
         let socket = directory.0.join("adapter.sock");
         let state_dir = directory.0.join("state");
@@ -363,22 +516,20 @@ impl RunningCodeRuntime {
             fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
         }
         let mut command = runtime_command(plan, &plan.runtime.launch, &socket, &state_dir)?;
-        command.as_std_mut().process_group(0);
-        let child = command.spawn().context("starting installed code runtime")?;
-        let process_id = child.id().context("code runtime has no process id")?;
+        let (child, process_tree) =
+            process_tree::ProcessTree::spawn_in(&mut command, retirement.as_ref())
+                .context("starting installed code runtime")?;
         let runtime = Self {
             child: parking_lot::Mutex::new(child),
-            process_group: parking_lot::Mutex::new(Some(PluginProcessGroup::new(process_id))),
+            process_group: parking_lot::Mutex::new(Some(process_tree)),
             socket,
             _directory: directory,
         };
         let mut probe =
             runtime_command(plan, &plan.runtime.readiness, &runtime.socket, &state_dir)?;
-        probe.as_std_mut().process_group(0);
-        let mut probe = probe
-            .spawn()
-            .context("starting code runtime readiness probe")?;
-        let _probe_group = probe.id().map(PluginProcessGroup::new);
+        let (mut probe, _probe_group) =
+            process_tree::ProcessTree::spawn_in(&mut probe, retirement.as_ref())
+                .context("starting code runtime readiness probe")?;
         let result = tokio::time::timeout(
             Duration::from_millis(plan.runtime.readiness_timeout_ms),
             probe.wait(),
@@ -411,9 +562,11 @@ impl RunningCodeRuntime {
             return Ok(true);
         }
         // Retained unknown lease evidence must not keep an exited adapter's
-        // descendants alive. Consume only this runtime's original group owner,
-        // once; later observations and final Drop cannot signal it again.
-        self.process_group.lock().take();
+        // descendants alive. Retain the original group for resource accounting:
+        // a stop request is not proof that its descendants have already exited.
+        if let Some(tree) = self.process_group.lock().as_mut() {
+            tree.request_stop()?;
+        }
         Ok(false)
     }
 
@@ -651,6 +804,8 @@ mod tests {
         let mut owned = BTreeMap::new();
         let mut synchronization = super::sync_fixture::Fixture::default();
         let mut navigation = super::navigation_fixture::Fixture::default();
+        let mut agent_release = super::agent_release::tests::Fixture::default();
+        let mut acquisition = super::agent_acquisition::tests::Fixture::default();
         let mut next_lease = 0_u64;
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
@@ -660,6 +815,51 @@ mod tests {
                 .unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
             let kind = request["type"].as_str().unwrap();
+            if let Some(response) = acquisition.reply(&request, &home, generation) {
+                if let Some(response) = response {
+                    let _ = writeln!(stream, "{response}");
+                }
+                continue;
+            }
+            if kind == "agentAcquisitionSupport" {
+                let response =
+                    json!({"type":"error","message":"unknown variant `agentAcquisitionSupport`"});
+                let _ = writeln!(stream, "{response}");
+                continue;
+            }
+            if let Some(response) = agent_release.reply(&request, &home, generation) {
+                if let Some(response) = response {
+                    let _ = writeln!(stream, "{response}");
+                }
+                continue;
+            }
+            if kind == "closeBuffer" && generation == "generation-lost-agent-close" {
+                let marker = home.join("close-count");
+                let count: u32 = fs::read_to_string(&marker)
+                    .unwrap_or_default()
+                    .parse()
+                    .unwrap_or(0);
+                fs::write(marker, (count + 1).to_string()).unwrap();
+                continue;
+            }
+            if matches!(kind, "openBuffer" | "openWorktree")
+                && matches!(
+                    generation.as_str(),
+                    "generation-lost-legacy" | "generation-pause-legacy"
+                )
+            {
+                fs::write(home.join("legacy-requested"), kind).unwrap();
+                if generation == "generation-lost-legacy" {
+                    continue;
+                }
+                for _ in 0..500 {
+                    if home.join("resume-legacy").exists() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert!(home.join("resume-legacy").exists());
+            }
             if let Some(response) =
                 navigation.reply(&request, &home, generation, &mut owned, &mut next_lease)
             {
@@ -757,13 +957,15 @@ mod tests {
                 continue;
             }
             let response = json!({
-                "type": if kind == "health" { "health" } else { "worktree" },
+                "type": if kind == "health" { "health" } else if matches!(kind, "openBuffer" | "closeBuffer") { "buffer" } else { "worktree" },
+                "api_version": 1,
                 "leases": u8::from(kind == "openWorktree" || kind == "openBuffer"),
                 "generation": generation, "descendant": descendant.id(),
+                "state": "ready",
                 "home": home,
                 "credential_environment": std::env::vars().any(|(key, _)| key.starts_with("ANTHROPIC_") || key.starts_with("COWBOY_AUTH_")),
             });
-            writeln!(stream, "{response}").unwrap();
+            let _ = writeln!(stream, "{response}");
         }
         let _ = descendant.kill();
         let _ = descendant.wait();
@@ -967,26 +1169,32 @@ mod tests {
     fn closing_one_buffer_does_not_drop_other_buffer_or_worktree_leases() {
         let mut route = WorktreeRoute::default();
         route
-            .observe(&json!({"type": "openWorktree"}), &json!({"leases": 1}))
+            .observe(
+                &json!({"type": "openWorktree"}),
+                &json!({"type":"worktree", "api_version":1, "leases": 1}),
+            )
             .unwrap();
         for id in ["a", "b"] {
             route
                 .observe(
                     &json!({"type": "openBuffer", "path": "a.rs", "leaseId": id}),
-                    &json!({}),
+                    &json!({"type":"buffer", "api_version":1, "leases":1}),
                 )
                 .unwrap();
         }
         assert!(
             !route
-                .observe(&json!({"type": "closeWorktree"}), &json!({"leases": 0}))
+                .observe(
+                    &json!({"type": "closeWorktree"}),
+                    &json!({"type":"worktree", "api_version":1, "leases": 0})
+                )
                 .unwrap()
         );
         assert!(
             !route
                 .observe(
                     &json!({"type": "closeBuffer", "path": "a.rs", "leaseId": "a"}),
-                    &json!({})
+                    &json!({"type":"buffer", "api_version":1, "leases":1})
                 )
                 .unwrap()
         );
@@ -994,7 +1202,7 @@ mod tests {
             route
                 .observe(
                     &json!({"type": "closeBuffer", "path": "a.rs", "leaseId": "b"}),
-                    &json!({})
+                    &json!({"type":"buffer", "api_version":1, "leases":0})
                 )
                 .unwrap()
         );

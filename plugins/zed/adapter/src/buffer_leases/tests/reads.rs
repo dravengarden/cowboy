@@ -139,6 +139,7 @@ async fn language_transport_failure_is_not_an_empty_success() {
         next_message_id: AtomicU32::new(1),
         next_lsp_request_id: AtomicU64::new(1),
         frontier: crate::analysis::Frontier,
+        closes: crate::native_close::Registry::default(),
     };
     zed.diagnostics
         .lock()

@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assertEquals, assertThrows } from "./test-assert.ts";
 import {
@@ -8,6 +7,7 @@ import {
   validateReleaseHistory,
 } from "./plugin-component-closure.ts";
 import { resolvePackagePins } from "./check-plugin-components.ts";
+import { mergedComponentRegistrySource, readComponentRegistrySources } from "./component-registry.ts";
 
 const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
 function history(): ComponentRelease[] {
@@ -135,7 +135,7 @@ test("retired Plugins require an explicit removal and never return", () => {
 
 test("schema-2 release history is unchanged by the schema-3 migration", async () => {
   const registry = JSON.parse(
-    await readFile("components/registry.json", "utf8"),
+    mergedComponentRegistrySource(readComponentRegistrySources()),
   ) as { releases: ComponentRelease[] };
   const historical = registry.releases.filter((release) =>
     release.closure === undefined

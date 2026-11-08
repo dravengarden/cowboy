@@ -48,6 +48,9 @@ impl MachineCommand {
             Self::AdapterRequest { adapter, .. } if adapter == session_code::ADAPTER => {
                 session_code::PROTOCOL_VERSION
             }
+            Self::AdapterRequest { adapter, .. } if adapter == code_observer::ADAPTER => {
+                code_observer::PROTOCOL_VERSION
+            }
             Self::Projects { .. } => PROJECT_REGISTRY_PROTOCOL_VERSION,
             Self::Execution { request, .. }
                 if matches!(request.action, execution::Action::Recover { .. }) =>

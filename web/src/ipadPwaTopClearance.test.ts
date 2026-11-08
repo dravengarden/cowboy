@@ -94,11 +94,11 @@ test("only the iPad PWA floor paints a synthetic status strip", () => {
     appSource.match(/var\(--cowboy-mobile-status-material-height\)/g)?.length,
     2,
   );
-  assert(appSource.includes('pt: "var(--cowboy-system-top-clearance)"'));
+  assert(appSource.includes('readerTopEdge(theme, "var(--cowboy-system-top-clearance, 0px)")'));
   assert(reviewSource.includes('pt: "var(--cowboy-system-top-clearance)"'));
   assert(
     repositorySource.includes(
-      "calc(var(--cowboy-system-top-clearance) + 14px)",
+      'pt: embedded ? 0 : "var(--cowboy-system-top-clearance)"',
     ),
   );
   assert(

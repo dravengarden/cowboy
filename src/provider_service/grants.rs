@@ -20,7 +20,7 @@ pub fn candidate_fingerprint(
         serde_json::to_vec(bundle)?.len() <= MAX_BUNDLE_BYTES,
         "credential bundle is too large"
     );
-    Ok(crate::admin::hex_sha256(&serde_json::to_vec(&(
+    Ok(crate::digest::hex_sha256(&serde_json::to_vec(&(
         "cowboy-native-login-candidate-v1",
         package,
         bundle,
@@ -148,7 +148,7 @@ impl ProviderAuthService {
         ensure!(
             receipt.machine_id == machine_id
                 && receipt.recipient_fingerprint
-                    == crate::admin::hex_sha256(enrolled_key.as_bytes()),
+                    == crate::digest::hex_sha256(enrolled_key.as_bytes()),
             "Provider grant enrollment changed"
         );
         let grant = self.existing_machine_grant(&receipt.account_id, enrolled_key)?;
@@ -216,7 +216,7 @@ impl ProviderAuthService {
             .as_ref()
             .context("Provider grant requires a recipient")?;
         ensure!(
-            crate::admin::hex_sha256(recipient.as_bytes()) == intent.recipient_fingerprint,
+            crate::digest::hex_sha256(recipient.as_bytes()) == intent.recipient_fingerprint,
             "Provider grant recipient mismatch"
         );
         intent_hash(intent)

@@ -69,6 +69,7 @@ pub(super) async fn exercise(server: &Path, root: &Path) {
                     protocol: 1,
                     instance: probe.instance.clone(),
                     buffer_ids: chunk.to_vec(),
+                    ..Default::default()
                 }),
             )
             .await

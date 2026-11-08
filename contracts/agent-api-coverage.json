@@ -124,6 +124,7 @@
     "plugin_uninstall::resolution::api_resolve": "exception:host — recovery decisions require their existing authorization plans; use the recovery UI or Operator CLI.",
     "preferences::read": "preferences.get",
     "preferences::update": "preferences.update",
+    "superagent::activity": "exception:Super-agent owner audit/export — the GUI collects cross-project historical candidates; coordinator MCP retains scoped catalog/context and its own durable receipts, never an owner-wide evidence channel.",
     "projects::list": "projects.list",
     "projects::placements": "projects.placements",
     "projects::policies": "projects.policies",

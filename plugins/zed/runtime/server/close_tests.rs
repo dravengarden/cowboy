@@ -13,6 +13,164 @@ struct Fixture {
 }
 
 #[gpui::test]
+async fn cowboy_close_capacity_preserves_receipts_and_original_owners(cx: &mut TestAppContext) {
+    let f = Fixture::new(cx).await;
+    let peer = PeerId::default();
+    let request = proto::CowboyCloseBuffers {
+        protocol: 2,
+        instance: f.instance.clone(),
+        buffer_ids: f.ids.clone(),
+        operation_id: 4097,
+        ..Default::default()
+    };
+    f.store.update(cx, |store, _| {
+        for operation_id in 1..=4096 {
+            store.cowboy_close.receipts.insert(
+                (peer, operation_id),
+                proto::CowboyCloseBuffersResponse {
+                    protocol: 2,
+                    instance: f.instance.clone(),
+                    buffer_ids: f.ids.clone(),
+                    operation_id,
+                    outcome: Outcome::Refused as i32,
+                },
+            );
+        }
+        store.cowboy_close.last_operation.insert(peer, 4096);
+    });
+    assert_eq!(
+        f.request(request.clone(), peer, cx).unwrap().outcome,
+        Outcome::Capacity as i32
+    );
+    assert_eq!(f.retained(peer, cx), 2);
+    let old = proto::CowboyCloseBuffers {
+        action: 1,
+        operation_id: 1,
+        ..request.clone()
+    };
+    assert_eq!(
+        f.request(old.clone(), peer, cx).unwrap().outcome,
+        Outcome::Refused as i32
+    );
+    f.request(proto::CowboyCloseBuffers { action: 2, ..old }, peer, cx)
+        .unwrap();
+    assert_eq!(
+        f.request(request, peer, cx).unwrap().outcome,
+        Outcome::Closed as i32
+    );
+    assert_eq!(f.retained(peer, cx), 0);
+}
+
+#[gpui::test]
+async fn cowboy_close_receipt_queries_and_retirement_never_replay_the_effect(
+    cx: &mut TestAppContext,
+) {
+    let f = Fixture::new(cx).await;
+    let peer = PeerId::default();
+    let original = f
+        .store
+        .read_with(cx, |store, _| store.shared_buffers[&peer].clone());
+    let request = proto::CowboyCloseBuffers {
+        protocol: 2,
+        instance: f.instance.clone(),
+        buffer_ids: f.ids.clone(),
+        operation_id: 1,
+        ..Default::default()
+    };
+    let closed = f.request(request.clone(), peer, cx).unwrap();
+    assert_eq!(closed.protocol, 2);
+    assert_eq!(closed.operation_id, 1);
+    assert_eq!(closed.outcome, Outcome::Closed as i32);
+    assert_eq!(f.retained(peer, cx), 0);
+    // Re-sharing the same IDs is a new owner lifetime. Neither a query nor
+    // duplicate/retired operation may close it again.
+    f.store.update(cx, |store, _| {
+        store.shared_buffers.insert(peer, original);
+    });
+    for action in [1, 0] {
+        let result = f
+            .request(
+                proto::CowboyCloseBuffers {
+                    action,
+                    ..request.clone()
+                },
+                peer,
+                cx,
+            )
+            .unwrap();
+        assert_eq!(result.outcome, Outcome::Closed as i32);
+        assert_eq!(f.retained(peer, cx), 2);
+    }
+    let forgotten = f
+        .request(
+            proto::CowboyCloseBuffers {
+                action: 2,
+                ..request.clone()
+            },
+            peer,
+            cx,
+        )
+        .unwrap();
+    assert_eq!(forgotten.outcome, Outcome::Forgotten as i32);
+    for action in [0, 1] {
+        let result = f
+            .request(
+                proto::CowboyCloseBuffers {
+                    action,
+                    ..request.clone()
+                },
+                peer,
+                cx,
+            )
+            .unwrap();
+        assert_eq!(result.outcome, Outcome::Unknown as i32);
+        assert_eq!(f.retained(peer, cx), 2);
+    }
+}
+
+#[gpui::test]
+async fn cowboy_close_receipts_bind_peer_instance_and_complete_target_set(cx: &mut TestAppContext) {
+    let f = Fixture::new(cx).await;
+    let request = proto::CowboyCloseBuffers {
+        protocol: 2,
+        instance: f.instance.clone(),
+        buffer_ids: f.ids.clone(),
+        operation_id: 1,
+        ..Default::default()
+    };
+    f.request(request.clone(), PeerId::default(), cx).unwrap();
+    let query = proto::CowboyCloseBuffers {
+        action: 1,
+        ..request
+    };
+    let other = PeerId { owner_id: 1, id: 2 };
+    assert_eq!(
+        f.request(query.clone(), other, cx).unwrap().outcome,
+        Outcome::Unknown as i32
+    );
+    let mut wrong = query.clone();
+    wrong.buffer_ids.pop();
+    assert!(f.request(wrong, PeerId::default(), cx).is_err());
+    let mut wrong = query.clone();
+    wrong.instance[0] ^= 1;
+    assert!(f.request(wrong, PeerId::default(), cx).is_err());
+    assert_eq!(
+        f.request(
+            proto::CowboyCloseBuffers {
+                action: 2,
+                operation_id: 99,
+                ..query
+            },
+            PeerId::default(),
+            cx
+        )
+        .unwrap()
+        .outcome,
+        Outcome::Unknown as i32
+    );
+}
+
+#[gpui::test]
 async fn cowboy_close_ack_does_not_return_acquisition_capacity(cx: &mut TestAppContext) {
     use language::cowboy_buffer_budget::in_use;
     let f = Fixture::new(cx).await;
@@ -197,7 +355,7 @@ async fn cowboy_close_strict_probe_instance_and_input_bounds(cx: &mut TestAppCon
     }
     for request in [
         proto::CowboyCloseBuffers {
-            protocol: 2,
+            protocol: 3,
             ..probe.clone()
         },
         proto::CowboyCloseBuffers {

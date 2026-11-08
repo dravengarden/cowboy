@@ -1,3 +1,4 @@
+import { ScrollEdges } from "@cowboy/app-shell";
 import { useEffect, useState } from "react";
 import { alpha, Box, ButtonBase, Stack, Typography } from "@mui/material";
 import { ShortcutKeycap } from "../../ShortcutKeycap";
@@ -344,7 +345,7 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
             ))}
           </Box>
         )}
-    </Box>
+    <ScrollEdges /></Box>
   );
 }
 

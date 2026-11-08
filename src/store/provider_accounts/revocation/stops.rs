@@ -80,7 +80,7 @@ impl Store {
             anyhow::ensure!(machine.rows_affected() == 1, "machine_unavailable");
             let key: Option<String> = sqlx::query_scalar("SELECT encryption_public_key FROM machines WHERE id=$1")
                 .bind(&scope.machine_id).fetch_one(&mut *tx).await?;
-            anyhow::ensure!(key.is_some_and(|key| crate::admin::hex_sha256(key.as_bytes()) == scope.recipient_fingerprint), "machine_enrollment_changed");
+            anyhow::ensure!(key.is_some_and(|key| crate::digest::hex_sha256(key.as_bytes()) == scope.recipient_fingerprint), "machine_enrollment_changed");
             let result = enqueue()?;
             tx.commit().await?;
             result
@@ -180,7 +180,7 @@ impl Store {
             anyhow::ensure!(machine.rows_affected() == 1, "machine_unavailable");
             let key: Option<String> = sqlx::query_scalar("SELECT encryption_public_key FROM machines WHERE id=$1")
                 .bind(&evidence.machine_id).fetch_one(&mut *tx).await?;
-            anyhow::ensure!(key.is_some_and(|key| crate::admin::hex_sha256(key.as_bytes()) == evidence.recipient_fingerprint), "machine_enrollment_changed");
+            anyhow::ensure!(key.is_some_and(|key| crate::digest::hex_sha256(key.as_bytes()) == evidence.recipient_fingerprint), "machine_enrollment_changed");
             anyhow::ensure!(connection_is_current(), "machine_connection_changed");
             sqlx::query("INSERT INTO provider_account_stops (owner_user_id,operation_id,session_id,value) VALUES ($1,$2,$3,$4) ON CONFLICT (owner_user_id,operation_id,session_id) DO UPDATE SET value=excluded.value")
                 .bind(owner).bind(operation).bind(&evidence.session_id).bind(serde_json::to_string(evidence)?).execute(&mut *tx).await?;

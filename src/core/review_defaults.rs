@@ -5,6 +5,32 @@ use crate::review_directory::{Change, override_value, parse_change};
 use crate::session_folders::{FolderActor, defaults::DefaultKey};
 use serde_json::json;
 
+/// Captures an allowed policy and exact Session lifetime, never serializable
+/// authority. Callers still need the current worker and Machine connection.
+#[derive(Clone)]
+pub struct LanguageServerTrust {
+    scope: super::SessionCodeScope,
+    folders: crate::session_folders::FolderObservation,
+}
+
+impl LanguageServerTrust {
+    pub fn scope(&self) -> &super::SessionCodeScope {
+        &self.scope
+    }
+
+    pub fn current(&self, hub: &Hub) -> bool {
+        let sessions = hub.inner.sessions.lock();
+        let Some(session) = sessions
+            .get(self.scope.session_id())
+            .filter(|s| !s.meta.closing)
+        else {
+            return false;
+        };
+        super::SessionCodeScope::observe(session).as_ref() == Some(&self.scope)
+            && self.folders.current(&hub.inner.folders.lock())
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Receipts {
     entries: std::collections::VecDeque<(String, String)>,
@@ -28,6 +54,18 @@ impl Receipts {
 }
 
 impl Hub {
+    pub fn restore_session_folders(&self, folders: Vec<crate::session_folders::SessionFolder>) {
+        self.inner.folders.lock().set_folders(folders);
+    }
+
+    pub fn folder_defaults(
+        &self,
+        actor: &crate::session_folders::FolderActor,
+        id: &str,
+    ) -> Result<crate::session_folders::defaults::ResolvedDefaults, String> {
+        self.inner.folders.lock().resolve_defaults(actor, id)
+    }
+
     pub fn review_default_receipt(&self, operation: &str) -> bool {
         self.inner
             .review_default_receipts
@@ -60,8 +98,9 @@ impl Hub {
             expected: input.expected.clone(),
             change: input.change.clone(),
         };
-        let fingerprint =
-            crate::admin::hex_sha256(&serde_json::to_vec(&replay).map_err(|_| "invalid_argument")?);
+        let fingerprint = crate::digest::hex_sha256(
+            &serde_json::to_vec(&replay).map_err(|_| "invalid_argument")?,
+        );
         {
             let mut receipts = self.inner.review_default_receipts.lock();
             if let Some(previous) = receipts.get(operation) {
@@ -135,33 +174,110 @@ impl Hub {
     /// session is restricted.
     #[must_use]
     pub fn language_servers_allowed(&self, session_id: &str) -> bool {
+        self.observe_language_server_trust(session_id).is_some()
+    }
+
+    /// The folder snapshot and policy check share the same mutation lock.
+    /// Policy-affecting folder mutations end it, including off/on ABA.
+    pub fn observe_language_server_trust(&self, session_id: &str) -> Option<LanguageServerTrust> {
         let sessions = self.inner.sessions.lock();
-        let Some(session) = sessions.get(session_id) else {
-            return false;
-        };
+        let session = sessions.get(session_id).filter(|s| !s.meta.closing)?;
+        let scope = super::SessionCodeScope::observe(session)?;
         let actor = FolderActor {
             user_id: session.meta.owner_user_id.clone(),
             sees_all: false,
         };
         let project = super::session_continuation::sidebar_project(&session.meta);
         let folders = self.inner.folders.lock();
-        let Some(folder) = folders.display_folder(&actor, session_id, project) else {
-            return true;
-        };
-        folders
-            .resolve_defaults(&actor, &folder)
-            .map_or(true, |resolved| {
-                !matches!(
-                    resolved.values.get(&DefaultKey::LanguageServers),
-                    Some(Some(value)) if value == "off"
-                )
-            })
+        let allowed = folders
+            .display_folder(&actor, session_id, project)
+            .is_none_or(|folder| {
+                folders
+                    .resolve_defaults(&actor, &folder)
+                    .is_ok_and(|resolved| {
+                        !matches!(
+                            resolved.values.get(&DefaultKey::LanguageServers),
+                            Some(Some(value)) if value == "off"
+                        )
+                    })
+            });
+        allowed.then(|| LanguageServerTrust {
+            scope,
+            folders: folders.observe(),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Receipts;
+    use crate::core::{Hub, SessionOrigin};
+
+    #[test]
+    fn language_trust_cannot_survive_off_on_or_session_replacement() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "observer".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "test".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let old = hub.observe_language_server_trust("observer").unwrap();
+        assert!(old.current(&hub));
+        hub.sync_apply(
+            "folders",
+            "create".into(),
+            "create",
+            &serde_json::json!({"id":"folder","name":"F"}),
+        )
+        .unwrap();
+        hub.sync_apply(
+            "folders",
+            "place".into(),
+            "place",
+            &serde_json::json!({"session_ids":["observer"],"folder":"folder"}),
+        )
+        .unwrap();
+        assert!(!old.current(&hub));
+        let before_off = hub.observe_language_server_trust("observer").unwrap();
+        for (operation, value) in [("off", "off"), ("on", "on")] {
+            hub.sync_apply(
+                "folders",
+                operation.into(),
+                "defaults",
+                &serde_json::json!({"id":"folder","values":{"language_servers":value}}),
+            )
+            .unwrap();
+            assert!(!before_off.current(&hub));
+            assert_eq!(hub.language_servers_allowed("observer"), value == "on");
+        }
+        let current = hub.observe_language_server_trust("observer").unwrap();
+        assert!(current.current(&hub));
+        hub.sync_apply(
+            "folders",
+            "rename".into(),
+            "rename",
+            &serde_json::json!({"id":"folder","name":"Renamed"}),
+        )
+        .unwrap();
+        assert!(current.current(&hub), "presentation changes preserve trust");
+        assert!(!current.current(&Hub::new()));
+        hub.set_machine_lineage("observer", Some("replacement"));
+        assert!(!current.current(&hub));
+        let current = hub.observe_language_server_trust("observer").unwrap();
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("observer")
+            .unwrap()
+            .meta
+            .closing = true;
+        assert!(!current.current(&hub));
+        assert!(hub.observe_language_server_trust("observer").is_none());
+    }
+
     #[test]
     fn recent_receipts_survive_pressure_and_new_writes_never_lock_out() {
         let mut receipts = Receipts::default();

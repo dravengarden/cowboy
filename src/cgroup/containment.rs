@@ -82,6 +82,16 @@ pub struct Containment {
     directory: std::fs::File,
 }
 
+/// A bounded observation of the original process tree. RSS sums process
+/// resident sets (shared pages can be counted more than once); CPU is the
+/// kernel's cumulative subtree usage, not a rate or a resource limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourceSample {
+    pub processes: u32,
+    pub rss_bytes: u64,
+    pub cpu_usage_usec: u64,
+}
+
 impl Containment {
     pub fn prepare(command: &mut tokio::process::Command) -> io::Result<Self> {
         #[cfg(target_os = "linux")]
@@ -99,8 +109,45 @@ impl Containment {
         &self.identity
     }
 
+    pub fn resources(&self) -> io::Result<ResourceSample> {
+        #[cfg(target_os = "linux")]
+        {
+            linux::resources(self)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(io::Error::other("native resource accounting unavailable"))
+        }
+    }
+
+    /// Request stop through the original opened group, retaining its descriptor
+    /// for accounting until the final owner is dropped. This is not exit proof.
+    pub fn signal_stop(&self) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            linux::kill(&self.directory)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(io::Error::other("native process containment unavailable"))
+        }
+    }
+
     pub async fn finish(self) -> io::Result<()> {
         self.identity.terminate().await
+    }
+
+    /// Stop and try to unlink this original group without waiting. Only a
+    /// confirmed removal ends ownership; a pending exit keeps its descriptor.
+    pub fn try_finish(&self) -> io::Result<bool> {
+        #[cfg(target_os = "linux")]
+        {
+            linux::try_finish(&self.identity, &self.directory)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(io::Error::other("native process containment unavailable"))
+        }
     }
 }
 

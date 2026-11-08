@@ -37,6 +37,7 @@ import {
 } from "react";
 
 import { DetentSheet } from "./detent-sheet.tsx";
+import { ScrollEdges } from "./scroll-edges.tsx";
 
 const DISMISS_TAP_MOVE_SLOP_PX = 10;
 const DISMISS_TAP_MAX_MS = 800;
@@ -179,6 +180,7 @@ function useReliableDismissTap(onClose: () => void): {
 export interface BottomSheetProps {
   readonly islandContext?: SheetDockContext | undefined;
   readonly hideMobileTitle?: boolean;
+  readonly readerTopBleed?: boolean;
   readonly open: boolean;
   readonly onClose: () => void;
   /** Heading shown at the top of the sheet/dialog. */
@@ -242,7 +244,7 @@ export function FloatingActionIsland(
     children,
     columns = "1fr",
     maxWidth,
-    minHeight = 54,
+    minHeight = MOBILE_SHEET_DISMISS_ISLAND_PX,
     rim = "defined",
     compact = false,
   }: {
@@ -277,6 +279,7 @@ export function FloatingActionIsland(
         gridTemplateColumns: columns,
         alignItems: "center",
         gap: compact ? 0 : 0.5,
+        "& .MuiSvgIcon-root": { fontSize: "1.5rem", width: "1.5rem", height: "1.5rem" },
         border: softRim ? 0 : 1,
         borderColor: (t) => alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.18 : 0.62),
         borderRadius: compact ? "1.25rem" : 999,
@@ -364,7 +367,7 @@ export function MobileSheetActionGroup(
     1,
     actions.reduce((count, action) => count + (action.visible === false ? 0 : 1), 0),
   );
-  const width = 54 + (visibleCount - 1) * 50;
+  const width = MOBILE_SHEET_DISMISS_ISLAND_PX + (visibleCount - 1) * 50;
   return (
     <Box
       data-mobile-sheet-footer-shield
@@ -448,9 +451,9 @@ export function MobileSheetActionGroup(
                       // font. Explicit SVG geometry also avoids minimum-font
                       // clamping on mobile browsers.
                       "& .MuiSvgIcon-root": {
-                        fontSize: "calc(24px * var(--cowboy-font-scale, 1))",
-                        width: "calc(24px * var(--cowboy-font-scale, 1))",
-                        height: "calc(24px * var(--cowboy-font-scale, 1))",
+                        fontSize: "1.5rem",
+                        width: "1.5rem",
+                        height: "1.5rem",
                       },
                       transition: [
                         "transform 160ms cubic-bezier(0.22, 1, 0.36, 1)",
@@ -647,6 +650,7 @@ export function BottomSheet(
     islandActions,
     islandContext,
     hideMobileTitle = false,
+    readerTopBleed = hideMobileTitle,
     denseHeader,
     fill = false,
   }: BottomSheetProps,
@@ -671,7 +675,7 @@ export function BottomSheet(
         PaperProps={{ sx: { maxWidth: wide ? { sm: 560, lg: 720 } : 444 } }}
       >
         {title == null ? null : <DialogTitle sx={{ fontWeight: 700 }}>{title}</DialogTitle>}
-        <DialogContent>{children}</DialogContent>
+        <DialogContent>{children}<ScrollEdges /></DialogContent>
         {actions == null
           ? null
           : <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, px: 3, pb: 2 }}>{actions}</Box>}
@@ -690,7 +694,8 @@ export function BottomSheet(
       animateOnOpen={animateOnOpen}
       footerOverlay={floatingActions}
       fillBody={fill && cover}
-      grabber={denseHeader == null}
+      readerTopBleed={readerTopBleed}
+      grabber={denseHeader == null && !readerTopBleed}
       ariaLabel={islandContext?.title ?? (typeof title === "string" ? title : undefined)}
       // Dim the standalone status bar in lockstep with the scrim, and — since
       // surfaceColor is also what DetentSheet RESTORES the bar to on close —
