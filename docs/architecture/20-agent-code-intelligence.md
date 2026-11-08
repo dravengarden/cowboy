@@ -164,6 +164,15 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   seen, so absence proves nothing. Which executor method Codex `apply_patch`
   uses is not yet verified against the pinned executor.
 
+  Production check on 2026-11-08 (Controller `b9dc4ff51`, transaction
+  `1794144305234690764-b9dc4ff51a24`): neither agent's actual edit path is
+  seen yet. A Claude 3.20.27 Write of a new Go file returned diagnostics
+  without `write`, consistent with the buffered apply helper. A Codex 3.5.21
+  create-and-edit received its steered row (`injected`, `introduced: 1`) also
+  without `write`, so its patch application does not use `fs/writeFile`
+  either. The hint therefore covers only direct `fs/writeFile` callers until
+  the helper's `process/start` result and Codex's patch method are observed.
+
 On 2026-11-07 the Controller activated
 `1ad869c5fed6f033583b75a5c2db09869b60b678` through transaction
 `1794056365894580054-1ad869c5fed6` (`succeeded` / `committed`). The full pinned
