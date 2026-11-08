@@ -1134,6 +1134,11 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
             retain_explicit_intent(hub, &session, error);
         }
     };
+    // A user send retries a preparation that failed permanently; the
+    // preflight below then holds the prompt until the target is ready.
+    if explicit {
+        execution::sessions::retry_blocked(&state, &session_id);
+    }
     let mut shutdown = state.shutdown.clone();
     let recovery = match dispatch_preflight(
         &mut shutdown,

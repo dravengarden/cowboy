@@ -707,6 +707,20 @@ source mismatch detection, not watcher frontiers or automatic baselines.
 - Baselines are immutable, content-matched captures at a read or pre-write
   boundary (the facade and executor see pre-write content). Without one the
   comparison is `unknown`.
+
+  The read boundary is implemented. Each explicit `code.diagnostics` read that
+  is `document_current` and passed its trust fence captures the complete
+  observation (at most 200 diagnostics) bound to the snapshot's text SHA-256
+  and byte count, keyed by the exact Session code scope and path. When a later
+  read sees different text, the previous capture becomes the baseline and the
+  reply's `comparison` names it (`against`). The same text never becomes its
+  own baseline. Comparisons are `unknown` without a baseline, for a reply that
+  is not `document_current`, after buffer replacement (a different native
+  stream), when the server set changed or a capture exceeded its bound.
+  Passive `code.summary` neither captures nor compares. Records are
+  Controller memory, bounded to 64 files per scope and 512 overall (least
+  recently observed first); a restart discards them. Pre-write capture waits
+  for executor receipts, so a read boundary may precede several edits.
 - **Hunk overlap** orders diagnostics within the budget (`in_edit` before
   `elsewhere`); it never asserts that an edit caused a diagnostic and never
   replaces the baseline comparison.
@@ -714,6 +728,15 @@ source mismatch detection, not watcher frontiers or automatic baselines.
   (severity, message); severity escalation is a change. Matching is
   multiplicity-aware with versioned anchor mapping; without `code`, provenance
   and ambiguity are preserved rather than hashing messages.
+
+  The implemented matcher keys identity on the native server, source kind,
+  registration, source and code. It has no anchor mapping yet: per identity it
+  pairs instances most severe first, counting `persisting`, `escalated`,
+  `introduced` and `resolved`. Moved instances persist. New instances of an
+  identity the baseline already had are listed as `ambiguous` candidates (up
+  to ten), since any of them may be the new one. Diagnostics without a code or
+  bounded provenance are counted as `unmatched` and make the comparison
+  `partial`. No field claims an edit caused a diagnostic.
 - Dependent files: a bounded worktree diagnostic sequence plus project epoch,
   classified `attributable | newly_observed | concurrent`; an empty delta means
   "nothing new observed there".
@@ -732,7 +755,7 @@ immediately.
 | --- | --- |
 | `code.search(query, {regex?, case_sensitive?, path?, limit?})` | bounded content matches with lines (core; implemented) |
 | `code.outline(path)`, `code.symbols(query, {limit?})` | syntax structure (tree-sitter tags; implemented, `heuristic`); language-engine refinement later |
-| `code.diagnostics(paths)` | implemented: diagnostics and counts with a per-file state from per-server analysis-frontier evidence (`document_current`, `stale`, otherwise `last_observed`), or `not_open`/`restricted`/`refused`/`unavailable`. A file no Code pane holds is acquired for the agent (`acquired: true`, see Acquisition) and waited on for up to 4 s. Baseline comparison comes with P2 |
+| `code.diagnostics(paths)` | implemented: diagnostics and counts with a per-file state from per-server analysis-frontier evidence (`document_current`, `stale`, otherwise `last_observed`), or `not_open`/`restricted`/`refused`/`unavailable`. A file no Code pane holds is acquired for the agent (`acquired: true`, see Acquisition) and waited on for up to 4 s. Each file carries a read-boundary `comparison` (see Baselines) |
 | `code.summary()` | implemented: passive counts over this session's tracked files (`coverage: agent_observed_files`), without acquisition or idle-time refresh. No usable observations means `counts: null`/`unobserved`; `partial` counts exclude unavailable files. Counts are never project totals, and Controller restart discards the tracked set until files are read again |
 | `code.hover({path,row,column,sha256})` | implemented over already-open Session buffers: zero-based UTF-16 position and exact content hash, original policy/route fences, identical bounded native snapshot before/after. Five-second read bound; at most 8 blocks / 2,000 text characters with explicit truncation; escaped envelopes over 12 KiB are refused. Never acquires a buffer or destination; stale locations are refused |
 | `code.definition/references/implementations(locator)` | after owned-navigation acceptance only |

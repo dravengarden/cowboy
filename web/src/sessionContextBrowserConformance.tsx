@@ -127,7 +127,7 @@ export async function runSessionContextBrowserConformance(
         outbox_contract: "atomic-delta-v1",
       });
     }
-    if (url.endsWith("/hibernate")) {
+    if (url.endsWith("/hibernate") || url.endsWith("/reload")) {
       writes.push({ url, body: {} });
       return new Response(null, { status: 204 });
     }
@@ -1095,6 +1095,29 @@ export async function runSessionContextBrowserConformance(
         `preparing ${width}: status is centered without horizontal overflow`);
       check(Boolean(exactButton("Restore")), `preparing ${width}: source recovery stays visible`);
       await observe?.(`preparing-${width}`);
+      // A startup that failed keeps the same page: why, Retry, and the source.
+      flushSync(() => root.render(
+        <BrowserProductTheme>
+          <CssBaseline />
+          <Box sx={{ height: 560, display: "flex", flexDirection: "column-reverse" }}>
+            <PreparingConversation
+              sessionId={sessions[3]!.id}
+              location="columbus on hawk"
+              blocked={{ detail: "The selected workspace could not be prepared (hawk). This session is retained; send a message or reload it to try again." }}
+            />
+          </Box>
+        </BrowserProductTheme>,
+      ));
+      await until(() => Boolean(container.querySelector('[data-conversation-empty-state="blocked"] [data-session-handoff-link="trash"]')));
+      const alert = container.querySelector('[role="alert"]');
+      check(Boolean(alert?.textContent?.includes("Session didn't start") && alert.textContent.includes("could not be prepared")) &&
+        container.scrollWidth <= width, `blocked ${width}: the reason replaces the progress without horizontal overflow`);
+      check(Boolean(exactButton("Restore")), `blocked ${width}: source recovery stays visible`);
+      const beforeRetry = writes.length;
+      exactButton("Retry")!.click();
+      await until(() => writes.length > beforeRetry);
+      check(writes.at(-1)!.url.endsWith(`/sessions/${sessions[3]!.id}/reload`), `blocked ${width}: Retry reloads the session`);
+      await observe?.(`blocked-${width}`);
     }
   } finally {
     root.unmount();

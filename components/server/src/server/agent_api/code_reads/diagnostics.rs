@@ -115,7 +115,7 @@ fn identities_match(
     })
 }
 
-fn severity(value: i32) -> &'static str {
+pub(super) fn severity(value: i32) -> &'static str {
     match value {
         1 => "error",
         2 => "warning",
@@ -170,6 +170,8 @@ async fn read_with_acquisition(
         .observe_language_server_trust(observed.session().session_id())
         .filter(|trust| trust.scope() == observed.session());
     let mut files = Vec::with_capacity(paths.len());
+    // Baselines are captured only from explicit reads, after the trust fence.
+    let mut captures = Vec::new();
     for path in paths {
         if trust
             .as_ref()
@@ -206,7 +208,11 @@ async fn read_with_acquisition(
                     files.push(json!({"path":path,"state":"unavailable"}));
                     continue;
                 }
-                let source_state = if buffer_snapshot.is_some() { source_state } else { SourceState::Unavailable };
+                let source_state = if buffer_snapshot.is_some() {
+                    source_state
+                } else {
+                    SourceState::Unavailable
+                };
                 let mut counts = json!({"error":0,"warning":0,"information":0,"hint":0});
                 for diagnostic in &diagnostics {
                     if let Some(count) = counts.get_mut(severity(diagnostic.severity)) {
@@ -221,7 +227,8 @@ async fn read_with_acquisition(
                     .take(MAX_PER_PATH)
                     .map(|value| diagnostic(value, buffer_snapshot.as_deref()))
                     .collect();
-                let mut file = json!({"path":path,"state":file_state(analysis.as_deref(), source_state),
+                let state = file_state(analysis.as_deref(), source_state);
+                let mut file = json!({"path":path,"state":state,
                     "counts":counts,"diagnostics":listed,"truncated":truncated,
                     "bufferSnapshot":buffer_snapshot,"sourceState":source_state});
                 if acquired {
@@ -229,6 +236,23 @@ async fn read_with_acquisition(
                 }
                 if let Some(analysis) = &analysis {
                     file["analysis"] = json!(servers(analysis));
+                }
+                if acquire {
+                    let pending = (state == "document_current")
+                        .then(|| {
+                            super::baselines::capture(
+                                &diagnostics,
+                                buffer_snapshot.as_deref(),
+                                analysis.as_deref().unwrap_or_default(),
+                            )
+                        })
+                        .flatten();
+                    match pending {
+                        Some(pending) => {
+                            captures.push((files.len(), path.clone(), pending, diagnostics))
+                        }
+                        None => file["comparison"] = super::baselines::unknown("not_current"),
+                    }
                 }
                 file
             }
@@ -245,6 +269,15 @@ async fn read_with_acquisition(
     // Revocation during an asynchronous query discards its observation even
     // when the owner re-enabled language servers before the reply arrived.
     fence_files(&state.hub, trust.as_ref(), &mut files);
+    if trust
+        .as_ref()
+        .is_some_and(|trust| trust.current(&state.hub))
+    {
+        for (index, path, pending, diagnostics) in captures {
+            files[index]["comparison"] =
+                super::baselines::record(observed.session(), &path, pending, &diagnostics);
+        }
+    }
     json!({
         "coverage": "open_buffers",
         "files": files,

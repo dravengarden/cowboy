@@ -429,6 +429,33 @@ async fn apply_create_defaults(
     Ok(provider_account_id)
 }
 
+/// Re-prepare a session whose last preparation failed permanently, on an
+/// explicit send or Reload. Returns `false` when it has no such failure.
+pub(in crate::server) fn retry_blocked(state: &Arc<AppState>, session_id: &str) -> bool {
+    let Some(info) = state.hub.session_info(session_id) else {
+        return false;
+    };
+    if info.meta.status != Status::Crashed
+        || info
+            .meta
+            .execution_binding
+            .as_ref()
+            .and_then(ExecutionBinding::preparation)
+            .is_none()
+    {
+        return false;
+    }
+    state.hub.set_status(
+        session_id,
+        Status::Starting,
+        Some("Preparing the workspace".to_owned()),
+    );
+    schedule(state, session_id);
+    true
+}
+
+/// Retries transient preparation failures. A permanent failure holds the
+/// session `Crashed` until [`retry_blocked`], so it cannot loop.
 pub(in crate::server) fn start_recovery(state: &Arc<AppState>) {
     let state = Arc::downgrade(state);
     tokio::spawn(async move {
@@ -441,11 +468,12 @@ pub(in crate::server) fn start_recovery(state: &Arc<AppState>) {
                 return;
             }
             for meta in state.hub.session_list() {
-                if meta
-                    .execution_binding
-                    .as_ref()
-                    .and_then(ExecutionBinding::preparation)
-                    .is_some()
+                if meta.status != Status::Crashed
+                    && meta
+                        .execution_binding
+                        .as_ref()
+                        .and_then(ExecutionBinding::preparation)
+                        .is_some()
                 {
                     schedule(&state, &meta.id);
                 }
@@ -468,22 +496,69 @@ fn schedule(state: &Arc<AppState>, session_id: &str) {
     let state = Arc::clone(state);
     let session_id = session_id.to_owned();
     tokio::spawn(async move {
-        if let Err(error) = prepare(&state, &session_id).await
+        if let Err(failure) = prepare(&state, &session_id).await
             && !state.execution_closures.lock().contains_key(&session_id)
-            && state
-                .hub
-                .session_info(&session_id)
-                .is_some_and(|info| info.meta.status != Status::Crashed)
+            && let Some(info) = state.hub.session_info(&session_id)
         {
-            state
-                .hub
-                .set_status(&session_id, Status::Crashed, Some(error));
+            if failure.retryable {
+                // Stay `Starting` for the recovery loop. Each status write is
+                // a durable lifecycle event, so a retry does not repeat one.
+                tracing::warn!(
+                    session = %session_id,
+                    error = %failure.message,
+                    "execution preparation will be retried"
+                );
+            } else if info.meta.status != Status::Crashed {
+                // A queued prompt stays queued for an explicit send or Reload;
+                // a retained wait would re-dispatch it every two seconds.
+                super::super::session_maintenance::clear_wait(&state.hub, &session_id);
+                state.hub.set_status(
+                    &session_id,
+                    Status::Crashed,
+                    Some(format!(
+                        "{} This session is retained; send a message or reload it to try again.",
+                        failure.message
+                    )),
+                );
+            }
         }
         state.execution_preparations.lock().remove(&session_id);
     });
 }
 
-async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
+/// Why a preparation failed. Only a retryable failure (the Machine or its
+/// connection is not ready, capacity is full) is repeated automatically.
+#[derive(Debug, PartialEq, Eq)]
+struct Failure {
+    message: String,
+    retryable: bool,
+}
+
+impl Failure {
+    fn permanent(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: false,
+        }
+    }
+}
+
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            retryable: true,
+        }
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
+async fn prepare(state: &AppState, session_id: &str) -> Result<(), Failure> {
     let info = state
         .hub
         .session_info(session_id)
@@ -523,10 +598,10 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
             crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
         )
     {
-        return Err(format!(
-            "Machine {} must be updated before it can prepare this workspace",
+        return Err(Failure::permanent(format!(
+            "Machine {} must be updated before it can prepare this workspace.",
             intent.machine_id
-        ));
+        )));
     }
     let response = call(
         state,
@@ -547,9 +622,9 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
             .source_path
             .clone_from(&binding.workspace.source_path);
         if intent.validate().is_err() || !alias_intent.accepts(&binding) {
-            return Err(
-                "Prepared environment no longer matches the selected workspace or executor".into(),
-            );
+            return Err(Failure::permanent(
+                "Prepared environment no longer matches the selected workspace or executor.",
+            ));
         }
         // Never canonicalize a remote Machine's paths on the Controller or
         // weaken the binding comparison. The Machine's existing discovery
@@ -567,9 +642,9 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
         if discovered.get("root").and_then(serde_json::Value::as_str)
             != Some(binding.workspace.source_path.as_str())
         {
-            return Err(
-                "Prepared environment no longer matches the selected workspace or executor".into(),
-            );
+            return Err(Failure::permanent(
+                "Prepared environment no longer matches the selected workspace or executor.",
+            ));
         }
         resolved_source = Some(binding.workspace.source_path.clone());
     }
@@ -607,13 +682,14 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
                 resolved_source.as_deref(),
             )
         })
+        .map_err(Failure::from)
 }
 
 fn prepared_response(
     session_id: &str,
     machine_id: &str,
     response: Response,
-) -> Result<BindingV1, String> {
+) -> Result<BindingV1, Failure> {
     match response {
         Response::Prepared { binding } => Ok(binding),
         Response::Refused { reason } => {
@@ -636,9 +712,10 @@ fn prepared_response(
                 Refusal::PreparationFailed => "The execution Machine could not finish preparation",
                 Refusal::Capacity => "The execution Machine has reached its environment capacity",
             };
-            Err(format!(
-                "{detail} ({machine_id}). This session is retained; Cowboy will retry preparation."
-            ))
+            Err(Failure {
+                message: format!("{detail} ({machine_id})."),
+                retryable: super::recovery::transient(reason),
+            })
         }
         other => {
             tracing::warn!(
@@ -647,9 +724,9 @@ fn prepared_response(
                 response = ?other,
                 "unexpected execution preparation response"
             );
-            Err(format!(
-                "The execution Machine returned an unexpected preparation response ({machine_id}). This session is retained; Cowboy will retry preparation."
-            ))
+            Err(Failure::permanent(format!(
+                "The execution Machine returned an unexpected preparation response ({machine_id})."
+            )))
         }
     }
 }
@@ -762,19 +839,22 @@ mod preparation_tests {
         let messages: std::collections::HashSet<_> = reasons
             .into_iter()
             .map(|reason| {
-                let message = prepared_response("session", "target", Response::Refused { reason })
+                let failure = prepared_response("session", "target", Response::Refused { reason })
                     .unwrap_err();
-                assert!(message.contains("(target)"));
-                assert!(message.contains("retry preparation"));
-                assert!(!message.contains("original environment"));
-                message
+                assert!(failure.message.contains("(target)"));
+                assert!(!failure.message.contains("original environment"));
+                // Only a Machine that is not ready yet is retried; a refused
+                // workspace, identity or environment would fail the same way.
+                assert_eq!(
+                    failure.retryable,
+                    matches!(reason, Refusal::Unavailable | Refusal::Capacity),
+                    "{reason:?}"
+                );
+                failure.message
             })
             .collect();
         assert_eq!(messages.len(), reasons.len());
-        assert!(
-            prepared_response("session", "target", Response::Closed)
-                .unwrap_err()
-                .contains("unexpected")
-        );
+        let unexpected = prepared_response("session", "target", Response::Closed).unwrap_err();
+        assert!(unexpected.message.contains("unexpected") && !unexpected.retryable);
     }
 }

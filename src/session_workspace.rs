@@ -14,7 +14,10 @@ use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
+mod fork;
 mod storage;
+
+use fork::{copy_fork_state, fork_base};
 pub use storage::WorkspaceStorage;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -190,10 +193,6 @@ pub struct PrepareWorkspaceRequest {
     #[serde(skip)]
     pub base_worktree: Option<PathBuf>,
 }
-
-/// Untracked files a fork copies are bounded: a large untracked tree is build
-/// output that belongs in `.gitignore`, not branch state.
-const FORK_UNTRACKED_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreparedWorkspace {
@@ -465,155 +464,6 @@ pub async fn prepare(
         isolated: true,
         created: true,
     })
-}
-
-/// The committed and uncommitted state of a fork's source worktree.
-struct ForkBase {
-    worktree: PathBuf,
-    revision: String,
-    /// `git stash create` commit of staged and unstaged tracked changes.
-    stash: Option<String>,
-}
-
-/// Read the source worktree without writing it. `git stash create` stores a
-/// dangling commit and leaves the worktree, index and stash list unchanged.
-async fn fork_base(repository: &Path, worktree: &Path) -> Result<ForkBase> {
-    let worktree = worktree
-        .canonicalize()
-        .with_context(|| format!("fork source worktree {} is unavailable", worktree.display()))?;
-    let common = |path: PathBuf| async move {
-        let dir = git_output(
-            &path,
-            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )
-        .await?;
-        PathBuf::from(dir)
-            .canonicalize()
-            .context("canonicalizing Git common directory")
-    };
-    if common(worktree.clone()).await? != common(repository.to_path_buf()).await? {
-        bail!(
-            "fork source worktree {} belongs to another repository",
-            worktree.display()
-        );
-    }
-    let revision = git_output(&worktree, ["rev-parse", "--verify", "HEAD^{commit}"])
-        .await
-        .context("resolving fork source HEAD")?;
-    let stash = git_output(&worktree, ["stash", "create"])
-        .await
-        .context("capturing fork source changes")?;
-    Ok(ForkBase {
-        worktree,
-        revision,
-        stash: (!stash.is_empty()).then_some(stash),
-    })
-}
-
-/// Apply the source's tracked changes (keeping what was staged) and copy its
-/// untracked, non-ignored files into the new worktree.
-async fn copy_fork_state(base: &ForkBase, destination: &Path) -> Result<()> {
-    if let Some(stash) = &base.stash {
-        git_output(destination, ["stash", "apply", "--index", stash.as_str()])
-            .await
-            .context("applying fork source changes")?;
-    }
-    let listed = git_command(
-        &base.worktree,
-        ["ls-files", "--others", "--exclude-standard", "-z"],
-    )
-    .await?;
-    if !listed.status.success() {
-        bail!(
-            "listing fork source untracked files: {}",
-            String::from_utf8_lossy(&listed.stderr).trim()
-        );
-    }
-    let source = base.worktree.clone();
-    let destination = destination.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        use std::os::unix::ffi::OsStrExt as _;
-        let mut copied = 0_u64;
-        for relative in listed.stdout.split(|byte| *byte == 0) {
-            if relative.is_empty() {
-                continue;
-            }
-            let relative = Path::new(OsStr::from_bytes(relative));
-            if relative.is_absolute()
-                || relative
-                    .components()
-                    .any(|part| !matches!(part, std::path::Component::Normal(_)))
-            {
-                bail!("unexpected untracked path {}", relative.display());
-            }
-            let from = source.join(relative);
-            let to = destination.join(relative);
-            // Neither tree may route a path through a symlinked directory: a
-            // copy must stay inside the destination and read only the source.
-            real_ancestors(&source, relative, false)?;
-            real_ancestors(&destination, relative, true)?;
-            let metadata = std::fs::symlink_metadata(&from)
-                .with_context(|| format!("reading {}", from.display()))?;
-            if metadata.file_type().is_symlink() {
-                std::os::unix::fs::symlink(std::fs::read_link(&from)?, &to)
-                    .with_context(|| format!("copying symlink {}", relative.display()))?;
-            } else if metadata.is_file() {
-                copied += metadata.len();
-                if copied > FORK_UNTRACKED_LIMIT_BYTES {
-                    bail!(
-                        "the source worktree has more than {} MiB of untracked files; ignore build output or commit it before forking",
-                        FORK_UNTRACKED_LIMIT_BYTES / 1024 / 1024
-                    );
-                }
-                copy_no_follow(&from, &to, metadata.permissions())
-                    .with_context(|| format!("copying {}", relative.display()))?;
-            }
-        }
-        Ok(())
-    })
-    .await
-    .context("joining fork file copy")?
-}
-
-/// Require every directory above `relative` in `root` to be a real directory,
-/// creating missing ones one level at a time when `create` is set.
-fn real_ancestors(root: &Path, relative: &Path, create: bool) -> Result<()> {
-    let mut current = root.to_path_buf();
-    let Some(parent) = relative.parent() else {
-        return Ok(());
-    };
-    for part in parent.components() {
-        current.push(part);
-        match std::fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_dir() => {}
-            Ok(_) => bail!("{} is not a real directory", current.display()),
-            Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::create_dir(&current)
-                    .with_context(|| format!("creating {}", current.display()))?;
-            }
-            Err(error) => {
-                return Err(error).with_context(|| format!("reading {}", current.display()));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Copy one regular file without following a symlink at either end.
-fn copy_no_follow(from: &Path, to: &Path, permissions: std::fs::Permissions) -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let mut input = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(from)?;
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(to)?;
-    std::io::copy(&mut input, &mut output)?;
-    output.set_permissions(permissions)?;
-    Ok(())
 }
 
 async fn acquire_session_lock(worktree_root: &Path, session_id: &str) -> Result<File> {
@@ -3576,6 +3426,16 @@ mod tests {
         std::fs::write(parent_path.join("notes/new.txt"), "untracked").unwrap();
         std::fs::create_dir_all(parent_path.join("build")).unwrap();
         std::fs::write(parent_path.join("build/out.bin"), "ignored").unwrap();
+        // `git stash create` refuses intent-to-add entries; one whose file was
+        // deleted is harmless and stays behind.
+        std::fs::create_dir_all(parent_path.join("docs")).unwrap();
+        std::fs::write(parent_path.join("docs/planned.md"), "intent").unwrap();
+        std::fs::write(parent_path.join("dropped.md"), "gone").unwrap();
+        git(
+            &parent_path,
+            &["add", "-N", "docs/planned.md", "dropped.md"],
+        );
+        std::fs::remove_file(parent_path.join("dropped.md")).unwrap();
         let status = || {
             std::process::Command::new("git")
                 .args(["status", "--porcelain=v1", "--untracked-files=all"])
@@ -3604,7 +3464,14 @@ mod tests {
         assert_eq!(read("tracked.txt"), "unstaged edit");
         assert_eq!(read("staged.txt"), "staged edit");
         assert_eq!(read("notes/new.txt"), "untracked");
+        assert_eq!(read("docs/planned.md"), "intent");
         assert!(!fork_path.join("build").exists());
+        assert_eq!(
+            git_output(&fork_path, ["diff", "--name-only", "--diff-filter=A"])
+                .await
+                .unwrap(),
+            "docs/planned.md"
+        );
         assert_eq!(
             git_output(&fork_path, ["diff", "--cached", "--name-only"])
                 .await
@@ -3639,8 +3506,8 @@ mod tests {
         let outside = temp.0.join("outside");
         std::fs::create_dir_all(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, fork_path.join("linked")).unwrap();
-        assert!(real_ancestors(&fork_path, Path::new("linked/file.txt"), true).is_err());
-        assert!(real_ancestors(&fork_path, Path::new("fresh/dir/file.txt"), true).is_ok());
+        assert!(fork::real_ancestors(&fork_path, Path::new("linked/file.txt"), true).is_err());
+        assert!(fork::real_ancestors(&fork_path, Path::new("fresh/dir/file.txt"), true).is_ok());
         assert!(fork_path.join("fresh/dir").is_dir());
 
         // A missing source worktree refuses rather than starting elsewhere.

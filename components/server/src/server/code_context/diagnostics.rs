@@ -50,6 +50,12 @@ impl Provenance {
                 .is_none_or(|value| value.len() <= 256)
     }
 
+    /// The native identity a diagnostic keeps across text versions of one
+    /// observation stream: server, source kind and registration.
+    pub fn matching_identity(&self) -> (&str, i32, Option<&str>) {
+        (&self.server, self.source_kind, self.registration.as_deref())
+    }
+
     /// Identity equality is not analysis freshness or a text-version mapping.
     pub fn belongs_to(&self, snapshot: &super::snapshot::BufferSnapshot) -> bool {
         self.bounded() && snapshot.identifies(&self.instance, &self.buffer, &self.buffer_epoch)
