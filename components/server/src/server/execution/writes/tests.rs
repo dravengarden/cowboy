@@ -222,3 +222,25 @@ fn a_waiting_helper_read_completes_through_its_operation() {
     );
     assert_eq!(latest(session, "/w/late.go").unwrap().sha256, expect);
 }
+
+#[test]
+fn exit_before_the_last_output_keeps_following_the_helper() {
+    let session = "writes-helper-exit";
+    let expect = sha("exit first\n");
+    observe(
+        session,
+        &helper_start("e1", "/w/exit.go", &expect),
+        &reply(json!({"state":"completed","reply":{}})),
+    );
+    let (read, _) = helper_read("e1", "", false);
+    observe(
+        session,
+        &read,
+        &reply(json!({"state":"completed","reply":{"chunks":[],"exited":true,"closed":false}})),
+    );
+    let line =
+        format!("{{\"schema\":1,\"status\":\"applied\",\"sha256\":\"{expect}\",\"size\":11}}\n");
+    let (read, done) = helper_read("e1", &line, true);
+    observe(session, &read, &done);
+    assert_eq!(latest(session, "/w/exit.go").unwrap().sha256, expect);
+}
