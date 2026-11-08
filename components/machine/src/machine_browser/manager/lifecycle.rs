@@ -224,8 +224,18 @@ impl BrowserManager {
         let rebinding = existing.navigation.lock().await;
         let previous = existing.binding.lock().clone();
         let url = if existing.login_request().as_deref() == Some(login_request_id) {
-            let failed = existing.live.lock().failed_navigation.clone();
-            failed.map(|failed| self.login_url(login_request_id).unwrap_or(failed))
+            // Only a failure recorded under this same login is retried; a
+            // URL that failed under an earlier binding is never reused.
+            let bound = Purpose::SignIn {
+                login_request_id: login_request_id.to_owned(),
+            };
+            let failed = existing
+                .live
+                .lock()
+                .failed_navigation
+                .clone()
+                .filter(|(purpose, _)| *purpose == bound);
+            failed.map(|(_, failed)| self.login_url(login_request_id).unwrap_or(failed))
         } else {
             let (url, expires_at_ms) = match self.bind_login(
                 login_request_id,
@@ -257,6 +267,9 @@ impl BrowserManager {
                     .with_reason(Reason::Failed);
             }
             self.unbind_login(&previous.purpose, &existing.instance_id);
+            // A navigation that failed under the previous binding is not
+            // this login's to retry.
+            existing.live.lock().failed_navigation = None;
             url
         };
         drop(rebinding);

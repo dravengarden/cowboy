@@ -139,9 +139,10 @@ struct Live {
     /// binding it was requested under.
     pending_navigation: Option<(Purpose, String)>,
     /// The URL whose navigation the launcher last rejected or did not
-    /// answer in time; cleared by the next successful navigation. A repeated
-    /// sign-in open for the bound login retries while it is set.
-    failed_navigation: Option<String>,
+    /// answer in time, with the binding it was requested under; cleared by
+    /// the next successful navigation and by a sign-in rebinding. A
+    /// repeated sign-in open retries it only for that same login.
+    failed_navigation: Option<(Purpose, String)>,
 }
 
 /// What an instance runs for and until when. A `Tab` instance reused for a

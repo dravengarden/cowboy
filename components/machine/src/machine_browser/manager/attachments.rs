@@ -388,7 +388,7 @@ impl BrowserManager {
         let mut live = instance.live.lock();
         if let Err(error) = navigated {
             tracing::warn!(%error, instance = %instance.instance_id, "browser navigation failed");
-            live.failed_navigation = Some(url.to_owned());
+            live.failed_navigation = Some((expected.clone(), url.to_owned()));
             return Err(Navigation::Rejected);
         }
         live.failed_navigation = None;

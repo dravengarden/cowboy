@@ -212,7 +212,13 @@ async fn a_rejected_sign_in_navigation_fails_the_open_and_a_repeat_retries_it() 
     assert_eq!(refused.reason, Some(Reason::Failed));
     assert_eq!(fixture.instance.login_request().as_deref(), Some("login-1"));
     assert_eq!(
-        fixture.instance.live.lock().failed_navigation.as_deref(),
+        fixture
+            .instance
+            .live
+            .lock()
+            .failed_navigation
+            .as_ref()
+            .map(|(_, failed)| failed.as_str()),
         Some(url)
     );
 
@@ -262,4 +268,65 @@ async fn a_queued_challenge_navigation_never_lands_after_a_rebinding() {
         "a superseded navigation reached the launcher: {line}"
     );
     assert!(fixture.instance.live.lock().failed_navigation.is_none());
+}
+
+#[tokio::test]
+async fn a_rebinding_never_retries_a_navigation_that_failed_under_another_binding() {
+    let mut fixture = fixture().await;
+    fixture
+        .manager
+        .trust_confinement
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let logins: LoginSessions = Arc::default();
+    let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+    let _uplink = fixture.manager.attach(
+        events,
+        reqwest::Url::parse("https://controller.invalid/").unwrap(),
+        &logins,
+    );
+    // The tab's last navigation failed.
+    fixture.instance.live.lock().failed_navigation =
+        Some((Purpose::Tab, "https://example.com/tab-page".into()));
+    // Login B has not emitted its verification URL yet.
+    logins.lock().insert(
+        "login-b".into(),
+        login(&fixture.account, unix_ms() + 60_000),
+    );
+    let open = |request: &str| {
+        let manager = Arc::clone(&fixture.manager);
+        let account = fixture.account.clone();
+        let request = request.to_owned();
+        tokio::spawn(async move {
+            manager
+                .open(
+                    &request,
+                    account,
+                    "inst-1".into(),
+                    Purpose::SignIn {
+                        login_request_id: "login-b".into(),
+                    },
+                    Viewport {
+                        width: 1280,
+                        height: 800,
+                        scale: 1,
+                    },
+                )
+                .await
+        })
+    };
+    // Rebinding to login B, then repeating B's open, sends nothing: the
+    // tab's failed URL is not B's sign-in page.
+    for request in ["o1", "o2"] {
+        let answer = tokio::time::timeout(Duration::from_secs(5), open(request))
+            .await
+            .expect("the open must not wait for the launcher")
+            .unwrap();
+        assert_eq!(answer.reason, None);
+        assert_eq!(fixture.instance.login_request().as_deref(), Some("login-b"));
+        assert!(fixture.instance.live.lock().failed_navigation.is_none());
+    }
+    let mut reader = tokio::io::BufReader::new(&mut fixture.launcher);
+    let mut line = String::new();
+    let sent = tokio::time::timeout(Duration::from_millis(300), reader.read_line(&mut line)).await;
+    assert!(sent.is_err(), "a stale URL reached the launcher: {line}");
 }
