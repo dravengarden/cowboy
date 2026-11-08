@@ -953,7 +953,19 @@ Machine's own observation of the account counts as exit evidence; the same
 account's browser on another Machine neither settles nor retargets it. A stop that
 stalls does not time out into "released": it stays pending, is logged as
 stuck, and blocks session selection on that Machine until the unit is gone;
-the only exception is an explicit operator emergency action.
+the only exception is an explicit operator emergency action. While the step's
+observation is unresolved (not yet an exit: for example a Machine that
+reconnected mid-stop and answers `stopping` with no instance, for which no
+terminal event follows), the Controller asks that Machine directly
+(`BrowserQuery`, at most once per Machine and account every 10 s, each bounded
+by the query timeout) and settles on its authoritative answer.
+A browser that is already stopping when reclaim reaches session selection
+(an owner request, recovery, an earlier Controller) also holds memory, so
+any current `stopping` observation on the Device's Machine, including one
+naming no instance, is unresolved browser work: session selection waits,
+querying each such browser at the same bounded rate, until none remains
+stopping and a resource report taken after that has arrived. Past
+`RELEASE_TIMEOUT` such a wait is logged as stuck, never treated as released.
 `OOMScoreAdjust=1000` is a preference that makes the browser the kernel's
 likely first victim inside the shared slice; it is not relied on for
 ordering.

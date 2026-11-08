@@ -279,8 +279,9 @@ fn state_json(machine_id: &str, event: &StateEvent) -> Value {
 }
 
 /// Ask a Machine for the account's browser. Its answer is authoritative,
-/// including "nothing runs", and replaces the cached observation.
-async fn query_machine(
+/// including "nothing runs", and replaces the cached observation. Bounded by
+/// `QUERY_TIMEOUT`; `None` when the Machine is unreachable or did not answer.
+pub(in crate::server) async fn query_machine(
     state: &AppState,
     machine_id: &str,
     account_id: &ProviderAccountId,

@@ -335,6 +335,31 @@ impl Coordinator {
         running
     }
 
+    /// Stopping instances on one Machine, including those naming no
+    /// instance (a unit of unknown owner whose exit is unconfirmed, or the
+    /// startup inventory still pending): each may still hold memory.
+    pub(in crate::server) fn stopping_on(&self, machine_id: &str) -> Vec<Observed> {
+        let mut stopping: Vec<Observed> = self
+            .states
+            .read()
+            .iter()
+            .filter(|((machine, _), observed)| {
+                machine == machine_id
+                    && observed.event.state == State::Stopping
+                    && self.is_current(&observed.connection)
+            })
+            .map(|(_, observed)| observed.clone())
+            .collect();
+        stopping.sort_by(|left, right| {
+            left.event
+                .instance
+                .account_id
+                .as_str()
+                .cmp(right.event.instance.account_id.as_str())
+        });
+        stopping
+    }
+
     /// Register a one-time stream token for a viewer that is about to ask
     /// the Machine to attach.
     pub(in crate::server) fn register_pairing(&self, token: String, pairing: Pairing) {
