@@ -1,6 +1,6 @@
 # Desktop Code Review
 
-**Status: design proposal r3 (2026-11-08); D0–D3 implemented (D3 with a Web-side projection), D4 planned.** r3 records the
+**Status: design proposal r3 (2026-11-08); D0–D4 implemented (D3 with a Web-side projection; see the phase notes for what remains).** r3 records the
 owner's answers to the r2 open questions. r2 folds in a
 Codex Astra Max design review of r1 (managed call
 `call-53884a467577cfb02c34574f`: verdict *needs-attention*, five high and ten
@@ -544,7 +544,7 @@ together" reads "Prompt and the work pane".
 | D2 tools | Streaming patch decoder and `@codemirror/merge` split view (patch-only), Inspector (Outline, Hunks, Problems, Details), `K` `gd` `gr` `gO` `]d`, checks `␣VK` with context gating, Review settings | Decoder fixtures pass; split and unified agree on every hunk of the fixture; hover/definition round trips under the measured `review_read_completed` budget |
 | D2d sides (implemented) | Comparison-bound side windows; expanded context in the split layout | Expanded old-side text equals `git show <base>:<path>` for the fixture; an edited worktree never changes it |
 | D3 (implemented, Web projection) | Delegation contract, Explain/Review forks as kept-source preview tabs, findings projection with anchor states, `␣VS` on a problem | A managed review's findings land on their lines at `exact`, move to `heuristic`/`unmapped` after an edit, and disappear with a deleted fork; a prose result is shown as text |
-| D4 isolation | Desktop drops `mobile/review` UI imports; shared domain under `web/src/review/`; `open` reveal payload; 13 updated | Structure ratchet totals not above baseline; Mobile unchanged |
+| D4 isolation (implemented, see notes) | Desktop drops `mobile/review` UI imports; shared domain under `web/src/review/`; `open` reveal payload; 13 updated | Structure ratchet totals not above baseline; Mobile unchanged |
 
 D1 as implemented (`web/src/desktop/review/`): the Navigator has Changes and
 Files; the Document is the read-only Vim buffer with unified diffs, source
@@ -603,9 +603,25 @@ severity. Delegations are device-local, so another device does not see them.
 `␣VS` has no problem-row form: `Enter` on a problem moves the Document's
 cursor to it, and `Enter` there sends the line.
 
-With D1c the workbench covers everything the classic layout offers on
-Desktop. `␣VL` stays as a fallback until D4 removes the Mobile UI imports
-from Desktop; it is not needed for any task.
+With D1c the workbench covers everything the classic layout offered on
+Desktop, and D4 retired that layout with `␣VL`: Desktop renders only the
+workbench and never loads `ReviewApp`.
+
+D4 as implemented moves the shared review domain to `web/src/review/` (62
+files with their tests, a mechanical move recorded with
+`check-structure --update`): the Code API client, diff, owned-buffer and
+owned-diff projections, review context, comparison, checks, settings and
+progress stores, remote PR sources and models, and the language and syntax
+helpers. `readRemoteReview` moved from `RemoteReviewApp.tsx` into
+`remoteReviewSources.ts`. The shared domain imports nothing from
+`mobile/` and Mobile never imports `desktop/review`. Three parts of the
+plan remain open: Desktop still renders `ReviewSettingsContent` from
+`mobile/review` inside its settings modal (a settings form, not a review
+surface; it moves when a second Desktop settings form needs it); the `open`
+reveal payload needs a change to the agent writers of `mobile-review:<sid>`
+and stays with the narrow `active` read; and the pane model keeps D0's
+three panes, with Review as the work pane's view rather than a
+`DesktopPane`.
 
 D2b deviates from "Editor engine": it does not add `@codemirror/merge`. A
 patch-only split needs no diff algorithm, because the alignment comes from

@@ -11,12 +11,12 @@ import {
 import {
   REVIEW_CODE_FONT_SIZES,
   REVIEW_CONTEXT_LINES,
-} from "./reviewSettingsModel";
+} from "../../review/reviewSettingsModel";
 import {
   updateReviewSettings,
   useReviewLanguageCapabilities,
   useReviewSettings,
-} from "./reviewSettings";
+} from "../../review/reviewSettings";
 import { ReviewDirectorySetting } from "../../ReviewDirectorySetting";
 
 function SettingToggle({
@@ -64,7 +64,7 @@ function SettingToggle({
 export function ReviewSettingsContent({
   language,
 }: {
-  language?: import("./codeApi").CodeLanguageCapabilities | undefined;
+  language?: import("../../review/codeApi").CodeLanguageCapabilities | undefined;
 } = {}): React.JSX.Element {
   const settings = useReviewSettings();
   const publishedLanguage = useReviewLanguageCapabilities();

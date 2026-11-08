@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../../tools/test-assert.ts";
 import { adjacentEntry, hunkPosition, hunkTarget, pathRemark } from "./reviewWorkbenchModel.ts";
-import type { GitReviewEntry } from "../../mobile/review/gitReviewModel.ts";
+import type { GitReviewEntry } from "../../review/gitReviewModel.ts";
 
 const diff = [
   "diff --git a/x b/x",

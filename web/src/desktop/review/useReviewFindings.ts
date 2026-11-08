@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { callActive, fetchCall, fetchCalls, type ManagedCallResult } from "../../managedCalls";
-import type { GitReviewEntry } from "../../mobile/review/gitReviewModel";
+import type { GitReviewEntry } from "../../review/gitReviewModel";
 import { type ReviewDelegation, useDelegations } from "./reviewDelegations";
 import { type ReviewFinding, reviewOutcome } from "./reviewFindingsModel";
 

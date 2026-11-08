@@ -9,11 +9,11 @@ import {
 } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
 import { Sheet } from "../../Sheet";
-import type { GitComparison } from "./codeApi";
+import type { GitComparison } from "../../review/codeApi";
 import {
   reviewCompareBranches,
   type ReviewCompareScenario,
-} from "./reviewCompareModel";
+} from "../../review/reviewCompareModel";
 
 function Row({ primary, secondary, selected, onClick }: {
   primary: string;

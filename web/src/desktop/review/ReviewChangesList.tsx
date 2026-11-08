@@ -22,14 +22,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { desktopSize } from "../../surface/desktopSize";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
-import type { CodeChange } from "../../mobile/review/codeApi";
-import { reviewEntryKey } from "../../mobile/review/diffNavigationModel";
-import type { GitReviewEntry } from "../../mobile/review/gitReviewModel";
+import type { CodeChange } from "../../review/codeApi";
+import { reviewEntryKey } from "../../review/diffNavigationModel";
+import type { GitReviewEntry } from "../../review/gitReviewModel";
 import {
   reviewCompareBranches,
   reviewCompareLabel,
   reviewCompareScenarios,
-} from "../../mobile/review/reviewCompareModel";
+} from "../../review/reviewCompareModel";
 import type { DesktopReviewChanges } from "./useDesktopReviewChanges";
 import { findingBadge, type FindingSeverity, type ReviewFinding } from "./reviewFindingsModel";
 

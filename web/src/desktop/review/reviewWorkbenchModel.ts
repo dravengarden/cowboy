@@ -1,7 +1,7 @@
 import type { EditorView } from "@codemirror/view";
-import { reviewEntryKey, diffHunkLines } from "../../mobile/review/diffNavigationModel";
-import type { GitReviewEntry } from "../../mobile/review/gitReviewModel";
-import { reviewSelectionMessage } from "../../mobile/review/reviewLineSelection";
+import { reviewEntryKey, diffHunkLines } from "../../review/diffNavigationModel";
+import type { GitReviewEntry } from "../../review/gitReviewModel";
+import { reviewSelectionMessage } from "../../review/reviewLineSelection";
 import { editorSelection } from "./reviewEditorSelection";
 import type { DesktopReviewDocument } from "./desktopReviewTabs";
 import { adjacentIndex, adjacentLine } from "./reviewDocumentKeys";

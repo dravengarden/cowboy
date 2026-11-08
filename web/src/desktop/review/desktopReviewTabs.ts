@@ -3,7 +3,7 @@
 // phone's Review tabs are its own. Like the Session tabs, a file opened by
 // browsing takes the single preview tab; keeping or pinning makes it stay.
 
-import type { CodeDiffScope } from "../../mobile/review/codeApi";
+import type { CodeDiffScope } from "../../review/codeApi";
 
 export type DesktopReviewDocument =
   | {

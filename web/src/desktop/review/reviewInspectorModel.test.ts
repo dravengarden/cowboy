@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../../tools/test-assert.ts";
-import type { CodeChecks } from "../../mobile/review/codeApi.ts";
+import type { CodeChecks } from "../../review/codeApi.ts";
 import { inspectorHunks, inspectorOutline, inspectorProblems, withLanguageProblems } from "./reviewInspectorModel.ts";
 
 test("hunks name their header row and count their lines", () => {

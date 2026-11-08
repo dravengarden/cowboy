@@ -20,7 +20,7 @@ import {
 import { ReviewCodeEditor } from "./ReviewCodeEditor";
 import { ReviewSplitMirror } from "./ReviewSplitMirror";
 import type { SplitDiff } from "./splitDiffModel";
-import type { CodeDiagnostic } from "../../mobile/review/codeApi";
+import type { CodeDiagnostic } from "../../review/codeApi";
 import { useState } from "react";
 import type { ReviewDocumentAction } from "./reviewDocumentKeys";
 import type { ReviewDocumentLoad } from "./useReviewDocumentText";

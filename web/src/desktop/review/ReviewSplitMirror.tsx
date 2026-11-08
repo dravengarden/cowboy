@@ -4,8 +4,8 @@ import { syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
 import { Box, useTheme } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import { cmTheme } from "../../cmTheme";
-import { loadCodeLanguage } from "../../mobile/review/codeLanguage";
-import { reviewHighlightStyle } from "../../mobile/review/codeSyntaxTheme";
+import { loadCodeLanguage } from "../../review/codeLanguage";
+import { reviewHighlightStyle } from "../../review/codeSyntaxTheme";
 import type { SplitSide } from "./splitDiffModel";
 import { splitSideExtensions } from "./splitSideExtensions";
 

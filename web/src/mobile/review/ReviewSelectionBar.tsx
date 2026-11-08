@@ -1,7 +1,7 @@
 import { Close } from "@mui/icons-material";
 import { Button, IconButton, Stack, Typography } from "@mui/material";
 import { useState } from "react";
-import type { ReviewLineSelection, ReviewQuestion } from "./reviewLineSelection";
+import type { ReviewLineSelection, ReviewQuestion } from "../../review/reviewLineSelection";
 
 /** What can be done with the selected lines, where a thumb can reach it. */
 export function ReviewSelectionBar({ selection, onClear, onSend, onExplain }: {

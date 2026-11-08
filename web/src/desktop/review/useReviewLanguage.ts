@@ -10,8 +10,8 @@ import {
   fetchCodeLanguage,
   fetchCodeNavigation,
   openCodeBuffer,
-} from "../../mobile/review/codeApi";
-import { useOwnedReviewBuffer } from "../../mobile/review/useOwnedReviewBuffer";
+} from "../../review/codeApi";
+import { useOwnedReviewBuffer } from "../../review/useOwnedReviewBuffer";
 
 export type ReviewLanguageState = "off" | "starting" | "ready" | "unavailable";
 

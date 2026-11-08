@@ -1,0 +1,367 @@
+import { test } from "bun:test";
+import { assertEquals } from "../../../tools/test-assert.ts";
+import {
+  closeCodeBuffer,
+  fetchCodeContentSearch,
+  fetchCodeFilePage,
+  fetchCodeLanguage,
+  fetchCodeManifest,
+  fetchCodeNavigation,
+  fetchCodeOutline,
+  fetchCodeSearch,
+  fetchCodeTree,
+  fetchGitRepository,
+  isTransientCodeApiStatus,
+  openCodeBuffer,
+  shouldCloseUnavailableSource,
+} from "./codeApi.ts";
+
+test("git history pages pass the after cursor", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requests.push(String(input));
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          commits: [],
+          historyTruncated: false,
+          worktrees: [],
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchGitRepository("session/id");
+    await fetchGitRepository("session/id", undefined, "abc1234");
+    assertEquals(requests, [
+      "/api/code/sessions/session%2Fid/repository",
+      "/api/code/sessions/session%2Fid/repository?after=abc1234",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("tree requests preserve paths and explicit refresh bypasses caches", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ url: string; cache?: RequestCache }> = [];
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    requests.push({ url: String(input), cache: init?.cache });
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          path: "src/mobile",
+          revision: "revision",
+          entries: [],
+          truncated: false,
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeTree("session/id", "src/mobile");
+    await fetchCodeTree("session/id", "src/mobile", undefined, true);
+    assertEquals(requests, [
+      {
+        url: "/api/code/sessions/session%2Fid/tree?path=src%2Fmobile",
+        cache: "default",
+      },
+      {
+        url: "/api/code/sessions/session%2Fid/tree?path=src%2Fmobile",
+        cache: "reload",
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("outline stays inside the stable Code data plane", async () => {
+  const original = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(JSON.stringify({
+        apiVersion: 1,
+        path: "src/main.rs",
+        symbols: [],
+      })),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeOutline("session/id", "src/main.rs");
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/intelligence/outline?path=src%2Fmain.rs",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("navigation hides Zed buffer identities behind Code paths", async () => {
+  const original = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(JSON.stringify({
+        apiVersion: 1,
+        path: "src/main.rs",
+        locations: [],
+      })),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeNavigation(
+      "session/id",
+      "src/main.rs",
+      4,
+      12,
+      "typeDefinition",
+    );
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/intelligence/navigation?path=src%2Fmain.rs&row=4&column=12&kind=typeDefinition",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("language intelligence stays inside the stable Code data plane", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          path: "src/main.rs",
+          version: [],
+          diagnostics: [],
+          inlayHints: [],
+          semanticTokens: [],
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeLanguage("session/id", "src/main.rs");
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/language?path=src%2Fmain.rs",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("hover queries use stable UTF-16 Code coordinates", async () => {
+  const original = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(JSON.stringify({
+        apiVersion: 1,
+        path: "src/main.rs",
+        contents: [],
+      })),
+    );
+  }) as typeof fetch;
+  try {
+    const { fetchCodeHover } = await import("./codeApi.ts");
+    await fetchCodeHover("session/id", "src/main.rs", 4, 12);
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/intelligence/hover?path=src%2Fmain.rs&row=4&column=12",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("search stays inside the stable Code data plane", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ apiVersion: 1, files: ["src/main.rs"] }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeSearch("session/id", "main rs");
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/search?q=main+rs&limit=50",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("content search uses the bounded content-search route", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          matches: [{
+            path: "src/a.rs",
+            line: 3,
+            column: 5,
+            text: "fn a()",
+            textTruncated: false,
+          }],
+          stopped: null,
+          filesScanned: 1,
+          filesSkipped: 0,
+          filesCapped: 0,
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    const result = await fetchCodeContentSearch("session/id", "fn a");
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/content-search?q=fn+a&limit=100",
+    );
+    assertEquals(result.matches[0]?.line, 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("manifest stays inside the stable Code data plane", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          provider: "local",
+          revision: "revision",
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeManifest("session/id");
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/manifest",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("file continuation keeps the path and opaque cursor together", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          path: "src/large.ts",
+          revision: "revision",
+          text: "next\n",
+          size: 1_000_000,
+          truncated: false,
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeFilePage(
+      "session",
+      "src/large.ts",
+      "revision:262144",
+    );
+    assertEquals(
+      requested,
+      "/api/code/sessions/session/file?path=src%2Flarge.ts&cursor=revision%3A262144",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("buffer leases use an idempotent stable Code contract", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ url: string; method?: string; body?: string }> = [];
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    requests.push({
+      url: String(input),
+      method: init?.method,
+      body: typeof init?.body === "string" ? init.body : undefined,
+    });
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          path: "src/main.rs",
+          leases: init?.method === "PUT" ? 1 : 0,
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await openCodeBuffer("session/id", "src/main.rs", "tab-1");
+    await closeCodeBuffer("session/id", "src/main.rs", "tab-1");
+    assertEquals(requests, [
+      {
+        url: "/api/code/sessions/session%2Fid/buffer",
+        method: "PUT",
+        body: '{"path":"src/main.rs","leaseId":"tab-1"}',
+      },
+      {
+        url: "/api/code/sessions/session%2Fid/buffer",
+        method: "DELETE",
+        body: '{"path":"src/main.rs","leaseId":"tab-1"}',
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Code API retries only transient failures", () => {
+  for (const status of [undefined, 304, 409, 410, 502, 503, 504]) {
+    assertEquals(isTransientCodeApiStatus(status), true);
+  }
+  for (const status of [400, 404, 415, 422]) {
+    assertEquals(isTransientCodeApiStatus(status), false);
+  }
+});
+
+test("missing source files close stale tabs without hiding missing diffs", () => {
+  assertEquals(shouldCloseUnavailableSource("source", 404), true);
+  assertEquals(shouldCloseUnavailableSource("source", 415), false);
+  assertEquals(shouldCloseUnavailableSource("diff", 404), false);
+});

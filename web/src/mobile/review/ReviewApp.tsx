@@ -37,19 +37,19 @@ import { ReviewProjectCheckoutRow } from "./ReviewProjectCheckoutRow";
 import { SegmentedTabs } from "../../SegmentedTabs";
 
 import { newUuid } from "../../uuid";
-import { closeCodeBuffer, CodeApiError, fetchCodeChanges, fetchCodeLanguage, fetchCodeManifest, type GitCommitSummary, isTransientCodeApiStatus, openCodeBuffer } from "./codeApi";
-import { invalidateDiffCache } from "./diffCache";
-import { reviewEntryKey } from "./diffNavigationModel";
+import { closeCodeBuffer, CodeApiError, fetchCodeChanges, fetchCodeLanguage, fetchCodeManifest, type GitCommitSummary, isTransientCodeApiStatus, openCodeBuffer } from "../../review/codeApi";
+import { invalidateDiffCache } from "../../review/diffCache";
+import { reviewEntryKey } from "../../review/diffNavigationModel";
 import {
   currentReviewMarks,
   type ReviewProgress,
   revisionMatches,
-} from "./reviewProgress";
+} from "../../review/reviewProgress";
 import { ReviewRepository } from "./ReviewRepository";
 import { ReviewCommit } from "./ReviewCommit";
 import { bindPullRequest, RemoteReviewApp } from "./RemoteReviewApp";
 import { forgetRepositoryPulls } from "./repositoryPulls";
-import type { Choice } from "./remoteReviewSources";
+import type { Choice } from "../../review/remoteReviewSources";
 import type { PullSummary } from "../../extensions/api";
 import type { CodeRevealRange } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
@@ -57,25 +57,25 @@ import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewChanges } from "./ReviewChanges";
 import { useReviewOpenRequest } from "../../useReviewOpenRequest";
 
-import { type ReviewBufferMode, reviewBufferMode } from "./ownedReviewBuffer";
+import { type ReviewBufferMode, reviewBufferMode } from "../../review/ownedReviewBuffer";
 
 import { isMarkdownReviewPath } from "./reviewMarkdown";
 
 import { resolveReviewLink } from "./reviewLinkTarget";
 
 import type { ReviewMode } from "./reviewMode";
-import { setReviewLanguageCapabilities, updateReviewSettings, useReviewSettings } from "./reviewSettings";
+import { setReviewLanguageCapabilities, updateReviewSettings, useReviewSettings } from "../../review/reviewSettings";
 import { openMobileProduct } from "../appPagerMotion";
 import { BOTTOM_NAV_PADDING } from "../bottomNavigation";
 import { appendDraftText } from "../../draftStore";
 
-import { type ReviewQuestion, reviewExplainPrompt, reviewExplainSessions, reviewExplainTitle } from "./reviewLineSelection";
+import { type ReviewQuestion, reviewExplainPrompt, reviewExplainSessions, reviewExplainTitle } from "../../review/reviewLineSelection";
 import { forkAvailability, forkSession } from "../../sessionFork";
 import { requestPickSession } from "../../sessionPickRequest";
 
-import type { CodeLanguage } from "./codeApi";
-import type { GitReviewEntry } from "./gitReviewModel";
-import { groupGitChanges, reviewQueue } from "./gitReviewModel";
+import type { CodeLanguage } from "../../review/codeApi";
+import type { GitReviewEntry } from "../../review/gitReviewModel";
+import { groupGitChanges, reviewQueue } from "../../review/gitReviewModel";
 import { ReviewTabStrip } from "./ReviewTabStrip";
 import {
   reviewLinkedSessions,
@@ -89,7 +89,7 @@ import {
   registeredReviewWorkspace,
   sessionReviewLocation,
   workspaceCodeContextId,
-} from "./reviewContextModel";
+} from "../../review/reviewContextModel";
 import {
   adjacentReviewTabAfterClose,
   closeAllReviewTabs,

@@ -21,7 +21,7 @@ import {
   fetchGitCommitDiff,
   type GitCommitDetail,
   type GitCommitSummary,
-} from "./codeApi";
+} from "../../review/codeApi";
 import { restoreReviewScrollTop } from "./reviewScrollPosition";
 
 function shortOid(oid: string): string {

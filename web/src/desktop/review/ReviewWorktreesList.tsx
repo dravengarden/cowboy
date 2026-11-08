@@ -4,12 +4,12 @@ import { desktopSize } from "../../surface/desktopSize";
 import { useStoreSelector } from "../../store";
 import { worktreeContextId } from "../../reviewDirectoryDefault";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
-import { fetchGitRepository, type GitWorktreeSummary } from "../../mobile/review/codeApi";
+import { fetchGitRepository, type GitWorktreeSummary } from "../../review/codeApi";
 import {
   groupRepositoryWorktrees,
   type RepositoryWorktreeRow,
   worktreeTitle,
-} from "../../mobile/review/repositoryTargetModel";
+} from "../../review/repositoryTargetModel";
 import type { DesktopReviewTarget } from "./useDesktopReviewContext";
 
 /** The context value that reviews `row`, or why it cannot be reviewed. */

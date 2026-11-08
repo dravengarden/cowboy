@@ -5,8 +5,8 @@ import {
   reviewCodeStatusRow,
   ReviewStatusMessage,
 } from "./ReviewCodeStatus.tsx";
-import type { OwnedReviewIntelligence } from "./useOwnedReviewBuffer.ts";
-import type { useOwnedReviewDiff } from "./useOwnedReviewDiff.ts";
+import type { OwnedReviewIntelligence } from "../../review/useOwnedReviewBuffer.ts";
+import type { useOwnedReviewDiff } from "../../review/useOwnedReviewDiff.ts";
 
 /** Read-only diff chrome: one attention row, no native reload/Apply control. */
 export function ReviewDiffCodeStatus({ diff, intelligence }: {

@@ -8,7 +8,7 @@ import {
   fetchGitRepository,
   type GitCommitDetail,
   type GitCommitSummary,
-} from "../../mobile/review/codeApi";
+} from "../../review/codeApi";
 import { REVIEW_TREE_LEFT_EVENT } from "./ReviewFilesList";
 
 const rowSx = {

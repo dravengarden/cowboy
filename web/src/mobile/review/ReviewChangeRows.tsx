@@ -19,10 +19,10 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import type { CodeChangeStatus } from "./codeApi";
-import type { GitReviewEntry } from "./gitReviewModel";
-import type { GitChangeTreeNode } from "./gitChangeTree";
-import { reviewEntryKey } from "./diffNavigationModel";
+import type { CodeChangeStatus } from "../../review/codeApi";
+import type { GitReviewEntry } from "../../review/gitReviewModel";
+import type { GitChangeTreeNode } from "../../review/gitChangeTree";
+import { reviewEntryKey } from "../../review/diffNavigationModel";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
 
 const statusLabel: Record<CodeChangeStatus, string> = {

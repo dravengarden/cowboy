@@ -2,8 +2,8 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { ReviewCheckStatus } from "./mobile/review/ReviewCheckStatus";
-import { refreshReviewChecks } from "./mobile/review/reviewChecksStore";
-import type { CodeChecks } from "./mobile/review/codeApi";
+import { refreshReviewChecks } from "./review/reviewChecksStore";
+import type { CodeChecks } from "./review/codeApi";
 
 export async function reviewCheckActionsBrowserChecks(): Promise<string> {
   const container = document.createElement("div");

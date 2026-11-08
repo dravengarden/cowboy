@@ -1,8 +1,8 @@
 import { type ComponentProps, useMemo } from "react";
-import { checkDiagnosticsForPath, withCheckDiagnostics } from "./checkAnnotations";
+import { checkDiagnosticsForPath, withCheckDiagnostics } from "../../review/checkAnnotations";
 import CodeViewer from "./CodeViewer";
-import { diffCheckAnnotations } from "./diffCheckAnnotations";
-import { useReviewChecks } from "./reviewChecksStore";
+import { diffCheckAnnotations } from "../../review/diffCheckAnnotations";
+import { useReviewChecks } from "../../review/reviewChecksStore";
 
 /** The session's code viewer with project check findings annotated on
  *  source files, beside the language engine's own diagnostics. */

@@ -6,9 +6,9 @@ import {
   fetchCodeFile,
   fetchCodeFilePage,
   fetchGitCommitDiff,
-} from "../../mobile/review/codeApi";
-import { loadCodeDiff } from "../../mobile/review/diffCache";
-import type { ReviewSettings } from "../../mobile/review/reviewSettingsModel";
+} from "../../review/codeApi";
+import { loadCodeDiff } from "../../review/diffCache";
+import type { ReviewSettings } from "../../review/reviewSettingsModel";
 import { type DesktopReviewDocument, reviewDocumentKey } from "./desktopReviewTabs";
 import { pullFile } from "./pullPatches";
 import { diffBaseOid, expandDiffContext } from "./diffContextExpansion";

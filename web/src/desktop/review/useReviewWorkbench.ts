@@ -2,9 +2,9 @@ import type { EditorView } from "@codemirror/view";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { mutateMobileReview, notify } from "../../store";
 import { appendDraftText } from "../../draftStore";
-import { currentReviewMarks, revisionMatches } from "../../mobile/review/reviewProgress";
-import type { GitReviewEntry } from "../../mobile/review/gitReviewModel";
-import { useReviewSettings } from "../../mobile/review/reviewSettings";
+import { currentReviewMarks, revisionMatches } from "../../review/reviewProgress";
+import type { GitReviewEntry } from "../../review/gitReviewModel";
+import { useReviewSettings } from "../../review/reviewSettings";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import { entryKey } from "./ReviewChangesList";
 import {
@@ -43,7 +43,7 @@ import {
   remoteFileMark,
   type RemoteReviewBinding,
   type RemoteReviewFile,
-} from "../../mobile/review/remoteReviewModel";
+} from "../../review/remoteReviewModel";
 import { adjacentIndex } from "./reviewDocumentKeys";
 
 /** The file `offset` from this one on its PR page that `accept` takes. */

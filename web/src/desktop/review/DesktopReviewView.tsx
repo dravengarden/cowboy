@@ -24,7 +24,7 @@ import { notify } from "../../store";
 import { ReviewNavigatorSplitter, useNavigatorWidth } from "./ReviewNavigatorSplitter";
 import { DesktopModal } from "../DesktopModal";
 import { ReviewLanguageLayer } from "./ReviewLanguageLayer";
-import type { CodeDiagnostic } from "../../mobile/review/codeApi";
+import type { CodeDiagnostic } from "../../review/codeApi";
 import { type ReviewLanguage, useReviewLanguage } from "./useReviewLanguage";
 
 /** Language intelligence for the open source file (diffs ask nothing). */

@@ -17,6 +17,11 @@ turn.
   interaction code remain separate.
 - The browser consumes a stable Cowboy protocol. It must not consume Zed's
   internal protocol directly.
+- The browser's review domain (Code API client, diff and owned-buffer
+  projections, review context, checks, settings and progress) lives in
+  `web/src/review/` and holds no UI; Mobile (`web/src/mobile/review/`) and
+  Desktop ([desktop-code-review](../desktop-code-review.md),
+  `web/src/desktop/review/`) each build their own surfaces on it.
 
 Cowboy exposes two Machine-side adapters behind that stable product API. The
 versioned `cowboy-code-adapter` serves filesystem and Git operations on remote

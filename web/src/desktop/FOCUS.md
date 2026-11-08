@@ -236,7 +236,7 @@ settings, `D` unified or split diff (per device; in a split the new side
 holds the Vim buffer and the old side follows its scroll), `Z` the whole file or the patch's context in diffs, `O` the outline, `]` fold the Inspector, `K` run a project check, `A` compare against, `U` unread only, `M` mark
 reviewed (the focused row, else the open file), `S` send and stay, `E` explain in a fork, `R` ask a fork for a managed
 review (both take the focused Navigator row, else the open file), `Q` close
-the file tab, `P` keep it, `[` fold the Navigator, `L` the classic layout.
+the file tab, `P` keep it, `[` fold the Navigator. Desktop has no other Review layout.
 From 1320 px of Review width the Inspector (`review.inspector`) sits on the
 right with the open file's Outline, Hunks, Problems and Details; narrower, it
 folds and `␣VO`/`␣V]`/`gO` open it inset. Its rows are a Cowboy list and

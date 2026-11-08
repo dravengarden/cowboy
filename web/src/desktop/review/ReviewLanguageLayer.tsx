@@ -2,7 +2,7 @@ import type { EditorView } from "@codemirror/view";
 import { Box, ListItemText, Menu, MenuItem, Popover, Typography } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import { notify } from "../../store";
-import type { CodeHover, CodeLocation } from "../../mobile/review/codeApi";
+import type { CodeHover, CodeLocation } from "../../review/codeApi";
 import { revealEditorLine } from "./reviewEditorSelection";
 import type { ReviewDocumentAction } from "./reviewDocumentKeys";
 import type { ReviewLanguage } from "./useReviewLanguage";

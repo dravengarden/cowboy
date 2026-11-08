@@ -18,12 +18,12 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
-import type { GitReviewEntry } from "./gitReviewModel";
+import type { GitReviewEntry } from "../../review/gitReviewModel";
 import {
   fetchGitRepository,
   type GitCommitSummary,
   type GitRepositorySnapshot,
-} from "./codeApi";
+} from "../../review/codeApi";
 import { buildGitGraph } from "./gitGraphModel";
 import {
   HISTORY_PAGE_SIZE,
@@ -31,7 +31,7 @@ import {
   mergeHistoryPage,
 } from "./reviewHistoryPaging";
 import { ReviewChanges } from "./ReviewChanges";
-import { useReviewRecovery } from "./useReviewRecovery";
+import { useReviewRecovery } from "../../review/useReviewRecovery";
 import { ReviewNavigationActions } from "./ReviewNavigationActions";
 import { ReviewRepositoryControls, type RepositorySection } from "./ReviewRepositoryControls";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
@@ -45,8 +45,8 @@ import {
   pullsByBranch,
   pullsWithoutWorktree,
   remoteRepositories,
-} from "./repositoryTargetModel";
-import type { Choice } from "./remoteReviewSources";
+} from "../../review/repositoryTargetModel";
+import type { Choice } from "../../review/remoteReviewSources";
 
 import { shortOid, relativeDate, GraphCell, HistoryCommitSkeleton, WorktreeGroupLabel, PullChip, WorktreeRow, factChipSx } from "./ReviewRepositoryRows";
 import { Sheet } from "../../Sheet";

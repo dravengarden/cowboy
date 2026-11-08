@@ -90,7 +90,7 @@ Controller release, **W** ordinary Web release.
 |---|---|---|---|---|---|
 | `legacyRecordsNotice` | `web/src/legacyRecordsNotice.ts`, `store.ts`, `ProductSyncDataNotice.tsx`, `productSyncDatabase.ts` (`cowboy:sync:` keys) | Pre-dataset IndexedDB records | No device retains `cowboy:sync:` keys | VictoriaLogs `legacy_records_notice` with `retained:0` on every device | W |
 | Calls dock rollback | `web/src/backgroundTasks.ts` `ui.calls_dock_legacy` | The old Calls dock | Stated: two Web releases or 14 days, the later of 2026-11-14 and the second Web release | Release log and the parity checklist in `background-tasks.md` | W |
-| Fields older Controllers omit | `web/src/agentTools.ts`, `mobile/review/codeApi.ts`, `callApproval.ts`, `components/provider-ui/src/index.ts`, `sessionErrorNotice.ts` (`session_id: null` before 2026-11-05) | Web against an older Controller | The Controller rollback window holds no release without the field | Deployment history | W |
+| Fields older Controllers omit | `web/src/agentTools.ts`, `review/codeApi.ts`, `callApproval.ts`, `components/provider-ui/src/index.ts`, `sessionErrorNotice.ts` (`session_id: null` before 2026-11-05) | Web against an older Controller | The Controller rollback window holds no release without the field | Deployment history | W |
 
 ## Build and release
 

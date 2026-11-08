@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import {
   type DesktopCommand,
   useDesktopCommand,
@@ -20,20 +20,8 @@ import {
   saveDesktopWorkView,
 } from "./desktopWorkView";
 
-/** The classic layout's single region; the workbench focuses its Document. */
-export const DESKTOP_REVIEW_REGION = "conversation.review";
-const WORKBENCH_FOCUS_REGION = "review.document";
-
-export type DesktopReviewLayout = "workbench" | "classic";
-const LAYOUT_KEY = "cowboy.desktop.reviewLayout.v1";
-
-function loadLayout(): DesktopReviewLayout {
-  try {
-    return globalThis.localStorage?.getItem(LAYOUT_KEY) === "classic" ? "classic" : "workbench";
-  } catch {
-    return "workbench";
-  }
-}
+/** Opening or focusing Review lands in its Document. */
+const FOCUS_REGION = "review.document";
 
 /** Focus `region` once it exists: the first open loads Review's chunk, so
  *  its regions mount a few frames after the view changes. */
@@ -58,7 +46,6 @@ export function useDesktopWorkView(sessionId: string): {
   view: DesktopWorkView;
   reviewMounted: boolean;
   showView: (view: DesktopWorkView) => void;
-  layout: DesktopReviewLayout;
 } {
   const workspace = useDesktopWorkspace();
   const { focusRegion } = workspace;
@@ -70,12 +57,6 @@ export function useDesktopWorkView(sessionId: string): {
     ? stored.view
     : loadDesktopWorkView(sessionId);
   const [reviewMounted, setReviewMounted] = useState(view === "review");
-  // Until History, Worktrees, Remote PR and context switching reach the
-  // Desktop workbench, the phone's layout stays one key away (␣VL).
-  const [layout, setLayout] = useState(loadLayout);
-  const focusTarget = layout === "workbench" ? WORKBENCH_FOCUS_REGION : DESKTOP_REVIEW_REGION;
-  const layoutRef = useRef(layout);
-  layoutRef.current = layout;
   if (view === "review" && !reviewMounted) setReviewMounted(true);
   const showView = useCallback((next: DesktopWorkView): void => {
     saveDesktopWorkView(sessionId, next);
@@ -85,12 +66,11 @@ export function useDesktopWorkView(sessionId: string): {
   useLayoutEffect(() => () => publishDesktopWorkView("conversation"), []);
   const showReview = useCallback((): void => {
     showView("review");
-    focusRegionWhenMounted(focusRegion, focusTarget);
-  }, [focusRegion, focusTarget, showView]);
+    focusRegionWhenMounted(focusRegion, FOCUS_REGION);
+  }, [focusRegion, showView]);
   // An agent or a transcript link asks to show a file: live navigation only.
   useReviewOpenRequest(sessionId, () => {
-    // The classic layout's own Review takes reveals itself.
-    if (layoutRef.current === "workbench") requestDesktopReviewReveal();
+    requestDesktopReviewReveal();
     showView("review");
   });
   useEffect(() => {
@@ -129,28 +109,8 @@ export function useDesktopWorkView(sessionId: string): {
     leaderAnywhere: true,
     when: () => reviewShown,
     disabledReason: "Open Review first",
-    run: () => focusRegion(focusTarget),
-  }), [focusRegion, focusTarget, reviewShown]);
+    run: () => focusRegion(FOCUS_REGION),
+  }), [focusRegion, reviewShown]);
   useDesktopCommand(focusCommand);
-  const layoutCommand = useMemo<DesktopCommand>(() => ({
-    id: "review.layout",
-    title: layout === "workbench" ? "Review: Use the classic layout" : "Review: Use the Desktop workbench",
-    description: "Switch Review between the Desktop workbench and the phone's layout",
-    group: "Review",
-    sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.reviewLayout),
-    leaderAnywhere: true,
-    when: () => reviewShown,
-    disabledReason: "Open Review first",
-    run: () => {
-      const next = layout === "workbench" ? "classic" : "workbench";
-      try {
-        globalThis.localStorage?.setItem(LAYOUT_KEY, next);
-      } catch {
-        // The choice then lasts for this page only.
-      }
-      setLayout(next);
-    },
-  }), [layout, reviewShown]);
-  useDesktopCommand(layoutCommand);
-  return { view, reviewMounted, showView, layout };
+  return { view, reviewMounted, showView };
 }

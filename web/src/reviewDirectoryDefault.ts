@@ -10,7 +10,7 @@ import {
   registeredReviewWorkspace,
   sessionReviewLocation,
   workspaceCodeContextId,
-} from "./mobile/review/reviewContextModel";
+} from "./review/reviewContextModel";
 
 /** Browsing another root never owns the target session's tabs or progress. */
 export function reviewStateKey(owner: string | undefined, target: string): string {

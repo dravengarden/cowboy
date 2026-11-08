@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { type CodeDiagnostic, type CodeDocumentSymbol, fetchCodeOutline } from "../../mobile/review/codeApi";
-import { useReviewChecks } from "../../mobile/review/reviewChecksStore";
-import { useOwnedReviewDiff } from "../../mobile/review/useOwnedReviewDiff";
+import { type CodeDiagnostic, type CodeDocumentSymbol, fetchCodeOutline } from "../../review/codeApi";
+import { useReviewChecks } from "../../review/reviewChecksStore";
+import { useOwnedReviewDiff } from "../../review/useOwnedReviewDiff";
 import {
   inspectorHunks,
   inspectorOutline,

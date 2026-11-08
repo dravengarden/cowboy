@@ -4,7 +4,7 @@ import { appendDraftText } from "../../draftStore";
 import { forkAvailability, forkSession } from "../../sessionFork";
 import { requestPickSession } from "../../sessionPickRequest";
 import { notify, renameSession, send, trashItems, useStoreSelector } from "../../store";
-import { reviewExplainPrompt, reviewExplainSessions, reviewExplainTitle } from "../../mobile/review/reviewLineSelection";
+import { reviewExplainPrompt, reviewExplainSessions, reviewExplainTitle } from "../../review/reviewLineSelection";
 import { keepDesktopTab, updateDesktopTabs } from "../workspaceTabs";
 import { delegationTask, recordDelegation } from "./reviewDelegations";
 import { documentRemark, pathRemark } from "./reviewWorkbenchModel";

@@ -5,7 +5,7 @@ import { desktopSize } from "../../surface/desktopSize";
 import { mutateMobileReview } from "../../store";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
 import { extensionRequest, type ExtensionResponse } from "../../extensions/api";
-import { readRemoteReview } from "../../mobile/review/RemoteReviewApp";
+import { readRemoteReview } from "../../review/remoteReviewSources";
 import {
   remoteFileKey,
   remoteFileMark,
@@ -13,8 +13,8 @@ import {
   type RemoteReviewFile,
   type RemoteReviewPage,
   sameReview,
-} from "../../mobile/review/remoteReviewModel";
-import { type Choice, choices, matches } from "../../mobile/review/remoteReviewSources";
+} from "../../review/remoteReviewModel";
+import { type Choice, choices, matches } from "../../review/remoteReviewSources";
 import { rememberPullFiles } from "./pullPatches";
 import { ReviewPullPicker } from "./ReviewPullPicker";
 import type { DesktopReviewContext } from "./useDesktopReviewContext";

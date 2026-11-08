@@ -258,7 +258,7 @@ try {
   await until(focusIn("review.document"), "focus returns to the Document");
   await keys("g", "d");
   await until(`${activeTab} === "src/app.ts"`, "gd opens the definition");
-  await until(`${focusIn("review.document")} && document.querySelector("[data-desktop-review-editor] .cm-content")?.textContent.includes("Project guide")`, "the definition's text is focused");
+  await until(`${focusIn("review.document")} && document.querySelector("[data-desktop-review-editor]")?.dataset.reviewDocumentKey === "source\\0src/app.ts"`, "the definition's buffer is focused");
   await keys("g", "T");
   await until(`${activeTab} === "README.md"`, "gT returns to the file");
   results.push("Language: the diagnostic is underlined and listed, K shows the hover, Escape returns, gd opens the definition");

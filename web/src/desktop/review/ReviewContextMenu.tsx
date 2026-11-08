@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useActiveSessionId } from "../../controlPlane";
 import { useAnnouncedSessionContext } from "../../SessionContextCue";
 import { useStoreSelector } from "../../store";
-import { reviewLinkedSessions } from "../../mobile/review/reviewContextModel";
+import { reviewLinkedSessions } from "../../review/reviewContextModel";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
 import { REVIEW_CONTEXT_GROUPS, reviewContextOptions } from "./reviewContextOptions";
 import type { DesktopReviewContext } from "./useDesktopReviewContext";

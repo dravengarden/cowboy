@@ -25,7 +25,7 @@ import {
   type CodeDocumentSymbol,
   type CodeOutline,
   fetchCodeOutline,
-} from "./codeApi";
+} from "../../review/codeApi";
 import {
   activeOutlineRow,
   filterOutline,
@@ -33,7 +33,7 @@ import {
   type OutlineSymbolCategory,
   outlineSymbolCategory,
   symbolKindLabel,
-} from "./outlineModel";
+} from "../../review/outlineModel";
 
 const VISIBLE_SYMBOL_CAP = 800;
 

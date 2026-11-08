@@ -4,7 +4,7 @@ import { sessionExecution } from "../../sessionExecution";
 import {
   registeredReviewWorkspace,
   reviewSessionProject,
-} from "../../mobile/review/reviewContextModel";
+} from "../../review/reviewContextModel";
 
 export interface ReviewContextOption {
   /** The review-directory value; `null` follows the Session's default. */

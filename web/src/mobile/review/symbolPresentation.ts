@@ -1,4 +1,4 @@
-import type { CodeHoverBlock } from "./codeApi";
+import type { CodeHoverBlock } from "../../review/codeApi";
 
 function cleanRustdocFence(markdown: string): string {
   const lines = markdown.replaceAll(/<br\s*\/?>/gi, "\n").split("\n");

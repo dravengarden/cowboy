@@ -2,7 +2,7 @@ import { Box, InputBase, Tab, Tabs } from "@mui/material";
 import { useEffect, useRef } from "react";
 import { desktopSize } from "../../surface/desktopSize";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
-import type { GitReviewEntry } from "../../mobile/review/gitReviewModel";
+import type { GitReviewEntry } from "../../review/gitReviewModel";
 import { ReviewChangesList } from "./ReviewChangesList";
 import { ReviewFilesList } from "./ReviewFilesList";
 import { ReviewContextMenu } from "./ReviewContextMenu";
@@ -11,7 +11,7 @@ import { ReviewWorktreesList } from "./ReviewWorktreesList";
 import type { DesktopReviewContext } from "./useDesktopReviewContext";
 import { ReviewPullList } from "./ReviewPullList";
 import type { ReviewFinding } from "./reviewFindingsModel";
-import type { RemoteReviewBinding, RemoteReviewFile } from "../../mobile/review/remoteReviewModel";
+import type { RemoteReviewBinding, RemoteReviewFile } from "../../review/remoteReviewModel";
 import type { DesktopReviewChanges } from "./useDesktopReviewChanges";
 
 export type ReviewNavigatorTab = "changes" | "files" | "history" | "worktrees" | "pulls";

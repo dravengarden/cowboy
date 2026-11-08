@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals, assertThrows } from "../../../../tools/test-assert.ts";
-import type { Choice } from "../../mobile/review/remoteReviewSources.ts";
+import type { Choice } from "../../review/remoteReviewSources.ts";
 import { choiceForInput } from "./ReviewPullPicker.tsx";
 
 const choice = (discovery: boolean): Choice => ({

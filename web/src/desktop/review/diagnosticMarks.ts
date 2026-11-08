@@ -1,7 +1,7 @@
 import { type Extension, RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin } from "@codemirror/view";
 import type { Theme } from "@mui/material/styles";
-import type { CodeDiagnostic } from "../../mobile/review/codeApi";
+import type { CodeDiagnostic } from "../../review/codeApi";
 
 const CLASS = ["", "error", "warning", "info", "info"] as const;
 

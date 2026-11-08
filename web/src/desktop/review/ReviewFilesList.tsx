@@ -7,7 +7,7 @@ import {
   type CodeTreeEntry,
   fetchCodeSearch,
   fetchCodeTree,
-} from "../../mobile/review/codeApi";
+} from "../../review/codeApi";
 
 interface Row {
   readonly entry: CodeTreeEntry;

@@ -33,7 +33,7 @@ import {
   type CodeTreeEntry as FileTreeEntry,
   type CodeTreePage,
   fetchCodeTree,
-} from "./codeApi";
+} from "../../review/codeApi";
 import { directoryPrefetchTargets } from "./directoryPrefetch";
 import {
   belongsToDirectorySubtree,
@@ -42,9 +42,9 @@ import {
   directoryTreeCacheKey,
   directoryTreeCacheScope,
   directoryTreeSessionPrefix,
-} from "./directoryTreeModel";
+} from "../../review/directoryTreeModel";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
-import { useReviewRecovery } from "./useReviewRecovery";
+import { useReviewRecovery } from "../../review/useReviewRecovery";
 import { ReviewNavigationActions } from "./ReviewNavigationActions";
 import { ReviewFileSearchBar } from "./ReviewFileSearchBar";
 import {

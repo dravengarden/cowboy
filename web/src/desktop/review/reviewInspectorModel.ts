@@ -3,9 +3,9 @@
 // Rows are one-based Document lines; in a diff a file line is placed only
 // through a verified projection, never guessed from the patch text.
 
-import type { CodeCheckDiagnostic, CodeChecks, CodeDiagnostic, CodeDocumentSymbol } from "../../mobile/review/codeApi";
-import { checkTitle } from "../../mobile/review/checkAnnotations";
-import { diffHunkLines } from "../../mobile/review/diffNavigationModel";
+import type { CodeCheckDiagnostic, CodeChecks, CodeDiagnostic, CodeDocumentSymbol } from "../../review/codeApi";
+import { checkTitle } from "../../review/checkAnnotations";
+import { diffHunkLines } from "../../review/diffNavigationModel";
 import type { ReviewFinding } from "./reviewFindingsModel";
 
 export interface InspectorHunk {

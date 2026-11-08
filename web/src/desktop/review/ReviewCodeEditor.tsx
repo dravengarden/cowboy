@@ -7,9 +7,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { cmTheme } from "../../cmTheme";
 import { notify } from "../../store";
 import { getVimConfigSource } from "../../vimSetting";
-import { loadCodeLanguage } from "../../mobile/review/codeLanguage";
-import { reviewHighlightStyle } from "../../mobile/review/codeSyntaxTheme";
-import { reviewLineGutter } from "../../mobile/review/reviewLineGutter";
+import { loadCodeLanguage } from "../../review/codeLanguage";
+import { reviewHighlightStyle } from "../../review/codeSyntaxTheme";
+import { reviewLineGutter } from "../../review/reviewLineGutter";
 import { createImeAutoInsertVim } from "../vim/imeAutoInsertVim";
 import { parseVimConfig } from "../vim/vimConfig";
 import { vimCommandKey } from "../vim/vimCommandKey";
@@ -17,7 +17,7 @@ import { reviewDiffDecorations } from "./reviewDiffDecorations";
 import type { SplitSide } from "./splitDiffModel";
 import { splitSideExtensions } from "./splitSideExtensions";
 import { diagnosticMarks } from "./diagnosticMarks";
-import type { CodeDiagnostic } from "../../mobile/review/codeApi";
+import type { CodeDiagnostic } from "../../review/codeApi";
 import { revealEditorLine } from "./reviewEditorSelection";
 import {
   type ReviewDocumentAction,
@@ -207,6 +207,9 @@ export function ReviewCodeEditor({
     if (!editor) return;
     const hadFocus = editor.dom.contains(document.activeElement);
     editor.setState(EditorState.create({ doc: text, extensions }));
+    // Names the document the buffer now holds (keys typed before this
+    // reached the previous one).
+    if (host.current) host.current.dataset.reviewDocumentKey = documentKey;
     if (restoreLine !== undefined) revealEditorLine(editor, restoreLine);
     if (hadFocus) editor.focus();
     // `restoreLine` belongs to the document that just arrived.

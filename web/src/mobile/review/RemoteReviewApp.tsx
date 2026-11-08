@@ -23,22 +23,20 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   extensionRequest,
   type ExtensionResponse,
-  resourceQuery,
 } from "../../extensions/api";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import {
-  pullNumber,
   remoteFileKey,
   remoteFileMark,
   type RemoteReviewBinding,
   type RemoteReviewFile,
   type RemoteReviewPage,
   sameReview,
-} from "./remoteReviewModel";
-import { useReviewSettings } from "./reviewSettings";
+} from "../../review/remoteReviewModel";
+import { useReviewSettings } from "../../review/reviewSettings";
 import { WorkspaceExtensionsButton } from "../../extensions/WorkspaceExtensionsButton";
 
-import { type Choice, choices, matches } from "./remoteReviewSources";
+import { type Choice, choices, matches, readRemoteReview } from "../../review/remoteReviewSources";
 import {
   PullSkeleton,
   remoteBottomSx,
@@ -47,53 +45,6 @@ import {
 
 const CodeViewer = lazy(() => import("./CodeViewer"));
 type Inventory = Extract<ExtensionResponse, { type: "inventory" }>;
-/** One page of a pull request, checked against the requested identity,
- *  revision and repository (shared by Mobile and Desktop Review). */
-export async function readRemoteReview(
-  context: string,
-  choice: Choice,
-  number: string,
-  page: number,
-  signal: AbortSignal,
-  repositoryId?: string,
-  revision?: string,
-  repository?: string,
-): Promise<RemoteReviewPage> {
-  const query = resourceQuery(
-    choice.extension.identity,
-    choice.remote.name,
-    choice.view,
-    "",
-    page,
-    number,
-  );
-  query.set("review", "true");
-  if (repository) query.set("repository", repository);
-  if (repositoryId) query.set("repositoryId", repositoryId);
-  if (revision) query.set("revision", revision);
-  const response = await extensionRequest(context, query, signal);
-  if (
-    response.type !== "review" || response.review.number !== number ||
-    (repositoryId && response.review.repositoryId !== repositoryId) ||
-    (revision && response.review.revision !== revision)
-  ) throw new Error("The PR identity changed. Refresh or associate it again.");
-  const url = new URL(response.review.url);
-  if (
-    url.hostname !== choice.remote.host ||
-    pullNumber(
-        url.href,
-        repository
-          ? {
-            ...choice.remote,
-            owner: repository.split("/")[0]!,
-            repository: repository.split("/")[1]!,
-          }
-          : choice.remote,
-      ) !== number
-  ) throw new Error("The PR repository changed.");
-  return response.review;
-}
-
 /**
  * Resolve a pull request of the choice's repository into a durable binding.
  * The read both proves access and supplies the immutable repository identity.

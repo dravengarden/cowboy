@@ -4,7 +4,7 @@ import {
   type RepositoryRemote,
   resourceQuery,
 } from "../../extensions/api";
-import { type Choice, choices } from "./remoteReviewSources";
+import { type Choice, choices } from "../../review/remoteReviewSources";
 
 /** The repository's open pull requests, as far as one installed extension sees. */
 export interface RepositoryPulls {
