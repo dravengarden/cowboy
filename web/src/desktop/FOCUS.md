@@ -233,7 +233,7 @@ a folded Prompt. The Review group (`␣V`, while Review is shown): `V` focus,
 Session's default, its project checkout, linked, bound or same-project
 sessions; per device, and choosing never moves the Agent), `,` Review
 settings, `D` unified or split diff (per device; in a split the new side
-holds the Vim buffer and the old side follows its scroll), `O` the outline, `]` fold the Inspector, `K` run a project check, `A` compare against, `U` unread only, `M` mark
+holds the Vim buffer and the old side follows its scroll), `Z` the whole file or the patch's context in diffs, `O` the outline, `]` fold the Inspector, `K` run a project check, `A` compare against, `U` unread only, `M` mark
 reviewed (the focused row, else the open file), `S` send and stay, `E` explain in a fork, `R` ask a fork for a managed
 review (both take the focused Navigator row, else the open file), `Q` close
 the file tab, `P` keep it, `[` fold the Navigator, `L` the classic layout.

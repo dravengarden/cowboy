@@ -19,7 +19,7 @@ import { setReviewContextChoice } from "./desktopReviewContextChoice";
 import { useReviewWorkbenchCommands } from "./useReviewWorkbenchCommands";
 import { REVIEW_DOCUMENT_REGION, type ReviewWorkbench, useReviewWorkbench } from "./useReviewWorkbench";
 import { useElementWidth } from "./useReviewTabsState";
-import { toggleReviewDiffLayout } from "./reviewDiffLayout";
+import { toggleReviewDiffContext, toggleReviewDiffLayout } from "./reviewDiffLayout";
 import { notify } from "../../store";
 import { ReviewNavigatorSplitter, useNavigatorWidth } from "./ReviewNavigatorSplitter";
 import { DesktopModal } from "../DesktopModal";
@@ -230,6 +230,9 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
     refresh: review.changes.refresh,
     toggleDiffLayout: () => {
       notify(toggleReviewDiffLayout() === "split" ? "Split diff" : "Unified diff", "info");
+    },
+    toggleDiffContext: () => {
+      notify(toggleReviewDiffContext() === "file" ? "Diffs show the whole file" : "Diffs show the patch's context", "info");
     },
     hasDocument: review.document !== undefined,
     overlay: compact && overlay,

@@ -236,13 +236,18 @@ export function DesktopReviewDocument({
           data-review-document-footer
           sx={{ minHeight: desktopSize(34), px: 1, gap: 1, borderTop: 1, borderColor: "divider", flexShrink: 0 }}
         >
-          <Typography noWrap sx={{ fontSize: "0.75rem", minWidth: 0, flex: 1, direction: "rtl", textAlign: "left" }} title={document.path}>
+          <Typography noWrap sx={{ fontSize: "0.75rem", minWidth: "6em", flex: 1, direction: "rtl", textAlign: "left" }} title={document.path}>
             {document.path}
           </Typography>
           {ready?.added !== undefined && (
             <Typography sx={{ fontFamily: "monospace", fontSize: "0.72rem", flexShrink: 0 }}>
               <Box component="span" sx={{ color: "success.main" }}>+{ready.added}</Box>{" "}
               <Box component="span" sx={{ color: "error.main" }}>−{ready.removed ?? 0}</Box>
+            </Typography>
+          )}
+          {ready?.context && (
+            <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-diff-context={ready.context}>
+              {ready.context === "file" ? "Whole file" : "Patch context only"} <LeaderKeycap leaderKey="VZ" />
             </Typography>
           )}
           <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-cursor-line={status.line}>

@@ -444,6 +444,12 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
           truncated: false,
         });
       }
+      const desktopReview = (globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests === true;
+      // The old side the two-hunk diffs name, for whole-file context.
+      if (desktopReview && url.pathname.endsWith("/blob") && url.searchParams.get("oid") === "1111111") {
+        return json({ apiVersion: 1, oid: "1111111", text: Array.from({ length: 45 }, (_, index) =>
+          index === 0 ? "a" : index === 39 ? "c" : `line ${String(index + 1)}`).join("\n") + "\n" });
+      }
       if (url.pathname.endsWith("/diff")) {
         return json({
           apiVersion: 1,
@@ -454,7 +460,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
           // Other files have two hunks so hunk navigation has somewhere to go.
           text: path === "src/app.ts"
             ? "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n"
-            : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-a\n+b\n@@ -40 +40 @@\n-c\n+d\n`,
+            : `diff --git a/${path} b/${path}\n${desktopReview ? "index 1111111..2222222 100644\n" : ""}--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-a\n+b\n@@ -40 +40 @@\n-c\n+d\n`,
           truncated: false,
         });
       }

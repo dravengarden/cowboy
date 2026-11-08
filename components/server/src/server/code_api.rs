@@ -789,6 +789,60 @@ pub(super) async fn api_code_file_raw(
     .await
 }
 
+/// One side of a diff by the blob id its `index` line names
+/// (docs/desktop-code-review.md "Server and API"). Content-addressed, so it
+/// never needs a snapshot fence; a Machine that predates it refuses.
+pub(super) async fn api_code_blob(
+    State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
+    Path(session_id): Path<String>,
+    Query(query): Query<CodeBlobQuery>,
+) -> Response {
+    let context_id = session_id.clone();
+    code_reads::scoped(authority, &context_id, |context| async move {
+        let cwd = context.cwd;
+        let result = match remote_code_request(
+            &state,
+            &context.scope,
+            CodeOperation::Blob {
+                oid: query.oid.clone(),
+            },
+        )
+        .await
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::Blob(blob))) => Ok(blob),
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote blob unavailable").into_response();
+            }
+            Ok(None) => {
+                let oid = query.oid;
+                tokio::task::spawn_blocking(move || {
+                    crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).blob(&oid)
+                })
+                .await
+                .unwrap_or_else(|_| Err("blob unavailable".to_owned()))
+            }
+        };
+        match result {
+            Ok(blob) => Json(CodeBlobResponse {
+                api_version: 1,
+                oid: blob.oid,
+                text: blob.text,
+            })
+            .into_response(),
+            Err(error) => match error.as_str() {
+                "blob not found" => (StatusCode::NOT_FOUND, error).into_response(),
+                "blob too large" => (StatusCode::PAYLOAD_TOO_LARGE, error).into_response(),
+                "binary file" | "file is not UTF-8" => {
+                    (StatusCode::UNSUPPORTED_MEDIA_TYPE, error).into_response()
+                }
+                _ => (StatusCode::BAD_REQUEST, "blob unavailable").into_response(),
+            },
+        }
+    })
+    .await
+}
+
 pub(super) fn code_file_error_response(error: &str) -> Response {
     match error {
         "file not found" => (StatusCode::NOT_FOUND, "file not found").into_response(),

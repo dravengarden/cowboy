@@ -159,6 +159,12 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
   the file identity revision still matches; changed snapshots return `409`.
 - `GET /file-raw?path=<relative>` returns the raw bytes of a previewable image
   or SVG with the matching `Content-Type`. Other paths return `415`.
+- `GET /blob?oid=<hex>` returns one side of a diff by the (possibly
+  abbreviated) blob id its `index` line names, as UTF-8 text up to 4 MiB:
+  `404` for an unknown, ambiguous or non-blob id, `413` above the bound, `415`
+  for binary text. Desktop Review fills a diff's gaps from it
+  ([desktop-code-review](../desktop-code-review.md) D2d); a Machine that
+  predates the operation answers `502`.
 
 Every response carries `apiVersion: 1`. Paths are resolved from the session and
 validated. For a Columbus aggregate worktree, the read-only tree additionally

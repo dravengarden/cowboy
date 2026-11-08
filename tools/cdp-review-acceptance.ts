@@ -181,6 +181,19 @@ try {
   await until(`document.querySelector("[data-review-diff-layout='unified']")`, "␣VD returns to the unified diff");
   results.push("Split diff: ␣VD shows both sides aligned, ]c steps hunks, Enter sends the new-side file line, ␣VD returns");
 
+  // Whole-file context from the exact old side the diff's index line names.
+  await keys(" ", "v", "z");
+  await until(`document.querySelector("[data-review-diff-context='file']")`, "␣VZ shows the whole file");
+  await until(`document.querySelector("[data-desktop-review-editor] .cm-content")?.textContent.includes("line 20")`, "the gap between the hunks is filled");
+  await keys("g", "g");
+  await keys("]", "c");
+  await keys("]", "c");
+  await until(`document.querySelector("[data-review-hunk-position]")?.textContent.includes("2/2")`, "]c still steps the two hunks");
+  await shot("12-file-context");
+  await keys(" ", "v", "z");
+  await until(`!document.querySelector("[data-review-diff-context]") && !document.querySelector("[data-desktop-review-editor] .cm-content")?.textContent.includes("line 20")`, "␣VZ returns to the patch");
+  results.push("␣VZ fills a diff with the whole file from its exact old side; ]c still steps the hunks; ␣VZ returns to the patch");
+
   await keys("V", "j", "Enter");
   await until(focusIn("prompt.composer"), "Enter hands focus to the Prompt");
   const remark = await page.evaluate<string>(`document.querySelector("[data-fixture-prompt]").value`);

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   CodeApiError,
+  fetchCodeBlob,
   fetchCodeDiffPage,
   fetchCodeFile,
   fetchCodeFilePage,
@@ -10,6 +11,8 @@ import { loadCodeDiff } from "../../mobile/review/diffCache";
 import type { ReviewSettings } from "../../mobile/review/reviewSettingsModel";
 import { type DesktopReviewDocument, reviewDocumentKey } from "./desktopReviewTabs";
 import { pullFile } from "./pullPatches";
+import { diffBaseOid, expandDiffContext } from "./diffContextExpansion";
+import type { ReviewDiffContext } from "./reviewDiffLayout";
 
 /** Pages read for one document before it is shown as cut short: 64 diff
  *  pages are the server's 16 MiB diff bound; 16 file windows are 4 MiB. */
@@ -24,6 +27,32 @@ export interface ReviewDocumentText {
   readonly removed: number | undefined;
   /** More exists than was read (a bound, or the server's own cut). */
   readonly truncated: boolean;
+  /** A diff asked for the whole file: `file` when its gaps were filled,
+   *  `limited` when only the patch could be shown. */
+  readonly context?: "file" | "limited" | undefined;
+}
+
+/**
+ * The diff with the whole file as context (`␣VZ`), from the exact old side
+ * its `index` line names. An ignore-whitespace or cut-short patch, a new or
+ * binary file, and a Machine without the blob route keep the patch.
+ */
+async function withFileContext(
+  sessionId: string,
+  value: ReviewDocumentText,
+  exact: boolean,
+  signal: AbortSignal,
+): Promise<ReviewDocumentText> {
+  const oid = exact && !value.truncated ? diffBaseOid(value.text) : undefined;
+  if (!oid) return { ...value, context: "limited" };
+  try {
+    const base = await fetchCodeBlob(sessionId, oid, signal);
+    const text = expandDiffContext(value.text, base.text);
+    return text ? { ...value, text, context: "file" } : { ...value, context: "limited" };
+  } catch (reason) {
+    if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
+    return { ...value, context: "limited" };
+  }
 }
 
 export type ReviewDocumentLoad =
@@ -141,6 +170,7 @@ export function useReviewDocumentText(
   document: DesktopReviewDocument | undefined,
   settings: ReviewSettings,
   dataRevision: number,
+  diffContext: ReviewDiffContext = "patch",
 ): ReviewDocumentLoad | undefined {
   const [load, setLoad] = useState<{ key: string; value: ReviewDocumentLoad }>();
   const key = document && sessionId ? `${sessionId}\0${reviewDocumentKey(document)}` : undefined;
@@ -149,13 +179,19 @@ export function useReviewDocumentText(
     const controller = new AbortController();
     // Keep showing the previous text of the same document while it refreshes.
     setLoad((previous) => previous?.key === key ? previous : { key, value: { state: "loading" } });
-    const read = document.kind === "diff"
+    const patch = document.kind === "diff"
       ? readDiff(sessionId, document, settings, controller.signal)
       : document.kind === "pr"
       ? readPull(document)
       : document.kind === "commit"
       ? readCommit(sessionId, document, controller.signal)
       : readSource(sessionId, document, controller.signal);
+    // A PR's blobs live on the host, not in this repository.
+    const expand = diffContext === "file" && (document.kind === "diff" || document.kind === "commit");
+    const exact = document.kind === "commit" || settings.showWhitespaceChanges;
+    const read = expand
+      ? patch.then((value) => withFileContext(sessionId, value, exact, controller.signal))
+      : patch;
     void read.then(
       (value) => {
         if (!controller.signal.aborted) setLoad({ key, value: { state: "ready", value } });
@@ -169,6 +205,6 @@ export function useReviewDocumentText(
     return () => controller.abort();
     // `document` is identified by `key`; settings that change the diff refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, dataRevision, settings.contextLines, settings.showWhitespaceChanges]);
+  }, [key, dataRevision, settings.contextLines, settings.showWhitespaceChanges, diffContext]);
   return load?.key === key ? load?.value : undefined;
 }

@@ -32,7 +32,7 @@ import { useDesktopReviewChanges } from "./useDesktopReviewChanges";
 import { useDesktopReviewContext } from "./useDesktopReviewContext";
 import { useReviewDocumentText } from "./useReviewDocumentText";
 import { useReviewTabsState } from "./useReviewTabsState";
-import { useReviewDiffLayout } from "./reviewDiffLayout";
+import { useReviewDiffContext, useReviewDiffLayout } from "./reviewDiffLayout";
 import { type SplitDiff, splitDiff, splitRowOf } from "./splitDiffModel";
 import { decodePatch } from "./unifiedPatchDecoder";
 import type { ReviewDocumentText } from "./useReviewDocumentText";
@@ -151,7 +151,8 @@ export function useReviewWorkbench(active: boolean) {
   const changes = useDesktopReviewChanges(target?.sessionId, context.stateKey, context.synced.comparison, active);
   const [tabs, updateTabs] = useReviewTabsState(context.stateKey);
   const document = activeReviewDocument(tabs);
-  const load = useReviewDocumentText(target?.sessionId, document, settings, changes.dataRevision);
+  const diffContext = useReviewDiffContext();
+  const load = useReviewDocumentText(target?.sessionId, document, settings, changes.dataRevision, diffContext);
   const editor = useRef<EditorView | null>(null);
   const positions = useRef(new Map<string, number>());
   // `]d`/`[d` and `gO` belong to the Inspector, which the view owns.

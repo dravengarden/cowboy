@@ -630,6 +630,20 @@ export function fetchGitCommit(
   );
 }
 
+/** One side of a diff by the blob id its `index` line names. A Machine that
+ *  predates the route answers 502; a large or binary side 413/415. */
+export function fetchCodeBlob(
+  sessionId: string,
+  oid: string,
+  signal?: AbortSignal,
+): Promise<{ oid: string; text: string }> {
+  const query = new URLSearchParams({ oid });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/blob?${query}`,
+    signal,
+  );
+}
+
 export function fetchGitCommitDiff(
   sessionId: string,
   oid: string,

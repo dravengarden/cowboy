@@ -72,6 +72,12 @@ fn closed_requests_preserve_every_existing_wire_operation() {
             },
             json!({ "type": "file_raw", "path": "image.png" }),
         ),
+        (
+            CodeOperation::Blob {
+                oid: "abc1234".into(),
+            },
+            json!({ "type": "blob", "oid": "abc1234" }),
+        ),
     ];
     for (scope, wire_scope) in [
         (DiffScope::Combined, "combined"),
