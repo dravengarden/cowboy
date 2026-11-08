@@ -36,6 +36,7 @@ import { createPortal } from "react-dom";
 import { Box, IconButton, SvgIcon, useTheme } from "@mui/material";
 import { FloatingActionIsland } from "./bottom-sheet.tsx";
 import { setStatusBarColor } from "./detent-sheet.tsx";
+import { FLOATING_CONTROLS_BOTTOM } from "./reader-bottom-edge.ts";
 import {
   type LightboxMediaElement,
   useLightboxGestures,
@@ -399,7 +400,7 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
         paddingTop: "max(env(safe-area-inset-top, 0px), 12px)",
         paddingLeft: "env(safe-area-inset-left, 0px)",
         paddingRight: "env(safe-area-inset-right, 0px)",
-        paddingBottom: "var(--lightbox-dock-clearance, max(env(safe-area-inset-bottom, 0px), 16px))",
+        paddingBottom: `var(--lightbox-dock-clearance, ${FLOATING_CONTROLS_BOTTOM})`,
         overflow: "hidden",
         touchAction: "none",
         "@keyframes shared-lightbox-in": {
@@ -581,7 +582,7 @@ const dockStyle: React.CSSProperties = {
   flexDirection: "column",
   alignItems: "center",
   gap: 10,
-  paddingBottom: "max(env(safe-area-inset-bottom, 0px), 16px)",
+  paddingBottom: FLOATING_CONTROLS_BOTTOM,
   paddingLeft: "max(env(safe-area-inset-left, 0px), 12px)",
   paddingRight: "max(env(safe-area-inset-right, 0px), 12px)",
   pointerEvents: "none",

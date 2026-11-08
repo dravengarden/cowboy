@@ -32,8 +32,11 @@ read-only package/config source rather than by sharing mutable Zed state.
 The process, licensing, trust, and version-pinning contract is defined in
 [14-zed-code-provider.md](14-zed-code-provider.md).
 
-Desktop shows the same Review in the Conversation pane (`␣V`), so the Prompt
-stays beside the code. Its layout is still the phone's single column.
+Desktop shows Review as a view of its work pane (`␣V`; `␣C` returns), so the
+Prompt stays beside the code and the transcript stays mounted behind it. The
+view itself is still the phone's single column; the keyboard-first Desktop
+workbench that replaces it is specified in
+[desktop-code-review.md](../desktop-code-review.md).
 
 ## Reading and control layout
 

@@ -7,17 +7,20 @@ import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
 import { PreparingConversation } from "./PreparingConversation";
+import { DeleteSessionShell } from "./DeleteSessionShell";
 import { SessionContextCue, SessionContinuedFrom, SessionHandedOffDock, SessionNextMessageBadge, SessionProvenance } from "./SessionContextCue";
 import {
   CLOSE_SESSION_SETTINGS_EVENT,
   COMPOSER_FOCUS_EVENT,
   requestNewFrom,
+  SESSION_NEW_FROM_EVENT,
 } from "./sessionSettingsOpen";
 import { Sheet } from "./Sheet";
 import { announceContext, type SessionContext } from "./sessionContext";
 import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice";
 import { frontPrompt, submitPrompt, useStore } from "./store";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
+import { getDraft } from "./draftStore";
 import { managementEntryFixture } from "./providerManagement.fixture";
 import { runCreateDefaultsBrowserChecks } from "./createDefaultsBrowserChecks";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
@@ -127,9 +130,13 @@ export async function runSessionContextBrowserConformance(
         outbox_contract: "atomic-delta-v1",
       });
     }
-    if (url.endsWith("/hibernate")) {
+    if (url.endsWith("/hibernate") || url.endsWith("/reload")) {
       writes.push({ url, body: {} });
       return new Response(null, { status: 204 });
+    }
+    if (url.endsWith("/continue-here")) {
+      writes.push({ url, body: {} });
+      return Response.json({ session: null });
     }
     if (url.endsWith("/fork") || url.endsWith("/duplicate")) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -139,6 +146,16 @@ export async function runSessionContextBrowserConformance(
         session_id: url.endsWith("/fork") ? "fork-copy" : "linked-copy",
         session: null,
       }, { status: 201 });
+    }
+    if (url.endsWith("/context/cancel")) {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      writes.push({ url, body });
+      return Response.json({
+        source_session_id: sessions[1]!.id,
+        text: "keep going",
+        content: [],
+        session: null,
+      });
     }
     if (url.endsWith("/context/send")) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -397,22 +414,38 @@ export async function runSessionContextBrowserConformance(
           ?.includes("Continued from")),
         `${mode}: links show how each session relates to this one`,
       );
-      await until(() => Boolean(exactButton("Fork")));
+      await until(() => Boolean(exactButton("Fork…")));
       check(
         container.querySelectorAll("[data-session-handed-off]").length === 1 &&
           Boolean(exactButton("Move to Trash")),
         `${mode}: only a session that was continued is history, and it can be cleared away`,
       );
-      exactButton("Fork").click();
-      await until(() => writes.some((write) => write.url.endsWith("/duplicate")));
+      const forkRequests: unknown[] = [];
+      const takeForkRequest = (event: Event) =>
+        forkRequests.push((event as CustomEvent).detail?.sessionId);
+      document.addEventListener(SESSION_NEW_FROM_EVENT, takeForkRequest);
+      exactButton("Fork…").click();
+      document.removeEventListener(SESSION_NEW_FROM_EVENT, takeForkRequest);
       check(
-        writes.some((write) =>
-          write.url.endsWith(`/${sessions[1]!.id}/duplicate`) &&
-          write.body.provider_account_id === "mink"
-        ),
-        `${mode}: forking keeps this agent's subscription in a new session`,
+        forkRequests.length === 1 && forkRequests[0] === sessions[1]!.id &&
+          !writes.some((write) => write.url.endsWith("/duplicate") || write.url.endsWith("/fork")),
+        `${mode}: Fork opens this session's options instead of forking at once`,
       );
-      await until(() => !button("Forking"));
+      exactButton("Continue here").click();
+      await until(() => writes.some((write) => write.url.endsWith("/continue-here")));
+      check(
+        writes.some((write) => write.url.endsWith(`/${sessions[1]!.id}/continue-here`)),
+        `${mode}: Continue here asks to keep working in the source`,
+      );
+      await until(() => !button("Reopening"));
+      const resumed = sessions.map((session) =>
+        session.id === sessions[1]!.id ? { ...session, handoff_resumed: true } : session
+      );
+      Socket.active.at(-1)?.publish({ type: "sessions", sessions: resumed });
+      await until(() => container.querySelectorAll("[data-session-handed-off]").length === 0);
+      check(true, `${mode}: a source kept as a second line of work leaves history`);
+      Socket.active.at(-1)?.publish({ type: "sessions", sessions });
+      await until(() => container.querySelectorAll("[data-session-handed-off]").length === 1);
       writes.length = 0;
       check(
         !contextReads.some((url) => url.includes(`/${sessions[2]!.id}/context`)),
@@ -1025,19 +1058,23 @@ export async function runSessionContextBrowserConformance(
     });
     flushSync(() => root.render(<Fixture desktop />));
     await openForm();
-    const forkOption = (id: string) => container.querySelector<HTMLSelectElement>(`[data-fork-option="${id}"]`);
+    const forkOption = (id: string) => container.querySelector<HTMLElement>(`[data-fork-option="${id}"]`);
     check(forkOption("model") && forkOption("effort") && !forkOption("fast"), "fork: model and reasoning are visible before expanding");
     await observe?.("fork-core");
     const beforeDraft = writes.length;
-    const selectOption = (id: string, value: string) => {
-      const input = forkOption(id)!;
-      input.value = value;
-      input.dispatchEvent(new Event("change", { bubbles: true }));
+    // Desktop options are lists (Vim menu keys reach them), not native selects.
+    const selectOption = async (id: string, label: string) => {
+      forkOption(id)!.closest(".MuiFormControl-root")!
+        .querySelector<HTMLElement>("[role='combobox']")!
+        .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      await until(() => Boolean(option(label)));
+      option(label)!.click();
+      await until(() => !document.querySelector("[role='listbox']"));
     };
-    selectOption("effort", "max");
+    await selectOption("effort", "Max");
     button("More options").click();
     await until(() => Boolean(forkOption("fast")));
-    selectOption("fast", "true");
+    await selectOption("fast", "On");
     await until(() => continueRun().disabled);
     check(writes.length === beforeDraft, "fork: configuration edits stay local");
     await observe?.("fork-advanced");
@@ -1075,6 +1112,35 @@ export async function runSessionContextBrowserConformance(
     flushSync(() => root.render(null));
     Socket.active.at(-1)?.publish({ type: "machines", machines: [machine], resync: true });
     await runCreateDefaultsBrowserChecks(sessions[1]!, "Claude · Mink");
+    // History keeps a fork with options, but nothing that would split the work.
+    container.style.cssText = "width:680px;max-width:100%;margin:auto";
+    flushSync(() => root.render(
+      <SurfaceContext.Provider
+        value={classifySurface({
+          finePointer: true,
+          hover: true,
+          tabletWidth: false,
+          touchCapable: false,
+          desktopHost: true,
+        })}
+      >
+        <BrowserProductTheme>
+          <CssBaseline />
+          <SessionContextSettings session={sessions[1]!} />
+        </BrowserProductTheme>
+      </SurfaceContext.Provider>,
+    ));
+    Socket.active.at(-1)?.publish({ type: "sessions", sessions });
+    await until(() => Boolean(exactButton("Fork")) && !exactButton("Fork")!.disabled);
+    exactButton("Fork")!.click();
+    await until(() => Boolean(container.querySelector("[data-new-session-fork-run]")));
+    check(
+      !container.querySelector("[data-new-session-continue-run]") &&
+        !container.querySelector("[data-new-session-continue]") &&
+        !button("Select sessions") && !button("Replace or fork"),
+      "history: Settings offers a configurable fork and no Replace or links",
+    );
+    flushSync(() => root.render(null));
     sessions[1] = { ...sessions[1]!, title: "network", trashed_at_ms: Date.now() };
     sessions[3] = { ...sessions[3]!, status: "starting", continued_from: sessions[1]!.id };
     for (const width of [360, 680]) {
@@ -1088,14 +1154,76 @@ export async function runSessionContextBrowserConformance(
         </BrowserProductTheme>,
       ));
       for (const socket of Socket.active) socket.publish({ type: "sessions", sessions });
+      Socket.active.at(-1)?.publish({
+        type: "sync_patch",
+        state: `queue:${sessions[3]!.id}`,
+        version: width,
+        value: { queue: [{ id: "first", text: "keep going", content: [], cmid: "context-handoff-op" }] },
+        confirmed: [],
+        resync: true,
+      });
       await until(() => Boolean(container.querySelector('[data-session-handoff-link="trash"]')));
+      await until(() => Boolean(container.querySelector("[data-handoff-cancel]")));
+      check(container.textContent!.includes("keep going"),
+        `preparing ${width}: the queued first message is shown with Cancel`);
       const status = container.querySelector('[role="status"]')!.getBoundingClientRect();
       const bounds = container.getBoundingClientRect();
       check(Math.abs(status.top + status.height / 2 - (bounds.top + bounds.height / 2)) < 65 && container.scrollWidth <= width,
         `preparing ${width}: status is centered without horizontal overflow`);
       check(Boolean(exactButton("Restore")), `preparing ${width}: source recovery stays visible`);
       await observe?.(`preparing-${width}`);
+      // A startup that failed keeps the same page: why, Retry, and the source.
+      flushSync(() => root.render(
+        <BrowserProductTheme>
+          <CssBaseline />
+          <Box sx={{ height: 560, display: "flex", flexDirection: "column-reverse" }}>
+            <PreparingConversation
+              sessionId={sessions[3]!.id}
+              location="columbus on hawk"
+              blocked={{ detail: "The selected workspace could not be prepared (hawk). This session is retained; send a message or reload it to try again." }}
+            />
+          </Box>
+        </BrowserProductTheme>,
+      ));
+      await until(() => Boolean(container.querySelector('[data-conversation-empty-state="blocked"] [data-session-handoff-link="trash"]')));
+      const alert = container.querySelector('[role="alert"]');
+      check(Boolean(alert?.textContent?.includes("Session didn't start") && alert.textContent.includes("could not be prepared")) &&
+        container.scrollWidth <= width, `blocked ${width}: the reason replaces the progress without horizontal overflow`);
+      check(Boolean(exactButton("Restore")), `blocked ${width}: source recovery stays visible`);
+      const beforeRetry = writes.length;
+      exactButton("Retry")!.click();
+      await until(() => writes.length > beforeRetry);
+      check(writes.at(-1)!.url.endsWith(`/sessions/${sessions[3]!.id}/reload`), `blocked ${width}: Retry reloads the session`);
+      await observe?.(`blocked-${width}`);
     }
+    container.querySelector<HTMLButtonElement>("[data-handoff-cancel]")!.click();
+    await until(() => writes.some((write) => write.url.endsWith("/context/cancel")));
+    const cancelled = writes.find((write) => write.url.endsWith("/context/cancel"))!;
+    await until(() => getDraft(sessions[1]!.id).text === "keep going");
+    check(
+      cancelled.url.includes(sessions[3]!.id) && cancelled.body.operation === "handoff-op",
+      "preparing: Cancel takes the handoff back and returns its message to the original",
+    );
+    // The Trash confirmation names the session it removes.
+    container.style.cssText = "width:680px;max-width:100%;margin:auto";
+    const { trashed_at_ms: _trashed, ...live } = sessions[1]!;
+    const named: SessionMeta = { ...live, status: "running", title: "Fix the flaky sync test", workspace_name: "cowboy" };
+    const desktop = classifySurface({ finePointer: true, hover: true, tabletWidth: false, touchCapable: false, desktopHost: true });
+    flushSync(() => root.render(
+      <SurfaceContext.Provider value={desktop}>
+        <BrowserProductTheme>
+          <CssBaseline />
+          <DeleteSessionShell session={named} onClose={() => {}} onStopAndTrash={() => {}} onDeletePermanently={() => {}} />
+        </BrowserProductTheme>
+      </SurfaceContext.Provider>,
+    ));
+    await until(() => Boolean(document.querySelector("[data-delete-session-name]")));
+    check(
+      document.querySelector("[data-delete-session-name]")!.textContent === "Fix the flaky sync testcowboy",
+      "trash: the confirmation names the session and its project",
+    );
+    await observe?.("trash-confirmation");
+    flushSync(() => root.render(null));
   } finally {
     root.unmount();
     container.remove();

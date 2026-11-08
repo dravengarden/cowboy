@@ -21,6 +21,7 @@ import { topBarRegionHints } from "./topBarRegionHints";
 import type { ShortcutAvailability } from "./commands/shortcutAvailability";
 import { useImeStatus } from "./vim/imeStatusStore";
 import { useVimMacroRecording } from "./vim/macroStatusStore";
+import { useDesktopReviewShown } from "./review/desktopWorkView";
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
@@ -109,6 +110,36 @@ const EXPLORE_HINTS: RegionHint[] = [
   { keys: "H/L", label: "Close/open" },
 ];
 
+// Review's own keys arrive with its Desktop workbench; until then the line
+// names how to reach and leave it (docs/desktop-code-review.md).
+const REVIEW_HINTS: RegionHint[] = [
+  { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
+  { keys: DESKTOP_SHORTCUTS.focusReview, label: "Focus Review" },
+];
+
+const REVIEW_NAVIGATOR_HINTS: RegionHint[] = [
+  { keys: "J/K", label: "Row" },
+  { keys: "L/Enter", label: "Open" },
+  { keys: "H", label: "Collapse/up" },
+  { keys: "[/]", label: "Changes/Files" },
+  { keys: "/", label: "Filter" },
+  { keys: "'", label: "Labels" },
+  { keys: DESKTOP_SHORTCUTS.reviewMark, label: "Mark" },
+  { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
+];
+
+const REVIEW_DOCUMENT_HINTS: RegionHint[] = [
+  { keys: "]c/[c", label: "Hunk" },
+  { keys: "]f/[f", label: "File" },
+  { keys: "]u", label: "Unreviewed" },
+  { keys: "gt/gT", label: "Tab" },
+  { keys: "V", label: "Select" },
+  { keys: "Enter", label: "Send" },
+  { keys: DESKTOP_SHORTCUTS.reviewMark, label: "Mark" },
+  { keys: DESKTOP_SHORTCUTS.reviewChanges, label: "Changes" },
+  { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
+];
+
 function regionHints(
   region: string | null,
   status: Status,
@@ -175,6 +206,12 @@ function regionHints(
       ];
     case "conversation.transcript":
       return projection === "explore" ? EXPLORE_HINTS : HISTORY_HINTS;
+    case "conversation.review":
+      return REVIEW_HINTS;
+    case "review.navigator":
+      return REVIEW_NAVIGATOR_HINTS;
+    case "review.document":
+      return REVIEW_DOCUMENT_HINTS;
     case "prompt.composer":
       return [
         // Only Vim turns Esc into a mode change; without it the editor keeps
@@ -194,6 +231,18 @@ function regionHints(
   }
 }
 
+function statusPaneLabel(
+  resizing: boolean,
+  region: string | null,
+  pane: string,
+  reviewShown: boolean,
+): string {
+  if (resizing) return "layout";
+  if (region === "topbar.controls") return "topbar";
+  // The work pane names the view it shows.
+  return pane === "conversation" && reviewShown ? "review" : pane;
+}
+
 export function DesktopStatusLine({
   sessionId,
   status,
@@ -209,6 +258,7 @@ export function DesktopStatusLine({
   const vimMode = useVimMode();
   const ime = useImeStatus();
   const macro = useVimMacroRecording();
+  const reviewShown = useDesktopReviewShown();
   const projection = useExploreSessionState(sessionId).projection;
   const rawSync = useSyncStatus();
   const held = useHeldDeliveries();
@@ -314,9 +364,7 @@ export function DesktopStatusLine({
       { keys: "Esc", label: "Cancel", availability: "available" },
     ]
     : ordinaryHints;
-  const paneLabel = resizingLayout
-    ? "layout"
-    : focusedRegion === "topbar.controls" ? "topbar" : focusedPane;
+  const paneLabel = statusPaneLabel(resizingLayout, focusedRegion, focusedPane, reviewShown);
   const regionLabel = workspace.selectedSplitter ?? focusedRegion;
 
   return (
@@ -349,7 +397,7 @@ export function DesktopStatusLine({
           mono
         />
         <Segment label={paneLabel.toUpperCase()} tooltip="Focused workspace pane" mono />
-        {regionLabel && (
+        {regionLabel && regionLabel.split(".").at(-1) !== paneLabel && (
           <Segment
             label={(regionLabel.split(".").at(-1) ?? regionLabel).toUpperCase()}
             tooltip={resizingLayout ? "Selected resize bar" : "Focused region"}

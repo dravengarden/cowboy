@@ -292,6 +292,8 @@ export function trackRunConfigCursor(
     cancelAnimationFrame(restore);
     let frames = 0;
     const retry = (): void => {
+      // An open list or menu owns focus until it closes.
+      if (popupOpen()) return;
       const active = document.activeElement;
       if (active !== null && !active.contains(root)) return;
       const cursor = lastCursorIn(root);
@@ -311,6 +313,11 @@ export function trackRunConfigCursor(
     document.removeEventListener("focusout", lost, true);
     lastCursor = null;
   };
+}
+
+/** A Select list or menu above the panel. */
+function popupOpen(): boolean {
+  return document.querySelector("[role='listbox'], [role='menu']") !== null;
 }
 
 /** The last cursor, or its replacement when a save re-rendered it. */
@@ -421,6 +428,10 @@ export function useRunConfigKeyboard(
     let tries = 0;
     let focusFirst = 0;
     const placeCursor = (): void => {
+      // A frame already queued when the user acted must not run: it would
+      // pull focus out of a list they just opened, and the menu's focus trap
+      // then parks it on the popup frame where j/k start nowhere.
+      if (settled || popupOpen()) return;
       const firstRow = panelRef.current?.querySelector<HTMLElement>(
         "[data-config-row]",
       );

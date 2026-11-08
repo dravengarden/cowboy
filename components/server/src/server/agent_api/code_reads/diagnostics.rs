@@ -10,7 +10,7 @@
 
 use serde_json::{Value, json};
 
-use super::super::super::code_reads::language::observe_open_buffer;
+use super::super::super::code_reads::language::{self, observe_open_buffer};
 use super::super::super::{
     AnalysisState, AppState, ServerAnalysis, SourceState, ZedAdapterResponse,
 };
@@ -40,7 +40,10 @@ async fn observe(
             // Track an open file under the agent's own owner too, within its
             // share: a holding left by an earlier Controller is then released
             // when idle instead of pinning its code runtime indefinitely.
-            let _ = super::acquire::acquire(state, session, path, trust).await;
+            let held = super::acquire::acquire(state, session, path, trust).await;
+            if held.is_ok() && changed(&first) {
+                return (refresh(state, observed, path, trust, first).await, false);
+            }
         }
         return (first, false);
     }
@@ -59,6 +62,53 @@ async fn observe(
             return (reply, true);
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+fn changed(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
+    matches!(
+        reply,
+        Ok(ZedAdapterResponse::BufferLanguage {
+            source_state: SourceState::Changed,
+            ..
+        })
+    )
+}
+
+/// Ask the engine to reload a mirror only this Session's agent acquisitions
+/// own, because its source changed, then wait briefly for analysis of the new
+/// text. The engine refuses when any other owner shares the buffer. An older
+/// engine rejects the request; its original observation is kept.
+async fn refresh(
+    state: &AppState,
+    observed: &SessionReadScope,
+    path: &str,
+    trust: &crate::core::LanguageServerTrust,
+    original: anyhow::Result<ZedAdapterResponse>,
+) -> anyhow::Result<ZedAdapterResponse> {
+    let query = language::Query::RefreshedLanguage {
+        refresh: language::AgentOwned::AgentOwned,
+    };
+    let reply = language::query_open_buffer(state, observed, path, query).await;
+    let reloaded = matches!(&reply, Ok(ZedAdapterResponse::BufferLanguage { refresh: Some(outcome), .. })
+        if outcome == "reloaded");
+    if !reloaded || !trust.current(&state.hub) {
+        return if reply.is_ok() { reply } else { original };
+    }
+    let deadline = tokio::time::Instant::now() + ANALYSIS_WAIT;
+    let mut latest = reply;
+    loop {
+        if !trust.current(&state.hub) || tokio::time::Instant::now() >= deadline {
+            return latest;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        latest = observe_open_buffer(state, observed, path).await;
+        let settled = matches!(&latest, Ok(ZedAdapterResponse::BufferLanguage {
+            source_state: SourceState::Matching, analysis: Some(servers), .. })
+            if !servers.is_empty() && servers.iter().all(|server| server.state != AnalysisState::Unknown));
+        if settled || latest.is_err() {
+            return latest;
+        }
     }
 }
 
@@ -115,7 +165,7 @@ fn identities_match(
     })
 }
 
-fn severity(value: i32) -> &'static str {
+pub(super) fn severity(value: i32) -> &'static str {
     match value {
         1 => "error",
         2 => "warning",
@@ -170,6 +220,8 @@ async fn read_with_acquisition(
         .observe_language_server_trust(observed.session().session_id())
         .filter(|trust| trust.scope() == observed.session());
     let mut files = Vec::with_capacity(paths.len());
+    // Baselines are captured only from explicit reads, after the trust fence.
+    let mut captures = Vec::new();
     for path in paths {
         if trust
             .as_ref()
@@ -206,7 +258,11 @@ async fn read_with_acquisition(
                     files.push(json!({"path":path,"state":"unavailable"}));
                     continue;
                 }
-                let source_state = if buffer_snapshot.is_some() { source_state } else { SourceState::Unavailable };
+                let source_state = if buffer_snapshot.is_some() {
+                    source_state
+                } else {
+                    SourceState::Unavailable
+                };
                 let mut counts = json!({"error":0,"warning":0,"information":0,"hint":0});
                 for diagnostic in &diagnostics {
                     if let Some(count) = counts.get_mut(severity(diagnostic.severity)) {
@@ -221,7 +277,8 @@ async fn read_with_acquisition(
                     .take(MAX_PER_PATH)
                     .map(|value| diagnostic(value, buffer_snapshot.as_deref()))
                     .collect();
-                let mut file = json!({"path":path,"state":file_state(analysis.as_deref(), source_state),
+                let state = file_state(analysis.as_deref(), source_state);
+                let mut file = json!({"path":path,"state":state,
                     "counts":counts,"diagnostics":listed,"truncated":truncated,
                     "bufferSnapshot":buffer_snapshot,"sourceState":source_state});
                 if acquired {
@@ -229,6 +286,23 @@ async fn read_with_acquisition(
                 }
                 if let Some(analysis) = &analysis {
                     file["analysis"] = json!(servers(analysis));
+                }
+                if acquire {
+                    let pending = (state == "document_current")
+                        .then(|| {
+                            super::baselines::capture(
+                                &diagnostics,
+                                buffer_snapshot.as_deref(),
+                                analysis.as_deref().unwrap_or_default(),
+                            )
+                        })
+                        .flatten();
+                    match pending {
+                        Some(pending) => {
+                            captures.push((files.len(), path.clone(), pending, diagnostics))
+                        }
+                        None => file["comparison"] = super::baselines::unknown("not_current"),
+                    }
                 }
                 file
             }
@@ -245,6 +319,15 @@ async fn read_with_acquisition(
     // Revocation during an asynchronous query discards its observation even
     // when the owner re-enabled language servers before the reply arrived.
     fence_files(&state.hub, trust.as_ref(), &mut files);
+    if trust
+        .as_ref()
+        .is_some_and(|trust| trust.current(&state.hub))
+    {
+        for (index, path, pending, diagnostics) in captures {
+            files[index]["comparison"] =
+                super::baselines::record(observed.session(), &path, pending, &diagnostics);
+        }
+    }
     json!({
         "coverage": "open_buffers",
         "files": files,

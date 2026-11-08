@@ -297,6 +297,7 @@ async fn reservation_fences_legacy_and_owned_reads_closes_opens_and_navigation()
         Request::BufferLanguage {
             worktree: root.clone(),
             path: file.clone(),
+            refresh: None,
         },
         Request::BufferHover {
             worktree: root.clone(),
@@ -843,6 +844,7 @@ async fn an_existing_unrelated_buffer_remains_readable_and_releasable() {
         .local(Request::BufferLanguage {
             worktree: fixture.root.clone(),
             path: "independent".into(),
+            refresh: None,
         })
         .await
         .unwrap();

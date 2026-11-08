@@ -41,8 +41,8 @@ test("git review groups conflicts and duplicates partial changes by intent", () 
     reviewQueue(sections).map(({ change, scope }) => `${scope}:${change.path}`),
     [
       "combined:conflict.ts",
-      "unstaged:partial.ts",
       "unstaged:new.ts",
+      "unstaged:partial.ts",
       "staged:partial.ts",
       "staged:staged.ts",
     ],
@@ -102,4 +102,22 @@ test("branch comparison creates one merge-base review queue", () => {
       },
     ],
   );
+});
+
+test("review queue follows the change tree instead of Git status order", () => {
+  const sections = groupGitChanges([
+    change("src/file-10.ts"),
+    change("README.md"),
+    change("src/file-2.ts"),
+    change("src/a/deep.ts"),
+    change("Cargo.toml"),
+  ]);
+
+  assertEquals(reviewQueue(sections).map((entry) => entry.change.path), [
+    "src/a/deep.ts",
+    "src/file-2.ts",
+    "src/file-10.ts",
+    "Cargo.toml",
+    "README.md",
+  ]);
 });

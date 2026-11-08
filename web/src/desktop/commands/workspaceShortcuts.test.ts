@@ -123,7 +123,7 @@ test("every prefix continuation has one stable command meaning", () => {
     i: "workspace.insertPrompt",
     t: "group:t",
     c: "workspace.focusConversation",
-    v: "conversation.toggleReview",
+    v: "review.open",
     l: "prompt.focusPlan",
     g: "prompt.focusCalls",
     q: "prompt.focusQueue",

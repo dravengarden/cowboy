@@ -40,10 +40,7 @@ import { ScrollEdges,
   DetentSheet,
   MobileSheetContextDock,
 } from "@cowboy/app-shell";
-import {
-  type DesktopCommand,
-  useDesktopCommand,
-} from "../desktop/commands/DesktopCommandProvider";
+import { DesktopQuestionDirectoryCommand } from "./DesktopQuestionDirectoryCommand";
 import { desktopImeOwnsKey } from "../desktop/commands/imeShortcut";
 import { sequentialShortcutAvailability } from "../desktop/commands/shortcutAvailability";
 import { DesktopModal } from "../desktop/DesktopModal";
@@ -299,28 +296,6 @@ interface QuestionPageSummary {
   id: string;
   title: string;
   ordinal: number;
-}
-
-function DesktopQuestionDirectoryCommand({
-  available,
-  toggle,
-}: {
-  available: boolean;
-  toggle: () => void;
-}): null {
-  const command = useMemo<DesktopCommand>(() => ({
-    id: "conversation.toggleQuestionDirectory",
-    title: "Toggle Page Index",
-    description: "Find and jump to a page",
-    group: "Conversation",
-    shortcut: "P",
-    contexts: ["conversation"],
-    when: () => available,
-    disabledReason: "No pages are available",
-    run: toggle,
-  }), [available, toggle]);
-  useDesktopCommand(command);
-  return null;
 }
 
 function useQuestionPageIndex(

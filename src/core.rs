@@ -3262,6 +3262,7 @@ impl Hub {
         } = registration;
         SessionMeta {
             continued_from: None,
+            handoff_resumed: false,
             forked_from: None,
             id: id.clone(),
             provider,
@@ -3444,39 +3445,6 @@ impl Hub {
             s.meta.continued_from = source;
         }
         self.broadcast_sessions();
-    }
-
-    /// Project persisted continuation marks after settings and sessions load.
-    pub fn restore_continuations(&self) {
-        let sessions = self.session_list();
-        let key = |id: &str| format!("{}{id}", settings_keys::SESSION_CONTINUED_FROM_PREFIX);
-        // Continuations created before the mark existed are named by their
-        // source's accepted send receipt. Record them once, so a later send
-        // from that source cannot erase the relationship.
-        for source in &sessions {
-            let Some(delivery) = crate::session_context::read(self, &source.id)
-                .ok()
-                .and_then(|context| context.delivery)
-                .filter(|delivery| {
-                    delivery.state == "accepted" && delivery.session_id != source.id
-                })
-            else {
-                continue;
-            };
-            if sessions.iter().any(|meta| meta.id == delivery.session_id)
-                && self.setting(&key(&delivery.session_id)).is_none()
-            {
-                self.set_setting(key(&delivery.session_id), serde_json::json!(source.id));
-            }
-        }
-        for meta in &sessions {
-            if let Some(source) = self
-                .setting(&key(&meta.id))
-                .and_then(|value| value.as_str().map(str::to_owned))
-            {
-                self.set_continued_from(&meta.id, Some(source));
-            }
-        }
     }
 
     pub fn rename_session(&self, session_id: &str, title: String) {

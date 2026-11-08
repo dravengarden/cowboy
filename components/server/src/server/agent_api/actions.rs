@@ -469,6 +469,26 @@ async fn review_directory_update(
     ))
 }
 
+async fn transition_plan(
+    state: &Arc<AppState>,
+    meta: &SessionMeta,
+    args: Value,
+    operation: &str,
+) -> Result<Value, &'static str> {
+    let mut input: crate::store::provider_accounts::transitions::Request =
+        serde_json::from_value(args).map_err(|_| "invalid_argument")?;
+    if !crate::managed_calls::valid_id(&input.target_login_operation) {
+        return Err("invalid_argument");
+    }
+    input.target_login_operation = document_operation(&meta.id, &input.target_login_operation);
+    let owner = account_owner(state, meta).await?;
+    let operation = document_operation(&meta.id, operation);
+    super::super::provider_accounts::transitions::plan(state, &owner, &operation, input).await?;
+    Ok(success(
+        super::super::provider_accounts::transitions::status(state, &owner, &operation).await?,
+    ))
+}
+
 async fn execute(
     state: &Arc<AppState>,
     meta: &SessionMeta,
@@ -489,6 +509,12 @@ async fn execute(
     if action == "receipts.get" {
         return receipt(state, meta, ledger, args, operation).await;
     }
+    // Read-only: an operation, when supplied, is not a receipt identity.
+    if action == "code.post_edit" {
+        return Ok(success(
+            super::code_reads::post_edit(state, meta, &args).await?,
+        ));
+    }
     let operation = operation
         .filter(|id| crate::managed_calls::valid_id(id))
         .ok_or("invalid_operation")?;
@@ -502,23 +528,7 @@ async fn execute(
         "control.apply" => Ok(success(
             super::control::apply(state, meta, args, operation).await?,
         )),
-        "accounts.transition_plan" => {
-            let mut input: crate::store::provider_accounts::transitions::Request =
-                serde_json::from_value(args).map_err(|_| "invalid_argument")?;
-            if !crate::managed_calls::valid_id(&input.target_login_operation) {
-                return Err("invalid_argument");
-            }
-            input.target_login_operation =
-                document_operation(&meta.id, &input.target_login_operation);
-            let owner = account_owner(state, meta).await?;
-            let operation = document_operation(&meta.id, operation);
-            super::super::provider_accounts::transitions::plan(state, &owner, &operation, input)
-                .await?;
-            Ok(success(
-                super::super::provider_accounts::transitions::status(state, &owner, &operation)
-                    .await?,
-            ))
-        }
+        "accounts.transition_plan" => transition_plan(state, meta, args, operation).await,
         "accounts.transition_reconcile" => {
             if args.as_object().is_none_or(|args| !args.is_empty()) {
                 return Err("invalid_argument");

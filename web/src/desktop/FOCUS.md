@@ -114,6 +114,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣S` + `S/Z/N/M/P/U` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project; `U` is Undo history, this device's undoable changes from the last 24 hours (LazyVim's `<leader>su`) |
 | `␣T` + `R/U/A/N/L/T` | Top bar group: run config, usage, verify, Provider update (only while one is available), reload; `T` focuses the bar |
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
+| `␣V` | Show the code Review in the work pane and focus it; while Review is shown, `␣V` is the Review group (`␣VV` focuses Review) |
 | `␣G` | Open Background tasks: the subagents and calls this session started (with the previous Calls panel restored: open or close Calls) |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
@@ -136,7 +137,7 @@ first moving focus there.
 A group opens only when one of its commands can run in the current focus
 (Interface needs the Prompt pane or an open Draft; Sessions and Top bar run
 from anywhere) and otherwise leaves its key to the root meaning. New families
-become groups instead of taking root letters. Free root letters: `I V X`.
+become groups instead of taking root letters. Free root letters: `X`.
 
 #### Vim in text fields
 
@@ -189,9 +190,46 @@ group's slot (the History/Explore toggle's `V`), reached through an item
 verb (row menus and grips), or is not a control at all: read-outs such as
 the status line's mode and pane segments render as text, not buttons.
 
-`␣V` shows the session's code Review in the Conversation pane and returns.
-The transcript stays mounted behind it, the Prompt stays beside the code, and
-Review's Agent action and **Send to Agent** return to the Conversation.
+#### Review view
+
+The work pane (the Conversation pane) shows one of two views of the Session,
+named by the `Conversation ␣C | Review ␣V` tabs in its header
+([docs/desktop-code-review.md](../../../docs/desktop-code-review.md)). Both
+stay mounted: the transcript keeps its reading position behind Review, and
+Review, once opened, keeps its files and cursor behind the Conversation (it
+stops polling while hidden). The view is remembered per Session on this
+device and is never synced.
+
+- `␣V` shows Review and focuses it. While Review is shown `␣V` is the Review
+  group (the group rule above), whose `␣VV` focuses Review from any focus.
+- `␣C` and the Conversation tab return. `Esc` never leaves Review: reading
+  code presses it constantly (leaving Visual, closing a popover, cancelling a
+  search), so it only unwinds Review's own layers.
+- Review's Send and Agent actions append to the Prompt and focus it,
+  unfolding a folded Prompt; Review stays shown beside it.
+- An agent's or a link's reveal request shows Review, as live navigation only.
+- The transcript's bare keys (`V` History/Explore, `F` Follow, `P` Page
+  Index) do not run while Review is shown; the palette explains why.
+- The approval dock belongs to the work pane and stays under either view.
+- While Review is shown the status line's pane segment reads `REVIEW`.
+
+The workbench has two regions, `review.navigator` and `review.document`;
+`Ctrl+H/L` move between them and the Prompt. The Navigator's tabs (Changes,
+Files) are a Cowboy list: `J/K`, `gg/G`, `Ctrl-D/U`, `zz`, `'` labels, `L` or
+`Enter` opens (a folder expands), `H` collapses or goes to the parent, `[`/`]`
+switch the tab and `/` filters (`Esc`, `↓` or `Enter` return to the list). The
+Document is a read-only codemirror-vim buffer with the Desktop Vim runtime and
+the user's vimrc; Insert is refused. Review adds, per editor and below any user
+mapping of the same keys: `]c`/`[c` hunk, `]f`/`[f` file over the complete
+change queue (the Unread filter does not change it), `]u`/`[u` unreviewed
+file, `gt`/`gT`/`{n}gt` file tab, and `Enter` (Normal or Visual), which
+appends the lines with their location to the Prompt and focuses it, unfolding
+a folded Prompt. The Review group (`␣V`, while Review is shown): `V` focus,
+`C`/`F` Changes/Files, `A` compare against, `U` unread only, `M` mark
+reviewed (the focused row, else the open file), `S` send and stay, `Q` close
+the file tab, `P` keep it, `[` fold the Navigator, `L` the classic layout.
+Below 900 px of Review width the Navigator folds to a rail and `␣VC`/`␣VF`
+open it inset; `Esc` or `H` at its root closes it.
 
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
 Numbered session slots (`Alt/Option+1…0`) are retired: labels replace them,
@@ -653,7 +691,8 @@ it); macOS Chrome binds none of them.
   to…, `n` creates a folder (inside a folder, beside a session), `a` creates
   a session in the row's directory (nvim-tree's add), `r` (or `i`)
   renames, `x` moves to Trash (an idle session at once with Undo, a working
-  session or a folder after confirmation), and `,` opens the row's
+  session or a folder after confirmation), `f` opens Replace or fork for a
+  session that can still choose its next agent, and `,` opens the row's
   settings (Session Settings, or a folder's directory defaults). They match
   the letters of the actions modal `s` opens. All are region-scoped bare
   letters resolved from physical codes, and a key strip at the foot of the
@@ -878,6 +917,11 @@ Every Desktop menu, listbox and Select popup speaks the Vim list grammar:
 Arrow/Home/End/Enter/Escape keys MUI handles (`menuNavigation.ts`), so disabled
 rows, wrap and focus-visible stay MUI's and no menu adds a local key handler.
 Letters resolve from physical codes; a text field inside a popup owns its keys.
+Desktop never renders a native `<select>`: its popup belongs to the operating
+system and no page key reaches it. A Select that keeps the platform picker on
+touch switches to a list on Desktop. A panel that places its cursor while it
+loads stops at the first user input and never takes focus from an open list,
+or the menu's focus trap parks it on the popup frame where `j/k` start nowhere.
 A keyboard-first picker (the delivery picker) always paints its cursor row and
 names its keys in a quiet hint line, without a divider. In the Composer,
 `Ctrl-n`/`Ctrl-p` walk a visible completion list, as in Vim Insert mode.

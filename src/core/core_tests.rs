@@ -859,6 +859,70 @@ async fn context_bootstrap_precedes_racing_queue_without_unpausing_it() {
     assert!(rx.try_recv().is_err());
 }
 
+#[test]
+fn continuation_bootstrap_waits_for_its_agent_and_can_be_taken_back() {
+    let hub = hub_with_session("continued");
+    hub.load_settings(vec![(
+        crate::session_context::key("continued"),
+        serde_json::json!({"revision":2,"applied_revision":2,
+            "injection":{"cmid":"context-handoff","sources":[]}}),
+    )]);
+    let waits = |cmid| crate::session_context::waits_for_agent(&hub, "continued", Some(cmid));
+    // Only a continuation's own bootstrap waits; links in place do not.
+    assert!(!waits("context-handoff"));
+    hub.set_continued_from("continued", Some("source".into()));
+    assert!(waits("context-handoff"));
+    assert!(!waits("typed"));
+    hub.requeue_prompt(
+        "continued",
+        "first".into(),
+        vec![],
+        Some("context-handoff".into()),
+    );
+    hub.requeue_prompt("continued", "later".into(), vec![], Some("typed".into()));
+    // Other queued work stays with the destination.
+    assert!(
+        hub.take_sole_queued("continued", "context-handoff")
+            .is_none()
+    );
+    assert!(hub.remove_queued_by_cmid("continued", "typed"));
+    assert!(hub.take_sole_queued("continued", "typed").is_none());
+    let (text, _) = hub
+        .take_sole_queued("continued", "context-handoff")
+        .unwrap();
+    assert_eq!(text, "first");
+    assert!(queue_texts(&hub, "continued").is_empty());
+    // A cancelled receipt stays readable, lets prompts through, and keeps
+    // startup from recording the relationship again from the source's receipt.
+    let receipt = |state: &str| serde_json::json!({"operation":"handoff","fingerprint":"f","session_id":"continued","state":state});
+    hub.create_local_session(
+        "source".to_owned(),
+        "claude-code".to_owned(),
+        "/tmp".to_owned(),
+        "t".to_owned(),
+        SessionOrigin::Web,
+        false,
+    );
+    hub.load_settings(vec![
+        (
+            crate::session_context::key("continued"),
+            serde_json::json!({"revision":3,"applied_revision":3,"delivery":receipt("cancelled")}),
+        ),
+        (
+            crate::session_context::key("source"),
+            serde_json::json!({"revision":2,"applied_revision":2,"delivery":receipt("accepted")}),
+        ),
+    ]);
+    assert!(crate::session_context::read(&hub, "continued").is_ok());
+    assert!(!crate::session_context::pending(&hub, "continued"));
+    hub.set_continued_from("continued", None);
+    hub.restore_continuations();
+    assert_eq!(
+        hub.session_info("continued").unwrap().meta.continued_from,
+        None
+    );
+}
+
 #[tokio::test]
 async fn resource_retry_respects_pause_edit_cancel_and_dispatches_once() {
     let hub = hub_with_session("wait");

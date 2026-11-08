@@ -116,8 +116,11 @@ export async function runCoverKeyboardBrowserConformance(keepFixture = false): P
       "resized keyboard restored home-indicator padding",
     );
     render(844, 844, false, 0);
+    // Without a keyboard the footer returns to the edge every floating
+    // island shares (FLOATING_CONTROLS_BOTTOM: the home-indicator inset, or
+    // 12px without one), not the compact 8px keyboard gap.
     check(
-      parseFloat(getComputedStyle(footer()).paddingBottom) >= 16,
+      parseFloat(getComputedStyle(footer()).paddingBottom) >= 12,
       "dismissal lost bottom safe spacing",
     );
     check(

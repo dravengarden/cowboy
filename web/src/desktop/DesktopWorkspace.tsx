@@ -1,8 +1,6 @@
 import { desktopSize } from "../surface/desktopSize";
 import { alpha, Box, Typography } from "@mui/material";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { DifferenceOutlined } from "@mui/icons-material";
-import { IconButton } from "@mui/material";
+import { lazy, Suspense, useMemo } from "react";
 import {
   type DesktopPane,
   useDesktopWorkspace,
@@ -35,14 +33,18 @@ import {
   DesktopRailCount,
 } from "./DesktopPaneCollapse";
 import { useStoreSelector } from "../store";
-import { desktopLeaderSequence, DESKTOP_WORKSPACE_KEYS } from "./commands/workspaceShortcuts";
-import { MOBILE_OPEN_PRODUCT_EVENT, mobileProductFromEvent } from "../mobile/appPagerMotion";
-import { useReviewOpenRequest } from "../useReviewOpenRequest";
+import { DESKTOP_REVIEW_REGION, useDesktopWorkView } from "./review/useDesktopWorkView";
+import { DesktopWorkViewTabs } from "./review/DesktopWorkViewTabs";
+import { TRANSCRIPT_HIDDEN_REASON } from "./review/conversationViewCommands";
 import { focusedSubagentStop, SUBAGENT_STOP_KEY } from "../subagents";
 
 const ReviewApp = lazy(async () => {
   const module = await import("../mobile/review/ReviewApp");
   return { default: module.ReviewApp };
+});
+const DesktopReviewView = lazy(async () => {
+  const module = await import("./review/DesktopReviewView");
+  return { default: module.DesktopReviewView };
 });
 const ignoreReviewDrawer = (): void => {};
 
@@ -77,7 +79,8 @@ function PaneHeader({
   children,
 }: {
   pane: DesktopPane;
-  shortcut: { value: string; title: string };
+  /** The pane's focus slot; a title that draws its own slots omits it. */
+  shortcut?: { value: string; title: string };
   actions?: React.ReactNode;
   /** Transient state shown in the fixed-height header so it never shifts the
    * pane body (the connection notice). */
@@ -99,18 +102,20 @@ function PaneHeader({
         flexShrink: 0,
       }}
     >
-      <Typography
-        variant="overline"
-        color="inherit"
-        sx={{
-          fontWeight: 700,
-          letterSpacing: "0.09em",
-          lineHeight: 1,
-          flexShrink: 0,
-        }}
-      >
-        {children}
-      </Typography>
+      {typeof children === "string" ? (
+        <Typography
+          variant="overline"
+          color="inherit"
+          sx={{
+            fontWeight: 700,
+            letterSpacing: "0.09em",
+            lineHeight: 1,
+            flexShrink: 0,
+          }}
+        >
+          {children}
+        </Typography>
+      ) : children}
       {actions
         ? (
           <Box
@@ -161,12 +166,14 @@ function PaneHeader({
             {status}
           </Box>
         )}
-      <DesktopRegionShortcut
-        shortcut={shortcut.value}
-        title={shortcut.title}
-        singleKeycap={shortcut.value}
-        sx={{ ml: 0.5 }}
-      />
+      {shortcut && (
+        <DesktopRegionShortcut
+          shortcut={shortcut.value}
+          title={shortcut.title}
+          singleKeycap={shortcut.value}
+          sx={{ ml: 0.5 }}
+        />
+      )}
       {collapsible && <DesktopPaneCollapseButton pane={pane} sx={{ ml: 0.75, mr: -0.75 }} />}
     </Box>
   );
@@ -204,7 +211,10 @@ export function DesktopWorkspace({
   const workspace = useDesktopWorkspace();
   const promptCollapsed = workspace.collapsedPanes.prompt;
   const conversationCollapsed = workspace.collapsedPanes.conversation;
-  const conversationShortcutsActive = workspace.focusedPane === "conversation";
+  const { view, reviewMounted, showView, layout } = useDesktopWorkView(sessionId);
+  const reviewShown = view === "review";
+  const conversationShortcutsActive = workspace.focusedPane === "conversation" &&
+    !reviewShown;
   const toggleProjectionCommand = useMemo<DesktopCommand>(() => ({
     id: "conversation.toggleProjection",
     title: `Switch to ${projection === "history" ? "Explore" : "History"}`,
@@ -212,10 +222,12 @@ export function DesktopWorkspace({
     group: "Conversation",
     shortcut: "V",
     contexts: ["conversation"],
+    when: () => !reviewShown,
+    disabledReason: TRANSCRIPT_HIDDEN_REASON,
     run: () => onProjectionChange(
       projection === "history" ? "explore" : "history",
     ),
-  }), [onProjectionChange, projection]);
+  }), [onProjectionChange, projection, reviewShown]);
   useDesktopCommand(toggleProjectionCommand);
   // A subagent row's Stop, from the keyboard: Tab selects the row's widget,
   // the key opens the row's own Stop confirmation.
@@ -232,29 +244,6 @@ export function DesktopWorkspace({
     run: () => focusedSubagentStop()?.click(),
   }), []);
   useDesktopCommand(stopSubagentCommand);
-  // Review takes the Conversation pane and leaves the transcript mounted, so
-  // returning keeps its reading position; the Prompt stays beside the code.
-  const [reviewSession, setReviewSession] = useState<string>();
-  useReviewOpenRequest(sessionId, () => setReviewSession(sessionId));
-  const reviewOpen = reviewSession === sessionId;
-  const toggleReviewCommand = useMemo<DesktopCommand>(() => ({
-    id: "conversation.toggleReview",
-    title: reviewOpen ? "Return to the Conversation" : "Review code",
-    description: "Show this session's changes in the Conversation pane",
-    group: "Conversation",
-    sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.review),
-    run: () => setReviewSession(reviewOpen ? undefined : sessionId),
-  }), [reviewOpen, sessionId]);
-  useDesktopCommand(toggleReviewCommand);
-  useEffect(() => {
-    // Review's Agent action and Send to Agent, which mean the same here.
-    const close = (event: Event): void => {
-      if (mobileProductFromEvent(event) === "agent") setReviewSession(undefined);
-    };
-    globalThis.addEventListener(MOBILE_OPEN_PRODUCT_EVENT, close);
-    return () => globalThis.removeEventListener(MOBILE_OPEN_PRODUCT_EVENT, close);
-  }, []);
-
   return (
     <Box
       sx={{
@@ -403,22 +392,8 @@ export function DesktopWorkspace({
         <PaneHeader
           pane="conversation"
           collapsible
-          shortcut={{ value: DESKTOP_SHORTCUTS.focusConversation, title: "Focus Conversation" }}
-          actions={(
+          actions={reviewShown ? undefined : (
             <>
-              <HintTooltip title={reviewOpen ? "Return to the Conversation" : "Review code"}>
-                <IconButton
-                  data-desktop-review-toggle
-                  size="small"
-                  aria-label={reviewOpen ? "Return to the Conversation" : "Review code"}
-                  aria-keyshortcuts={DESKTOP_SHORTCUTS.review}
-                  aria-pressed={reviewOpen}
-                  color={reviewOpen ? "primary" : "default"}
-                  onClick={toggleReviewCommand.run}
-                >
-                  <DifferenceOutlined fontSize="small" />
-                </IconButton>
-              </HintTooltip>
               <DesktopProjectionToggle
                 projection={projection}
                 onChange={onProjectionChange}
@@ -432,7 +407,7 @@ export function DesktopWorkspace({
             </>
           )}
         >
-          Conversation
+          <DesktopWorkViewTabs view={view} onChange={showView} />
         </PaneHeader>
         <Box
           data-desktop-region="conversation.transcript"
@@ -442,27 +417,40 @@ export function DesktopWorkspace({
           sx={{
             flex: 1,
             minHeight: 0,
-            display: reviewOpen ? "none" : "flex",
+            display: reviewShown ? "none" : "flex",
             flexDirection: "column",
           }}
         >
           {conversation}
-          {
-            /* A folded pane shows nothing, so the Composer keeps the answer
-              (approvalDockStore). */
-          }
-          {!conversationCollapsed && <DesktopApprovalDock sessionId={sessionId} />}
         </Box>
-        {reviewOpen && (
+        {reviewMounted && (
           <Box
             data-desktop-review
-            sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+            data-desktop-review-layout={layout}
+            data-desktop-region={layout === "classic" ? DESKTOP_REVIEW_REGION : undefined}
+            hidden={!reviewShown}
+            tabIndex={-1}
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              display: reviewShown ? "flex" : "none",
+              flexDirection: "column",
+              "&:focus": { outline: "none" },
+            }}
           >
             <Suspense fallback={null}>
-              <ReviewApp active onDrawerOpenChange={ignoreReviewDrawer} />
+              {layout === "classic"
+                ? <ReviewApp active={reviewShown} onDrawerOpenChange={ignoreReviewDrawer} />
+                : <DesktopReviewView active={reviewShown} />}
             </Suspense>
           </Box>
         )}
+        {
+          /* The work pane answers a blocked agent under either view; a folded
+            pane shows nothing, so the Composer keeps the answer
+            (approvalDockStore). */
+        }
+        {!conversationCollapsed && <DesktopApprovalDock sessionId={sessionId} />}
       </Box>
       {conversationCollapsed && (
         <DesktopCollapsedPaneRail

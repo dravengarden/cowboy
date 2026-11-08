@@ -25,7 +25,7 @@ import { Fragment, lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, us
 import { createPortal, flushSync } from "react-dom";
 import { Alert, alpha, Box, Button, ButtonBase, Chip, CircularProgress, Divider, IconButton, List, ListItemIcon, ListItemText, ListSubheader, Menu, MenuItem, Skeleton, Stack, TextField, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
 import type { Theme } from "@mui/material";
-import { Add, Check as CheckIcon, ChevronRight, Circle, Close as CloseIcon, CreateNewFolderOutlined, DeleteOutline, BedtimeOutlined, DragIndicator, DriveFileMoveOutlined, DriveFileRenameOutline, ForkRightOutlined, ExpandMore, FolderOpenOutlined, FolderOutlined, InfoOutlined, LabelOutlined, MoreVert, NotificationsOffOutlined, NotificationsOutlined, Refresh as RefreshIcon, Schedule, Settings as SettingsIcon } from "@mui/icons-material";
+import { Add, Check as CheckIcon, ChevronRight, Circle, CreateNewFolderOutlined, DeleteOutline, BedtimeOutlined, DragIndicator, DriveFileMoveOutlined, DriveFileRenameOutline, ForkRightOutlined, ExpandMore, FolderOpenOutlined, FolderOutlined, InfoOutlined, LabelOutlined, MoreVert, NotificationsOffOutlined, NotificationsOutlined, Refresh as RefreshIcon, Schedule, Settings as SettingsIcon } from "@mui/icons-material";
 import { useKeyboardOpen } from "./keyboardInset";
 import { DelayedNetworkProgress } from "./NetworkActionFeedback";
 import { sessionListProjectLabel, sessionProjectLabel } from "./sessionProject";
@@ -36,7 +36,8 @@ import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { requestPickSession } from "./sessionPickRequest";
 import { openSessionSettings, requestNewFrom } from "./sessionSettingsOpen";
-import { SessionNextMessageBadge, useContinuation } from "./SessionContextCue";
+import { SessionNextMessageBadge } from "./SessionContextCue";
+import { useHistorySession, useHistorySessionIds } from "./sessionHistory";
 import { isManagedChild } from "./managedCalls";
 import { SessionRowTitle } from "./SessionRowTitle";
 import { SessionActionBadge, SessionAttentionMenu } from "./SessionAttention";
@@ -63,7 +64,8 @@ import { haptic } from "./haptic";
 import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
 import { useNavbarAtBottom } from "./navbarSettings";
 import { setTranscriptProjection, captureTranscriptViewportAnchor, useExploreSessionState } from "./explore/exploreStore";
-import { DetentSheet, MobileSheetActionGroup } from "@cowboy/app-shell";
+import { DetentSheet } from "@cowboy/app-shell";
+import { MobileSessionsDock } from "./MobileSessionsDock";
 import { ConfirmSheet, Sheet } from "./Sheet";
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -336,7 +338,7 @@ export function SessionsSpotlight({ anchor }: { anchor: React.RefObject<HTMLElem
 
 export type SessionRowCommand =
     | "open" | "left" | "settings" | "move" | "newFolder" | "rename" | "newSession"
-    | "trash" | "preferences";
+    | "trash" | "preferences" | "replaceOrFork";
 
 /** Primary-tint opacity of the open session's row on Desktop. */
 export const CURRENT_ROW_FILL = 0.12;
@@ -359,6 +361,8 @@ export const SESSION_ROW_KEY_COMMANDS: Readonly<Record<string, SessionRowCommand
     ",": "preferences",
     // nvim-tree's `a`dd: a new Session in the cursor row's directory.
     a: "newSession",
+    // The actions modal's `F`: Replace or fork from the cursor row.
+    f: "replaceOrFork",
 };
 
 export const SESSION_ROW_EVENTS: Readonly<Record<string, SessionRowCommand>> = {
@@ -450,13 +454,9 @@ export function SessionList({
         row: SessionMeta;
         el: HTMLElement;
     } | null>(null);
-    // Sources of a continuation, as a stable value so a `sessions` frame for
-    // another reason re-renders no row.
-    const handedOffIds = useStoreSelector((snapshot) =>
-        snapshot.sessions.flatMap((entry) => entry.continued_from ? [entry.continued_from] : []).sort().join("\n"));
-    const handedOff = useMemo(() => new Set(handedOffIds.split("\n")), [handedOffIds]);
+    const handedOff = useHistorySessionIds();
     // A handed-off session is history; continuing it again would split the work.
-    const menuHandedOff = useContinuation(menuAnchor?.row.id ?? "") !== undefined;
+    const menuHandedOff = useHistorySession(menuAnchor?.row.id ?? "");
     useSystemNotificationPreferences();
     const menuSessionMuted = menuAnchor
         ? sessionNotificationsMuted(menuAnchor.row.id)
@@ -906,6 +906,7 @@ export function SessionList({
             else if (command === "newFolder") setNamePrompt({ mode: "create", parent: draft.parent_id });
             else if (command === "newSession") onNewInFolder?.(draft.parent_id ?? null);
             else if (command === "move" && desktop) startMovePick(rowKey);
+            else if (command === "replaceOrFork") return;
             else onDraftAction({ draft, action: command === "settings" || command === "preferences" ? "menu" : command });
             return;
         }
@@ -971,6 +972,17 @@ export function SessionList({
                 }
                 return;
             }
+            case "replaceOrFork":
+                // Same eligibility as the actions modal: history, system and
+                // managed child conversations have no next agent to choose.
+                if (
+                    session && !session.system && !isManagedChild(session) &&
+                    !handedOff.has(session.id)
+                ) {
+                    requestPickSession(session.id, session);
+                    requestNewFrom(session.id);
+                }
+                return;
             case "preferences":
                 if (folder) setDefaultsFolder(folder.id);
                 else if (session) {
@@ -2277,6 +2289,7 @@ export function SessionList({
                         ["X", "Trash"],
                         [",", "Settings"],
                         ["A", "New here"],
+                        ["F", "Replace or fork"],
                         ["S", "More"],
                     ] as const).map(([key, label]) => (
                         <span key={key}><Kbd keys={key} />{label}</span>
@@ -2284,94 +2297,14 @@ export function SessionList({
                 </Box>
             )}
             {mobileDrawer && (
-                <Box
-                    sx={{
-                        position: "absolute",
-                        zIndex: 3,
-                        left: 0,
-                        right: 0,
-                        bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        boxSizing: "border-box",
-                        // Session actions stay on the reading edge; Settings
-                        // stays on the trailing edge. Each MobileSheetActionGroup
-                        // defaults to width 100%, which would split this row
-                        // into two half-width columns instead of two islands.
-                        pl: 2,
-                        pr: phone ? 2 : 4,
-                        pointerEvents: "none",
-                        "& > [data-mobile-sheet-footer-shield]": {
-                            width: "auto",
-                            flex: "0 0 auto",
-                        },
-                    }}
-                >
-                    <MobileSheetActionGroup
-                        actions={[
-                            ...(allowNewSession
-                                ? [{
-                                    key: "new",
-                                    label: "Create",
-                                    onPress: onNew,
-                                    icon: <Add aria-hidden sx={{ fontSize: "1.35em" }} />,
-                                }]
-                                : []),
-                            {
-                                key: "fold",
-                                label: fold.label,
-                                visible: fold.action !== null,
-                                onPress: fold.run,
-                                icon: fold.icon,
-                            },
-                        ]}
-                    />
-                    <MobileSheetActionGroup
-                        actions={[
-                            {
-                                key: "close",
-                                label: "Close sessions",
-                                onPress: onClose ?? (() => undefined),
-                                icon: (
-                                    <CloseIcon
-                                        aria-hidden
-                                        sx={{
-                                            fontSize: "1.25em",
-                                            transform: "translate(-0.75px, -0.5px)",
-                                        }}
-                                    />
-                                ),
-                            },
-                            ...(onOpenAbout
-                                ? [{
-                                    key: "info",
-                                    label: "About",
-                                    onPress: onOpenAbout,
-                                    icon: (
-                                        <InfoOutlined
-                                            aria-hidden
-                                            sx={{ fontSize: "1.25em" }}
-                                        />
-                                    ),
-                                }]
-                                : []),
-                            ...(onOpenSettings
-                                ? [{
-                                    key: "settings",
-                                    label: "Settings",
-                                    onPress: onOpenSettings,
-                                    icon: (
-                                        <SettingsIcon
-                                            aria-hidden
-                                            sx={{ fontSize: "1.25em" }}
-                                        />
-                                    ),
-                                }]
-                                : []),
-                        ]}
-                    />
-                </Box>
+                <MobileSessionsDock
+                    phone={phone}
+                    fold={fold}
+                    onNew={allowNewSession ? onNew : undefined}
+                    onClose={onClose}
+                    onOpenAbout={onOpenAbout}
+                    onOpenSettings={onOpenSettings}
+                />
             )}
             <Menu
                 sx={{ display: desktop ? "none" : undefined }}

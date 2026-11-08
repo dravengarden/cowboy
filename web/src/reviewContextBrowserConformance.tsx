@@ -31,7 +31,7 @@ async function until(predicate: () => boolean, message: string) {
   throw new Error(`${message}: ${document.body.textContent?.slice(0, 1500)}`);
 }
 
-export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false, checksEnabled = false) {
+export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false, checksEnabled = false, content?: () => React.ReactNode) {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
   const sessions: SessionMeta[] = [
@@ -364,8 +364,10 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
           revision: context,
           added: 1,
           removed: 1,
-          text:
-            "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n",
+          // Other files have two hunks so hunk navigation has somewhere to go.
+          text: path === "src/app.ts"
+            ? "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n"
+            : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-a\n+b\n@@ -40 +40 @@\n-c\n+d\n`,
           truncated: false,
         });
       }
@@ -383,7 +385,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       <BrowserProductTheme>
         <CssBaseline />
         <SurfaceProvider>
-          {desktop ? <SurfaceContext.Provider value={{ kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true }}>
+          {content ? content() : desktop ? <SurfaceContext.Provider value={{ kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true }}>
             <DesktopWorkspaceProvider><DesktopCommandProvider><ReviewApp active onDrawerOpenChange={() => {}} /></DesktopCommandProvider></DesktopWorkspaceProvider>
           </SurfaceContext.Provider> : <ReviewApp active onDrawerOpenChange={() => {}} />}
         </SurfaceProvider>
@@ -546,15 +548,20 @@ async function checkReviewCompareAndSelection(
     await until(() => !!row("app.ts"), "Comparison should list its files");
     check(row("app.ts")?.textContent?.includes("+12 −3"), "A changed file should show its line counts");
     await press(row("app.ts"), "changed file");
+    // One gutter cell per patch row; the spacer cell has no height.
     const lines = () => [
       ...body.querySelectorAll<HTMLElement>(".cm-lineNumbers .cm-gutterElement"),
-    ].filter((element) => element.textContent?.trim());
+    ].filter((element) => element.getBoundingClientRect().height > 0);
     const bar = () => body.querySelector("[data-review-selection-bar]");
     await until(() => lines().length >= 6, "Diff should render line numbers");
     await wait(300);
-    await press(lines().find((line) => line.textContent?.trim() === "5"), "line 5");
+    check(
+      lines().map((line) => line.textContent?.trim()).join(",") === ",,,,,1,",
+      `Diff gutter should number new-file lines, got: ${lines().map((line) => line.textContent).join(",")}`,
+    );
+    await press(lines()[4], "line 5");
     await until(() => bar()?.textContent?.includes("1 line") === true, "A tap should select its line");
-    await press(lines().find((line) => line.textContent?.trim() === "6"), "line 6");
+    await press(lines()[5], "line 6");
     await until(() => bar()?.textContent?.includes("2 lines") === true, "Two taps should select a range");
     check(body.querySelectorAll(".cm-review-selected-line").length === 2, "Selected lines are not highlighted");
 
@@ -570,8 +577,8 @@ async function checkReviewCompareAndSelection(
     const asked = fixture.submits.find((command) => command.includes('"session_id":"explain-fork"'));
     check(asked?.includes("Do not change any files") && asked.includes("src/app.ts:1"), `Explain should ask its fork, got: ${asked}`);
     opened.length = 0;
-    await press(lines().find((line) => line.textContent?.trim() === "5"), "line 5 again");
-    await press(lines().find((line) => line.textContent?.trim() === "6"), "line 6 again");
+    await press(lines()[4], "line 5 again");
+    await press(lines()[5], "line 6 again");
     await until(() => bar()?.textContent?.includes("2 lines") === true, "Selection should work again");
     await press(body.querySelector('[aria-label="Send to Agent"]'), "Send to Agent");
     await until(() => opened.includes("agent"), "Sending should return to the Agent");
@@ -1007,6 +1014,8 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
 }
 
 async function checkDesktopReviewPane(fixture: ReturnType<typeof renderReviewContextPreview>): Promise<string> {
+  // The work view is remembered per device; start from the Conversation.
+  localStorage.removeItem("cowboy.desktop.workView.v1");
   const host = document.createElement("div");
   host.style.cssText = "height:600px;display:flex";
   document.body.append(host);
@@ -1034,33 +1043,40 @@ async function checkDesktopReviewPane(fixture: ReturnType<typeof renderReviewCon
         </SurfaceProvider>,
       )
     );
-    const toggle = () => host.querySelector<HTMLElement>("[data-desktop-review-toggle]");
-    await until(() => !!toggle(), "Desktop should offer Review");
+    const tab = (view: string) => host.querySelector<HTMLElement>(`[data-desktop-work-view="${view}"]`);
+    const shown = () => host.querySelector("[data-desktop-review]:not([hidden])");
+    await until(() => !!tab("review"), "Desktop should offer Review");
     const transcript = host.querySelector("[data-fixture-transcript]");
-    flushSync(() => toggle()!.click());
+    flushSync(() => tab("review")!.click());
     await until(
-      () => host.querySelector("[data-desktop-review]")?.textContent?.includes("Compare") === true ||
+      () => shown()?.textContent?.includes("Compare") === true ||
         !!host.querySelector("[data-desktop-review] [data-review-compare]"),
       "Review should open in the Conversation pane",
     );
     check(transcript?.isConnected, "Opening Review unmounted the transcript");
+    check(tab("review")?.getAttribute("aria-selected") === "true", "The Review tab is not selected");
+    // Send and Agent land in the Prompt beside the code; Review stays.
     openMobileProduct("agent");
-    await until(() => !host.querySelector("[data-desktop-review]"), "Agent should return to the Conversation");
+    await wait();
+    check(!!shown(), "Review's Agent action left Review");
+    flushSync(() => tab("conversation")!.click());
+    await until(() => !shown(), "The Conversation tab should return to the Conversation");
     check(host.querySelector("[data-fixture-transcript]") === transcript, "Returning replaced the transcript");
+    check(!!host.querySelector("[data-desktop-review][hidden]"), "Review was unmounted instead of kept behind the tabs");
     const request = {mode:"files",tabs:[{path:"README.md",pinned:false}],active:"README.md",progress:{},positions:{},open_revision:1,reveal_revision:1};
     fixture.sync("mobile-review:project", request, 1000);
     await wait();
-    check(!host.querySelector("[data-desktop-review]"), "Another session's open request stole focus");
+    check(!shown(), "Another session's open request stole focus");
     fixture.sync("mobile-review:worktree", request, 1000);
-    await until(() => !!host.querySelector("[data-desktop-review]"), "Live MCP navigation did not open Review");
-    openMobileProduct("agent");
-    await until(() => !host.querySelector("[data-desktop-review]"), "Could not leave requested Review");
+    await until(() => !!shown(), "Live MCP navigation did not open Review");
+    flushSync(() => tab("conversation")!.click());
+    await until(() => !shown(), "Could not leave requested Review");
     fixture.sync("mobile-review:worktree", request, 1001);
     await wait();
-    check(!host.querySelector("[data-desktop-review]"), "Repeated observation replayed navigation");
+    check(!shown(), "Repeated observation replayed navigation");
     fixture.sync("mobile-review:worktree", {...request,open_revision:2,reveal_revision:2}, 1002);
-    await until(() => !!host.querySelector("[data-desktop-review]"), "A fresh same-file request was ignored");
-    return "Desktop shows Review in the Conversation pane and returns to the same transcript";
+    await until(() => !!shown(), "A fresh same-file request was ignored");
+    return "Desktop shows Review as a work-pane view, keeps it on Send, and returns to the same transcript";
   } finally {
     root.unmount();
     host.remove();
@@ -1104,12 +1120,12 @@ async function checkChangedDocuments(): Promise<string> {
     }), {headers: {"Content-Type": "application/json"}});
   };
   try {
-    flushSync(() => root.render(<BrowserProductTheme><ReviewChanges
+    flushSync(() => root.render(<SurfaceProvider><BrowserProductTheme><ReviewChanges
       sessionId="documents" comparison={comparison} documentsOnly compact
       reviewed={new Set()} onRevision={() => {}}
       onPreview={(path) => previews.push(path)}
       onOpenDiff={(entry) => diffs.push(entry.change.path)}
-    /></BrowserProductTheme>));
+    /></BrowserProductTheme></SurfaceProvider>));
     await until(() => !!container.querySelector('[aria-label="Preview current file design.md"]'), "Document preview action missing");
     check(!container.textContent?.includes("app.ts"), "Non-document shown in document filter");
     check(container.textContent?.includes("removed.md"), "Deleted document missing from review");

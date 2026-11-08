@@ -56,6 +56,11 @@ impl Entry {
         }
     }
 
+    /// The buffer lease this acquisition created, if it reached preparation.
+    pub(super) fn lease(&self) -> Option<&LeaseRef> {
+        self.lease.as_ref()
+    }
+
     pub(super) fn reply(&self, reference: Reference) -> Response {
         super::reply(
             reference,

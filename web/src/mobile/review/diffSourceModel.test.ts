@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../../tools/test-assert.ts";
 import {
+  diffNewLineLabels,
   diffPointToNewFile,
   diffSourceProjection,
 } from "./diffSourceModel.ts";
@@ -38,4 +39,23 @@ test("diff points reject deleted lines and metadata", () => {
   assertEquals(diffPointToNewFile(DIFF, 0, 4), null);
   assertEquals(diffPointToNewFile(DIFF, 3, 4), null);
   assertEquals(diffPointToNewFile(DIFF, 5, 4), null);
+});
+
+test("diff gutter labels follow new-file lines, not patch rows", () => {
+  const { labels, widest } = diffNewLineLabels(
+    [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -98,4 +98,4 @@ fn",
+      " keep",
+      "-old",
+      "+new",
+      " tail",
+      "\\ No newline at end of file",
+      "",
+    ].join("\n"),
+  );
+  assertEquals(labels, ["", "", "", "", "98", "", "99", "100", "", ""]);
+  assertEquals(widest, "100");
 });

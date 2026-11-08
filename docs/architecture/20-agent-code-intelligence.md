@@ -707,6 +707,68 @@ source mismatch detection, not watcher frontiers or automatic baselines.
 - Baselines are immutable, content-matched captures at a read or pre-write
   boundary (the facade and executor see pre-write content). Without one the
   comparison is `unknown`.
+
+  The read boundary is implemented. Each explicit `code.diagnostics` read that
+  is `document_current` and passed its trust fence captures the complete
+  observation (at most 200 diagnostics) bound to the snapshot's text SHA-256
+  and byte count, keyed by the exact Session code scope and path. When a later
+  read sees different text, the previous capture becomes the baseline and the
+  reply's `comparison` names it (`against`). The same text never becomes its
+  own baseline. Comparisons are `unknown` without a baseline, for a reply that
+  is not `document_current`, after buffer replacement (a different native
+  stream), when the server set changed or a capture exceeded its bound.
+  Passive `code.summary` neither captures nor compares. Records are
+  Controller memory, bounded to 64 files per scope and 512 overall (least
+  recently observed first); a restart discards them. Pre-write capture waits
+  for executor receipts, so a read boundary may precede several edits.
+
+  The read boundary shipped in `02d1da0c3`; Hawk's Controller runs it through
+  the concurrent activation of descendant `270f49cd9`, transaction
+  `1794123221502657538-270f49cd9f4c` (`succeeded` / `committed`), whose running
+  executable matched the active release. A real MCP read of a temporary Go
+  file returned gopls `document_current`, its exact 62-byte SHA-256, the
+  `UndeclaredName` finding and `comparison: unknown/no_baseline`. After a disk
+  edit, repeated reads stayed `stale` with `sourceState: changed` and the old
+  snapshot, so the comparison stayed `unknown/not_current`. The fixture was
+  removed after verifying its hash. In production a comparison therefore needs
+  the native mirror to observe new text: until an agent-owned reload on source
+  change (or a write receipt) exists, disk edits by tools do not produce one.
+  Reopening a buffer is reported as `buffer_replaced`.
+
+  Zed 1.39.0 closes that gap for agent-only buffers. `bufferLanguage` accepts
+  `refresh: "agent_owned"`; the adapter reloads the mirror through the
+  existing bounded native reload route only when every owner of the buffer is
+  an automatic agent acquisition (owner IDs are never reused), no
+  synchronization reservation or unresolved close exists, and its bounded
+  source reader reports `changed`. The active-buffer read lock is held through
+  the reload, so no owner joins or leaves meanwhile. Outcomes are
+  `not_needed`, `reloaded`, `refused` (another owner, fence or native
+  size/binary/symlink refusal, mirror unchanged) or `unknown` (unobserved
+  within 5 s; never retried). Nothing is saved, opened or synchronized. When an
+  explicit `code.diagnostics` read of a file the agent already holds sees
+  `changed`, the Controller sends one refresh and, after `reloaded`, waits up
+  to 4 s for analysis of the new text before answering. The Machine already
+  classifies `bufferLanguage` as passive, so no Machine release is needed; an
+  older adapter rejects the unknown field and the original observation is
+  kept. A file a Code pane also holds stays `stale`.
+
+  Source `680d83d46` passed the complete pinned gate. The exact static 1.39.0
+  adapter (`5c1e8c71…`) / unchanged 1.15.0 server (`b2171b6e…`) passed native
+  sync/navigation conformance, including a real exclusive-owner reload,
+  shared-owner refusal and unchanged source through the distributable
+  adapter's socket, and signed install/drain. Controller transaction
+  `1794127149954701623-680d83d46f3f` succeeded and committed with the running
+  executable matching the release. The signed package (composite
+  `sha256:ccfe12562186857759f130aef1aa667d47f40149c3ffa50c7b37f833a05d641d`)
+  was published with all three URLs matching their digests; operation
+  `hawk-zed-1-39-0-agent-refresh` completed with Machine receipt `applied`
+  (installation `installation-310bda29…`), 1.38.0 remaining the rollback
+  generation. A real MCP read of a temporary Go file returned
+  `document_current`/`no_baseline`; after a disk edit, one read (273 ms)
+  reloaded the agent-only mirror and returned the new SHA-256 with gopls
+  `document_current` and `comparison: complete` (introduced 1, persisting 1,
+  two ambiguous `UndeclaredName` candidates). The serving adapter's executable
+  hash matched 1.39.0. The fixture was removed after verifying its hash.
 - **Hunk overlap** orders diagnostics within the budget (`in_edit` before
   `elsewhere`); it never asserts that an edit caused a diagnostic and never
   replaces the baseline comparison.
@@ -714,6 +776,15 @@ source mismatch detection, not watcher frontiers or automatic baselines.
   (severity, message); severity escalation is a change. Matching is
   multiplicity-aware with versioned anchor mapping; without `code`, provenance
   and ambiguity are preserved rather than hashing messages.
+
+  The implemented matcher keys identity on the native server, source kind,
+  registration, source and code. It has no anchor mapping yet: per identity it
+  pairs instances most severe first, counting `persisting`, `escalated`,
+  `introduced` and `resolved`. Moved instances persist. New instances of an
+  identity the baseline already had are listed as `ambiguous` candidates (up
+  to ten), since any of them may be the new one. Diagnostics without a code or
+  bounded provenance are counted as `unmatched` and make the comparison
+  `partial`. No field claims an edit caused a diagnostic.
 - Dependent files: a bounded worktree diagnostic sequence plus project epoch,
   classified `attributable | newly_observed | concurrent`; an empty delta means
   "nothing new observed there".
@@ -732,7 +803,7 @@ immediately.
 | --- | --- |
 | `code.search(query, {regex?, case_sensitive?, path?, limit?})` | bounded content matches with lines (core; implemented) |
 | `code.outline(path)`, `code.symbols(query, {limit?})` | syntax structure (tree-sitter tags; implemented, `heuristic`); language-engine refinement later |
-| `code.diagnostics(paths)` | implemented: diagnostics and counts with a per-file state from per-server analysis-frontier evidence (`document_current`, `stale`, otherwise `last_observed`), or `not_open`/`restricted`/`refused`/`unavailable`. A file no Code pane holds is acquired for the agent (`acquired: true`, see Acquisition) and waited on for up to 4 s. Baseline comparison comes with P2 |
+| `code.diagnostics(paths)` | implemented: diagnostics and counts with a per-file state from per-server analysis-frontier evidence (`document_current`, `stale`, otherwise `last_observed`), or `not_open`/`restricted`/`refused`/`unavailable`. A file no Code pane holds is acquired for the agent (`acquired: true`, see Acquisition) and waited on for up to 4 s. Each file carries a read-boundary `comparison` (see Baselines) |
 | `code.summary()` | implemented: passive counts over this session's tracked files (`coverage: agent_observed_files`), without acquisition or idle-time refresh. No usable observations means `counts: null`/`unobserved`; `partial` counts exclude unavailable files. Counts are never project totals, and Controller restart discards the tracked set until files are read again |
 | `code.hover({path,row,column,sha256})` | implemented over already-open Session buffers: zero-based UTF-16 position and exact content hash, original policy/route fences, identical bounded native snapshot before/after. Five-second read bound; at most 8 blocks / 2,000 text characters with explicit truncation; escaped envelopes over 12 KiB are refused. Never acquires a buffer or destination; stale locations are refused |
 | `code.definition/references/implementations(locator)` | after owned-navigation acceptance only |
@@ -751,6 +822,46 @@ uniquely resolvable, otherwise candidates or `stale/ambiguous`.
   (≤1 s) exchanges, delivered as its own row through the existing async-note
   path (`plugins/claude-code/runtime/context-mod.js`, `deliverAsync`), never by
   rewriting a tool result.
+
+  Implemented (Claude Plugin 3.20.30, component release 3.99.0): after the
+  main agent's successful Edit, Write or NotebookEdit of a file inside the
+  target workspace, the Mod returns the write result unchanged and schedules
+  one observation. It runs the session's own `cowboy mcp` on the target
+  through the existing hook route (the keeper injects the gateway context; no
+  credential reaches the Provider runtime) with one `cowboy_execute` call of
+  the read-only action `code.post_edit`. That action is the explicit
+  `code.diagnostics` read (acquisition, agent-owned refresh, read baselines)
+  reduced to at most 10 errors, 5 warnings and 2,000 message characters,
+  with `deliver` true only for new or escalated diagnostics against a
+  content-matched baseline, or current errors without one. The Mod appends
+  the result as its own `system-reminder` row, with `<`, `>`, `&` and line
+  separators escaped inside the JSON so repository text cannot close the
+  fixed presentation. Observations run one at a time in batches of up to five
+  files; a file edited again meanwhile is dropped from the earlier result.
+  Subagent edits, shell-made changes and Code-pane-shared files (which stay
+  `stale`) produce no row. Project language servers being on is the per-session
+  opt-in: otherwise the read is `restricted` and nothing is delivered. Each
+  bridge exchange holds at most one second; the write itself never waits.
+  Delivery identity states, `context_cleared` dropping and watcher-triggered
+  coverage remain open.
+
+  Source `e64747ba8` passed the full gate, `claude-remote-check`, and the
+  packaged `execution-worker-conformance` (accepted, 97 checks, unchanged set)
+  and `execution-managed-conformance` (accepted, 7 checks) with the exact
+  rebuilt artifacts. The endpoint-close fixture's 15 s deadline was shorter
+  than an idle event poll's 20 s bound; the post-edit observation exposed it
+  and the deadline is now 25 s. Controller transaction
+  `1794134057192471504-e64747ba8734` succeeded and committed. A direct
+  production `code.post_edit` returned `deliver: false` for a clean file and
+  `deliver: true` (`introduced: 1`, `undefined: missingName`) after the edit.
+  Claude Plugin 3.20.30 (composite
+  `sha256:4b388ab6f31acacdbc8df80ff10e9a0db350cc7bb0947eb9bbf592c136137e5d`)
+  was published with all five URLs matching and installed on OVH by
+  `ovh-claude-code-3-20-30-post-edit` (`applied`; 3.20.27 is the rollback
+  generation). A new 3.20.30 session wrote and then edited a Go file; its
+  model had the row with `comparison: complete`, `introduced: 1` and the
+  `UndeclaredName` message. It answered its own turn before noticing the row,
+  so delivery is next-request, not synchronous. The session was trashed.
 - **Codex.** Existing research proves app-server-owned command hooks only, not
   project-hook exclusion (`docs/experiments/codex-native-hooks-research-2026-10-05.json`).
   A hook is accepted only if conformance proves exact Cowboy-owned hook hashes

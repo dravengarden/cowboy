@@ -3,7 +3,7 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { productSessionSignal } from "./productSessionEnd";
 import { requestPickSession } from "./sessionPickRequest";
 import { newUuid } from "./uuid";
-import type { SessionMeta } from "./protocol";
+import type { ContentBlock, SessionMeta } from "./protocol";
 
 export interface NextAgent {
   provider: string;
@@ -17,13 +17,17 @@ export interface NextAgent {
 export interface ContextDelivery {
   operation: string;
   session_id: string;
-  state: "preparing" | "accepted" | "failed" | "unknown";
+  state: "preparing" | "accepted" | "failed" | "unknown" | "cancelled";
   error?: string | null;
   session?: SessionMeta;
   source_trashed?: boolean;
+  /** Why the handoff left its source out of Trash. */
+  source_kept?: string;
 }
 export interface SessionContext {
   revision: number;
+  /** The user kept working here after this session's handoff. */
+  handoff_resumed?: boolean;
   applied_revision: number;
   sources: string[];
   next_agent: NextAgent | null;
@@ -109,6 +113,35 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
   return value as T;
 }
 
+export interface CancelledHandoff {
+  source_session_id: string;
+  text: string;
+  content: ContentBlock[];
+  session?: SessionMeta | null;
+  note?: string;
+}
+
+/** Take a continuation back while its first message is still queued. The
+ *  Service restores the original and moves this destination to Trash. */
+export async function cancelHandoff(
+  id: string,
+  operation: string,
+): Promise<CancelledHandoff> {
+  const cancelled = await json<CancelledHandoff>(
+    `/api/sessions/${encodeURIComponent(id)}/context/cancel`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operation }),
+    },
+  );
+  // A send whose reply was lost is resolved now: it was taken back.
+  sends.delete(cancelled.source_session_id);
+  announceContext(id);
+  announceContext(cancelled.source_session_id);
+  return cancelled;
+}
+
 export function loadSessionContext(id: string): Promise<SessionContext> {
   const existing = reads.get(id);
   if (existing) return existing;
@@ -184,6 +217,13 @@ export async function saveSessionContext(
   configured.add(id);
   sends.delete(id);
   return saved;
+}
+
+/** Keep working in a handed-off session beside its continuation. */
+export async function continueHere(id: string): Promise<void> {
+  await json<unknown>(`/api/sessions/${encodeURIComponent(id)}/continue-here`, {
+    method: "POST",
+  });
 }
 
 export function useSessionContext(id: string, active = true) {
@@ -308,10 +348,19 @@ export async function sendWithContext(
   if (!configured.has(id) && !sends.has(id)) return false;
   const context = await loadSessionContext(id);
   let request = sends.get(id);
+  // Taken back on any device: the message returned to a Composer, so the
+  // unresolved send is over and the next one is ordinary.
+  if (
+    request && context.delivery?.state === "cancelled" &&
+    context.delivery.operation === request.operation
+  ) {
+    sends.delete(id);
+    request = undefined;
+  }
   if (
     !request && context.revision === context.applied_revision &&
     context.delivery?.state === "accepted" &&
-    context.delivery.session_id !== id &&
+    context.delivery.session_id !== id && !context.handoff_resumed &&
     !observedHandoffs.has(context.delivery.operation)
   ) {
     openContextDestination(context.delivery);

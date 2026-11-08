@@ -1678,7 +1678,7 @@ export function DocumentView({
           visible={!!(truncated || counts || nextCursor || loadMoreError)}
           counts={counts} hunkCount={hunks.length} hunkIndex={hunkIndex}
           onPrevious={() => setHunkIndex((value) => value - 1)}
-          onNext={() => setHunkIndex((value) => value + 1)}
+          onNext={() => setHunkIndex((value) => (value + 1) % hunks.length)}
           hasMore={!!nextCursor} loadingMore={loadingMore} loadMoreError={loadMoreError}
           onLoadMore={loadMore} limited={limited} diff={target.kind === "diff"}
         />

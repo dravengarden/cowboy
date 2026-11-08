@@ -1,4 +1,4 @@
-import { Button, Typography } from "@mui/material";
+import { Box, Button, Typography } from "@mui/material";
 import type { SessionMeta } from "./protocol";
 import { sessionIsWorking } from "./trashModel";
 import { useNavbarAtBottom } from "./navbarSettings";
@@ -69,6 +69,21 @@ export function DeleteSessionShell({
         </>
       }
     >
+      {/* Name what is being removed: the title alone can be ambiguous, so
+          the project it belongs to follows it. */}
+      <Box
+        data-delete-session-name
+        sx={{ mb: 1.5, px: 1.5, py: 1, borderRadius: 2, bgcolor: "action.hover", minWidth: 0 }}
+      >
+        <Typography variant="body1" noWrap title={session.title} sx={{ fontWeight: 600 }}>
+          {session.title || "Untitled session"}
+        </Typography>
+        {session.workspace_name && (
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+            {session.workspace_name}
+          </Typography>
+        )}
+      </Box>
       <Typography variant="body2" color="text.secondary">
         {turnRunning
           ? "Its current turn is cancelled. The session then moves to Trash, where it can be restored with its transcript and worktree."

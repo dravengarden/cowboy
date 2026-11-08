@@ -244,6 +244,7 @@ primary phone/desktop product path.
 - [`releases/plugin-session-cleanup-root-2026-10-05.md`](releases/plugin-session-cleanup-root-2026-10-05.md) — Hawk cleanup-root activation, integrated Rust checks, 32 native writer groups and 18 retained worker/keeper processes
 - [`releases/plugin-session-worktree-containment-2026-10-04.md`](releases/plugin-session-worktree-containment-2026-10-04.md) — Hawk writer-host activation, 535 Machine tests, 32 native writer groups and 18 retained worker/keeper processes
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop information density and interaction contract
+- [`desktop-code-review.md`](desktop-code-review.md) — Proposal: Desktop Code Review as a keyboard-first work-pane view (`␣V` group, read-only Vim buffer, CodeMirror split diff, MUI composition, device-local view state)
 - [`ux-principles.md`](ux-principles.md) — Core efficiency contract: bottom controls on Mobile, visible keyboard commands on Desktop, state continuity and rendered acceptance
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore's read-only transcript projection
 - [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Jank-free drawers, pager, transcript, CodeMirror, iPhone PWA status material, iPad standalone chrome, and iOS compositor contract

@@ -42,6 +42,7 @@ if (
   suite !== "info-metrics" &&
   suite !== "review-context" &&
   suite !== "review-compare" &&
+  suite !== "desktop-review" &&
   suite !== "loading-progress" &&
   suite !== "subscriptions" &&
   suite !== "client-update" &&
@@ -99,6 +100,7 @@ await build({
         suite === "loading-progress" ||
         suite === "review-context" ||
         suite === "review-compare" ||
+        suite === "desktop-review" ||
         suite === "subscriptions" ||
         suite === "client-update" ||
         suite === "session-context" ||
@@ -160,6 +162,7 @@ await build({
     suite === "review-context" ||
     suite === "loading-progress" ||
     suite === "review-compare" ||
+    suite === "desktop-review" ||
     suite === "client-update" ||
     suite === "subscriptions" ||
     suite === "session-context" ||
@@ -190,6 +193,8 @@ await build({
                           ? "../web/src/loadingProgressBrowserConformance.tsx"
                           : suite === "review-context"
                             ? "../web/src/reviewContextBrowserConformance.tsx"
+                            : suite === "desktop-review"
+                              ? "../web/src/desktop/review/desktopReviewBrowserFixture.tsx"
                             : suite === "review-compare"
                               ? "../web/src/reviewContextBrowserConformance.tsx"
                               : suite === "info-metrics"

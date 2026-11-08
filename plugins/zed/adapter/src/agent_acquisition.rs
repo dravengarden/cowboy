@@ -82,6 +82,15 @@ pub(crate) async fn respond(
 }
 
 impl Registry {
+    /// Every buffer lease an automatic acquisition created. Lease IDs are
+    /// never reused, so an ID in this set always names an agent owner.
+    pub(crate) fn agent_leases(&self) -> Vec<crate::buffer_leases::LeaseRef> {
+        self.entries
+            .values()
+            .filter_map(|entry| entry.lease().cloned())
+            .collect()
+    }
+
     async fn prepare(
         &mut self,
         worktree: PathBuf,

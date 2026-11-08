@@ -19,8 +19,10 @@ use super::only_keys;
 use crate::core::SessionMeta;
 
 mod acquire;
+mod baselines;
 mod diagnostics;
 mod hover;
+mod post_edit;
 mod summary;
 
 pub(in crate::server) async fn maintain_holdings(state: std::sync::Arc<AppState>) {
@@ -222,6 +224,36 @@ async fn checks(state: &AppState, meta: &SessionMeta) -> Result<Value, String> {
         "declaration_error": declared.err(),
         "runs": check_runs(&meta.id),
     }))
+}
+
+/// The bounded post-edit summary a Provider adapter delivers to its model
+/// (`cowboy_execute` action `code.post_edit`, read-only, no operation needed).
+pub(super) async fn post_edit(
+    state: &AppState,
+    meta: &SessionMeta,
+    args: &Value,
+) -> Result<Value, &'static str> {
+    only_keys(args, &["paths"]).map_err(|_| "invalid_argument")?;
+    let paths = paths(args).map_err(|_| "invalid_argument")?;
+    if paths.len() > post_edit::MAX_PATHS {
+        return Err("invalid_argument");
+    }
+    let scope = session::resolve(
+        &state.hub,
+        &state.machine_control,
+        &state.service_id,
+        &meta.id,
+    )
+    .ok_or("unavailable")?;
+    let CodeReadScope::Session(observed) = &scope else {
+        return Err("unavailable");
+    };
+    super::super::managed_calls::touch_code_observation(state, observed).await;
+    let value = diagnostics::read(state, observed, paths).await;
+    if !session::current(&state.hub, &state.machine_control, observed) {
+        return Err("code_context_changed");
+    }
+    Ok(post_edit::project(&value))
 }
 
 /// Explicitly run one declared check (`cowboy_execute` action `code.check`).

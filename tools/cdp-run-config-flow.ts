@@ -316,13 +316,168 @@ async function resizeAndClose(driver: AcceptanceDriver): Promise<void> {
   check(errors.length === 0, `No page errors: ${JSON.stringify(errors)}`);
 }
 
+/** Every Select popup speaks the Vim list grammar (FOCUS.md "Menus"):
+ *  however it opened, the cursor starts on the current option, `j/k` move,
+ *  `l` picks and `h` closes. */
+async function selectPopups(
+  driver: AcceptanceDriver,
+  only?: number,
+): Promise<void> {
+  const { page, key, sleep, check, shot, results } = driver;
+  const state = () => selectState(driver);
+  const selects = "[data-run-config-panel] [role='combobox']";
+  const count = await page.evaluate<number>(
+    `document.querySelectorAll(${JSON.stringify(selects)}).length`,
+  );
+  check(count >= 5, `Run configuration has its Selects: ${count}`);
+  for (let index = only ?? 0; index < (only === undefined ? count : only + 1); index++) {
+    const at = await page.evaluate<{ x: number; y: number; value: string }>(`(() => {
+      const select = document.querySelectorAll(${JSON.stringify(selects)})[${index}];
+      select.scrollIntoView({ block: "center" });
+      const r = select.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, value: select.textContent };
+    })()`);
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      await page.send("Input.dispatchMouseEvent", {
+        type,
+        x: at.x,
+        y: at.y,
+        button: "left",
+        clickCount: 1,
+      });
+    }
+    await sleep(350);
+    const opened = await state();
+    check(
+      opened.list && opened.option.startsWith(at.value.trim()),
+      `Select ${index} opens on its current option: ${JSON.stringify(opened)}`,
+    );
+    await key("j");
+    await key("k");
+    await sleep(100);
+    check(
+      (await state()).option === opened.option,
+      `Select ${index}: j then k returns to the current option`,
+    );
+    if (index === 0) await shot("run-config-select-open");
+    await key("h");
+    await sleep(300);
+    const closed = await state();
+    check(
+      !closed.list && closed.combobox.trim() === at.value.trim(),
+      `Select ${index}: h closes without changing it: ${JSON.stringify(closed)}`,
+    );
+  }
+  if (only !== undefined) {
+    // Later steps start where the workbench opens: on the active preset.
+    await page.evaluate(`document.querySelector("[data-config-preset='2']").focus()`);
+    await sleep(150);
+    results.push("A Select opened as the workbench settles keeps its cursor");
+    return;
+  }
+  results.push("Every Select opens on its value; j/k move, h closes unchanged");
+  await replaceOrForkSelects(driver);
+}
+
+/** Where the cursor is while a Select is in play. */
+function selectState({ page }: AcceptanceDriver) {
+  return page.evaluate<{ option: string; list: boolean; combobox: string }>(`(() => {
+    const a = document.activeElement;
+    return {
+      option: a?.getAttribute("role") === "option" ? a.textContent : "",
+      list: Boolean(document.querySelector("[role='listbox']")),
+      combobox: a?.getAttribute("role") === "combobox" ? a.textContent : "",
+    };
+  })()`);
+}
+
+/** Replace or fork: the AI installation list opened from the dialog leader,
+ *  and the new agent's options, pick with `j`/`l`. */
+async function replaceOrForkSelects(driver: AcceptanceDriver): Promise<void> {
+  const { page, key, sleep, check, results } = driver;
+  const state = () => selectState(driver);
+  const replace = await page.evaluate<boolean>(`(() => {
+    const button = [...document.querySelectorAll("[data-config-pane='context'] button")]
+      .find((b) => b.textContent.includes("Replace or fork"));
+    button?.click();
+    return Boolean(button);
+  })()`);
+  check(replace, "Replace or fork opens its form");
+  await sleep(400);
+  const installation = `[...document.querySelectorAll("[data-config-pane='context'] [role='combobox']")].find((e) => e.closest('.MuiFormControl-root')?.querySelector('label')?.textContent === 'AI installation')`;
+  await key(" ");
+  await sleep(300);
+  const letters = await page.evaluate<string>(`(() => {
+    const r = ${installation}.getBoundingClientRect();
+    const hint = [...document.querySelectorAll('[data-desktop-hint]')].find((h) => {
+      const b = h.getBoundingClientRect();
+      return b.top >= r.top - 30 && b.bottom <= r.bottom + 30 && b.left >= r.left - 30 && b.right <= r.right + 30;
+    });
+    return hint?.textContent ?? "";
+  })()`);
+  check(letters, "The dialog leader labels AI installation");
+  for (const letter of letters.toLowerCase()) await key(letter);
+  await sleep(350);
+  const before = await state();
+  check(before.list && before.option, `The leader opens AI installation on its value: ${JSON.stringify(before)}`);
+  await key("j");
+  await sleep(100);
+  const next = (await state()).option;
+  check(next && next !== before.option, "j moves to the next installation");
+  await key("l");
+  await sleep(300);
+  const picked = await state();
+  check(
+    !picked.list && next.startsWith(picked.combobox.trim()),
+    `l picks the installation and closes the list: ${JSON.stringify(picked)}`,
+  );
+  results.push("AI installation opens from the leader; j moves, l picks");
+  // The new agent's own options were native selects, whose OS popup never
+  // sees j/k; on Desktop they are lists like every other Select.
+  const fork = await page.evaluate<{ x: number; y: number; native: boolean } | null>(`(() => {
+    const field = document.querySelector("[data-config-pane='context'] [data-fork-option]");
+    const select = field?.closest('.MuiFormControl-root')?.querySelector("[role='combobox']");
+    if (!select) return null;
+    select.scrollIntoView({ block: "center" });
+    const r = select.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, native: field.tagName === "SELECT" };
+  })()`);
+  check(fork && !fork.native, `The new agent's options are Desktop lists: ${JSON.stringify(fork)}`);
+  if (!fork) throw new Error("The new agent's options did not render");
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    await page.send("Input.dispatchMouseEvent", { type, x: fork.x, y: fork.y, button: "left", clickCount: 1 });
+  }
+  await sleep(350);
+  const forkOpened = await state();
+  check(forkOpened.list && forkOpened.option, `A new-agent option opens on its value: ${JSON.stringify(forkOpened)}`);
+  await key("j");
+  await sleep(100);
+  const forkNext = (await state()).option;
+  await key("l");
+  await sleep(300);
+  const forkPicked = await state();
+  check(
+    forkNext !== forkOpened.option && !forkPicked.list && forkNext.startsWith(forkPicked.combobox.trim()),
+    `j/l pick a new-agent option: ${JSON.stringify({ forkNext, forkPicked })}`,
+  );
+  results.push("The new agent's options are lists that j/l drive, not native selects");
+  await page.evaluate(`(() => {
+    const button = [...document.querySelectorAll("[data-config-pane='context'] button")]
+      .find((b) => b.textContent.includes("Replace or fork"));
+    button?.click();
+  })()`);
+  await sleep(300);
+}
+
 export async function runConfigFlow(driver: AcceptanceDriver): Promise<void> {
   for (
     const step of [
       openWorkbench,
+      (d: AcceptanceDriver) => selectPopups(d, 0),
       agentDraft,
       toolsPane,
       contextPane,
+      (d: AcceptanceDriver) => selectPopups(d),
       resizeAndClose,
     ]
   ) {

@@ -635,6 +635,7 @@ async fn owned_resources(zed: &Zed, root: &Path) {
     crate::buffer_navigation::connected_lsp::exercise(zed, root).await;
     crate::native_close::connected::exercise(zed, root).await;
     crate::agent_acquisition::connected::exercise(zed, root).await;
+    crate::agent_acquisition::connected::refresh(zed, root).await;
 }
 
 async fn native_source_regressions(zed: &Zed, instance: &[u8], workspace: &Path, worktree: u64) {

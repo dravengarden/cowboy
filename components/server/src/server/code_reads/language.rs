@@ -15,6 +15,10 @@ use serde::Serialize;
 pub(in crate::server) enum Query {
     #[serde(rename = "bufferLanguage")]
     Language,
+    /// The same observation after the engine reloads a mirror only this
+    /// Session's agent acquisitions own, when its source changed.
+    #[serde(rename = "bufferLanguage")]
+    RefreshedLanguage { refresh: AgentOwned },
     #[serde(rename = "bufferHover")]
     Hover { row: u32, column: u32 },
     #[serde(rename = "bufferNavigate")]
@@ -25,6 +29,12 @@ pub(in crate::server) enum Query {
     },
     #[serde(rename = "bufferSymbols")]
     Outline,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::server) enum AgentOwned {
+    AgentOwned,
 }
 
 #[derive(Serialize)]

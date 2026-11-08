@@ -595,7 +595,7 @@ fn unanswered(
     }
 }
 
-fn transient(reason: crate::machine_protocol::execution::Refusal) -> bool {
+pub(super) fn transient(reason: crate::machine_protocol::execution::Refusal) -> bool {
     use crate::machine_protocol::execution::Refusal;
     matches!(reason, Refusal::Unavailable | Refusal::Capacity)
 }

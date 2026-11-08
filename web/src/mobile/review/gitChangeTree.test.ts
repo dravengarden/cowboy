@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../../tools/test-assert.ts";
 import type { GitReviewEntry } from "./gitReviewModel.ts";
-import { buildGitChangeTree } from "./gitChangeTree.ts";
+import { buildGitChangeTree, compareGitTreePaths } from "./gitChangeTree.ts";
 
 const entry = (path: string): GitReviewEntry => ({
   change: {
@@ -54,5 +54,29 @@ test("git change tree preserves branching directories", () => {
   assertEquals(tree[0]?.children.map((node) => [node.name, node.path]), [
     ["mobile", "src/mobile"],
     ["server", "src/server"],
+  ]);
+});
+
+test("git change tree orders numbered names naturally", () => {
+  const tree = buildGitChangeTree([
+    entry("file-10.ts"),
+    entry("file-2.ts"),
+    entry("file-1.ts"),
+  ]);
+  assertEquals(tree.map((node) => node.name), [
+    "file-1.ts",
+    "file-2.ts",
+    "file-10.ts",
+  ]);
+});
+
+test("tree path order lists directories before sibling files", () => {
+  const paths = ["b.ts", "a/z.ts", "a/b/c.ts", "a.ts", "a/a.ts"];
+  assertEquals(paths.toSorted(compareGitTreePaths), [
+    "a/b/c.ts",
+    "a/a.ts",
+    "a/z.ts",
+    "a.ts",
+    "b.ts",
   ]);
 });

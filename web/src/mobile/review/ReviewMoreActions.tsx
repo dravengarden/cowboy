@@ -69,11 +69,29 @@ export function ReviewMoreActions({
         <Stack spacing={1} sx={{ px: 1, pb: 1 }}>
           <Box
             ref={content}
+            // One action per row, aligned like Review settings below, so a
+            // short label never pairs up with its neighbour.
             sx={{
               display: "flex",
-              flexWrap: "wrap",
-              alignItems: "center",
+              flexDirection: "column",
+              alignItems: "stretch",
               gap: 1,
+              // Inline action groups are horizontal on Desktop; stack them here.
+              "& [data-review-navigation-actions]": {
+                flexDirection: "column",
+                alignItems: "stretch",
+                gap: 1,
+              },
+              "& [data-review-navigation-actions] > span": { display: "flex" },
+              "& .MuiButton-root": {
+                flex: 1,
+                minHeight: 44,
+                justifyContent: "flex-start",
+                textTransform: "none",
+              },
+              "& .MuiButton-root:not(.Mui-disabled)": {
+                color: "text.primary",
+              },
             }}
           >
             {children(close)}

@@ -22,7 +22,8 @@ import { ForkConfiguration, type ForkConfig } from "./ForkConfiguration";
 import { SessionSubscription, useSessionSubscription } from "./SessionSubscription";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { ConfirmSheet } from "./Sheet";
-import { SessionProvenance, useContinuation } from "./SessionContextCue";
+import { SessionProvenance } from "./SessionContextCue";
+import { useHistorySession } from "./sessionHistory";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { accountIdentity } from "./accountIdentity";
 import { duplicateMode, duplicateSession, forkAvailability, forkSession } from "./sessionFork";
@@ -59,7 +60,7 @@ export function SessionContextSettings({
   const [formGeneration, setFormGeneration] = useState(0);
   const actions = useRef<HTMLDivElement>(null);
   const { data, error, reload } = useSessionContext(session.id);
-  const handedOff = useContinuation(session.id) !== undefined;
+  const handedOff = useHistorySession(session.id);
   useEffect(() => {
     const take = () => {
       if (!takeNewFromRequest(session.id)) return;
@@ -98,75 +99,75 @@ export function SessionContextSettings({
   return (
     <Box data-session-context sx={{ minWidth: 0, pb: open ? 2 : 0 }}>
       {provenance && <SessionProvenance sessionId={session.id} />}
-      {/* Its work moved on: a further switch from here would split it. */}
-      {!handedOff && (
-        <Stack spacing={1.5}>
-          {error && (
-            <Alert severity="error" action={<Button onClick={() => void reload()}>Retry</Button>}>
-              {error}
-            </Alert>
-          )}
-          {data && (
-            <>
-              <ContextDelivery session={session} context={data} onResolved={onSaved} />
-              {!inlineLinks && (
-                <LinkedSessions
-                  session={session}
-                  context={data}
-                  draft={draft}
-                  onDraft={setDraft}
-                  onSettled={reload}
-                />
-              )}
-            </>
-          )}
-          <Box ref={actions} data-session-new-from-section>
-            <Button
-              startIcon={<ForkRightOutlined />}
-              endIcon={<ExpandMore sx={{ transform: open ? "rotate(180deg)" : undefined }} />}
-              aria-expanded={open}
-              aria-keyshortcuts="Enter"
-              disabled={!data}
-              // Functional: a save that just closed the form may not have
-              // re-rendered yet, and a stale `open` would close it again.
-              onClick={() => setOpen((value) => !value)}
-              sx={{ justifyContent: "flex-start", textTransform: "none" }}
-            >
-              Replace or fork
-            </Button>
-            {data && stagedAgent && !open && (
-              <PendingSwitch session={session} context={data} onBack={() => void reload()} />
+      {/* A handed-off session's work moved on: a further switch or new links
+          from here would split it, but a fork with chosen options stays. */}
+      <Stack spacing={1.5}>
+        {error && (
+          <Alert severity="error" action={<Button onClick={() => void reload()}>Retry</Button>}>
+            {error}
+          </Alert>
+        )}
+        {data && !handedOff && (
+          <>
+            <ContextDelivery session={session} context={data} onResolved={onSaved} />
+            {!inlineLinks && (
+              <LinkedSessions
+                session={session}
+                context={data}
+                draft={draft}
+                onDraft={setDraft}
+                onSettled={reload}
+              />
             )}
-          </Box>
-          {data && open && (
-            <NewSessionForm
-              key={`${session.id}:${formGeneration}`}
-              session={session}
-              observed={data}
-              sources={draft ?? pendingSources(data)}
-              allowFork={allowFork && !session.system && !isManagedChild(session)}
-              onContinued={() => {
-                onSaved();
-                // A staged choice applies to the next message: go write it.
-                closeSessionSettings(session.id);
-                requestComposerFocus(session.id);
-              }}
-              onForked={() => setOpen(false)}
-              onRestart={() => setFormGeneration((value) => value + 1)}
-            />
+          </>
+        )}
+        <Box ref={actions} data-session-new-from-section>
+          <Button
+            startIcon={<ForkRightOutlined />}
+            endIcon={<ExpandMore sx={{ transform: open ? "rotate(180deg)" : undefined }} />}
+            aria-expanded={open}
+            aria-keyshortcuts="Enter"
+            disabled={!data}
+            // Functional: a save that just closed the form may not have
+            // re-rendered yet, and a stale `open` would close it again.
+            onClick={() => setOpen((value) => !value)}
+            sx={{ justifyContent: "flex-start", textTransform: "none" }}
+          >
+            {handedOff ? "Fork" : "Replace or fork"}
+          </Button>
+          {data && stagedAgent && !open && !handedOff && (
+            <PendingSwitch session={session} context={data} onBack={() => void reload()} />
           )}
-          {data && inlineLinks && (
-            <LinkedSessions
-              session={session}
-              context={data}
-              draft={draft}
-              onDraft={setDraft}
-              onSettled={reload}
-              inline
-            />
-          )}
-        </Stack>
-      )}
+        </Box>
+        {data && open && (
+          <NewSessionForm
+            key={`${session.id}:${formGeneration}`}
+            session={session}
+            observed={data}
+            sources={draft ?? pendingSources(data)}
+            allowFork={allowFork && !session.system && !isManagedChild(session)}
+            forkOnly={handedOff}
+            onContinued={() => {
+              onSaved();
+              // A staged choice applies to the next message: go write it.
+              closeSessionSettings(session.id);
+              requestComposerFocus(session.id);
+            }}
+            onForked={() => setOpen(false)}
+            onRestart={() => setFormGeneration((value) => value + 1)}
+          />
+        )}
+        {data && inlineLinks && !handedOff && (
+          <LinkedSessions
+            session={session}
+            context={data}
+            draft={draft}
+            onDraft={setDraft}
+            onSettled={reload}
+            inline
+          />
+        )}
+      </Stack>
     </Box>
   );
 }
@@ -255,6 +256,7 @@ function NewSessionForm({
   observed,
   sources,
   allowFork,
+  forkOnly,
   onContinued,
   onForked,
   onRestart,
@@ -263,6 +265,8 @@ function NewSessionForm({
   observed: SessionContext;
   sources: string[];
   allowFork: boolean;
+  /** History: Replace would split the work that moved on; a fork keeps both. */
+  forkOnly: boolean;
   onContinued: () => void;
   onForked: () => void;
   /** Start over from the latest context. */
@@ -444,31 +448,15 @@ function NewSessionForm({
         }
       />
       <SessionSubscription state={subscription} disabled={busy} desktop={desktop} helperText="" />
-      <Stack spacing={0.5} data-new-session-outcome>
-        <Typography variant="caption" color="text.secondary" data-new-session-continue>
-          {sameAccount && samePlacement
-            ? `Replace starts a new session with a fresh conversation on your next message${
-                copiesWorktree ? ", with uncommitted changes" : ""
-              }. This session then moves to Trash.`
-            : copiesWorktree
-              ? "Replace continues in a new session with this agent on your next message, with uncommitted changes. This session then moves to Trash."
-              : "Replace continues in a new session with this agent on your next message. This session then moves to Trash and keeps uncommitted changes."}
-        </Typography>
-        {allowFork && (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            data-new-session-fork={!samePlacement ? "unavailable" : forkMode}
-          >
-            {!samePlacement
-              ? "Fork needs this project and Machine."
-              : forkMode === "fork"
-                ? "Fork starts a new session now and keeps this one, copying the conversation and uncommitted changes."
-                : "Fork starts a new session now and keeps this one. The new agent reads this conversation; uncommitted changes stay here."}
-            {samePlacement && waitForTurn && queued === 0 && " Available after the current turn."}
-          </Typography>
-        )}
-      </Stack>
+      <ForkOutcome
+        forkOnly={forkOnly}
+        allowFork={allowFork}
+        sameAccount={sameAccount}
+        samePlacement={samePlacement}
+        copiesWorktree={copiesWorktree}
+        forkMode={forkMode}
+        waitForTurn={waitForTurn && queued === 0}
+      />
       {!placement.loading && !placement.error && !placement.project && (
         <Alert
           severity="warning"
@@ -511,15 +499,17 @@ function NewSessionForm({
         }
       />
       {!validPreset && <Alert severity="warning">Choose an available preset for this Agent.</Alert>}
-      {full && <Alert severity="warning">Remove a linked session so this one can be linked.</Alert>}
-      {submittedRunning && queued === 0 && (
+      {full && !forkOnly && <Alert severity="warning">Remove a linked session so this one can be linked.</Alert>}
+      {submittedRunning && queued === 0 && !forkOnly && (
         <Typography variant="caption" color="text.secondary" data-new-session-wait>
           Replace is available once the submitted message finishes.
         </Typography>
       )}
-      {queued > 0 && (
+      {queued > 0 && (!forkOnly || forkMode === "fork") && (
         <Typography variant="caption" color="text.secondary" data-new-session-wait>
-          {allowFork && forkMode === "fork" && samePlacement
+          {forkOnly
+            ? "Fork is"
+            : allowFork && forkMode === "fork" && samePlacement
             ? "Replace and Fork are"
             : "Replace is"}{" "}
           available once{" "}
@@ -529,17 +519,19 @@ function NewSessionForm({
       )}
       {error && <Alert severity="error">{error}</Alert>}
       <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
-        <Button
-          variant="contained"
-          data-new-session-continue-run
-          disabled={locked || !ready || full || replaceWaits || custom}
-          onClick={() => void continueWork()}
-        >
-          {busy ? "Saving…" : "Replace this session"}
-        </Button>
+        {!forkOnly && (
+          <Button
+            variant="contained"
+            data-new-session-continue-run
+            disabled={locked || !ready || full || replaceWaits || custom}
+            onClick={() => void continueWork()}
+          >
+            {busy ? "Saving…" : "Replace this session"}
+          </Button>
+        )}
         {allowFork && (
           <Button
-            variant="outlined"
+            variant={forkOnly ? "contained" : "outlined"}
             data-new-session-fork-run
             disabled={locked || !ready || !samePlacement || forkWaits}
             onClick={() => void forkWork()}
@@ -548,6 +540,55 @@ function NewSessionForm({
           </Button>
         )}
       </Stack>
+    </Stack>
+  );
+}
+
+/** What each action does with this target, in the form's own words. */
+function ForkOutcome({
+  forkOnly,
+  allowFork,
+  sameAccount,
+  samePlacement,
+  copiesWorktree,
+  forkMode,
+  waitForTurn,
+}: {
+  forkOnly: boolean;
+  allowFork: boolean;
+  sameAccount: boolean;
+  samePlacement: boolean;
+  copiesWorktree: boolean;
+  forkMode: "fork" | "linked";
+  waitForTurn: boolean;
+}): React.JSX.Element {
+  return (
+    <Stack spacing={0.5} data-new-session-outcome>
+      {!forkOnly && (
+        <Typography variant="caption" color="text.secondary" data-new-session-continue>
+          {sameAccount && samePlacement
+            ? `Replace starts a new session with a fresh conversation on your next message${
+                copiesWorktree ? ", with uncommitted changes" : ""
+              }. This session then moves to Trash.`
+            : copiesWorktree
+              ? "Replace continues in a new session with this agent on your next message, with uncommitted changes. This session then moves to Trash."
+              : "Replace continues in a new session with this agent on your next message. This session then moves to Trash and keeps uncommitted changes."}
+        </Typography>
+      )}
+      {allowFork && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          data-new-session-fork={!samePlacement ? "unavailable" : forkMode}
+        >
+          {!samePlacement
+            ? "Fork needs this project and Machine."
+            : forkMode === "fork"
+              ? "Fork starts a new session now and keeps this one, copying the conversation and uncommitted changes."
+              : "Fork starts a new session now and keeps this one. The new agent reads this conversation; uncommitted changes stay here."}
+          {samePlacement && waitForTurn && " Available after the current turn."}
+        </Typography>
+      )}
     </Stack>
   );
 }

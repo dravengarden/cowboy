@@ -14,6 +14,7 @@ export const SPLIT_SOURCES = {
     "./SettingsShell.tsx",
     "./MobileSettingsNavigation.tsx",
     "./SessionList.tsx",
+    "./MobileSessionsDock.tsx",
     "./sessionFocusLifecycle.ts",
     "./desktopSplitters.tsx",
     "./mobileDrawerSurface.ts",

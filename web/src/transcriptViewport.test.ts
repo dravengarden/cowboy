@@ -183,6 +183,31 @@ test("a booting agent is never described as ready", () => {
     }),
     { kind: "ready", preparing: false },
   );
+  // A startup that failed before any conversation stays a startup page.
+  assertEquals(
+    conversationEmptyPresentation({
+      status: "crashed",
+      itemCount: 0,
+      optimisticCount: 0,
+      cleared: false,
+      fresh: false,
+      unstarted: true,
+    }),
+    { kind: "blocked", preparing: false },
+  );
+  // A crash after real conversation (or a cleared one) is not a startup.
+  for (const input of [{ unstarted: false, cleared: false }, { unstarted: true, cleared: true }]) {
+    assertEquals(
+      conversationEmptyPresentation({
+        status: "crashed",
+        itemCount: 0,
+        optimisticCount: 0,
+        fresh: false,
+        ...input,
+      })?.kind === "blocked",
+      false,
+    );
+  }
   // An optimistic bubble is conversation: a prompt queued during startup
   // replaces every empty state the moment it is painted.
   assertEquals(
