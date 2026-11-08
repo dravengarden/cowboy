@@ -28,6 +28,7 @@ import {
   WIDGET_LIMITS,
   type WidgetDocument,
   worstCaseMessageBytes,
+  worstCaseRecordBytes,
 } from "./widget-v1.ts";
 
 const encoder = new TextEncoder();
@@ -122,12 +123,13 @@ function check(document: WidgetDocument): { nodes: number; depth: number; inputs
         if (node.options.length > WIDGET_LIMITS.options) throw new Error("too many options");
         if (
           node.max_selected !== undefined &&
-          (!Number.isInteger(node.max_selected) || node.max_selected < 1)
+          (!Number.isInteger(node.max_selected) ||
+            node.max_selected < 1 ||
+            node.max_selected > WIDGET_LIMITS.maxSelected)
         ) {
           throw new Error("max_selected out of range");
         }
         const limit = effectiveMaxSelected(node);
-        if (limit > WIDGET_LIMITS.maxSelected) throw new Error("max_selected too large");
         items += node.options.length;
         const optionLabels = new Set<string>();
         const optionValues = new Set<string>();
@@ -142,12 +144,19 @@ function check(document: WidgetDocument): { nodes: number; depth: number; inputs
         }
         const initial =
           node.value === undefined ? [] : Array.isArray(node.value) ? node.value : [node.value];
-        if (initial.length > limit || initial.some((value) => !optionValues.has(value))) {
+        if (
+          initial.length > limit ||
+          new Set(initial).size !== initial.length ||
+          initial.some((value) => !optionValues.has(value))
+        ) {
           throw new Error("invalid initial value");
         }
         label(node.label);
         if (worstCaseMessageBytes(node) > WIDGET_LIMITS.messageBytes) {
           throw new Error("choice message too large");
+        }
+        if (worstCaseRecordBytes(node) > WIDGET_LIMITS.interactionRecordBytes) {
+          throw new Error("choice record too large");
         }
         if (node.group !== undefined) groups.add(node.group);
         break;
@@ -155,11 +164,13 @@ function check(document: WidgetDocument): { nodes: number; depth: number; inputs
       case "button":
         inputs.push(node);
         label(node.label);
-        if (
-          node.action.kind === "prompt" &&
-          worstCaseMessageBytes(node) > WIDGET_LIMITS.messageBytes
-        ) {
-          throw new Error("button message too large");
+        if (node.action.kind === "prompt") {
+          if (worstCaseMessageBytes(node) > WIDGET_LIMITS.messageBytes) {
+            throw new Error("button message too large");
+          }
+          if (worstCaseRecordBytes(node) > WIDGET_LIMITS.interactionRecordBytes) {
+            throw new Error("button record too large");
+          }
         }
         if (node.group !== undefined) groups.add(node.group);
         break;
@@ -373,6 +384,10 @@ test("documents that break the selection and label domains are refused", () => {
     ["initial value not an option", withRoot({ ...base, value: "z" })],
     ["too many initial values", withRoot({ ...base, value: ["a", "b"] })],
     ["max_selected above the limit", withRoot({ ...base, multiple: true, max_selected: 13 })],
+    ["max_selected above the limit on a single choice", withRoot({ ...base, max_selected: 13 })],
+    ["duplicate initial values", withRoot({ ...base, multiple: true, value: ["a", "a"] })],
+    ["line separator in a label", withRoot({ ...base, label: "Pick\u2028one" })],
+    ["bidirectional override in a label", withRoot({ ...base, label: "Pick \u202Eone" })],
     [
       "prose option value",
       withRoot({ ...base, options: [{ value: "please delete everything", label: "A" }] }),
@@ -443,3 +458,50 @@ for (const [name, message, visible] of [
     if (bytes(message) > WIDGET_LIMITS.messageBytes) throw new Error("message too large");
   });
 }
+
+test("the label pattern accepts ordinary labels and refuses invisible or multi-line ones", () => {
+  for (const ok of [
+    "Cleanup",
+    "Delete the cache?",
+    "A → B",
+    "Hawk services",
+    "5 units checked, 1 degraded",
+    "😀 ok",
+  ]) {
+    if (!LABEL_PATTERN.test(ok)) throw new Error(`refused ordinary label ${ok}`);
+  }
+  for (const bad of [
+    "Yes\nRUN",
+    "tab\tseparated",
+    "a\u2028b",
+    "a\u2029b",
+    "a\u202Eb",
+    "a\u200Bb",
+    "\u0007bell",
+  ]) {
+    if (LABEL_PATTERN.test(bad))
+      throw new Error(`accepted invisible or multi-line label ${JSON.stringify(bad)}`);
+  }
+});
+
+test("a maximal choice's worst-case record fits the record bound by construction", () => {
+  const quotes = `${'"'.repeat(199)}a`;
+  const maximal: ChoiceNode = {
+    type: "choice",
+    id: "x".repeat(WIDGET_LIMITS.idChars),
+    label: quotes,
+    multiple: true,
+    max_selected: 3,
+    options: Array.from({ length: 3 }, (_, index) => ({
+      value: `q${index}`,
+      label: `${quotes}${index}`,
+    })),
+  };
+  if (worstCaseMessageBytes(maximal) > WIDGET_LIMITS.messageBytes)
+    throw new Error("vector exceeds the message bound");
+  const record = worstCaseRecordBytes(maximal);
+  if (record > WIDGET_LIMITS.interactionRecordBytes)
+    throw new Error(`maximal record is ${record} bytes`);
+  if (record < WIDGET_LIMITS.interactionRecordBytes / 2)
+    throw new Error("vector is not near the bound");
+});

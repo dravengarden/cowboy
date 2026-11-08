@@ -5,10 +5,11 @@ activated. Revision 1 received an Astra Max design review ("request changes",
 16 findings, 6 blocking); revision 2 a second ("request changes", 15
 findings, 4 blocking); revision 3 a third ("request changes", 14 findings,
 5 blocking); revision 4 a fourth ("request changes", 13 findings, 5
-blocking). The owner chose to keep the full interactive design (2026-11-08)
-rather than narrow Phase 1 to display-only widgets. Every finding is
-resolved below and none was rejected
-([§1](#1-review-findings-and-resolutions)). Statements marked
+blocking); revision 5 a fifth ("request changes", 10 findings, 3 blocking).
+The owner chose to keep the full interactive design (2026-11-08) rather than
+narrow Phase 1 to display-only widgets. Every finding is resolved below and
+none was rejected ([§1](#1-review-findings-and-resolutions)); revision 6 is
+the current text. Statements marked
 **[unverified]** are inferred from code or history and still need evidence.
 
 Related: [`agent-api.md`](agent-api.md) (the MCP read/execute/receipt surface
@@ -133,6 +134,21 @@ typing-free, auditable decisions within measured bounds.
 | N12 | The update gate passed against an inflated baseline (P2) | Baselines separated (108-byte sentence; card plus sentence); the update bound is a constant (≤ 512 B for three ops) and the document states that an update costs more than both for a report this small | §11 |
 | N13 | Controller acceptance of unknown types with `fallback` contradicted the closed union (P2) | The Controller rejects every unknown type; `unsupported` parsing is reserved for a newer document meeting an older Web client | §5.3 |
 
+### 1.5 Revision 5 (Astra Max, `4ce4140df`)
+
+| # | Finding (severity) | Resolution | Section |
+|---|---|---|---|
+| G1 | Reconnect retransmits pending commands and worker dedupe is per process, so a replacement worker can execute a widget prompt again without a dispatch CAS; a rejected replay does not prove the original unsent (P1) | A widget command is written to exactly one connection and never retransmitted: on reconnect the runtime drops it from `pending` and the attempt becomes `uncertain` unless the old epoch's replayed `TurnEnded` proves it; one epoch per attempt is therefore exact | §8.3 |
+| G2 | Treating a startup withdrawal as `returned → admitted` would make the relay re-send a decision the person stopped (P1) | A withdrawal caused by Stop settles the record `cancelled (stopped)` — proven unsent, never relayed; `returned` is reserved for prompts the runtime itself gives back and requeues (rejected first ack, `UndeliveredPrompt`) | §8.3 |
+| G3 | Refreshing the artifact's age does not close the collection race: the collector reads an old mtime, pauses, and unlinks after the pin commits (P1) | Pin admission (verify, refresh, commit) and the collector's final age check plus unlink share one in-process lock; the paused-after-metadata vector is a fixture | §6.3 |
+| G4 | `LABEL_PATTERN` reported with doubled backslashes (P2) | The committed source is `/^[^\p{Cc}\p{Zl}\p{Zp}\p{Cf}]+$/u` with a single escape (the examples pass); line and paragraph separators and format characters are now excluded too, with positive and negative label tests | §5.3, contract |
+| G5 | Late delivery proof is discarded once an attempt is `uncertain`; `retried_by` missing from summaries (P2) | Attempt identities stay searchable; a late `TurnEnd(T, E)` moves `uncertain → delivered` and marks an existing retry `duplicate_of`, serialized through the record's conditional update; summaries carry both links | §8.3, contract |
+| G6 | A crash between `cancel_requested` and `cancelled` strands an admitted record (P2) | Startup reconciliation settles every admitted record with a durable intent: queue copies removed, `cancelled (removed)`, snapshot published, before drain is enabled | §8.3 |
+| G7 | The 6 KiB record bound fails with five attempts; `stop_reason` unbounded (P2) | `worstCaseRecordBytes` reserves every bounded field at maximum (message, selected labels, five attempts, reason, links) and is validated at publish against 8 KiB; `stop_reason` ≤ 64 chars | §5.3, contract |
+| G8 | `widgets.list` not packed (P2) | List pages are packed against the complete encoded response with a continuation cursor after the last included entry | §6.1 |
+| G9 | 512 B is an example budget, not a three-op bound; §3 contradicted §11 (P2) | The bound is scoped to a benchmark update class (≤ 3 ops, paths and values ≤ 64 chars); general patches are bounded by the patch and document limits; §3 and §11 now state the same thing | §3, §11 |
+| G10 | The checker let a single choice carry `max_selected: 13` (P3) | The raw field is validated 1..12 independently of the effective cardinality; vector added | §5.3, contract |
+
 Rulings on decisions are folded into §14.
 
 ## 2. Evidence from history
@@ -208,13 +224,15 @@ Goals, in priority order:
    summary, progress list or image must be legible at 320 CSS px and dense
    on Desktop without the agent describing layout.
 2. **Bounded, honest token overhead.** Publishing a widget costs more than a
-   terse Markdown reply, updating it costs more than a one-line status, and
-   this design claims no net token saving (§11). What it claims is a bound:
-   publication ≤ 4.5× the same-language report, an update ≤ 2.5× a one-line
-   status and below re-sending the report, a decision message ≤ 2 KiB and
-   fixed in shape. The bounds are measured on complete exchanges with every
-   envelope counted, per prefix, and the measurement is a ship gate that
-   stops the design if it fails.
+   terse Markdown reply, updating it costs more than a one-line status for
+   any report smaller than about 330 bytes, and this design claims no net
+   token saving (§11). What it claims is a bound: publication ≤ 4.5× the
+   same-language report; a benchmark update (≤ 3 ops, paths and values ≤ 64
+   chars) ≤ 512 B of envelope and result, with general patches bounded only
+   by the patch and document limits; a decision message ≤ 2 KiB and fixed in
+   shape. The bounds are measured on complete exchanges with every envelope
+   counted, per prefix, and the measurement is a ship gate that stops the
+   design if it fails.
 3. **Act without typing, without delegating authority.** A widget can offer
    the next decision as buttons or choices; the answer reaches the agent as
    an ordinary, auditable user message that contains only what the person
@@ -333,10 +351,12 @@ choice's effective cardinality is one whatever `max_selected` says. The
 worst-case composed message of every prompt node, computed by
 `worstCaseMessageBytes` (options ranked by their serialized contribution,
 raw label plus JSON-escaped copy, the effective cardinality largest
-selected), must fit `messageBytes` (2 KiB); with `reason` ≤ 200 chars and
-handles ≤ 16, an interaction record is ≤ 6 KiB and a snapshot ≤ 32 KiB by
-construction; both are re-checked when built, and the quote/emoji vector in
-the test shows why raw length is not the right rank.
+selected), must fit `messageBytes` (2 KiB); the worst-case record, with
+`reason` ≤ 200 chars, handles ≤ 16, `stop_reason` ≤ 64 and five attempts,
+must fit `interactionRecordBytes` (8 KiB), so admission-time growth is
+reserved rather than hoped for, and a snapshot is ≤ 32 KiB; all are
+re-checked when built, and the quote/emoji vector in the test shows why raw
+length is not the right rank.
 
 Field domains are part of the contract: `percent` cells are fractions 0..1,
 `bytes` integer byte counts, `duration` seconds, `date` epoch milliseconds
@@ -353,12 +373,16 @@ exceeded, **any** unknown node type (with or without `fallback`), an unknown
 property on a known node, a prose or duplicate option value, an initial
 `value` that is not an option, a duplicate or malformed id, a duplicate
 interactive label, a label that is not one printable line
-(`LABEL_PATTERN`: no control characters), a card with `actions` but no
-`id`, a `url` ref that is not `https:`, an artifact string that does not
-name an existing artifact, a `data` image that fails the decode check
-(§5.4), a prompt node whose worst-case message exceeds `messageBytes` —
-each is `invalid` with `{path, code, message}` so an agent repairs in one
-round trip. The **Web is tolerant** only of what a *newer Controller*
+(`LABEL_PATTERN`: no control characters, no line or paragraph separators,
+no format characters such as bidirectional overrides), a `max_selected`
+outside 1..12 as a raw field, an initial `value` with duplicates, a card
+with `actions` but no `id`, a `url` ref that is not `https:`, an artifact
+string that does not name an existing artifact, a `data` image that fails
+the decode check (§5.4), a prompt node whose worst-case message exceeds
+`messageBytes` or whose worst-case record (`worstCaseRecordBytes`: message,
+selected labels, five attempts, reason and retry links at their maxima)
+exceeds `interactionRecordBytes` — each is `invalid` with `{path, code,
+message}` so an agent repairs in one round trip. The **Web is tolerant** only of what a *newer Controller*
 admitted and this client does not know: an unknown type parses into an
 explicit `unsupported` runtime node (type, `fallback`, raw) before the tree
 is narrowed to known nodes, so the closed `Node` union and the exhaustive
@@ -406,8 +430,10 @@ agent-chosen remote address as a zero-click exfiltration channel
 ### 6.1 The `widgets` domain over Cowboy MCP
 
 Reads: `widgets.list({session_id?, after?, limit?, include_closed?})`
-(default 50, `page_required` above; `session_id` addresses another
-same-owner session) and `widgets.read({session_id?, widget_id, select:
+(`session_id` addresses another same-owner session; pages are packed against
+the complete encoded response like every other page, so a page may hold
+fewer entries than `limit` and `next` continues after the last included
+one) and `widgets.read({session_id?, widget_id, select:
 "meta"|"document"|"interactions", revision?, offset?, chars?, after?,
 limit?})`. A valid document can be 24 KiB and the read budget is 16 KiB, so
 `document` is a text window over the compact JSON (default 1,000 chars, max
@@ -518,7 +544,8 @@ widget_revisions(session_id, widget_id, revision, document, document_sha256,
 widget_interactions(session_id, widget_id, interaction_id, request_hash,
                     transcript_generation, revision, state_version, node_id,
                     group_id, label, selected, message, message_sha256,
-                    state, reason, retry_of, retried_by, duplicate_of, cmid,
+                    state, reason, cancel_requested, attempts,
+                    retry_of, retried_by, duplicate_of, cmid,
                     created_at_ms, PRIMARY KEY (session_id, interaction_id))
 widget_artifact_refs(session_id, widget_id, revision, artifact_name,
                      PRIMARY KEY (session_id, widget_id, revision, artifact_name))
@@ -598,15 +625,18 @@ widget_artifact_refs(session_id, widget_id, revision, artifact_name,
   `widget_artifact_refs` of non-purged widgets with its existing `events`
   and Call-result roots, so an image stays fetchable while any current or
   pinned revision that shows it is still readable; after the purge the usual
-  24 h grace applies. Pinning races the collector the same way a new event
-  referencing an existing artifact does, and is protected the same way:
-  before the publish or update transaction commits, the Controller refreshes
-  the age of every artifact the document references (the rule `put_bytes`
-  already applies), so a collector that enumerated roots before the pin
-  cannot unlink the artifact within the 24 h grace, and the next sweep sees
-  the committed reference. No text scanning is needed: references are
-  extracted from the validated document, and the inline carrier may not
-  reference artifacts at all (§6.4).
+  24 h grace applies. Pinning and collection are coordinated, not merely
+  staggered: the artifact store gains one in-process pin lock. Publication
+  holds it while it verifies that every referenced artifact exists,
+  refreshes its age and commits the reference; the collector holds it for
+  each candidate across its final reachability check (re-reading
+  `widget_artifact_refs` and the other roots for that name), its age check
+  and the unlink. A collector that paused after inspecting an old
+  modification time therefore re-checks under the lock and finds the new
+  reference before it can unlink; the 24 h grace remains a second guard for
+  the event path. No text scanning is needed: references are extracted from
+  the validated document, and the inline carrier may not reference artifacts
+  at all (§6.4).
 
 ### 6.4 Inline carrier (read-only)
 
@@ -843,10 +873,12 @@ The session queue persists write-behind (`StoreWrite::UpdatePending`), the
 transcript echo of a user message is synthesized by the worker **before**
 the provider request (`src/acp.rs`, `AgentCommand::Prompt`) and also for a
 held prompt that is cancelled before reaching ACP (`src/remote_runtime.rs`
-`cancel`), and the store writer may exhaust its retries. None of them can
-therefore be the record or the proof. `widget_interactions` is the record,
-the acknowledged conditional write is the gate, and the turn the prompt
-started is the proof.
+`cancel`), the runtime retransmits every pending command on reconnect while
+the worker's command dedup is per process, and the store writer may exhaust
+its retries. None of them can therefore be the record or the proof.
+`widget_interactions` is the record, the acknowledged conditional write is
+the gate, the turn identified by `(worker_epoch, turn_id)` is the proof, and
+a widget command is written to exactly one connection.
 
 1. **Admit.** The Web sends `widget_action {session_id, widget_id,
    revision, state_version, transcript_generation, node_id, interaction_id,
@@ -854,41 +886,45 @@ started is the proof.
    the widget is open and not cleared, revision and state version match what
    the person saw, the node exists, carries `prompt` and is not disabled,
    its group is undecided, the selection is 1 value for a single choice or
-   1..`max_selected` for a multiple one and every value is an option of that
-   choice; composes the message (§8.2) and checks it against `messageBytes`;
-   inserts the record (`admitted`, request hash, label, selected labels,
-   message and its SHA-256, generation), pins the revision if this is its
-   first decision, records the group as decided, bumps `state_version`, and
-   replies `widget_action_result {outcome: admitted}`. A repeated
-   `interaction_id` with the same hash returns `replayed` with the record's
-   current state **before** any staleness check; a different hash is
-   `conflict`. Refusals are stateless: nothing is recorded, and a retry with
-   the same id is evaluated afresh.
-2. **Relay.** A relay keeps every `admitted` record present in the session
-   queue as a prompt whose content is exactly the record's message, with
-   `cmid = widget:<interaction_id>`, `promptOrigin {actor:"human",
-   source:"widget"}` and the record's generation. `tracks_delivery` gains
-   the `widget:` prefix, so `prompt_already_accepted` refuses a duplicate
-   whether the original is queued, dispatched or echoed. The ledger does not
-   transition on enqueue: "queued" is a derived display state. The relay
-   never enqueues a record whose `cancel_requested` is set.
-3. **Reconcile the queue before it drains.** On Controller start, and when a
-   session's queue is restored, every restored entry with a `widget:` cmid
-   is checked against the ledger before drain is enabled: it stays only if
-   its record is `admitted` in the current generation and the content hash
-   matches `message_sha256`; otherwise it is removed. `admitted` records
-   without an entry are re-enqueued. Enqueue dedup protects against
+   1..`max_selected` for a multiple one with no duplicates and every value an
+   option of that choice; composes the message (§8.2) and checks it against
+   `messageBytes` and the record against `interactionRecordBytes`; inserts
+   the record (`admitted`, request hash, label, selected labels, message and
+   its SHA-256, generation, `cancel_requested = false`, no attempts), pins
+   the revision if this is its first decision, records the group as decided,
+   bumps `state_version`, and replies `widget_action_result {outcome:
+   admitted}`. A repeated `interaction_id` with the same hash returns
+   `replayed` with the record's current state **before** any staleness
+   check; a different hash is `conflict`. Refusals are stateless: nothing is
+   recorded, and a retry with the same id is evaluated afresh.
+2. **Relay.** A relay keeps every `admitted` record whose `cancel_requested`
+   is false present in the session queue as a prompt whose content is exactly
+   the record's message, with `cmid = widget:<interaction_id>`,
+   `promptOrigin {actor:"human", source:"widget"}` and the record's
+   generation. `tracks_delivery` gains the `widget:` prefix, so
+   `prompt_already_accepted` refuses a duplicate whether the original is
+   queued, dispatched or echoed. The ledger does not transition on enqueue:
+   "queued" is a derived display state.
+3. **Reconcile before the queue drains.** On Controller start, and whenever
+   a session's queue is restored, before drain is enabled: every restored
+   entry with a `widget:` cmid stays only if its record is `admitted` in the
+   current generation, without `cancel_requested`, and its content hash
+   matches `message_sha256`; otherwise it is removed. Every `admitted` record
+   with `cancel_requested = true` is settled: queue copies removed, record
+   `cancelled (removed)`, snapshot published. Every remaining `admitted`
+   record without an entry is re-enqueued. Enqueue dedup protects against
    duplicates; this step protects against a stale persisted copy draining
-   after its record moved on.
+   after its record moved on and against a cancellation that committed its
+   intent but not its completion.
 4. **Hand off only after an acknowledged CAS.** When the queue head is a
    widget prompt, the dispatcher takes the session fence, verifies the
    content hash, mints the attempt's `command_id` and `turn_id` (the ids
    `RemoteRuntime::prompt_traced` creates today; the dispatcher supplies
    them instead of letting the Supervisor discard the returned id), and
    issues the acknowledged conditional write `admitted → dispatched` that
-   also appends the attempt `{command_id, turn_id, worker_epoch: null}`,
-   under the current generation **and** `cancel_requested = false`.
-   `committed`: hand the prompt to the worker with those ids and
+   also appends the attempt `{command_id, turn_id, worker_epoch: null,
+   outcome: open}`, under the current generation **and** `cancel_requested =
+   false`. `committed`: hand the prompt to the worker with those ids and
    `note_dispatched`. `failed` (the record is no longer `admitted`, a
    cancellation intent is recorded, or the generation moved): drop the queue
    entry. `unknown`: hand nothing off, keep the entry, retry the same
@@ -898,22 +934,33 @@ started is the proof.
    open without a handoff and resolves to `uncertain` (step 5). At most five
    attempts are recorded per interaction; exhausting them makes the record
    `uncertain`.
-5. **Proof: the turn, identified.** The turn's identity is the pair
+5. **Write once, never retransmit.** The runtime keeps a `CoreCommand::Prompt`
+   in `pending` until its `CommandAck` and, on reconnect, clears `sent` and
+   retransmits every pending command; the worker's `seen_commands` dedup is
+   per process, so a replacement worker would execute a retransmitted prompt
+   again, outside any dispatch CAS. Widget commands opt out: the runtime
+   marks a widget command `written` the moment it is handed to a connection
+   and, on reconnect, removes a written-but-unacknowledged widget command
+   from `pending` instead of resending it; the attempt closes as `uncertain`
+   unless the old epoch's replayed events prove it (step 6). A command never
+   written (the connection was down the whole time) is still pending and is
+   written once to the next connection. Consequently one attempt executes in
+   at most one epoch, and `DispatchAttempt.worker_epoch` is exact. A rejected
+   `CommandAck` therefore always refers to the one and only write and is
+   definite (see "returned" below).
+6. **Proof: the turn, identified.** The turn's identity is the pair
    `(worker_epoch, turn_id)`, exactly what Steer already targets. Three
    Controller-only changes make it usable (no Machine, wire or
    worker-generation file changes; `agent_model.rs`, `acp.rs`, `worker.rs`
    and `runtime_wire.rs` are hashed into the worker generation and stay
    untouched): `apply_event` receives the frame's `worker_epoch` and
    `runtime_seq`; on `TurnStarted {turn_id, command_id}` the Controller
-   binds the attempt's turn to that epoch (first epoch wins; a later
-   `TurnStarted` for the same turn from another epoch is recorded as a
-   re-execution of the attempt); and the `TurnEnded {turn_id, stop_reason}`
-   projection stamps `{turn_id, worker_epoch}` onto the persisted `TurnEnd`
-   envelope through the reserved payload-key mechanism the echo's cmid
-   already uses (`persistence.rs`; `contracts/protocol/event.json` extended),
-   instead of dropping them. The Controller-synthesized `TurnEnd {Cancelled}`
-   for a prompt withdrawn during configuration startup carries the withdrawn
-   command's `turn_id` and `worker_epoch: null`.
+   binds the attempt's turn to that epoch (one write, so one epoch); and the
+   `TurnEnded {turn_id, stop_reason}` projection stamps `{turn_id,
+   worker_epoch}` onto the persisted `TurnEnd` envelope through the reserved
+   payload-key mechanism the echo's cmid already uses (`persistence.rs`),
+   with a Controller-side envelope round-trip fixture beside
+   `contracts/protocol/event.json`, which only covers the bare `Event`.
 
    **Evidence.** A record becomes `delivered` when a `TurnEnd` carrying the
    attempt's `turn_id` and its bound `worker_epoch` ends with `EndTurn`,
@@ -921,34 +968,53 @@ started is the proof.
    spellings). Never evidence: the user-message echo (synthesized before the
    provider request), `TurnStarted` and the Busy lifecycle row (emitted
    before the fallible `session/prompt` send), `CommandAck` (the ACP command
-   channel accepted a message, nothing more), and **any agent output** —
-   the window between a turn's Busy and its `TurnEnd` opens before the
-   request is sent and can contain native-cycle or subagent output, so
-   output is display-only and is dropped from the evidence list.
+   channel accepted a message, nothing more), `acknowledge_prompt_finish`
+   (transport cleanup for any matching completion), and **any agent
+   output** — the window between a turn's Busy and its `TurnEnd` opens before
+   the request is sent and can contain native-cycle or subagent output.
    `Cancelled`, `Error` or `error: …` stop reasons, a `TurnEnd` with a
    missing reference or `unknown-turn`, the bound epoch exiting (Exited,
    Crashed, a Welcome snapshot from another epoch whose `current_turn_id` is
-   not this turn) without `TurnEnd(T)`, a lineage reset, or a Clear while
-   dispatched make the record `uncertain`. A `TurnEnd` whose pair matches no
-   open attempt is ignored for the ledger (and `complete_turn`'s guard
-   release is unchanged).
+   not this turn) without `TurnEnd(T)`, a lineage reset, a dropped
+   written-but-unacknowledged command, or a Clear while dispatched make the
+   record `uncertain`. A `TurnEnd` whose pair matches no attempt is ignored
+   for the ledger (`complete_turn`'s guard release is unchanged).
 
-   **Returned prompts.** The runtime gives a prompt back without any
-   provider request when the worker rejects the `CommandAck`, reports
-   `UndeliveredPrompt`, or the Controller withdraws it during configuration
-   startup; the runtime already requeues such prompts under their cmid. For
-   a widget prompt that closes the attempt as `returned` and moves the
-   record back to `admitted`; the next dispatch is a new attempt with new
-   ids. Parking into drafts (`park_recovery_prompts`) is refused for
-   `widget:` cmids as any other edit path (§8.4).
+   **Late proof.** Attempt identities stay searchable after the record is
+   `uncertain`. A `TurnEnd(T, E)` with a completing stop reason that arrives
+   later — the old epoch's unacknowledged events replayed after a reconnect,
+   or found in the store after a restart — moves the record `uncertain →
+   delivered` through the same conditional update that admits retries, so the
+   two cannot interleave: if a retry was already admitted, it is marked
+   `duplicate_of` the original and stays visible as such; if the late proof
+   commits first, a retry is refused `not_retryable`. Both links appear in
+   the snapshot's interaction summaries.
+
+   **Returned and stopped prompts.** The runtime gives a prompt back without
+   any provider request when the worker rejects the one and only
+   `CommandAck` (its workspace check runs before dedup, but with no replay
+   there is nothing to confuse it with) or reports `UndeliveredPrompt` from
+   cold-start salvage; the runtime already requeues such prompts under their
+   cmid, and for a widget prompt the attempt closes as `returned` and the
+   record goes back to `admitted`; the next dispatch is a new attempt. A
+   prompt the person **stops** during configuration startup is different:
+   `RemoteRuntime::cancel` withdraws the held prompt before any send and
+   synthesizes `Cancelled` without requeueing it; the attempt closes as
+   `cancelled` and the record settles `cancelled (stopped)`, proven unsent,
+   and is never relayed again — relaying it would undo the person's Stop. A
+   Stop after the command was written is `uncertain`, as any other
+   cancellation of a sent prompt. Parking into drafts
+   (`park_recovery_prompts`) is refused for `widget:` cmids as any other edit
+   path (§8.4).
 
    **Lifetimes.** interaction ↔ cmid: permanent. cmid ↔ attempt
    `(command_id, turn_id)`: from the CAS until `TurnEnd(T)` arrives, the
-   prompt is returned, the bound epoch dies, or a Clear fences it. turn ↔
-   epoch: from `TurnStarted` to `TurnEnded` or worker exit. After a
-   Controller restart the open attempts are resolved from durable evidence:
-   a persisted `TurnEnd(T, E)` found in the store; a `TurnEnded` the worker
-   replays because it was never acknowledged; a Welcome snapshot whose
+   prompt is returned or stopped, the bound epoch dies, or a Clear fences it;
+   the identities remain on the record afterwards for late proof. turn ↔
+   epoch: from `TurnStarted` to `TurnEnded` or worker exit. After a Controller
+   restart the open attempts are resolved from durable evidence: a persisted
+   `TurnEnd(T, E)` found in the store; a `TurnEnded` the worker replays
+   because it was never acknowledged; a Welcome snapshot whose
    `current_turn_id` is still `T` (keep waiting); otherwise `uncertain`. The
    remaining gap — a `TurnEnded` acknowledged to the worker but lost before
    the write-behind store persisted it — resolves to `uncertain`, never to a
@@ -964,25 +1030,24 @@ started is the proof.
    `current_turn_id`), to tag `Update` events of the active prompt with its
    `turn_id`, and to distinguish "cancelled before send" from a provider
    `Cancelled`.
-6. **Retry.** `widget_action_retry {interaction_id, retry_interaction_id}`
+7. **Retry.** `widget_action_retry {interaction_id, retry_interaction_id}`
    is the only Send-again for an `uncertain` or `failed` record. It copies
    the original's pinned intent (label, selection, revision, message)
    regardless of the widget's current revision, closure or group state (the
    decision was already admitted), records `retry_of` on the new record and
    `retried_by` on the original, and is admitted idempotently on
    `retry_interaction_id`: a replay returns the retry's current state. It is
-   refused with `cleared`, `not_retryable` (the original is not `uncertain`
-   or `failed`), `already_retried`, `retry_chain` (the original is itself a
-   retry; chains have length one), `in_flight`, `interaction_limit`,
-   `rate_limited`, `session_unavailable` or `conflict`. If proof for the
-   original arrives later, the retry is marked `duplicate_of` the original;
-   both messages remain visible to the person and the agent, and both links
-   appear in the snapshot's interaction summaries. The session's ordinary
-   turn Retry (`retry_turn`, which otherwise re-submits the last user prompt
-   under a `cowboy-retry:` cmid) recognises a last prompt whose cmid is
-   `widget:` and performs this operation instead, so no path re-sends a
-   widget prompt outside the ledger.
-7. **Cancel.** Deleting a widget prompt from the queue is arbitrated with
+   refused with `unknown_interaction`, `widget_mismatch` (the original
+   belongs to another widget), `cleared`, `not_retryable` (the original is
+   not `uncertain` or `failed`, including one just proven delivered),
+   `already_retried`, `retry_chain` (the original is itself a retry; chains
+   have length one), `in_flight`, `interaction_limit`, `rate_limited`,
+   `session_unavailable` or `conflict`. The session's ordinary turn Retry
+   (`retry_turn`, which otherwise re-submits the last user prompt under a
+   `cowboy-retry:` cmid) recognises a last prompt whose cmid is `widget:`
+   and performs this operation instead, so no path re-sends a widget prompt
+   outside the ledger.
+8. **Cancel.** Deleting a widget prompt from the queue is arbitrated with
    dispatch through the ledger, not the queue: the Hub first records the
    durable intent `cancel_requested = true` on the record through the
    acknowledged write (conditional on the record still being `admitted`);
@@ -991,25 +1056,30 @@ started is the proof.
    the person is told so; on `unknown` the entry stays, the dispatcher will
    not hand it off (step 4 requires the intent to be false, and an unknown
    intent is treated as possibly set until re-read), and the intent write is
-   re-issued. Cancellation is promised only after its commit: a prompt whose
-   cancellation intent never became durable remains `admitted` and may still
-   dispatch after a restart, which the person sees as the control returning
-   to "queued".
+   re-issued. A crash between the intent and the completion is finished by
+   step 3 at the next start. Cancellation is promised only after its intent
+   commits: a prompt whose intent never became durable remains `admitted`
+   and may still dispatch after a restart, which the person sees as the
+   control returning to "queued".
 
 | Crash or fault point | Ledger | Queue after restart | Outcome |
 |---|---|---|---|
 | after admission commit, before enqueue | `admitted` | re-enqueued (step 3) | sent once |
 | after enqueue, queue state lost | `admitted` | re-enqueued | sent once |
 | after enqueue, queue state persisted | `admitted` | kept after hash check | sent once |
-| cancellation intent `committed` | `cancel_requested` → `cancelled` | entry removed | never sent |
+| cancellation intent `committed`, completion lost | `cancel_requested` | removed, record settled `cancelled` at start | never sent |
 | cancellation intent `unknown` | `admitted`, intent possibly set | entry kept, not dispatched until re-read | sent once or cancelled, never both |
 | cancellation intent never durable (crash before commit) | `admitted` | re-enqueued | may still dispatch; shown as queued again |
 | CAS acknowledged, process dies before handoff | `dispatched` | entry removed by reconciliation | `uncertain`, Send-again offered |
 | CAS acknowledgement lost, process alive | `admitted` or `dispatched` | entry kept | retry CAS; handoff once or `uncertain` |
+| command written, connection drops before ack | `dispatched` | not retransmitted; dropped from pending | `uncertain`; late proof from the old epoch's replayed `TurnEnded` can still deliver |
+| command never written, connection drops | `dispatched` | written once to the next connection | one execution |
 | handoff done, turn never ends (worker replaced) | `dispatched` | entry gone | `uncertain` |
 | turn ends cancelled / errored before output | `dispatched` | — | `uncertain` |
 | turn ends normally with the attempt's `(turn_id, worker_epoch)` | `delivered` | — | proven |
-| prompt returned (rejected ack, undelivered, withdrawn at startup) | attempt `returned`, record `admitted` | requeued by cmid | sent once on a later attempt |
+| late `TurnEnd(T, E)` after `uncertain` | `delivered`; retry marked `duplicate_of` | — | both messages visible |
+| prompt returned (rejected first ack, undelivered) | attempt `returned`, record `admitted` | requeued by cmid | sent once on a later attempt |
+| person stops during configuration startup | attempt `cancelled`, record `cancelled (stopped)` | not requeued | never sent |
 | `TurnEnd` for another turn id or epoch | unchanged | — | ignored as evidence |
 | `TurnEnded` acknowledged but lost before persistence | `dispatched` | — | `uncertain` unless the ack is delayed until the ledger commits |
 | echo present without provider request | any | — | ignored as evidence |
@@ -1143,9 +1213,11 @@ tokenizer traces are the ship gate below, not this table **[unverified]**:
 | One status update, three ops | 108 B one sentence · 396 B card re-sent with the sentence | 438 B | 4.1× the sentence · 1.1× the re-sent card |
 | The person's answer | a typed sentence the agent then parses | 97 B button · ≈200 B choice with question | fixed shape |
 
-An update's cost is a near-constant (three ops: 438 B; bound 512 B) that
-does not grow with the report, so patching beats re-sending a report only
-when the report is larger than about 330 bytes: the **median historical
+An update's cost does not grow with the report: a **benchmark update** (≤ 3
+ops, paths and values ≤ 64 chars; `progressPatch` is one) is 438 B and is
+bounded at 512 B, while a general patch is bounded only by the patch and
+document limits (an op may set an 8 K-char text). Patching therefore beats
+re-sending a report only when the report is larger than about 330 bytes: the **median historical
 table is at that boundary and the top third is above it**; against a
 one-sentence status, patching never wins. Prefix totals on the approval
 exchange: after publication the widget has cost 1,151 B against 286 B
@@ -1156,7 +1228,7 @@ For a p90 table (675 B) re-sent with its sentence, the widget gains about
 345 B per update and recovers its publication overhead after roughly six
 updates **[arithmetic on the measured examples; tokenizer traces pending]**.
 **The design therefore claims no token saving.** What it claims is a bound —
-publication ≤ 4.5× the same-language report, a three-op update ≤ 512 B, a
+publication ≤ 4.5× the same-language report, a benchmark update ≤ 512 B, a
 decision message ≤ 2 KiB — in exchange for in-place updates, readable Mobile
 rendering and typing-free, auditable decisions. The one measurable token
 effect in the design's favour is on the person's side: a decision is a
@@ -1179,7 +1251,7 @@ agent's read of it — and two Markdown lifecycles of the same exchange (the
 report then one-sentence statuses; the report then the report re-sent with
 the sentence; plus a typed answer), reporting each prefix separately against
 each baseline. Phase 1 ships only if measured publication is ≤ 4.5× its
-report for every archetype, a three-op update is ≤ 512 B of envelope and
+report for every archetype, a benchmark update is ≤ 512 B of envelope and
 result, a decision message is ≤ 2 KiB, and warm discovery plus one publish
 stays under 4 K tokens; otherwise the design stops here and is reworked, not
 narrowed automatically. The contract test enforces the byte forms of these
@@ -1189,7 +1261,7 @@ bounds on the committed examples today.
 
 | Phase | Content | Components | Release boundary |
 |---|---|---|---|
-| 1 | Contract v1 (18 types); `button`/`choice` with `prompt`/`open`/`copy`; `widgets.publish/update/list/read`, receipts, help topic; `sessions.transcript_generation`, `session_widgets`, `widget_revisions`, `widget_interactions`, `widget_artifact_refs`; acknowledged in-order store-writer variants, generation stamping on envelopes and durable-first Clear with an operation identity; notice-projected anchored rows, acknowledged publication watermark and sweep, bootstrap `widget_state` (paged) and lookup; `widget_action` admission, relay, queue reconciliation, acknowledged CAS handoff with recorded attempts, turn identity carried from `prompt_traced` through `apply_event` to the persisted `TurnEnd` envelope, `uncertain` and `widget_action_retry`; inline read-only carrier; Mobile and Desktop renderers with preview lines and the entered region; `session.events` widget kind; collector root | Controller + Web (four tables, one column) | no Machine release |
+| 1 | Contract v1 (18 types); `button`/`choice` with `prompt`/`open`/`copy`; `widgets.publish/update/list/read`, receipts, help topic; `sessions.transcript_generation`, `session_widgets`, `widget_revisions`, `widget_interactions`, `widget_artifact_refs`; acknowledged in-order store-writer variants, generation stamping on envelopes and durable-first Clear with an operation identity; notice-projected anchored rows, acknowledged publication watermark and sweep, bootstrap `widget_state` (paged) and lookup; `widget_action` admission, relay, queue reconciliation with cancellation settlement, acknowledged CAS handoff with recorded attempts, write-once widget commands (no reconnect retransmission), turn identity carried from `prompt_traced` through `apply_event` to the persisted `TurnEnd` envelope with its round-trip fixture, late proof, `uncertain` and `widget_action_retry`; the artifact pin lock; inline read-only carrier; Mobile and Desktop renderers with preview lines and the entered region; `session.events` widget kind; collector root | Controller + Web (four tables, one column) | no Machine release |
 | 2 | Worker-side turn stamping (`TurnEnded` from the prompt task, `turn_id` on active-prompt `Update`s, cancelled-before-send distinguished) so `uncertain` resolves sooner; `form` fields if elicitation proves insufficient; `control` actions behind the product confirm and an explicit allowlist; pin a widget to the Desktop side pane / Mobile dock; `metric`, `distribution`, `grid`, `tabs`; SVG `data` images under a bounded policy; image sources from execution-machine files through the verified artifact delivery used by image Calls | Controller + Web; **Machine release** for the worker signal and file sources | explicit maintenance boundary |
 | 3 | `widget_template` Plugin kind; Call children's result documents rendered as parent widgets; live `Ref` badges; `chart` | Controller, Web, Plugin SDK | separate reviewed contracts |
 
@@ -1241,7 +1313,20 @@ guidance; the §11 gate runs before the domain is enabled.
   new attempt; a replacement worker's Welcome snapshot with
   `current_turn_id == T` keeps the record open, without it the record is
   `uncertain`; a replayed un-acknowledged `TurnEnded` after a restart
-  resolves the open attempt exactly once.
+  resolves the open attempt exactly once. Write-once: a reconnect with a
+  written-but-unacknowledged widget command does not retransmit it (the
+  attempt is `uncertain`) while a never-written one is written once; a Stop
+  during configuration startup settles `cancelled (stopped)` and nothing is
+  relayed; a late `TurnEnd` after `uncertain` delivers and marks an existing
+  retry a duplicate, and a retry admitted after the late proof is refused;
+  a crash between cancellation intent and completion is settled at start.
+  Artifacts: the collector paused **after inspecting the modification time**
+  while publication pins the artifact under the lock does not unlink it.
+  Packing: a `widgets.list` page with maximal titles and summaries fits the
+  response budget and continues after the last included entry. Labels: the
+  positive and negative label vectors; a single choice with
+  `max_selected: 13` refused; duplicate initial values refused; the maximal
+  record fixture within 8 KiB.
 - Reducer tests mirroring `backgroundTasksReconcile.test.ts` T1 and
   `persistence_tests.rs` T3/T4: a cached open widget at seq 10 and a
   200-event reconnect tail must show the newest `state_version`; a cached
@@ -1296,9 +1381,12 @@ guidance; the §11 gate runs before the domain is enabled.
 | 14 | Transcript generation as the Clear fence | r3 request changes (R3) | §6.3: Clear durable first; generation CAS at the database; dispatched work becomes uncertain |
 | 15 | Decision-pinned revisions | r3 request changes (R4, R12) | §6.3: refs per revision retained for pinned ones; reads bound to `sha256` |
 | 16 | Queued widget prompts are delete-only | r3 request changes (R2, R8) | §8.4: every mutation path refused; content hash verified at handoff |
-| 17 | Delivery evidence is the turn the prompt started, never the echo | r4 request changes (N1) | §8.3: attempts `(command_id, turn_id)` recorded in the CAS, turn bound to `worker_epoch` on `TurnStarted`, turn reference persisted on `TurnEnd`, output excluded from evidence, Controller-only changes |
-| 18 | A commit-acknowledged store operation gates every widget effect | r4 conditional (N2–N4) | §6.3: in-order acknowledged writer variants, Clear with operation identity and expected generation, cancellation intents, generation-stamped envelopes |
-| 19 | `widget_action_retry` as the only Send-again | r4 request changes (N6, N7) | §8.3: complete refusal set, idempotent replay, chain of one, links in summaries, `retry_turn` routed |
-| 20 | The design claims bounded overhead and no token saving | r4 claim approved, gate evidence rejected (N12) | §11: separated baselines, constant update bound, honest break-even arithmetic |
-| 21 | An update's bound is a constant (512 B for three ops), not a ratio to a status line (new) | — | §11; for review |
-| 22 | Clear is an identified, conditional, acknowledged writer operation (new) | — | §6.3; for review |
+| 17 | Delivery evidence is the turn the prompt started, never the echo | r4 request changes (N1); r5 request changes (G1, G2, G5) | §8.3: write-once widget commands, exact epoch per attempt, Stop settles without relay, late proof reconciled with retries |
+| 18 | A commit-acknowledged store operation gates every widget effect | r4 conditional; r5 conditional (G6) | §8.3 step 3 settles committed cancellation intents at start |
+| 19 | `widget_action_retry` as the only Send-again | r4 request changes; r5 request changes (G5) | §8.3: late proof serialized with retry admission, `duplicate_of`/`retried_by` projected, missing-original and mismatch refusals |
+| 20 | The design claims bounded overhead and no token saving | r4/r5 claim approved; evidence corrected (G9) | §3 and §11 agree; benchmark class defined |
+| 21 | An update's bound is a constant for a benchmark update class, not for arbitrary patches | r5 request changes (G9) | §11 scoped |
+| 22 | Clear is an identified, conditional, acknowledged writer operation | r5 approve | retained |
+| 23 | A widget command is written to exactly one connection and never retransmitted (new) | — | §8.3 step 5; for review |
+| 24 | Artifact pin admission and collection share one lock (new) | — | §6.3; for review |
+| 25 | A Stop during configuration startup settles the decision as cancelled, never relayed (new) | — | §8.3; for review |

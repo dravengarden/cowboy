@@ -65,11 +65,14 @@ export const WIDGET_LIMITS = {
    *  bytes, raw and JSON-escaped), measured as UTF-8 bytes; validated at
    *  publish so admission can never refuse a valid document's choice. */
   messageBytes: 2 * 1024,
-  /** Serialized `InteractionRecord`; follows from `messageBytes`, `reasonChars`,
-   *  `handleChars` and the other bounded fields and is re-checked at admission. */
-  interactionRecordBytes: 6 * 1024,
+  /** Serialized `InteractionRecord` with every bounded field at its maximum
+   *  (message, selected labels, five attempts, reason, retry links); computed
+   *  by `worstCaseRecordBytes` at publish for every prompt node and re-checked
+   *  at admission, so later attempts can never push a record past it. */
+  interactionRecordBytes: 8 * 1024,
   reasonChars: 200,
   handleChars: 16,
+  stopReasonChars: 64,
   /** A retry may not itself be retried. */
   retryChain: 1,
   /** Dispatch attempts recorded per interaction before it becomes `uncertain`. */
@@ -103,9 +106,12 @@ export const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 export const WIDGET_HANDLE_PATTERN = /^w[1-9][0-9]*$/;
 
 /** Visible labels (titles, summaries, interactive labels, option labels)
- *  are one line of printable text: no control characters, so the composed
- *  message is exactly two lines and JSON escaping is bounded. */
-export const LABEL_PATTERN = /^[^\p{Cc}]+$/u;
+ *  are one line of printable text: no control characters (`Cc`), no line or
+ *  paragraph separators (`Zl`, `Zp`) and no format characters (`Cf`, which
+ *  covers bidirectional overrides and zero-width joiners), so the composed
+ *  message is exactly two lines, reads as it is drawn and escapes to at most
+ *  twice its length. */
+export const LABEL_PATTERN = /^[^\p{Cc}\p{Zl}\p{Zp}\p{Cf}]+$/u;
 
 export type Tone = "neutral" | "info" | "success" | "warning" | "error" | "running";
 export type Size = "xs" | "sm" | "md" | "lg";
@@ -356,9 +362,13 @@ export type ChoiceNode = NodeBase & {
   label: string;
   options: Option[];
   multiple?: boolean;
-  /** Integer 1..`maxSelected`; defaults to 1, or to `maxSelected` when
-   *  `multiple`. Part of the choice's interaction signature. */
+  /** Integer 1..`maxSelected` whenever present, validated as a raw field;
+   *  the effective cardinality is one unless `multiple`
+   *  (`effectiveMaxSelected`), and that effective value is what the
+   *  interaction signature carries. */
   max_selected?: number;
+  /** Initial selection: existing option values, no duplicates, at most the
+   *  effective cardinality. */
   value?: string | string[];
   submit?: { label?: string; confirm?: string };
   group?: string;
@@ -576,6 +586,10 @@ export type ListResult = {
   transcript_generation: number;
 };
 
+/** `widgets.list` pages are packed against the complete encoded response
+ *  (`readPageBytes`); `next` continues after the last included entry. */
+export type ListPacking = "packed";
+
 /** `widgets.read`. A whole document can exceed the 16 KiB read budget, so
  *  `document` is a text window over the compact JSON (default 1,000 chars,
  *  max 4,000). A current-document read restarts when `revision` changes
@@ -661,11 +675,58 @@ export type InteractionRecord = {
   attempts: DispatchAttempt[];
   /** Set on a record created by `widget_action_retry`. */
   retry_of?: string;
-  /** Set on an `uncertain` record once a retry exists; a late proof of the
-   *  original marks the retry `duplicate_of` the original. */
+  /** Set on an `uncertain`/`failed` record once a retry exists. */
   retried_by?: string;
+  /** Set on a retry when a late proof arrives for its original: the original
+   *  becomes `delivered` and the retry is a known duplicate (§8.3). */
   duplicate_of?: string;
 };
+
+/** Worst-case serialized size of an interaction record for a prompt node:
+ *  its worst-case message, the selected labels repeated, the label, five
+ *  attempts with bounded fields, a maximal reason and all retry links.
+ *  Validated at publish against `interactionRecordBytes`. */
+export function worstCaseRecordBytes(node: InputNode): number {
+  const handle = "w".padEnd(WIDGET_LIMITS.handleChars, "9");
+  const id = "x".repeat(WIDGET_LIMITS.idChars);
+  const selected =
+    node.type === "choice"
+      ? [...node.options]
+          .map((option) => option.label)
+          .sort((a, b) => utf8(JSON.stringify(b)) - utf8(JSON.stringify(a)))
+          .slice(0, effectiveMaxSelected(node))
+      : undefined;
+  const attempt: DispatchAttempt = {
+    command_id: "cmd-".padEnd(WIDGET_LIMITS.idChars, "9"),
+    turn_id: "turn-".padEnd(WIDGET_LIMITS.idChars, "9"),
+    worker_epoch: "".padEnd(WIDGET_LIMITS.idChars, "9"),
+    dispatched_at_ms: 2 ** 53 - 1,
+    outcome: "uncertain",
+    stop_reason: "e".repeat(WIDGET_LIMITS.stopReasonChars),
+  };
+  const record: InteractionRecord = {
+    interaction_id: id,
+    handle,
+    node_id: node.id,
+    group: id,
+    revision: 2 ** 31 - 1,
+    state_version: 2 ** 31 - 1,
+    transcript_generation: 2 ** 31 - 1,
+    label: node.label,
+    selected,
+    message: composeInteractionMessage(handle, 2 ** 31 - 1, node.label, selected),
+    message_sha256: "f".repeat(64),
+    at_ms: 2 ** 53 - 1,
+    state: "uncertain",
+    reason: "r".repeat(WIDGET_LIMITS.reasonChars),
+    cancel_requested: true,
+    attempts: Array.from({ length: WIDGET_LIMITS.attemptsPerInteraction }, () => attempt),
+    retry_of: id,
+    retried_by: id,
+    duplicate_of: id,
+  };
+  return utf8(JSON.stringify(record));
+}
 
 /** One handoff of an interaction's prompt to a worker (docs/widgets.md
  *  §8.3 step 5). The runtime already mints `command_id` and `turn_id` for
@@ -679,8 +740,12 @@ export type DispatchAttempt = {
   dispatched_at_ms: number;
   /** open: handed off, no attributed end yet; delivered / uncertain: as the
    *  record state; returned: the runtime gave the prompt back before any
-   *  provider request (requeued under its cmid). */
-  outcome: "open" | "delivered" | "uncertain" | "returned";
+   *  provider request and requeued it under its cmid; cancelled: withdrawn
+   *  by the person's Stop before any send, settled without relay. A widget
+   *  command is written to exactly one connection and never retransmitted
+   *  (§8.3), so one epoch per attempt is exact. */
+  outcome: "open" | "delivered" | "uncertain" | "returned" | "cancelled";
+  /** ≤ `stopReasonChars`. */
   stop_reason?: string;
 };
 
@@ -693,6 +758,7 @@ export type InteractionSummary = Pick<
   | "state"
   | "at_ms"
   | "retry_of"
+  | "retried_by"
   | "duplicate_of"
 >;
 
@@ -834,6 +900,8 @@ export type WidgetActionRefusal =
   | "not_retryable"
   | "already_retried"
   | "retry_chain"
+  | "unknown_interaction"
+  | "widget_mismatch"
   | "rate_limited"
   | "session_unavailable"
   | "conflict";
