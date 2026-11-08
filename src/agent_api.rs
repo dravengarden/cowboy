@@ -673,10 +673,10 @@ export interface Cowboy {
 // Run one explicitly (runs project code in your execution environment; needs Project language servers on):
 // cowboy_execute({action:"code.check",operation,arguments:{check:"<id>"}}) -> {status:"accepted"|"existing",run}.
 // Then poll code.checks(). A result is evidence for the inputs the command saw, not proof of correctness.
-// cowboy_execute({action:"code.post_edit",arguments:{paths:[1..5 files]}}) is read-only (operation optional): the
-// code.diagnostics read reduced to {deliver,files:[{path,state,comparison?,diagnostics?,write?}],truncated}; Provider adapters
-// deliver it after edits. deliver:false is not a clean result. write:{observed,matches_analyzed} compares the analyzed text
-// with the last executor fs/writeFile Cowboy saw for that file (a hint: no turn identity; shells and helpers are not seen).
+// cowboy_execute({action:"code.post_edit",arguments:{paths:[1..5]}}) (read-only): diagnostics reduced to
+// {deliver,files:[{path,state,comparison?,diagnostics?,write?}]}; deliver:false is not clean; suppressed:"repeat" =
+// delivered <10 min ago; write.matches_analyzed hints the analyzed text is the last seen write.
+// code.summary().deliveries: recent post-edit deliveries {id,route,files,state,reason,at_ms}.
 // symbols: case-insensitive name substring across the worktree, default50/max200.
 // Gitignore-aware; hidden files, binaries, >2MiB files and symlinks are skipped. Smart case unless case_sensitive.
 // limit default100/max200, <=20 per file; line/column are 1-based (UTF-16 column). partial: a bound stopped the scan.

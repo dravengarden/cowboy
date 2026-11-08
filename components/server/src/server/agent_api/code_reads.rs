@@ -21,6 +21,7 @@ use crate::core::SessionMeta;
 mod acquire;
 mod baselines;
 mod codex_push;
+mod deliveries;
 mod diagnostics;
 mod hover;
 mod post_edit;
@@ -114,7 +115,9 @@ pub(super) async fn read(
         if !session::current(&state.hub, &state.machine_control, observed) {
             return Err("code_context_changed".into());
         }
-        return Ok(summary::project(value));
+        let mut projected = summary::project(value);
+        projected["deliveries"] = deliveries::list(&meta.id)["deliveries"].take();
+        return Ok(projected);
     }
     let value = match request {
         Request::Search(params) => {
@@ -233,6 +236,42 @@ async fn checks(state: &AppState, meta: &SessionMeta) -> Result<Value, String> {
 /// The bounded post-edit summary a Provider adapter delivers to its model
 /// (`cowboy_execute` action `code.post_edit`, read-only, no operation needed).
 pub(super) async fn post_edit(
+    state: &AppState,
+    meta: &SessionMeta,
+    args: &Value,
+) -> Result<Value, &'static str> {
+    let mut value = post_edit_value(state, meta, args).await?;
+    if value["deliver"] == true {
+        let files = changed_files(&value);
+        match deliveries::begin(
+            &meta.id,
+            deliveries::Route::Adapter,
+            files,
+            deliveries::digest(&value),
+        ) {
+            Some(id) => value["delivery"] = Value::String(id),
+            None => {
+                value["deliver"] = Value::Bool(false);
+                value["suppressed"] = Value::String("repeat".into());
+            }
+        }
+    }
+    Ok(value)
+}
+
+/// Files whose entry a delivery would show.
+fn changed_files(value: &Value) -> Vec<String> {
+    value["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|file| file.get("diagnostics").is_some())
+        .filter_map(|file| file["path"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The `code.post_edit` read without delivery bookkeeping.
+async fn post_edit_value(
     state: &AppState,
     meta: &SessionMeta,
     args: &Value,

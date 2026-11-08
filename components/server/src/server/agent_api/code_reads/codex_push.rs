@@ -202,7 +202,8 @@ async fn deliver(
     let Some(info) = state.hub.session_info(session) else {
         return;
     };
-    let Ok(value) = super::post_edit(state, &info.meta, &json!({"paths":relative_paths})).await
+    let Ok(value) =
+        super::post_edit_value(state, &info.meta, &json!({"paths":relative_paths})).await
     else {
         return;
     };
@@ -211,6 +212,19 @@ async fn deliver(
             event_name = "cowboy.code.post_edit_push",
             session,
             outcome = "nothing_to_deliver"
+        );
+        return;
+    };
+    let Some(delivery_id) = super::deliveries::begin(
+        session,
+        super::deliveries::Route::CodexSteering,
+        super::changed_files(&value),
+        super::deliveries::digest(&value),
+    ) else {
+        tracing::info!(
+            event_name = "cowboy.code.post_edit_push",
+            session,
+            outcome = "suppressed"
         );
         return;
     };
@@ -232,12 +246,20 @@ async fn deliver(
         Err(reason) if reason.contains("next checkpoint is unavailable") => steer(false),
         other => other,
     };
+    use super::deliveries::State;
     match started {
         Ok(delivery) => {
             let outcome = delivery.outcome().await;
+            let state = match outcome.as_str() {
+                "injected" => State::Appended,
+                "not_delivered" | "unsupported" => State::Refused,
+                _ => State::Unknown,
+            };
+            super::deliveries::finish(session, &delivery_id, state, None);
             tracing::info!(event_name = "cowboy.code.post_edit_push", session, outcome);
         }
         Err(reason) => {
+            super::deliveries::finish(session, &delivery_id, State::Refused, Some(&reason));
             tracing::info!(
                 event_name = "cowboy.code.post_edit_push",
                 session,
