@@ -262,9 +262,37 @@ pub(super) fn machine_routes() -> Router<Arc<AppState>> {
     .route("/api/machines/{id}/maintenance", put(session_maintenance::configure))
 }
 
+/// Linked context, its handoff to a new agent, and forks.
+fn with_session_context_routes(
+    router: Router<Arc<AppState>>,
+    state: &Arc<AppState>,
+) -> Router<Arc<AppState>> {
+    router
+        .route(
+            "/api/sessions/{id}/context",
+            get(session_context::get).put(session_context::set),
+        )
+        .route(
+            "/api/sessions/{id}/context/send",
+            post(session_context::send).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/context/cancel",
+            post(session_context::cancel),
+        )
+        .route("/api/sessions/{id}/fork", post(session_context::fork))
+        .route(
+            "/api/sessions/{id}/duplicate",
+            post(session_context::duplicate).layer(middleware::from_fn_with_state(
+                Arc::clone(&state.session_create_replays),
+                session_create_replay::replay,
+            )),
+        )
+}
+
 /// Session, execution, draft, managed-call, history and WebSocket routes.
 pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
+    with_session_context_routes(Router::new(), state)
         .route("/api/drafts", get(draft_documents::list))
         .route(
             "/api/drafts/mutations",
@@ -372,22 +400,6 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             post(notifications::acknowledge),
         )
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
-        .route(
-            "/api/sessions/{id}/context",
-            get(session_context::get).put(session_context::set),
-        )
-        .route(
-            "/api/sessions/{id}/context/send",
-            post(session_context::send).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
-        )
-        .route("/api/sessions/{id}/fork", post(session_context::fork))
-        .route(
-            "/api/sessions/{id}/duplicate",
-            post(session_context::duplicate).layer(middleware::from_fn_with_state(
-                Arc::clone(&state.session_create_replays),
-                session_create_replay::replay,
-            )),
-        )
         .route("/api/sessions/{id}/config-revert", get(config_revert::get))
         .route(
             "/api/sessions/{id}/config-revert/restore",

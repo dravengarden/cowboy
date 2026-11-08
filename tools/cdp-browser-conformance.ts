@@ -17,7 +17,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "boot-snapshot": ["runBootSnapshotBrowserConformance", 4],
   "client-update": ["runClientUpdateFixture", 9],
   subscriptions: ["runSubscriptionsBrowserConformance", 131],
-  "session-context": ["runSessionContextBrowserConformance", 119],
+  "session-context": ["runSessionContextBrowserConformance", 122],
   "desktop-viewport": ["runDesktopViewportBrowserConformance", 9],
   "loading-progress": ["runLoadingProgressBrowserConformance", 10],
   "review-context": ["runReviewContextBrowserConformance", 8],

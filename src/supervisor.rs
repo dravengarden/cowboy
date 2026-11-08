@@ -714,6 +714,40 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Launch a dormant session's worker without handing it a prompt, under
+    /// the same wake admission and workspace checks as a prompt revive. The
+    /// caller keeps its prompt queued; the drain sends it once it is running.
+    pub fn wake_for_queued_prompt(&self, session_id: &str) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock();
+        refuse_trashed(&self.hub, session_id)?;
+        if self.should_hold_native_restore_failure(session_id) {
+            return Err(crate::provider_behavior::NATIVE_RESTORE_TIMEOUT_HOLD.to_owned());
+        }
+        let runtime = self.runtime_for_session(session_id)?;
+        if runtime.hibernation_pending(session_id) {
+            return Err("Waiting for resources: session is finishing hibernation".into());
+        }
+        let _admission = self
+            .wake_admission
+            .lock()
+            .clone()
+            .map(|admit| admit(session_id))
+            .transpose()?;
+        self.prepare_session_inner(session_id)?;
+        self.refuse_unprepared_workspace(session_id)?;
+        let session = self.start_session(session_id)?;
+        if self.is_dormant(&runtime, session_id) {
+            runtime.revive(session);
+            let listener = self.wake_listener.lock().clone();
+            if let Some(listener) = listener {
+                listener(session_id);
+            }
+        } else {
+            runtime.ensure(session);
+        }
+        Ok(())
+    }
+
     /// Stopping a retained turn must never require starting or repairing a
     /// worker, including after host policy has denied its placement. A
     /// subagent lives only in its current worker's ACP connection.

@@ -4,8 +4,10 @@ use super::*;
 use crate::core::SessionInfo;
 use crate::session_context::{Context, Delivery, Injection, Link, NextAgent, Source};
 
+mod cancel;
 mod fork;
 mod inheritance;
+pub(super) use cancel::cancel;
 pub(super) use fork::{duplicate, fork};
 
 // Serializes short durable mutations and creation admission, including requests

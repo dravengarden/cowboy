@@ -1160,6 +1160,22 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         retain_failed_dispatch(hub, session_id, text, content, cmid, &wait);
         return;
     }
+    // A continuation's first message stays queued (visible and cancellable)
+    // while its agent launches; reaching Running drains it to that agent.
+    if recovery.is_none()
+        && crate::session_context::waits_for_agent(hub, &session_id, cmid.as_deref())
+        && !supervisor.has_live_worker(&session_id)
+    {
+        match supervisor.wake_for_queued_prompt(&session_id) {
+            Ok(()) => {
+                hub.requeue_prompt(&session_id, text, content, cmid);
+                // The launch may already have reported Running.
+                hub.context_state_changed(&session_id);
+            }
+            Err(error) => retain(session_id, text, content, cmid, &error),
+        }
+        return;
+    }
     // Links wait for a real message: a preamble would break a slash command.
     if !crate::session_context::is_command(&text)
         && let Err(error) =

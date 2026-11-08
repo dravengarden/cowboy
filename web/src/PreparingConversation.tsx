@@ -7,6 +7,7 @@ import { QueuedAttachmentChips } from "./QueuedAttachmentChips";
 import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
 import { prettifyCrashDetail } from "./crashDetail";
 import { reloadSession } from "./sessionReload";
+import { handoffOperation, SessionHandoffCancel } from "./SessionHandoffCancel";
 import { useStoreSelector } from "./store";
 
 /** Startup is a conversation with pending delivery, not an empty-page hero.
@@ -18,17 +19,27 @@ export function PreparingConversation({ sessionId, location, blocked }: {
   blocked?: { detail: string | null } | undefined;
 }): React.JSX.Element {
   const queue = useStoreSelector((state) => state.queues.get(sessionId));
+  const continued = useStoreSelector((state) =>
+    state.sessions.some((session) => session.id === sessionId && Boolean(session.continued_from))
+  );
   return (
     <Stack data-conversation-empty-state={blocked ? "blocked" : "preparing"} spacing={3} sx={{ flex: "1 1 0 !important", minHeight: 180, width: "100%", px: 2, py: 3, minWidth: 0, alignItems: "center", justifyContent: "safe center" }}>
-      {queue?.map((row) => (
+      {queue?.map((row) => {
+        // Only the continuation's own first message can still take the switch back.
+        const operation = continued && row.status === undefined ? handoffOperation(row.cmid) : undefined;
+        return (
         <Box key={row.id} sx={{ alignSelf: "flex-end", width: "100%", maxWidth: 560, minWidth: 0, overflowWrap: "anywhere" }}>
           <MessagePreview text={row.text} attachments={row.attachments} />
           <QueuedAttachmentChips attachments={attachmentTrayForSurface(row.attachments, row.text)} />
-          <Typography variant="caption" color={row.status === "failed" && !blocked ? "error" : "text.secondary"}>
-            {blocked ? "Queued · sends once the session starts" : row.status === "failed" ? row.failure || "Not sent — check the queue" : "Waiting to send"}
-          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ minWidth: 0 }}>
+            <Typography variant="caption" color={row.status === "failed" && !blocked ? "error" : "text.secondary"}>
+              {blocked ? "Queued · sends once the session starts" : row.status === "failed" ? row.failure || "Not sent — check the queue" : "Waiting to send"}
+            </Typography>
+            {operation !== undefined && <SessionHandoffCancel sessionId={sessionId} operation={operation} />}
+          </Stack>
         </Box>
-      ))}
+        );
+      })}
       <Stack spacing={1.5} alignItems="center" sx={{ width: "100%", maxWidth: blocked ? "28rem" : "22rem", textAlign: "center" }}>
         {blocked ? <BlockedStartup sessionId={sessionId} location={location} detail={blocked.detail} /> : (
           <Stack role="status" spacing={0.75} alignItems="center">

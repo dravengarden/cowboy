@@ -387,6 +387,20 @@ pub fn allows_dispatch(hub: &crate::core::Hub, id: &str, cmid: Option<&str>) -> 
     })
 }
 
+/// A continuation's first message waits in its queue, where every device can
+/// see it and still take the handoff back, until its new agent is running.
+pub fn waits_for_agent(hub: &crate::core::Hub, id: &str, cmid: Option<&str>) -> bool {
+    cmid.is_some_and(|cmid| {
+        hub.session_info(id)
+            .is_some_and(|info| info.meta.continued_from.is_some())
+            && read(hub, id).is_ok_and(|context| {
+                context
+                    .injection
+                    .is_some_and(|injection| injection.cmid == cmid)
+            })
+    })
+}
+
 pub fn validate_sources(ids: &[String]) -> Result<(), String> {
     let unique: std::collections::HashSet<_> = ids.iter().collect();
     if ids.len() > MAX_SOURCES

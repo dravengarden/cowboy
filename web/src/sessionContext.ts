@@ -3,7 +3,7 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { productSessionSignal } from "./productSessionEnd";
 import { requestPickSession } from "./sessionPickRequest";
 import { newUuid } from "./uuid";
-import type { SessionMeta } from "./protocol";
+import type { ContentBlock, SessionMeta } from "./protocol";
 
 export interface NextAgent {
   provider: string;
@@ -17,7 +17,7 @@ export interface NextAgent {
 export interface ContextDelivery {
   operation: string;
   session_id: string;
-  state: "preparing" | "accepted" | "failed" | "unknown";
+  state: "preparing" | "accepted" | "failed" | "unknown" | "cancelled";
   error?: string | null;
   session?: SessionMeta;
   source_trashed?: boolean;
@@ -107,6 +107,33 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
     );
   }
   return value as T;
+}
+
+export interface CancelledHandoff {
+  source_session_id: string;
+  text: string;
+  content: ContentBlock[];
+  session?: SessionMeta | null;
+  note?: string;
+}
+
+/** Take a continuation back while its first message is still queued. The
+ *  Service restores the original and moves this destination to Trash. */
+export async function cancelHandoff(
+  id: string,
+  operation: string,
+): Promise<CancelledHandoff> {
+  const cancelled = await json<CancelledHandoff>(
+    `/api/sessions/${encodeURIComponent(id)}/context/cancel`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operation }),
+    },
+  );
+  announceContext(id);
+  announceContext(cancelled.source_session_id);
+  return cancelled;
 }
 
 export function loadSessionContext(id: string): Promise<SessionContext> {

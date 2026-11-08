@@ -18,6 +18,7 @@ import { announceContext, type SessionContext } from "./sessionContext";
 import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice";
 import { frontPrompt, submitPrompt, useStore } from "./store";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
+import { getDraft } from "./draftStore";
 import { managementEntryFixture } from "./providerManagement.fixture";
 import { runCreateDefaultsBrowserChecks } from "./createDefaultsBrowserChecks";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
@@ -139,6 +140,16 @@ export async function runSessionContextBrowserConformance(
         session_id: url.endsWith("/fork") ? "fork-copy" : "linked-copy",
         session: null,
       }, { status: 201 });
+    }
+    if (url.endsWith("/context/cancel")) {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      writes.push({ url, body });
+      return Response.json({
+        source_session_id: sessions[1]!.id,
+        text: "keep going",
+        content: [],
+        session: null,
+      });
     }
     if (url.endsWith("/context/send")) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -1088,7 +1099,18 @@ export async function runSessionContextBrowserConformance(
         </BrowserProductTheme>,
       ));
       for (const socket of Socket.active) socket.publish({ type: "sessions", sessions });
+      Socket.active.at(-1)?.publish({
+        type: "sync_patch",
+        state: `queue:${sessions[3]!.id}`,
+        version: width,
+        value: { queue: [{ id: "first", text: "keep going", content: [], cmid: "context-handoff-op" }] },
+        confirmed: [],
+        resync: true,
+      });
       await until(() => Boolean(container.querySelector('[data-session-handoff-link="trash"]')));
+      await until(() => Boolean(container.querySelector("[data-handoff-cancel]")));
+      check(container.textContent!.includes("keep going"),
+        `preparing ${width}: the queued first message is shown with Cancel`);
       const status = container.querySelector('[role="status"]')!.getBoundingClientRect();
       const bounds = container.getBoundingClientRect();
       check(Math.abs(status.top + status.height / 2 - (bounds.top + bounds.height / 2)) < 65 && container.scrollWidth <= width,
@@ -1119,6 +1141,14 @@ export async function runSessionContextBrowserConformance(
       check(writes.at(-1)!.url.endsWith(`/sessions/${sessions[3]!.id}/reload`), `blocked ${width}: Retry reloads the session`);
       await observe?.(`blocked-${width}`);
     }
+    container.querySelector<HTMLButtonElement>("[data-handoff-cancel]")!.click();
+    await until(() => writes.some((write) => write.url.endsWith("/context/cancel")));
+    const cancelled = writes.find((write) => write.url.endsWith("/context/cancel"))!;
+    await until(() => getDraft(sessions[1]!.id).text === "keep going");
+    check(
+      cancelled.url.includes(sessions[3]!.id) && cancelled.body.operation === "handoff-op",
+      "preparing: Cancel takes the handoff back and returns its message to the original",
+    );
   } finally {
     root.unmount();
     container.remove();
