@@ -246,11 +246,13 @@ is clipboard text the owner explicitly chooses to use as the authorization
 code, which then travels the existing owner-submitted native login input path.
 The OAuth bundle prohibition above is unchanged: no native credential enters
 the Controller, and the browser profile (cookies included) is Machine-local,
-account-owned state that is visible only inside that browser's own isolated
-view and is deleted with the account. Browsers of different accounts share no
-state: no profile, cache, display, temporary files, shared memory, sockets or
-clipboard, so one account's browser can never carry another account's
-identity. The owner accepts this as their
+account-owned state that no other browser instance can reach and that is
+deleted with the account; like every other account file it remains readable
+by the trusted Machine supervisor and host administrator described below.
+Browsers of different accounts share no state: no profile, cache, display,
+temporary files, shared memory, IPC, sockets or clipboard, so one account's
+browser can never carry another account's identity. The owner accepts this as
+their
 remote-display path to their own browser on their own Machine rather than
 third-party collection or intermediation of credentials; Anthropic's rule does
 not explicitly address the arrangement, so this is an accepted interpretation,
@@ -723,8 +725,10 @@ that login automatically.
 Named account authorization opens an external browser rather than replacing the
 native shell's shared authentication sheet; when the
 [Machine browser](machine-browser.md) is enabled for the account, the dialog
-may instead open the challenge in that browser's viewer, which is the only
-path that isolates the sign-in cookies. A failed OS-browser launch offers
+may instead open the challenge in that browser's viewer, Cowboy's managed
+per-account cookie-isolation path (a separate browser profile on the owner's
+device, described below, remains the manual alternative). A failed OS-browser
+launch offers
 copy-link recovery, without silently navigating that shared sheet. Browser/PWA
 links use a fresh `noopener noreferrer` tab. These presentation choices do not
 isolate Provider cookies: the UI offers an explicit copy-link path to a separate
