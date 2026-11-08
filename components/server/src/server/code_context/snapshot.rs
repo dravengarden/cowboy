@@ -34,6 +34,16 @@ impl BufferSnapshot {
         self.bounded() && self.content.sha256 == sha256
     }
 
+    /// The native mirror stream (instance, buffer, incarnation).
+    pub(in crate::server) fn stream(&self) -> (&str, &str, &str) {
+        (&self.instance, &self.buffer, &self.buffer_epoch)
+    }
+
+    /// The exact LF-normalized text identity: SHA-256 and UTF-8 byte count.
+    pub(in crate::server) fn content(&self) -> (&str, u32) {
+        (&self.content.sha256, self.content.utf8_bytes)
+    }
+
     pub(super) fn identifies(&self, instance: &str, buffer: &str, epoch: &str) -> bool {
         self.bounded()
             && self.instance == instance
