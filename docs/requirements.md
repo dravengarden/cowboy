@@ -249,9 +249,13 @@ the Controller, and the browser profile (cookies included) is Machine-local,
 account-owned state that no other browser instance can reach and that is
 deleted with the account; like every other account file it remains readable
 by the trusted Machine supervisor and host administrator described below.
-Browsers of different accounts share no state: no profile, cache, display,
-temporary files, shared memory, IPC, sockets or clipboard, so one account's
-browser can never carry another account's identity. The owner accepts this as
+Browsers of different accounts share no profile, cache, display, temporary,
+shared-memory, IPC or socket state and cannot signal or inspect each other;
+one account's browser state is never inherited by another's, and a sign-in
+opens only in the browser of the account that owns the login. The Machine's
+network namespace and user identity remain shared, as they are for the native
+CLIs, and the owner's own choice of which upstream credentials to type is
+guarded only by the account label the viewer shows. The owner accepts this as
 their
 remote-display path to their own browser on their own Machine rather than
 third-party collection or intermediation of credentials; Anthropic's rule does

@@ -1,9 +1,10 @@
 # Machine browser: owner-operated browser on a Machine
 
-Status: design, revision 3, 2026-11-08. Nothing below is implemented. Three
-Astra Max design reviews (2026-11-08: 12, 17 and 14 findings) are folded in
-and cross-referenced in [Acceptance](#acceptance-before-any-real-account).
-The owner decided the policy boundary the same day; see the
+Status: design, revision 4, 2026-11-08. Nothing below is implemented. Four
+Astra Max design-review rounds (2026-11-08: 12, 17, 14 and 13 findings) are
+folded in and cross-referenced in
+[Acceptance](#acceptance-before-any-real-account). The owner decided the
+policy boundary the same day; see the
 [credential rule](requirements.md#named-provider-accounts-isolation-acceptance)
 amendment. The owner also stated strict isolation between the browsers of
 different account cards as a core requirement; see
@@ -58,17 +59,17 @@ precedent: the engine is a Plugin, the product is core.
 
 | Concern | Owner |
 |---|---|
-| Browser runtime bytes: launcher, Xvnc, window manager, Chromium, helpers, fonts, managed policy file | `machine_browser` Plugin (signed artifact) |
-| Launch graph, readiness protocol, platform and host-ABI matrix, declared executables and policy contract | Plugin contract (data) |
+| Browser runtime bytes: launcher, Xvnc, window manager, Chromium, helpers, fonts, glibc, managed policy file | `machine_browser` Plugin (signed artifact) |
+| Launch graph, readiness protocol, host requirements, declared executables and policy contract | Plugin contract (data) |
 | Plugin kind, schema, signing, Catalog, install/upgrade/rollback/uninstall, generation leases | Core (generic Plugin lifecycle) |
-| Instance manager: admission, start, attachment leases, hibernation, caps, reconciliation, confinement verification, profile snapshots | Core Machine |
-| Per-account profile placement, reset, revocation wipe, durable fences | Core Machine + Controller revocation plan |
+| Instance manager: admission, start, attachment leases, hibernation, caps, reconciliation, confinement verification, snapshot publication | Core Machine |
+| Per-account profile snapshots, reset, revocation wipe, durable fences, staging budget | Core Machine + Controller revocation plan |
 | Display stream, backpressure, binding, continuing authorization | Core wire protocol + Machine + Controller |
 | Routes, owner/device/Origin checks, per-account enablement | Core Controller |
 | Viewer (canvas, decoder, input, clipboard action, mobile sheet) | Core web |
 | Sign-in integration | Core (Machine login session + Controller + web) |
 | Resource settings | Core Device/Service configuration |
-| Host sandbox policy (AppArmor) | Host configuration (Columbus `machines/ovh`), outside Cowboy |
+| Host sandbox policy (AppArmor bootstrap and sealed profiles) | Host configuration (Columbus `machines/ovh`), outside Cowboy |
 
 Without the Plugin installed on a Machine, the core mechanism admits nothing:
 the Machine advertises no browser capability and `open` answers
@@ -92,19 +93,21 @@ graph; it has no UI, URLs, credentials or network targets.
   "display_name": "Machine browser",
   "description": "Owner-operated Chromium on the Machine for account sign-in.",
   "supported_platforms": [{"os": "linux", "architecture": "x86_64"}],
-  "host_abi": {
-    "interpreter": "/lib64/ld-linux-x86-64.so.2",
-    "glibc_min": "2.39",
-    "distributions": [{"id": "ubuntu", "version_id": "26.04"}]
+  "host_requirements": {
+    "kernel_min": "5.15",
+    "merged_usr": true,
+    "mount_points": ["/opt", "/mnt"],
+    "apparmor_features": ["network_v9", "unix", "mount", "namespaces/userns"],
+    "built_from": {"id": "ubuntu", "version_id": "26.04"}
   },
   "runtime": {
     "artifact": "runtime",
-    "launcher": "bin/cowboy-browser-launcher",
+    "launcher": "usr/libexec/cowboy-browser-launcher",
     "browser": "opt/chromium/chrome",
     "browser_version": "151.0.7922.71",
     "display_server": "usr/bin/Xtigervnc",
     "helpers": ["usr/bin/xrandr", "usr/bin/xkbcomp", "usr/bin/xauth", "usr/bin/matchbox-window-manager"],
-    "policy": {"file": "etc/cowboy-browser/policy.json", "directory": "/etc/opt/chrome/policies/managed"}
+    "policy": {"file": "usr/share/cowboy-browser/policy.json", "directory": "/etc/opt/chrome/policies/managed"}
   },
   "launch": {
     "protocol": "cowboy-browser-control-v1",
@@ -113,6 +116,22 @@ graph; it has no UI, URLs, credentials or network targets.
 }
 ```
 
+- The artifact is the instance's whole userland. Its `usr/` and `opt/` are
+  bound over `/usr` and `/opt` inside the instance, and it ships glibc and
+  the dynamic loader, so the ELF interpreter path `/lib64/ld-linux-x86-64.so.2`
+  resolves through the host's merged-usr symlink into the artifact. Nothing
+  from the host's userland is used; `LD_LIBRARY_PATH` is not needed; compiled-in
+  paths such as `/usr/bin/xkbcomp`, `/usr/share/X11/xkb` and
+  `/usr/share/fonts` resolve inside the artifact. The spike on hawk
+  (2026-11-08) confirmed the opposite approach fails: Ubuntu's `Xtigervnc`
+  finds `xkbcomp` only at its compiled path, and `LD_LIBRARY_PATH` cannot
+  reach that.
+- `host_requirements` are what the host must still provide: the kernel,
+  merged-usr symlinks (`/lib64`, `/lib`, `/bin` → `usr/…`), the `/opt` and
+  `/mnt` mount points, and an AppArmor with socket-permission, `unix`
+  address, mount and user-namespace mediation. The Machine advertises the
+  browser capability only when all of them hold; otherwise the reason is
+  `host_requirements`. `built_from` is provenance, not a host requirement.
 - Every `runtime.*` path is a normalized relative path (no absolute path, no
   `.` or `..` components, no symlink) that the SDK resolves inside the named
   artifact at validation time, for every declared platform, exactly as the
@@ -120,13 +139,6 @@ graph; it has no UI, URLs, credentials or network targets.
   coverage. The Machine recomputes the same checks against the installed,
   content-addressed generation before every launch; a missing or non-regular
   executable fails admission, never falls back to an ambient binary.
-- `host_abi` declares what the tree assumes of the host: the ELF interpreter
-  path, the minimum glibc and the distributions the artifact was built for
-  and tested on. The Machine advertises the browser capability only when
-  the interpreter exists, `getconf GNU_LIBC_VERSION` meets the minimum and
-  `/etc/os-release` matches a declared distribution; otherwise the reason is
-  `host_abi`. A pristine Ubuntu 26.04 test proves that target, not Linux in
-  general.
 - `runtime.policy.directory` is the browser build's managed-policy directory
   (`/etc/opt/chrome/policies/managed` for Google Chrome,
   `/etc/chromium/policies/managed` for Chromium builds). It is validated
@@ -136,25 +148,27 @@ graph; it has no UI, URLs, credentials or network targets.
 - `browser_version` is the full writer version used by the
   [profile compatibility fence](#profile-compatibility-and-rollback).
 - The Machine passes no shell or template arguments. The launcher receives a
-  fixed argument vector: `--control-socket`, `--instance-dir`,
-  `--profile-dir`, `--runtime-dir`, `--display`, `--geometry WxH`,
-  `--scale N`, `--tmpfs-bytes N`. Everything else is in the launcher.
+  fixed argument vector: `--control-socket-dir`, `--snapshot-dir`
+  (read-only source, may be absent), `--staging-dir`, `--runtime-dir`,
+  `--display`, `--geometry WxH`, `--scale N`, `--profile-bytes N`,
+  `--instance-bytes N`. Everything else is in the launcher.
 - The runtime artifact is a relocatable, symlink-free, hard-link-free tree
   within the existing limits (1 GiB compressed, 4 GiB expanded, 100 000
-  entries; symbolic and hard links are rejected by the installer). It is
-  assembled on a builder from the target distribution's packages (Ubuntu
-  26.04 today: Chromium or Google Chrome, TigerVNC `Xtigervnc`, matchbox
-  window manager, `xkbcomp`, `xrandr`, `xauth`, XKB data, fonts) by
-  resolving the complete package dependency closure and excluding only what
-  `host_abi` guarantees (glibc, the dynamic loader). The builder audits every
-  ELF object with `ldd` against the tree plus host glibc and refuses a
-  missing dependency. The `chrome-sandbox` setuid helper is removed from the
-  tree; Chromium uses its namespace sandbox.
+  entries; symbolic and hard links are rejected by the installer; the
+  builder replaces package symlinks with copies). It is assembled on a
+  builder from the `built_from` distribution's packages by resolving the
+  complete dependency closure of the browser, `Xtigervnc`, the window
+  manager, the helpers, XKB data, fonts and glibc, and excluding only
+  packages that are not runtime files. The builder audits every ELF object
+  with `ldd` against the tree alone and refuses a missing dependency. The
+  `chrome-sandbox` setuid helper and the Qt theme shims are removed; Chromium
+  uses its namespace sandbox. Measured spike tree: 967 MiB uncompressed
+  before symlink replacement.
 - Conformance runs the exact signed archive through the real Machine
   installer on a pristine Ubuntu 26.04 guest with the production AppArmor
   policy enforced and the stock user-namespace restriction intact, then
-  opens, attaches, resizes, copies and hibernates, and runs the syscall-level
-  canary probes described under [Acceptance](#acceptance-before-any-real-account).
+  opens, attaches, resizes, copies, snapshots and hibernates, and runs the
+  probes described under [Acceptance](#acceptance-before-any-real-account).
 - Chromium security releases ship as new Plugin versions through the
   ordinary per-Machine install/upgrade/rollback lifecycle, independent of
   Machine host releases.
@@ -174,67 +188,87 @@ revocation still delete them.
 
 ### Launcher contract
 
-The launcher is a small static binary in the artifact. It runs under the host
-AppArmor profile described [below](#host-sandbox-policy-outside-cowboy), and
-it builds the instance's isolation before anything else starts. Every step
-is fixed; nothing is configurable from outside beyond the argument vector.
+The launcher is a small static binary in the artifact. It is the supervisor
+of one instance: it builds the isolation, starts the three display and
+browser processes under a sealed policy, serves the control socket, performs
+snapshot copies on the Machine's request, and reaps everything as PID 1 of
+the instance. It runs under the host's `bootstrap` AppArmor profile; the
+processes it starts run under the `sealed` profile (see
+[host policy](#host-sandbox-policy-outside-cowboy)). Every step is fixed;
+nothing is configurable from outside beyond the argument vector.
 
-1. **Namespaces.** `unshare(CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWIPC)`.
-   The user namespace maps the Machine user's uid and gid to themselves and
-   nothing else, so no process inside is root in any sense. Mount
-   propagation is made recursively private before any mount.
-2. **Private mounts, in this order.** Bind the runtime tree read-only,
-   `nosuid`, `nodev` at `$XDG_RUNTIME_DIR/cowboy-browser/runtime`; mount a
-   tmpfs of `--tmpfs-bytes` at `$XDG_RUNTIME_DIR/cowboy-browser/profile` and
-   restore the account's profile snapshot into it (see
-   [Profile storage](#profile-storage-snapshots-not-live-disk)); bind the
-   unit's `RuntimeDirectory` read-write at
-   `$XDG_RUNTIME_DIR/cowboy-browser/instance`; mount a private tmpfs over
-   `/tmp` (256 MiB) and a private tmpfs over `/dev/shm` (`--tmpfs-bytes`);
-   build `/etc` as a private tmpfs scaffold containing bind mounts of exactly
-   `resolv.conf`, `hosts`, `nsswitch.conf`, `ld.so.cache`, `localtime`,
-   `passwd`, `group`, `ssl/` and `fonts/` from the host plus the policy file
-   at `runtime.policy.directory` (so nothing has to exist on a pristine host
-   and nothing else from the host's `/etc` is visible); then mask `/home`
-   with an empty tmpfs. The Machine state root lives under `/home` on
-   supported hosts, so masking the ancestor hides it; if a host places the
-   state root elsewhere, the launcher masks that path before `/home`. All
-   sources were bound before their ancestors were masked, so the bind mounts
-   keep their objects.
-3. **Seal.** Close every descriptor except the control socket, `chdir` to
-   the instance mount point, drop every capability from the effective,
-   permitted, inheritable and ambient sets and from the bounding set, and
-   set `no_new_privs`. From this point no process in the instance, including
-   the launcher itself, can mount, unmask or rebind anything in this mount
-   namespace, because the namespace is owned by a user namespace in which
-   nothing holds `CAP_SYS_ADMIN`. Chromium's zygote still creates its own
-   nested user, PID and network namespaces for its sandbox: creating a user
-   namespace needs no capability, the AppArmor grant is inherited, and the
-   capabilities it gains apply only inside the nested namespace, which cannot
-   reach this mount namespace.
-4. **Display.** Write an X authorization cookie into the instance directory
-   and start `Xtigervnc` on a fixed display number (collisions are impossible
-   because `/tmp` and the abstract socket space are not shared, see next
-   item) with `-auth <cookie> -nolisten tcp -nolisten local -rfbport -1
-   -rfbunixpath <instance>/rfb.sock -rfbunixmode 0600 -SecurityTypes None
-   -AcceptSetDesktopSize=0 -SendPrimary=0 -SendCutText=1 -AcceptCutText=1
-   -geometry WxH -depth 24 -xkbdir <runtime xkb>` and `XKB_BINDIR` pointing
-   at the runtime's `xkbcomp`. `-nolisten local` disables the X server's
-   abstract Unix socket, which would otherwise live in the shared network
-   namespace; the only X endpoint is the pathname socket in the private
-   `/tmp`. The RFB socket is reachable from outside the namespace only
-   through the bind-mounted instance directory, which is 0700.
+1. **Namespaces.** `unshare(CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWPID |
+   CLONE_NEWIPC)`; `setgroups` is denied before the single self-mapping of
+   the Machine user's uid and gid is written, so no process inside is root
+   in any sense. The launcher forks once so that it is PID 1 of the new PID
+   namespace and owns reaping. Mount propagation is made recursively private
+   before any mount. Processes of other instances are invisible and cannot
+   be signalled from inside; the Machine still sees real pids through the
+   unit's cgroup.
+2. **Private mounts, in this order.** Mount a private tmpfs over `/mnt` and
+   create the alias directories in it. Bind the runtime tree read-only,
+   `nosuid`, `nodev` at `/mnt/runtime`, then bind its `usr/` over `/usr` and
+   `opt/` over `/opt` (read-only, `nosuid`, `nodev`): from here the instance's
+   userland is the artifact. Mount a tmpfs of `--profile-bytes` at
+   `/mnt/profile` and a tmpfs of `--instance-bytes` at `/mnt/instance`
+   (`HOME`, `XDG_*`, `TMPDIR`, logs); bind the unit's `RuntimeDirectory`,
+   which holds only the control and RFB sockets, at `/mnt/sockets`. If
+   `--snapshot-dir` is given, bind it read-only at `/mnt/snapshot`, restore it
+   into `/mnt/profile` with the no-follow copier described under
+   [snapshots](#profile-storage-tmpfs-and-published-snapshots) (the pages are
+   allocated by the launcher inside the unit's cgroup, so they are charged to
+   the unit), then unmount `/mnt/snapshot`. Mount a private tmpfs over `/tmp`
+   (256 MiB) and over `/dev/shm` (`--profile-bytes`); mount a fresh `proc`
+   for the new PID namespace. Build `/etc` as a private tmpfs scaffold
+   containing bind mounts of exactly `resolv.conf`, `hosts`, `nsswitch.conf`,
+   `localtime`, `passwd`, `group`, `machine-id` and `ssl/` from the host plus
+   the policy file at `runtime.policy.directory`, so nothing has to exist on
+   a pristine host and nothing else from the host's `/etc` is visible. Then
+   mask `/home`, the Machine user's `/run/user/<uid>` and, if it lies
+   elsewhere, the Machine state root with empty tmpfs. Every source was
+   bound before its ancestor was masked, so the bind mounts keep their
+   objects; afterwards no unselected account directory, no other instance's
+   `RuntimeDirectory`, no native credential and no Machine state is reachable
+   by any path, in this namespace or in any namespace a descendant could
+   create.
+3. **Seal the children, not the mounts.** For each child the launcher
+   forks, closes every descriptor except the ones the child needs, `chdir`s
+   into `/mnt/instance`, clears the bounding set while it still holds
+   `CAP_SETPCAP`, clears the ambient, inheritable, permitted and effective
+   sets, sets `no_new_privs`, transitions to the `sealed` AppArmor profile,
+   and execs. The sealed profile has no mount, pivot, umount or remount
+   permission, so a descendant that creates its own user and mount namespace
+   gains nothing it can bind: the kernel still asks the profile. Chromium's
+   zygote keeps working: creating a user namespace needs no capability, the
+   sealed profile grants `userns`, and the capabilities it gains apply only
+   inside the nested namespace.
+   The launcher itself keeps its capabilities in the instance's user
+   namespace under the `bootstrap` profile; it needs them to mount and unmount
+   the snapshot and staging aliases. It talks to the children only through
+   the X protocol and the fixed control protocol, never executes anything
+   they write, and is itself validated by the Machine (see
+   [confinement verification](#confinement-verification)).
+4. **Display.** Write an X authorization cookie into `/mnt/instance` and
+   start `Xtigervnc` on a fixed display number with `-auth <cookie>
+   -nolisten tcp -nolisten local -rfbport -1 -rfbunixpath /mnt/sockets/rfb.sock
+   -rfbunixmode 0600 -SecurityTypes None -AcceptSetDesktopSize=0
+   -SendPrimary=0 -SendCutText=1 -AcceptCutText=1 -geometry WxH -depth 24`.
+   `-nolisten local` disables the X server's abstract socket; the only X
+   endpoint is the pathname socket in the private `/tmp`; collisions are
+   impossible because `/tmp` and the abstract address space are both
+   unavailable to other instances (private `/tmp`, abstract addresses denied
+   by the sealed profile). The RFB socket is reachable from outside the
+   namespace only through the unit's `RuntimeDirectory`, which is 0700.
 5. **Window manager** keeps the single browser window fullscreen and
    following the screen size.
-6. **Browser.** Clear the environment and set only: `PATH` and
-   `LD_LIBRARY_PATH` inside the runtime, `FONTCONFIG_FILE` (generated into
-   the instance directory, pointing at the runtime's fonts),
-   `GSETTINGS_SCHEMA_DIR` and `LIBGL_DRIVERS_PATH` inside the runtime,
-   `DISPLAY`, `XAUTHORITY`, `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`,
-   `XDG_RUNTIME_DIR` and `TMPDIR` inside the instance directory, `TZ` from
-   the host, `LANG=en_US.UTF-8`, and `SSL_CERT_FILE` for the scaffolded
-   certificate bundle. No proxy variable is inherited or set. Chromium starts
-   with `--user-data-dir=<profile> --no-first-run --no-default-browser-check
+6. **Browser.** Environment: `PATH=/usr/bin`, `FONTCONFIG_FILE` (generated
+   into `/mnt/instance`, pointing at `/usr/share/fonts`),
+   `GSETTINGS_SCHEMA_DIR=/usr/share/glib-2.0/schemas`, `DISPLAY`,
+   `XAUTHORITY`, `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`,
+   `XDG_RUNTIME_DIR` and `TMPDIR` inside `/mnt/instance`, `TZ` from the host,
+   `LANG=en_US.UTF-8`, `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`.
+   No proxy variable is inherited or set. Chromium starts with
+   `--user-data-dir=/mnt/profile --no-first-run --no-default-browser-check
    --disable-sync --disable-background-networking --disable-component-update
    --disable-extensions --disable-breakpad --disable-crash-reporter
    --disable-quic --disk-cache-size=1048576 --password-store=basic
@@ -251,7 +285,7 @@ is fixed; nothing is configurable from outside beyond the argument vector.
    `AutofillAddressEnabled=false`, `AutofillCreditCardEnabled=false`,
    `BackgroundModeEnabled=false`, `MetricsReportingEnabled=false`,
    `DefaultBrowserSettingEnabled=false`, `PromotionalTabsEnabled=false`,
-   `QuicAllowed=false`, `WebRtcIpHandling=disable_non_proxied_udp`,
+   `QuicAllowed=false`, `WebRtcIPHandling=disable_non_proxied_udp`,
    `DefaultGeolocationSetting=2`, `DefaultNotificationsSetting=2`,
    `AudioCaptureAllowed=false`, `VideoCaptureAllowed=false`,
    `RestoreOnStartup=5`. Session restoration is off on purpose: a reopened
@@ -261,22 +295,23 @@ is fixed; nothing is configurable from outside beyond the argument vector.
    session restore. Some of these settings are observable by pages as
    ordinary denied permissions; they are choices any user could make.
 8. **Control socket** (`cowboy-browser-control-v1`, newline-delimited JSON
-   on a Unix socket in the instance directory): the launcher sends `ready`
-   only after all three processes run, carrying the pids and start times of
-   the launcher, display server, window manager and browser, the launcher's
-   `/proc/self/ns/{user,mnt,ipc}` identities, its `uid_map`/`gid_map`, its
-   confinement label, and the mount table it built. The Machine verifies the
-   same facts from outside before accepting readiness (see
-   [confinement verification](#confinement-verification)). Commands:
-   `navigate {url}` (re-invokes Chromium against the running profile; the
-   singleton socket in the profile hands the URL to the existing instance; no
-   debugging port), `resize {width, height}` (through `xrandr`, bounded by
-   the launcher and by the Machine to 320×480…`browser.max_geometry`;
-   `scale` is fixed for the life of the incarnation), `attach {attachment_id}`
-   and `detach {attachment_id}` (informational), `snapshot` (quiesce and
-   let the Machine read a consistent profile copy; see below) and `stop`.
-9. It exits when any of the three processes exits; `KillMode=control-group`
-   ends the rest.
+   on `/mnt/sockets/control.sock`): the launcher sends `ready` only after all
+   three processes run, carrying the pids and start times (host view, read
+   through the unit's cgroup by the Machine) of itself, the display server,
+   the window manager and the browser, its `/proc/self/ns/{user,mnt,pid,ipc}`
+   identities, its `uid_map`/`gid_map`, both profile labels, and the mount
+   table it built. The Machine verifies the same facts from outside before
+   accepting readiness. Commands: `navigate {url}` (re-invokes Chromium
+   against the running profile; the singleton socket in the profile hands the
+   URL to the existing instance; no debugging port), `resize {width, height}`
+   (through `xrandr`, bounded by the launcher and by the Machine to
+   320×480…`browser.max_geometry`; `scale` is fixed for the life of the
+   incarnation), `attach {attachment_id}` and `detach {attachment_id}`
+   (informational), `snapshot {generation}` (described below) and
+   `stop {graceful_ms}`.
+9. It exits when the browser exits (after a graceful `stop` it waits for the
+   browser to flush and exit, then stops the display); `KillMode=control-group`
+   ends anything left.
 
 ## Instance manager (core Machine)
 
@@ -285,40 +320,93 @@ is fixed; nothing is configurable from outside beyond the argument vector.
 ```text
 BrowserInstance = Machine + Plugin generation digest + account_id + instance_id + incarnation
 Attachment      = BrowserInstance + attachment_id (one live attachment per instance)
-Profile         = account_id + profile_revision (+ writer version)
+Snapshot        = account_id + snapshot generation (+ profile_revision, writer version)
 ```
 
 One instance per `(Machine, account)`; `browser.max_instances` (default 1)
 bounds concurrently running instances per Machine. Each instance runs in its
-own user, mount and IPC namespaces, its own X server, its own `/tmp` and
-`/dev/shm`, and its own systemd unit and cgroup.
+own user, mount, PID and IPC namespaces, its own X server, its own `/tmp`,
+`/dev/shm`, profile and instance tmpfs, and its own systemd unit and cgroup
+with two sub-cgroups, `display/` and `browser/`, created by the launcher so
+the Machine can freeze the browser alone.
 
-### Profile storage: snapshots, not live disk
+### Profile storage: tmpfs and published snapshots
 
 The live profile never touches the shared filesystem. During a run it lives
 in the instance's size-bounded private tmpfs (`browser.profile_max_bytes`),
 so the kernel enforces the storage bound and a page that fills browser
 storage gets `ENOSPC` inside the browser instead of filling the volume that
-holds Machine state and native credentials. The tmpfs pages count toward the
-unit's `MemoryMax` and never swap.
+holds Machine state and native credentials. Tmpfs pages are charged to the
+cgroup that allocates them: the launcher restores the snapshot from inside
+the unit, and Chromium writes from inside the unit, so every profile,
+`/tmp` and `/dev/shm` page counts against the unit's `MemoryMax` and never
+swaps. With swap disabled these pages compete with Chromium's own memory, so
+the unit's OOM kill can precede tmpfs `ENOSPC`; the defaults below leave
+headroom for a full profile plus the measured browser footprint and are
+confirmed by the restore and full-profile measurements in
+[Acceptance](#acceptance-before-any-real-account).
 
-Persistence is a Machine-written snapshot at
-`provider-auth/accounts/<uuid>/browser/profile/` (0700, created parent-first
-with `prepare_private_directory` at every level): on `hibernate`, on explicit
-`snapshot`, and at `browser.snapshot_interval` (default 10 min) while
-attached, the Machine asks the launcher to quiesce, copies the tmpfs contents
-into a staging directory beside the snapshot, fsyncs, and renames it into
-place; the previous snapshot is kept until the rename succeeds. A crash or
-OOM loses only the changes since the last snapshot. Cookies, local storage
-and Cloudflare clearance therefore persist; caches are excluded from the
-snapshot. The snapshot is readable by the trusted Machine supervisor and by
-the host administrator, like every other account file; no other browser
-instance can reach it.
+Persistence is a **published snapshot** under
+`provider-auth/accounts/<uuid>/browser/`:
 
-`browser-state.json` lives beside the `browser/` directory, outside the
-deleted tree, and is fsynced before any mutable step: `profile_revision`,
-the full `browser_version` of the last writer and the generation digest,
-plus any pending reset or revocation fence with its operation id.
+```text
+browser/
+  state.json            fsynced first: profile_revision, writer browser_version,
+                        generation digest, current snapshot generation, fences
+  snapshots/gen-<n>/    immutable, complete snapshot generations
+  staging/gen-<n>/      being written; never read as a snapshot
+```
+
+A snapshot is taken only at a **coherent barrier**:
+
+- at every graceful stop (hibernate, deadline, reclaim, uninstall drain):
+  the launcher asks Chromium to exit (`SIGTERM` to the browser sub-cgroup,
+  bounded by the unit's `TimeoutStopSec`), Chromium flushes and closes its
+  databases, and only then is the tmpfs copied; this is the primary path and
+  the only one that captures in-memory browser state;
+- optionally while attached, every `browser.snapshot_interval`
+  (default 10 min) and on an explicit `BrowserSnapshot`: the Machine freezes
+  the `browser/` sub-cgroup (`cgroup.freeze`), so every Chromium writer is
+  stopped for the whole copy, then thaws it. A frozen copy is
+  crash-consistent (SQLite WAL and journal files and LevelDB manifests and
+  logs are copied together and recover exactly as after a crash); it does
+  not include state Chromium has not yet written, and the loss window is
+  since the last **published** generation, not a fixed interval, because
+  periodic snapshots run only while attached and may be refused or fail.
+
+The copy itself is done by the launcher, inside the unit: the Machine
+reserves the staging budget (below), creates `staging/gen-<n>` and the
+launcher binds it at `/mnt/publish` for the duration of the copy only, then
+unmounts it. The copier opens every entry descriptor-relative with
+`O_NOFOLLOW`, copies only regular files and directories (sockets, FIFOs,
+symlinks, the singleton link and lock files, and the cache directories are
+skipped by name), preserves holes with `SEEK_HOLE`, and stops at the
+reserved logical-byte, entry-count and depth limits. The Machine then
+validates the staging tree with the same rules before publication:
+regular files and directories only, bounded bytes, entries and depth, no
+links. It treats the tree as untrusted input and never follows anything
+into the host filesystem. Publication is: fsync every copied file and
+directory, fsync `staging/`, rename `staging/gen-<n>` to
+`snapshots/gen-<n>`, fsync `snapshots/`, write `state.json` with the new
+current generation and fsync it, then remove older generations beyond the
+retained one. Restoration reads a snapshot generation only through the
+read-only alias and with the same no-follow copier.
+
+Staging budget: the Machine keeps one byte and inode reservation ledger for
+all browser staging on the Machine, admits a snapshot only when the
+reservation fits under the Device disk low-watermark with the previous
+generation retained, allows at most one staging and one published
+generation per account, and reconciles abandoned staging directories at
+start and before every new admission. A snapshot that cannot be admitted is
+refused, never queued.
+
+Snapshot failure is subordinate to mandatory stops: a graceful stop attempts
+the snapshot at most twice within the stop deadline; a stop forced by login
+termination, deadline, reclaim, revocation or `RuntimeMaxSec` proceeds
+without a snapshot, keeps the last published generation, and reports
+`unsaved_state_lost`. An explicit `hibernate` whose snapshot fails reports
+the failure rather than success. Pending persistence never extends an
+instance's authority to run.
 
 ### Durable placement, reset and revocation
 
@@ -328,17 +416,23 @@ is admitted. The account revocation plan gains `browsers` beside `logins`,
 `grants` and `sessions`, captured from these placements, so a `Tab`-only
 placement is revoked like any other target.
 
-On the Machine, `revoke_browser` and `reset_browser` share one path, in this
-order: write the operation fence and the next `profile_revision` into
-`browser-state.json` and fsync (an admission fence that survives a crash);
-stop the running unit and wait for its cgroup to be empty, escalating
-`SIGTERM` to `SIGKILL` on the unit's own timeout; delete
-`accounts/<uuid>/browser` with a scoped, no-follow removal; record completion
-in `browser-state.json`. A restart in the middle resumes the fenced
-operation from the state file and preserves its receipt; a delayed reset or
-revocation carrying an older revision is a no-op. Native tombstones and every
-other file under the account are untouched. Revocation completion is not
-recorded while a browser placement is still pending.
+On the Machine, lifecycle mutations and snapshots of one account are
+serialized by one per-account lifecycle lock. `revoke_browser` and
+`reset_browser` share one path, in this order: take the lock; write the
+operation fence and the next `profile_revision` into `state.json` and fsync
+(an admission fence that survives a crash); cancel any in-flight snapshot
+(the launcher's copy is interrupted and its staging directory abandoned, or
+the unit is killed, which has the same effect); stop the running unit and
+wait for its cgroup to be empty, escalating `SIGTERM` to `SIGKILL` on the
+unit's own timeout; delete `browser/snapshots`, `browser/staging` and the
+rest of `accounts/<uuid>/browser` with a scoped, no-follow removal; record
+completion in `state.json`. A snapshot job publishes only if the
+`(incarnation, profile_revision)` it captured still match under the lock;
+otherwise its staging is discarded. A restart in the middle resumes the
+fenced operation from `state.json` and preserves its receipt; a delayed
+reset or revocation carrying an older revision is a no-op. Native tombstones
+and every other file under the account are untouched. Revocation completion
+is not recorded while a browser placement is still pending.
 
 ### Lifecycle
 
@@ -348,43 +442,43 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
      └───────────────────┴──────────── stopping ◀──┘
 ```
 
-- `hibernated`: no process, no memory, snapshot on disk. This is what the
-  owner's "tab" shows when nothing is running.
+- `hibernated`: no process, no memory, published snapshot on disk. This is
+  what the owner's "tab" shows when nothing is running.
 - `open` admits only when the Plugin is installed and its executables, policy
-  binding and `host_abi` verify, the host policy is present (see
-  [host policy](#host-sandbox-policy-outside-cowboy)), the account is
-  enabled for the browser and not fenced, `browser.max_instances` is not
-  reached, and the recorded writer version is not newer than the runtime's.
-  Memory admission goes through the same compare-and-swap launch ledger as
-  cold workers, converted to a byte-weighted reservation with exact refunds
-  and the existing floor preserved: a browser reserves `browser.memory_max`
-  bytes, a cold worker its existing reserve, so a browser and a worker can
-  never both count the same headroom. The reservation is held until `ready`
-  or failure, then refunded exactly.
+  binding and `host_requirements` verify, the host policy is present, the
+  account is enabled for the browser and not fenced, `browser.max_instances`
+  is not reached, and the recorded writer version is not newer than the
+  runtime's. Memory admission goes through the same compare-and-swap launch
+  ledger as cold workers, converted to a byte-weighted reservation with
+  exact refunds and the existing floor preserved: a browser reserves
+  `browser.memory_max` bytes, a cold worker its existing reserve, so a
+  browser and a worker can never both count the same headroom. The
+  reservation is held until `ready` or failure, then refunded exactly.
 - The unit is `systemd-run --user --collect --unit cowboy-browser-<instance>
   --slice cowboy-agents.slice -p Delegate=yes -p KillMode=control-group
   -p MemoryMax=<browser.memory_max> -p MemoryHigh=<browser.memory_high>
   -p MemorySwapMax=0 -p CPUQuota=<browser.cpu_quota> -p TasksMax=<browser.tasks_max>
   -p OOMScoreAdjust=1000 -p LimitCORE=0 -p RuntimeMaxSec=<browser.max_runtime>
-  -p TimeoutStopSec=15 -p RuntimeDirectory=cowboy-browser/<instance>
-  -p RuntimeDirectoryMode=0700`. The instance directory is that short
-  `RuntimeDirectory` path, so every Unix socket path stays far below the
-  kernel limit.
+  -p TimeoutStopSec=20 -p RuntimeDirectory=cowboy-browser/<instance>
+  -p RuntimeDirectoryMode=0700`. The `RuntimeDirectory` holds only the two
+  sockets; it is not a storage location, and the Machine stops the instance
+  if anything else appears in it.
 - `ready` is accepted only after [confinement verification](#confinement-verification).
 - `attached` requires a live attachment lease. `detached` starts the
-  `browser.hibernate_after` grace (default 120 s); expiry hibernates (which
-  snapshots first). A sign-in-bound instance's deadline is
+  `browser.hibernate_after` grace (default 120 s); expiry hibernates
+  (graceful stop with snapshot). A sign-in-bound instance's deadline is
   `min(login expiry, browser.max_runtime)`.
-- Every mutation (`hibernate`, `resize`, `navigate`, `stop`) carries the
-  expected incarnation; attach, detach, resize and stream cleanup carry the
-  `attachment_id`; reset carries the expected `profile_revision`. A command
-  whose expectation no longer matches is a recorded no-op with reason
-  `superseded`. Replays of the same request ID return the original receipt.
+- Every mutation (`hibernate`, `resize`, `navigate`, `snapshot`, `stop`)
+  carries the expected incarnation; attach, detach, resize and stream cleanup
+  carry the `attachment_id`; reset carries the expected `profile_revision`.
+  A command whose expectation no longer matches is a recorded no-op with
+  reason `superseded`. Replays of the same request ID return the original
+  receipt.
 - Failure never retries with weaker isolation. A namespace or sandbox failure
   reports `sandbox_unavailable` with the host policy pointer; a confinement
   verification failure reports `confinement_unverified`; a missing host
-  prerequisite reports `host_abi` or `listener_prevention_unavailable`. All
-  leave the instance hibernated with the reservation refunded.
+  prerequisite reports `host_requirements`. All leave the instance
+  hibernated with the reservation refunded.
 
 ### Confinement verification
 
@@ -392,56 +486,63 @@ Before accepting `ready`, before every `navigate`, and before adopting any
 surviving unit at restart, the Machine pins each reported pid to its reported
 start time and reads from outside the namespace:
 
-- `/proc/<pid>/ns/user`, `ns/mnt` and `ns/ipc` of the launcher, display
-  server, window manager and browser: identical to the identities the
-  launcher reported and different from the Machine's own; `uid_map` and
-  `gid_map` contain exactly the single self-mapping;
-- `/proc/<pid>/attr/current` of every pinned process: the expected AppArmor
-  profile in enforce mode;
-- `/proc/<pid>/mountinfo` of the browser: the profile mount point is a tmpfs
-  of the expected size, the instance mount point is backed by the unit's
-  `RuntimeDirectory` (matched by mount source and root, major:minor and
-  inode of the backing directory), the runtime mount is read-only,
-  `nosuid`, `nodev` and backed by the installed generation, `/tmp`,
-  `/dev/shm`, `/etc` and `/home` are tmpfs with the expected flags, and the
-  policy file is bound from the artifact at the contract's policy directory;
-- `/proc/<pid>/status` of the browser's sandboxed descendants (found through
-  the cgroup): `NoNewPrivs` set and capability sets empty in the instance's
-  user namespace;
+- `/proc/<pid>/ns/user`, `ns/mnt`, `ns/pid` and `ns/ipc` of the launcher,
+  display server, window manager and browser: identical to the identities
+  the launcher reported and different from the Machine's own; `uid_map` and
+  `gid_map` of that **outer instance namespace** contain exactly the single
+  self-mapping;
+- `/proc/<pid>/attr/current`: the launcher under the `bootstrap` profile,
+  the display server, window manager and browser under the `sealed` profile,
+  all in enforce mode;
+- `/proc/<pid>/status` of the display server, window manager and browser
+  main process: `NoNewPrivs` set and every capability set empty. Chromium's
+  sandboxed descendants are identified by namespace ancestry (their
+  `ns/user` differs and its parent is the instance namespace); they are
+  checked for `NoNewPrivs` and for the sealed label, not for empty
+  capability bitmaps, because a nested user namespace legitimately grants
+  capabilities that apply only inside it;
+- `/proc/<pid>/mountinfo` of the browser: `/usr` and `/opt` backed by the
+  installed generation, read-only, `nosuid`, `nodev`; `/mnt/profile` and
+  `/mnt/instance` tmpfs of the expected sizes; `/mnt/sockets` backed by the
+  unit's `RuntimeDirectory` (matched by mount source and root, major:minor
+  and inode of the backing directory); `/tmp`, `/dev/shm`, `/etc`, `/home`
+  and `/run/user/<uid>` tmpfs with the expected flags; `/mnt/snapshot` and
+  `/mnt/publish` absent; the policy file bound from the artifact at the
+  contract's policy directory;
 - the whole cgroup subtree of the unit (`cgroup.procs` recursively, because
   `Delegate=yes` lets children create sub-cgroups): no process owns a
-  listening TCP socket or a UDP socket bound outside the kernel's ephemeral
-  range, matched by socket inode against `/proc/<pid>/net/{tcp,tcp6,udp,udp6}`
-  of each distinct network namespace found among those processes.
+  listening TCP socket or an explicitly bound UDP socket, matched by socket
+  inode against `/proc/<pid>/net/{tcp,tcp6,udp,udp6}` of each distinct
+  network namespace found among those processes, and no process owns an
+  abstract Unix socket (`/proc/<pid>/net/unix` entries with an `@` path).
 
 The socket scan repeats every 10 s while the instance runs and at every
 attach, navigate and resize; a violation stops the instance with reason
-`listener_detected`. The scan is detection evidence; prevention is the host
-policy's socket mediation plus the browser policy (no QUIC, no non-proxied
+`listener_detected`. The scan is detection evidence; prevention is the
+sealed profile (below) plus the browser policy (no QUIC, no non-proxied
 WebRTC UDP, no remote debugging), and admission refuses when prevention is
 unavailable.
 
 ### Storage during a run
 
-The profile tmpfs is the storage bound; the instance directory, `/tmp` and
-`/dev/shm` are bounded tmpfs as well, and the HTTP cache is bounded by flag.
-Downloads and file dialogs are disabled by policy. Nothing the browser does
-during a run can write to the shared filesystem. Snapshots are written only by
-the Machine and refused when the Device disk low-watermark would be crossed,
-in which case the instance keeps running and the owner is told the snapshot
-is pending.
+The profile and instance tmpfs are the storage bounds; `/tmp` and `/dev/shm`
+are bounded tmpfs as well; the HTTP cache is bounded by flag; downloads and
+file dialogs are disabled by policy. The only host-visible writable location
+is the sockets directory, which may hold the two sockets and nothing else.
+Snapshots are written only through the staging budget. Nothing the browser
+does during a run can write to the shared filesystem.
 
 ### Profile compatibility and rollback
 
-`browser-state.json` records the full `browser_version` of the artifact that
-last opened the profile, written and fsynced before the launcher restores the
-snapshot into the tmpfs. `open` compares it with the runtime's
-`browser_version`: an older runtime, including an older build of the same
-major, refuses with `profile_newer_than_runtime` and offers Reset; a newer
-runtime advances the record before launch. Artifact version and
-profile-format compatibility are distinct, so the fence is the conservative
-full version, not the major. The acceptance matrix includes upgrade → use →
-rollback and a crash between the record and readiness.
+`state.json` records the full `browser_version` of the artifact that last
+opened the profile, written and fsynced before the launcher restores the
+snapshot. `open` compares it with the runtime's `browser_version`: an older
+runtime, including an older build of the same major, refuses with
+`profile_newer_than_runtime` and offers Reset; a newer runtime advances the
+record before launch. Artifact version and profile-format compatibility are
+distinct, so the fence is the conservative full version, not the major. The
+acceptance matrix includes upgrade → use → rollback and a crash between the
+record and readiness.
 
 ### Restart reconciliation
 
@@ -454,12 +555,13 @@ and namespace identities. At Machine start:
 - a record whose boot ID differs from the current boot is cleared (the unit
   cannot have survived);
 - a record with a live unit of the same invocation ID is adopted as
-  `detached` only after the installation, executables and `host_abi`
-  re-verify, the account is still enabled and unfenced, the deadline has not
-  passed, a memory reservation is re-taken, and
+  `detached` only after the installation, executables and
+  `host_requirements` re-verify, the account is still enabled and unfenced,
+  the deadline has not passed, a memory reservation is re-taken, and
   [confinement verification](#confinement-verification) passes against the
   recorded identities; otherwise the unit is stopped;
 - a live `cowboy-browser-*` unit without a record is stopped;
+- abandoned staging directories are reconciled against the staging ledger;
 - a sign-in-bound record is stopped at reconciliation, because the Machine's
   native logins do not survive a restart: a lost Controller connection
   cancels registered logins (`LoginConnection` drop) and native recovery
@@ -506,9 +608,10 @@ Commands and events are a closed addition to `MachineCommand` /
 - `BrowserDetach{request_id, instance_id, attachment_id}`
 - `BrowserResize{request_id, instance_id, expected_incarnation, attachment_id, width, height}`
 - `BrowserNavigate{request_id, instance_id, expected_incarnation, url}` (`Tab` only)
+- `BrowserSnapshot{request_id, instance_id, expected_incarnation}`
 - `BrowserHibernate{request_id, instance_id, expected_incarnation}`
 - `BrowserReset{request_id, account_id, expected_profile_revision}`
-- `BrowserState{instance_id, incarnation, account_id, state, reason, geometry, scale, deadline_ms, attachment_id, snapshot_at_ms}`
+- `BrowserState{instance_id, incarnation, account_id, state, reason, geometry, scale, deadline_ms, attachment_id, snapshot_generation, snapshot_at_ms, unsaved_state_lost}`
 
 The display stream is not an RPC and does not use bulk lanes: lanes carry
 idempotent execution requests, resend after loss and close on idle
@@ -554,12 +657,12 @@ framing. Counters record bytes and frames.
 
 | Route | Effect |
 |---|---|
-| `GET /api/provider-accounts/{account}/browser` | state, geometry, scale, deadline, snapshot time, Machine, reasons |
+| `GET /api/provider-accounts/{account}/browser` | state, geometry, scale, deadline, snapshot generation and time, Machine, reasons |
 | `POST /api/provider-accounts/{account}/browser/open` | open as `Tab` (no URL body) |
 | `POST /api/provider-accounts/{account}/logins/{request}/browser` | open bound to that sign-in; no URL in the body; owner and account checked against the login receipt |
 | `POST .../browser/navigate` | `Tab` instances only, owner-supplied `https` URL, bounded |
 | `POST .../browser/resize` | bounded geometry; carries the attachment |
-| `POST .../browser/hibernate`, `POST .../browser/reset` | lifecycle, with expected incarnation or profile revision |
+| `POST .../browser/snapshot`, `POST .../browser/hibernate`, `POST .../browser/reset` | lifecycle, with expected incarnation or profile revision |
 | `GET .../browser/stream` | viewer WebSocket; `takeover=true` replaces a live attachment |
 | `GET /api/machine/browser-stream` | Machine upgrade with `x-cowboy-browser-stream-token` |
 
@@ -589,13 +692,15 @@ properties they were started with; bounds enforced by the schema):
 | Key | Default | Bounds | Meaning |
 |---|---|---|---|
 | `browser.max_instances` | 1 | 0–4 | running instances per Machine |
-| `browser.memory_max` / `browser.memory_high` | 1536 MiB / 1200 MiB | 512 MiB–4 GiB | unit limits; also the admission weight |
+| `browser.memory_max` / `browser.memory_high` | 2048 MiB / 1536 MiB | 1–6 GiB | unit limits, including every tmpfs page; also the admission weight |
 | `browser.cpu_quota` | 200% | 50–400% | unit CPU quota |
 | `browser.tasks_max` | 512 | 128–2048 | unit task limit |
 | `browser.hibernate_after` | 120 s | 30 s–30 min | detached grace |
 | `browser.max_runtime` | 30 min | 5 min–4 h | hard cap per run |
-| `browser.profile_max_bytes` | 256 MiB | 64 MiB–1 GiB | profile tmpfs size and snapshot bound |
-| `browser.snapshot_interval` | 10 min | 1 min–1 h | periodic snapshot while attached |
+| `browser.profile_max_bytes` | 256 MiB | 64 MiB–1 GiB | profile tmpfs size, `/dev/shm` size and snapshot bound |
+| `browser.instance_max_bytes` | 128 MiB | 32–512 MiB | instance tmpfs size |
+| `browser.snapshot_interval` | 10 min | 1 min–1 h, or off | periodic frozen snapshot while attached |
+| `browser.staging_max_bytes` | 1 GiB | 256 MiB–8 GiB | Machine-wide snapshot staging budget |
 | `browser.max_geometry` | 2560×1600 | ≤ 4096×4096 | resize bound |
 
 Reclaim ordering: the Controller's memory reclaim hibernates running browsers
@@ -611,10 +716,12 @@ likely first victim inside the shared slice; it is not relied on for
 ordering.
 
 Measured on hawk (nixpkgs Chromium 151, Xvnc 1.16, Claude sign-in page
-loaded): 570–590 MiB in the cgroup, Xvnc 30 MiB of it, no TCP listeners,
-RFB handshake, resize and clipboard forwarding verified over the Unix socket.
-The defaults above are provisional until the mixed-load measurement in
-[Acceptance](#acceptance-before-any-real-account) exists.
+loaded, profile on disk): 570–590 MiB in the cgroup, Xvnc 30 MiB of it, no
+TCP listeners, RFB handshake, resize and clipboard forwarding verified over
+the Unix socket. The tmpfs profile adds its pages to that figure; the
+defaults above are provisional until the restore, full-profile and
+mixed-load measurements in [Acceptance](#acceptance-before-any-real-account)
+exist.
 
 ## Viewer (core web)
 
@@ -670,64 +777,91 @@ running instance.
 Ubuntu restricts unprivileged user namespaces
 (`kernel.apparmor_restrict_unprivileged_userns=1`), so neither the launcher's
 isolation nor Chromium's sandbox can start from the Machine's user service
-without an AppArmor profile that grants `userns`. That profile is host
-configuration, kept and receipted in Columbus `machines/ovh`, and it confines
-rather than exempts. The sysctl and the ordinary denial for every other
-process stay exactly as they are.
+without AppArmor policy that grants `userns`. That policy is host
+configuration, kept and receipted in Columbus `machines/ovh`. It is two
+profiles, and it confines rather than exempts. The sysctl and the ordinary
+denial for every other process stay exactly as they are.
 
-- It attaches to the Plugin's launcher executable through a glob over the
-  Machine state root and runtime digest directory (derived from
-  `runtime.launcher`), and is inherited by every child, including Chromium
-  and its nested sandboxes.
-- It grants `userns` and, inside the instance's user namespace only, the
-  mount and capability operations the launcher needs before it seals; the
-  profile never grants anything against host paths.
-- It allows read and map of the runtime mount point, read of the scaffolded
-  `/etc`, read-write of the profile and instance mount points, `/tmp` and
-  `/dev/shm` inside the namespace, and the X and control sockets inside the
-  instance directory.
-- It denies the rest of the Machine user's home and the Machine state root
-  with audit logging, so an attempt is evidence. Because the launcher masks
-  those paths inside the namespace and nothing inside can unmask them, the
-  deny rule is a second layer and needs no per-account exceptions: the only
-  account visible to the browser is the one bound at the profile mount
-  point, and the profile cannot tell accounts apart, so it does not try to.
-- It denies `listen` and `accept` for `inet` and `inet6` sockets. The
-  Machine checks that the host's AppArmor exposes socket-permission
-  mediation (`/sys/kernel/security/apparmor/features/network`) and refuses
-  admission with `listener_prevention_unavailable` otherwise.
+**`bootstrap`** attaches to the Plugin's launcher executable through a glob
+over the Machine state root and runtime digest directory (derived from
+`runtime.launcher`). It grants `userns`; the mount, umount and remount
+operations of step 2 and of the snapshot aliases, each with its exact
+source pattern, destination alias and flags (read-only bind of the installed
+generation, tmpfs at the fixed alias paths, read-only bind of
+`accounts/*/browser/snapshots/gen-*` at `/mnt/snapshot`, read-write bind of
+`accounts/*/browser/staging/gen-*` at `/mnt/publish`, the `/etc` scaffold
+binds); read of the runtime and of the snapshot alias; read-write of
+`/mnt/instance`, `/mnt/profile`, `/mnt/publish` and `/mnt/sockets`; and
+`change_profile -> sealed` plus `signal` and `ptrace (read)` toward its own
+children for supervision. It denies everything else under the Machine user's
+home and the Machine state root with audit logging. The bootstrap profile
+can bind an alias only from the patterns above; it cannot, for example, bind
+another unit's `RuntimeDirectory` or another account's native directory,
+and the launcher is the only process that ever runs under it.
 
-The Machine does not weaken anything when the policy is absent: the launcher
-cannot create its namespaces and reports `sandbox_unavailable`. The policy is
-validated first on the disposable Ubuntu 26.04 KVM guest already used for OVH
-SSH tests (`machines/ovh/tests/openssh_kvm.py` pattern), with synthetic
-account directories and canary files, before it is installed on OVH.
+**`sealed`** is reached only by `change_profile` from `bootstrap` and is
+inherited by every descendant, including Chromium's nested sandboxes. It has
+no `mount`, `umount`, `remount` or `pivot_root` permission at all, so a
+descendant that creates a new user and mount namespace cannot bind or mask
+anything there either. It grants `userns` (for the zygote), read and map of
+`/usr/**`, `/opt/**` and the scaffolded `/etc`, read-write of
+`/mnt/profile/**`, `/mnt/instance/**`, `/tmp/**` and `/dev/shm/**`, creation
+of exactly `/mnt/sockets/rfb.sock` and the X socket in `/tmp/.X11-unix/`,
+and `network inet stream (connect send receive)` and
+`network inet6 stream (connect send receive)` plus
+`network inet dgram (connect send receive)` and the `inet6` equivalent. It
+denies `bind`, `listen` and `accept` on every `inet`/`inet6` socket (a UDP
+receiver that binds port 0 is an explicit `bind` and is refused; a
+connected client UDP socket is auto-bound by the kernel and does not pass
+the `bind` hook), denies every abstract Unix address (`deny unix addr=@**`),
+denies `/mnt/snapshot/**`, `/mnt/publish/**`, `/home/**` and the Machine
+state root with audit logging, and denies `ptrace` and `signal` toward
+anything outside its own instance.
+
+The Machine checks that the host's AppArmor exposes the features these
+profiles rely on (`/sys/kernel/security/apparmor/features`: network
+permissions, `unix` addresses, mount, user namespaces) and that both profiles
+are loaded in enforce mode, and refuses admission with
+`host_requirements` otherwise. It never weakens anything when the policy is
+absent: the launcher cannot create its namespaces and reports
+`sandbox_unavailable`. The policy is validated first on the disposable Ubuntu
+26.04 KVM guest already used for OVH SSH tests
+(`machines/ovh/tests/openssh_kvm.py` pattern), with synthetic account
+directories and canary files, before it is installed on OVH.
 
 ## Account isolation (core requirement)
 
-The browsers of different account cards share no state. This is what makes
-several accounts on one Machine safe to operate, and it is a requirement of
-the design, not a side effect:
+The browsers of different account cards share no profile, display, temporary,
+shared-memory, IPC or socket state, and nothing a page can store in one
+account's browser can be read by another's. This is what makes several
+accounts on one Machine safe to operate, and it is a requirement of the
+design, not a side effect:
 
 | State | Isolation |
 |---|---|
-| Cookies, local storage, IndexedDB, service workers, HTTP cache, GPU and shader caches, Chromium singleton lock, `Local State` | per-account profile: a private tmpfs during the run, restored from and snapshotted to the account's own directory by the Machine; no other account's data exists in the instance's view |
-| `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `TMPDIR`, NSS database | inside the per-run instance directory (tmpfs), destroyed with the unit |
-| `/tmp`, X display socket, X lock files | private tmpfs per instance; the X server's abstract socket is disabled; each instance has its own `Xtigervnc`, so X selections, window state and input never cross |
+| Cookies, local storage, IndexedDB, service workers, HTTP cache, GPU and shader caches, Chromium singleton lock, `Local State` | per-account profile: a private tmpfs during the run, restored from and published to the account's own snapshot directory; no other account's data exists in the instance's view, and the sealed profile cannot mount anything into it |
+| `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `TMPDIR`, NSS database | the per-run instance tmpfs, destroyed with the unit |
+| `/tmp`, X display socket, X lock files | private tmpfs per instance; the X server's abstract socket is disabled and abstract addresses are denied by the sealed profile; each instance has its own `Xtigervnc`, so X selections, window state and input never cross |
 | `/dev/shm`, SysV and POSIX IPC | private tmpfs and private IPC namespace per instance |
-| Abstract Unix sockets | none are created: the X server's is disabled and Chromium's singleton uses a pathname socket inside the profile; the two-instance acceptance test checks the abstract namespace |
-| Control and RFB sockets | per instance, inside the 0700 instance directory |
-| Process tree, memory, CPU accounting | one systemd unit and cgroup per instance; `max_instances` may allow several at once, each in its own namespaces |
+| Processes and signals | private PID namespace per instance with its own `/proc`; the sealed profile also denies `ptrace` and `signal` outside the instance |
+| Abstract Unix sockets, UDP receivers, TCP listeners | denied by the sealed profile; the Machine's recursive socket scan is the evidence |
+| Control and RFB sockets | per instance, inside the unit's 0700 `RuntimeDirectory`; reachable only through that host path (the same-user boundary below) |
+| Memory and CPU accounting | one systemd unit and cgroup per instance; `max_instances` may allow several at once, each in its own namespaces |
 | Remote clipboard | held per attachment in the viewer, never shared between accounts, dropped on attachment, incarnation or login-request change; the owner's device clipboard is only ever pasted by an explicit action |
-| Runtime files (browser, fonts, policy) | shared read-only artifact; they carry no state |
+| Runtime files (browser, fonts, policy, glibc) | shared read-only artifact; they carry no state |
 | Sign-in binding | a sign-in opens only in the browser of the same account as the login, checked under the login lock; the viewer always names the account whose browser it shows |
 
 What stays shared is what is shared for the native CLIs already: the
-Machine's egress address, timezone and locale, and the runtime version. The
-design does not manufacture per-account device differences; separate,
-persistent, honestly distinct profiles are the isolation, and the account
-label in the viewer is the guard against the owner signing one account into
-another account's browser.
+Machine's egress address, timezone and locale, the runtime version, the
+host network namespace, and the Machine user identity, under which the
+trusted Machine supervisor and any same-user host process can reach the
+sockets directory and the snapshot files (the trust boundary recorded in
+`requirements.md`). The design does not manufacture per-account device
+differences; separate, persistent, honestly distinct profiles are the
+isolation. It prevents automatic inheritance of one account's browser state
+by another and binds a sign-in to the account that owns the browser; it
+cannot stop the owner from typing one account's upstream credentials into
+another account's browser, which is why the viewer always names the account.
 
 ## Security and privacy
 
@@ -742,13 +876,13 @@ another account's browser.
   not as established vendor permission.
 - Credentials: the native login's OAuth files stay Machine-local and
   native-owned exactly as today. The browser's cookies live in the account's
-  profile snapshot on the Machine and in the instance's private tmpfs while
+  published snapshot on the Machine and in the instance's private tmpfs while
   it runs. No other browser instance can reach them; the trusted Machine
   supervisor and the host administrator can, as they can reach every other
   account file (`requirements.md`, trust boundary). The authorization code
   travels only through the existing owner-submitted path.
 - Same-user processes on the Machine (other workers) could reach the RFB
-  socket through the host path of the instance directory. The existing
+  socket through the host path of the sockets directory. The existing
   requirement already states that directory separation is not a security
   boundary against host filesystem access; agent tools execute on their bound
   development host, not the OVH Machine. This is recorded, not claimed
@@ -768,29 +902,34 @@ broadens the AppArmor or userns permissions or relaxes the sysctl; adds
 
 ## Acceptance before any real account
 
-Each row cites the round-1 (R1-n), round-2 (R2-n) or round-3 (R3-n) finding
-it closes.
+Each row cites the round-1 (R1-n), round-2 (R2-n), round-3 (R3-n) or
+round-4 (R4-n) finding it closes.
 
 | Evidence | Findings |
 |---|---|
-| Listener evidence throughout a run: cgroup-subtree socket scan across every network namespace at ready, navigate, resize, reconnect and every 10 s; a short-lived listener attempt from inside the namespace is refused by the host policy, and admission refuses on a host without socket mediation; X auth enforced; private `/tmp`; no abstract X socket; QUIC and non-proxied WebRTC UDP off | R1-1, R2-17, R3-9 |
-| Policy text accepted and accurate about transit and about who can read the profile; Controller stream path has no persistence or logging of payloads (code review + test) | R1-2, R2-7, R3-14 |
-| Syscall-level canaries from inside a running instance (a conformance helper exec'd in the namespace, not the browser UI): `open`, `openat`, `stat`, `rename` and `mount` against another synthetic account's profile, native credentials and the Machine state root fail; the mount table shows only the bound profile; AppArmor audit shows the denials; `file://` and dialog UI tests are additional, not sufficient | R1-3, R2-1, R3-3 |
-| Nested sandbox evidence on pristine Ubuntu 26.04 with the stock sysctl: Chromium's zygote creates its user, PID and network namespaces under the inherited enforcing profile; `uid_map` is the single self-mapping; capability sets of the launcher and all descendants are empty after sealing; a descendant cannot mount, unmask or rebind | R3-1 |
-| Two synthetic accounts running at once (`browser.max_instances=2`): no shared path, X display, `/tmp`, `/dev/shm`, IPC object, abstract socket or clipboard between them; a cookie set in one is absent from the other across hibernate and reopen; a sign-in open against the other account's login is refused | core isolation, R3-5 |
-| Mount sequence on a pristine host without Chrome or policy directories installed: `/etc` scaffold, policy file bound at the contract's directory, bind-before-mask ordering; effective-policy evidence from the browser (remote debugging flag refused, download blocked, `file://` blocked, QUIC off) in conformance | R2-12, R3-4, R3-7 |
+| Socket evidence throughout a run: recursive cgroup scan across every network namespace at ready, navigate, resize, reconnect and every 10 s for TCP listeners, explicitly bound UDP sockets and abstract Unix sockets; from inside the sealed profile a TCP `listen`, a UDP `bind` to port 0 and an abstract `bind`/`connect` are all refused; admission refuses on a host without the AppArmor features; X auth enforced; private `/tmp`; no abstract X socket; QUIC and non-proxied WebRTC UDP off, with the effective `WebRtcIPHandling` value read back | R1-1, R2-17, R3-9, R4-12 |
+| Policy text accepted and accurate about transit, host visibility and the remaining shared channels; Controller stream path has no persistence or logging of payloads (code review + test) | R1-2, R2-7, R3-14, R4-13 |
+| Syscall-level canaries from inside a running instance (a conformance helper exec'd under the sealed profile, not the browser UI): `open`, `openat`, `stat`, `rename`, `mount`, `umount` and `pivot_root` against another synthetic account's snapshot, native credentials, the Machine state root and another instance's `RuntimeDirectory` fail, including from a freshly created descendant user+mount namespace that tries to bind one of those onto `/mnt/profile` or `/mnt/sockets`; the mount table shows only the bound aliases; AppArmor audit shows the denials; `file://` and dialog UI tests are additional, not sufficient | R1-3, R2-1, R3-1, R3-3, R4-1 |
+| Nested sandbox evidence on pristine Ubuntu 26.04 with the stock sysctl: Chromium's zygote creates its user, PID and network namespaces under the inherited sealed profile; the outer instance namespace's `uid_map` is the single self-mapping; capability sets of the display server, window manager and browser main process are empty with `NoNewPrivs`; sandboxed descendants are identified by namespace ancestry and carry the sealed label | R3-1, R4-10 |
+| Two synthetic accounts running at once (`browser.max_instances=2`): no shared path, X display, `/tmp`, `/dev/shm`, IPC object, PID visibility, signal delivery, abstract socket, UDP channel or clipboard between them; a cookie set in one is absent from the other across hibernate and reopen; a sign-in open against the other account's login is refused | core isolation, R3-5, R4-11, R4-12 |
+| Mount sequence on a pristine host without Chrome or policy directories installed: `/mnt` aliases, `/usr` and `/opt` from the artifact, `/etc` scaffold, policy file bound at the contract's directory, `/proc` for the PID namespace, bind-before-mask ordering, `/run/user/<uid>` masked; effective-policy evidence from the browser (remote debugging flag refused, download blocked, `file://` blocked, QUIC off) in conformance | R2-12, R3-4, R3-7 |
+| Hermetic runtime: `Xtigervnc` finds `xkbcomp` and XKB data, Chromium finds fonts and GSettings, all from the artifact, with no `LD_LIBRARY_PATH`; `ldd` audit of every ELF object against the tree alone; `host_requirements` check and refusal on a host that fails it | R2-13, R3-13 |
 | Stream binding and authorization: token single-use, wrong `ConnectionToken`, wrong incarnation, wrong attachment, revoked owner, expired session or step-up during continuous traffic, revoked device, disabled account, gate closed, Origin mismatch all close both hops; takeover detaches only the old attachment; old-connection rejection after Machine reconnection | R1-4, R2-4, R2-6, R2-9, R3-8 |
-| Race and fencing tests: login completes between reservation and unit registration; Machine restart with a live unit (same and different boot) re-verifies confinement before adoption; delayed hibernate/resize/reset/detach for a superseded incarnation, attachment or profile revision; browser OOM during login leaves the native login and generation untouched; cross-account open refused | R1-5, R2-3, R2-4, R2-5 |
-| Durable fences: crash injection after the fence is written, after the unit is stopped, and after deletion but before completion, for both reset and revocation; restart resumes the operation, the revision never goes backwards, a delayed reset cannot delete a newly created profile | R2-2, R3-2 |
+| Race and fencing tests: login completes between reservation and unit registration; Machine restart with a live unit (same and different boot) re-verifies confinement before adoption; delayed hibernate/resize/snapshot/reset/detach for a superseded incarnation, attachment or profile revision; browser OOM during login leaves the native login and generation untouched; cross-account open refused | R1-5, R2-3, R2-4, R2-5 |
+| Durable fences and snapshot serialization: crash injection after the fence is written, after the unit is stopped, after deletion but before completion, and during an in-flight snapshot copy and publication, for both reset and revocation; restart resumes the operation, the revision never goes backwards, a stale snapshot never publishes over a reset or replacement profile, abandoned staging is reconciled | R2-2, R3-2, R4-4 |
+| Snapshot coherence: frozen-copy snapshots under concurrent Chromium writes recover cleanly (SQLite WAL and LevelDB open without error, cookies intact); graceful-stop snapshots capture state written just before the stop; publication is atomic (generation directory plus fsynced `state.json`), the previous generation survives a crash at every point, and the retained generation is the one `state.json` names | R4-2, R4-6 |
+| Snapshot contents as untrusted input: a profile containing absolute and relative symlinks, FIFOs, sockets, hard links, sparse files, deep trees and oversized files is copied without following, hanging or expanding beyond the bound, and restored the same way; the Machine's validation rejects the hostile staging tree | R4-3 |
+| Restoration and memory accounting: restoring a full-size snapshot charges the unit's cgroup (not the supervisor), the sum of browser plus profile, `/tmp` and `/dev/shm` tmpfs stays below `MemoryMax` under the defaults, no swap is used, and the loss window after a crash equals the state since the last published generation | R4-7 |
+| Storage: a page filling IndexedDB faster than any polling interval hits the profile tmpfs bound; a process filling `HOME` or `TMPDIR` hits the instance tmpfs bound; `/run/user/<uid>` free space and unrelated runtime-directory operations are unaffected; the Machine's own state writes keep succeeding; snapshot refused at the staging budget and at the disk low-watermark; concurrent snapshots of two accounts near the watermark never over-commit | R2-10, R3-6, R4-5, R4-9 |
+| Snapshot failure versus stops: a stop forced by login termination, deadline, reclaim or `RuntimeMaxSec` completes without a snapshot and reports `unsaved_state_lost`; an explicit hibernate whose snapshot fails reports failure; pending persistence never keeps a unit alive past its authority | R4-8 |
 | Mixed-load measurement on the target Machine with simultaneous worker and browser admissions: byte-weighted reservations never over-admit, exact refunds, memory peak, pressure stall, OOM events, session continuity; reclaim hibernates the browser before any session; a browser stop stalled beyond 60 s keeps the fence and blocks session selection instead of settling | R1-6, R2-11, R3-10 |
-| Abnormal-exit cleanup: SIGKILL and OOM of the unit, and a deliberately crashing child, with synthetic secrets in the instance directory; no core dump, no swap (`MemorySwapMax=0`), instance directory removed; the last snapshot survives; profile deleted by reset and by revocation with a running browser | R1-7 |
+| Abnormal-exit cleanup: SIGKILL and OOM of the unit, and a deliberately crashing child, with synthetic secrets in the instance tmpfs; no core dump, no swap (`MemorySwapMax=0`), the tmpfs is gone with the unit, the sockets directory removed; the last published generation survives; profile deleted by reset and by revocation with a running browser | R1-7 |
 | Attachment lease: a viewer that disappears without Close is detached within 30 s and the instance hibernates after the grace; unpaired streams time out; stale and post-expiry renewals cannot resurrect an attachment | R1-8, R2-8 |
 | Clipboard: PRIMARY copies never arrive; explicit action required; edited code never overwritten; held text cleared on attachment change | R1-9 |
 | Resize authority and scale handoff: phone and desktop geometries, DPR 2 on touch, bounded sizes, desktop→phone handoff through "Restart for this screen", pointer mapping verified | R1-10, R2-14 |
 | Physical iPhone over the overlay: full sign-in flow including keyboard, IME, paste, Mail switch and return, email-code path, desktop handoff | R1-11 |
 | Enablement limited to the test account; authentication contract, worker generation, artifact, host-policy and lifecycle receipts retained; the separate native-owned lifecycle acceptance remains in force | R1-12 |
-| Exact signed archive installed through the real Machine installer on pristine Ubuntu 26.04: archive limits, link rejection, relocation, `ldd` audit, `host_abi` check (and refusal on a host that fails it), enforced AppArmor, confinement verification from outside | R2-12, R2-13, R3-13 |
-| Storage: a page filling IndexedDB faster than any polling interval hits the tmpfs bound and the Machine's own state writes keep succeeding; snapshot refused at the disk low-watermark; reset works afterwards | R2-10, R3-6 |
+| Exact signed archive installed through the real Machine installer on pristine Ubuntu 26.04: archive limits, link rejection, relocation, enforced AppArmor profiles, confinement verification from outside | R2-12, R2-13 |
 | Session restore: reopening a snapshot shows the new-tab page and issues no request to a previously open page (local test server) after clean hibernation and after a crash | R3-11 |
 | Plugin lifecycle: upgrade and uninstall with a running instance (drain, pinned bytes, retirement after lease release); rollback to an older build of the same major refuses and reset recovers; a crash between the writer record and readiness leaves a consistent record | R2-15, R2-16, R3-12 |
 
@@ -826,15 +965,18 @@ through the Machine browser on OVH.
   signed authentication section and forces every named account to sign in
   again.
 - Per-account AppArmor profiles: host policy cannot follow dynamically created
-  account identifiers; the namespace bind gives the same guarantee with one
-  static profile.
+  account identifiers; the namespace bind under a sealed profile gives the
+  same guarantee with two static profiles.
+- A relocatable tree over the host's `/usr` with `LD_LIBRARY_PATH`: fails on
+  compiled-in helper paths (`xkbcomp`) and ties the artifact to the host's
+  glibc; binding the artifact as the instance's `/usr` removes both problems.
 - Live profile on disk with polling-based size checks: cannot bound growth
-  between samples; the tmpfs profile with Machine-written snapshots gives a
+  between samples; the tmpfs profile with published snapshots gives a
   kernel-enforced bound at the cost of losing changes since the last
-  snapshot on a crash.
+  published generation on a crash.
 - Freezing the browser and squeezing its cgroup into swap for hibernation:
   more state to reason about than stopping the process, and in conflict with
-  `MemorySwapMax=0`; stopping with a persistent snapshot costs a 3–5 s cold
+  `MemorySwapMax=0`; stopping with a published snapshot costs a 3–5 s cold
   start, which is acceptable for a sign-in.
 
 ## Open questions
