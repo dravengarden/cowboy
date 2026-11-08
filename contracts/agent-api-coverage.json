@@ -10,6 +10,7 @@
     "agent_tools::list": "tools.defaults",
     "agent_tools::session": "tools.session",
     "api_artifact": "exception:streams — binary content transport; transcript metadata exposes attachment references; use the artifact/native file owner.",
+    "api_code_blob": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_code_buffer_close": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_code_buffer_open": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_code_changes": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",

@@ -5,15 +5,15 @@ import {
   type CodeChanges,
   fetchCodeChanges,
   fetchCodeManifest,
-} from "../../mobile/review/codeApi";
-import { invalidateDiffCache } from "../../mobile/review/diffCache";
+} from "../../review/codeApi";
+import { invalidateDiffCache } from "../../review/diffCache";
 import {
   type GitReviewEntry,
   type GitReviewSection,
   groupGitChanges,
   reviewQueue,
-} from "../../mobile/review/gitReviewModel";
-import { resolveReviewComparison } from "../../mobile/review/reviewCompareModel";
+} from "../../review/gitReviewModel";
+import { resolveReviewComparison } from "../../review/reviewCompareModel";
 
 export interface DesktopReviewChanges {
   readonly sections: readonly GitReviewSection[];

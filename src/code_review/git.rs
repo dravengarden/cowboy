@@ -171,5 +171,7 @@ pub(super) fn git_path_is_tracked(root: &Path, path: &str) -> bool {
     git_output(root, &["ls-files", "--error-unmatch", "--", path], 1024).is_ok()
 }
 
+pub(crate) mod blob;
+
 #[cfg(test)]
 mod tests;

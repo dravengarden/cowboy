@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../../tools/test-assert.ts";
-import type { GitCommitSummary } from "./codeApi.ts";
+import type { GitCommitSummary } from "../../review/codeApi.ts";
 import {
   historyPageCursor,
   mergeHistoryPage,

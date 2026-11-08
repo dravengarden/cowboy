@@ -110,13 +110,6 @@ const EXPLORE_HINTS: RegionHint[] = [
   { keys: "H/L", label: "Close/open" },
 ];
 
-// Review's own keys arrive with its Desktop workbench; until then the line
-// names how to reach and leave it (docs/desktop-code-review.md).
-const REVIEW_HINTS: RegionHint[] = [
-  { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
-  { keys: DESKTOP_SHORTCUTS.focusReview, label: "Focus Review" },
-];
-
 const REVIEW_NAVIGATOR_HINTS: RegionHint[] = [
   { keys: "J/K", label: "Row" },
   { keys: "L/Enter", label: "Open" },
@@ -135,6 +128,8 @@ const REVIEW_DOCUMENT_HINTS: RegionHint[] = [
   { keys: "]u", label: "Unreviewed" },
   { keys: "]d", label: "Problem" },
   { keys: "gO", label: "Outline" },
+  { keys: "K", label: "Hover" },
+  { keys: "gd/gr", label: "Definition/refs" },
   { keys: "gt/gT", label: "Tab" },
   { keys: "V", label: "Select" },
   { keys: "Enter", label: "Send" },
@@ -209,8 +204,6 @@ function regionHints(
       ];
     case "conversation.transcript":
       return projection === "explore" ? EXPLORE_HINTS : HISTORY_HINTS;
-    case "conversation.review":
-      return REVIEW_HINTS;
     case "review.navigator":
       return REVIEW_NAVIGATOR_HINTS;
     case "review.document":

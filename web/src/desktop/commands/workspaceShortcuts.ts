@@ -132,7 +132,6 @@ export const DESKTOP_WORKSPACE_KEYS = {
   review: "V",
   focusReview: "VV",
   // Review's classic (phone) layout, until the workbench covers it.
-  reviewLayout: "VL",
   focusPlan: "L",
   // Managed calls delegated to other Agents: `G` for aGents.
   focusCalls: "G",

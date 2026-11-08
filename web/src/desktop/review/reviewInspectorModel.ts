@@ -3,9 +3,10 @@
 // Rows are one-based Document lines; in a diff a file line is placed only
 // through a verified projection, never guessed from the patch text.
 
-import type { CodeCheckDiagnostic, CodeChecks, CodeDocumentSymbol } from "../../mobile/review/codeApi";
-import { checkTitle } from "../../mobile/review/checkAnnotations";
-import { diffHunkLines } from "../../mobile/review/diffNavigationModel";
+import type { CodeCheckDiagnostic, CodeChecks, CodeDiagnostic, CodeDocumentSymbol } from "../../review/codeApi";
+import { checkTitle } from "../../review/checkAnnotations";
+import { diffHunkLines } from "../../review/diffNavigationModel";
+import type { ReviewFinding } from "./reviewFindingsModel";
 
 export interface InspectorHunk {
   readonly row: number;
@@ -73,6 +74,53 @@ export function inspectorProblems(
   return problems.sort((left, right) =>
     (left.row ?? Number.MAX_SAFE_INTEGER) - (right.row ?? Number.MAX_SAFE_INTEGER) ||
     left.line - right.line || ORDER[left.severity] - ORDER[right.severity]
+  );
+}
+
+const LSP_SEVERITY: Readonly<Record<number, CodeCheckDiagnostic["severity"]>> = { 1: "error", 2: "warning" };
+
+/** The language engine's diagnostics of an open source file, as problems
+ *  merged with the check findings in Document order. */
+export function withLanguageProblems(
+  problems: readonly InspectorProblem[],
+  diagnostics: readonly CodeDiagnostic[],
+): InspectorProblem[] {
+  const language = diagnostics.map((diagnostic, index): InspectorProblem => ({
+    key: `language:${String(index)}`,
+    severity: LSP_SEVERITY[diagnostic.severity] ?? "note",
+    message: diagnostic.message,
+    source: diagnostic.source ?? "Language",
+    line: diagnostic.start.row + 1,
+    row: diagnostic.start.row + 1,
+  }));
+  return [...problems, ...language].sort((left, right) =>
+    (left.row ?? Number.MAX_SAFE_INTEGER) - (right.row ?? Number.MAX_SAFE_INTEGER) ||
+    ORDER[left.severity] - ORDER[right.severity]
+  );
+}
+
+const FINDING_SEVERITY = { critical: "error", high: "error", medium: "warning", low: "note" } as const;
+const ANCHOR_NOTE = { current: "", stale: " · the file changed since the review", unmapped: " · outside the reviewed files" } as const;
+
+/** A managed review's findings for `path` as problems; only `current` ones
+ *  can be placed (`rowOf`), the rest are listed with the reason. */
+export function withFindingProblems(
+  problems: readonly InspectorProblem[],
+  findings: readonly ReviewFinding[],
+  path: string,
+  rowOf: (line: number) => number | undefined,
+): InspectorProblem[] {
+  const here = findings.filter((finding) => samePath(finding.path, path)).map((finding): InspectorProblem => ({
+    key: `finding:${finding.key}`,
+    severity: FINDING_SEVERITY[finding.severity],
+    message: `${finding.title}${ANCHOR_NOTE[finding.anchor]}`,
+    source: `AI review · ${finding.severity}`,
+    line: finding.lineStart,
+    row: finding.anchor === "current" ? rowOf(finding.lineStart) : undefined,
+  }));
+  return [...problems, ...here].sort((left, right) =>
+    (left.row ?? Number.MAX_SAFE_INTEGER) - (right.row ?? Number.MAX_SAFE_INTEGER) ||
+    ORDER[left.severity] - ORDER[right.severity]
   );
 }
 

@@ -507,6 +507,7 @@ pub(super) fn code_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/code/sessions/{id}/diff", get(api_code_diff))
         .route("/api/code/sessions/{id}/file", get(api_code_file))
         .route("/api/code/sessions/{id}/file-raw", get(api_code_file_raw))
+        .route("/api/code/sessions/{id}/blob", get(api_code_blob))
         .route("/api/code/sessions/{id}/language", get(api_code_language))
         .route(
             "/api/code/sessions/{id}/intelligence/hover",

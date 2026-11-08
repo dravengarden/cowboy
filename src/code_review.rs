@@ -22,7 +22,7 @@ const LOCAL_PROVIDER_REVISION: &[u8] = b"local-v2-project-projection";
 
 pub mod checks;
 pub mod content_search;
-mod git;
+pub(crate) mod git;
 pub mod structure;
 use git::{contains, git_fetch, git_output, git_path_is_tracked};
 

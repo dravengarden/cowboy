@@ -1,0 +1,82 @@
+import { test } from "bun:test";
+import { assertEquals } from "../../../tools/test-assert.ts";
+import type { GitReviewEntry } from "./gitReviewModel.ts";
+import { buildGitChangeTree, compareGitTreePaths } from "./gitChangeTree.ts";
+
+const entry = (path: string): GitReviewEntry => ({
+  change: {
+    path,
+    status: "modified",
+    staged: false,
+    unstaged: true,
+  },
+  scope: "unstaged",
+});
+
+test("git change tree contains only changed files and expands directories", () => {
+  const tree = buildGitChangeTree([
+    entry("src/server.rs"),
+    entry("src/mobile/review.ts"),
+    entry("Cargo.toml"),
+  ]);
+  assertEquals(tree.map((node) => [node.kind, node.path]), [
+    ["directory", "src"],
+    ["file", "Cargo.toml"],
+  ]);
+  assertEquals(tree[0]?.children.map((node) => [node.kind, node.path]), [
+    ["directory", "src/mobile"],
+    ["file", "src/server.rs"],
+  ]);
+});
+
+test("git change tree compacts directory-only path chains", () => {
+  const tree = buildGitChangeTree([
+    entry("config/data-selections/active.json"),
+    entry("crates/corsair-data/src/lib.rs"),
+  ]);
+  assertEquals(tree.map((node) => [node.name, node.path]), [
+    ["config/data-selections", "config/data-selections"],
+    ["crates/corsair-data/src", "crates/corsair-data/src"],
+  ]);
+  assertEquals(tree[0]?.children.map((node) => node.path), [
+    "config/data-selections/active.json",
+  ]);
+});
+
+test("git change tree preserves branching directories", () => {
+  const tree = buildGitChangeTree([
+    entry("src/mobile/app.ts"),
+    entry("src/server/api.ts"),
+  ]);
+  assertEquals(tree.map((node) => [node.name, node.path]), [
+    ["src", "src"],
+  ]);
+  assertEquals(tree[0]?.children.map((node) => [node.name, node.path]), [
+    ["mobile", "src/mobile"],
+    ["server", "src/server"],
+  ]);
+});
+
+test("git change tree orders numbered names naturally", () => {
+  const tree = buildGitChangeTree([
+    entry("file-10.ts"),
+    entry("file-2.ts"),
+    entry("file-1.ts"),
+  ]);
+  assertEquals(tree.map((node) => node.name), [
+    "file-1.ts",
+    "file-2.ts",
+    "file-10.ts",
+  ]);
+});
+
+test("tree path order lists directories before sibling files", () => {
+  const paths = ["b.ts", "a/z.ts", "a/b/c.ts", "a.ts", "a/a.ts"];
+  assertEquals(paths.toSorted(compareGitTreePaths), [
+    "a/b/c.ts",
+    "a/a.ts",
+    "a/z.ts",
+    "a.ts",
+    "b.ts",
+  ]);
+});

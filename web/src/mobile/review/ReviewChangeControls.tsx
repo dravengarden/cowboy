@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useNetworkActionState } from "../../NetworkActionFeedback";
 import { COARSE_POINTER_ROOT_CLASS } from "../../platform";
 import { ReviewComparisonButton } from "./ReviewComparisonButton";
-import { reviewFetchAge } from "./reviewCompareModel";
+import { reviewFetchAge } from "../../review/reviewCompareModel";
 
 /** The changes view owns these controls even when the repository lays them
  * beside its tabs. Opening secondary actions never resets the comparison. */

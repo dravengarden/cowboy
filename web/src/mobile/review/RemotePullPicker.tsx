@@ -27,8 +27,8 @@ import {
 } from "../../extensions/api";
 import { WorkspaceExtensionsButton } from "../../extensions/WorkspaceExtensionsButton";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
-import { pullNumber } from "./remoteReviewModel";
-import type { Choice } from "./remoteReviewSources";
+import { pullNumber } from "../../review/remoteReviewModel";
+import type { Choice } from "../../review/remoteReviewSources";
 
 export const remoteBottomSx = {
   flexShrink: 0,

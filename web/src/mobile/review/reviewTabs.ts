@@ -1,4 +1,4 @@
-import type { CodeDiffScope } from "./codeApi";
+import type { CodeDiffScope } from "../../review/codeApi";
 
 const STORAGE_KEY = "cowboy:code-review-tabs:v1";
 const MAX_TABS_PER_MODE = 12;

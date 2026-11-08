@@ -3,8 +3,8 @@ import { Alert, Box, Button } from "@mui/material";
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { dismissReviewActions } from "./ReviewMoreActions";
-import { refreshReviewChecks, useReviewChecks } from "./reviewChecksStore";
-import { sendCheckRequest } from "./checkRequest";
+import { refreshReviewChecks, useReviewChecks } from "../../review/reviewChecksStore";
+import { sendCheckRequest } from "../../review/checkRequest";
 
 /** User-triggered checks only. An uncertain reply retains its operation ID.
  *  With a `container`, the buttons render there (More actions) and a reply's

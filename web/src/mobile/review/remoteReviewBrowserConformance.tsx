@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { createTheme, ThemeProvider } from "@mui/material";
 import { SurfaceProvider } from "../../surface/SurfaceProfile";
 import { RemoteReviewApp } from "./RemoteReviewApp";
-import type { RemoteReviewBinding } from "./remoteReviewModel";
+import type { RemoteReviewBinding } from "../../review/remoteReviewModel";
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);

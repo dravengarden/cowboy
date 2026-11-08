@@ -19,8 +19,28 @@ import { setReviewContextChoice } from "./desktopReviewContextChoice";
 import { useReviewWorkbenchCommands } from "./useReviewWorkbenchCommands";
 import { REVIEW_DOCUMENT_REGION, type ReviewWorkbench, useReviewWorkbench } from "./useReviewWorkbench";
 import { useElementWidth } from "./useReviewTabsState";
+import { toggleReviewDiffContext, toggleReviewDiffLayout } from "./reviewDiffLayout";
+import { notify } from "../../store";
 import { ReviewNavigatorSplitter, useNavigatorWidth } from "./ReviewNavigatorSplitter";
 import { DesktopModal } from "../DesktopModal";
+import { ReviewLanguageLayer } from "./ReviewLanguageLayer";
+import type { CodeDiagnostic } from "../../review/codeApi";
+import { type ReviewLanguage, useReviewLanguage } from "./useReviewLanguage";
+
+/** Language intelligence for the open source file (diffs ask nothing). */
+function useWorkbenchLanguage(review: ReviewWorkbench): ReviewLanguage {
+  const ready = review.load?.state === "ready" ? review.load.value : undefined;
+  const source = review.document?.kind === "source" ? review.document.path : undefined;
+  return useReviewLanguage(
+    review.target?.sessionId ?? "",
+    review.target ? source : undefined,
+    review.changes.bufferMode,
+    source && ready && !ready.truncated ? ready.text : undefined,
+    review.changes.dataRevision,
+  );
+}
+import { useDelegate } from "./reviewDelegation";
+import { type ReviewFindings, useReviewFindings } from "./useReviewFindings";
 import { focusOutline, REVIEW_INSPECTOR_REGION, REVIEW_RUN_CHECK_EVENT, ReviewInspector } from "./ReviewInspector";
 import { ReviewSettingsContent } from "../../mobile/review/ReviewSettings";
 
@@ -56,9 +76,11 @@ function useInspectorPanel(width: number, closeNavigatorInset: () => void) {
   };
 }
 
-function InspectorRegion({ review, panel }: {
+function InspectorRegion({ review, panel, language, findings }: {
   review: ReviewWorkbench;
   panel: ReturnType<typeof useInspectorPanel>;
+  language: ReviewLanguage;
+  findings: ReviewFindings;
 }): React.JSX.Element {
   return (
     <Box
@@ -77,7 +99,7 @@ function InspectorRegion({ review, panel }: {
         ...(panel.beside ? {} : { position: "absolute", zIndex: 4, top: 0, bottom: 0, right: 0, boxShadow: 8 }),
       }}
     >
-      <ReviewInspector review={review} onShow={panel.show} />
+      <ReviewInspector review={review} onShow={panel.show} diagnostics={language.diagnostics} findings={findings} />
     </Box>
   );
 }
@@ -150,6 +172,7 @@ interface ViewControls {
   readonly setUnreadOnly: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setTab: React.Dispatch<React.SetStateAction<ReviewNavigatorTab>>;
   readonly requestComparison: () => void;
+  readonly delegate: (kind: "explain" | "review", path?: string) => void;
 }
 
 /** The view's half of the Review commands: the Navigator and its layout. */
@@ -175,6 +198,8 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
       const path = focusedRow()?.dataset.reviewChange ?? focusedRow()?.dataset.reviewTreePath;
       review.send(true, path ? review.pathRemark(path) : undefined);
     },
+    // A focused Navigator row names the file; otherwise the open Document.
+    delegate: (kind) => controls.delegate(kind, focusedRow()?.dataset.reviewChange ?? focusedRow()?.dataset.reviewTreePath),
     closeTab: () => review.closeTab(),
     keepTab: () => review.keepTab(),
     toggleNavigator: () => compact ? controls.setOverlay((value) => !value) : controls.setFolded((value) => !value),
@@ -203,6 +228,12 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
       review.workspace.focusRegion(REVIEW_DOCUMENT_REGION);
     },
     refresh: review.changes.refresh,
+    toggleDiffLayout: () => {
+      notify(toggleReviewDiffLayout() === "split" ? "Split diff" : "Unified diff", "info");
+    },
+    toggleDiffContext: () => {
+      notify(toggleReviewDiffContext() === "file" ? "Diffs show the whole file" : "Diffs show the patch's context", "info");
+    },
     hasDocument: review.document !== undefined,
     overlay: compact && overlay,
   });
@@ -210,7 +241,11 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
 
 /** The Document region: the open file, its tabs and footer. Focus that
  *  reaches the region before the editor exists is handed on when it mounts. */
-function ReviewDocumentRegion({ review }: { review: ReviewWorkbench }): React.JSX.Element {
+function ReviewDocumentRegion({ review, diagnostics, onDelegate }: {
+  review: ReviewWorkbench;
+  diagnostics: readonly CodeDiagnostic[];
+  onDelegate: (kind: "explain" | "review") => void;
+}): React.JSX.Element {
   return (
     <Box
       data-desktop-region={REVIEW_DOCUMENT_REGION}
@@ -241,7 +276,10 @@ function ReviewDocumentRegion({ review }: { review: ReviewWorkbench }): React.JS
         }}
         onMark={() => review.markOpen()}
         onSend={() => review.send(false)}
+        onDelegate={onDelegate}
         empty={<EmptyDocument review={review} />}
+        split={review.split}
+        diagnostics={diagnostics}
       />
     </Box>
   );
@@ -290,7 +328,11 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
     if (compact && overlay) setOverlay(false);
   };
   const inspector = useInspectorPanel(width, () => setOverlay(false));
+  const language = useWorkbenchLanguage(review);
+  const delegate = useDelegate(review);
+  const findings = useReviewFindings(review.context.agentSessionId, review.changes.queue);
   useReviewViewCommands(review, {
+    delegate,
     inspector: inspector.commands,
     openContext: () => {
       showNavigator(tab);
@@ -349,6 +391,7 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
         review.openSource(path);
       }}
       dataRevision={review.changes.dataRevision}
+      findings={findings.findings}
     />
   );
   return (
@@ -383,8 +426,9 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
           {navigator}
         </Paper>
       )}
-      <ReviewDocumentRegion review={review} />
-      {review.target && <InspectorRegion review={review} panel={inspector} />}
+      <ReviewDocumentRegion review={review} diagnostics={language.diagnostics} onDelegate={(kind) => delegate(kind)} />
+      {review.target && <InspectorRegion review={review} panel={inspector} language={language} findings={findings} />}
+      <ReviewLanguageLayer review={review} language={language} />
       <DesktopModal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Review settings" width={640}>
         <ReviewSettingsContent />
       </DesktopModal>

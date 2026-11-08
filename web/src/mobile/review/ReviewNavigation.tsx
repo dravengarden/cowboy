@@ -12,8 +12,8 @@ import {
   createReviewDestination,
   type ReviewDestination,
 } from "./ownedReviewDestination.ts";
-import type { OwnedReviewIntelligence } from "./useOwnedReviewBuffer.ts";
-import { useReviewSettings } from "./reviewSettings.ts";
+import type { OwnedReviewIntelligence } from "../../review/useOwnedReviewBuffer.ts";
+import { useReviewSettings } from "../../review/reviewSettings.ts";
 
 const CodeViewer = lazy(() => import("./CodeViewer.tsx"));
 const kinds = [

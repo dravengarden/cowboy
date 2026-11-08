@@ -8,7 +8,7 @@ import { COARSE_POINTER_ROOT_CLASS } from "./platform.ts";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import { ReviewChanges } from "./mobile/review/ReviewChanges.tsx";
 import { ReviewRepository } from "./mobile/review/ReviewRepository.tsx";
-import type { GitReviewEntry } from "./mobile/review/gitReviewModel.ts";
+import type { GitReviewEntry } from "./review/gitReviewModel.ts";
 import type { SessionMeta } from "./protocol.ts";
 
 function check(value: unknown, message: string): asserts value {

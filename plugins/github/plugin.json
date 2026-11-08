@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "github",
   "version": "0.2.9",
-  "component_release": "3.101.0",
+  "component_release": "3.102.0",
   "publisher": "cowboy-first-party",
   "kind": "workspace_extension",
   "entrypoint": "contract.json",

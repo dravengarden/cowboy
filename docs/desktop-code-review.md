@@ -1,6 +1,6 @@
 # Desktop Code Review
 
-**Status: design proposal r3 (2026-11-08); D0, D1, D1b, D1c and D2a implemented, D2b–D4 planned.** r3 records the
+**Status: design proposal r3 (2026-11-08); D0–D4 implemented (D3 with a Web-side projection; see the phase notes for what remains).** r3 records the
 owner's answers to the r2 open questions. r2 folds in a
 Codex Astra Max design review of r1 (managed call
 `call-53884a467577cfb02c34574f`: verdict *needs-attention*, five high and ten
@@ -493,7 +493,7 @@ Machine that predates it:
 
 | Addition | Phase | Contract |
 | --- | --- | --- |
-| Comparison-bound side windows: `GET /file?path=&side=base\|new&diff=<snapshot revision>&cursor=` | D2b | Windowed like `/file` from the exact objects the snapshot diffed; `410` once the snapshot is gone; never for ignore-whitespace snapshots. Required for expanded context in the split layout |
+| Comparison-bound side windows: `GET /file?path=&side=base\|new&diff=<snapshot revision>&cursor=` (implemented as `GET /blob?oid=`, see D2d below) | D2b | Windowed like `/file` from the exact objects the snapshot diffed; `410` once the snapshot is gone; never for ignore-whitespace snapshots. Required for expanded context in the split layout |
 | Findings projection: `GET /api/code/sessions/{id}/findings` and `?call=&path=&revision=` | D3 | Lists completed review calls of the Session and its live forks (call, task, base, root, files, verdict, completeness); per path returns anchors with `state: exact\|heuristic\|unmapped` computed from the snapshot blob and the current content identity. Authority: the reader must already see both sessions; reuses the call detail checks |
 | `open` reveal payload: optional `reveal {path, context, revision}` on `mobile-review:<sid>` | D4 | Written by new `open` writers; Desktop's adapter prefers it over the narrow `active` read |
 
@@ -539,10 +539,12 @@ together" reads "Prompt and the work pane".
 | D1b (implemented) | History (commit drill-in, commit tabs) and Worktrees tabs, the context control `␣VX` (this Session, project checkout, linked, bound and same-project sessions; a per-device choice), Review settings `␣V,`, a resizable Navigator in Resize mode | `tools/cdp-review-acceptance.ts` (15 trusted-input steps, both themes) |
 | D1c (implemented) | Remote PR in the workbench: the Pull request tab (`␣VG`) binds a PR through the synced `remote_review`, lists its files and opens them as in-memory `pr` tabs with viewed marks in the synced progress; Desktop ignores the phone's `remote_selected` | the acceptance's Pull request step against an opt-in GitHub fixture |
 | D2a (implemented) | Inspector (Outline, Hunks, Problems, Details) beside or inset, `]d`/`[d`, `gO`, `␣VO`, `␣V]`, `␣VK`; Problems are check findings, placed only on source lines or through the verified diff projection; language diagnostics wait for D2c's buffer leases | acceptance Inspector steps (check, `]d`, `gO`, inset at narrow width) |
+| D2b (implemented) | Split diff (`␣VD`, per device): an incremental decoder (`unifiedPatchDecoder.ts`) and an aligned two-sided layout (`splitDiffModel.ts`); the new side is the Vim buffer, the old side a passive mirror that follows its scroll; selections, `]c`, the Inspector and remarks map split rows to patch rows | decoder tests at every cut offset; acceptance split step |
+| D2c (implemented) | Language intelligence on source files in the manifest's buffer mode: owned buffers through `useOwnedReviewBuffer` (every answer checked against the shown text), legacy through a buffer lease and the language routes; `K` hover, `gd` `gD` `gy` `gI` `gr` (legacy only, as on the phone; owned reports navigation unavailable), diagnostics underlined and merged into Problems; a jump keeps its source tab. Diffs point to the file | acceptance language step (diagnostic, `K`, `gd`, `gT`) |
 | D2 tools | Streaming patch decoder and `@codemirror/merge` split view (patch-only), Inspector (Outline, Hunks, Problems, Details), `K` `gd` `gr` `gO` `]d`, checks `␣VK` with context gating, Review settings | Decoder fixtures pass; split and unified agree on every hunk of the fixture; hover/definition round trips under the measured `review_read_completed` budget |
-| D2b sides | Comparison-bound side windows; expanded context in the split layout | Expanded old-side text equals `git show <base>:<path>` for the fixture; an edited worktree never changes it |
-| D3 agent loop | Delegation contract, Explain/Review forks as kept-source preview tabs, findings projection with anchor states, `␣VS` on a problem | A managed review's findings land on their lines at `exact`, move to `heuristic`/`unmapped` after an edit, and disappear with a deleted fork; a prose result is shown as text |
-| D4 isolation | Desktop drops `mobile/review` UI imports; shared domain under `web/src/review/`; `open` reveal payload; 13 updated | Structure ratchet totals not above baseline; Mobile unchanged |
+| D2d sides (implemented) | Comparison-bound side windows; expanded context in the split layout | Expanded old-side text equals `git show <base>:<path>` for the fixture; an edited worktree never changes it |
+| D3 (implemented, Web projection) | Delegation contract, Explain/Review forks as kept-source preview tabs, findings projection with anchor states, `␣VS` on a problem | A managed review's findings land on their lines at `exact`, move to `heuristic`/`unmapped` after an edit, and disappear with a deleted fork; a prose result is shown as text |
+| D4 isolation (implemented, see notes) | Desktop drops `mobile/review` UI imports; shared domain under `web/src/review/`; `open` reveal payload; 13 updated | Structure ratchet totals not above baseline; Mobile unchanged |
 
 D1 as implemented (`web/src/desktop/review/`): the Navigator has Changes and
 Files; the Document is the read-only Vim buffer with unified diffs, source
@@ -562,9 +564,75 @@ Session's own worktree. `tools/cdp-review-acceptance.ts` drives the
 workbench with trusted keys in both themes and is part of
 `just desktop-keyboard-acceptance`.
 
-With D1c the workbench covers everything the classic layout offers on
-Desktop. `␣VL` stays as a fallback until D4 removes the Mobile UI imports
-from Desktop; it is not needed for any task.
+D2d as implemented reads the old side by the blob id the diff's own
+`index` line names, `GET /api/code/sessions/{id}/blob?oid=`, instead of a
+snapshot-bound `/file?side=&diff=`. A blob id is content-addressed, so the
+answer is the exact text the patch was computed from without a snapshot
+fence or a TTL; Git refuses an ambiguous prefix and a non-blob object.
+Outside the hunks both sides are equal, so the old side alone fills every
+gap: `␣VZ` (a per-device choice, `cowboy.desktop.reviewDiffContext.v1`)
+shows working-tree and commit diffs with the whole file, each gap joined to
+the hunk before it so `]c` lands where it did. The Web checks every context
+and removed line against the blob and keeps the patch on any mismatch, as it
+does for an ignore-whitespace or cut-short diff, a new or binary file, a PR
+(its blobs live on the host), a side over 4 MiB and a Machine without the
+route; the footer then says "Patch context only". Remote Machines answer
+only after a Machine release carries the operation.
+
+D3 as implemented deviates from "Find the call" and "Read findings where
+they apply": there is no Controller findings projection yet, because a call
+records only `input_revision`, not the per-file blob identity `exact` needs.
+Desktop keeps the projection in the Web instead. `␣VE` and `␣VR` (and the
+footer's Explain and Review) fork the Agent as the phone's Explain does;
+`␣VR` sends the delegation contract with a task id
+(`desktop-review-<time>-<random>`) and records the delegation on this device
+(`cowboy.desktop.reviewDelegations.v1`: source, fork, task, files with their
+change fingerprints). The last five are read through their forks
+(`/api/sessions/{fork}/calls`, matched by the `review_task` label), polled
+every 15 s while one runs; a fork with no matching call after 10 minutes
+counts as never started. A finding is `current` while its file's change
+fingerprint equals the delegated one, `stale` after the file changed and
+`unmapped` outside the delegated files; only `current` findings are placed,
+and only where Problems already places findings (a source file, or a diff
+through the verified projection). Each is listed with its reason otherwise.
+The fingerprint is metadata, not content identity, so `current` is weaker
+than `exact`; the Controller projection (and with it `heuristic` carrying)
+replaces this when calls record their snapshot blobs. The Navigator badges a
+file with the count of its current findings, coloured by the highest
+severity. Delegations are device-local, so another device does not see them.
+`␣VS` has no problem-row form: `Enter` on a problem moves the Document's
+cursor to it, and `Enter` there sends the line.
+
+With D1c the workbench covers everything the classic layout offered on
+Desktop, and D4 retired that layout with `␣VL`: Desktop renders only the
+workbench and never loads `ReviewApp`.
+
+D4 as implemented moves the shared review domain to `web/src/review/` (62
+files with their tests, a mechanical move recorded with
+`check-structure --update`): the Code API client, diff, owned-buffer and
+owned-diff projections, review context, comparison, checks, settings and
+progress stores, remote PR sources and models, and the language and syntax
+helpers. `readRemoteReview` moved from `RemoteReviewApp.tsx` into
+`remoteReviewSources.ts`. The shared domain imports nothing from
+`mobile/` and Mobile never imports `desktop/review`. Three parts of the
+plan remain open: Desktop still renders `ReviewSettingsContent` from
+`mobile/review` inside its settings modal (a settings form, not a review
+surface; it moves when a second Desktop settings form needs it); the `open`
+reveal payload needs a change to the agent writers of `mobile-review:<sid>`
+and stays with the narrow `active` read; and the pane model keeps D0's
+three panes, with Review as the work pane's view rather than a
+`DesktopPane`.
+
+D2b deviates from "Editor engine": it does not add `@codemirror/merge`. A
+patch-only split needs no diff algorithm, because the alignment comes from
+the patch (deletions face the additions that follow them, the shorter side
+padded), and the dependency would change the locked web inputs. Two
+CodeMirror views carry the sides; both get the file's grammar, since the
+split rows hold plain code. The loader joins only revision-matched pages
+before the decoder runs, and the decoder itself is incremental and tested at
+every cut offset, so a page boundary inside a hunk or a line cannot change
+the result. Expanded context remains D2's later step (comparison-bound side
+windows); until then the split shows the patch's hunks only.
 
 D0 keeps the Desktop pane model at three panes: Review is the region
 `conversation.review` of the Conversation pane rather than a fourth

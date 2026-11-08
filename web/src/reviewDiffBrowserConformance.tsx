@@ -17,13 +17,13 @@ import { BufferClientError } from "./codeBuffers/protocol.ts";
 import CodeViewer, {
   type CodeInspectCandidate,
 } from "./mobile/review/CodeViewer.tsx";
-import type { CodeDiffScope } from "./mobile/review/codeApi.ts";
-import type { ReviewDiffSource } from "./mobile/review/ownedDiffSource.ts";
+import type { CodeDiffScope } from "./review/codeApi.ts";
+import type { ReviewDiffSource } from "./review/ownedDiffSource.ts";
 import { ReviewDiffCodeStatus } from "./mobile/review/ReviewDiffCodeStatus.tsx";
-import { useOwnedReviewDiff } from "./mobile/review/useOwnedReviewDiff.ts";
-import { useOwnedReviewBuffer } from "./mobile/review/useOwnedReviewBuffer.ts";
-import { diffCheckAnnotations } from "./mobile/review/diffCheckAnnotations";
-import { withCheckDiagnostics } from "./mobile/review/checkAnnotations";
+import { useOwnedReviewDiff } from "./review/useOwnedReviewDiff.ts";
+import { useOwnedReviewBuffer } from "./review/useOwnedReviewBuffer.ts";
+import { diffCheckAnnotations } from "./review/diffCheckAnnotations";
+import { withCheckDiagnostics } from "./review/checkAnnotations";
 import { reviewCheckActionsBrowserChecks } from "./reviewCheckActionsBrowserChecks";
 
 function check(value: unknown, message: string): asserts value {

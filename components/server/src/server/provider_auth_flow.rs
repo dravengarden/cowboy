@@ -618,6 +618,12 @@ pub(super) async fn apply_session_provider_reload(
     target: &ResolvedProviderGeneration,
     automatic: bool,
 ) -> Result<(), String> {
+    if execution::recovery::target_proved_lost(state, meta).await {
+        return Err(
+            "The execution environment was lost; Reload the session or send a message to recover it, then update the Provider"
+                .to_owned(),
+        );
+    }
     let reload = |carry: Option<&crate::core::NamedReleaseCarry>| {
         state.supervisor.reload_session_provider(
             meta,

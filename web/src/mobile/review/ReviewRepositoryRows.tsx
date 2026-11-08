@@ -17,7 +17,7 @@ import {
   pullLabel,
   type RepositoryWorktreeRow,
   worktreeTitle,
-} from "./repositoryTargetModel";
+} from "../../review/repositoryTargetModel";
 
 const graphColors = ["#7c5ce0", "#36a56a", "#d98624", "#3489c9"];
 

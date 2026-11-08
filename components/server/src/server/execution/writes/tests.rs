@@ -102,3 +102,145 @@ fn other_methods_relative_paths_and_binary_bytes_are_not_writes() {
         assert_eq!(latest(session, path), None, "{path}");
     }
 }
+
+#[test]
+fn native_file_urls_name_the_same_target_path() {
+    let session = "writes-urls";
+    let done = reply(json!({"state":"completed","reply":{}}));
+    observe(
+        session,
+        &invoke("url", "file:///w/my%20dir/a.go", "x\n"),
+        &done,
+    );
+    assert_eq!(
+        latest(session, "/w/my dir/a.go").unwrap().sha256,
+        sha("x\n")
+    );
+    for (operation, location) in [
+        ("remote", "file://host/w/b.go"),
+        ("http", "https://x/w/c.go"),
+    ] {
+        observe(session, &invoke(operation, location, "x"), &done);
+    }
+    assert_eq!(latest(session, "/w/b.go"), None);
+    assert_eq!(latest(session, "/w/c.go"), None);
+}
+
+fn helper_start(process: &str, path: &str, expect: &str) -> Command {
+    let request = json!({"schema":1,"path":path,"base":"absent","expect":expect,"splices":[]});
+    let encoded = base64::engine::general_purpose::STANDARD.encode(request.to_string());
+    command(
+        json!({"kind":"invoke","wait_ms":0,"invocation":{"operation_id":format!("start-{process}"),
+        "method":"process/start","params":{"processId":process,
+            "argv":["bash","-c","script","bash","end","/helper","apply","--request",encoded]}}}),
+    )
+}
+
+fn helper_read(process: &str, stdout: &str, closed: bool) -> (Command, Response) {
+    let chunk = base64::engine::general_purpose::STANDARD.encode(stdout);
+    (
+        command(
+            json!({"kind":"invoke","wait_ms":0,"invocation":{"operation_id":format!("read-{process}-{closed}"),
+            "method":"process/read","params":{"processId":process}}}),
+        ),
+        reply(
+            json!({"state":"completed","reply":{"chunks":[{"stream":"stdout","chunk":chunk}],
+            "closed":closed,"exited":closed}}),
+        ),
+    )
+}
+
+#[test]
+fn apply_helpers_record_only_their_confirmed_expected_digest() {
+    let session = "writes-helper";
+    let started = reply(json!({"state":"completed","reply":{}}));
+    let expect = sha("after\n");
+    observe(session, &helper_start("p1", "/w/a.go", &expect), &started);
+    let (read, partial) = helper_read("p1", "{\"schema\":1,\"status\":\"app", false);
+    observe(session, &read, &partial);
+    assert_eq!(latest(session, "/w/a.go"), None);
+    let line = format!("lied\",\"sha256\":\"{expect}\",\"size\":6}}\n\u{1e}end:0\n");
+    let (read, rest) = helper_read("p1", &line, true);
+    observe(session, &read, &rest);
+    let write = latest(session, "/w/a.go").unwrap();
+    assert_eq!(
+        (write.sha256.as_str(), write.utf8_bytes),
+        (expect.as_str(), 6)
+    );
+
+    // A conflict or a different digest is not the agent's write.
+    observe(
+        session,
+        &helper_start("p2", "/w/b.go", &sha("b\n")),
+        &started,
+    );
+    let conflict = format!(
+        "{{\"schema\":1,\"status\":\"conflict\",\"sha256\":\"{}\",\"size\":1}}\n",
+        sha("b\n")
+    );
+    let (read, done) = helper_read("p2", &conflict, true);
+    observe(session, &read, &done);
+    assert_eq!(latest(session, "/w/b.go"), None);
+    observe(
+        session,
+        &helper_start("p3", "/w/c.go", &sha("c\n")),
+        &started,
+    );
+    let other = format!(
+        "{{\"schema\":1,\"status\":\"applied\",\"sha256\":\"{}\",\"size\":1}}\n",
+        sha("x\n")
+    );
+    let (read, done) = helper_read("p3", &other, true);
+    observe(session, &read, &done);
+    assert_eq!(latest(session, "/w/c.go"), None);
+    // Ordinary processes and another session's reads are ignored.
+    let (read, done) = helper_read("p1", &line, true);
+    observe("another", &read, &done);
+    assert_eq!(latest("another", "/w/a.go"), None);
+}
+
+#[test]
+fn a_waiting_helper_read_completes_through_its_operation() {
+    let session = "writes-helper-late";
+    let expect = sha("late helper\n");
+    observe(
+        session,
+        &helper_start("q1", "/w/late.go", &expect),
+        &reply(json!({"state":"completed","reply":{}})),
+    );
+    let (read, _) = helper_read("q1", "", false);
+    observe(session, &read, &reply(json!({"state":"pending"})));
+    assert_eq!(latest(session, "/w/late.go"), None);
+    let operation = "read-q1-false";
+    let line =
+        format!("{{\"schema\":1,\"status\":\"applied\",\"sha256\":\"{expect}\",\"size\":12}}\n");
+    let (_, done) = helper_read("q1", &line, true);
+    observe(
+        session,
+        &command(json!({"kind":"observe","operation_id":operation,"wait_ms":0})),
+        &done,
+    );
+    assert_eq!(latest(session, "/w/late.go").unwrap().sha256, expect);
+}
+
+#[test]
+fn exit_before_the_last_output_keeps_following_the_helper() {
+    let session = "writes-helper-exit";
+    let expect = sha("exit first\n");
+    observe(
+        session,
+        &helper_start("e1", "/w/exit.go", &expect),
+        &reply(json!({"state":"completed","reply":{}})),
+    );
+    let (read, _) = helper_read("e1", "", false);
+    observe(
+        session,
+        &read,
+        &reply(json!({"state":"completed","reply":{"chunks":[],"exited":true,"closed":false}})),
+    );
+    let line =
+        format!("{{\"schema\":1,\"status\":\"applied\",\"sha256\":\"{expect}\",\"size\":11}}\n");
+    let (read, done) = helper_read("e1", &line, true);
+    observe(session, &read, &done);
+    assert_eq!(latest(session, "/w/exit.go").unwrap().sha256, expect);
+}

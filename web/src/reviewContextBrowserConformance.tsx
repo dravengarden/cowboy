@@ -254,6 +254,20 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       });
     }
     if (url.pathname.endsWith("/bootstrap")) return json({ messages: [] });
+    const delegated = /^\/api\/sessions\/explain-fork\/calls(\/review-call)?$/.exec(url.pathname);
+    if (delegated && (globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests) {
+      // The fork's managed review, matched by the task its first message named.
+      const task = submits.flatMap((data) => /task: \\"([^\\"]+)\\"/.exec(data)?.[1] ?? []).at(-1);
+      if (!task) return json({ calls: [] });
+      const call = { call_id: "review-call", request_id: "review-request", provider: "codex", purpose: "review",
+        labels: { review_task: task }, placement: { parent_session_id: "explain-fork", machine_id: "local", workspace_id: "fixture" },
+        child_session_id: "review-child", state: "completed", created_at_ms: 1, updated_at_ms: 2, input_revision: null,
+        has_result: true, runtime_machine_id: null, provider_version: null, cancel_requested: false, error: null };
+      if (!delegated[1]) return json({ calls: [call] });
+      return json({ call: { ...call, result: { structured: { review_complete: true, verdict: "changes_requested", findings: [
+        { severity: "high", title: "Fixture AI finding", body: "The fixture's managed review.", file: "src/app.ts", line_start: 1, line_end: 1 },
+      ] } } } });
+    }
     if (url.pathname.endsWith("/fork")) {
       requests.push(url.pathname);
       return json({ session_id: "explain-fork" });
@@ -273,6 +287,22 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       const clean = context === "project" || context === "copy";
       const branch = context === "worktree" ? "feature/review" : "main";
       const path = url.searchParams.get("path") ?? "";
+      // The Desktop fixture's language engine (legacy buffers): one warning on
+      // README line 3, a hover and a definition on line 1.
+      if ((globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests) {
+        if (url.pathname.endsWith("/buffer")) return json({ apiVersion: 1, path, leases: 1 });
+        if (url.pathname.endsWith("/language")) {
+          return json({ apiVersion: 1, path, version: [], inlayHints: [], semanticTokens: [], diagnostics: path === "README.md"
+            ? [{ start: { row: 2, column: 0 }, end: { row: 2, column: 6 }, severity: 2, source: "fixture-ls", message: "Fixture diagnostic" }]
+            : [] });
+        }
+        if (url.pathname.endsWith("/intelligence/hover")) {
+          return json({ apiVersion: 1, path, contents: [{ text: "Project guide heading", markdown: false }] });
+        }
+        if (url.pathname.endsWith("/intelligence/navigation")) {
+          return json({ apiVersion: 1, path, locations: [{ path: "src/app.ts", start: { row: 0, column: 0 }, end: { row: 0, column: 3 } }] });
+        }
+      }
       if (url.pathname.endsWith("/intelligence/outline")) {
         if (!(globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests) return new Response("unavailable", { status: 404 });
         const at = (row: number) => ({ row, column: 0 });
@@ -290,7 +320,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
             ? "/tasks/cowboy/feature"
             : "/projects/cowboy",
           changeCount: clean ? 0 : 1,
-          bufferMode: "unavailable",
+          bufferMode: (globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests ? "legacy" : "unavailable",
           language: {
             provider: "none",
             state: "unavailable",
@@ -329,6 +359,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
               status: "modified",
               staged: false,
               unstaged: true,
+              ...((globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests ? { fingerprint: "fixture-app" } : {}),
               ...(branches ? { additions: 12, deletions: 3 } : {}),
             },
             ...(dense
@@ -413,6 +444,12 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
           truncated: false,
         });
       }
+      const desktopReview = (globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests === true;
+      // The old side the two-hunk diffs name, for whole-file context.
+      if (desktopReview && url.pathname.endsWith("/blob") && url.searchParams.get("oid") === "1111111") {
+        return json({ apiVersion: 1, oid: "1111111", text: Array.from({ length: 45 }, (_, index) =>
+          index === 0 ? "a" : index === 39 ? "c" : `line ${String(index + 1)}`).join("\n") + "\n" });
+      }
       if (url.pathname.endsWith("/diff")) {
         return json({
           apiVersion: 1,
@@ -423,7 +460,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
           // Other files have two hunks so hunk navigation has somewhere to go.
           text: path === "src/app.ts"
             ? "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n"
-            : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-a\n+b\n@@ -40 +40 @@\n-c\n+d\n`,
+            : `diff --git a/${path} b/${path}\n${desktopReview ? "index 1111111..2222222 100644\n" : ""}--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-a\n+b\n@@ -40 +40 @@\n-c\n+d\n`,
           truncated: false,
         });
       }

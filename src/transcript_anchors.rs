@@ -20,6 +20,7 @@ pub const CALL_ANCHOR_UPDATE: &str = "cowboy_call_anchor";
 pub const SUBAGENT_UPDATE: &str = "cowboy_subagent";
 pub const SUBAGENT_PREFIX: &str = "subagent:";
 pub const CALL_PREFIX: &str = "call:";
+pub const WIDGET_PREFIX: &str = "widget:";
 /// Marks a session whose rows from before the table existed were scanned.
 pub const BACKFILL_SENTINEL: &str = "backfill:v1";
 /// Anchors the Hub warms from the table at start, newest first.
@@ -38,6 +39,14 @@ const ID_MAX_BYTES: usize = 256;
 #[must_use]
 pub fn anchor_key(update: &Value) -> Option<String> {
     let kind = update.get("sessionUpdate").and_then(Value::as_str)?;
+    // A widget row is a notice carrying its snapshot (docs/widgets.md §6.2).
+    if kind == "notice" {
+        return update
+            .pointer("/_cowboy/widget/widgetId")
+            .and_then(Value::as_str)
+            .filter(|id| valid_id(id))
+            .map(|id| format!("{WIDGET_PREFIX}{id}"));
+    }
     let (field, prefix) = match kind {
         SUBAGENT_UPDATE => ("sessionId", SUBAGENT_PREFIX),
         CALL_ANCHOR_UPDATE => ("callId", CALL_PREFIX),

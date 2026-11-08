@@ -186,6 +186,33 @@ fn check_unborn_repository(format: &str) {
 }
 
 #[test]
+fn a_diff_index_line_reads_back_its_exact_base_side() {
+    let dir = repository();
+    let root = dir.path();
+    std::fs::write(root.join("side.txt"), "one\ntwo\nthree\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "base"]);
+    std::fs::write(root.join("side.txt"), "one\nTWO\nthree\n").unwrap();
+    let provider = LocalCodeProvider::new(root);
+    let diff = provider
+        .diff_snapshot("side.txt", 0, true, DiffScope::Combined, None)
+        .unwrap();
+    let index = diff
+        .text
+        .lines()
+        .find_map(|line| line.strip_prefix("index "))
+        .unwrap();
+    let base = index.split("..").next().unwrap();
+    // A later worktree edit never changes the base side.
+    std::fs::write(root.join("side.txt"), "edited\n").unwrap();
+    assert_eq!(provider.blob(base).unwrap().text, "one\ntwo\nthree\n");
+    assert_eq!(provider.blob("not-hex").unwrap_err(), "invalid blob oid");
+    assert_eq!(provider.blob("0000000").unwrap_err(), "blob not found");
+    let tree = git(root, &["rev-parse", "HEAD^{tree}"]);
+    assert_eq!(provider.blob(&tree).unwrap_err(), "blob not found");
+}
+
+#[test]
 fn diff_totals_count_content_that_looks_like_patch_headers() {
     let dir = repository();
     let root = dir.path();

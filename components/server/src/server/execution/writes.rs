@@ -37,15 +37,107 @@ struct Log {
     writes: HashMap<(String, String), (Write, Instant)>,
     /// Admitted writes whose completion has not been observed yet.
     pending: HashMap<(String, String), (String, String, usize)>,
+    /// Running apply helpers by process ID: target path, expected digest and
+    /// the stdout read so far.
+    helpers: HashMap<(String, String), (String, String, String)>,
+    /// Helper output reads still pending, by operation ID: their process ID.
+    reads: HashMap<(String, String), String>,
+}
+
+/// Bounded helper stdout; an outcome is one short JSON line.
+const MAX_HELPER_OUTPUT: usize = 8 * 1024;
+
+/// The target path and expected after-digest of an inline apply request.
+/// Large requests travel in a file and are not observed.
+fn helper_request(params: &serde_json::Value) -> Option<(String, String, String)> {
+    let argv: Vec<&str> = params["argv"]
+        .as_array()?
+        .iter()
+        .map(serde_json::Value::as_str)
+        .collect::<Option<_>>()?;
+    let index = argv
+        .windows(2)
+        .position(|pair| pair == ["apply", "--request"])?;
+    let encoded = argv.get(index + 2)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let request: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let path = target_path(request["path"].as_str()?)?;
+    let expect = request["expect"]
+        .as_str()
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))?;
+    Some((
+        params["processId"].as_str()?.to_owned(),
+        path,
+        expect.to_owned(),
+    ))
+}
+
+/// The helper's applied outcome for exactly the expected digest.
+fn applied(output: &str, expect: &str) -> Option<usize> {
+    output.lines().find_map(|line| {
+        let outcome: serde_json::Value = serde_json::from_str(line).ok()?;
+        (outcome["schema"] == 1 && outcome["status"] == "applied" && outcome["sha256"] == expect)
+            .then(|| {
+                outcome["size"]
+                    .as_u64()
+                    .and_then(|size| usize::try_from(size).ok())
+            })
+            .flatten()
+    })
+}
+
+fn helper_output(log: &mut Log, session: &str, process: &str, reply: &serde_json::Value) {
+    let key = (session.to_owned(), process.to_owned());
+    let Some((path, expect, output)) = log.helpers.get_mut(&key) else {
+        return;
+    };
+    for chunk in reply["chunks"].as_array().into_iter().flatten() {
+        if chunk["stream"] != "stdout" {
+            continue;
+        }
+        let Some(bytes) = chunk["chunk"]
+            .as_str()
+            .and_then(|data| base64::engine::general_purpose::STANDARD.decode(data).ok())
+        else {
+            continue;
+        };
+        if output.len() + bytes.len() <= MAX_HELPER_OUTPUT {
+            output.push_str(&String::from_utf8_lossy(&bytes));
+        }
+    }
+    if let Some(size) = applied(output, expect) {
+        // The helper's digest is of the written bytes; LF files share it with
+        // the native mirror, CRLF files never match.
+        let identity = (path.clone(), expect.clone(), size);
+        log.helpers.remove(&key);
+        record(log, session, identity);
+    } else if reply["closed"] == true || output.len() >= MAX_HELPER_OUTPUT {
+        // Exit can precede the last output; only a closed pipe is final.
+        log.helpers.remove(&key);
+    }
 }
 
 static LOG: LazyLock<Mutex<Log>> = LazyLock::new(Mutex::default);
 
+/// An absolute target path: native callers send `file://` URLs; a plain
+/// absolute path is accepted too. Relative or non-file locations are not.
+fn target_path(value: &str) -> Option<String> {
+    if value.starts_with('/') {
+        return Some(value.to_owned());
+    }
+    let url = url::Url::parse(value).ok()?;
+    (url.scheme() == "file" && url.host().is_none())
+        .then(|| url.to_file_path().ok())
+        .flatten()?
+        .to_str()
+        .map(str::to_owned)
+}
+
 /// The written path and identity of an `fs/writeFile` call, if hashable.
 fn identity(params: &serde_json::Value) -> Option<(String, String, usize)> {
-    let path = params["path"]
-        .as_str()
-        .filter(|path| path.starts_with('/'))?;
+    let path = target_path(params["path"].as_str()?)?;
     let data = params["dataBase64"].as_str()?;
     if data.len() > MAX_BYTES / 3 * 4 + 4 {
         return None;
@@ -55,7 +147,7 @@ fn identity(params: &serde_json::Value) -> Option<(String, String, usize)> {
         .ok()?;
     let text = std::str::from_utf8(&bytes).ok()?.replace("\r\n", "\n");
     Some((
-        path.to_owned(),
+        path,
         format!("{:x}", Sha256::digest(text.as_bytes())),
         text.len(),
     ))
@@ -118,9 +210,67 @@ pub(super) fn observe(session: &str, command: &Command, response: &Response) {
                 None => {}
             }
         }
+        Command::Invoke { invocation, .. } if invocation.method == "process/start" => {
+            let Some((process, path, expect)) = helper_request(&invocation.params) else {
+                return;
+            };
+            let mut log = LOG.lock();
+            if completed(response) == Some(false) || log.helpers.len() >= MAX_PENDING {
+                return;
+            }
+            log.helpers
+                .insert((session.to_owned(), process), (path, expect, String::new()));
+        }
+        Command::Invoke { invocation, .. } if invocation.method == "process/read" => {
+            let Some(process) = invocation.params["processId"].as_str() else {
+                return;
+            };
+            let mut log = LOG.lock();
+            if !log
+                .helpers
+                .contains_key(&(session.to_owned(), process.to_owned()))
+            {
+                return;
+            }
+            match response {
+                Response::Call {
+                    response:
+                        KeeperResponse::Operation {
+                            outcome: Outcome::Completed { reply },
+                        },
+                } => helper_output(&mut log, session, process, reply),
+                // A waiting read answers later through its operation ID.
+                Response::Call {
+                    response:
+                        KeeperResponse::Operation {
+                            outcome: Outcome::Pending,
+                        },
+                } if log.reads.len() < MAX_PENDING => {
+                    log.reads.insert(
+                        (session.to_owned(), invocation.operation_id.clone()),
+                        process.to_owned(),
+                    );
+                }
+                _ => {}
+            }
+        }
         Command::Observe { operation_id, .. } => {
             let mut log = LOG.lock();
             let key = (session.to_owned(), operation_id.clone());
+            if completed(response).is_some()
+                && let Some(process) = log.reads.remove(&key)
+            {
+                if let Response::Call {
+                    response:
+                        KeeperResponse::Operation {
+                            outcome: Outcome::Completed { reply },
+                        },
+                } = response
+                {
+                    helper_output(&mut log, session, &process, reply);
+                }
+                return;
+            }
             match completed(response) {
                 None => {}
                 Some(done) => {

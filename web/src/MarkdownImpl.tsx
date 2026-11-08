@@ -35,7 +35,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { ProtectedImageLightbox as ImageLightbox } from "./ProtectedImageLightbox";
-import { MermaidDiagram } from "./MermaidDiagram";
+import { richFence } from "./richFence";
 import { copyText } from "./clipboard";
 import { headingSlug } from "./mobile/review/reviewLinkTarget";
 import { hasNativeExternalOpener, openExternalUrl, safeExternalUrl, shouldRouteExternalClick } from "./openExternal";
@@ -882,12 +882,9 @@ const MarkdownImpl = memo(function MarkdownImpl({
           />
         </MarkdownCodeBoundary>
       );
-      // The diagram owns the block for its whole life, so the streamed source,
-      // the drawn figure, and a failed render all replace one another in place.
-      if (lang.toLowerCase() === "mermaid") {
-        return <MermaidDiagram source={text} pending={pending} fallback={block} />;
-      }
-      return block;
+      // A rich fence (diagram, widget) owns the block for its whole life, so the
+      // streamed source, the drawing and a failed render replace one another.
+      return richFence(lang, text, pending, block);
     },
     // ReactMarkdown wraps a fenced block in `<pre><code>`. The `code` override
     // above already renders its own scrollable container (the highlighter's

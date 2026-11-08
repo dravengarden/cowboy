@@ -156,3 +156,32 @@ fn queries_require_protocol_nineteen_and_have_distinct_reply_codecs() {
         event
     );
 }
+
+#[test]
+fn every_machine_installable_kind_has_an_install_step() {
+    for kind in [
+        PluginKind::AgentProvider,
+        PluginKind::CodeIntelligence,
+        PluginKind::TelemetryBackend,
+        PluginKind::WorkspaceExtension,
+        PluginKind::MemoryBackend,
+        PluginKind::CallProfile,
+        PluginKind::MachineBrowser,
+        PluginKind::McpServer,
+    ] {
+        InstallStep {
+            plugin_kind: kind,
+            ..fixture()
+        }
+        .validate()
+        .unwrap();
+    }
+    assert!(
+        InstallStep {
+            plugin_kind: PluginKind::AuthenticationProvider,
+            ..fixture()
+        }
+        .validate()
+        .is_err()
+    );
+}

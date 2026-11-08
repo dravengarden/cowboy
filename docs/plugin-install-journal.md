@@ -99,6 +99,10 @@ atomically records the new actor, complete operation digest, target and time in
 `plugin_install_staging_resolutions`. The original operation and uncertain
 Machine receipt are never rewritten. This resolution permits a fresh operation
 identity; it does not repeat the old command or authorize installation itself.
+An operation retired from `Prepared` (a storage failure or restart before
+`Installing` committed) never reached the Machine: the step is sent only after
+that commit. Reconciliation records it as `Aborted`/`transport_not_sent` without
+contacting the Machine, which releases the slot; startup no longer re-fences it.
 Pending, Unknown at Activating or later, changed targets, missing/conflicting
 evidence, offline Machines, revoked grants and expired observations leave the
 original fence in place. A saved Applied receipt interrupted after

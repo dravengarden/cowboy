@@ -16,6 +16,7 @@ export interface ReviewWorkbenchActions {
   readonly toggleUnread: () => void;
   readonly mark: () => void;
   readonly sendAndStay: () => void;
+  readonly delegate: (kind: "explain" | "review") => void;
   readonly closeTab: () => void;
   readonly keepTab: () => void;
   readonly toggleNavigator: () => void;
@@ -25,6 +26,8 @@ export interface ReviewWorkbenchActions {
   readonly navigatorFilter: () => void;
   readonly navigatorClose: () => void;
   readonly refresh: () => void;
+  readonly toggleDiffLayout: () => void;
+  readonly toggleDiffContext: () => void;
   readonly hasDocument: boolean;
   readonly overlay: boolean;
 }
@@ -82,9 +85,13 @@ export function useReviewWorkbenchCommands(actions: ReviewWorkbenchActions): voi
       leader("review.unread", "VU", "Review: Only unreviewed files", () => a().toggleUnread()),
       leader("review.mark", "VM", "Review: Mark reviewed", () => a().mark()),
       leader("review.send", "VS", "Review: Send to the Prompt and stay", () => a().sendAndStay()),
+      leader("review.explain", "VE", "Review: Explain in a fork", () => a().delegate("explain")),
+      leader("review.delegate", "VR", "Review: Ask a fork to review this file", () => a().delegate("review")),
       leader("review.closeTab", "VQ", "Review: Close file tab", () => a().closeTab(), withDocument),
       leader("review.keepTab", "VP", "Review: Keep file tab", () => a().keepTab(), withDocument),
       leader("review.toggleNavigator", "V[", "Review: Fold the Navigator", () => a().toggleNavigator()),
+      leader("review.diffLayout", "VD", "Review: Unified or split diff", () => a().toggleDiffLayout()),
+      leader("review.diffContext", "VZ", "Review: Whole file or the patch's context", () => a().toggleDiffContext()),
       leader("review.outline", "VO", "Review: Outline in the Inspector", () => a().inspector.show()),
       leader("review.toggleInspector", "V]", "Review: Fold the Inspector", () => a().inspector.toggle()),
       leader("review.check", "VK", "Review: Run a project check", () => a().inspector.runCheck()),

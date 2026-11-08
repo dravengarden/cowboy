@@ -8,6 +8,9 @@ const mermaidSource = await readFile(
 const markdownSource = await readFile(
   new URL("./MarkdownImpl.tsx", import.meta.url), "utf8",
 );
+const richFenceSource = await readFile(
+  new URL("./richFence.tsx", import.meta.url), "utf8",
+);
 const lightboxSource = await readFile(
   new URL("../../components/app-shell/image-lightbox.tsx", import.meta.url), "utf8",
 );
@@ -96,9 +99,10 @@ test("dark diagrams are legible inline and enlarged", () => {
 
 test("Mermaid failures return to the ordinary Markdown code renderer", () => {
   assert(mermaidSource.includes("data-mermaid-source-fallback"));
+  assert(markdownSource.includes("return richFence(lang, text, pending, block);"));
   assert(
-    markdownSource.includes(
-      "<MermaidDiagram source={text} pending={pending} fallback={block} />",
+    richFenceSource.includes(
+      "<MermaidDiagram source={source} pending={pending} fallback={block} />",
     ),
   );
 });

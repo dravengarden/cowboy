@@ -1,4 +1,4 @@
-import type { GitCommitSummary } from "./codeApi";
+import type { GitCommitSummary } from "../../review/codeApi";
 
 export const HISTORY_PAGE_SIZE = 128;
 

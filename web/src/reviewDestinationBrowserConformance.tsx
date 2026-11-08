@@ -10,7 +10,7 @@ import { golden, targetText } from "./codeBuffers/destinationFixture.ts";
 import { CodeBufferNavigationPanel } from "./CodeBufferNavigationPanel.tsx";
 import { ReviewNavigation } from "./mobile/review/ReviewNavigation.tsx";
 import { ReviewCodeStatus } from "./mobile/review/ReviewCodeStatus.tsx";
-import { useOwnedReviewBuffer } from "./mobile/review/useOwnedReviewBuffer.ts";
+import { useOwnedReviewBuffer } from "./review/useOwnedReviewBuffer.ts";
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);

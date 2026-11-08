@@ -242,6 +242,10 @@ const cowboy = strict(Object.freeze({
     list: query,
     read: keyed("id", ["document_id"]),
   }),
+  widgets: namespace("widgets", {
+    list: query,
+    read: keyed("widget_id", ["id"]),
+  }),
   code: namespace("code", {
     search: (text, q) =>
       typeof text === "string" ? ({ ...q, query: text }) : (text ?? {}),

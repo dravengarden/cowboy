@@ -1,6 +1,6 @@
 import { ChevronRight, FolderOpenOutlined } from "@mui/icons-material";
 import { Box, ListItemButton, Typography } from "@mui/material";
-import type { ReviewRegisteredWorkspace } from "./reviewContextModel";
+import type { ReviewRegisteredWorkspace } from "../../review/reviewContextModel";
 
 export function ReviewProjectCheckoutRow({
   workspace,

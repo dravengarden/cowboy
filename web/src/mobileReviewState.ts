@@ -10,7 +10,7 @@ export interface MobileReviewState {
   readonly open_revision?: number;
   readonly reveal_revision?: number;
   readonly directory?: string | null;
-  readonly remote_review?: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null;
+  readonly remote_review?: import("./review/remoteReviewModel").RemoteReviewBinding | null;
   readonly remote_selected?: boolean;
   /** `""` is uncommitted work; absent follows the repository default. */
   readonly comparison?: string;
@@ -35,7 +35,7 @@ export const mobileReviewMutators = {
   },
   setRemoteReview: (
     value: MobileReviewState,
-    args: { binding: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null },
+    args: { binding: import("./review/remoteReviewModel").RemoteReviewBinding | null },
   ): MobileReviewState => ({ ...value, remote_review: args.binding }),
   selectRemoteReview: (
     value: MobileReviewState, args: { selected: boolean },

@@ -29,15 +29,15 @@ import {
 } from "@codemirror/language";
 import { highlightTree } from "@lezer/highlight";
 import { cmTheme } from "../../cmTheme";
-import { loadCodeLanguage } from "./codeLanguage";
-import { codeSyntaxPalette, reviewHighlightStyle } from "./codeSyntaxTheme";
-import { changedWordRange } from "./diffWordModel";
-import { diffContextFolds } from "./diffContextModel";
+import { loadCodeLanguage } from "../../review/codeLanguage";
+import { codeSyntaxPalette, reviewHighlightStyle } from "../../review/codeSyntaxTheme";
+import { changedWordRange } from "../../review/diffWordModel";
+import { diffContextFolds } from "../../review/diffContextModel";
 import {
   diffPointToNewFile,
   diffSourceProjection,
-} from "./diffSourceModel";
-import { reviewLineGutter } from "./reviewLineGutter";
+} from "../../review/diffSourceModel";
+import { reviewLineGutter } from "../../review/reviewLineGutter";
 import { rankAndDedupeInspectCandidates } from "./symbolCandidateModel";
 import {
   bindCodeViewerSwipeFreeze,
@@ -45,10 +45,10 @@ import {
   isMobileCodeSwipeFrozen,
   type MobileCodeScrollIdleReporter,
 } from "../../mobileCodeSurface";
-import type { CodeLanguage } from "./codeApi";
+import type { CodeLanguage } from "../../review/codeApi";
 import { restoreReviewScrollTop } from "./reviewScrollPosition";
 
-import type { ReviewLineSelection } from "./reviewLineSelection";
+import type { ReviewLineSelection } from "../../review/reviewLineSelection";
 
 export interface CodeInspectCandidate {
   label: string;

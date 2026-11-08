@@ -5,10 +5,12 @@ import { desktopSize } from "../../surface/desktopSize";
 import { notify } from "../../store";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
-import { sendCheckRequest } from "../../mobile/review/checkRequest";
-import { checkStatusSummary } from "../../mobile/review/checkAnnotations";
-import { refreshReviewChecks } from "../../mobile/review/reviewChecksStore";
-import { symbolKindLabel } from "../../mobile/review/outlineModel";
+import { sendCheckRequest } from "../../review/checkRequest";
+import type { CodeDiagnostic } from "../../review/codeApi";
+import type { ReviewFindings } from "./useReviewFindings";
+import { checkStatusSummary } from "../../review/checkAnnotations";
+import { refreshReviewChecks } from "../../review/reviewChecksStore";
+import { symbolKindLabel } from "../../review/outlineModel";
 import { revealEditorLine } from "./reviewEditorSelection";
 import { adjacentLine } from "./reviewDocumentKeys";
 import { useInspectorData } from "./useInspectorData";
@@ -106,12 +108,28 @@ function InspectorDetails({ review, placement }: {
  * outline, hunks, problems and facts. `Enter` on a row moves the Document's
  * cursor there; `]d`/`[d` step the placed problems; `gO` arrives here.
  */
-export function ReviewInspector({ review, onShow }: {
+/** Delegated reviews still running, or ended without trustworthy findings. */
+function AiReviewStatus({ findings }: { findings: ReviewFindings }): React.JSX.Element | null {
+  const { pending, incomplete } = findings;
+  if (pending === 0 && incomplete === 0) return null;
+  return (
+    <Typography sx={{ px: 2, py: 0.25, fontSize: "0.68rem", color: "text.secondary" }} data-review-ai-status>
+      {pending > 0 ? `${String(pending)} AI review${pending === 1 ? "" : "s"} running. ` : ""}
+      {incomplete > 0 ? `${String(incomplete)} ended incomplete, failed or never started; none of their findings are shown.` : ""}
+    </Typography>
+  );
+}
+
+export function ReviewInspector({ review, onShow, diagnostics, findings }: {
   review: ReviewWorkbench;
+  /** Managed review findings anchored for this Review (useReviewFindings). */
+  findings: ReviewFindings;
+  /** The language engine's diagnostics of the open source file. */
+  diagnostics: readonly CodeDiagnostic[];
   /** Make the Inspector visible (a narrow Review keeps it folded). */
   onShow: () => void;
 }): React.JSX.Element {
-  const data = useInspectorData(review);
+  const data = useInspectorData(review, diagnostics, findings.findings);
   const list = useRef<HTMLUListElement>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -121,12 +139,15 @@ export function ReviewInspector({ review, onShow }: {
   const own = review.target?.own === true;
   const runCheck = useRunCheck(review.target?.sessionId ?? "");
   const runnable = own && data.checks?.allowed === true && data.checks.runnable === true && !!data.checks.epoch;
+  // Rows are unified patch rows; a split diff shows them on its own rows.
   const jump = (row: number | undefined): void => {
     const view = review.editor.current;
     if (!view || row === undefined) return;
-    revealEditorLine(view, row);
+    revealEditorLine(view, review.viewRowOf(row));
     view.focus();
   };
+  const viewRowOf = useRef(review.viewRowOf);
+  viewRowOf.current = review.viewRowOf;
   const latest = useRef(data);
   latest.current = data;
   const latestShow = useRef(onShow);
@@ -139,7 +160,7 @@ export function ReviewInspector({ review, onShow }: {
         return;
       }
       if (action.kind !== "problem") return;
-      const rows = latest.current.problems.flatMap((problem) => problem.row === undefined ? [] : [problem.row]);
+      const rows = latest.current.problems.flatMap((problem) => problem.row === undefined ? [] : [viewRowOf.current(problem.row)]);
       const cursor = view.state.doc.lineAt(view.state.selection.main.head).number;
       const row = adjacentLine([...new Set(rows)].sort((a, b) => a - b), cursor, action.offset);
       if (row === undefined) notify(rows.length === 0 ? "No problems placed in this document" : "No more problems", "info");
@@ -211,6 +232,7 @@ export function ReviewInspector({ review, onShow }: {
             This diff is not verified against the file, so findings are listed but not placed. Open the file to step through them.
           </Alert>
         )}
+        <AiReviewStatus findings={findings} />
         {data.problems.length === 0 && <Empty>{data.checks?.runs.length ? "No findings in this file." : "No check has run."}</Empty>}
         {data.problems.map((problem) => (
           <ListItemButton key={problem.key} data-desktop-item={problem.key} data-review-problem={problem.line} disabled={problem.row === undefined} onClick={() => jump(problem.row)} sx={{ ...rowSx, gap: 0.75, alignItems: "flex-start", py: 0.25 }}>

@@ -15,7 +15,7 @@ import {
   type CodeContentSearchResults,
   fetchCodeContentSearch,
   fetchCodeSearch,
-} from "./codeApi";
+} from "../../review/codeApi";
 
 export type ReviewSearchMode = "files" | "text";
 

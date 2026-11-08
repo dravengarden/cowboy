@@ -1,7 +1,7 @@
 import { Alert, Box, Button, ButtonBase, Typography } from "@mui/material";
 import { useId, useState } from "react";
 import { openAppSettings } from "../../appSettings";
-import type { OwnedReviewIntelligence } from "./useOwnedReviewBuffer";
+import type { OwnedReviewIntelligence } from "../../review/useOwnedReviewBuffer";
 import { HintTooltip } from "../../HintTooltip";
 
 export const reviewCodeStatusAction = {

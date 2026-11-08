@@ -19,7 +19,7 @@ import {
   registeredReviewWorkspace,
   sessionReviewLocation,
   workspaceCodeContextId,
-} from "./mobile/review/reviewContextModel";
+} from "./review/reviewContextModel";
 import { sessionExecution } from "./sessionExecution";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 

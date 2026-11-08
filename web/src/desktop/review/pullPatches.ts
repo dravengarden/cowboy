@@ -3,7 +3,7 @@
 // persistence (docs/remote-pr-review.md). A PR tab whose patch is gone (a
 // reload) asks to be reopened from the Pull request tab.
 
-import type { RemoteReviewBinding, RemoteReviewFile } from "../../mobile/review/remoteReviewModel";
+import type { RemoteReviewBinding, RemoteReviewFile } from "../../review/remoteReviewModel";
 
 export interface PullFileRef {
   readonly binding: RemoteReviewBinding;

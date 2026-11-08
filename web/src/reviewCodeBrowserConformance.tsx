@@ -21,7 +21,7 @@ import {
   type OwnedReviewIntelligence,
   reviewDisplayText,
   useOwnedReviewBuffer,
-} from "./mobile/review/useOwnedReviewBuffer.ts";
+} from "./review/useOwnedReviewBuffer.ts";
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);

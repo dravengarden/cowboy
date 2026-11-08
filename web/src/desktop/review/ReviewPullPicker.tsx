@@ -16,8 +16,8 @@ import { useEffect, useRef, useState } from "react";
 import { desktopSize } from "../../surface/desktopSize";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
 import { extensionRequest, type PullPage, type PullSummary, resourceQuery } from "../../extensions/api";
-import { pullNumber } from "../../mobile/review/remoteReviewModel";
-import type { Choice } from "../../mobile/review/remoteReviewSources";
+import { pullNumber } from "../../review/remoteReviewModel";
+import type { Choice } from "../../review/remoteReviewSources";
 
 const RELATIONS = [
   { value: "author", label: "Mine" },

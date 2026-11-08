@@ -2,7 +2,7 @@
 import {
   decodeRemoteReview,
   type RemoteReviewPage,
-} from "../mobile/review/remoteReviewModel.ts";
+} from "../review/remoteReviewModel.ts";
 export interface ExtensionIdentity {
   pluginId: string;
   pluginVersion: string;

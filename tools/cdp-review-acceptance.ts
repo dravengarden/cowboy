@@ -153,6 +153,47 @@ try {
   await until(`${activeTab} !== ${JSON.stringify(second)}`, "]u skips the reviewed file");
   results.push("␣VM marks the file reviewed; ]u skips it while ]f would not");
 
+  // Side by side: the old side mirrors, the new side keeps the Vim buffer.
+  await keys(" ", "v", "d");
+  await until(`document.querySelector("[data-review-diff-layout='split'] [data-desktop-review-split-old]")`, "␣VD shows the split diff");
+  const sides = await page.evaluate<{ old: string; next: string }>(`({
+    old: document.querySelector("[data-desktop-review-split-old] .cm-content").textContent,
+    next: document.querySelector("[data-desktop-review-editor] .cm-content").textContent,
+  })`);
+  check(sides.old.includes("a") && !sides.old.includes("+b") && sides.next.includes("b") && !sides.next.includes("-a"),
+    `the split shows each side without diff markers (${sides.old} | ${sides.next})`);
+  // The split has no file header rows, so its first row is hunk 1's header.
+  await keys("g", "g");
+  await until(`document.querySelector("[data-review-hunk-position]")?.textContent.includes("1/2")`, "gg starts in hunk 1");
+  await keys("]", "c");
+  await until(`document.querySelector("[data-review-hunk-position]")?.textContent.includes("2/2")`, "]c works in the split");
+  await keys("[", "c");
+  await until(`document.querySelector("[data-review-hunk-position]")?.textContent.includes("1/2")`, "[c returns in the split");
+  await key("Enter");
+  await until(focusIn("prompt.composer"), "Enter sends from the split");
+  const splitRemark = await page.evaluate<string>(`document.querySelector("[data-fixture-prompt]").value`);
+  check(/src\/file-\d+\.ts:1\b/.test(splitRemark) && splitRemark.includes("+b"), `a split remark names the new file line: ${splitRemark.slice(0, 120)}`);
+  await prefix();
+  await keys("v", "v");
+  await until(focusIn("review.document"), "back in the Document");
+  await shot("9-split");
+  await keys(" ", "v", "d");
+  await until(`document.querySelector("[data-review-diff-layout='unified']")`, "␣VD returns to the unified diff");
+  results.push("Split diff: ␣VD shows both sides aligned, ]c steps hunks, Enter sends the new-side file line, ␣VD returns");
+
+  // Whole-file context from the exact old side the diff's index line names.
+  await keys(" ", "v", "z");
+  await until(`document.querySelector("[data-review-diff-context='file']")`, "␣VZ shows the whole file");
+  await until(`document.querySelector("[data-desktop-review-editor] .cm-content")?.textContent.includes("line 20")`, "the gap between the hunks is filled");
+  await keys("g", "g");
+  await keys("]", "c");
+  await keys("]", "c");
+  await until(`document.querySelector("[data-review-hunk-position]")?.textContent.includes("2/2")`, "]c still steps the two hunks");
+  await shot("12-file-context");
+  await keys(" ", "v", "z");
+  await until(`!document.querySelector("[data-review-diff-context]") && !document.querySelector("[data-desktop-review-editor] .cm-content")?.textContent.includes("line 20")`, "␣VZ returns to the patch");
+  results.push("␣VZ fills a diff with the whole file from its exact old side; ]c still steps the hunks; ␣VZ returns to the patch");
+
   await keys("V", "j", "Enter");
   await until(focusIn("prompt.composer"), "Enter hands focus to the Prompt");
   const remark = await page.evaluate<string>(`document.querySelector("[data-fixture-prompt]").value`);
@@ -206,12 +247,52 @@ try {
   await until(`document.querySelector("[data-review-cursor-line='1']")`, "gg reaches line 1");
   await keys("]", "d");
   await until(`document.querySelector("[data-review-cursor-line='3']")`, "]d moves to the finding's line");
+  await until(`document.querySelector("[data-desktop-review-editor] .cowboy-review-diagnostic-warning")`, "the language diagnostic is underlined");
+  await until(`document.querySelector("[data-review-inspector-section='problems']")?.textContent.includes("Fixture diagnostic")`, "the diagnostic joins Problems");
+  await keys("g", "g");
+  await key("K");
+  await until(`document.querySelector("[data-review-hover]")?.textContent.includes("Project guide heading")`, "K shows the hover");
+  await shot("10-hover");
+  await key("Escape");
+  await until(`!document.querySelector("[data-review-hover]")`, "Escape closes the hover");
+  await until(focusIn("review.document"), "focus returns to the Document");
+  await keys("g", "d");
+  await until(`${activeTab} === "src/app.ts"`, "gd opens the definition");
+  await until(`${focusIn("review.document")} && document.querySelector("[data-desktop-review-editor]")?.dataset.reviewDocumentKey === "source\\0src/app.ts"`, "the definition's buffer is focused");
+  await keys("g", "T");
+  await until(`${activeTab} === "README.md"`, "gT returns to the file");
+  results.push("Language: the diagnostic is underlined and listed, K shows the hover, Escape returns, gd opens the definition");
   await keys("g", "O");
   await until(`document.activeElement?.closest("[data-review-inspector-section='outline']")`, "gO focuses the outline");
   await key("Enter");
   await until(`document.querySelector("[data-review-cursor-line='1']")`, "Enter on a symbol moves the cursor to it");
   await shot("8-inspector");
   results.push("Inspector: outline and problems beside the Document; ␣VK runs the check, ]d reaches its finding, gO focuses the outline and Enter jumps");
+
+  // ␣VR on a focused change asks a fork for a managed review; its findings
+  // come back as a Navigator badge and as Problems on their lines.
+  await keys(" ", "v", "c");
+  await until(focusIn("review.navigator"), "␣VC focuses the Navigator");
+  await page.evaluate(`document.querySelector("[data-review-change='src/app.ts']").focus()`);
+  await keys(" ", "v", "r");
+  await until(`globalThis.__reviewFixture.submits.some((data) => data.includes('"session_id":"explain-fork"') && data.includes("review.start") && data.includes('src/app.ts'))`, "␣VR sends the delegation contract to the fork");
+  await until(`document.querySelector("[data-review-change='src/app.ts'] [data-review-finding-badge='1']")`, "the review's finding badges its file");
+  await page.evaluate(`document.querySelector("[data-review-change='src/app.ts']").focus()`);
+  await key("l");
+  await until(`${activeTab} === "src/app.ts"`, "L opens the reviewed file");
+  await until(`document.querySelector("[data-review-inspector-section='problems']")?.textContent.includes("Fixture AI finding")`, "the finding joins Problems");
+  // An unverified (legacy) diff lists findings without placing them; the
+  // file itself places a current one on its line.
+  await keys(" ", "v", "f");
+  await until(`document.querySelector("[data-review-tree-path='src']")`, "the tree loads");
+  await page.evaluate(`document.querySelector("[data-review-tree-path='src']").focus()`);
+  await key("l");
+  await until(`document.querySelector("[data-review-tree-path='src/app.ts']")`, "L expands src");
+  await page.evaluate(`document.querySelector("[data-review-tree-path='src/app.ts']").focus()`);
+  await key("l");
+  await until(`[...document.querySelectorAll("[data-review-problem]")].some((row) => row.textContent.includes("Fixture AI finding") && !row.classList.contains("Mui-disabled"))`, "a current finding is placed on its line in the file");
+  await shot("11-ai-review");
+  results.push("␣VR delegates a managed review of the focused change to a fork; its finding badges the file, joins Problems and is placed on its line");
 
   await keys(" ", "v", "h");
   await until(`document.querySelector("[data-review-navigator-tab='history'][aria-selected='true']")`, "␣VH shows History");

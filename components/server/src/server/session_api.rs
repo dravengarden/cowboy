@@ -90,7 +90,7 @@ pub(super) async fn api_session_reload(
     let Some(info) = state.hub.session_info(&session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let _maintenance = match session_maintenance::reload_lease(&state, &session_id) {
+    let maintenance = match session_maintenance::reload_lease(&state, &session_id) {
         Ok(lease) => lease,
         Err(error) => return (StatusCode::CONFLICT, error).into_response(),
     };
@@ -121,12 +121,13 @@ pub(super) async fn api_session_reload(
         };
     }
     let reload_key = provider_fence_key_for_session(&state.hub, &session_id);
-    let reload_fence = state.plugin_lifecycle_fences.read();
-    if let Some(refusal) = reload_key
-        .as_ref()
-        .and_then(|key| reload_fence.get(key))
-        .and_then(|fence| provider_fence_refusal(*fence))
-    {
+    let fence_refusal = |fences: &HashMap<_, _>| {
+        reload_key
+            .as_ref()
+            .and_then(|key| fences.get(key))
+            .and_then(|fence| provider_fence_refusal(*fence))
+    };
+    if let Some(refusal) = fence_refusal(&state.plugin_lifecycle_fences.read()) {
         return (StatusCode::CONFLICT, refusal).into_response();
     }
     tracing::info!(
@@ -141,10 +142,31 @@ pub(super) async fn api_session_reload(
     {
         return (StatusCode::ACCEPTED, "preparing the workspace").into_response();
     }
-    match state
-        .supervisor
-        .reload_session(&session_id, query.confirm_active_turn)
-    {
+    let recovery =
+        match execution::recovery::before_reload(&state, &session_id, query.confirm_active_turn)
+            .await
+        {
+            Ok(recovery) => recovery,
+            Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+        };
+    // Held from here so a Plugin change cannot begin during the replacement.
+    let reload_fence = state.plugin_lifecycle_fences.read();
+    if let Some(refusal) = fence_refusal(&reload_fence) {
+        return (StatusCode::CONFLICT, refusal).into_response();
+    }
+    let result = match recovery {
+        Some(intent) => {
+            // Recovery takes this same non-reentrant lease itself.
+            drop(maintenance);
+            state
+                .supervisor
+                .recover_execution_session(&session_id, intent)
+        }
+        None => state
+            .supervisor
+            .reload_session(&session_id, query.confirm_active_turn),
+    };
+    match result {
         Ok(()) => (StatusCode::ACCEPTED, "reloading").into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }

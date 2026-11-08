@@ -139,6 +139,7 @@ impl InstallStep {
                     | PluginKind::MemoryBackend
                     | PluginKind::CallProfile
                     | PluginKind::MachineBrowser
+                    | PluginKind::McpServer
             ) && self.plugin_version.len() <= 128
                 && semver::Version::parse(&self.plugin_version).is_ok(),
             "invalid installation capability or version"

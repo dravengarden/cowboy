@@ -6,6 +6,7 @@ use crate::execution_protocol::{Command, RuntimeReply, RuntimeRequest, Scope};
 use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::execution::{Action, Refusal, Request, Response};
 
+pub(super) mod reconciler;
 pub(super) mod recovery;
 pub(super) mod sessions;
 pub(super) mod writes;

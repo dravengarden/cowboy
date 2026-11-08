@@ -1336,6 +1336,7 @@ async fn serve_axum(
     ));
 
     let provider_update_task = tokio::spawn(session_provider_updates::run(Arc::clone(&state)));
+    let execution_reconciler_task = tokio::spawn(execution::reconciler::run(Arc::clone(&state)));
     let generation_retention_task = tokio::spawn(run_generation_retention(Arc::clone(&state)));
     let adoption_state = Arc::clone(&state);
     let shared_authentication_task = tokio::spawn(async move {
@@ -1358,6 +1359,7 @@ async fn serve_axum(
     local_operator.shutdown().await;
     convergence_task.abort();
     provider_update_task.abort();
+    execution_reconciler_task.abort();
     generation_retention_task.abort();
     shared_authentication_task.abort();
     trash_retention_task.abort();
@@ -2178,6 +2180,19 @@ struct CodeDiffResponse {
     truncated: bool,
     next_cursor: Option<String>,
     limited: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodeBlobQuery {
+    oid: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeBlobResponse {
+    api_version: u8,
+    oid: String,
+    text: String,
 }
 
 #[derive(Debug, Deserialize)]

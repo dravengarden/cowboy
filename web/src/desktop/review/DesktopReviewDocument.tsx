@@ -18,6 +18,10 @@ import {
   reviewDocumentKey,
 } from "./desktopReviewTabs";
 import { ReviewCodeEditor } from "./ReviewCodeEditor";
+import { ReviewSplitMirror } from "./ReviewSplitMirror";
+import type { SplitDiff } from "./splitDiffModel";
+import type { CodeDiagnostic } from "../../review/codeApi";
+import { useState } from "react";
 import type { ReviewDocumentAction } from "./reviewDocumentKeys";
 import type { ReviewDocumentLoad } from "./useReviewDocumentText";
 
@@ -115,6 +119,23 @@ function ReviewFileTabs({
   );
 }
 
+/** Explain or review the open file in a fork of the source Session. */
+function DelegateButtons({ onDelegate }: { onDelegate: (kind: "explain" | "review") => void }): React.JSX.Element {
+  const sx = { textTransform: "none", fontSize: "0.72rem", flexShrink: 0, gap: 0.5 } as const;
+  return (
+    <>
+      <Button size="small" color="inherit" onClick={() => onDelegate("explain")} data-review-explain sx={sx}>
+        Explain
+        <LeaderKeycap leaderKey="VE" />
+      </Button>
+      <Button size="small" color="inherit" onClick={() => onDelegate("review")} data-review-delegate sx={sx}>
+        Review
+        <LeaderKeycap leaderKey="VR" />
+      </Button>
+    </>
+  );
+}
+
 export interface ReviewDocumentStatus {
   readonly line: number;
   readonly hunk: { index: number; total: number } | undefined;
@@ -142,7 +163,10 @@ export function DesktopReviewDocument({
   onView,
   onMark,
   onSend,
+  onDelegate,
   empty,
+  split,
+  diagnostics,
 }: {
   tabs: DesktopReviewTabs;
   document: ReviewDocumentRef | undefined;
@@ -159,9 +183,14 @@ export function DesktopReviewDocument({
   onView: (view: EditorView | null) => void;
   onMark: () => void;
   onSend: () => void;
+  /** Ask a fork of the source Session to explain or review the open file. */
+  onDelegate: (kind: "explain" | "review") => void;
   empty: React.ReactNode;
+  split?: SplitDiff | undefined;
+  diagnostics?: readonly CodeDiagnostic[] | undefined;
 }): React.JSX.Element {
   const ready = load?.state === "ready" ? load.value : undefined;
+  const [scrollTop, setScrollTop] = useState(0);
   return (
     <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <ReviewFileTabs tabs={tabs} onSelect={onSelectTab} onClose={onCloseTab} onKeep={onKeepTab} />
@@ -179,12 +208,18 @@ export function DesktopReviewDocument({
       )}
       {document && load?.state !== "error" && (
         // Mounted across documents, so a file change never drops Vim's focus;
-        // the next text replaces the state when it arrives.
+        // the next text replaces the state when it arrives. A split adds the
+        // old side as a passive mirror; the new side keeps the Vim buffer.
+        <Box sx={{ flex: 1, minHeight: 0, display: "flex" }} data-review-diff-layout={split ? "split" : "unified"}>
+        {split && <ReviewSplitMirror path={document.path} side={split.left} fontSize={fontSize} scrollTop={scrollTop} />}
         <ReviewCodeEditor
-          documentKey={ready?.key ?? "loading"}
+          documentKey={split ? `${ready?.key ?? "loading"}:split` : ready?.key ?? "loading"}
           path={document.path}
           kind={document.kind === "source" ? "source" : "diff"}
-          text={ready?.text ?? ""}
+          text={split?.right.text ?? ready?.text ?? ""}
+          side={split?.right}
+          onScroll={split ? setScrollTop : undefined}
+          diagnostics={diagnostics}
           wrap={wrap}
           fontSize={fontSize}
           restoreLine={restoreLine}
@@ -192,6 +227,7 @@ export function DesktopReviewDocument({
           onCursorLine={onCursorLine}
           onView={onView}
         />
+        </Box>
       )}
       {document && (
         <Toolbar
@@ -200,13 +236,18 @@ export function DesktopReviewDocument({
           data-review-document-footer
           sx={{ minHeight: desktopSize(34), px: 1, gap: 1, borderTop: 1, borderColor: "divider", flexShrink: 0 }}
         >
-          <Typography noWrap sx={{ fontSize: "0.75rem", minWidth: 0, flex: 1, direction: "rtl", textAlign: "left" }} title={document.path}>
+          <Typography noWrap sx={{ fontSize: "0.75rem", minWidth: "6em", flex: 1, direction: "rtl", textAlign: "left" }} title={document.path}>
             {document.path}
           </Typography>
           {ready?.added !== undefined && (
             <Typography sx={{ fontFamily: "monospace", fontSize: "0.72rem", flexShrink: 0 }}>
               <Box component="span" sx={{ color: "success.main" }}>+{ready.added}</Box>{" "}
               <Box component="span" sx={{ color: "error.main" }}>−{ready.removed ?? 0}</Box>
+            </Typography>
+          )}
+          {ready?.context && (
+            <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-diff-context={ready.context}>
+              {ready.context === "file" ? "Whole file" : "Patch context only"} <LeaderKeycap leaderKey="VZ" />
             </Typography>
           )}
           <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-cursor-line={status.line}>
@@ -231,6 +272,7 @@ export function DesktopReviewDocument({
               <LeaderKeycap leaderKey="VM" />
             </Button>
           )}
+          <DelegateButtons onDelegate={onDelegate} />
           <Button
             size="small"
             color="inherit"

@@ -1,0 +1,686 @@
+import { reportCodeRead } from "./reviewReadTelemetry";
+
+export type CodeChangeStatus =
+  | "modified"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "untracked"
+  | "conflicted";
+
+export interface CodeChange {
+  path: string;
+  oldPath?: string;
+  status: CodeChangeStatus;
+  staged: boolean;
+  unstaged: boolean;
+  /** Changes whenever this entry's diff can; absent from older Machines. */
+  fingerprint?: string;
+  /** Absent for binary and untracked files and from older Machines. */
+  additions?: number;
+  deletions?: number;
+}
+
+export type CodeDiffScope = "combined" | "staged" | "unstaged";
+
+export interface CodeChanges {
+  apiVersion: 1;
+  head?: string;
+  revision: string;
+  changes: CodeChange[];
+  truncated: boolean;
+  comparison?: string;
+  defaultComparison?: string;
+  comparisons: GitComparison[];
+  /** This Machine reads `committed:<reference>`. */
+  committedComparisons?: boolean;
+  /** When Review last fetched the compared branch. */
+  fetchedAtMs?: number;
+  /** Review can fetch here; absent from Controllers that predate it. */
+  fetchAvailable?: boolean;
+}
+
+export interface GitComparison {
+  reference: string;
+  label: string;
+}
+
+export interface CodeTreeEntry {
+  name: string;
+  path: string;
+  kind: "directory" | "file";
+  ignored: boolean;
+}
+
+export interface CodeTreePage {
+  apiVersion: 1;
+  path: string;
+  revision: string;
+  entries: CodeTreeEntry[];
+  truncated: boolean;
+}
+
+export interface CodeManifest {
+  apiVersion: 1;
+  provider: string;
+  revision: string;
+  head?: string;
+  project: string;
+  branch?: string;
+  worktree?: string;
+  changeCount: number;
+  language: CodeLanguageCapabilities;
+  /** Absent only on a pre-cutover Controller. Selection precedes any open. */
+  bufferMode?: "legacy" | "owned" | "unavailable";
+}
+
+export interface GitCommitSummary {
+  oid: string;
+  parents: string[];
+  author: string;
+  authoredAt: string;
+  subject: string;
+  decorations: string[];
+}
+
+export interface GitWorktreeSummary {
+  path: string;
+  head?: string;
+  branch?: string;
+  bare: boolean;
+  detached: boolean;
+  locked?: string;
+  prunable?: string;
+  current: boolean;
+}
+
+export interface GitRepositorySnapshot {
+  apiVersion: 1;
+  commits: GitCommitSummary[];
+  historyTruncated: boolean;
+  worktrees: GitWorktreeSummary[];
+  /** Absent on later history pages and from Machines that predate it. */
+  target?: GitChangeTarget;
+}
+
+export interface GitTrackedReference {
+  reference: string;
+  label: string;
+  ahead: number;
+  behind: number;
+}
+
+export interface GitChangeTarget {
+  branch?: string | null;
+  head?: string | null;
+  changeCount: number;
+  upstream?: GitTrackedReference;
+  base?: GitTrackedReference;
+}
+
+export interface GitCommitFile {
+  path: string;
+  oldPath?: string;
+  status: Exclude<CodeChangeStatus, "untracked" | "conflicted">;
+}
+
+export interface GitCommitDetail {
+  apiVersion: 1;
+  oid: string;
+  parents: string[];
+  author: string;
+  authorEmail: string;
+  authoredAt: string;
+  message: string;
+  files: GitCommitFile[];
+  filesTruncated: boolean;
+}
+
+export interface CodeLanguageCapabilities {
+  provider: string;
+  state: "restricted" | "warming" | "ready" | "unavailable" | "failed";
+  diagnostics: boolean;
+  inlayHints: boolean;
+  semanticTokens: boolean;
+  hover: boolean;
+  navigation: boolean;
+  outline: boolean;
+}
+
+export interface CodeSearchResults {
+  apiVersion: 1;
+  files: string[];
+}
+
+export interface CodeDocument {
+  apiVersion: 1;
+  path: string;
+  revision?: string;
+  text: string;
+  truncated: boolean;
+  nextCursor?: string;
+  limited?: boolean;
+}
+
+export interface CodeBufferLease {
+  apiVersion: 1;
+  path: string;
+  leases: number;
+}
+
+export interface CodeLanguagePoint {
+  row: number;
+  column: number;
+}
+
+export interface CodeDiagnostic {
+  start: CodeLanguagePoint;
+  end: CodeLanguagePoint;
+  severity: number;
+  source?: string;
+  message: string;
+}
+
+export interface CodeInlayHint {
+  offset: number;
+  label: string;
+  kind?: string;
+  paddingLeft: boolean;
+  paddingRight: boolean;
+}
+
+export interface CodeLanguage {
+  apiVersion: 1;
+  path: string;
+  version: { replicaId: number; timestamp: number }[];
+  diagnostics: CodeDiagnostic[];
+  inlayHints: CodeInlayHint[];
+  semanticTokens: number[];
+}
+
+export interface CodeHoverBlock {
+  text: string;
+  language?: string;
+  markdown: boolean;
+}
+
+export interface CodeHover {
+  apiVersion: 1;
+  path: string;
+  contents: CodeHoverBlock[];
+}
+
+export type CodeNavigationKind =
+  | "definition"
+  | "declaration"
+  | "typeDefinition"
+  | "implementation"
+  | "references";
+
+export interface CodeLocation {
+  path: string;
+  start: { row: number; column: number };
+  end: { row: number; column: number };
+}
+
+export interface CodeNavigation {
+  apiVersion: 1;
+  path: string;
+  locations: CodeLocation[];
+}
+
+export interface CodeDocumentSymbol {
+  name: string;
+  kind: number;
+  start: CodeLanguagePoint;
+  end: CodeLanguagePoint;
+  selectionStart: CodeLanguagePoint;
+  selectionEnd: CodeLanguagePoint;
+  children: CodeDocumentSymbol[];
+}
+
+export interface CodeOutline {
+  apiVersion: 1;
+  path: string;
+  symbols: CodeDocumentSymbol[];
+}
+
+export class CodeApiError extends Error {
+  constructor(public readonly status: number) {
+    super(`Code API ${status}`);
+  }
+}
+
+export function isTransientCodeApiStatus(
+  status: number | undefined,
+): boolean {
+  return status === undefined ||
+    status === 304 ||
+    status === 409 ||
+    status === 410 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504;
+}
+
+export function shouldCloseUnavailableSource(
+  kind: "source" | "diff",
+  status: number | undefined,
+): boolean {
+  return kind === "source" && status === 404;
+}
+
+async function codeFetch<T>(
+  url: string,
+  signal?: AbortSignal,
+  cache?: RequestCache,
+): Promise<T> {
+  const startedAt = performance.now();
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...(signal ? { signal } : {}),
+      ...(cache ? { cache } : {}),
+    });
+  } catch (error) {
+    if (!signal?.aborted) reportCodeRead(url, startedAt, "network");
+    throw error;
+  }
+  if (!response.ok) {
+    reportCodeRead(url, startedAt, response.status);
+    throw new CodeApiError(response.status);
+  }
+  const body = await response.json() as T & { apiVersion?: number };
+  if (body.apiVersion !== 1) {
+    reportCodeRead(url, startedAt, "version");
+    throw new Error("Unsupported Code API version");
+  }
+  reportCodeRead(url, startedAt, 200);
+  return body;
+}
+
+async function codeBufferLease(
+  sessionId: string,
+  path: string,
+  leaseId: string,
+  method: "PUT" | "DELETE",
+): Promise<CodeBufferLease> {
+  const response = await fetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/buffer`,
+    {
+      method,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, leaseId }),
+      keepalive: method === "DELETE",
+    },
+  );
+  if (!response.ok) {
+    throw new CodeApiError(response.status);
+  }
+  const body = await response.json() as CodeBufferLease;
+  if (body.apiVersion !== 1) {
+    throw new Error("Unsupported Code API version");
+  }
+  return body;
+}
+
+export function openCodeBuffer(
+  sessionId: string,
+  path: string,
+  leaseId: string,
+): Promise<CodeBufferLease> {
+  return codeBufferLease(sessionId, path, leaseId, "PUT");
+}
+
+export function closeCodeBuffer(
+  sessionId: string,
+  path: string,
+  leaseId: string,
+): Promise<CodeBufferLease> {
+  return codeBufferLease(sessionId, path, leaseId, "DELETE");
+}
+
+export function fetchCodeLanguage(
+  sessionId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<CodeLanguage> {
+  const query = new URLSearchParams({ path });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/language?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeHover(
+  sessionId: string,
+  path: string,
+  row: number,
+  column: number,
+  signal?: AbortSignal,
+): Promise<CodeHover> {
+  const query = new URLSearchParams({
+    path,
+    row: String(row),
+    column: String(column),
+  });
+  return codeFetch(
+    `/api/code/sessions/${
+      encodeURIComponent(sessionId)
+    }/intelligence/hover?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeNavigation(
+  sessionId: string,
+  path: string,
+  row: number,
+  column: number,
+  kind: CodeNavigationKind,
+  signal?: AbortSignal,
+): Promise<CodeNavigation> {
+  const query = new URLSearchParams({
+    path,
+    row: String(row),
+    column: String(column),
+    kind,
+  });
+  return codeFetch(
+    `/api/code/sessions/${
+      encodeURIComponent(sessionId)
+    }/intelligence/navigation?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeOutline(
+  sessionId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<CodeOutline> {
+  const query = new URLSearchParams({ path });
+  return codeFetch(
+    `/api/code/sessions/${
+      encodeURIComponent(sessionId)
+    }/intelligence/outline?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeDiffPage(
+  sessionId: string,
+  cursor: string,
+  signal?: AbortSignal,
+): Promise<CodeDocument & { added: number; removed: number }> {
+  const query = new URLSearchParams({ cursor });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/diff?${query}`,
+    signal,
+  );
+}
+
+/** Fetch the compared remote branch. Refusals carry a reason worth showing. */
+export async function fetchReviewComparison(
+  sessionId: string,
+  comparison: string,
+): Promise<void> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/review-fetch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comparison }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error((await response.text()) || "Could not fetch this branch");
+  }
+}
+
+export function fetchCodeChanges(
+  sessionId: string,
+  signal?: AbortSignal,
+  comparison?: string,
+): Promise<CodeChanges> {
+  const query = comparison ? `?${new URLSearchParams({ comparison })}` : "";
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/changes${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeManifest(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<CodeManifest> {
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/manifest`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeTree(
+  sessionId: string,
+  path: string,
+  signal?: AbortSignal,
+  refresh = false,
+): Promise<CodeTreePage> {
+  const query = path ? `?${new URLSearchParams({ path })}` : "";
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/tree${query}`,
+    signal,
+    refresh ? "reload" : "default",
+  );
+}
+
+export function fetchCodeSearch(
+  sessionId: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<CodeSearchResults> {
+  const params = new URLSearchParams({ q: query, limit: "50" });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/search?${params}`,
+    signal,
+  );
+}
+
+export interface CodeContentMatch {
+  path: string;
+  line: number;
+  column: number;
+  text: string;
+  textTruncated: boolean;
+}
+
+export interface CodeContentSearchResults {
+  apiVersion: 1;
+  matches: CodeContentMatch[];
+  /** Set when a bound stopped the scan; the list is then incomplete. */
+  stopped: "limit" | "files" | "bytes" | "deadline" | null;
+  filesScanned: number;
+  filesSkipped: number;
+  filesCapped: number;
+}
+
+export function fetchCodeContentSearch(
+  sessionId: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<CodeContentSearchResults> {
+  const params = new URLSearchParams({ q: query, limit: "100" });
+  return codeFetch(
+    `/api/code/sessions/${
+      encodeURIComponent(sessionId)
+    }/content-search?${params}`,
+    signal,
+  );
+}
+
+export type CodeCheckRunState =
+  | "running"
+  | "passed"
+  | "failed"
+  | "timed_out"
+  | "error";
+
+/** One finding of a project check (`check@1`); line and column are 1-based. */
+export interface CodeCheckDiagnostic {
+  path: string;
+  line: number;
+  /** 0 when the tool reported no column. */
+  column: number;
+  severity: "error" | "warning" | "note";
+  code?: string;
+  message: string;
+}
+
+export interface CodeCheckRun {
+  runId: string;
+  check: string;
+  state: CodeCheckRunState;
+  startedAtMs: number;
+  finishedAtMs?: number;
+  exitCode?: number;
+  error?: string;
+  outputTruncated: boolean;
+  diagnostics: CodeCheckDiagnostic[];
+  truncated: boolean;
+}
+
+export interface CodeChecks {
+  runnable?: boolean;
+  epoch?: string;
+  apiVersion: 1;
+  allowed: boolean;
+  declared: {
+    id: string;
+    title?: string;
+    format: string;
+    timeoutSeconds: number;
+  }[];
+  declarationError?: string;
+  /** The latest run of each declared check. */
+  runs: CodeCheckRun[];
+}
+
+export function fetchCodeChecks(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<CodeChecks> {
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/checks`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeDiff(
+  sessionId: string,
+  path: string,
+  context: number,
+  showWhitespace: boolean,
+  scope: CodeDiffScope,
+  comparison?: string,
+  signal?: AbortSignal,
+): Promise<CodeDocument & { added: number; removed: number }> {
+  const query = new URLSearchParams({
+    path,
+    context: String(context < 0 ? 100 : context),
+    showWhitespace: String(showWhitespace),
+    scope,
+  });
+  if (comparison) query.set("comparison", comparison);
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/diff?${query}`,
+    signal,
+  );
+}
+
+export function fetchGitRepository(
+  sessionId: string,
+  signal?: AbortSignal,
+  after?: string,
+): Promise<GitRepositorySnapshot> {
+  const query = after ? `?${new URLSearchParams({ after })}` : "";
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/repository${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchGitCommit(
+  sessionId: string,
+  oid: string,
+  signal?: AbortSignal,
+): Promise<GitCommitDetail> {
+  const query = new URLSearchParams({ oid });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/commit?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+/** One side of a diff by the blob id its `index` line names. A Machine that
+ *  predates the route answers 502; a large or binary side 413/415. */
+export function fetchCodeBlob(
+  sessionId: string,
+  oid: string,
+  signal?: AbortSignal,
+): Promise<{ oid: string; text: string }> {
+  const query = new URLSearchParams({ oid });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/blob?${query}`,
+    signal,
+  );
+}
+
+export function fetchGitCommitDiff(
+  sessionId: string,
+  oid: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<CodeDocument & { added: number; removed: number }> {
+  const query = new URLSearchParams({ oid, path });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/commit-diff?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeFile(
+  sessionId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<CodeDocument & { size: number }> {
+  const query = new URLSearchParams({ path });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/file?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeFilePage(
+  sessionId: string,
+  path: string,
+  cursor: string,
+  signal?: AbortSignal,
+): Promise<CodeDocument & { size: number }> {
+  const query = new URLSearchParams({ path, cursor });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/file?${query}`,
+    signal,
+    "no-store",
+  );
+}

@@ -42,6 +42,7 @@ mod hub_superagent;
 mod hub_sync;
 mod session_attention;
 pub use session_attention::SessionAttention;
+mod lost_execution;
 mod session_trash;
 pub use code_scope::{CodeReadScope, SessionCodeScope};
 pub use session_trash::TRASHED_SESSION_REFUSAL;
@@ -1685,6 +1686,10 @@ struct HubInner {
     /// When an unattended Provider update last left each session crashed.
     /// Never held with `sessions`.
     automatic_update_failed_sessions: Mutex<HashMap<String, std::time::Instant>>,
+    /// The execution incarnation a target last proved lost and when it first
+    /// did, by session. A replacement has a new incarnation, so a stale entry
+    /// never refuses it.
+    lost_execution: Mutex<HashMap<String, (String, std::time::Instant)>>,
     /// Canonicalizes the raw ACP stream for the in-memory replay tail. The DB
     /// writer still reduces compact deltas so streaming text coalesces without
     /// enqueueing the accumulated string on every token.
@@ -1937,6 +1942,7 @@ impl Hub {
                 provider_update_offers: Mutex::new(HashMap::new()),
                 automatic_update_failures: Mutex::new(HashMap::new()),
                 automatic_update_failed_sessions: Mutex::new(HashMap::new()),
+                lost_execution: Mutex::new(HashMap::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
                 background: Mutex::new(HashMap::new()),
                 boot_epoch: {

@@ -22,15 +22,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { desktopSize } from "../../surface/desktopSize";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
-import type { CodeChange } from "../../mobile/review/codeApi";
-import { reviewEntryKey } from "../../mobile/review/diffNavigationModel";
-import type { GitReviewEntry } from "../../mobile/review/gitReviewModel";
+import type { CodeChange } from "../../review/codeApi";
+import { reviewEntryKey } from "../../review/diffNavigationModel";
+import type { GitReviewEntry } from "../../review/gitReviewModel";
 import {
   reviewCompareBranches,
   reviewCompareLabel,
   reviewCompareScenarios,
-} from "../../mobile/review/reviewCompareModel";
+} from "../../review/reviewCompareModel";
 import type { DesktopReviewChanges } from "./useDesktopReviewChanges";
+import { findingBadge, type FindingSeverity, type ReviewFinding } from "./reviewFindingsModel";
 
 const STATUS: Record<CodeChange["status"], { letter: string; color: string }> = {
   modified: { letter: "M", color: "warning.main" },
@@ -49,16 +50,21 @@ export function entryKey(entry: GitReviewEntry): string {
   return reviewEntryKey(entry.change.path, entry.scope, entry.comparison);
 }
 
+const BADGE_COLOR = { critical: "error.main", high: "error.main", medium: "warning.main", low: "info.main" } as const;
+
 function ChangeRow({
   entry,
   open,
   reviewed,
   onOpen,
+  badge,
 }: {
   entry: GitReviewEntry;
   open: boolean;
   reviewed: boolean;
   onOpen: (entry: GitReviewEntry) => void;
+  /** Current AI review findings in this file: a read-out, not a control. */
+  badge: { count: number; severity: FindingSeverity } | undefined;
 }): React.JSX.Element {
   const { change } = entry;
   const slash = change.path.lastIndexOf("/");
@@ -104,6 +110,16 @@ function ChangeRow({
           {" "}
           <Box component="span" sx={{ color: "error.main" }}>−{change.deletions ?? 0}</Box>
         </Typography>
+      )}
+      {badge && (
+        <Box
+          component="span"
+          data-review-finding-badge={badge.count}
+          aria-label={`${String(badge.count)} finding${badge.count === 1 ? "" : "s"}, highest ${badge.severity}`}
+          sx={{ flexShrink: 0, minWidth: "1.3em", px: 0.5, borderRadius: 1, fontSize: "0.66rem", fontWeight: 700, textAlign: "center", color: "background.paper", bgcolor: BADGE_COLOR[badge.severity] }}
+        >
+          {badge.count}
+        </Box>
       )}
       {reviewed && <CheckCircle aria-label="Reviewed" sx={{ fontSize: "1rem", color: "success.main", flexShrink: 0 }} />}
     </ListItemButton>
@@ -190,7 +206,9 @@ export function ReviewChangesList({
   filter,
   compareRequest,
   onOpen,
+  findings,
 }: {
+  findings: readonly ReviewFinding[];
   changes: DesktopReviewChanges;
   reviewed: ReadonlySet<string>;
   openKey: string | undefined;
@@ -272,6 +290,7 @@ export function ReviewChangesList({
                     open={entryKey(entry) === openKey}
                     reviewed={reviewed.has(entryKey(entry))}
                     onOpen={onOpen}
+                    badge={findingBadge(findings, entry.change.path)}
                   />
                 ))}
               </ul>

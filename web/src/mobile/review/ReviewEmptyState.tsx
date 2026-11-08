@@ -1,7 +1,7 @@
 import { CheckRounded, CommitOutlined } from "@mui/icons-material";
 import { Box, Button, List, ListItemButton, Stack, Typography } from "@mui/material";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
-import type { GitChangeTarget, GitCommitSummary } from "./codeApi";
+import type { GitChangeTarget, GitCommitSummary } from "../../review/codeApi";
 import { relativeDate, shortOid } from "./ReviewRepositoryRows";
 
 export interface EmptyReviewContext {

@@ -1,7 +1,7 @@
 import type { EditorView } from "@codemirror/view";
-import { reviewEntryKey, diffHunkLines } from "../../mobile/review/diffNavigationModel";
-import type { GitReviewEntry } from "../../mobile/review/gitReviewModel";
-import { reviewSelectionMessage } from "../../mobile/review/reviewLineSelection";
+import { reviewEntryKey, diffHunkLines } from "../../review/diffNavigationModel";
+import type { GitReviewEntry } from "../../review/gitReviewModel";
+import { reviewSelectionMessage } from "../../review/reviewLineSelection";
 import { editorSelection } from "./reviewEditorSelection";
 import type { DesktopReviewDocument } from "./desktopReviewTabs";
 import { adjacentIndex, adjacentLine } from "./reviewDocumentKeys";
@@ -59,12 +59,21 @@ export function documentRemark(
   view: EditorView,
   document: DesktopReviewDocument,
   root: string | undefined,
+  /** A split shows its own rows; each names the unified patch row it stands for. */
+  unified?: { readonly text: string; readonly rows: readonly number[] },
 ): string {
+  const selected = editorSelection(view);
+  const selection = unified
+    ? {
+      from: Math.min(unified.rows[selected.from - 1] ?? 1, unified.rows[selected.to - 1] ?? 1),
+      to: Math.max(unified.rows[selected.from - 1] ?? 1, unified.rows[selected.to - 1] ?? 1),
+    }
+    : selected;
   const message = reviewSelectionMessage({
     path: document.path,
-    text: view.state.doc.toString(),
+    text: unified?.text ?? view.state.doc.toString(),
     kind: document.kind === "source" ? "source" : "diff",
-    selection: editorSelection(view),
+    selection,
     comparison: document.kind === "diff" ? document.comparison : undefined,
   });
   const commit = document.kind === "commit"

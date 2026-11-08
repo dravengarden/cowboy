@@ -21,16 +21,16 @@ import {
   fetchCodeChanges,
   fetchReviewComparison,
   type GitChangeTarget,
-} from "./codeApi";
+} from "../../review/codeApi";
 import {
   type GitReviewEntry,
   groupGitChanges,
   limitGitSections,
   reviewQueue,
-} from "./gitReviewModel";
-import { buildGitChangeTree } from "./gitChangeTree";
-import { reviewEntryKey } from "./diffNavigationModel";
-import { useReviewRecovery } from "./useReviewRecovery";
+} from "../../review/gitReviewModel";
+import { buildGitChangeTree } from "../../review/gitChangeTree";
+import { reviewEntryKey } from "../../review/diffNavigationModel";
+import { useReviewRecovery } from "../../review/useReviewRecovery";
 import { ReviewChangeControls } from "./ReviewChangeControls";
 import { ReviewEmptyState, type EmptyReviewContext } from "./ReviewEmptyState";
 import { ReviewComparePicker } from "./ReviewComparePicker";
@@ -41,7 +41,7 @@ import {
   resolveReviewComparison,
   reviewCompareLabel,
   reviewCompareScenarios,
-} from "./reviewCompareModel";
+} from "../../review/reviewCompareModel";
 
 import { GitTreeRows } from "./ReviewChangeRows";
 const REVIEW_WINDOW_SIZE = 80;
