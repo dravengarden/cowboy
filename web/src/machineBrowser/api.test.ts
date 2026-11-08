@@ -41,6 +41,8 @@ test("admission and refusal codes never reach people raw", () => {
     "browser_not_running",
     "browser_attached",
     "browser_open_failed",
+    "browser_machine_unavailable",
+    "browser_restart_unconfirmed",
     "browser_command_failed",
     "dataset_changed",
     "browser_attach_refused",
@@ -257,6 +259,8 @@ test("lifecycle calls hit their routes with the dataset and exact wire bodies", 
     await api.openSignIn(account, "provider-login-1", "dataset-1", viewport, signal),
     machine,
   );
+  await api.open(account, "dataset-1", viewport, signal, "hawk");
+  await api.openSignIn(account, "provider-login-1", "dataset-1", viewport, signal, "hawk");
   const target = { machine_id: "hawk", instance: { ...state.instance, extra: "dropped" } };
   await api.hibernate(account, "dataset-1", target, signal);
   await api.snapshot(account, "dataset-1", target, signal);
@@ -274,6 +278,8 @@ test("lifecycle calls hit their routes with the dataset and exact wire bodies", 
   assertEquals(paths, [
     `/api/provider-accounts/${account}/browser/open`,
     `/api/provider-accounts/${account}/logins/provider-login-1/browser`,
+    `/api/provider-accounts/${account}/browser/open`,
+    `/api/provider-accounts/${account}/logins/provider-login-1/browser`,
     `/api/provider-accounts/${account}/browser/hibernate`,
     `/api/provider-accounts/${account}/browser/snapshot`,
     `/api/provider-accounts/${account}/browser/reset`,
@@ -282,10 +288,14 @@ test("lifecycle calls hit their routes with the dataset and exact wire bodies", 
   const bodies = calls.map((call) => JSON.parse(String(call.init.body)) as unknown);
   assertEquals(bodies[0], { dataset: "dataset-1", width: 1280, height: 800, scale: 1 });
   assertEquals(bodies[1], { dataset: "dataset-1", width: 1280, height: 800, scale: 1 });
+  // A pinned open names its Machine.
+  const pinned = { dataset: "dataset-1", width: 1280, height: 800, scale: 1, machine_id: "hawk" };
+  assertEquals(bodies[2], pinned);
+  assertEquals(bodies[3], pinned);
   // Every instance-scoped request names the Machine shown with the instance.
-  assertEquals(bodies[2], { dataset: "dataset-1", machine_id: "hawk", instance: state.instance });
-  assertEquals(bodies[3], { dataset: "dataset-1", machine_id: "hawk", instance: state.instance });
-  assertEquals(bodies[4], {
+  assertEquals(bodies[4], { dataset: "dataset-1", machine_id: "hawk", instance: state.instance });
+  assertEquals(bodies[5], { dataset: "dataset-1", machine_id: "hawk", instance: state.instance });
+  assertEquals(bodies[6], {
     dataset: "dataset-1",
     machine_id: "hawk",
     expected_profile_revision: 3,

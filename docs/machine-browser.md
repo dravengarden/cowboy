@@ -1023,7 +1023,14 @@ displays.
   it is a Chromium launch flag. A device that attaches with a different
   preferred scale sees the framebuffer scaled to fit and an explicit
   "Restart for this screen" action, which hibernates (snapshotting) and
-  reopens with the new scale (new incarnation). For a sign-in-bound instance
+  reopens with the new scale (new incarnation). The restart stays on the
+  captured Machine: it reopens only after that Machine confirms the
+  captured instance stopped (the hibernate's answer, else reads pinned to
+  that Machine, about 30 s at most: `hibernated` for that instance and
+  incarnation, or no instance running), and the open names that Machine
+  (`machine_id`), so it never starts on another Machine with a different
+  profile. A newer instance there (`browser_instance_changed`) or no
+  confirmation (`browser_restart_unconfirmed`) reopens nothing. For a sign-in-bound instance
   the Machine re-navigates to the stored verification URL after the restart;
   the page state before the restart is lost, which the action says.
 - **Attachment.** The stream socket carries the device proof as a
@@ -1052,9 +1059,16 @@ displays.
   placement). While the panel shows a live browser, is attached or awaits a
   starting open, its state reads carry that Machine, so a newer browser of
   the same account on another Machine never replaces what it shows. Each
-  read is tagged with its generation and pinned Machine; an answer that is
-  no longer the newest read, or whose pin no longer matches the panel (an
-  open mounted the viewer meanwhile), is discarded. While the viewer is
+  read is tagged with its generation, pinned Machine and lifecycle epoch;
+  an answer that is no longer the newest read, whose pin no longer matches
+  the panel (an open mounted the viewer meanwhile), or that was issued
+  before the latest lifecycle transition (an applied command result, a
+  viewer mounted or ended, an awaited open settled) is discarded. An answer
+  naming no instance never ends a viewer whose instance was established
+  after that read was issued (a restart's stopping-time read cannot close
+  the replacement viewer). Status polling keeps one read in flight: the
+  next poll is scheduled only after the previous read settles, so reads
+  slower than the poll period still apply. While the viewer is
   mounted, the shown state and every instance command come from the
   viewer's Machine and instance: a read for another Machine or an older
   incarnation never replaces it, and a newer instance on the viewer's

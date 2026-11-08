@@ -245,11 +245,14 @@ export interface MachineBrowserApi {
   /** `machine` keeps the read on the Machine the panel shows while that
    * Machine still holds the account's browser. */
   read(account: string, signal: AbortSignal, machine?: string): Promise<BrowserRead>;
+  /** `machine` opens only on that Machine (a restart reopens where it
+   * stopped); the Controller refuses rather than choose another one. */
   open(
     account: string,
     dataset: string,
     viewport: BrowserViewport,
     signal: AbortSignal,
+    machine?: string,
   ): Promise<BrowserResult>;
   openSignIn(
     account: string,
@@ -257,6 +260,7 @@ export interface MachineBrowserApi {
     dataset: string,
     viewport: BrowserViewport,
     signal: AbortSignal,
+    machine?: string,
   ): Promise<BrowserResult>;
   hibernate(
     account: string,
@@ -345,12 +349,16 @@ export function createMachineBrowserApi(
         signal,
         validBrowserRead,
       ),
-    open: (account, dataset, viewport, signal) =>
-      post(`${accountPath(account)}/browser/open`, { dataset, ...viewport }, signal),
-    openSignIn: (account, request, dataset, viewport, signal) =>
+    open: (account, dataset, viewport, signal, machine) =>
+      post(
+        `${accountPath(account)}/browser/open`,
+        { dataset, ...viewport, ...(machine ? { machine_id: machine } : {}) },
+        signal,
+      ),
+    openSignIn: (account, request, dataset, viewport, signal, machine) =>
       post(
         `${accountPath(account)}/logins/${encodeURIComponent(request)}/browser`,
-        { dataset, ...viewport },
+        { dataset, ...viewport, ...(machine ? { machine_id: machine } : {}) },
         signal,
       ),
     hibernate: (account, dataset, target, signal) =>
@@ -384,6 +392,10 @@ const ERROR_TEXT: Record<string, string> = {
   browser_attach_refused: "The Machine refused the attachment. Check the browser state and retry.",
   browser_attach_failed: "The Machine did not answer the attachment request.",
   browser_open_failed: "The browser could not be opened on the Machine.",
+  browser_machine_unavailable:
+    "The browser’s Machine is not connected or cannot run browsers right now; it was not opened elsewhere.",
+  browser_restart_unconfirmed:
+    "The browser did not confirm that it stopped, so it was not reopened. Check its state and retry.",
   browser_command_failed: "The Machine did not confirm the command.",
   dataset_changed: "Your Cowboy account data changed. Reload before continuing.",
   invalid_viewport: "This screen size is outside the supported range.",

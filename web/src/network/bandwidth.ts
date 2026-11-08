@@ -160,17 +160,45 @@ export function lowPriorityInterval(
   task: () => void,
   periodMs: number,
 ): () => void {
+  return lowPrioritySchedule(() => {
+    task();
+  }, periodMs);
+}
+
+/**
+ * Like `lowPriorityInterval`, but at most one run of `task` is in flight:
+ * the next period starts only once the previous run settled, so a response
+ * slower than the period is never overtaken by the next poll.
+ */
+export function lowPriorityPoll(
+  task: () => PromiseLike<unknown>,
+  periodMs: number,
+): () => void {
+  return lowPrioritySchedule(task, periodMs);
+}
+
+function lowPrioritySchedule(
+  task: () => PromiseLike<unknown> | undefined,
+  periodMs: number,
+): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
   const schedule = (): void => {
+    if (stopped) return;
     const condition = networkCondition();
     const delay = condition === "constrained"
       ? periodMs * CONSTRAINED_PERIOD_FACTOR
       : periodMs;
     timer = setTimeout(() => {
       if (stopped) return;
-      if (!hidden() && networkCondition() !== "offline") task();
-      schedule();
+      const run = !hidden() && networkCondition() !== "offline"
+        ? task()
+        : undefined;
+      if (run) {
+        run.then(schedule, schedule);
+      } else {
+        schedule();
+      }
     }, delay);
   };
   schedule();

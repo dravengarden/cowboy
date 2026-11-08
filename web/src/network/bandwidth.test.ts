@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import { assertEquals } from "../../../tools/test-assert.ts";
 import {
   classifyNetwork,
+  lowPriorityPoll,
   NO_ESTIMATE,
   type ThroughputEstimate,
   withThroughputSample,
@@ -63,4 +64,26 @@ test("the browser's own hint wins when it has one", () => {
   const slow = samples(NO_ESTIMATE, 4, 64 * 1024, 1000);
   assertEquals(classifyNetwork(true, undefined, slow), "constrained");
   assertEquals(classifyNetwork(true, undefined, NO_ESTIMATE), "unconstrained");
+});
+
+test("a low-priority poll never starts while its previous run is in flight", async () => {
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  let runs = 0;
+  let settle: () => void = () => undefined;
+  const stop = lowPriorityPoll(() => {
+    runs++;
+    return new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+  }, 2);
+  await pause(30);
+  // Many periods passed, but the first run has not settled.
+  assertEquals(runs, 1);
+  settle();
+  await pause(30);
+  assertEquals(runs, 2);
+  stop();
+  settle();
+  await pause(20);
+  assertEquals(runs, 2);
 });

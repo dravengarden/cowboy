@@ -2,7 +2,7 @@
  * read, status polling while nothing is attached, and the lifecycle calls.
  * Everything observable lives in the pure `browserModel`. */
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { lowPriorityInterval } from "../network/bandwidth";
+import { lowPriorityPoll } from "../network/bandwidth";
 import { productSessionSignal } from "../productSessionEnd";
 import { productSyncPrincipal } from "../productSyncIdentity";
 import {
@@ -19,6 +19,9 @@ import {
   type BrowserEvent,
   type BrowserModel,
   INITIAL_BROWSER_MODEL,
+  RESTART_CONFIRM_ATTEMPTS,
+  RESTART_CONFIRM_INTERVAL_MS,
+  confirmStopped,
   pollPeriod,
   readTicket,
   reduceBrowser,
@@ -52,7 +55,8 @@ export interface MachineBrowserController {
   hibernate(target?: BrowserTarget): void;
   snapshot(): void;
   reset(target?: ResetTarget): void;
-  /** Hibernate, then reopen at another device scale. */
+  /** Hibernate, confirm that exact browser stopped, then reopen it at
+   * another device scale on the same Machine. */
   restart(viewport: BrowserViewport, target?: BrowserTarget): void;
 }
 
@@ -60,6 +64,10 @@ const READ_TIMEOUT_MS = 15_000;
 /** The Controller itself waits up to 150 s for a cold start. */
 const OPEN_TIMEOUT_MS = 180_000;
 const COMMAND_TIMEOUT_MS = 60_000;
+const RESTART_TIMEOUT_MS =
+  OPEN_TIMEOUT_MS +
+  COMMAND_TIMEOUT_MS +
+  RESTART_CONFIRM_ATTEMPTS * (RESTART_CONFIRM_INTERVAL_MS + READ_TIMEOUT_MS);
 
 function errorText(cause: unknown): string {
   if (cause instanceof MachineBrowserError) return cause.message;
@@ -67,6 +75,26 @@ function errorText(cause: unknown): string {
     return "The Machine did not answer in time. Refresh to see the current state.";
   }
   return browserErrorText(undefined);
+}
+
+/** Hibernate exactly `target`, confirm it stopped (`confirmStopped`, with
+ * reads pinned to its Machine), then reopen only on that Machine. */
+async function restartOn(
+  api: MachineBrowserApi,
+  { account, dataset }: { account: string; dataset: string },
+  target: BrowserTarget,
+  abort: AbortSignal,
+  reopen: (abort: AbortSignal, machine: string) => Promise<BrowserResult>,
+): Promise<BrowserResult> {
+  const hibernated = await api.hibernate(account, dataset, target, abort);
+  const read = (signal: AbortSignal) =>
+    api.read(
+      account,
+      AbortSignal.any([signal, AbortSignal.timeout(READ_TIMEOUT_MS)]),
+      target.machine_id,
+    );
+  await confirmStopped(target, hibernated, read, abort);
+  return reopen(abort, target.machine_id);
 }
 
 export function useMachineBrowser({
@@ -89,22 +117,32 @@ export function useMachineBrowser({
   const signal = (timeoutMs: number): AbortSignal =>
     AbortSignal.any([productSessionSignal(), AbortSignal.timeout(timeoutMs)]);
 
-  // Each read is tagged with its generation and the Machine it was pinned
-  // to; an answer that is no longer the newest read, or whose pin no longer
-  // matches the panel (a viewer mounted meanwhile), is discarded.
+  // Each read is tagged with its generation, pinned Machine and lifecycle
+  // epoch (`readTicket`): a superseded, re-pinned or pre-transition answer
+  // is discarded.
   const readGeneration = useRef(0);
-  const refresh = useCallback(() => {
+  const inFlight = useRef<Promise<void> | undefined>(undefined);
+  const refresh = useCallback((): Promise<void> => {
     const ticket = readTicket(readGeneration, () => modelRef.current);
     const current = (): boolean => live() && ticket.current();
-    api.read(account, signal(READ_TIMEOUT_MS), ticket.pinned).then(
+    const issued = ticket.epoch;
+    const done = api.read(account, signal(READ_TIMEOUT_MS), ticket.pinned).then(
       (read) => {
-        if (current()) dispatch({ type: "read", read, now: Date.now() });
+        if (current()) dispatch({ type: "read", read, now: Date.now(), issued });
       },
       (cause: unknown) => {
-        if (current()) dispatch({ type: "read_failed", message: errorText(cause) });
+        if (current()) dispatch({ type: "read_failed", message: errorText(cause), issued });
       },
     );
+    inFlight.current = done;
+    void done.finally(() => {
+      if (inFlight.current === done) inFlight.current = undefined;
+    });
+    return done;
   }, [account, api, live]);
+  // A poll never overtakes a read still in flight (which would discard it):
+  // it waits for that one, and the next poll is scheduled after it settles.
+  const poll = useCallback(() => inFlight.current ?? refresh(), [refresh]);
 
   useEffect(() => {
     alive.current = true;
@@ -120,8 +158,8 @@ export function useMachineBrowser({
   const period = active ? pollPeriod(model, Date.now()) : undefined;
   useEffect(() => {
     if (period === undefined) return undefined;
-    return lowPriorityInterval(refresh, period);
-  }, [period, refresh]);
+    return lowPriorityPoll(poll, period);
+  }, [period, poll]);
 
   const run = useCallback(
     (
@@ -147,10 +185,10 @@ export function useMachineBrowser({
     [live],
   );
   const openCall = useCallback(
-    (viewport: BrowserViewport, abort: AbortSignal): Promise<BrowserResult> =>
+    (viewport: BrowserViewport, abort: AbortSignal, machine?: string): Promise<BrowserResult> =>
       signInRequest
-        ? api.openSignIn(account, signInRequest, dataset, viewport, abort)
-        : api.open(account, dataset, viewport, abort),
+        ? api.openSignIn(account, signInRequest, dataset, viewport, abort, machine)
+        : api.open(account, dataset, viewport, abort, machine),
     [account, api, dataset, signInRequest],
   );
   const open = useCallback(
@@ -189,17 +227,18 @@ export function useMachineBrowser({
     },
     [account, api, dataset, run],
   );
+  // The restart reopens only on the captured Machine (`restartOn`).
   const restart = useCallback(
     (viewport: BrowserViewport, captured?: BrowserTarget) => {
       const target = captured ?? shownTarget(modelRef.current);
       if (!target) return;
       run(
         "open",
-        async (abort) => {
-          await api.hibernate(account, dataset, target, abort);
-          return openCall(viewport, abort);
-        },
-        OPEN_TIMEOUT_MS + COMMAND_TIMEOUT_MS,
+        (abort) =>
+          restartOn(api, { account, dataset }, target, abort, (signal, machine) =>
+            openCall(viewport, signal, machine),
+          ),
+        RESTART_TIMEOUT_MS,
       );
     },
     [account, api, dataset, openCall, run],

@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../tools/test-assert.ts";
-import type { BrowserRead, BrowserStateEvent } from "./api";
+import { type BrowserRead, type BrowserStateEvent, MachineBrowserError } from "./api";
 import {
   type BrowserModel,
   INITIAL_BROWSER_MODEL,
@@ -13,10 +13,13 @@ import {
   pinnedMachine,
   CHANGED_BEFORE_CONFIRM,
   pollPeriod,
+  RESTART_CONFIRM_ATTEMPTS,
+  confirmStopped,
   readTicket,
   reduceBrowser,
   resetTarget,
   shownTarget,
+  stoppedFor,
   targetOf,
 } from "./browserModel";
 import { confirmationCurrent, confirmationFor } from "./confirmation";
@@ -54,7 +57,7 @@ test("an open that answers detached mounts the viewer; a refused open explains i
     now: 10,
   });
   assertEquals(model.busy, undefined);
-  assertEquals(model.viewer, { takeover: false, generation: 1, target: shown() });
+  assertEquals(model.viewer, { takeover: false, generation: 1, target: shown(), since: 1 });
   assertEquals(model.read?.state?.state, "detached");
   const refused = reduceBrowser(INITIAL_BROWSER_MODEL, {
     type: "result",
@@ -100,7 +103,7 @@ test("a refused sign-in open never mounts the viewer or takes the display over",
     now: 10,
     takeover: true,
   });
-  assertEquals(bound.viewer, { takeover: true, generation: 1, target: shown() });
+  assertEquals(bound.viewer, { takeover: true, generation: 1, target: shown(), since: 1 });
 });
 
 test("a starting open polls fast and attaches once the instance runs", () => {
@@ -125,7 +128,7 @@ test("hibernated, stopping and superseded states end the viewer and keep the las
     reduceBrowser(INITIAL_BROWSER_MODEL, { type: "read", read: read(event("detached")), now: 1 }),
     { type: "attach", takeover: true },
   );
-  assertEquals(attached.viewer, { takeover: true, generation: 1, target: shown() });
+  assertEquals(attached.viewer, { takeover: true, generation: 1, target: shown(), since: 1 });
   const held = reduceBrowser(attached, { type: "remote_clipboard", text: "code-1" });
   assertEquals(held.remoteClipboard, "code-1");
   const hibernated = reduceBrowser(held, {
@@ -257,7 +260,7 @@ test("a sign-in panel enters every browser through the sign-in open", () => {
       now: 1,
       takeover,
     });
-  assertEquals(open(true).viewer, { takeover: true, generation: 1, target: shown() });
+  assertEquals(open(true).viewer, { takeover: true, generation: 1, target: shown(), since: 1 });
   assertEquals(open(false).viewer, undefined);
 });
 
@@ -494,4 +497,122 @@ test("a confirmed takeover never attaches to a browser that replaced the confirm
   });
   assertEquals(signIn.viewer, undefined);
   assertEquals(signIn.error, CHANGED_BEFORE_CONFIRM);
+});
+
+test("a read issued before a lifecycle transition never ends the viewer it established", () => {
+  const generations = { current: 0 };
+  // Restart: the old viewer ended while the browser was stopping.
+  let model: BrowserModel = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "read",
+    read: read(event("stopping")),
+    now: 1,
+  });
+  const whileStopping = readTicket(generations, () => model);
+  assertEquals(whileStopping.pinned, "ovh");
+  // The replacement opens on the same Machine before that read answers.
+  model = reduceBrowser(model, {
+    type: "result",
+    action: "open",
+    result: { machine_id: "ovh", state: event("detached", { instance: shown("ovh", 2).instance }) },
+    now: 2,
+  });
+  assertEquals(model.viewer?.target, shown("ovh", 2));
+  assertEquals(whileStopping.current(), false);
+  // Its incarnation-less "hibernated" arrives anyway (a queued dispatch).
+  const late = read(
+    event("hibernated", { instance: { ...shown().instance, instance_id: "", incarnation: 0 } }),
+  );
+  const after = reduceBrowser(model, {
+    type: "read",
+    read: late,
+    now: 3,
+    issued: whileStopping.epoch,
+  });
+  assertEquals(after.viewer?.target, shown("ovh", 2));
+  const failed = reduceBrowser(model, {
+    type: "read_failed",
+    message: "x",
+    issued: whileStopping.epoch,
+  });
+  assertEquals(failed.error, "");
+  // The same answer from a read issued after the viewer was established
+  // ends it: nothing runs there any more.
+  const fresh = readTicket(generations, () => model);
+  assertEquals(fresh.current(), true);
+  const ended = reduceBrowser(model, { type: "read", read: late, now: 4, issued: fresh.epoch });
+  assertEquals(ended.viewer, undefined);
+});
+
+test("a restart reopens only after that exact browser verifiably stopped", async () => {
+  const signal = new AbortController().signal;
+  const target = shown("ovh", 3);
+  const none = { ...target.instance, instance_id: "", incarnation: 0 };
+  assertEquals(stoppedFor(target, read(event("hibernated", { instance: target.instance }))), true);
+  assertEquals(stoppedFor(target, read(event("hibernated", { instance: none }))), true);
+  assertEquals(stoppedFor(target, read(event("stopping", { instance: target.instance }))), false);
+  assertEquals(
+    stoppedFor(target, read(event("hibernated", { instance: target.instance }), "beta")),
+    false,
+  );
+  assertEquals(
+    stoppedFor(target, read(event("hibernated", { instance: shown("ovh", 2).instance }))),
+    false,
+  );
+  // The hibernate answered `stopping`: pinned reads until it hibernated.
+  const answers = [
+    read(event("stopping", { instance: target.instance })),
+    read(event("hibernated", { instance: target.instance })),
+  ];
+  const reads: string[] = [];
+  let waits = 0;
+  await confirmStopped(
+    target,
+    { machine_id: "ovh", state: event("stopping", { instance: target.instance }) },
+    () => {
+      reads.push("read");
+      return Promise.resolve(answers.shift() ?? read(null));
+    },
+    signal,
+    () => {
+      waits++;
+      return Promise.resolve();
+    },
+  );
+  assertEquals([reads.length, waits], [2, 2]);
+  // A newer instance on that Machine, or no confirmation in time, refuses.
+  const codeOf = async (answer: BrowserRead): Promise<string> => {
+    try {
+      await confirmStopped(
+        target,
+        answer,
+        () => Promise.resolve(answer),
+        signal,
+        () => Promise.resolve(),
+      );
+      return "confirmed";
+    } catch (cause) {
+      return cause instanceof MachineBrowserError ? cause.code : "other";
+    }
+  };
+  assertEquals(
+    await codeOf(read(event("detached", { instance: shown("ovh", 4).instance }))),
+    "browser_instance_changed",
+  );
+  let attempts = 0;
+  const stuck = read(event("stopping", { instance: target.instance }));
+  try {
+    await confirmStopped(
+      target,
+      stuck,
+      () => {
+        attempts++;
+        return Promise.resolve(stuck);
+      },
+      signal,
+      () => Promise.resolve(),
+    );
+  } catch (cause) {
+    assertEquals(cause instanceof MachineBrowserError && cause.code, "browser_restart_unconfirmed");
+  }
+  assertEquals(attempts, RESTART_CONFIRM_ATTEMPTS);
 });

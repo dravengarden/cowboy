@@ -7,6 +7,7 @@ import {
   type BrowserState,
   type BrowserStateEvent,
   type BrowserTarget,
+  MachineBrowserError,
   browserReasonText,
   namesInstance,
 } from "./api";
@@ -21,8 +22,11 @@ export interface BrowserModel {
   notice: string;
   busy?: BrowserAction | undefined;
   /** The viewer mounts while this is set; `generation` remounts it. It
-   * attaches to exactly `target`, never to another browser of the account. */
-  viewer?: { takeover: boolean; generation: number; target: BrowserTarget } | undefined;
+   * attaches to exactly `target`, never to another browser of the account.
+   * `since` is the lifecycle epoch it was established in. */
+  viewer?:
+    | { takeover: boolean; generation: number; target: BrowserTarget; since?: number }
+    | undefined;
   /** Text the remote browser copied, held for the open attachment only. */
   remoteClipboard?: string | undefined;
   /** When the instance was first seen `starting`, bounding the fast poll. */
@@ -30,11 +34,21 @@ export interface BrowserModel {
   /** An open answered `starting` for this instance; attach to it once it
    * runs. */
   awaitingOpen?: BrowserTarget | undefined;
+  /** Advances on every lifecycle transition (an applied command result, a
+   * viewer mounted or ended, an awaited open settled); a read issued before
+   * the current epoch describes an earlier lifecycle and is discarded. */
+  epoch?: number;
 }
 
 export type BrowserEvent =
-  | { type: "read"; read: BrowserRead; now: number }
-  | { type: "read_failed"; message: string }
+  | {
+      type: "read";
+      read: BrowserRead;
+      now: number;
+      /** The lifecycle epoch the read was issued in (`readTicket`). */
+      issued?: number | undefined;
+    }
+  | { type: "read_failed"; message: string; issued?: number | undefined }
   | { type: "busy"; action: BrowserAction }
   | {
       type: "result";
@@ -91,19 +105,26 @@ export function shownTarget(model: BrowserModel): BrowserTarget | undefined {
 
 /** Whether a read describes something other than the mounted viewer's
  * browser and must not replace it: another Machine's answer (a poll that
- * finished after an open mounted the viewer elsewhere) or an older
- * incarnation on the viewer's Machine. A newer instance there, or an answer
- * that no instance runs, describes the viewer's browser ending. */
-export function staleForViewer(model: BrowserModel, read: BrowserRead): boolean {
-  const viewer = model.viewer?.target;
+ * finished after an open mounted the viewer elsewhere), an older
+ * incarnation on the viewer's Machine, or an answer naming no instance
+ * that was issued before the viewer's instance was established (it may
+ * describe the browser a restart stopped). A newer instance there, or a
+ * later answer that no instance runs, describes the viewer's browser
+ * ending. */
+export function staleForViewer(model: BrowserModel, read: BrowserRead, issued?: number): boolean {
+  const viewer = model.viewer;
   if (!viewer) return false;
-  if (read.machine_id !== viewer.machine_id) return true;
+  if (read.machine_id !== viewer.target.machine_id) return true;
   const state = read.state;
-  return (
-    state !== null &&
-    namesInstance(state) &&
-    state.instance.incarnation < viewer.instance.incarnation
-  );
+  if (state === null || !namesInstance(state)) {
+    return issued !== undefined && issued < (viewer.since ?? 0);
+  }
+  return state.instance.incarnation < viewer.target.instance.incarnation;
+}
+
+/** Whether a read was issued in an earlier lifecycle epoch than the panel's. */
+export function issuedBefore(model: BrowserModel, issued: number | undefined): boolean {
+  return issued !== undefined && issued < (model.epoch ?? 0);
 }
 
 /** The Machine the panel's reads stay on: the browser it is attached to or
@@ -123,13 +144,87 @@ export function pinnedMachine(model: BrowserModel): string | undefined {
 export function readTicket(
   generations: { current: number },
   model: () => BrowserModel,
-): { pinned: string | undefined; current: () => boolean } {
+): { pinned: string | undefined; epoch: number; current: () => boolean } {
   const generation = ++generations.current;
-  const pinned = pinnedMachine(model());
+  const issued = model();
+  const pinned = pinnedMachine(issued);
+  const epoch = issued.epoch ?? 0;
   return {
     pinned,
-    current: () => generation === generations.current && pinned === pinnedMachine(model()),
+    epoch,
+    current: () =>
+      generation === generations.current &&
+      pinned === pinnedMachine(model()) &&
+      epoch === (model().epoch ?? 0),
   };
+}
+
+/** Whether a Machine's answer confirms that exactly `target` stopped:
+ * hibernated on its Machine for that instance and incarnation, or that
+ * Machine's answer that no instance runs. */
+export function stoppedFor(
+  target: BrowserTarget,
+  answer: { machine_id: string | null; state: BrowserStateEvent | null },
+): boolean {
+  const state = answer.state;
+  if (answer.machine_id !== target.machine_id || state?.state !== "hibernated") return false;
+  if (!namesInstance(state)) return true;
+  return (
+    state.instance.instance_id === target.instance.instance_id &&
+    state.instance.incarnation === target.instance.incarnation
+  );
+}
+
+export const RESTART_CONFIRM_INTERVAL_MS = 1_000;
+export const RESTART_CONFIRM_ATTEMPTS = 30;
+
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const abort = (): void => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/** Wait until `target` verifiably stopped on its Machine before a restart
+ * reopens there: the hibernate's own answer, else reads pinned to that
+ * Machine (bounded). A newer instance there, or no confirmation in time,
+ * refuses the restart. */
+export async function confirmStopped(
+  target: BrowserTarget,
+  hibernated: BrowserResult,
+  read: (signal: AbortSignal) => Promise<BrowserRead>,
+  signal: AbortSignal,
+  wait: (ms: number, signal: AbortSignal) => Promise<void> = pause,
+): Promise<void> {
+  let answer: { machine_id: string | null; state: BrowserStateEvent | null } = hibernated;
+  for (let attempt = 0; ; attempt++) {
+    if (stoppedFor(target, answer)) return;
+    const state = answer.state;
+    if (
+      answer.machine_id === target.machine_id &&
+      state !== null &&
+      namesInstance(state) &&
+      state.instance.incarnation > target.instance.incarnation
+    ) {
+      throw new MachineBrowserError("browser_instance_changed", 409);
+    }
+    if (attempt >= RESTART_CONFIRM_ATTEMPTS) {
+      throw new MachineBrowserError("browser_restart_unconfirmed", 409);
+    }
+    await wait(RESTART_CONFIRM_INTERVAL_MS, signal);
+    answer = await read(signal);
+  }
 }
 
 /** The Machine and profile revision a reset applies to, taken together from
@@ -288,12 +383,29 @@ function withRead(model: BrowserModel, read: BrowserRead, now: number): BrowserM
   return next;
 }
 
+/** Every lifecycle transition advances the epoch; a viewer established by
+ * it records that epoch. */
 export function reduceBrowser(model: BrowserModel, event: BrowserEvent): BrowserModel {
+  const next = reduceEvent(model, event);
+  const transition =
+    event.type === "result" ||
+    next.viewer !== model.viewer ||
+    next.awaitingOpen !== model.awaitingOpen;
+  if (!transition) return next;
+  const epoch = (model.epoch ?? 0) + 1;
+  const viewer =
+    next.viewer && next.viewer !== model.viewer ? { ...next.viewer, since: epoch } : next.viewer;
+  return { ...next, epoch, viewer };
+}
+
+function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
   switch (event.type) {
     case "read":
-      if (staleForViewer(model, event.read)) return { ...model, loaded: true };
+      if (issuedBefore(model, event.issued)) return model;
+      if (staleForViewer(model, event.read, event.issued)) return { ...model, loaded: true };
       return withRead(model, event.read, event.now);
     case "read_failed":
+      if (issuedBefore(model, event.issued)) return model;
       return { ...model, loaded: true, error: event.message };
     case "busy":
       return { ...model, busy: event.action, error: "", notice: "" };
