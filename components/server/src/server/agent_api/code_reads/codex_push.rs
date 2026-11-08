@@ -215,15 +215,24 @@ async fn deliver(
         return;
     };
     let cmid = format!("{CMID_PREFIX}{}", uuid::Uuid::new_v4().simple());
-    match super::super::super::send_delivery::begin(
-        state,
-        session,
-        &text,
-        &[],
-        cmid,
-        Some(&target),
-        true,
-    ) {
+    let steer = |next_checkpoint| {
+        super::super::super::send_delivery::begin(
+            state,
+            session,
+            &text,
+            &[],
+            cmid.clone(),
+            Some(&target),
+            next_checkpoint,
+        )
+    };
+    // Prefer the next checkpoint; a worker without it takes ordinary
+    // current-turn steering, which also never starts or cancels a turn.
+    let started = match steer(true) {
+        Err(reason) if reason.contains("next checkpoint is unavailable") => steer(false),
+        other => other,
+    };
+    match started {
         Ok(delivery) => {
             let outcome = delivery.outcome().await;
             tracing::info!(event_name = "cowboy.code.post_edit_push", session, outcome);
