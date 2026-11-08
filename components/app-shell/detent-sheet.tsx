@@ -932,8 +932,8 @@ export function DetentSheet(
             }
           }}
           sx={{
-            position: "fixed", "--cowboy-reader-sticky-top": "0px",
-            ...(isCover && readerTopBleed && !fillBody ? { "--cowboy-reader-sticky-top": `calc(${SAFE_TOP} + 20px)`, "&::after": (theme) => readerTopEdge(theme, SAFE_TOP)["&::after"] } : {}),
+            position: "fixed",
+            ...(isCover && readerTopBleed && !fillBody ? { "&::after": (theme) => readerTopEdge(theme, SAFE_TOP)["&::after"] } : {}),
             left: 0,
             right: 0,
             // A bottom COVER lifts above the on-screen keyboard via `--kb-inset` (set

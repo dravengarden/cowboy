@@ -10,7 +10,6 @@ export function readerTopEdge(theme: Theme, inset?: string) {
   const top = readerTopInset(inset);
   const color = theme.palette.background.default;
   return {
-    "--cowboy-reader-sticky-top": `calc(${top} + 20px)`,
     "&::after": {
       content: '""', position: "absolute", top: 0, left: 0, right: 0,
       height: `calc(${top} + 20px)`, zIndex: 2, pointerEvents: "none",

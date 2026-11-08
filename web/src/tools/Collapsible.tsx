@@ -12,6 +12,44 @@ import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
 // (measured) — short output stays plain with no chrome. This is the "不拥挤"
 // mechanism: every block defaults compact, the user opens only what they want.
 
+function FoldToolbar({ sticky, children }: { sticky: boolean; children: ReactNode }): React.JSX.Element {
+  const theme = useTheme();
+  return (
+    <Box
+      data-fold-toolbar
+      sx={{
+        // Sticking is relative to the scroller's content box, so a reader
+        // that pads for the status area already places this below it.
+        position: sticky ? "sticky" : "relative",
+        top: 0,
+        zIndex: 3,
+        display: "flex",
+        justifyContent: "flex-end",
+        py: 0.25,
+        minWidth: 0,
+        // While stuck over code, only the controls themselves occlude it.
+        pointerEvents: "none",
+      }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-end",
+          flexWrap: "wrap",
+          gap: 0.5,
+          minWidth: 0,
+          borderRadius: 1,
+          pointerEvents: "auto",
+          backgroundColor: alpha(theme.palette.background.default, 0.88),
+        }}
+      >
+        {children}
+      </Box>
+    </Box>
+  );
+}
+
 export function Collapsible({
   children,
   collapsedChildren,
@@ -89,23 +127,7 @@ export function Collapsible({
   return (
     <Box ref={rootRef} sx={{ position: "relative", isolation: "isolate" }}>
       {(toolbar || (overflows && open)) && (
-        <Box
-          data-fold-toolbar
-          sx={{
-            position: overflows && open ? "sticky" : "relative",
-            top: overflows && open ? "var(--cowboy-reader-sticky-top, 0px)" : 0,
-            zIndex: 3,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-end",
-            flexWrap: "wrap",
-            gap: 0.5,
-            py: 0.25,
-            minWidth: 0,
-            borderRadius: 1,
-            backgroundColor: paper,
-          }}
-        >
+        <FoldToolbar sticky={overflows && open}>
           {toolbar}
           {overflows && open && (
             <IconButton
@@ -124,7 +146,7 @@ export function Collapsible({
               <ExpandLessRounded sx={{ fontSize: "1.125rem" }} />
             </IconButton>
           )}
-        </Box>
+        </FoldToolbar>
       )}
       <Box
         ref={innerRef}
