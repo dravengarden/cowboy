@@ -18,6 +18,15 @@ test("desktop session dialog exposes confirmed runtime reload", () => {
   assert(appSource.includes("<SessionReloadDialog"));
 });
 
+test("a session row opens Replace or fork with the actions modal's own letter", () => {
+  // The row letter matches the modal's `F`, and the key strip names it.
+  assert(appSource.includes('f: "replaceOrFork",'));
+  assert(appSource.includes('["F", "Replace or fork"],'));
+  assert(appSource.includes('case "replaceOrFork":'));
+  // History, system and managed child conversations have no next agent.
+  assert(appSource.includes("!sessions.some((entry) => entry.continued_from === session.id)"));
+});
+
 test("mobile reload is a labeled session action behind the shared confirmation", () => {
   assert(
     composerSource.includes(
