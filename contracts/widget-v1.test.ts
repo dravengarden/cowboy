@@ -17,6 +17,7 @@ import {
 import {
   type ChoiceNode,
   composeInteractionMessage,
+  reduceSettlement,
   effectiveMaxSelected,
   type InputNode,
   interactionSignature,
@@ -550,12 +551,15 @@ test("the record estimator is an upper bound over every permitted selection", ()
           stop_reason: normalizeMetadata('"\\'.repeat(64), WIDGET_LIMITS.stopReasonChars),
           ownership: "released",
           released_by: "fate_rejected_history_unknown",
+          sealed: false,
           recipients: Array.from({ length: WIDGET_LIMITS.recipientsPerAttempt }, () => ({
             worker_epoch: "e".repeat(WIDGET_LIMITS.idChars),
             launch: "l".repeat(WIDGET_LIMITS.idChars),
-            status: "submitted_failed",
-            turn_id: "t".repeat(WIDGET_LIMITS.idChars),
-            stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
+            disposition: {
+              kind: "finished",
+              turn_id: "t".repeat(WIDGET_LIMITS.idChars),
+              stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
+            },
           })),
           duplicate_execution: false,
         })),
@@ -712,4 +716,84 @@ test("metadata normalization keeps every stored metadata string inside the alpha
     if (normalized.length > WIDGET_LIMITS.stopReasonChars) throw new Error("not truncated");
   }
   if (normalizeMetadata("EndTurn", 64) !== "EndTurn") throw new Error("plain text changed");
+});
+
+test("the settlement reduction is exhaustive over recipient dispositions", () => {
+  type Recipients = Parameters<typeof reduceSettlement>[0];
+  const epoch = (disposition: Recipients[number]["disposition"]) => ({
+    worker_epoch: "e1",
+    launch: "l1",
+    disposition,
+  });
+  const finished = (stop_reason: string) => epoch({ kind: "finished", turn_id: "t", stop_reason });
+  const cases: [string, ReturnType<typeof reduceSettlement>, Recipients][] = [
+    [
+      "one completing finish",
+      { delivery: "delivered", duplicate_execution: false },
+      [finished("EndTurn")],
+    ],
+    [
+      "two completing finishes",
+      { delivery: "delivered", duplicate_execution: true },
+      [finished("EndTurn"), finished("MaxTokens")],
+    ],
+    [
+      "cancelled finish plus submitted_failed",
+      { delivery: "uncertain", duplicate_execution: true },
+      [finished("Cancelled"), epoch({ kind: "submitted_failed", reason: "connection lost" })],
+    ],
+    [
+      "completing finish plus terminated",
+      { delivery: "delivered", duplicate_execution: true },
+      [finished("Refusal"), epoch({ kind: "terminated" })],
+    ],
+    [
+      "aborted by Stop plus never_received",
+      { delivery: "stopped", duplicate_execution: false },
+      [epoch({ kind: "aborted", cause: "stopped" }), epoch({ kind: "never_received" })],
+    ],
+    [
+      "aborted by startup failure",
+      { delivery: "returned", duplicate_execution: false },
+      [epoch({ kind: "aborted", cause: "startup_failed" })],
+    ],
+    [
+      "never received anywhere",
+      { delivery: "returned", duplicate_execution: false },
+      [epoch({ kind: "never_received" }), epoch({ kind: "never_received" })],
+    ],
+    [
+      "terminated without receipt",
+      { delivery: "uncertain", duplicate_execution: false },
+      [epoch({ kind: "terminated" })],
+    ],
+    [
+      "submitted_failed plus aborted",
+      { delivery: "uncertain", duplicate_execution: false },
+      [
+        epoch({ kind: "submitted_failed", reason: "agent exited" }),
+        epoch({ kind: "aborted", cause: "channel_failed" }),
+      ],
+    ],
+  ];
+  for (const [name, expected, recipients] of cases) {
+    const actual = reduceSettlement(recipients);
+    if (
+      actual.delivery !== expected.delivery ||
+      actual.duplicate_execution !== expected.duplicate_execution
+    ) {
+      throw new Error(
+        `${name}: got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`,
+      );
+    }
+  }
+});
+
+test("a single interaction record always fits a read response under the cap", () => {
+  if (
+    WIDGET_LIMITS.interactionRecordBytes + WIDGET_LIMITS.metaBytes >
+    WIDGET_LIMITS.readResponseCapBytes
+  ) {
+    throw new Error("one record plus metadata cannot exceed the response cap");
+  }
 });

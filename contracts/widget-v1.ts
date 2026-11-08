@@ -81,10 +81,15 @@ export const WIDGET_LIMITS = {
   /** Recipient epochs the broker may record per attempt; a further routing
    *  is refused and the attempt settles `uncertain` once the rest are terminal. */
   recipientsPerAttempt: 2,
-  /** Target size of one `widgets.read` or lookup page measured on the
-   *  complete encoded response, including metadata and escaping; a page
-   *  always carries at least one item. */
+  /** Target size of one `widgets.read`, `widgets.list` or lookup page
+   *  measured on the complete encoded response, including metadata and
+   *  escaping. A page always carries at least one item and may exceed the
+   *  target only for that single item, never `readResponseCapBytes`. */
   readPageBytes: 12 * 1024,
+  /** The MCP read result cap; one record plus `WidgetMeta` and framing
+   *  (≤ `metaBytes`) always fits. */
+  readResponseCapBytes: 16 * 1024,
+  metaBytes: 2 * 1024,
   /** Interaction summaries carried inside a snapshot; full records are paged. */
   snapshotInteractions: 5,
   /** Serialized `WidgetSnapshot`: a maximal document plus every metadata
@@ -743,9 +748,11 @@ function maximalRecord(node: InputNode, selected: string[] | undefined): Interac
   const recipient: RecipientEpoch = {
     worker_epoch: "e".repeat(WIDGET_LIMITS.idChars),
     launch: "l".repeat(WIDGET_LIMITS.idChars),
-    status: "submitted_failed",
-    turn_id: "t".repeat(WIDGET_LIMITS.idChars),
-    stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
+    disposition: {
+      kind: "finished",
+      turn_id: "t".repeat(WIDGET_LIMITS.idChars),
+      stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
+    },
   };
   const attempt: DispatchAttempt = {
     command_id: "c".repeat(WIDGET_LIMITS.idChars),
@@ -756,6 +763,7 @@ function maximalRecord(node: InputNode, selected: string[] | undefined): Interac
     stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
     ownership: "released",
     released_by: "fate_rejected_history_unknown",
+    sealed: false,
     recipients: Array.from({ length: WIDGET_LIMITS.recipientsPerAttempt }, () => recipient),
     duplicate_execution: false,
   };
@@ -879,19 +887,18 @@ export type DispatchAttempt = {
   /** ≤ `stopReasonChars`, `METADATA_PATTERN` after `normalizeMetadata`. */
   stop_reason?: string;
   /** Transport ownership, separate from delivery (docs/widgets.md §8.3
-   *  step 5): `held` from the dispatch CAS; `released` only when **every**
-   *  recipient epoch in `recipients` is terminal (a receipt, a receipt
-   *  tombstone installed before any receipt, or a proven process-tree
-   *  termination) and routing is tombstoned or the attempt finished. One
-   *  recipient's receipt is delivery evidence, never by itself a release.
-   *  While any attempt of the session is held, no prompt from any producer
-   *  may be admitted for the session and an idle snapshot cannot release
-   *  the guard. */
+   *  step 5): `held` from the dispatch CAS; `released` only by a
+   *  `CommandFateSettlement.settled` or `rejected` whose inventory the
+   *  broker **sealed** under its routing lock (routing tombstoned, every
+   *  recipient terminal). There is no single-recipient shortcut: a
+   *  `TurnEnd` or `finished` is delivery evidence that triggers the
+   *  revocation, never a release. While any attempt of the session is
+   *  held, no prompt from any producer may be admitted for the session and
+   *  an idle snapshot cannot release the guard. */
   ownership: "held" | "released";
-  released_by?: /** Single recipient whose own `TurnEnd(T, E)` or `finished` arrived;
-   *  the inventory had no other epoch. */
-    | "turn_end"
-    /** `settled` after an acknowledged revocation: every recipient terminal. */
+  /** True once the settlement carried `sealed: true`. */
+  sealed?: boolean;
+  released_by?: /** `settled` after an acknowledged revocation of a sealed inventory. */
     | "settled"
     /** A proven-unsent return before any write, or a Stop before any write. */
     | "returned"
@@ -915,19 +922,84 @@ export type RecipientEpoch = {
   /** Immutable binding recorded at worker registration; the termination
    *  proof is keyed by it and retained while this entry exists. */
   launch: string;
-  status:
-    | "routed"
-    | "received"
-    | "running"
-    | "finished"
-    | "aborted"
-    | "submitted_failed"
-    | "never_received"
-    | "terminated";
-  turn_id?: string;
-  /** ≤ `stopReasonChars`, `METADATA_PATTERN`. */
-  stop_reason?: string;
+  disposition: RecipientDisposition;
 };
+
+/** One recipient's state, preserved unchanged through the worker journal,
+ *  the broker ledger, the settlement and the stored attempt. */
+export type RecipientDisposition =
+  | { kind: "routed" }
+  | { kind: "received" }
+  | { kind: "running"; turn_id: string }
+  /** The provider responded. `stop_reason` ≤ `stopReasonChars`, `METADATA_PATTERN`. */
+  | { kind: "finished"; turn_id: string; stop_reason: string }
+  /** Never submitted; `cause` decides whether the intent may be re-sent. */
+  | {
+      kind: "aborted";
+      cause:
+        | "stopped"
+        | "startup_failed"
+        | "config_failed"
+        | "managed_round_failed"
+        | "channel_failed";
+    }
+  /** Submitted, no response; execution unknown. */
+  | { kind: "submitted_failed"; reason: string }
+  /** Fenced before any receipt; a later copy is refused. */
+  | { kind: "never_received" }
+  /** Process tree proven terminated without a disposition. */
+  | { kind: "terminated" };
+
+/** Terminal dispositions; an attempt's ownership is released only when every
+ *  recipient is terminal and the inventory is sealed. */
+export const TERMINAL_DISPOSITIONS = [
+  "finished",
+  "aborted",
+  "submitted_failed",
+  "never_received",
+  "terminated",
+] as const;
+/** Dispositions under which the provider may have executed the prompt. */
+export const POSSIBLY_EXECUTED_DISPOSITIONS = [
+  "finished",
+  "submitted_failed",
+  "terminated",
+] as const;
+/** Stop reasons that prove the provider completed the prompt. */
+export const COMPLETING_STOP_REASONS = [
+  "EndTurn",
+  "MaxTokens",
+  "MaxTurnRequests",
+  "Refusal",
+  "end_turn",
+  "max_tokens",
+  "max_turn_requests",
+  "refusal",
+] as const;
+
+/** The exhaustive delivery reduction over a sealed inventory (docs/widgets.md
+ *  §8.3 'Settlement rules'). */
+export function reduceSettlement(recipients: readonly RecipientEpoch[]): {
+  delivery: "delivered" | "uncertain" | "returned" | "stopped";
+  duplicate_execution: boolean;
+} {
+  const dispositions = recipients.map((recipient) => recipient.disposition);
+  const completing = dispositions.filter(
+    (d) =>
+      d.kind === "finished" &&
+      (COMPLETING_STOP_REASONS as readonly string[]).includes(d.stop_reason),
+  ).length;
+  const possiblyExecuted = dispositions.filter((d) =>
+    (POSSIBLY_EXECUTED_DISPOSITIONS as readonly string[]).includes(d.kind),
+  ).length;
+  const duplicate_execution = possiblyExecuted >= 2;
+  if (completing >= 1) return { delivery: "delivered", duplicate_execution };
+  if (possiblyExecuted >= 1) return { delivery: "uncertain", duplicate_execution };
+  if (dispositions.some((d) => d.kind === "aborted" && d.cause === "stopped")) {
+    return { delivery: "stopped", duplicate_execution };
+  }
+  return { delivery: "returned", duplicate_execution };
+}
 
 /** Machine-side command-fate protocol (docs/widgets.md §8.3 step 5), part of
  *  the `widget_delivery_v1` bundle. Every request and answer carries the
@@ -971,16 +1043,28 @@ export type CommandFateObservation =
 export type CommandFateSettlement =
   /** Waiting for fences or termination proofs of these recipients. */
   | { session_id: string; command_id: string; fate: "pending_epochs"; recipients: RecipientEpoch[] }
-  /** Routing tombstoned, every recipient fenced `never_received` or proven
-   *  terminated, no receipt anywhere. With intact journals the command never
-   *  executed (`returned`); with `journals_unavailable` the future is fenced
-   *  and every recipient terminated but the past is unknown (`uncertain`). */
-  | { session_id: string; command_id: string; fate: "rejected"; journals_unavailable: boolean }
-  /** Every recipient terminal; the final statuses decide delivery:
-   *  `finished` with a completing stop reason → `delivered`; `aborted` only →
-   *  `returned` (or `cancelled (stopped)`); `submitted_failed` or
-   *  `terminated` without `finished` → `uncertain`. */
-  | { session_id: string; command_id: string; fate: "settled"; recipients: RecipientEpoch[] };
+  /** Routing tombstoned and sealed, every recipient fenced `never_received`
+   *  or proven terminated, no receipt anywhere. With intact journals the
+   *  command never executed (`returned`); with `journals_unavailable` the
+   *  future is fenced and every recipient terminated but the past is
+   *  unknown (`uncertain`). */
+  | {
+      session_id: string;
+      command_id: string;
+      fate: "rejected";
+      sealed: true;
+      journals_unavailable: boolean;
+    }
+  /** Every recipient terminal and the inventory sealed under the routing
+   *  lock (no further recipient can ever be added); `reduceSettlement`
+   *  decides delivery and duplication from `recipients`. */
+  | {
+      session_id: string;
+      command_id: string;
+      fate: "settled";
+      sealed: true;
+      recipients: RecipientEpoch[];
+    };
 
 /** Either answer; `RevokeCommand` never returns an observation. */
 export type CommandFate = CommandFateObservation | CommandFateSettlement;
