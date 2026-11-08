@@ -5,6 +5,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+pub mod browser_placements;
 pub mod grants;
 pub mod logins;
 pub mod revocation;
@@ -29,6 +30,11 @@ pub struct Account {
     /// legacy records: those keep conservative whole-registry admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission_revision: Option<i64>,
+    /// Owner enablement of the Machine browser for this account; off by
+    /// default and independent of session or login admission. Omitted while
+    /// false so an older Controller still reads the registry.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub browser_enabled: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -91,6 +97,12 @@ pub enum Change {
         id: ProviderAccountId,
         enabled: bool,
     },
+    /// Machine browser enablement. Enabling needs an available account;
+    /// disabling is always accepted and hibernates any running browser.
+    SetBrowserEnabled {
+        id: ProviderAccountId,
+        enabled: bool,
+    },
     SetDefault {
         provider_id: String,
         id: ProviderAccountId,
@@ -112,9 +124,13 @@ pub struct Receipt {
     pub local_wipes: BTreeMap<String, revocation::LocalWipe>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub login_stops: BTreeMap<String, revocation::login_stops::Evidence>,
+    /// Machine browser revocation evidence by Machine id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub browser_revocations: BTreeMap<String, revocation::browser_revocations::Evidence>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // Applied carries the whole receipt; every caller consumes it at once.
 pub enum MutationResult {
     Applied(Receipt),
     Conflict(Registry),
@@ -175,6 +191,43 @@ impl Registry {
                 Some(self.revision.checked_add(1).ok_or("revision_exhausted")?);
             account.enabled = enabled;
         }
+        Ok(())
+    }
+
+    fn set_default(
+        &mut self,
+        provider_id: &str,
+        id: &ProviderAccountId,
+    ) -> std::result::Result<(), &'static str> {
+        if !provider_id_valid(provider_id) {
+            return Err("invalid_provider");
+        }
+        if id.is_default() {
+            self.defaults.remove(provider_id);
+        } else {
+            self.accounts
+                .iter()
+                .find(|a| &a.id == id && a.provider_id == provider_id && a.available())
+                .ok_or("account_unavailable")?;
+            self.defaults.insert(provider_id.to_owned(), id.clone());
+        }
+        Ok(())
+    }
+
+    fn set_browser_enabled(
+        &mut self,
+        id: &ProviderAccountId,
+        enabled: bool,
+    ) -> std::result::Result<(), &'static str> {
+        let account = self
+            .accounts
+            .iter_mut()
+            .find(|account| &account.id == id)
+            .ok_or("account_not_found")?;
+        if enabled && !account.available() {
+            return Err("account_unavailable");
+        }
+        account.browser_enabled = enabled;
         Ok(())
     }
 
@@ -239,6 +292,7 @@ impl Registry {
                     admission_revision: Some(
                         self.revision.checked_add(1).ok_or("revision_exhausted")?,
                     ),
+                    browser_enabled: false,
                 });
                 id
             }
@@ -260,19 +314,12 @@ impl Registry {
                 self.set_enabled(id, *enabled)?;
                 id.clone()
             }
+            Change::SetBrowserEnabled { id, enabled } => {
+                self.set_browser_enabled(id, *enabled)?;
+                id.clone()
+            }
             Change::SetDefault { provider_id, id } => {
-                if !provider_id_valid(provider_id) {
-                    return Err("invalid_provider");
-                }
-                if id.is_default() {
-                    self.defaults.remove(provider_id);
-                } else {
-                    self.accounts
-                        .iter()
-                        .find(|a| &a.id == id && &a.provider_id == provider_id && a.available())
-                        .ok_or("account_unavailable")?;
-                    self.defaults.insert(provider_id.clone(), id.clone());
-                }
+                self.set_default(provider_id, id)?;
                 id.clone()
             }
         };
@@ -385,7 +432,9 @@ impl Store {
                     .bind(owner).bind(account_id.as_str()).fetch_all(&mut *tx).await?;
                 let sessions: Vec<(String, Option<String>)> = sqlx::query_as("SELECT id,machine_id FROM sessions WHERE owner_user_id=$1 AND provider_account_id=$2 ORDER BY id")
                     .bind(owner).bind(account_id.as_str()).fetch_all(&mut *tx).await?;
-                Some(revocation::Plan::capture(&account_id, logins, grants, sessions)?)
+                let browsers: Vec<(String, String)> = sqlx::query_as("SELECT machine_id,instance_id FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 ORDER BY machine_id")
+                    .bind(owner).bind(account_id.as_str()).fetch_all(&mut *tx).await?;
+                Some(revocation::Plan::capture(&account_id, logins, grants, sessions, browsers)?)
             } else { None };
             if matches!(input.change, Change::BeginRevocation { .. }) {
                 // Same transaction and owner lock as the admission fence. This
@@ -400,7 +449,7 @@ impl Store {
             }
             sqlx::query("UPDATE provider_account_registries SET revision=$1,value=$2 WHERE owner_user_id=$3")
                 .bind(registry.revision).bind(serde_json::to_string(&registry)?).bind(owner).execute(&mut *tx).await?;
-            let receipt = Receipt { registry, account_id, revocation, revocation_completed: false, remote_wipes: BTreeMap::new(), local_wipes: BTreeMap::new(), login_stops: BTreeMap::new() };
+            let receipt = Receipt { registry, account_id, revocation, revocation_completed: false, remote_wipes: BTreeMap::new(), local_wipes: BTreeMap::new(), login_stops: BTreeMap::new(), browser_revocations: BTreeMap::new() };
             sqlx::query("INSERT INTO provider_account_operations (owner_user_id,operation_id,request_hash,result) VALUES ($1,$2,$3,$4)")
                 .bind(owner).bind(operation).bind(&hash).bind(serde_json::to_string(&receipt)?).execute(&mut *tx).await?;
             tx.commit().await?;

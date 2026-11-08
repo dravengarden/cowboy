@@ -820,6 +820,9 @@ pub(super) async fn handle_machine_ws(
     state
         .session_maintenance
         .observe_capacity(&hello.machine_id, hello.capacity.clone());
+    state
+        .browsers
+        .observe_capability(&hello.machine_id, hello.browser.clone());
     let lanes = Arc::new(crate::machine_lanes::LaneSet::default());
     // Dropped when this connection ends, which refuses further lanes.
     let _lane_registration = lane_token.map(|token| {

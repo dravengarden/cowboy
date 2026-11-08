@@ -389,6 +389,17 @@ impl Host for SessionHost<'_> {
                 actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
                 Ok(value)
             }
+            "accounts.browser" => {
+                only_keys(&args, &["account_id"])?;
+                let owner = actions::account_owner(self.state, self.meta).await?;
+                let account = crate::provider_account::ProviderAccountId::try_from(
+                    arg_str(&args, "account_id")?.to_owned(),
+                )
+                .map_err(|_| "invalid_argument".to_owned())?;
+                super::provider_accounts::browser::state_value(self.state, &owner, &account)
+                    .await
+                    .map_err(str::to_owned)
+            }
             "accounts.login_options" => {
                 only_keys(&args, &["account_id", "machine_id"])?;
                 let owner = actions::account_owner(self.state, self.meta).await?;

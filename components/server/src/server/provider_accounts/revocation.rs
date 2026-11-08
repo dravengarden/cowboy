@@ -55,6 +55,12 @@ pub(in crate::server) async fn reconcile(
     result["worker_trees"] = worker_trees::run(state, owner, operation)
         .await
         .map_err(|_| "revocation_reconciliation_failed")?;
+    result["browsers"] = serde_json::to_value(
+        super::browser::revocation::run(state, owner, operation)
+            .await
+            .map_err(|_| "revocation_reconciliation_failed")?,
+    )
+    .map_err(|_| "unavailable")?;
     let native = if ready {
         native::run(store, &state.machine_control, owner, operation)
             .await

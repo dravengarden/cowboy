@@ -1,8 +1,9 @@
 //! Shared account metadata writer for HTTP, CLI and MCP. Never accepts secrets.
 use super::*;
-use crate::store::provider_accounts::{Mutation, MutationResult};
+use crate::store::provider_accounts::{Change, Mutation, MutationResult};
 use serde_json::{Value, json};
 
+pub(super) mod browser;
 pub(super) mod lifecycle;
 pub(super) mod login;
 pub(super) mod native_generation;
@@ -42,7 +43,7 @@ pub(super) fn validate_native_evidence(
 pub(super) fn receipt_value(receipt: &crate::store::provider_accounts::Receipt) -> Value {
     if let Some(plan) = &receipt.revocation {
         return json!({"status":if receipt.revocation_completed { "completed" } else { "revoking" },"revision":receipt.registry.revision,"account_id":receipt.account_id,
-            "planned":{"logins":plan.logins.len(),"sessions":plan.sessions.len(),"grants":plan.grants.len()},
+            "planned":{"logins":plan.logins.len(),"sessions":plan.sessions.len(),"grants":plan.grants.len(),"browsers":plan.browsers.len()},
             "completion_state":if receipt.revocation_completed { "completed" } else { "unconfirmed" }});
     }
     json!({"status":"committed","revision":receipt.registry.revision,"account_id":receipt.account_id})
@@ -113,7 +114,7 @@ fn allow_named_creation(provider: &str, enabled: bool) -> Result<(), &'static st
 }
 
 pub(super) async fn update_value(
-    state: &AppState,
+    state: &Arc<AppState>,
     owner: &str,
     operation: &str,
     input: &Mutation,
@@ -130,6 +131,20 @@ pub(super) async fn update_value(
             state
                 .hub
                 .announce_preferences(owner, "provider_accounts", receipt.registry.revision);
+            // Disabling the account or its browser ends the owner's viewer at
+            // once and hibernates the instance; the snapshot is kept.
+            if let Change::SetBrowserEnabled { id, enabled: false }
+            | Change::SetEnabled { id, enabled: false } = &input.change
+            {
+                state.browsers.cancel_viewer(id.as_str());
+                let state = Arc::clone(state);
+                let account = id.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = browser::hibernate_running(&state, &account).await {
+                        tracing::info!(%error, "browser hibernate after disable did not complete");
+                    }
+                });
+            }
             Ok(receipt_value(&receipt))
         }
         MutationResult::Conflict(current) => {
@@ -240,10 +255,12 @@ mod tests {
                 sessions: vec![],
                 logins: vec![],
                 grants: vec![],
+                browsers: vec![],
             }),
             remote_wipes: Default::default(),
             local_wipes: Default::default(),
             login_stops: Default::default(),
+            browser_revocations: Default::default(),
         };
         // An empty plan or a disabled account alone does not imply completion.
         assert_eq!(receipt_value(&receipt)["status"], "revoking");
@@ -256,7 +273,7 @@ mod tests {
         assert_eq!(receipt_value(&restored)["completion_state"], "completed");
         assert_eq!(
             receipt_value(&restored)["planned"],
-            json!({"logins":0,"sessions":0,"grants":0})
+            json!({"logins":0,"sessions":0,"grants":0,"browsers":0})
         );
         let mut legacy = serde_json::to_value(&receipt).unwrap();
         legacy

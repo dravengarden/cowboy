@@ -48,6 +48,9 @@ impl Store {
                     && grant.operation_id == target.operation_id, "grant_scope_mismatch");
                 if !readiness::grant_missing(&receipt, &grant).is_empty() { return Ok(false); }
             }
+            for target in &plan.browsers {
+                if !receipt.browser_revocations.contains_key(&target.machine_id) { return Ok(false); }
+            }
             receipt.revocation_completed = true;
             sqlx::query("UPDATE provider_account_operations SET result=$3 WHERE owner_user_id=$1 AND operation_id=$2")
                 .bind(owner).bind(operation).bind(serde_json::to_string(&receipt)?).execute(&mut *tx).await?;

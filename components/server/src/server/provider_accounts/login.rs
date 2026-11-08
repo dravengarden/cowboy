@@ -11,7 +11,7 @@ mod native_recovery;
 mod native_status;
 pub(in crate::server) use native::accept_native_completion;
 pub(in crate::server) use native_events::poll as native_events;
-mod continuation;
+pub(in crate::server) mod continuation;
 mod discovery;
 mod operations;
 mod options;

@@ -104,6 +104,11 @@ operations! {
     "drafts.reorder", true, "{session_id:string,order:string[]}";
     "drafts.schedule", true, "{session_id:string,id?:string,text?:string,content?:unknown[],fire_at_ms:number,delivery?:'back'|'front'}";
     "drafts.unschedule", true, "{session_id:string,id:string}";
+    "accounts.browser_open", true, "{account:string,body:{width:number,height:number,scale:1|2}}; open the account's Machine browser as a tab on its Machine; the owner streams the display from the Cowboy UI";
+    "accounts.browser_navigate", true, "{account:string,body:{instance:{account_id:string,instance_id:string,incarnation:number},url:string}}; https only; tab browsers only";
+    "accounts.browser_snapshot", true, "{account:string,body:{instance:{account_id:string,instance_id:string,incarnation:number}}}; frozen profile snapshot while running";
+    "accounts.browser_hibernate", true, "{account:string,body:{instance:{account_id:string,instance_id:string,incarnation:number}}}; graceful stop with a snapshot";
+    "accounts.browser_reset", true, "{account:string,body:{expected_profile_revision:number}}; delete the profile; the next open starts fresh";
     "usage.refresh", true, "{account?:string}; shared per-account cooldown and in-flight deduplication; Service collectors return immediately; named account IDs await their bounded native query; no account also refreshes your named accounts once, serially";
     "usage.reset", true, "{account:string,body:{confirm:'confirm',expected_credit_id:string}}; consumes a reset credit; explicit user intent required";
     "usage.reset_schedule", true, "{account:string,body:{fire_at_ms:number,confirm:'confirm'}}; schedules credit consumption";

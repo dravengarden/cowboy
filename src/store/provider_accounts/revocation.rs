@@ -5,6 +5,7 @@ use super::{ProviderAccountId, grants, logins};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+pub mod browser_revocations;
 mod completion;
 pub mod discovery;
 mod grant_admission;
@@ -37,12 +38,24 @@ pub struct SessionTarget {
     pub machine_id: Option<String>,
 }
 
+/// A Machine browser placement of the account; the Machine deletes its
+/// profile and hibernates any running instance.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserTarget {
+    pub machine_id: String,
+    pub instance_id: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
     pub logins: Vec<OperationTarget>,
     pub grants: Vec<OperationTarget>,
     pub sessions: Vec<SessionTarget>,
+    /// Omitted while empty so an older Controller still reads the plan.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browsers: Vec<BrowserTarget>,
 }
 
 impl Plan {
@@ -51,6 +64,7 @@ impl Plan {
         logins: Vec<(String, String)>,
         grants: Vec<(String, String)>,
         sessions: Vec<(String, Option<String>)>,
+        browsers: Vec<(String, String)>,
     ) -> Result<Self> {
         let mut plan = Self {
             logins: Vec::new(),
@@ -60,6 +74,13 @@ impl Plan {
                 .map(|(session_id, machine_id)| SessionTarget {
                     session_id,
                     machine_id,
+                })
+                .collect(),
+            browsers: browsers
+                .into_iter()
+                .map(|(machine_id, instance_id)| BrowserTarget {
+                    machine_id,
+                    instance_id,
                 })
                 .collect(),
         };
@@ -115,8 +136,16 @@ mod tests {
             vec![],
             vec![("grant".into(), encoded.clone())],
             vec![("session".into(), None)],
+            vec![("ovh".into(), "b-1".into())],
         )
         .unwrap();
+        assert_eq!(
+            plan.browsers,
+            vec![BrowserTarget {
+                machine_id: "ovh".into(),
+                instance_id: "b-1".into(),
+            }]
+        );
         assert_eq!(
             plan.grants,
             vec![OperationTarget {
@@ -131,11 +160,21 @@ mod tests {
                 machine_id: None
             }]
         );
-        assert!(Plan::capture(&account, vec![], vec![("wrong".into(), encoded)], vec![]).is_err());
+        assert!(
+            Plan::capture(
+                &account,
+                vec![],
+                vec![("wrong".into(), encoded)],
+                vec![],
+                vec![]
+            )
+            .is_err()
+        );
         assert!(
             Plan::capture(
                 &account,
                 vec![("login".into(), "broken".into())],
+                vec![],
                 vec![],
                 vec![]
             )

@@ -18,7 +18,7 @@ pub(in crate::server) struct Revoke {
 }
 
 pub(in crate::server) async fn start(
-    state: &AppState,
+    state: &Arc<AppState>,
     owner: &str,
     operation: &str,
     input: Revoke,

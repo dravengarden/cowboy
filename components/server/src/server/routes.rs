@@ -93,6 +93,44 @@ pub(super) fn provider_routes() -> Router<Arc<AppState>> {
                 .post(provider_accounts::login::start)
                 .layer(DefaultBodyLimit::max(16 * 1024)),
         )
+        .route(
+            "/api/provider-accounts/{account_id}/browser",
+            get(provider_accounts::browser::http_state),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/open",
+            post(provider_accounts::browser::http_open).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/navigate",
+            post(provider_accounts::browser::http_navigate).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/resize",
+            post(provider_accounts::browser::http_resize).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/snapshot",
+            post(provider_accounts::browser::http_snapshot).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/hibernate",
+            post(provider_accounts::browser::http_hibernate)
+                .layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/reset",
+            post(provider_accounts::browser::http_reset).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/browser/stream",
+            get(provider_accounts::browser::viewer::upgrade),
+        )
+        .route(
+            "/api/provider-accounts/{account_id}/logins/{request}/browser",
+            post(provider_accounts::browser::http_open_sign_in)
+                .layer(DefaultBodyLimit::max(16 * 1024)),
+        )
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
         .route("/api/usage/executors", get(api_usage_executors))
         .route(
@@ -259,6 +297,10 @@ pub(super) fn machine_routes() -> Router<Arc<AppState>> {
     .route("/api/machine/enroll", post(api_machine_enroll))
     .route("/api/machine/connect", any(machine_ws_upgrade))
     .route(crate::machine_lanes::LANE_PATH, any(machine_lanes::upgrade))
+    .route(
+        crate::machine_protocol::machine_browser::STREAM_PATH,
+        any(provider_accounts::browser::machine_stream::upgrade),
+    )
     .route("/api/machines/{id}/maintenance", put(session_maintenance::configure))
 }
 

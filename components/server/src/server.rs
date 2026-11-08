@@ -209,6 +209,7 @@ struct AppState {
     machine_control: Arc<MachineControl>,
     machine_snapshots: MachineSnapshots,
     session_maintenance: session_maintenance::Coordinator,
+    browsers: provider_accounts::browser::coordinator::Coordinator,
     plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
     plugin_storage: crate::plugin_storage::PluginStorage,
     provider_catalog: Arc<crate::provider_catalog::ProviderCatalog>,
@@ -669,6 +670,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         machine_control,
         machine_snapshots,
         session_maintenance: session_maintenance::Coordinator::default(),
+        browsers: provider_accounts::browser::coordinator::Coordinator::default(),
         plugin_catalog,
         plugin_storage,
         provider_catalog,
@@ -1328,6 +1330,18 @@ async fn serve_axum(
     state: Arc<AppState>,
     shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
+    {
+        // Browser observations name accounts; the coordinator, not the shared
+        // diagnostics history, consumes them.
+        let weak = Arc::downgrade(&state);
+        state
+            .machine_control
+            .set_browser_observer(Arc::new(move |machine_id, event| {
+                if let Some(state) = weak.upgrade() {
+                    state.browsers.observe(machine_id, event);
+                }
+            }));
+    }
     session_maintenance::start(&state);
     session_reclaim::listen_for_wakes(&state);
     memory_reclaim::start(&state);

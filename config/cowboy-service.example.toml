@@ -41,6 +41,11 @@ schema = 1
 # Disabling refuses new logins; existing receipt recovery and cleanup remain available.
 # boolean (true or false); applies live.
 # native_claude_login = false
+# Allow owners to open Machine browsers for accounts they enabled one for.
+# Requires the machine_browser Plugin and its host policy on the Machine.
+# Disabling refuses new opens and closes viewer streams; snapshots are kept.
+# boolean (true or false); applies live.
+# machine_browser = false
 # Delay between bounded recovery pages of existing account revocation intents.
 # Does not start login, probe Providers, or declare upstream logout complete.
 # duration string such as "6h", from 30s to 1d; applies live.

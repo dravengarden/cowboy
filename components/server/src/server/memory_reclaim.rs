@@ -31,7 +31,18 @@ const STUCK_LOG_INTERVAL: Duration = Duration::from_mins(10);
 struct DeviceState {
     reclaiming: bool,
     pending: Option<Pending>,
+    /// A browser told to hibernate; settles only on its hibernated state and
+    /// a report taken since. It never times out into "released".
+    browser_pending: Option<BrowserPending>,
     stuck_logged: Option<Instant>,
+}
+
+struct BrowserPending {
+    account: String,
+    incarnation: u64,
+    at: Instant,
+    observed_at_ms: i64,
+    _decision: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
 struct Pending {
@@ -68,6 +79,8 @@ enum Step {
     Idle,
     Wait,
     Hibernate(String),
+    /// Running browsers hibernate before any session is selected.
+    HibernateBrowser(Box<super::provider_accounts::browser::coordinator::Observed>),
     Stuck,
 }
 
@@ -138,6 +151,29 @@ fn tick(state: &Arc<AppState>, devices: &mut HashMap<String, DeviceState>) {
         );
         match step {
             Step::Idle | Step::Wait => {}
+            Step::HibernateBrowser(observed) => {
+                let Ok(decision) = session_reclaim::decisions(&machine_id).try_lock_owned() else {
+                    continue;
+                };
+                let account = observed.event.instance.account_id.clone();
+                tracing::info!(machine = %machine_id, headroom_bytes = headroom,
+                    "hibernating a Machine browser to relieve Device memory");
+                device.browser_pending = Some(BrowserPending {
+                    account: account.as_str().to_owned(),
+                    incarnation: observed.event.instance.incarnation,
+                    at: Instant::now(),
+                    observed_at_ms: observed_at_ms_of(&observed),
+                    _decision: Some(decision),
+                });
+                let state = Arc::clone(state);
+                tokio::spawn(async move {
+                    if let Err(error) =
+                        super::provider_accounts::browser::hibernate_running(&state, &account).await
+                    {
+                        tracing::warn!(%error, "memory reclaim browser hibernate failed");
+                    }
+                });
+            }
             Step::Stuck => {
                 if device
                     .stuck_logged
@@ -195,10 +231,30 @@ fn decide(
         }
         device.pending = None;
     }
+    if let Some(pending) = device.browser_pending.as_ref() {
+        let running = state
+            .browsers
+            .state(&pending.account)
+            .is_some_and(|observed| {
+                observed.running() && observed.event.instance.incarnation == pending.incarnation
+            });
+        // A stalled browser stop stays pending and blocks session selection;
+        // only its verified hibernation and a fresh sample settle it.
+        if running || observed_at_ms <= pending.observed_at_ms {
+            if pending.at.elapsed() >= RELEASE_TIMEOUT {
+                return Step::Stuck;
+            }
+            return Step::Wait;
+        }
+        device.browser_pending = None;
+    }
     device.reclaiming = policy.reclaiming(device.reclaiming, headroom);
     if !device.reclaiming {
         device.stuck_logged = None;
         return Step::Idle;
+    }
+    if let Some(browser) = state.browsers.running_on(machine_id).into_iter().next() {
+        return Step::HibernateBrowser(Box::new(browser));
     }
     let woken = session_reclaim::recent_wakes(None);
     let candidates = session_reclaim::candidates(state, machine_id)
@@ -209,6 +265,11 @@ fn decide(
         Some(session) => Step::Hibernate(session.to_owned()),
         None => Step::Stuck,
     }
+}
+
+/// The report a browser decision was taken on: the newest sample at the time.
+fn observed_at_ms_of(observed: &super::provider_accounts::browser::coordinator::Observed) -> i64 {
+    observed.event.observed_at_ms
 }
 
 #[cfg(test)]

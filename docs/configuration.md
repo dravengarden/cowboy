@@ -168,6 +168,7 @@ as a deprecated override for one release.
 | Service | `accounts.revocation_retry_interval` | `"1m"` | live |
 | Service | `accounts.native_claude_login` | `false` | live |
 | Service | `accounts.native_claude_sessions` | `false` | live |
+| Service | `accounts.machine_browser` | `false` | live |
 | Service | `plugins.urgent_retention_cooldown` | `"1h"` | live |
 | Service | `plugins.catalog_keep_releases` | `3` | live |
 | Service | `plugins.repin_dormant_sessions` | `false` | live |

@@ -183,6 +183,7 @@ const cowboy = strict(Object.freeze({
   }),
   accounts: namespace("accounts", {
     usage: (account_id) => ({ account_id }),
+    browser: (account_id) => ({ account_id }),
     revocation_status: (account_id) => ({ account_id }),
     transition_status: (operation) => ({ operation }),
     list: none,

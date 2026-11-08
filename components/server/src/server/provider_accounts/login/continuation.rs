@@ -2,7 +2,7 @@
 //! A request ID locates an existing operation; it cannot dispatch a new login.
 use super::*;
 
-async fn resolve(
+pub(in crate::server) async fn resolve(
     store: &crate::store::Store,
     owner: &str,
     account: &ProviderAccountId,

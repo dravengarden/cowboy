@@ -84,6 +84,7 @@ pub const READ_OPERATIONS: &[&str] = &[
     "accounts.login_status",
     "accounts.revocation_status",
     "accounts.transition_status",
+    "accounts.browser",
 ];
 
 /// Explicit actions use existing domain writers. Read programs cannot call them.
@@ -132,21 +133,21 @@ const SUPERAGENT_SDK: &str = r#"
 
 pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login. No automatic account rotation.
 // Read: await cowboy.accounts.transition_status(operation) -> stage planned|stop_confirmed|binding_committed|completed|unknown.
-// Owner-scoped historical evidence only; worker_state is not_observed. No resume or vendor requests.
+// Owner-scoped historical evidence only; worker_state is not_observed.
 // Transition IDs and target_login_operation are scoped to this parent session.
 // Plan only: cowboy_execute({action:"accounts.transition_plan",operation,arguments:{
 // session_id,account_id,machine_id,provider,from_version,from_digest,from_generation,target_login_operation}}).
-// Requires an existing named session and completed, currently admitted native login; no credentials as input.
+// Needs an existing named session and an admitted native login; no credentials as input.
 // Explicit migration: cowboy_execute({action:"accounts.transition_reconcile",operation,arguments:{}}).
 // Stops the original worker and replaces its binding; never starts a worker. Same operation on every retry.
 // Query transition_status after uncertainty. unconfirmed/not_admitted do not undo already committed stages.
 // Read: await cowboy.accounts.list() -> {registry:{revision,accounts:[{id,provider_id,label,enabled,revoking}],defaults},session_admission}.
 // Read: await cowboy.accounts.usage(account_id) -> {account_id,provider_id,machine_id?,usage?,refreshing,reason?,message?,next_refresh_at_ms?}.
 // Named usage is cached, owner-scoped and native-profile-bound. Missing usage is unknown, not zero.
-// Refresh through control.apply("usage.refresh",{account:account_id}); the five-minute budget is shared with background collection.
+// Refresh via control.apply("usage.refresh",{account:account_id}); its 5-minute budget is shared with background collection.
 // Read: await cowboy.accounts.login_options(account_id,machine_id) -> local login readiness,
 // exact installed release, methods and reason codes. No vendor requests or credentials.
-// Readiness is a snapshot, not permission or proof of login; start rechecks admission.
+// Readiness is a snapshot, not permission; start rechecks admission.
 // Read: accounts.logins(account_id,{after_machine?,limit?}) -> effective login per Machine,
 // ordered by machine_id; default20/max50, next_after_machine continues. Local metadata only.
 // Read: accounts.login_status(account_id,request_id) observes an existing owner-scoped login,
@@ -158,7 +159,7 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Discover the exact installed release/method first. Native login needs current user intent.
 // Returns request_id/provider_id and status active|completed|inactive|cancelling|unknown|not_started.
 // continue_url opens the existing login in Cowboy for the owner to enter the authorization code.
-// It contains no credentials and starts no new login. Keep using the original MCP operation for receipts/cancel.
+// No credentials; starts no login. Keep the original MCP operation for receipts/cancel.
 // Receipt: cowboy_receipt({domain:"logins",operation}); same parent session only.
 // A durable dispatch reservation never permits redispatch on replay, even after restart.
 // unknown does not prove failure. Never switch operation/account to bypass uncertainty.
@@ -167,26 +168,27 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // cancellation_requested means enqueued, not process-exit confirmation or credential revocation.
 // Receipts preserve cancel_requested across restart even if live status is unknown.
 // Login challenges/code use the owner-checked HTTP/CLI flow; no secrets in receipts.
+// accounts.browser(account_id): Machine browser state; lifecycle via control.apply accounts.browser_*.
 // Write: cowboy_execute({action:"accounts.update",operation,arguments:{expected_revision,change:AccountChange}}).
 export type AccountChange =
  | {type:"create";provider_id:string;label:string}
  | {type:"rename";id:string;label:string}
  | {type:"set_enabled";id:string;enabled:boolean}
+ | {type:"set_browser_enabled";id:string;enabled:boolean}
  | {type:"set_default";provider_id:string;id:string};
 // IDs are controller-issued UUIDs; "default" selects the legacy account.
-// Legacy display names: list().display_preferences; edit through preferences.update
-// with scope:"subscriptions", its expected_revision, changes:{legacy_labels:{provider_id:label}}.
-// Replace the complete label map; never creates an identity or changes credentials/admission.
+// Legacy display names: list().display_preferences; edit via preferences.update {scope:"subscriptions",expected_revision,changes:{legacy_labels:{provider_id:label}}}.
+// Replace the whole label map; it never creates an identity or changes credentials/admission.
 // Machine and account are independent. Defaults apply to future sessions only.
 // Disable does not log out or stop existing sessions. Change its default first.
 // Explicit permanent Cowboy revocation: accounts.revoke {account_id,expected_revision}.
 // Fences new access and stops/cleans this account on all Machines; never cancels the vendor subscription.
 // Reuse the original operation/input after uncertainty. Metadata update cannot start revocation.
 // Read accounts.revocation_status(account_id) for durable completion and exact missing evidence.
-// Start/replay receipts expose historical completion_state; status/reconcile add the completion object.
+// Start/replay receipts carry historical completion_state; status/reconcile add completion.
 // Resume from any same-owner session: accounts.reconcile {account_id}; it locates the original plan.
 // Retry an existing parent-scoped revocation: cowboy_execute({action:"accounts.reconcile",operation,arguments:{}}).
-// Use its ORIGINAL operation in the SAME parent session. Each remote target has a 2s cooperative wait budget.
+// Use its ORIGINAL operation in the SAME parent session. Each remote target gets a 2s cooperative wait.
 // revoking/unconfirmed is not logout completion; pending targets need another same-ID retry.
 // Return: {status:"committed",revision,account_id}; revision_conflict includes current.
 // Retain operation and identical input on retry. cowboy_receipt({domain:"accounts",operation}).
@@ -480,10 +482,11 @@ export interface Cowboy {
     usage(account_id:string): Promise<unknown>;
     logins(account_id:string,q?:{after_machine?:string;limit?:number}): Promise<{account_id:string;provider_id:string;logins:AccountLogin[];next_after_machine:string|null}>;
     login_status(account_id:string,request_id:string): Promise<AccountLogin>;
-    revocation_status(account_id:string): Promise<{status:"not_started"|"revoking"|"completed";account_id:string;completion?:{account_completed:boolean;missing:{kind:string;target:string}[]}}>;
-    transition_status(operation:string): Promise<{operation:string;stage:"planned"|"stop_confirmed"|"binding_committed"|"completed"|"unknown";evidence:"historical";worker_state:"not_observed"}>;
+    revocation_status(account_id:string): Promise<{status:string;account_id:string;completion?:{account_completed:boolean;missing:{kind:string;target:string}[]}}>;
+    transition_status(operation:string): Promise<{operation:string;stage:string;evidence:string;worker_state:string}>;
     list(): Promise<{registry:{revision:number;accounts:{id:string;provider_id:string;label:string;enabled:boolean;revoking:boolean}[];defaults:Record<string,string>};display_preferences:{scope:"subscriptions";revision:number;values:{legacy_labels:Record<string,string>}};session_admission:string;session_providers:string[]}>;
     login_options(account_id:string,machine_id:string): Promise<{account_id:string;provider_id:string;machine_id:string;registry_revision:number;available:boolean;reason:string|null;release:{provider_version:string;generation_digest:string}|null;methods:{id:string;available:boolean;reason:string|null}[];session_admission:string}>;
+    browser(account_id:string): Promise<{machine_id:string|null;state:unknown;admission:string|null}>;
   };
 }
 "#,

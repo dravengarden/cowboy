@@ -50,7 +50,8 @@ pub(super) fn machine_diagnostic_event_visible(
         | MachineEvent::LoginStopObserved { .. }
         | MachineEvent::WorkerExitObserved { .. }
         | MachineEvent::NativeBindingPrepared { .. }
-        | MachineEvent::ProviderAuthRefreshCandidate { .. } => false,
+        | MachineEvent::ProviderAuthRefreshCandidate { .. }
+        | MachineEvent::Browser { .. } => false,
         MachineEvent::CommandResult { request_id, .. } => {
             !request_id.starts_with("provider-login-")
         }

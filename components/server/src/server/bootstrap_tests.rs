@@ -182,6 +182,43 @@ fn preferences_routes_and_announcements_are_account_scoped() {
             RouteAuth::ProductOperator
         );
     }
+    // Machine browser routes: the viewer routes are owner product routes,
+    // the Machine's stream half is a token-authenticated Machine route.
+    for (method, path) in [
+        (Method::GET, "/api/provider-accounts/account/browser"),
+        (Method::POST, "/api/provider-accounts/account/browser/open"),
+        (
+            Method::POST,
+            "/api/provider-accounts/account/browser/navigate",
+        ),
+        (
+            Method::POST,
+            "/api/provider-accounts/account/browser/resize",
+        ),
+        (
+            Method::POST,
+            "/api/provider-accounts/account/browser/snapshot",
+        ),
+        (
+            Method::POST,
+            "/api/provider-accounts/account/browser/hibernate",
+        ),
+        (Method::POST, "/api/provider-accounts/account/browser/reset"),
+        (Method::GET, "/api/provider-accounts/account/browser/stream"),
+        (
+            Method::POST,
+            "/api/provider-accounts/account/logins/request/browser",
+        ),
+    ] {
+        assert_eq!(classify_route(&method, path), RouteAuth::ProductOperator);
+    }
+    assert_eq!(
+        classify_route(
+            &Method::GET,
+            crate::machine_protocol::machine_browser::STREAM_PATH
+        ),
+        RouteAuth::Public
+    );
     assert_eq!(
         classify_route(&Method::GET, "/api/preferences/about"),
         RouteAuth::Product

@@ -18,6 +18,7 @@ pub const ACCOUNT_NATIVE_CLAUDE_LOGIN: Key<bool> =
     Key::new(Scope::Service, "accounts.native_claude_login");
 pub const ACCOUNT_NATIVE_CLAUDE_SESSIONS: Key<bool> =
     Key::new(Scope::Service, "accounts.native_claude_sessions");
+pub const ACCOUNT_MACHINE_BROWSER: Key<bool> = Key::new(Scope::Service, "accounts.machine_browser");
 pub const USAGE_PROVIDER_WINDOW: Key<Duration> = Key::new(Scope::Service, "usage.provider_window");
 pub const USAGE_REQUESTS_PER_WINDOW: Key<i64> =
     Key::new(Scope::Service, "usage.requests_per_window");
@@ -116,6 +117,13 @@ pub static SERVICE_FIELDS: &[Field] = &[
         default: Value::Bool(false),
         reload: Reload::Live,
         doc: "Allow explicit named Claude native logins on account-aware Machines.\nDoes not enable named session creation, copy credentials, or start a login.\nDisabling refuses new logins; existing receipt recovery and cleanup remain available.",
+    },
+    Field {
+        key: "accounts.machine_browser",
+        kind: Kind::Bool,
+        default: Value::Bool(false),
+        reload: Reload::Live,
+        doc: "Allow owners to open Machine browsers for accounts they enabled one for.\nRequires the machine_browser Plugin and its host policy on the Machine.\nDisabling refuses new opens and closes viewer streams; snapshots are kept.",
     },
     Field {
         key: "accounts.revocation_retry_interval",

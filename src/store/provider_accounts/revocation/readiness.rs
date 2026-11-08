@@ -99,6 +99,14 @@ impl Store {
             );
             missing.extend(grant_missing(&receipt, &grant));
         }
+        for target in &plan.browsers {
+            if !receipt.browser_revocations.contains_key(&target.machine_id) {
+                missing.push(Missing {
+                    kind: "browser_revocation",
+                    target: target.machine_id.clone(),
+                });
+            }
+        }
         Ok(Readiness {
             account_completed: receipt.revocation_completed,
             missing,
