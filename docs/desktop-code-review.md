@@ -1,6 +1,9 @@
 # Desktop Code Review
 
-**Status: design proposal r1 (2026-11-08), not implemented.** Normative
+**Status: design proposal r2 (2026-11-08), not implemented.** r2 folds in a
+Codex Astra Max design review of r1 (managed call
+`call-53884a467577cfb02c34574f`: verdict *needs-attention*, five high and ten
+medium findings, none rejected; see [Review record](#review-record)). Normative
 contracts it builds on: [Desktop focus and keyboard](../web/src/desktop/FOCUS.md),
 [Desktop efficiency](desktop-efficiency-redesign.md),
 [core UX principles](ux-principles.md), the Code Review data plane in
@@ -8,7 +11,7 @@ contracts it builds on: [Desktop focus and keyboard](../web/src/desktop/FOCUS.md
 [19-code-review-engine](architecture/19-code-review-engine.md) and agent code
 intelligence in [20](architecture/20-agent-code-intelligence.md). Where this
 proposal changes a sentence of FOCUS.md or 13, that document is updated in the
-implementing change, not before.
+same change that implements the new behaviour (D0 for the keyboard contract).
 
 ## Problem
 
@@ -54,6 +57,9 @@ Goals, in the order of the UX principles (efficiency first):
    splitters, keycaps, the status line).
 5. Desktop and Mobile stay separate products sharing protocol, API client,
    models and hooks; neither grows responsive branches for the other.
+6. Everything drawn on a line is bound to an identity the server vouches for:
+   no old-side text, finding or annotation is reconstructed from a source that
+   is not bound to the displayed revision.
 
 Non-goals: editing files, terminals, writing comments to GitHub, a second
 shortcut grammar, Monaco (see "Editor engine"), a Desktop reading mode of its
@@ -74,6 +80,7 @@ fences).
 │          │ drafts    │ comparison       │                           │ Details    │
 │          │           │ unread · fetch   │ ───────────────────────── │            │
 │          │ send      │ / filter  Files|Text │ Ln 42 · hunk 2/5 · Send ⏎ Explain ␣VE │
+│          │           ├ approval dock: the blocked agent's question, either view ─┤
 ├──────────┴───────────┴─────────────────────────────────────────────────────────┤
 │ NORMAL  REVIEW·Document  main ↔ Ready to merge  3/51 reviewed  ]c Hunk  ␣V More │
 └───────────────────────────────────────────────────────────────────────────────┘
@@ -84,6 +91,13 @@ are unchanged. The work column (today: Conversation) gains a second **view**,
 Review. Both views are mounted; switching never loses the transcript's reading
 position or Review's cursor, folds and tabs.
 
+The approval dock moves out of the transcript container to the work pane
+itself, below whichever view is shown, so a permission, Provider question or
+call approval that arrives while Review is open is answered where it was
+before: at the pane's full width, outside any scroller, with the full subject
+(FOCUS.md "Approvals"). The dock keeps claiming the Session, so the Composer
+draws the choices only while the work pane is folded, exactly as today.
+
 ### Inner width policy
 
 Review measures its own container (`@container`), never the viewport:
@@ -92,7 +106,15 @@ Review measures its own container (`@container`), never the viewport:
 | --- | --- |
 | ≥ 1320 px | Navigator (persisted, default 280 px) · Document · Inspector (persisted, default 300 px) |
 | 900–1319 px | Navigator · Document; the Inspector is folded. Restoring one side panel folds the other, so one side panel is open at a time |
-| < 900 px | Compact: both side panels fold to 36 px rails; the Document has the width. `␣VC/F/H/W` open the Navigator as a temporary inset list (MUI `Drawer` anchored inside the pane, exclusive region, `Esc`/`H` or opening a file closes it) |
+| < 900 px | Compact: both side panels fold to 36 px rails; the Document has the width. `␣VC/F/H/W` open the Navigator as a temporary inset list (MUI `Drawer` anchored inside the pane, an exclusive region) |
+
+In the inset, the list keeps first ownership of its keys: `H` collapses a
+tree node, moves to the parent or leaves a commit, as in the wide layout, and
+closes the inset only at the navigation root (a top-level row with nothing to
+collapse, or the change list itself); `Esc` leaves the filter field first and
+closes the inset next; opening a file closes it. The Navigator is the same
+mounted owner at every width, so a resize across a tier keeps its cursor,
+folds and filter.
 
 A laptop at 1440 px with Sessions and Prompt open gives Review about 750 px,
 so Compact is the common first sight. Folding the Prompt (`␣W]`) is the
@@ -109,8 +131,8 @@ projection, not a transient layer. Consequences:
 - **`␣V`** opens Review from any focus, Composer Insert included (`Cmd/Alt+K V`).
   It also runs from the pane header's view tabs (`Conversation | Review`, an
   MUI `Tabs` with the `␣C`/`␣V` slots) and the Command Palette.
-- **Return**: `␣C` (focus Conversation restores the Conversation view),
-  `␣VV` inside Review, the header tab, or the palette.
+- **Return**: `␣C` (focus Conversation restores the Conversation view), the
+  header tab, or the palette's *Return to the Conversation*.
 - **`Esc` never leaves Review.** It unwinds Visual mode, a pending chord, the
   hover popover, the filter field or an inset list, and then does nothing, as
   in a Vim buffer. The earlier Desktop behaviour where Review's Agent action
@@ -119,32 +141,36 @@ projection, not a transient layer. Consequences:
 - **Agent-driven reveal** (`open {path, reveal}` on the synced state, used by
   agents and transcript file links) switches the view to Review and opens the
   file, but only as live navigation: hydration and session switches never
-  steal focus (`useReviewOpenRequest.ts`, unchanged).
+  steal focus (`useReviewOpenRequest.ts`; see "Reveal" below).
 - The view is per Session and per device (`cowboy:desktop-work-view:<sid>`),
   so returning to a Session returns to where its review stopped.
 
 ### The `␣V` group
 
-`␣V` becomes the Review group, following the group rule in FOCUS.md: a group
-opens only when one of its commands can run; otherwise its key keeps the root
-meaning. With Review closed only *open* can run, so `␣V` opens Review at once,
-exactly as today. With Review open, `␣V` shows the group:
+`␣V` becomes the Review group. FOCUS.md's group rule (implemented by
+`desktopLeaderGroupAvailable`) opens a group whenever any of its commands can
+run and otherwise leaves the key its root meaning. Every grouped command
+therefore declares `when: reviewShown`, and the root command `review.open`
+(the former `conversation.toggleReview`, whose hints, slots and tests
+migrate) is the fallback: with Review hidden, `␣V` opens Review at once, as
+today; with Review shown, `␣V` opens the group.
 
 | Key | Meaning |
 | --- | --- |
-| `␣VV` | Review ⇄ Conversation; the doubled key also focuses the Document, as `␣SS`/`␣TT` focus their surfaces |
+| `␣VV` | Focus the Document, as `␣SS`/`␣TT` focus their surfaces (`review.focus`); return is `␣C` |
 | `␣VC` `␣VF` `␣VH` `␣VW` | Navigator: Changes, Files, History, Worktrees — switch the list and focus it |
-| `␣VB` | Comparison (base): Uncommitted, Ready to merge, Not pushed, This session, other branches, Fetch this branch |
+| `␣VA` | Compare against: Uncommitted, Ready to merge, Not pushed, This session, other branches, Fetch this branch |
 | `␣VU` | Unread filter on the change list |
 | `␣VD` | Diff layout: unified ⇄ split |
-| `␣VM` | Mark the open file reviewed / unreviewed |
-| `␣VS` | Send: append the selection (or cursor line) with its location to the Prompt and stay in Review (collect several, then write once) |
+| `␣VM` | Mark reviewed / unreviewed: the focused Navigator row's file, else the open file |
+| `␣VS` | Send to the Prompt and stay in Review: the focused Navigator row's path, the focused Problem, else the Document selection or cursor line (collect several, then write once) |
 | `␣VE` | Explain the selection: a fork of the agent answers in a new tab |
-| `␣VR` | Review the selection or open file with an AI reviewer (the fork starts a managed call) |
-| `␣VK` | Checks: run a declared project check (`check@1`); a picker when several are declared |
+| `␣VR` | Review the selection or open file with an AI reviewer (the fork starts a managed call under the contract below) |
+| `␣VK` | Checks: run a declared project check (`check@1`); a picker when several are declared; enabled only for the active Session's own worktree |
 | `␣VT` | Text search across the worktree (`search@1`): the Navigator filter in Text mode |
 | `␣VO` | Outline: focus the Inspector's Outline section (`gO` from the Document) |
 | `␣VX` | Context: project checkout, linked sessions, bind a worktree, Remote PR |
+| `␣VB` + `D/O/R/L/A/P/K/U/</>` | File tabs group, the `␣B` grammar one level down: close this, others, right, left, all; pin, keep, reopen; move |
 | `␣V[` `␣V]` | Fold Navigator / Inspector |
 | `␣V,` | Review settings: code font size, wrap, whitespace, context lines, hover on dwell |
 
@@ -158,6 +184,9 @@ Document's own keys first. Root `V` stays taken; the free root letters remain
 Review adds no primitive. Its three regions are the Document (a Vim buffer),
 the Navigator and the Inspector (Cowboy lists). `Ctrl+H/J/K/L` move between
 them and to the Prompt and Sessions as between any regions; `␣WW` cycles them.
+No list row carries a bare product letter: Mark and Send are leader actions
+with the focused item as their target, so the shared item verbs (`M` move,
+`S` settings) keep their meaning everywhere.
 
 ### Document: a read-only Vim buffer
 
@@ -169,16 +198,23 @@ Insert-mode entry (`i a o I A c s …`) is refused and the status line shows
 Vim's `W10` wording, "Read-only". The buffer is one file: a unified or split
 diff, or a source window.
 
-Cowboy defines the following through codemirror-vim's `defineAction` /
-`mapCommand` (so they are Vim mappings the user can remap), registered as
-Desktop commands for discovery:
+codemirror-vim's keymap is global and the user's mappings are applied to it
+globally (`vim/imeAutoInsertVim.ts`), while the Composer and a Draft editor
+may be mounted beside Review. Review's additions are therefore **not**
+`Vim.map`/`defineAction` registrations. They are a Review-editor-scoped CM6
+keymap extension that runs only while that editor's Vim state is Normal or
+Visual with no pending operator, count or user-mapped prefix, yields to any
+user mapping of the same keys (the vimrc wins), and leaves the other editors
+untouched. Each is also a Desktop command for which-key, the palette and the
+status line.
 
 | Key | Action |
 | --- | --- |
 | `]c` / `[c` | Next / previous hunk (Vim diff mode) |
-| `]f` / `[f` | Next / previous changed file in the Navigator's queue (next unread when the Unread filter is on); the ends stop and the status line says "Last change" |
+| `]f` / `[f` | Next / previous changed file over the complete queue, whatever the Unread filter shows (13-code-review: the filter never changes navigation); the ends stop and the status line says "Last change" |
+| `]u` / `[u` | Next / previous unreviewed file; a distinct command, so marking the current file never changes where `]f` goes |
 | `]d` / `[d` | Next / previous problem in this file: language diagnostics, check findings and AI findings in one ordered set |
-| `gt` / `gT` / `{n}gt` | Next / previous / nth file tab |
+| `gt` / `gT` / `{n}gt` | Next / previous / nth file tab; `␣VB` holds close, keep, pin, reopen and move |
 | `zo zc za zR zM` | Folds: collapsed unchanged regions in a diff, language folds in source |
 | `K` | Hover (type, documentation) in an MUI `Popover` at the cursor; `K` or `Esc` closes, `j/k` scroll it |
 | `gd` `gD` `gy` `gI` | Definition, declaration, type definition, implementation (LazyVim's LSP set): opens the target in the preview file tab and pushes the jump list |
@@ -186,7 +222,7 @@ Desktop commands for discovery:
 | `gO` | Outline in the Inspector (Vim's `gO`) |
 | `Ctrl-O` / `Ctrl-I` | Jump list back / forward, across files |
 | `V` `v` | Visual selection; a click on a line number selects the line and a Shift-click extends it, as on Mobile |
-| `Enter` | Send the selection (or cursor line) to the Prompt: appends `path:lines` plus the text to the Composer and focuses it in Insert at the end. A folded Prompt is restored first (FOCUS.md: an explicit jump restores). Nothing is sent to the agent until `Mod+Enter` |
+| `Enter` | Send the selection (or cursor line) to the Prompt: appends the location plus the text to the Composer and focuses it in Insert at the end. A folded Prompt is restored first (FOCUS.md: an explicit jump restores). Nothing is sent to the agent until `Mod+Enter` |
 | `Esc` | Leave Visual / cancel a pending key / close the hover; otherwise nothing |
 
 In a diff, a location names file lines, new side first, not diff rows
@@ -217,11 +253,10 @@ names them while it owns focus.
 | `L` / `Enter` | Open in the preview file tab (Changes: the diff; Files: the source; History: the commit's file list; Worktrees: switch to the owning Session, or Review the worktree) |
 | `H` | Files tree: collapse, or move to the parent; History: back from a commit |
 | `za zM zR` | Files tree folds, as in the Sessions tree |
-| `M` | Mark this file reviewed / unreviewed (same as `␣VM` on the open file) |
-| `S` | Send this path to the Prompt (append, stay) |
+| `␣VM` / `␣VS` | Mark the focused row's file reviewed; send its path to the Prompt (leader actions targeting the focused row) |
 
 Changes keeps the complete queue for `]f`/`[f` and mounts rows in windows, as
-Mobile does. The Changes header shows the comparison button (`␣VB`), unread
+Mobile does. The Changes header shows the comparison button (`␣VA`), unread
 toggle (`␣VU`), fetch time and counts; a file row shows status, path shortened
 from the left, `+n −m` and its reviewed mark.
 
@@ -231,11 +266,21 @@ from the left, `+n −m` and its reviewed mark.
 | --- | --- | --- |
 | Outline | Document symbols (`outline@1`, exact or heuristic, labelled) | `Enter` moves the cursor; `gO` arrives here |
 | Hunks | Hunk list with `@@` headers and `+n −m` | `Enter` jumps; `]c` keeps the row in step |
-| Problems | Language diagnostics, check findings (dated per run) and AI findings (severity, title, call) for the open file; stale ones labelled | `Enter` jumps, `S` sends the problem with its location to the Prompt |
-| Details | Path, status, comparison, file facts, worktree revision, the latest review call's verdict | read-out |
+| Problems | Language diagnostics, check findings (dated per run) and AI findings (severity, title, call, anchor state) for the open file | `Enter` jumps; `␣VS` sends the focused problem with its location to the Prompt |
+| Details | Path, status, comparison, file facts, worktree revision, the latest review call's verdict and completeness | read-out |
 
 `J/K` move rows, `H/L` fold a section, `'` labels rows. Sections are MUI
 `List`s with `ListSubheader`s, not Accordions.
+
+### File tabs
+
+File tabs reuse the Desktop tab-strip primitive (recessed rail, italic preview
+tab, pinned tabs first) but not its Session commands. The strip is not a focus
+region and its tabs are `tabIndex=-1`, so the file-scoped commands are the
+`␣VB` group above plus `gt`/`gT` in the Document, each drawn as a slot on the
+strip's trailing control and listed in the tab's context menu. A file tab is
+kept (made permanent) by `␣VBK`, pinning, moving or a double click; typing
+cannot keep a read-only tab, so the keep command is not optional here.
 
 ### Status line
 
@@ -269,19 +314,41 @@ One editor engine, one Vim, one theme, no new worker, and the bounded reading
 model survives. Monaco would buy a polished split view at the price of a second
 engine that does not speak Vim, MUI or Cowboy's paging.
 
-### Split view without a new endpoint
+### Split view: patch first, sides only when bound
 
-A unified diff page already holds both sides of every hunk. The split layout
-builds two aligned documents per hunk window (`-` lines left, `+` lines right,
-context on both) and feeds `MergeView` with the unchanged regions collapsed,
-the way GitHub renders patches. "Expand context" reads the new side through
-the existing windowed `GET /file` and derives the old side by applying the
-hunks in reverse, which is exact while the diff is complete (not cut at the
-16 MiB bound) and the file identity revision still matches; otherwise the
-layout stays hunk-aligned and says so in its status row. A `GET /file?…&side=base`
-window is an optimization for a later revision, not a dependency. Word-level
+A diff snapshot is paged at about 256 KiB, cut at a newline where one is near
+(`src/diff_snapshot.rs`); a page therefore does not end on a hunk boundary,
+and a large replacement can have its removals on one page and its additions on
+the next. Mobile appends pages of one revision into one text document and
+decorates it, which tolerates that. The split layout needs hunk structure, so
+it uses a **streaming patch decoder**: parser state carried across pages of the
+same revision, incomplete lines and hunks buffered until the next page or the
+terminal truncation marker, continuation distinguished from truncation, file
+headers, `rename from/to` and `Binary files … differ` kept as file metadata
+outside the hunk documents, and `\ No newline at end of file` and CRLF carried
+per line. Fixtures cover a hunk and a single line crossing a page boundary, a
+rename-only file, a binary row, a truncated diff and an empty hunk before D2
+acceptance.
+
+From decoded hunks the split layout builds two aligned documents per hunk
+(`-` lines left, `+` lines right, context on both) for `MergeView`, with the
+unchanged regions collapsed — the way GitHub renders a patch. Word-level
 highlights (`diffWordModel`), context folds, check annotations and the line
 gutter are shared extension builders used by both layouts.
+
+**Expanding context is not reconstructed from the worktree.** `GET /file`
+reads today's file, whose metadata revision is paging evidence and not bound
+to the diff snapshot ([plugin-review-owned-diff](plugin-review-owned-diff.md)
+disclaims old-side identity); a historical, staged or `committed:` comparison
+has no worktree side at all, and an ignore-whitespace patch cannot be reversed
+exactly. Reverse-applying hunks over a later worktree read would fabricate
+old-side text. Expanded context therefore requires **comparison-bound side
+windows** from the server (see "Server and API"): the old side from the exact
+base tree object of the snapshot's comparison and the new side from the exact
+object or identity the snapshot diffed, each windowed like `/file` and refused
+once the snapshot is gone. Until a Machine serves them, the split layout stays
+hunk-aligned and its status row says "Context limited to the patch";
+ignore-whitespace diffs never offer expanded context.
 
 Source windows, large files, images, Markdown preview and Mermaid keep the
 Mobile contracts (first 256 KiB window, continuation by revision, 32 MiB
@@ -292,14 +359,15 @@ preview cap, plain text first while the grammar loads).
 | Surface | MUI | Notes |
 | --- | --- | --- |
 | Work-pane header | `Tabs` (`Conversation`, `Review`) with leader slots; action rail of `IconButton`s | The transcript stays mounted behind |
+| Approval dock | unchanged `DesktopApprovalDock`, hosted by the work pane | below either view |
 | Navigator tabs | `Tabs` (dense, `desktopSize` heights) | `[`/`]`, `␣VC/F/H/W` |
 | Change rows, tree rows, Inspector rows | `List`, `ListItemButton`, `ListSubheader`; `data-desktop-item` | Selected and cursor states per the Sessions rule: tinted fill for the open file, crisp outline for the cursor |
-| Comparison, context, checks | `Button` + `Menu` with the Vim menu grammar (`menuNavigation.ts`) | `␣VB`, `␣VX`, `␣VK` |
+| Comparison, context, checks | `Button` + `Menu` with the Vim menu grammar (`menuNavigation.ts`) | `␣VA`, `␣VX`, `␣VK` |
 | Unread, wrap, whitespace, layout | `ToggleButton` / `ToggleButtonGroup` | `␣VU`, `␣VD` |
 | Status rows over a document | one-line `Alert` (dense) with a Details disclosure | 13-code-review's one-line rule |
 | Hover | `Popover` with Markdown, anchored at the cursor | `K`, dwell when enabled |
 | Selection footer | `Toolbar` of `Button`s: Send `⏎`, Explain `␣VE`, Review `␣VR`, Mark `␣VM` | always mounted; disabled explanations |
-| File tabs | the Desktop tab-strip primitive (recessed rail, italic preview, pin) | `gt`/`gT`; `␣B` acts on Session tabs only |
+| File tabs | the Desktop tab-strip primitive with the `␣VB` group and `gt`/`gT` | context menu lists the same commands |
 | Splitters, keycaps, status line, editor | Cowboy primitives | the documented exceptions |
 
 Colors, borders and state layers come from theme tokens; both themes are
@@ -312,15 +380,30 @@ reviewed, AI review) use `NetworkActionFeedback`.
 ## State ownership
 
 The synced `mobile-review:<sid>` state is split by meaning, not by product.
-Nothing changes on the wire; Desktop simply stops reading the device fields.
+Desktop reads the review's identity and progress and writes only those; it
+never writes `tabs`, `active` or `mode`.
 
 | Field | Owner | Why |
 | --- | --- | --- |
 | `comparison`, `bindings`, `remote_review`, `remote_selected`, `directory` | synced (Session) | What is being reviewed; agents set it with `setComparison`, `bind`, `unbind` through the sync operation |
 | `progress` (reviewed marks, keyed by change fingerprint) | synced | A review's progress is the same on every device |
 | `positions` (last line per path) | synced, last writer wins | Continue on Desktop where the phone stopped |
-| `open {path, reveal}` revisions | synced request | Agents and links ask the current device to show a file |
+| `open {path, reveal}` | synced request, consumed by the reveal adapter | Agents and links ask the current device to show a file |
 | `tabs`, `active`, `mode`, folds, split/unified, pane widths, work view | Desktop device-local (`desktopReviewState.ts`, `localStorage`) | Like Desktop tabs and pane folds; the phone's tabs are its own |
+
+### Reveal
+
+`open` is Mobile's navigation: on the server (`src/core/hub_sync.rs`) it
+pushes a tab, sets `active` and `mode`, bumps `open_revision` and, with
+`reveal`, bumps `reveal_revision`; `useReviewOpenRequest` observes only the
+counter. Desktop does not reuse `open` for its own navigation (that would move
+the phone's tabs) and does not follow `active` in general. Its **reveal
+adapter** reads, at the moment `reveal_revision` increases, the `active` path
+and the state's context (`directory`, bindings) from the same patch, and opens
+that path in Desktop's local preview tab; a second reveal before the first is
+painted replaces it. That narrow read of `active` is the documented exception
+until writers add an optional `reveal {path, context, revision}` payload to
+`open` (readers first, D4), after which the adapter prefers it.
 
 Device-local layout state is UI preference and is not exposed through Cowboy
 MCP, the same documented exception as `cowboy:desktop-collapsed-panes`. No new
@@ -328,40 +411,75 @@ Service or Device setting is added.
 
 ## The agent loop
 
-1. **Remark.** `Enter` or `␣VS` puts `path:line-range` and the lines into the
-   Composer; `Mod+Enter` sends. Several `␣VS` collect into one message.
-2. **Ask.** `␣VE` forks the agent (`latest_completed`, one live Explain per
-   session with `reuse`, 13-code-review "Explain"), opens the fork as a new
-   preview tab beside the current Session tab and shows its Conversation; the
-   fork has the context and its own worktree. `␣⇥` returns to the review.
-3. **Delegate.** `␣VR` asks that fork to start a managed review of the
-   selection or file (`review.start`); a reader has no call authority of its
-   own. The call shows in Background tasks (`␣G`).
-4. **Read findings where they apply.** When the call ends, its structured
-   findings (`severity`, `title`, `body`, `file`, `line_start`, `line_end`)
-   appear in the Inspector's Problems for the files they name and in the
-   gutter, anchored to the call's `input_revision`. A finding whose file
-   changed since is listed as stale and not drawn on lines. `]d` steps them,
-   `S` sends one back to the Prompt as a remark.
-5. **Check.** `␣VK` runs a declared project check through the session's own
-   execution keeper; its anchored diagnostics join Problems, dated per run.
-6. **See the change land.** The worktree revision poll refreshes Changes and
-   marks the open diff "no longer matches" in a status row; `]f` continues.
+Review can show code the active Agent is not working in: a linked session, a
+project checkout, an unowned worktree, a Remote PR (13-code-review "Change
+target and worktree ownership"). Every handoff therefore carries the **browsed
+context**: context id (`session::`, `workspace::`, `worktree::`, remote PR),
+Machine, root, comparison and the diff or file revision. A remark names the
+root when it is not the Session's own worktree, as `reviewExplainPrompt`'s
+`viewedRoot` does today; an identical relative path in two roots never
+collapses into one.
 
-Findings are read through the existing parent-scoped call detail endpoint;
-Review adds no call route. Every read keeps the existing authority checks.
+1. **Remark.** `Enter` or `␣VS` puts `path:line-range` (with the root when it
+   differs) and the lines into the Composer; `Mod+Enter` sends. Several `␣VS`
+   collect into one message.
+2. **Ask.** `␣VE` forks the agent (`latest_completed`, one live Explain per
+   session with `reuse`, 13-code-review "Explain"). Before the fork opens as a
+   preview tab, the source Session's tab is kept: a Session opened from the
+   sidebar and only reviewed is usually still the single preview tab, which
+   the next preview would replace (FOCUS.md "Tabs", `workspaceTabs.ts`). An
+   existing live fork's tab is reused. The fork's Conversation is shown; `␣⇥`
+   returns to the review.
+3. **Delegate.** `␣VR` asks that fork to start a managed review; a reader has
+   no call authority of its own. The fork's first message is a fixed
+   **delegation contract**, not prose: `review.start` with `task` (a stable id
+   derived from the source Session, context and scope), `base` (the browsed
+   root's full `HEAD` SHA from `GET /repository`), `root` (the browsed root),
+   `files` (the scope, at most 32), `focus` (the selected lines and the
+   question), `notify: true`. `review.start` selects the structured findings
+   schema only when `task` and `base` are both given, and a base-bound review
+   needs `root` (`agent_api/actions.rs`); without them the result is prose and
+   Review shows it as text, never as findings.
+4. **Find the call.** Calls are listed and read through their actual parent,
+   the fork, and the source Session's call list does not include descendants
+   (`managed_calls.rs`). The Controller therefore provides a parent-scoped
+   **findings projection** (see "Server and API") that resolves the review
+   calls of a Session and of its live Explain forks (Trash included) by the
+   fork record and the `review_task` label. A deleted fork removes its calls;
+   Problems says "review removed with its session". Repeated questions are
+   told apart by task id, never by "the latest call".
+5. **Read findings where they apply.** A finding is drawn on a line only when
+   the projection vouches for it. `input_revision` is an opaque digest of
+   HEAD, index, worktree and requested files (`managed_calls/snapshot.rs`),
+   not a file identity, so the projection maps each finding from the call's
+   snapshot to the displayed file: `exact` when the snapshot's blob for the
+   path equals the current side's content identity, `heuristic` when lines
+   can be carried through the snapshot→current diff (labelled, per 19's
+   precision vocabulary), `unmapped` otherwise (listed, not drawn). Findings
+   are consumed only from a result with `review_complete: true`, a verdict and
+   no truncation; anything else is shown as an incomplete review with its
+   text. `]d` steps mapped findings, `␣VS` sends one back as a remark.
+6. **Check.** `␣VK` runs a declared project check through the session's own
+   execution keeper; it is enabled only while the browsed context is the
+   active Session's own worktree and `GET /checks` reports the check runnable,
+   keeps the epoch and operation id across an uncertain reply, and its
+   anchored diagnostics join Problems, dated per run.
+7. **See the change land.** The worktree revision poll refreshes Changes and
+   marks the open diff "no longer matches" in a status row; `]f` continues.
 
 ## Server and API
 
-No Controller or Machine change is required for the first two phases.
-`changes`, `diff`, `file`, `tree`, `search`, `content-search`, `checks`,
-`repository`, the language routes and the manifest poll are used as they are.
-Later optional additions, each a reader-first optional field or query:
+The first two phases use `changes`, `diff`, `file`, `tree`, `search`,
+`content-search`, `checks`, `repository`, the language routes and the manifest
+poll as they are. Three additions are dependencies of later phases, each
+staged reader-before-writer with optional fields and explicit refusal from a
+Machine that predates it:
 
-- `GET /file?path=&cursor=&side=base`: a base-side window for a complete split
-  view of large files (D2 optimization).
-- A `findings@1` projection of a review call for a given file and revision,
-  if client-side anchoring proves too costly (D3 optimization).
+| Addition | Phase | Contract |
+| --- | --- | --- |
+| Comparison-bound side windows: `GET /file?path=&side=base\|new&diff=<snapshot revision>&cursor=` | D2b | Windowed like `/file` from the exact objects the snapshot diffed; `410` once the snapshot is gone; never for ignore-whitespace snapshots. Required for expanded context in the split layout |
+| Findings projection: `GET /api/code/sessions/{id}/findings` and `?call=&path=&revision=` | D3 | Lists completed review calls of the Session and its live forks (call, task, base, root, files, verdict, completeness); per path returns anchors with `state: exact\|heuristic\|unmapped` computed from the snapshot blob and the current content identity. Authority: the reader must already see both sessions; reuses the call detail checks |
+| `open` reveal payload: optional `reveal {path, context, revision}` on `mobile-review:<sid>` | D4 | Written by new `open` writers; Desktop's adapter prefers it over the narrow `active` read |
 
 ## Code ownership
 
@@ -379,10 +497,13 @@ web/src/desktop/review/         Desktop UI
   DesktopReviewNavigator.tsx     Changes / Files / History / Worktrees
   DesktopReviewDocument.tsx      CM6 host: source, unified, split; file tabs
   DesktopReviewInspector.tsx     Outline / Hunks / Problems / Details
-  desktopReviewState.ts          device-local view state
+  desktopReviewState.ts          device-local view state, reveal adapter
   reviewCommands.ts              the ␣V group and region commands
-  reviewVim.ts                   read-only Vim buffer, ]c ]f ]d gt K gd gO
-  reviewMerge.ts                 hunk-aligned split documents, reverse apply
+  reviewVim.ts                   editor-scoped read-only Vim additions
+  reviewPatchDecoder.ts          streaming decoder over revision-matched pages
+  reviewMerge.ts                 hunk-aligned split documents
+  reviewFindings.ts              findings projection client, anchor states
+  reviewDelegation.ts            the fork's review.start contract
 web/src/mobile/review/          Mobile UI, unchanged behaviour
 ```
 
@@ -397,11 +518,12 @@ together" reads "Prompt and the work pane".
 
 | Phase | Scope | Acceptance |
 | --- | --- | --- |
-| D0 seam | Work-pane view tabs; `␣V` group semantics; `REVIEW` status segment; `Esc` policy; `DesktopPane` `review`; the current `ReviewApp` still renders inside | `just desktop-browser-gate`; shortcut audit lists no uncovered control; Mobile screenshots and chunks unchanged |
-| D1 workbench | Width tiers, Navigator with list grammar and tabs, Document as read-only Vim buffer (unified diff, source, file tabs, `]c ]f gt`, `Enter`/`␣VS`), device-local state split, comparison/unread/mark | Keyboard-only scripted review of a 50-file change at 1100, 1440 and 1728 px; no synced tab writes from Desktop |
-| D2 tools | `@codemirror/merge` split view, expand context, Inspector (Outline, Hunks, Problems, Details), `K` `gd` `gr` `gO` `]d`, checks `␣VK`, Review settings | Hover/definition round trips under the measured `review_read_completed` budget; split and unified agree on every hunk of the fixture |
-| D3 agent loop | Explain/Review forks as tabs, findings anchored from call results, `S` on a problem | A managed review's findings land on their lines at the call revision and go stale correctly after an edit |
-| D4 isolation | Desktop drops `mobile/review` UI imports; shared domain under `web/src/review/`; FOCUS.md and 13 updated | Structure ratchet totals not above baseline; Mobile unchanged |
+| D0 seam | Work-pane view tabs; `review.open`/`review.focus` and the gated `␣V` group; `REVIEW` status segment; `Esc` policy; `DesktopPane` `review`; the approval dock hosted by the work pane; FOCUS.md updated; the current `ReviewApp` still renders inside | `just desktop-browser-gate`; shortcut audit lists no uncovered control; an approval arriving while Review is open is answerable at the pane's full width; Mobile screenshots and chunks unchanged |
+| D1 workbench | Width tiers, Navigator with list grammar and tabs, Document as read-only Vim buffer (unified diff, source, file tabs, `]c ]f ]u gt`, `Enter`/`␣VS`), editor-scoped Vim additions, device-local state and reveal adapter, comparison/unread/mark | Keyboard-only scripted review of a 50-file change at 1100, 1440 and 1728 px; no synced tab writes from Desktop; Composer and Review mounted together with a vimrc mapping of `]c` still owned by the user; `H` across width tiers without remount |
+| D2 tools | Streaming patch decoder and `@codemirror/merge` split view (patch-only), Inspector (Outline, Hunks, Problems, Details), `K` `gd` `gr` `gO` `]d`, checks `␣VK` with context gating, Review settings | Decoder fixtures pass; split and unified agree on every hunk of the fixture; hover/definition round trips under the measured `review_read_completed` budget |
+| D2b sides | Comparison-bound side windows; expanded context in the split layout | Expanded old-side text equals `git show <base>:<path>` for the fixture; an edited worktree never changes it |
+| D3 agent loop | Delegation contract, Explain/Review forks as kept-source preview tabs, findings projection with anchor states, `␣VS` on a problem | A managed review's findings land on their lines at `exact`, move to `heuristic`/`unmapped` after an edit, and disappear with a deleted fork; a prose result is shown as text |
+| D4 isolation | Desktop drops `mobile/review` UI imports; shared domain under `web/src/review/`; `open` reveal payload; 13 updated | Structure ratchet totals not above baseline; Mobile unchanged |
 
 ## Verification gates
 
@@ -413,42 +535,73 @@ together" reads "Prompt and the work pane".
 - Both themes, Desktop widths 1100/1440/1728/ultrawide, Review widths across
   the three tiers, long paths, empty/loading/error states, IME composition
   never reaching a Review key.
+- Decoder fixtures (page-split hunk and line, rename-only, binary, truncated,
+  empty hunk, missing final newline, CRLF); findings anchor states; the
+  Explain preview opened from an initially unkept Session tab.
 - `just desktop-perf-profile` scenarios: open Review, `]c` ×20, `]f` ×20,
   split toggle; no long task regression against the baseline.
 - Mobile 390 px regression: no Desktop review chunk loaded.
 
-## Decisions taken in r1 (owner may revise)
+## Decisions taken in r2 (owner may revise)
 
 1. Review is a persistent view of the work pane, selected by `␣V`/`␣C` and
    header tabs; `Esc` never leaves it.
-2. `␣V` becomes a group; the root meaning (open) is preserved by the group
-   rule, and return is `␣VV` or `␣C`.
-3. The Document is a real read-only Vim buffer (codemirror-vim), with Cowboy's
-   additions defined as Vim mappings: `]c ]f ]d gt K gd gr gO`.
-4. `Enter` sends and focuses the Prompt; `␣VS` sends and stays.
+2. `␣V` is a group whose commands are gated on Review being shown;
+   `review.open` is the root fallback, `␣VV` focuses the Document, `␣C`
+   returns.
+3. The Document is a real read-only Vim buffer (codemirror-vim) with Review's
+   additions (`]c ]f ]u ]d gt K gd gr gO`) dispatched per editor, user
+   mappings first.
+4. `Enter` sends and focuses the Prompt; `␣VS` sends and stays; both carry the
+   browsed context.
 5. CodeMirror 6 stays; `@codemirror/merge` is added; Monaco is not.
-6. Split view is built client-side from unified pages; no new endpoint.
-7. Synced review state is split by meaning: review identity and progress sync,
-   device view state does not; the wire is unchanged.
-8. Navigator rows use `M` for Mark reviewed and `S` for Send path, two
-   region-scoped bare letters named in the key strip.
-9. Explain forks open as preview tabs in the tab strip.
-10. Side panels follow the one-open-panel rule below 1320 px and fold to rails
-    below 900 px; Review never folds Sessions or Prompt.
+6. The split view is built from a streaming patch decoder and shows the patch
+   only until comparison-bound side windows exist; nothing is reconstructed
+   from the worktree.
+7. Synced review state is split by meaning; Desktop never writes `tabs`,
+   `active` or `mode`; reveal is consumed through an adapter.
+8. No bare product letters on rows: Mark and Send are `␣VM`/`␣VS` with the
+   focused item as target; `␣VA` is the comparison, `␣VB` the file tabs.
+9. `]f`/`[f` walk the complete queue; `]u`/`[u` walk unreviewed files.
+10. Managed review from Review uses a fixed `review.start` contract (task,
+    base, root, files, focus); findings are drawn only through the
+    provenance projection and only from complete results.
+11. The approval dock belongs to the work pane, visible under either view.
+12. Explain opens the fork beside a kept source tab and reuses a live fork's
+    tab.
 
-## Open questions for the design review
+## Open questions
 
 - Should `Esc` in Document Normal mode return to the Conversation, as FOCUS.md's
-  "then product mode" clause could be read, or stay inert as in Vim (r1)?
-- Is `]f`/`[f` the right file motion, or should the queue use `]q`/`[q`?
+  "then product mode" clause could be read, or stay inert as in Vim (r2)? The
+  review did not object to inert.
 - Should `Enter` restore a folded Prompt (FOCUS.md's jump rule) or only append
   and announce, given that restoring shrinks Review to Compact at 1440 px?
-- Is the hunk-aligned split with reverse-applied context acceptable until a
-  base-side window exists, including for renames and binary rows?
 - Should AI findings also mark the Navigator rows (count badge) or stay in the
   Inspector and gutter?
 
 ## Review record
 
-r1 awaits a Codex Astra Max design review; findings and dispositions are
-recorded here in r2.
+Codex Astra Max design review of r1, 2026-11-08 (managed call
+`call-53884a467577cfb02c34574f`, preset `astra-max`, input revision
+`sha256:4e9be292…`): verdict *needs-attention*, five high and ten medium
+findings. Static review only; no build, browser or physical IME check was run.
+Each finding and its disposition in r2:
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | high | Reverse-applying hunks over `/file` fabricates old-side context: the file's metadata revision is not bound to the diff snapshot, ignore-whitespace patches are lossy, and `plugin-review-owned-diff` disclaims old-side identity | Accepted. Expanded context requires comparison-bound side windows (D2b); the split layout is patch-only until then; ignore-whitespace never expands |
+| 2 | high | `input_revision` is an opaque snapshot digest, not a per-file identity; path+line matching can annotate unrelated text; 19 requires anchoring to file identity and side | Accepted. The findings projection is a D3 dependency with `exact`/`heuristic`/`unmapped` anchor states; nothing is drawn unmapped |
+| 3 | high | The approval dock sits inside the hidden transcript and claims the Session, so a permission during Review has no visible surface | Accepted. The dock is hosted by the work pane under either view (D0) |
+| 4 | high | Diff pages cut at ~256 KiB without hunk boundaries; rendering pages as hunks corrupts alignment; rename/binary, EOF newline and CRLF need explicit handling | Accepted. Streaming patch decoder with fixtures before D2 acceptance |
+| 5 | high | `review.start` yields structured findings only with `task` + `base` (+ `root`); `reviewExplainPrompt` requests none, so the fork can return prose | Accepted. Fixed delegation contract; findings consumed only from complete, untruncated structured results |
+| 6 | medium | `open` writes `tabs`/`active`/`mode`; the reveal hook sees only a counter; ignoring `active` loses the path, reusing `open` moves the phone's tabs | Accepted. Reveal adapter reads `active` narrowly at reveal time (documented exception); optional reveal payload in D4 |
+| 7 | medium | Remarks, forks and checks must carry the browsed context, or a same-named path in another root and a check against the wrong Session follow | Accepted. Every handoff carries context id, Machine, root, comparison, revision; checks gated to the Session's own worktree with epoch/operation retained |
+| 8 | medium | The fork's call is not listed under the source Session; "latest call" cannot associate repeated questions | Accepted. Controller findings projection resolves calls through the fork record and `review_task`; deleted forks remove their findings |
+| 9 | medium | `defineAction`/`mapCommand` are global and would change the Composer and Draft editors | Accepted. Editor-scoped CM6 keymap with user-mapping precedence; simultaneous-editor tests |
+| 10 | medium | A group opens whenever any command is runnable, so an enabled `␣VV` toggle defeats the root fallback; `␣VV` cannot both return and focus | Accepted. Grouped commands gated on `reviewShown`; `review.open` is the root fallback; `␣VV` focuses; `␣C` returns; FOCUS.md updated in D0 |
+| 11 | medium | `M`/`S` are the shared Move/Settings item verbs | Accepted. Removed from rows; `␣VM`/`␣VS` target the focused item |
+| 12 | medium | Compact `H` closed the inset while also meaning collapse/parent/back | Accepted. The list owns `H`; the inset closes only at the navigation root; `Esc` leaves the filter first |
+| 13 | medium | The tab-strip primitive has no focus region and `␣B` is Session-only, so file tabs had no keyboard keep/pin/close/reopen | Accepted. `␣VB` group mirrors `␣B` for file tabs; comparison moved to `␣VA` |
+| 14 | medium | The Explain preview would replace an unkept source Session tab | Accepted. The source tab is kept before the fork opens; a live fork's tab is reused |
+| 15 | medium | `]f` depending on the Unread filter contradicts 13-code-review's complete-queue rule | Accepted. `]f`/`[f` over the complete queue; `]u`/`[u` for unreviewed |
