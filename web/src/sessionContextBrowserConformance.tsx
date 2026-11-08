@@ -7,6 +7,7 @@ import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
 import { PreparingConversation } from "./PreparingConversation";
+import { DeleteSessionShell } from "./DeleteSessionShell";
 import { SessionContextCue, SessionContinuedFrom, SessionHandedOffDock, SessionNextMessageBadge, SessionProvenance } from "./SessionContextCue";
 import {
   CLOSE_SESSION_SETTINGS_EVENT,
@@ -1149,6 +1150,26 @@ export async function runSessionContextBrowserConformance(
       cancelled.url.includes(sessions[3]!.id) && cancelled.body.operation === "handoff-op",
       "preparing: Cancel takes the handoff back and returns its message to the original",
     );
+    // The Trash confirmation names the session it removes.
+    container.style.cssText = "width:680px;max-width:100%;margin:auto";
+    const { trashed_at_ms: _trashed, ...live } = sessions[1]!;
+    const named: SessionMeta = { ...live, status: "running", title: "Fix the flaky sync test", workspace_name: "cowboy" };
+    const desktop = classifySurface({ finePointer: true, hover: true, tabletWidth: false, touchCapable: false, desktopHost: true });
+    flushSync(() => root.render(
+      <SurfaceContext.Provider value={desktop}>
+        <BrowserProductTheme>
+          <CssBaseline />
+          <DeleteSessionShell session={named} onClose={() => {}} onStopAndTrash={() => {}} onDeletePermanently={() => {}} />
+        </BrowserProductTheme>
+      </SurfaceContext.Provider>,
+    ));
+    await until(() => Boolean(document.querySelector("[data-delete-session-name]")));
+    check(
+      document.querySelector("[data-delete-session-name]")!.textContent === "Fix the flaky sync testcowboy",
+      "trash: the confirmation names the session and its project",
+    );
+    await observe?.("trash-confirmation");
+    flushSync(() => root.render(null));
   } finally {
     root.unmount();
     container.remove();
