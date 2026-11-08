@@ -40,6 +40,8 @@ struct Log {
     /// Running apply helpers by process ID: target path, expected digest and
     /// the stdout read so far.
     helpers: HashMap<(String, String), (String, String, String)>,
+    /// Helper output reads still pending, by operation ID: their process ID.
+    reads: HashMap<(String, String), String>,
 }
 
 /// Bounded helper stdout; an outcome is one short JSON line.
@@ -96,15 +98,7 @@ fn applied(output: &str, expect: &str) -> Option<usize> {
     })
 }
 
-fn helper_output(
-    log: &mut Log,
-    session: &str,
-    params: &serde_json::Value,
-    reply: &serde_json::Value,
-) {
-    let Some(process) = params["processId"].as_str() else {
-        return;
-    };
+fn helper_output(log: &mut Log, session: &str, process: &str, reply: &serde_json::Value) {
     let key = (session.to_owned(), process.to_owned());
     let Some((path, expect, output)) = log.helpers.get_mut(&key) else {
         return;
@@ -254,23 +248,56 @@ pub(super) fn observe(session: &str, command: &Command, response: &Response) {
                 .insert((session.to_owned(), process), (path, expect, String::new()));
         }
         Command::Invoke { invocation, .. } if invocation.method == "process/read" => {
-            let Response::Call {
-                response:
-                    KeeperResponse::Operation {
-                        outcome: Outcome::Completed { reply },
-                    },
-            } = response
-            else {
+            let Some(process) = invocation.params["processId"].as_str() else {
                 return;
             };
             let mut log = LOG.lock();
-            if !log.helpers.is_empty() {
-                helper_output(&mut log, session, &invocation.params, reply);
+            if !log
+                .helpers
+                .contains_key(&(session.to_owned(), process.to_owned()))
+            {
+                return;
+            }
+            tracing::info!(event_name = "cowboy.execution.apply_helper_read", session, completed = ?completed(response));
+            match response {
+                Response::Call {
+                    response:
+                        KeeperResponse::Operation {
+                            outcome: Outcome::Completed { reply },
+                        },
+                } => helper_output(&mut log, session, process, reply),
+                // A waiting read answers later through its operation ID.
+                Response::Call {
+                    response:
+                        KeeperResponse::Operation {
+                            outcome: Outcome::Pending,
+                        },
+                } if log.reads.len() < MAX_PENDING => {
+                    log.reads.insert(
+                        (session.to_owned(), invocation.operation_id.clone()),
+                        process.to_owned(),
+                    );
+                }
+                _ => {}
             }
         }
         Command::Observe { operation_id, .. } => {
             let mut log = LOG.lock();
             let key = (session.to_owned(), operation_id.clone());
+            if completed(response).is_some()
+                && let Some(process) = log.reads.remove(&key)
+            {
+                if let Response::Call {
+                    response:
+                        KeeperResponse::Operation {
+                            outcome: Outcome::Completed { reply },
+                        },
+                } = response
+                {
+                    helper_output(&mut log, session, &process, reply);
+                }
+                return;
+            }
             match completed(response) {
                 None => {}
                 Some(done) => {

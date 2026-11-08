@@ -198,3 +198,27 @@ fn apply_helpers_record_only_their_confirmed_expected_digest() {
     observe("another", &read, &done);
     assert_eq!(latest("another", "/w/a.go"), None);
 }
+
+#[test]
+fn a_waiting_helper_read_completes_through_its_operation() {
+    let session = "writes-helper-late";
+    let expect = sha("late helper\n");
+    observe(
+        session,
+        &helper_start("q1", "/w/late.go", &expect),
+        &reply(json!({"state":"completed","reply":{}})),
+    );
+    let (read, _) = helper_read("q1", "", false);
+    observe(session, &read, &reply(json!({"state":"pending"})));
+    assert_eq!(latest(session, "/w/late.go"), None);
+    let operation = "read-q1-false";
+    let line =
+        format!("{{\"schema\":1,\"status\":\"applied\",\"sha256\":\"{expect}\",\"size\":12}}\n");
+    let (_, done) = helper_read("q1", &line, true);
+    observe(
+        session,
+        &command(json!({"kind":"observe","operation_id":operation,"wait_ms":0})),
+        &done,
+    );
+    assert_eq!(latest(session, "/w/late.go").unwrap().sha256, expect);
+}
