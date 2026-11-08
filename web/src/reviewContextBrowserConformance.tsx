@@ -1109,12 +1109,12 @@ async function checkChangedDocuments(): Promise<string> {
     }), {headers: {"Content-Type": "application/json"}});
   };
   try {
-    flushSync(() => root.render(<BrowserProductTheme><ReviewChanges
+    flushSync(() => root.render(<SurfaceProvider><BrowserProductTheme><ReviewChanges
       sessionId="documents" comparison={comparison} documentsOnly compact
       reviewed={new Set()} onRevision={() => {}}
       onPreview={(path) => previews.push(path)}
       onOpenDiff={(entry) => diffs.push(entry.change.path)}
-    /></BrowserProductTheme>));
+    /></BrowserProductTheme></SurfaceProvider>));
     await until(() => !!container.querySelector('[aria-label="Preview current file design.md"]'), "Document preview action missing");
     check(!container.textContent?.includes("app.ts"), "Non-document shown in document filter");
     check(container.textContent?.includes("removed.md"), "Deleted document missing from review");
