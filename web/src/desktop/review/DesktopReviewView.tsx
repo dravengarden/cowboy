@@ -12,7 +12,8 @@ import {
   REVIEW_NAVIGATOR_TABS,
   type ReviewNavigatorTab,
 } from "./DesktopReviewNavigator";
-import { openReviewDocument } from "./desktopReviewTabs";
+import { revealedFile } from "../../mobileReviewState";
+import { revealEditorLine } from "./reviewEditorSelection";
 import { REVIEW_TREE_LEFT_EVENT } from "./ReviewFilesList";
 import { entryKey } from "./ReviewChangesList";
 import { setReviewContextChoice } from "./desktopReviewContextChoice";
@@ -137,9 +138,14 @@ function useReviewReveal(review: ReviewWorkbench): void {
   useEffect(() => {
     if (!pending || !ready) return;
     setPending(false);
-    const { context, target, updateTabs } = latest.current;
-    const path = context.agentSynced.active;
-    if (path && target?.own) updateTabs((state) => openReviewDocument(state, { kind: "source", path }));
+    const { context, target, placeSource, document, editor } = latest.current;
+    const file = revealedFile(context.agentSynced);
+    if (!file || !target?.own) return;
+    placeSource(file.path, file.line);
+    // A file already shown keeps its state; move its cursor directly.
+    if (file.line !== undefined && document?.kind === "source" && document.path === file.path && editor.current) {
+      revealEditorLine(editor.current, file.line);
+    }
   }, [pending, ready]);
 }
 

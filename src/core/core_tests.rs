@@ -463,6 +463,18 @@ fn mobile_review_bindings_name_contexts_and_stay_bounded() {
         "bindings": ["session::a", "session::a", "../x", "project"]
     }));
     assert_eq!(restored.bindings, ["session::a"]);
+
+    // A reveal written at another revision, or naming no valid line, is dropped.
+    let restored = super::MobileReviewState::from_stored(serde_json::json!({
+        "reveal_revision": 3,
+        "reveal": {"path": "src/lib.rs", "line": 4, "revision": 2}
+    }));
+    assert!(restored.reveal.is_none());
+    let restored = super::MobileReviewState::from_stored(serde_json::json!({
+        "reveal_revision": 3,
+        "reveal": {"path": "src/lib.rs", "line": 4, "revision": 3}
+    }));
+    assert_eq!(restored.reveal.map(|reveal| reveal.line), Some(Some(4)));
 }
 
 #[test]

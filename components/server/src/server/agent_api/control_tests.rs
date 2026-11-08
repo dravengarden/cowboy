@@ -53,9 +53,57 @@ fn review_open_uses_owned_sync_tabs_and_original_operation() {
         json!({"path":"README.md"}),
         json!({"session_id":"own"}),
         json!({"session_id":"own","path":"README.md","state":"foreign"}),
+        json!({"session_id":"own","path":"README.md","line":0}),
+        json!({"session_id":"own","path":"README.md","line":"12"}),
     ] {
         assert!(command_value("sessions.review_open", &input, "bad").is_err());
     }
+}
+
+#[test]
+fn review_open_line_is_bound_to_its_reveal() {
+    let hub = crate::core::Hub::new();
+    fixture(&hub, "own", Some("owner"), false);
+    let input = json!({"session_id":"own","path":"src/lib.rs","line":42});
+    let command = command_value("sessions.review_open", &input, "open-line").unwrap();
+    assert_eq!(
+        command["args"],
+        json!({"path":"src/lib.rs","reveal":true,"line":42})
+    );
+    hub.sync_apply(
+        "mobile-review:own",
+        "open-line".into(),
+        "open",
+        &command["args"],
+    )
+    .unwrap();
+    let state = hub.sync_value("mobile-review:own");
+    assert_eq!(
+        state["reveal"],
+        json!({"path":"src/lib.rs","line":42,"revision":state["reveal_revision"]})
+    );
+    // A plain open moves `active` but leaves the reveal it did not make.
+    hub.sync_apply(
+        "mobile-review:own",
+        "browse".into(),
+        "open",
+        &json!({"path":"README.md"}),
+    )
+    .unwrap();
+    let state = hub.sync_value("mobile-review:own");
+    assert_eq!(
+        (state["active"].as_str(), state["reveal"]["path"].as_str()),
+        (Some("README.md"), Some("src/lib.rs"))
+    );
+    assert!(
+        hub.sync_apply(
+            "mobile-review:own",
+            "no-reveal".into(),
+            "open",
+            &json!({"path":"a.rs","line":3})
+        )
+        .is_err()
+    );
 }
 
 #[tokio::test]

@@ -123,32 +123,7 @@ impl Hub {
                         .and_then(serde_json::Value::as_bool)
                         .ok_or("invalid PR selection")?;
                 }
-                "open" => {
-                    let path = mobile_review_string_arg(args, "path", 4096)?;
-                    if !valid_mobile_review_path(&path) {
-                        return Err("invalid mobile review path".to_owned());
-                    }
-                    if !state.tabs.iter().any(|tab| tab.path == path) {
-                        if state.tabs.len() >= MOBILE_REVIEW_TAB_CAP {
-                            let evict = state.tabs.iter().position(|tab| !tab.pinned).unwrap_or(0);
-                            let removed = state.tabs.remove(evict);
-                            if state.active.as_deref() == Some(&removed.path) {
-                                state.active = None;
-                            }
-                        }
-                        state.tabs.push(MobileReviewTab {
-                            path: path.clone(),
-                            pinned: false,
-                        });
-                    }
-                    state.active = Some(path);
-                    state.mode = "files".to_owned();
-                    state.open_revision = state.open_revision.saturating_add(1);
-                    if args.get("reveal") == Some(&serde_json::Value::Bool(true)) {
-                        state.reveal_revision = state.reveal_revision.saturating_add(1);
-                        state.remote_selected = false;
-                    }
-                }
+                "open" => state.open(args)?,
                 "close" => {
                     let path = mobile_review_string_arg(args, "path", 4096)?;
                     state.tabs.retain(|tab| tab.path != path);

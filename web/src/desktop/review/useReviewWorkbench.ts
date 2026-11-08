@@ -125,6 +125,11 @@ function useDocumentOpeners(
     updateTabs((state) => openReviewDocument(state, { kind: "source", path }));
     focusDocument();
   }, [focusDocument, updateTabs]);
+  /** Open a source file at `line` without taking focus (an agent's reveal). */
+  const placeSource = useCallback((path: string, line?: number): void => {
+    if (line !== undefined) positions.current.set(reviewDocumentKey({ kind: "source", path }), line);
+    updateTabs((state) => openReviewDocument(state, { kind: "source", path }));
+  }, [positions, updateTabs]);
   const openCommit = useCallback((oid: string, path: string): void => {
     updateTabs((state) => openReviewDocument(state, { kind: "commit", oid, path }));
     focusDocument();
@@ -139,7 +144,7 @@ function useDocumentOpeners(
     }));
     focusDocument();
   }, [focusDocument, updateTabs]);
-  return { open, openSource, openCommit, openPull };
+  return { open, openSource, placeSource, openCommit, openPull };
 }
 
 /** Everything the Desktop Review workbench reads and does, without layout. */
@@ -174,7 +179,7 @@ export function useReviewWorkbench(active: boolean) {
   const focusDocument = useCallback((): void => {
     requestAnimationFrame(() => workspace.focusRegion(REVIEW_DOCUMENT_REGION));
   }, [workspace]);
-  const { open, openSource, openCommit, openPull } = useDocumentOpeners(updateTabs, focusDocument, positions);
+  const { open, openSource, placeSource, openCommit, openPull } = useDocumentOpeners(updateTabs, focusDocument, positions);
   const markEntry = useCallback((key: string, mark: string | undefined): void => {
     if (!context.stateKey || !mark) {
       notify("Open the diff to mark it reviewed", "info");
@@ -261,6 +266,7 @@ export function useReviewWorkbench(active: boolean) {
     root,
     open,
     openSource,
+    placeSource,
     openCommit,
     openPull,
     markOpen: () => openKey && markEntry(openKey, openMark),
