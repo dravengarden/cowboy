@@ -47,6 +47,7 @@ mod managed_calls;
 pub mod preferences;
 pub mod provider_accounts;
 mod session_metadata;
+pub mod session_widgets;
 mod workspace_documents;
 pub use core_security::HandoffPoint;
 mod plugin_installations;
@@ -459,27 +460,6 @@ enum StorageBackend {
 
 /// Clearing a transcript removes its anchors and records that nothing older
 /// remains to backfill.
-async fn clear_transcript_anchors_pg(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    session_id: &str,
-) -> Result<()> {
-    sqlx::query("DELETE FROM transcript_anchors WHERE session_id = $1")
-        .bind(session_id)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("DELETE transcript anchors for {session_id}"))?;
-    sqlx::query(
-        "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) VALUES ($1, $2, 0, $3)",
-    )
-    .bind(session_id)
-    .bind(crate::transcript_anchors::BACKFILL_SENTINEL)
-    .bind(chrono::Utc::now().timestamp_millis())
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("INSERT anchor sentinel for {session_id}"))?;
-    Ok(())
-}
-
 #[derive(Clone)]
 struct PostgresStorage {
     pool: PgPool,
@@ -6064,7 +6044,7 @@ impl PostgresStorage {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("DELETE events for {session_id}"))?;
-        clear_transcript_anchors_pg(&mut tx, session_id).await?;
+        session_widgets::clear_transcript_projections_pg(&mut tx, session_id).await?;
         // Archive the old conversation's Calls without changing child execution,
         // results, admission receipts or budgets. Future calls start visible.
         sqlx::query("UPDATE managed_agent_calls SET dismissed = TRUE WHERE parent_session_id = $1 AND (document::jsonb->>'created_at_ms')::bigint < $2")

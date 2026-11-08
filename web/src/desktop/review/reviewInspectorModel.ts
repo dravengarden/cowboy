@@ -6,6 +6,7 @@
 import type { CodeCheckDiagnostic, CodeChecks, CodeDiagnostic, CodeDocumentSymbol } from "../../mobile/review/codeApi";
 import { checkTitle } from "../../mobile/review/checkAnnotations";
 import { diffHunkLines } from "../../mobile/review/diffNavigationModel";
+import type { ReviewFinding } from "./reviewFindingsModel";
 
 export interface InspectorHunk {
   readonly row: number;
@@ -93,6 +94,31 @@ export function withLanguageProblems(
     row: diagnostic.start.row + 1,
   }));
   return [...problems, ...language].sort((left, right) =>
+    (left.row ?? Number.MAX_SAFE_INTEGER) - (right.row ?? Number.MAX_SAFE_INTEGER) ||
+    ORDER[left.severity] - ORDER[right.severity]
+  );
+}
+
+const FINDING_SEVERITY = { critical: "error", high: "error", medium: "warning", low: "note" } as const;
+const ANCHOR_NOTE = { current: "", stale: " · the file changed since the review", unmapped: " · outside the reviewed files" } as const;
+
+/** A managed review's findings for `path` as problems; only `current` ones
+ *  can be placed (`rowOf`), the rest are listed with the reason. */
+export function withFindingProblems(
+  problems: readonly InspectorProblem[],
+  findings: readonly ReviewFinding[],
+  path: string,
+  rowOf: (line: number) => number | undefined,
+): InspectorProblem[] {
+  const here = findings.filter((finding) => samePath(finding.path, path)).map((finding): InspectorProblem => ({
+    key: `finding:${finding.key}`,
+    severity: FINDING_SEVERITY[finding.severity],
+    message: `${finding.title}${ANCHOR_NOTE[finding.anchor]}`,
+    source: `AI review · ${finding.severity}`,
+    line: finding.lineStart,
+    row: finding.anchor === "current" ? rowOf(finding.lineStart) : undefined,
+  }));
+  return [...problems, ...here].sort((left, right) =>
     (left.row ?? Number.MAX_SAFE_INTEGER) - (right.row ?? Number.MAX_SAFE_INTEGER) ||
     ORDER[left.severity] - ORDER[right.severity]
   );

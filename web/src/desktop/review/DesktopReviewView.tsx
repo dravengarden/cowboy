@@ -39,6 +39,8 @@ function useWorkbenchLanguage(review: ReviewWorkbench): ReviewLanguage {
     review.changes.dataRevision,
   );
 }
+import { useDelegate } from "./reviewDelegation";
+import { type ReviewFindings, useReviewFindings } from "./useReviewFindings";
 import { focusOutline, REVIEW_INSPECTOR_REGION, REVIEW_RUN_CHECK_EVENT, ReviewInspector } from "./ReviewInspector";
 import { ReviewSettingsContent } from "../../mobile/review/ReviewSettings";
 
@@ -74,10 +76,11 @@ function useInspectorPanel(width: number, closeNavigatorInset: () => void) {
   };
 }
 
-function InspectorRegion({ review, panel, language }: {
+function InspectorRegion({ review, panel, language, findings }: {
   review: ReviewWorkbench;
   panel: ReturnType<typeof useInspectorPanel>;
   language: ReviewLanguage;
+  findings: ReviewFindings;
 }): React.JSX.Element {
   return (
     <Box
@@ -96,7 +99,7 @@ function InspectorRegion({ review, panel, language }: {
         ...(panel.beside ? {} : { position: "absolute", zIndex: 4, top: 0, bottom: 0, right: 0, boxShadow: 8 }),
       }}
     >
-      <ReviewInspector review={review} onShow={panel.show} diagnostics={language.diagnostics} />
+      <ReviewInspector review={review} onShow={panel.show} diagnostics={language.diagnostics} findings={findings} />
     </Box>
   );
 }
@@ -169,6 +172,7 @@ interface ViewControls {
   readonly setUnreadOnly: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setTab: React.Dispatch<React.SetStateAction<ReviewNavigatorTab>>;
   readonly requestComparison: () => void;
+  readonly delegate: (kind: "explain" | "review", path?: string) => void;
 }
 
 /** The view's half of the Review commands: the Navigator and its layout. */
@@ -194,6 +198,8 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
       const path = focusedRow()?.dataset.reviewChange ?? focusedRow()?.dataset.reviewTreePath;
       review.send(true, path ? review.pathRemark(path) : undefined);
     },
+    // A focused Navigator row names the file; otherwise the open Document.
+    delegate: (kind) => controls.delegate(kind, focusedRow()?.dataset.reviewChange ?? focusedRow()?.dataset.reviewTreePath),
     closeTab: () => review.closeTab(),
     keepTab: () => review.keepTab(),
     toggleNavigator: () => compact ? controls.setOverlay((value) => !value) : controls.setFolded((value) => !value),
@@ -232,9 +238,10 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
 
 /** The Document region: the open file, its tabs and footer. Focus that
  *  reaches the region before the editor exists is handed on when it mounts. */
-function ReviewDocumentRegion({ review, diagnostics }: {
+function ReviewDocumentRegion({ review, diagnostics, onDelegate }: {
   review: ReviewWorkbench;
   diagnostics: readonly CodeDiagnostic[];
+  onDelegate: (kind: "explain" | "review") => void;
 }): React.JSX.Element {
   return (
     <Box
@@ -266,6 +273,7 @@ function ReviewDocumentRegion({ review, diagnostics }: {
         }}
         onMark={() => review.markOpen()}
         onSend={() => review.send(false)}
+        onDelegate={onDelegate}
         empty={<EmptyDocument review={review} />}
         split={review.split}
         diagnostics={diagnostics}
@@ -318,7 +326,10 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
   };
   const inspector = useInspectorPanel(width, () => setOverlay(false));
   const language = useWorkbenchLanguage(review);
+  const delegate = useDelegate(review);
+  const findings = useReviewFindings(review.context.agentSessionId, review.changes.queue);
   useReviewViewCommands(review, {
+    delegate,
     inspector: inspector.commands,
     openContext: () => {
       showNavigator(tab);
@@ -377,6 +388,7 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
         review.openSource(path);
       }}
       dataRevision={review.changes.dataRevision}
+      findings={findings.findings}
     />
   );
   return (
@@ -411,8 +423,8 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
           {navigator}
         </Paper>
       )}
-      <ReviewDocumentRegion review={review} diagnostics={language.diagnostics} />
-      {review.target && <InspectorRegion review={review} panel={inspector} language={language} />}
+      <ReviewDocumentRegion review={review} diagnostics={language.diagnostics} onDelegate={(kind) => delegate(kind)} />
+      {review.target && <InspectorRegion review={review} panel={inspector} language={language} findings={findings} />}
       <ReviewLanguageLayer review={review} language={language} />
       <DesktopModal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Review settings" width={640}>
         <ReviewSettingsContent />

@@ -451,7 +451,7 @@ function itemProgressSignature(
     case "compaction":
       return `${count}:${item.key}:compaction:${item.status}:${item.summary.length}`;
     case "notice":
-      return `${count}:${item.key}:notice:${item.title}`;
+      return `${count}:${item.key}:notice:${item.title}:${item.widget?.stateVersion ?? ""}`;
   }
 }
 

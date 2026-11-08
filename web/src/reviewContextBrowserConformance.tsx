@@ -254,6 +254,20 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       });
     }
     if (url.pathname.endsWith("/bootstrap")) return json({ messages: [] });
+    const delegated = /^\/api\/sessions\/explain-fork\/calls(\/review-call)?$/.exec(url.pathname);
+    if (delegated && (globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests) {
+      // The fork's managed review, matched by the task its first message named.
+      const task = submits.flatMap((data) => /task: \\"([^\\"]+)\\"/.exec(data)?.[1] ?? []).at(-1);
+      if (!task) return json({ calls: [] });
+      const call = { call_id: "review-call", request_id: "review-request", provider: "codex", purpose: "review",
+        labels: { review_task: task }, placement: { parent_session_id: "explain-fork", machine_id: "local", workspace_id: "fixture" },
+        child_session_id: "review-child", state: "completed", created_at_ms: 1, updated_at_ms: 2, input_revision: null,
+        has_result: true, runtime_machine_id: null, provider_version: null, cancel_requested: false, error: null };
+      if (!delegated[1]) return json({ calls: [call] });
+      return json({ call: { ...call, result: { structured: { review_complete: true, verdict: "changes_requested", findings: [
+        { severity: "high", title: "Fixture AI finding", body: "The fixture's managed review.", file: "src/app.ts", line_start: 1, line_end: 1 },
+      ] } } } });
+    }
     if (url.pathname.endsWith("/fork")) {
       requests.push(url.pathname);
       return json({ session_id: "explain-fork" });
@@ -345,6 +359,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
               status: "modified",
               staged: false,
               unstaged: true,
+              ...((globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests ? { fingerprint: "fixture-app" } : {}),
               ...(branches ? { additions: 12, deletions: 3 } : {}),
             },
             ...(dense

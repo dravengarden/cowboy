@@ -1,6 +1,6 @@
 # Desktop Code Review
 
-**Status: design proposal r3 (2026-11-08); D0–D2c implemented, D2d–D4 planned.** r3 records the
+**Status: design proposal r3 (2026-11-08); D0–D3 implemented (D3 with a Web-side projection), D2d–D4 planned.** r3 records the
 owner's answers to the r2 open questions. r2 folds in a
 Codex Astra Max design review of r1 (managed call
 `call-53884a467577cfb02c34574f`: verdict *needs-attention*, five high and ten
@@ -543,7 +543,7 @@ together" reads "Prompt and the work pane".
 | D2c (implemented) | Language intelligence on source files in the manifest's buffer mode: owned buffers through `useOwnedReviewBuffer` (every answer checked against the shown text), legacy through a buffer lease and the language routes; `K` hover, `gd` `gD` `gy` `gI` `gr` (legacy only, as on the phone; owned reports navigation unavailable), diagnostics underlined and merged into Problems; a jump keeps its source tab. Diffs point to the file | acceptance language step (diagnostic, `K`, `gd`, `gT`) |
 | D2 tools | Streaming patch decoder and `@codemirror/merge` split view (patch-only), Inspector (Outline, Hunks, Problems, Details), `K` `gd` `gr` `gO` `]d`, checks `␣VK` with context gating, Review settings | Decoder fixtures pass; split and unified agree on every hunk of the fixture; hover/definition round trips under the measured `review_read_completed` budget |
 | D2b sides | Comparison-bound side windows; expanded context in the split layout | Expanded old-side text equals `git show <base>:<path>` for the fixture; an edited worktree never changes it |
-| D3 agent loop | Delegation contract, Explain/Review forks as kept-source preview tabs, findings projection with anchor states, `␣VS` on a problem | A managed review's findings land on their lines at `exact`, move to `heuristic`/`unmapped` after an edit, and disappear with a deleted fork; a prose result is shown as text |
+| D3 (implemented, Web projection) | Delegation contract, Explain/Review forks as kept-source preview tabs, findings projection with anchor states, `␣VS` on a problem | A managed review's findings land on their lines at `exact`, move to `heuristic`/`unmapped` after an edit, and disappear with a deleted fork; a prose result is shown as text |
 | D4 isolation | Desktop drops `mobile/review` UI imports; shared domain under `web/src/review/`; `open` reveal payload; 13 updated | Structure ratchet totals not above baseline; Mobile unchanged |
 
 D1 as implemented (`web/src/desktop/review/`): the Navigator has Changes and
@@ -563,6 +563,30 @@ or its folder's review directory; an agent's reveal opens a file only in the
 Session's own worktree. `tools/cdp-review-acceptance.ts` drives the
 workbench with trusted keys in both themes and is part of
 `just desktop-keyboard-acceptance`.
+
+D3 as implemented deviates from "Find the call" and "Read findings where
+they apply": there is no Controller findings projection yet, because a call
+records only `input_revision`, not the per-file blob identity `exact` needs.
+Desktop keeps the projection in the Web instead. `␣VE` and `␣VR` (and the
+footer's Explain and Review) fork the Agent as the phone's Explain does;
+`␣VR` sends the delegation contract with a task id
+(`desktop-review-<time>-<random>`) and records the delegation on this device
+(`cowboy.desktop.reviewDelegations.v1`: source, fork, task, files with their
+change fingerprints). The last five are read through their forks
+(`/api/sessions/{fork}/calls`, matched by the `review_task` label), polled
+every 15 s while one runs; a fork with no matching call after 10 minutes
+counts as never started. A finding is `current` while its file's change
+fingerprint equals the delegated one, `stale` after the file changed and
+`unmapped` outside the delegated files; only `current` findings are placed,
+and only where Problems already places findings (a source file, or a diff
+through the verified projection). Each is listed with its reason otherwise.
+The fingerprint is metadata, not content identity, so `current` is weaker
+than `exact`; the Controller projection (and with it `heuristic` carrying)
+replaces this when calls record their snapshot blobs. The Navigator badges a
+file with the count of its current findings, coloured by the highest
+severity. Delegations are device-local, so another device does not see them.
+`␣VS` has no problem-row form: `Enter` on a problem moves the Document's
+cursor to it, and `Enter` there sends the line.
 
 With D1c the workbench covers everything the classic layout offers on
 Desktop. `␣VL` stays as a fallback until D4 removes the Mobile UI imports
