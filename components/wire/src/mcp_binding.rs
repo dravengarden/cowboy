@@ -272,7 +272,10 @@ mod relay_tests {
                 action: execution::Action::InstallCallGateway { grant },
             }),
         };
-        assert_eq!(command.minimum_protocol(), 42);
+        assert_eq!(
+            command.minimum_protocol(),
+            crate::machine_protocol::MCP_TRANSPORT_PROTOCOL_VERSION
+        );
     }
 }
 

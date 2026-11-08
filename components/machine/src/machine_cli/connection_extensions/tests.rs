@@ -15,7 +15,7 @@ impl Link {
     fn new(store: MachinePluginStore, service: &str) -> Self {
         let control = Arc::new(MachineControl::default());
         let (commands, mut incoming) = mpsc::unbounded_channel();
-        let connection = control.install("execution".into(), "fixture".into(), false, 43, commands);
+        let connection = control.install("execution".into(), "fixture".into(), false, crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION, commands);
         let scope = Arc::new(PluginExecutionScope::new(Some(service), "execution"));
         let link = McpLink::new(&scope);
         let store = Arc::new(store);

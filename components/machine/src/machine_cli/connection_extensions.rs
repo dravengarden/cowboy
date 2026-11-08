@@ -159,5 +159,5 @@ pub(super) fn consume(
     None
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, target_os = "linux", feature = "full"))]
 mod tests;

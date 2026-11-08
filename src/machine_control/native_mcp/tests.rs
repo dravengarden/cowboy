@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 fn connect(control: &MachineControl) -> (ConnectionToken, mpsc::UnboundedReceiver<MachineCommand>) {
     let (tx, rx) = mpsc::unbounded_channel();
     (
-        control.install("hawk".into(), "epoch".into(), false, 43, tx),
+        control.install("hawk".into(), "epoch".into(), false, crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION, tx),
         rx,
     )
 }
@@ -143,7 +143,7 @@ async fn confirm(
 async fn native_preparation_refuses_an_unconfirmed_protocol_without_sending() {
     let control = Arc::new(MachineControl::default());
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let connection = control.install("hawk".into(), "epoch".into(), false, 42, tx);
+    let connection = control.install("hawk".into(), "epoch".into(), false, crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION - 1, tx);
     assert!(
         control
             .prepare_native_mcp(&connection, profile())

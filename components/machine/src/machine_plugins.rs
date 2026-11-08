@@ -25,7 +25,7 @@ mod code_sync_conformance;
 mod extensions;
 mod installation;
 mod mcp_servers;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, target_os = "linux", feature = "full"))]
 pub(crate) use mcp_servers::tests::conformance as mcp_conformance;
 mod native_identity;
 mod native_profile;

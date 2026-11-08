@@ -209,7 +209,9 @@
     "code_api::check_routes": "code.checks",
     "code_api::search_routes": "code.search",
     "code_buffers::routes": "exception:native — browser-owned unsaved buffers, navigation and file synchronization stay with native code tools and the Code UI.",
+    "mcp_bindings::routes": "exception:identity — session MCP policy writes are owner-authorized CAS and launch preparation is Controller-owned; agents observe bindings through configuration.read('mcp').",
     "product_auth_router": "exception:identity — login, credentials, passkeys, grants and account administration remain with the identity owner.",
+    "session_tool_routes": "tools.session",
     "telemetry_binding::recovery::surface::routes": "exception:host — exact telemetry recovery and writer promotion require maintenance authority; use the Operator CLI.",
     "telemetry_binding::resolution::surface::routes": "exception:host — telemetry recovery plans require their existing human/host authorization; use the Operator CLI or recovery UI.",
     "telemetry_binding::surface::routes": "exception:host — telemetry dataset enrollment and writer binding require identity/host authority; use the Operator CLI."

@@ -8,7 +8,7 @@ fn connect(
 ) -> (ConnectionToken, mpsc::UnboundedReceiver<MachineCommand>) {
     let (tx, rx) = mpsc::unbounded_channel();
     (
-        control.install(machine.into(), "same-epoch".into(), false, 42, tx),
+        control.install(machine.into(), "same-epoch".into(), false, crate::machine_protocol::MCP_TRANSPORT_PROTOCOL_VERSION, tx),
         rx,
     )
 }

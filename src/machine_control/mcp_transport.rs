@@ -85,7 +85,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_transport_requires_version_and_current_connection_at_delivery() {
         let control = MachineControl::default();
-        let (legacy, mut legacy_rx) = connect(&control, 41);
+        let (legacy, mut legacy_rx) = connect(&control, crate::machine_protocol::MCP_TRANSPORT_PROTOCOL_VERSION - 1);
         assert!(
             control
                 .mcp_request_on_connection(&legacy, request())
@@ -93,7 +93,7 @@ mod tests {
                 .is_err()
         );
         assert!(legacy_rx.try_recv().is_err());
-        let (current, mut rx) = connect(&control, 42);
+        let (current, mut rx) = connect(&control, crate::machine_protocol::MCP_TRANSPORT_PROTOCOL_VERSION);
         let (result, ()) = tokio::join!(
             control.mcp_request_on_connection(&current, request()),
             async {
@@ -132,7 +132,7 @@ mod tests {
                         response: json!({"closed":true}),
                     },
                 );
-                let _replacement = connect(&control, 42);
+                let _replacement = connect(&control, crate::machine_protocol::MCP_TRANSPORT_PROTOCOL_VERSION);
             }
         );
         assert!(
@@ -151,7 +151,7 @@ mod tests {
     #[tokio::test]
     async fn cancelling_mcp_wait_preserves_other_requests_and_discards_late_reply() {
         let control = MachineControl::default();
-        let (connection, mut commands) = connect(&control, 42);
+        let (connection, mut commands) = connect(&control, crate::machine_protocol::MCP_TRANSPORT_PROTOCOL_VERSION);
         let mut retained = Box::pin(control.mcp_request_on_connection(&connection, request()));
         assert!(futures::poll!(&mut retained).is_pending());
         let retained_id = take_request(&mut commands);
@@ -188,7 +188,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn mcp_timeout_releases_waiter_and_discards_late_reply() {
         let control = MachineControl::default();
-        let (connection, mut commands) = connect(&control, 42);
+        let (connection, mut commands) = connect(&control, crate::machine_protocol::MCP_TRANSPORT_PROTOCOL_VERSION);
         let mut pending = Box::pin(control.mcp_request_on_connection(&connection, request()));
         assert!(futures::poll!(&mut pending).is_pending());
         let request_id = take_request(&mut commands);
@@ -209,7 +209,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_disconnect_releases_waiter_before_deadline() {
         let control = MachineControl::default();
-        let (connection, mut commands) = connect(&control, 42);
+        let (connection, mut commands) = connect(&control, crate::machine_protocol::MCP_TRANSPORT_PROTOCOL_VERSION);
         let mut pending = Box::pin(control.mcp_request_on_connection(&connection, request()));
         assert!(futures::poll!(&mut pending).is_pending());
         take_request(&mut commands);

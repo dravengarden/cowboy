@@ -16,7 +16,7 @@ fn fixture() -> (
         crate::service_identity::load_or_create(root.path()).unwrap(),
     ));
     let (tx, rx) = mpsc::unbounded_channel();
-    let connection = control.install("hawk".into(), "epoch".into(), false, 43, tx);
+    let connection = control.install("hawk".into(), "epoch".into(), false, crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION, tx);
     let binding = crate::execution_environment::fixture().decode().unwrap();
     let profile = serde_json::from_value(json!({"schema":1,"service_id":control.service.as_str(),"session_id":"parent","runtime_machine":"ovh","execution_machine":"hawk","workspace_id":"cowboy","epoch":"b".repeat(32),"binding":{"name":"suger","server":{"plugin_id":"suger","generation_digest":format!("sha256:{}", "c".repeat(64))},"tools":["fixture_read"]}})).unwrap();
     (control, connection, rx, binding, vec![profile])
@@ -79,7 +79,7 @@ async fn mismatched_policy_or_stale_connection_sends_nothing() {
             }
             "stale" => {
                 let (tx, rx) = mpsc::unbounded_channel();
-                control.install("hawk".into(), "epoch".into(), false, 43, tx);
+                control.install("hawk".into(), "epoch".into(), false, crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION, tx);
                 replacement = Some(rx);
             }
             _ => unreachable!(),
@@ -186,7 +186,7 @@ async fn lost_keeper_observation_never_prepares_on_replacement() {
         if cancel {
             task.abort();
         } else {
-            control.install("hawk".into(), "epoch".into(), false, 43, tx);
+            control.install("hawk".into(), "epoch".into(), false, crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION, tx);
         }
         control.record_remote(
             &connection,
