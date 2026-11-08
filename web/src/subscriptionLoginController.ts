@@ -72,6 +72,11 @@ function restore(value: unknown, scope: LoginScope): Pending {
   }
   return value as unknown as Pending;
 }
+/** A saved attempt that never started, or whose cancellation is recorded,
+ * cannot be continued: it releases its tab pointer to a named sign-in. The
+ * server keeps every receipt and fence. */
+const abandonedAttempt = (observation: LoginObservation) =>
+  observation.status === "not_started" || observation.cancel_requested === true;
 function sameAttempt(left: Pending, right: Pending): boolean {
   return (["machine", "operation", "request", "version", "digest", "method"] as const).every((field) => left[field] === right[field]);
 }
@@ -220,15 +225,15 @@ export function subscriptionLogin(scope: LoginScope, ports: {
         return new Error("Another sign-in is saved in this tab. Reconcile it in Subscriptions first.");
       };
       if (state.pending) {
-        if (state.observation?.request_id && state.observation.request_id !== reference) throw mismatch();
-        if (state.pending.request && state.pending.request !== reference) throw mismatch();
-        const value = await request(receiptPath(state.pending));
-        if (!object(value) || !id(value.request_id)) throw new Error("The original sign-in is not confirmed. Check status.");
-        if (value.request_id !== reference) throw mismatch();
-        observe(value, state.pending);
-        publish({ referenceMismatch: false });
-        await readEvents(state.pending);
-        return;
+        let saved = state.observation?.request_id ? state.observation : undefined;
+        if (!saved || saved.request_id === reference) {
+          const value = await request(receiptPath(state.pending));
+          if (!object(value) || !id(value.request_id)) throw new Error("The original sign-in is not confirmed. Check status.");
+          if (value.request_id === reference) { observe(value, state.pending); publish({ referenceMismatch: false }); return await readEvents(state.pending); }
+          saved = value as unknown as LoginObservation;
+        }
+        if (!abandonedAttempt(saved)) throw mismatch();
+        forget(state.pending); publish({ pending: undefined, observation: undefined, events: [] });
       }
       const value = await request(`/api/provider-accounts/${scope.account}/logins/${reference}`);
       if (!object(value) || !id(value.machine_id) || value.request_id !== reference) throw new Error("Sign-in could not be found for this account.");
