@@ -203,7 +203,8 @@ fn record(log: &mut Log, session: &str, (path, sha256, utf8_bytes): (String, Str
     tracing::info!(
         event_name = "cowboy.execution.write_observed",
         session,
-        sequence = log.sequence
+        sequence = log.sequence,
+        path = %path
     );
     let write = Write {
         sequence: log.sequence,
