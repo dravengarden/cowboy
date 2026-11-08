@@ -184,7 +184,10 @@ opens use it; running instances keep their pinned bytes until their unit
 exits. Uninstall with a running instance first hibernates it (explicit drain
 with the owner notified), then proceeds; the generic uninstall path gains a
 `machine_browser` branch for this because today it only removes the active
-link. Generation retirement treats browser leases like Code leases: a
+link. The drain stops every instance gracefully with reason `reclaim`,
+refuses new opens until the uninstall finishes, and proceeds only once every
+unit's exit is confirmed; otherwise the uninstall step stays pending
+(`slot_fenced`) and nothing is unlinked. Generation retirement treats browser leases like Code leases: a
 generation retires only after its last browser lease releases. After the
 Plugin is uninstalled, profile snapshots remain account data; reset and
 revocation still delete them.
@@ -465,6 +468,19 @@ generation per account, and reconciles abandoned staging directories at
 start and before every new admission. A snapshot that cannot be admitted is
 refused, never queued.
 
+Periodic and explicit snapshots run as a cancellable copy job: the account
+lifecycle lock is held only to admit the generation and to publish it, so
+supervision (leases, socket scans, deadlines, login authority) and resets or
+revocations never wait for a copy. Every stop cancels a running job; a
+graceful stop first lets it finish while still enforcing the deadline, the
+login binding and the confinement checks, and becomes a forced stop if one of
+them fails meanwhile. A staging generation stays reserved in the ledger as
+long as a copier may write it: a copy the launcher refused or finished is
+removed (scoped, no-follow) before its budget is released; a cancelled or
+timed-out copy keeps its reservation until the unit's exit is confirmed. A
+removal that fails keeps the budget reserved and is retried before the
+account's next admission.
+
 Snapshot failure is subordinate to mandatory stops: a graceful stop attempts
 the snapshot at most twice within the stop deadline; a stop forced by login
 termination, deadline, reclaim, revocation or `RuntimeMaxSec` proceeds
@@ -504,7 +520,14 @@ stop the running unit and wait for its cgroup to be empty, escalating
 `SIGTERM` to `SIGKILL` on the unit's own timeout; delete
 `accounts/<uuid>/browser` (snapshots and staging) with a scoped, no-follow
 removal while `browser-state.json` stays in place; publish
-`browser-state.json` again with the completion. A snapshot job publishes only if the
+`browser-state.json` again with the completion, which also clears the
+recorded writer `browser_version` and generation digest (the version fence
+guarded the deleted data). If systemd's stop and `SIGKILL` escalation do not
+collect the unit, the Machine writes `cgroup.kill` and waits for the cgroup to
+empty; when even that cannot be confirmed the instance stays registered, the
+profile is not deleted, the operation answers `failed` with the fence still
+raised, and a background retry repeats the termination and completes the
+fenced operation once the exit is confirmed. A snapshot job publishes only if the
 `(incarnation, profile_revision)` it captured still match under the lock;
 otherwise its staging is discarded. A restart in the middle resumes the
 fenced operation from `state.json` and preserves its receipt; a delayed
@@ -526,7 +549,9 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
   binding and `host_requirements` verify, the host policy is present, the
   account is enabled for the browser and not fenced, `browser.max_instances`
   is not reached, and the recorded writer version is not newer than the
-  runtime's. Memory admission goes through the same compare-and-swap launch
+  runtime's. The `max_instances` slot is reserved atomically before any
+  asynchronous step (memory wait, unit start) and released only when the
+  unit's exit is confirmed. Memory admission goes through the same compare-and-swap launch
   ledger as cold workers, converted to a byte-weighted reservation with
   exact refunds and the existing floor preserved: a browser reserves
   `browser.memory_max` bytes, a cold worker its existing reserve, so a
@@ -556,7 +581,9 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
   reports `sandbox_unavailable` with the host policy pointer; a confinement
   verification failure reports `confinement_unverified`; a missing host
   prerequisite reports `host_requirements`. All leave the instance
-  hibernated with the reservation refunded.
+  hibernated with the reservation refunded. A failed start's unit is
+  terminated with the same confirmation as any stop; an unconfirmed exit
+  keeps the instance slot reserved and the account's fences raised.
 
 ### Confinement verification
 
@@ -564,6 +591,14 @@ Before accepting `ready`, before every `navigate`, and before adopting any
 surviving unit at restart, the Machine pins each reported pid to its reported
 start time and reads from outside the namespace:
 
+- the unit's root cgroup holds exactly the launcher's supervision tree: the
+  supervisor (the unit's `MainPID`, single-entry `NSpid`), the namespace
+  relay (its child, single-entry `NSpid`, in the instance's user, mount and
+  IPC namespaces but its parent's pid namespace, with `pid_for_children`
+  equal to the instance's), and the init (the relay's child, `NSpid` ending
+  in 1); any other root-cgroup process must be a child of the init inside
+  the instance pid namespace (the snapshot copier) under the bootstrap
+  profile;
 - `/proc/<pid>/ns/user`, `ns/mnt`, `ns/pid` and `ns/ipc` of the launcher,
   display server, window manager and browser: identical to the identities
   the launcher reported and different from the Machine's own; `uid_map` and
@@ -586,9 +621,13 @@ start time and reads from outside the namespace:
   `/mnt/instance` tmpfs of the expected sizes; `/mnt/sockets` backed by the
   unit's `RuntimeDirectory` (matched by mount source and root, major:minor
   and inode of the backing directory); `/tmp`, `/dev/shm`, `/etc`, `/home`
-  and `/run/user/<uid>` tmpfs with the expected flags; `/mnt/snapshot` and
-  `/mnt/publish` absent; the policy file bound from the artifact at the
-  contract's policy directory;
+  and `/run/user/<uid>` tmpfs with the expected flags; `/home`,
+  `/run/user/<uid>` and the Machine state root (as the kernel resolves it)
+  each covered by an empty `ro,nosuid,nodev,noexec` 4 KiB mask with nothing
+  but masks mounted below; `/mnt/snapshot` and `/mnt/publish` absent;
+  `<policy-directory>/policy.json` bound read-only from exactly the
+  artifact's policy file (same device and mount-root path, not merely the
+  same device);
 - the whole cgroup subtree of the unit (`cgroup.procs` recursively, because
   `Delegate=yes` lets children create sub-cgroups): no process owns a
   listening TCP socket or **any** UDP socket, matched by socket inode
@@ -597,7 +636,10 @@ start time and reads from outside the namespace:
   abstract Unix socket (`/proc/<pid>/net/unix` entries with an `@` path in
   any state but connected: Chromium's `SO_PASSCRED` socketpairs are
   autobound to abstract names by the kernel and stay connected, refusing
-  every third party);
+  every third party). The scan fails closed: only a process whose `/proc`
+  entry vanished is skipped; unreadable descriptors or namespace links of a
+  live process, or a namespace whose tables no live member can read, are a
+  violation;
 - `/proc/<pid>/mountinfo` also shows `/mnt/sockets` read-only, and the
   `RuntimeDirectory` on the host contains exactly the two sockets.
 
@@ -647,6 +689,10 @@ and namespace identities. At Machine start:
   [confinement verification](#confinement-verification) passes against the
   recorded identities; otherwise the unit is stopped;
 - a live `cowboy-browser-*` unit without a record is stopped;
+- every stop here uses the confirmed termination above: a record is cleared
+  only once its unit's exit is confirmed, and a pending reset or revocation
+  of its account (of every account, for an unrecorded unit) is completed only
+  then;
 - abandoned staging directories are reconciled against the staging ledger;
 - a sign-in-bound record is stopped at reconciliation, because the Machine's
   native logins do not survive a restart: a lost Controller connection
@@ -1108,8 +1154,9 @@ the text above:
   floor and exact refunds on drop.
 - Host pids are never taken from the launcher. The Machine enumerates the
   unit's cgroup tree and matches the launcher's namespace-local pids through
-  `/proc/<pid>/status` `NSpid`; the supervisor must be the unit's `MainPID`
-  and the init the only other process in the unit's root cgroup.
+  `/proc/<pid>/status` `NSpid` and `PPid`; the supervisor must be the unit's
+  `MainPID`, the relay its child and the init the relay's child (see
+  Confinement verification).
 - Nested-sandbox ancestry is established through `NSpid` and `browser/`
   membership (above) rather than `NS_GET_PARENT`, which needs raw `ioctl`
   and the crate forbids `unsafe`.
@@ -1121,6 +1168,22 @@ the text above:
   the memory reservation and re-runs confinement verification against the
   recorded unit; sign-in instances are stopped. A fenced account is never
   adopted; the fence is completed first.
+- A running browser is always treated as potentially dirty: a frozen copy
+  never clears that, so a forced stop reports `unsaved_state_lost` unless a
+  flushed stop-time copy was published.
+- A `SignIn` open naming the account's running instance validates the login
+  like a fresh open (`login_mismatch` otherwise), binds it to the running
+  instance, which from then on follows that login (its durable record says
+  sign-in and its deadline becomes the earlier of its own and the login's
+  expiry), and navigates to the verification URL once the Machine knows it.
+- Browser commands are dispatched in arrival order; an account's `Open`,
+  `Hibernate`, `Reset`, `Revoke` and `Query` run strictly one after another
+  in that order (leases, attachments, resizes and navigation do not wait
+  behind them), so an open and a revocation sent in that order apply in that
+  order.
+- Browser-control `Query` for an account without a running instance, and
+  every `Reset`/`Revoke` answer, is a `hibernated` observation with
+  `instance_id: ""` and `incarnation: 0`.
 - `BrowserAttach` replaces any live attachment (takeover) and the old
   stream's close cannot touch the replacement because the attachment id
   differs; lease renewals are bounded to 30 s from now whatever the

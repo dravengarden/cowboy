@@ -413,6 +413,31 @@ impl MachinePluginStore {
         access: UninstallAccess<'_>,
     ) -> StepObservation {
         let _lifecycle = self.lifecycle.lock().await;
+        // A browser Plugin's instances are drained (and their exit confirmed)
+        // before its generation is unlinked; an unconfirmed instance leaves
+        // the step pending rather than acknowledged.
+        let _drained = match access {
+            UninstallAccess::Execute(_)
+                if admission_enabled
+                    && step.validate().is_ok()
+                    && service == Some(step.service_id.as_str())
+                    && machine == step.machine_id
+                    && self.operations.query(step) == (StepLookup::NotFound {}) =>
+            {
+                match self.drain_browsers(&step.plugin_id).await {
+                    Ok(hold) => hold,
+                    Err(error) => {
+                        tracing::warn!(error = %format!("{error:#}"), plugin = %step.plugin_id, "uninstall deferred");
+                        return StepObservation {
+                            admission_enabled: service.is_some()
+                                && self.operations.installations.admits(step),
+                            result: unavailable(StepUnavailable::SlotFenced),
+                        };
+                    }
+                }
+            }
+            _ => None,
+        };
         let result = if step.validate().is_err() {
             unavailable(StepUnavailable::InvalidRequest)
         } else if service != Some(step.service_id.as_str()) || machine != step.machine_id {

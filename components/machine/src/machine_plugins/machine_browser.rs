@@ -2,7 +2,35 @@
 //! runtime plan and the account root its instances are isolated under.
 use super::*;
 
+/// The Machine browser manager as the Plugin store reaches it: uninstalling
+/// the browser Plugin first drains every running instance through it. The
+/// manager registers itself at construction, so the store never depends on
+/// the browser module.
+pub trait BrowserDrain: Send + Sync {
+    /// Hibernate every running instance (gracefully, with its stop-time
+    /// snapshot where possible) and confirm each unit's exit. The returned
+    /// hold refuses new opens until dropped.
+    ///
+    /// # Errors
+    /// Returns when an instance could not be confirmed stopped.
+    fn drain(&self) -> DrainFuture<'_>;
+}
+
+/// What a drain resolves to: a hold that refuses new opens while it lives.
+pub type DrainFuture<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<Box<dyn std::any::Any + Send>>> + Send + 'a>,
+>;
+
+/// The registered drain, shared by every clone of the store.
+pub(super) type DrainSlot =
+    std::sync::Arc<parking_lot::Mutex<Option<std::sync::Weak<dyn BrowserDrain>>>>;
+
 impl MachinePluginStore {
+    /// Register the Machine browser manager that uninstall drains.
+    pub fn register_browser_drain(&self, drain: std::sync::Weak<dyn BrowserDrain>) {
+        *self.browser_drain.lock() = Some(drain);
+    }
+
     /// Parent of every named account's private directory.
     pub fn accounts_root(&self) -> PathBuf {
         self.auth_base.join("accounts")

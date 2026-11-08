@@ -67,7 +67,7 @@ impl BrowserManager {
             return Some(Reason::LoginEnded);
         };
         let logins = logins.lock();
-        let Some(login) = logins.get(request) else {
+        let Some(login) = logins.get(&request) else {
             return Some(Reason::LoginEnded);
         };
         let bound = login.browser.as_ref().is_some_and(|(bound, incarnation)| {
@@ -90,6 +90,6 @@ impl BrowserManager {
     pub(super) fn bound_instance(&self, request_id: &str) -> Option<Arc<Instance>> {
         self.running()
             .into_iter()
-            .find(|instance| instance.login_request() == Some(request_id))
+            .find(|instance| instance.login_request().as_deref() == Some(request_id))
     }
 }

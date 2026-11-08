@@ -42,7 +42,7 @@ impl BrowserManager {
         if phase == Phase::Stopping {
             return true;
         }
-        if now >= instance.deadline {
+        if now >= instance.deadline() {
             let event = self
                 .stop_instance(instance, Reason::Deadline, false, None)
                 .await;
@@ -50,7 +50,10 @@ impl BrowserManager {
             return true;
         }
         if let Some(reason) = self.login_binding_broken(instance) {
-            let event = self.stop_instance(instance, reason, true, None).await;
+            // A login that ended keeps what it signed in; a binding that no
+            // longer matches is an authority failure and stops at once.
+            let graceful = reason == Reason::LoginEnded;
+            let event = self.stop_instance(instance, reason, graceful, None).await;
             self.send_state(event);
             return true;
         }
@@ -107,17 +110,18 @@ impl BrowserManager {
                 }
             }
         }
-        if snapshot_due {
-            let slot = self.slot(&instance.account_id);
-            let _lifecycle = slot.lifecycle.lock().await;
-            if let Err(error) = self.frozen_snapshot(instance).await {
-                tracing::warn!(%error, instance = %instance.instance_id, "periodic browser snapshot failed");
-                instance.live.lock().last_periodic = now;
-            }
+        if snapshot_due && !instance.copy_running() {
+            // The copy runs as its own job; a failure waits a full interval.
+            instance.live.lock().last_periodic = now;
+            self.spawn_snapshot(instance);
         }
         let pending = instance.live.lock().pending_navigation.take();
-        if let Some(url) = pending {
-            self.navigate_verified(instance, &url).await;
+        if let Some(url) = pending
+            && let Err(reason) = self.navigate_checked(instance, &url).await
+        {
+            let event = self.stop_instance(instance, reason, false, None).await;
+            self.send_state(event);
+            return true;
         }
         false
     }

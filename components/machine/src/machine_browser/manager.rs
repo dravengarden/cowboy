@@ -34,14 +34,23 @@ use crate::machine_protocol::machine_browser::{
 use crate::provider_account::ProviderAccountId;
 
 mod attachments;
+mod capacity;
+mod drain;
 mod launch;
 mod lifecycle;
 mod login_binding;
 mod reconcile;
 mod snapshots;
 mod supervision;
+mod termination;
+#[cfg(test)]
+mod tests;
 
+use capacity::{CapacityGuard, CapacityLedger};
 use launch::{VersionOrder, compare_versions, launch_arguments};
+use lifecycle::complete_fenced;
+use snapshots::CopyJob;
+use termination::{Retained, Unconfirmed};
 
 /// Longest an open waits for memory headroom; an owner is waiting.
 const MEMORY_WAIT: Duration = Duration::from_secs(15);
@@ -92,6 +101,9 @@ struct AccountSlot {
     /// Serializes lifecycle mutations and snapshots of one account.
     lifecycle: tokio::sync::Mutex<()>,
     instance: parking_lot::Mutex<Option<Arc<Instance>>>,
+    /// Completion of the account's most recently dispatched ordered command;
+    /// the next one starts only after it.
+    order: parking_lot::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,8 +130,51 @@ struct Live {
     last_periodic: Instant,
     last_scan: Instant,
     pending_navigation: Option<String>,
-    /// Profile writes may have happened since the last published snapshot.
-    unsaved: bool,
+}
+
+/// What an instance runs for and until when. A `Tab` instance reused for a
+/// sign-in is rebound to the login and adopts its earlier deadline.
+#[derive(Debug, Clone)]
+struct Binding {
+    purpose: Purpose,
+    deadline: Instant,
+    deadline_ms: i64,
+}
+
+impl Binding {
+    fn new(purpose: Purpose, deadline_ms: i64) -> Self {
+        Self {
+            purpose,
+            deadline: Instant::now()
+                + Duration::from_millis(
+                    u64::try_from(deadline_ms.saturating_sub(unix_ms())).unwrap_or(0),
+                ),
+            deadline_ms,
+        }
+    }
+}
+
+/// Everything an [`Instance`] is built from, at start or adoption.
+struct InstanceParts {
+    account_id: ProviderAccountId,
+    instance_id: String,
+    incarnation: u64,
+    purpose: Purpose,
+    deadline_ms: i64,
+    unit: String,
+    runtime_dir: PathBuf,
+    cgroup_dir: PathBuf,
+    invocation_id: String,
+    scale: u8,
+    profile_revision: u64,
+    plan: Arc<MachineBrowserRuntimePlan>,
+    settings: Settings,
+    report: ReadyReport,
+    control: Control,
+    phase: Phase,
+    geometry: Geometry,
+    last_snapshot: Option<(u64, i64)>,
+    capacity: Option<CapacityGuard>,
 }
 
 /// One running (or starting) browser instance.
@@ -127,12 +182,11 @@ pub struct Instance {
     account_id: ProviderAccountId,
     instance_id: String,
     incarnation: u64,
-    purpose: Purpose,
+    binding: parking_lot::Mutex<Binding>,
     unit: String,
     runtime_dir: PathBuf,
     cgroup_dir: PathBuf,
-    deadline: Instant,
-    deadline_ms: i64,
+    invocation_id: String,
     scale: u8,
     profile_revision: u64,
     plan: Arc<MachineBrowserRuntimePlan>,
@@ -140,9 +194,50 @@ pub struct Instance {
     report: ReadyReport,
     control: tokio::sync::Mutex<Control>,
     live: parking_lot::Mutex<Live>,
+    /// The running snapshot copy, if any.
+    copy: parking_lot::Mutex<Option<CopyJob>>,
+    /// A staging generation a copier of this unit may still be writing; it is
+    /// removed and its budget released only once the unit's exit is
+    /// confirmed.
+    abandoned: parking_lot::Mutex<Option<(u64, StagingReservation)>>,
+    /// The Machine-wide instance slot, released on confirmed exit.
+    capacity: parking_lot::Mutex<Option<CapacityGuard>>,
 }
 
 impl Instance {
+    fn new(parts: InstanceParts) -> Self {
+        Self {
+            account_id: parts.account_id,
+            instance_id: parts.instance_id,
+            incarnation: parts.incarnation,
+            binding: parking_lot::Mutex::new(Binding::new(parts.purpose, parts.deadline_ms)),
+            unit: parts.unit,
+            runtime_dir: parts.runtime_dir,
+            cgroup_dir: parts.cgroup_dir,
+            invocation_id: parts.invocation_id,
+            scale: parts.scale,
+            profile_revision: parts.profile_revision,
+            plan: parts.plan,
+            settings: parts.settings,
+            report: parts.report,
+            control: tokio::sync::Mutex::new(parts.control),
+            live: parking_lot::Mutex::new(Live {
+                phase: parts.phase,
+                geometry: parts.geometry,
+                verified: Verified::unpinned(),
+                attachment: None,
+                detached_since: Some(Instant::now()),
+                last_snapshot: parts.last_snapshot,
+                last_periodic: Instant::now(),
+                last_scan: Instant::now(),
+                pending_navigation: None,
+            }),
+            copy: parking_lot::Mutex::new(None),
+            abandoned: parking_lot::Mutex::new(None),
+            capacity: parking_lot::Mutex::new(parts.capacity),
+        }
+    }
+
     fn reference(&self) -> InstanceRef {
         InstanceRef {
             account_id: self.account_id.clone(),
@@ -151,21 +246,35 @@ impl Instance {
         }
     }
 
-    /// The durable record written once an instance is verified.
-    fn record(&self, invocation_id: String, boot_id: &str) -> InstanceRecord {
+    fn purpose(&self) -> Purpose {
+        self.binding.lock().purpose.clone()
+    }
+
+    fn deadline(&self) -> Instant {
+        self.binding.lock().deadline
+    }
+
+    fn deadline_ms(&self) -> i64 {
+        self.binding.lock().deadline_ms
+    }
+
+    /// The durable record written once an instance is verified (and again
+    /// when it is rebound to a login).
+    fn record(&self, boot_id: &str) -> InstanceRecord {
+        let binding = self.binding.lock().clone();
         InstanceRecord {
             schema_version: 1,
             instance_id: self.instance_id.clone(),
             account_id: self.account_id.as_str().to_owned(),
-            purpose: self.purpose.clone(),
+            purpose: binding.purpose,
             plugin_id: self.plan.plugin_id.clone(),
             plugin_version: self.plan.plugin_version.clone(),
             generation_digest: self.plan.generation_digest.clone(),
             unit: self.unit.clone(),
-            invocation_id,
+            invocation_id: self.invocation_id.clone(),
             boot_id: boot_id.to_owned(),
             incarnation: self.incarnation,
-            deadline_ms: self.deadline_ms,
+            deadline_ms: binding.deadline_ms,
             profile_revision: self.profile_revision,
             started_at_ms: unix_ms(),
             runtime_dir: self.runtime_dir.clone(),
@@ -176,37 +285,15 @@ impl Instance {
         }
     }
 
-    fn login_request(&self) -> Option<&str> {
-        match &self.purpose {
-            Purpose::SignIn { login_request_id } => Some(login_request_id),
+    fn login_request(&self) -> Option<String> {
+        match &self.binding.lock().purpose {
+            Purpose::SignIn { login_request_id } => Some(login_request_id.clone()),
             Purpose::Tab => None,
         }
     }
 
-    fn expectations<'a>(
-        &'a self,
-        uid: u32,
-        gid: u32,
-        main_pid: u32,
-        bootstrap: &'a str,
-        sealed: &'a str,
-    ) -> Expectations<'a> {
-        Expectations {
-            uid,
-            gid,
-            runtime_root: &self.plan.runtime_root,
-            runtime_dir: &self.runtime_dir,
-            cgroup_dir: &self.cgroup_dir,
-            main_pid,
-            profile_bytes: self.settings.profile_max_bytes,
-            instance_bytes: self.settings.instance_max_bytes,
-            policy_directory: &self.plan.contract.runtime.policy.directory,
-            bootstrap_label: Some(bootstrap),
-            sealed_label: Some(sealed),
-        }
-    }
-
     fn state(&self, request_id: Option<String>) -> StateEvent {
+        let deadline_ms = self.deadline_ms();
         let live = self.live.lock();
         StateEvent {
             request_id,
@@ -220,7 +307,7 @@ impl Instance {
             reason: None,
             geometry: Some(live.geometry),
             scale: Some(self.scale),
-            deadline_ms: Some(self.deadline_ms),
+            deadline_ms: Some(deadline_ms),
             attachment_id: live
                 .attachment
                 .as_ref()
@@ -245,8 +332,21 @@ pub struct BrowserManager {
     next_uplink: std::sync::atomic::AtomicU64,
     accounts: parking_lot::Mutex<HashMap<String, Arc<AccountSlot>>>,
     staging: Arc<StagingLedger>,
+    /// Abandoned staging generations whose scoped removal failed; their
+    /// budget stays reserved until a retry removes them.
+    leftover_staging: parking_lot::Mutex<Vec<(PathBuf, u64, StagingReservation)>>,
+    /// Machine-wide instance slots, reserved before any asynchronous start.
+    capacity: Arc<CapacityLedger>,
+    /// Units whose exit could not be confirmed, by unit name. Their accounts'
+    /// reset and revocation fences stay raised until a retry confirms exit.
+    unconfirmed: parking_lot::Mutex<HashMap<String, Unconfirmed>>,
+    /// Outstanding Plugin-uninstall drains; opens are refused while any holds.
+    draining: Arc<std::sync::atomic::AtomicUsize>,
+    /// Host paths every instance must hide behind a read-only mask.
+    masks: Vec<PathBuf>,
     receipts: parking_lot::Mutex<VecDeque<(String, StateEvent)>>,
     headroom: fn() -> Option<u64>,
+    this: Weak<BrowserManager>,
 }
 
 impl BrowserManager {
@@ -264,20 +364,54 @@ impl BrowserManager {
         let boot_id = crate::boot_identity::current()?
             .context("kernel boot identity unavailable")?
             .to_string();
-        Ok(Arc::new(Self {
+        let uid = rustix::process::getuid().as_raw();
+        let manager = Arc::new_cyclic(|this| Self {
             state_dir: state_dir.to_path_buf(),
             providers,
             device_config,
-            uid: rustix::process::getuid().as_raw(),
+            uid,
             gid: rustix::process::getgid().as_raw(),
             boot_id,
             uplink: parking_lot::Mutex::new(None),
             next_uplink: std::sync::atomic::AtomicU64::new(1),
             accounts: parking_lot::Mutex::new(HashMap::new()),
             staging: Arc::new(StagingLedger::default()),
+            leftover_staging: parking_lot::Mutex::new(Vec::new()),
+            capacity: Arc::new(CapacityLedger::default()),
+            unconfirmed: parking_lot::Mutex::new(HashMap::new()),
+            draining: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            masks: sensitive_paths(state_dir, uid),
             receipts: parking_lot::Mutex::new(VecDeque::new()),
             headroom,
-        }))
+            this: this.clone(),
+        });
+        manager.register_drain();
+        Ok(manager)
+    }
+
+    /// Verification expectations for `instance` against `main_pid`.
+    fn expectations<'a>(
+        &'a self,
+        instance: &'a Instance,
+        main_pid: u32,
+        bootstrap: &'a str,
+        sealed: &'a str,
+    ) -> Expectations<'a> {
+        Expectations {
+            uid: self.uid,
+            gid: self.gid,
+            runtime_root: &instance.plan.runtime_root,
+            runtime_dir: &instance.runtime_dir,
+            cgroup_dir: &instance.cgroup_dir,
+            main_pid,
+            profile_bytes: instance.settings.profile_max_bytes,
+            instance_bytes: instance.settings.instance_max_bytes,
+            policy_directory: &instance.plan.contract.runtime.policy.directory,
+            policy_file: &instance.plan.contract.runtime.policy.file,
+            masks: &self.masks,
+            bootstrap_label: Some(bootstrap),
+            sealed_label: Some(sealed),
+        }
     }
 
     /// Bind the Controller connection whose events, stream endpoint and
@@ -389,6 +523,41 @@ impl BrowserManager {
             reason,
             max_instances: settings.max_instances,
         })
+    }
+
+    /// Run one Controller command in the background. Lifecycle commands
+    /// (open, hibernate, reset, revoke, query) of one account run strictly
+    /// in arrival order, so an open and a revocation the Controller sent in
+    /// that order are applied in that order; leases, attachments and other
+    /// per-instance commands never wait behind a slow lifecycle step.
+    pub fn dispatch(self: &Arc<Self>, request_id: String, command: Command) {
+        let ordered = match &command {
+            Command::Open { account_id, .. }
+            | Command::Reset { account_id, .. }
+            | Command::Revoke { account_id, .. }
+            | Command::Query { account_id } => Some(account_id.clone()),
+            Command::Hibernate { instance } => Some(instance.account_id.clone()),
+            _ => None,
+        };
+        let turn = ordered.map(|account| {
+            let (done, next) = tokio::sync::oneshot::channel::<()>();
+            let previous = self.slot(&account).order.lock().replace(next);
+            (previous, done)
+        });
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            let _done = match turn {
+                Some((previous, done)) => {
+                    if let Some(previous) = previous {
+                        // Resolves when the previous command's sender drops.
+                        let _ = previous.await;
+                    }
+                    Some(done)
+                }
+                None => None,
+            };
+            manager.handle(request_id, command).await;
+        });
     }
 
     /// Dispatch one Controller command. Replays answer with their original
@@ -508,7 +677,10 @@ impl BrowserManager {
             let manager = Arc::clone(self);
             let url = url.to_owned();
             tokio::spawn(async move {
-                manager.navigate_verified(&instance, &url).await;
+                if let Err(reason) = manager.navigate_checked(&instance, &url).await {
+                    let event = manager.stop_instance(&instance, reason, false, None).await;
+                    manager.send_state(event);
+                }
             });
         }
     }
@@ -554,6 +726,7 @@ impl BrowserManager {
                     Arc::new(AccountSlot {
                         lifecycle: tokio::sync::Mutex::new(()),
                         instance: parking_lot::Mutex::new(None),
+                        order: parking_lot::Mutex::new(None),
                     })
                 }),
         )
@@ -704,6 +877,18 @@ fn hibernated_event(
         unsaved_state_lost: false,
         observed_at_ms: unix_ms(),
     }
+}
+
+/// The host paths an instance must not see: `/home`, the Machine user's
+/// runtime directory and the Machine state root as the kernel resolves it
+/// (the launcher's mask mount lands on the resolved path; a state root below
+/// `/home` is covered by that mask).
+fn sensitive_paths(state_dir: &Path, uid: u32) -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/home"),
+        PathBuf::from(format!("/run/user/{uid}")),
+        std::fs::canonicalize(state_dir).unwrap_or_else(|_| state_dir.to_path_buf()),
+    ]
 }
 
 fn unix_ms() -> i64 {

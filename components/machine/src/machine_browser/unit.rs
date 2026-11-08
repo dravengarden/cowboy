@@ -338,6 +338,89 @@ pub async fn stop_and_wait(unit: &str) -> Result<bool> {
     wait_gone(unit, Duration::from_secs(10)).await
 }
 
+/// Stop the unit and confirm that none of its processes remain: systemd's
+/// stop with its own `SIGKILL` escalation first, then `cgroup.kill` on the
+/// unit's cgroup and a wait for it to empty. `true` only when the exit is
+/// verified (the unit was collected, or its cgroup is gone or unpopulated);
+/// a caller that gets `false` must keep treating the instance as running.
+pub async fn terminate(unit: &str, cgroup_dir: Option<&Path>) -> bool {
+    match stop_and_wait(unit).await {
+        Ok(true) => return true,
+        Ok(false) => tracing::error!(%unit, "browser unit is still present after SIGKILL"),
+        Err(error) => tracing::warn!(%error, %unit, "browser unit stop failed"),
+    }
+    let cgroup = match cgroup_dir {
+        Some(dir) => Some(dir.to_path_buf()),
+        None => show(unit).await.ok().and_then(|status| status.cgroup_dir()),
+    };
+    let Some(cgroup) = cgroup else {
+        tracing::error!(%unit, "browser unit cgroup unknown; exit unconfirmed");
+        return false;
+    };
+    if let Err(error) = kill_cgroup(&cgroup) {
+        tracing::warn!(%error, %unit, "browser cgroup.kill failed");
+    }
+    match wait_cgroup_empty(&cgroup, CGROUP_KILL_WAIT).await {
+        Ok(true) => true,
+        Ok(false) => {
+            tracing::error!(%unit, "browser cgroup still populated after cgroup.kill");
+            false
+        }
+        Err(error) => {
+            tracing::error!(%error, %unit, "browser cgroup unreadable; exit unconfirmed");
+            false
+        }
+    }
+}
+
+/// How long `terminate` waits for a killed cgroup to empty.
+const CGROUP_KILL_WAIT: Duration = Duration::from_secs(10);
+
+/// `SIGKILL` every process of the cgroup subtree through `cgroup.kill`. A
+/// missing cgroup has nothing left to kill.
+///
+/// # Errors
+/// Returns when the kill file cannot be written.
+pub fn kill_cgroup(dir: &Path) -> Result<()> {
+    match std::fs::write(dir.join("cgroup.kill"), "1") {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            Err(error).with_context(|| format!("writing {}", dir.join("cgroup.kill").display()))
+        }
+    }
+}
+
+/// Whether the cgroup holds no process any more: it was removed, or
+/// `cgroup.events` reports `populated 0`.
+///
+/// # Errors
+/// Returns when the cgroup exists but cannot be read.
+pub fn cgroup_empty(dir: &Path) -> Result<bool> {
+    match std::fs::read_to_string(dir.join("cgroup.events")) {
+        Ok(events) => Ok(events.lines().any(|line| line.trim() == "populated 0")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error).with_context(|| format!("reading {}", dir.display())),
+    }
+}
+
+/// Wait until [`cgroup_empty`] holds.
+///
+/// # Errors
+/// Returns when the cgroup cannot be read; `Ok(false)` on timeout.
+pub async fn wait_cgroup_empty(dir: &Path, timeout: Duration) -> Result<bool> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if cgroup_empty(dir)? {
+            return Ok(true);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(POLL).await;
+    }
+}
+
 /// Every loaded `cowboy-browser-*` unit of the user manager.
 ///
 /// # Errors
@@ -448,6 +531,25 @@ pub async fn wait_frozen(dir: &Path, timeout: Duration) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cgroup_exit_is_confirmed_only_by_an_empty_or_removed_cgroup() {
+        let temp = tempfile::tempdir().unwrap();
+        let cgroup = temp.path().join("cowboy-browser-a.service");
+        std::fs::create_dir(&cgroup).unwrap();
+        std::fs::write(cgroup.join("cgroup.events"), "populated 1\nfrozen 0\n").unwrap();
+        assert!(!cgroup_empty(&cgroup).unwrap());
+        kill_cgroup(&cgroup).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(cgroup.join("cgroup.kill")).unwrap(),
+            "1"
+        );
+        std::fs::write(cgroup.join("cgroup.events"), "populated 0\nfrozen 0\n").unwrap();
+        assert!(cgroup_empty(&cgroup).unwrap());
+        let removed = temp.path().join("gone.service");
+        assert!(cgroup_empty(&removed).unwrap());
+        kill_cgroup(&removed).unwrap();
+    }
 
     #[test]
     fn unit_names_round_trip_and_reject_foreign_units() {

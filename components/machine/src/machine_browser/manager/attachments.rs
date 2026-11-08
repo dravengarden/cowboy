@@ -158,29 +158,31 @@ impl BrowserManager {
             Err(event) => return Some((*event).with_request(request_id)),
         };
         let now = Instant::now();
-        let mut live = instance.live.lock();
-        let Some(attachment) = live.attachment.as_mut() else {
-            return Some(
-                instance
-                    .state(Some(request_id.to_owned()))
-                    .with_reason(Reason::Superseded),
-            );
+        let renewed = {
+            let mut live = instance.live.lock();
+            match live.attachment.as_mut() {
+                // Expiry is monotonic: a late or stale renewal cannot resurrect.
+                Some(attachment)
+                    if attachment.id == attachment_id && attachment.lease_expires > now =>
+                {
+                    let bound = now
+                        + Duration::from_millis(u64::try_from(LEASE_EXPIRY_MS).unwrap_or(30_000));
+                    let requested = now
+                        + Duration::from_millis(
+                            u64::try_from(expires_at_ms.saturating_sub(unix_ms())).unwrap_or(0),
+                        );
+                    attachment.lease_expires = bound.min(requested).max(now);
+                    true
+                }
+                _ => false,
+            }
         };
-        if attachment.id != attachment_id || attachment.lease_expires <= now {
-            // Expiry is monotonic: a late or stale renewal cannot resurrect.
-            return Some(
-                instance
-                    .state(Some(request_id.to_owned()))
-                    .with_reason(Reason::Superseded),
-            );
-        }
-        let bound = now + Duration::from_millis(u64::try_from(LEASE_EXPIRY_MS).unwrap_or(30_000));
-        let requested = now
-            + Duration::from_millis(
-                u64::try_from(expires_at_ms.saturating_sub(unix_ms())).unwrap_or(0),
-            );
-        attachment.lease_expires = bound.min(requested).max(now);
-        None
+        // `state` takes the live lock itself: the guard above is released.
+        (!renewed).then(|| {
+            instance
+                .state(Some(request_id.to_owned()))
+                .with_reason(Reason::Superseded)
+        })
     }
 
     pub(super) fn detach(
@@ -283,43 +285,47 @@ impl BrowserManager {
             Ok(instance) => instance,
             Err(event) => return Ok((*event).with_request(request_id)),
         };
-        if instance.purpose != Purpose::Tab {
+        if instance.purpose() != Purpose::Tab {
             return Err("only tab browsers accept owner navigation".into());
         }
-        self.navigate_verified(&instance, url).await;
+        if let Err(reason) = self.navigate_checked(&instance, url).await {
+            return Ok(self
+                .stop_instance(&instance, reason, false, Some(request_id))
+                .await);
+        }
         Ok(instance.state(Some(request_id.to_owned())))
     }
 
-    /// Full confinement verification, then navigation. A violation stops
-    /// the instance instead of navigating.
-    pub(super) async fn navigate_verified(self: &Arc<Self>, instance: &Arc<Instance>, url: &str) {
+    /// Full confinement verification, then navigation. A violation is
+    /// returned, never acted on here, so a caller holding the account
+    /// lifecycle lock stops through `stop_locked` and every other caller
+    /// through `stop_instance`.
+    pub(super) async fn navigate_checked(
+        &self,
+        instance: &Arc<Instance>,
+        url: &str,
+    ) -> Result<(), Reason> {
         let bootstrap = host::enforce_label(BOOTSTRAP_PROFILE);
         let sealed = host::enforce_label(SEALED_PROFILE);
         let supervisor = instance.live.lock().verified.supervisor.pid;
         let verified = verify::verify(
-            &instance.expectations(self.uid, self.gid, supervisor, &bootstrap, &sealed),
+            &self.expectations(instance, supervisor, &bootstrap, &sealed),
             &instance.report,
-        );
-        match verified {
-            Ok(verified) => instance.live.lock().verified = verified,
-            Err(violation) => {
-                tracing::warn!(detail = %violation, "browser confinement failed before navigation");
-                let event = self
-                    .stop_instance(instance, Reason::ConfinementUnverified, false, None)
-                    .await;
-                self.send_state(event);
-                return;
-            }
-        }
+        )
+        .map_err(|violation| {
+            tracing::warn!(detail = %violation, "browser confinement failed before navigation");
+            Reason::ConfinementUnverified
+        })?;
+        instance.live.lock().verified = verified;
         let navigated = instance
             .control
             .lock()
             .await
             .navigate(url, COMMAND_TIMEOUT)
             .await;
-        match navigated {
-            Ok(()) => instance.live.lock().unsaved = true,
-            Err(error) => tracing::warn!(%error, "browser navigation failed"),
+        if let Err(error) = navigated {
+            tracing::warn!(%error, "browser navigation failed");
         }
+        Ok(())
     }
 }

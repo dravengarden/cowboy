@@ -25,7 +25,7 @@ mod code_sync_conformance;
 mod extensions;
 mod installation;
 mod machine_browser;
-pub use machine_browser::MachineBrowserRuntimePlan;
+pub use machine_browser::{BrowserDrain, DrainFuture, MachineBrowserRuntimePlan};
 mod mcp_servers;
 #[cfg(all(test, target_os = "linux", feature = "full"))]
 pub(crate) use mcp_servers::tests::conformance as mcp_conformance;
@@ -40,6 +40,7 @@ mod operations;
 mod remove_projection;
 mod session_extensions;
 mod telemetry;
+mod uninstall;
 use crate::machine_protocol::plugin_install::InstallPhase;
 use installation::{InstallGuard, ensure_machine_installable_kind};
 
@@ -314,6 +315,7 @@ pub struct MachinePluginStore {
     /// The Device configuration, once the daemon has loaded it. Retention
     /// policy reads it live; without it the artifact cache is never pruned.
     device_config: std::sync::Arc<std::sync::OnceLock<crate::config::Handle>>,
+    browser_drain: machine_browser::DrainSlot,
     #[cfg(test)]
     runtime_verifications: std::sync::Arc<AtomicU64>,
     #[cfg(test)]
@@ -381,6 +383,7 @@ impl MachinePluginStore {
             operations: std::sync::Arc::new(operations),
             runtime_proofs: std::sync::Arc::default(),
             device_config: std::sync::Arc::default(),
+            browser_drain: std::sync::Arc::default(),
             #[cfg(test)]
             runtime_verifications: std::sync::Arc::new(AtomicU64::new(0)),
             #[cfg(test)]
@@ -870,81 +873,8 @@ impl MachinePluginStore {
     pub async fn uninstall(&self, provider_id: &str, expected_digest: &str) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
         self.operations.ensure_legacy_allowed(provider_id)?;
+        let _drained = self.drain_browsers(provider_id).await?;
         self.uninstall_inner(provider_id, expected_digest, || Ok(()))
-    }
-
-    fn uninstall_inner(
-        &self,
-        provider_id: &str,
-        expected_digest: &str,
-        before_mutation: impl FnOnce() -> Result<()>,
-    ) -> Result<()> {
-        validate_plugin_id(provider_id)?;
-        let active = self
-            .inventory_one(provider_id)?
-            .context("Plugin is not installed")?;
-        ensure!(
-            active.generation_digest == expected_digest,
-            "active Plugin generation changed; refresh the uninstall plan"
-        );
-        // Until account-aware lifecycle receipts are available, refuse before
-        // changing the active installation instead of leaving another account's
-        // plaintext credentials behind a successful uninstall receipt.
-        self.ensure_no_named_auth_materializations(provider_id)?;
-        let plugin_root = self.plugin_root(provider_id);
-        let active_link = plugin_root.join("active");
-        let remove_active = active_link.exists() || active_link.symlink_metadata().is_ok();
-        // Inventory may re-verify retained bytes/auth materialization. Even this
-        // last validation and filesystem lookup consume the original lease.
-        before_mutation()?;
-        if remove_active {
-            fs::remove_file(&active_link)
-                .with_context(|| format!("removing {}", active_link.display()))?;
-        }
-        if active.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider {
-            return Ok(());
-        }
-        let materialized = self.auth_provider_root(provider_id).join("materialized");
-        remove_projection::remove(&materialized).with_context(|| {
-            format!(
-                "removing Provider credential projection {}",
-                materialized.display()
-            )
-        })?;
-        let runtime = self.auth_provider_root(provider_id).join("runtime");
-        remove_projection::remove(&runtime).with_context(|| {
-            format!(
-                "removing Provider runtime credential projections {}",
-                runtime.display()
-            )
-        })?;
-        Ok(())
-    }
-
-    fn ensure_no_named_auth_materializations(&self, provider_id: &str) -> Result<()> {
-        let accounts = self.auth_base.join("accounts");
-        if !accounts.exists() {
-            return Ok(());
-        }
-        for entry in fs::read_dir(accounts)? {
-            let entry = entry?;
-            ensure!(
-                entry.file_type()?.is_dir(),
-                "invalid Provider account directory"
-            );
-            let provider = entry.path().join("providers").join(provider_id);
-            ensure!(
-                !provider.join("materialized").try_exists()?
-                    && !provider.join("runtime").try_exists()?,
-                "Revoke named Provider account projections before uninstalling this Plugin"
-            );
-            native_profile::ensure_revoked(
-                &provider.join("native"),
-                &entry.file_name().to_string_lossy(),
-                provider_id,
-            )?;
-        }
-        Ok(())
     }
 
     /// Retire Agent Provider generations that nothing can launch any more.

@@ -17,15 +17,23 @@ impl BrowserManager {
             |reason: Reason| hibernated_event(request_id, &account_id, &instance_id, reason, None);
         let existing = slot.instance.lock().clone();
         if let Some(existing) = existing {
-            return if existing.instance_id == instance_id {
-                existing.state(Some(request_id.to_owned()))
-            } else {
-                hibernated(Reason::Busy)
+            if existing.instance_id != instance_id {
+                return hibernated(Reason::Busy);
+            }
+            return match &purpose {
+                Purpose::Tab => existing.state(Some(request_id.to_owned())),
+                Purpose::SignIn { login_request_id } => {
+                    self.reuse_for_sign_in(request_id, &existing, login_request_id)
+                        .await
+                }
             };
         }
         let _lifecycle = slot.lifecycle.lock().await;
         if slot.instance.lock().is_some() {
             return hibernated(Reason::Busy);
+        }
+        if self.draining.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            return hibernated(Reason::NotAvailable);
         }
         let plan = match self.providers.machine_browser_runtime() {
             Ok(Some(plan)) => Arc::new(plan),
@@ -40,9 +48,6 @@ impl BrowserManager {
             return hibernated(Reason::HostRequirements);
         }
         let settings = self.settings();
-        if settings.max_instances == 0 || self.running().len() >= settings.max_instances as usize {
-            return hibernated(Reason::Capacity);
-        }
         if !settings.geometry_allowed(viewport.width, viewport.height) {
             self.send_result(
                 request_id.to_owned(),
@@ -51,6 +56,11 @@ impl BrowserManager {
             );
             return hibernated(Reason::Failed);
         }
+        // Reserved before anything asynchronous, so concurrent opens for
+        // other accounts cannot pass the limit together.
+        let Some(capacity) = self.capacity.try_reserve(settings.max_instances) else {
+            return hibernated(Reason::Capacity);
+        };
         let (account_dir, record) = match self.prepare_record(&account_id, &plan) {
             Ok(prepared) => prepared,
             Err(reason) => return hibernated(reason),
@@ -96,6 +106,7 @@ impl BrowserManager {
                 purpose.clone(),
                 viewport,
                 deadline_ms,
+                capacity,
             )
             .await;
         drop(reservation);
@@ -108,24 +119,103 @@ impl BrowserManager {
             }
         };
         *slot.instance.lock() = Some(Arc::clone(&instance));
-        if instance.login_request().is_some() {
+        if let Some(request) = instance.login_request() {
             // The login may have ended while the unit started.
             if let Some(reason) = self.login_binding_broken(&instance) {
                 return self
                     .stop_locked(&instance, reason, false, Some(request_id))
                     .await;
             }
-            let url = pending_navigation.or_else(|| {
-                instance
-                    .login_request()
-                    .and_then(|request| self.login_url(request))
-            });
-            if let Some(url) = url {
-                self.navigate_verified(&instance, &url).await;
+            let url = pending_navigation.or_else(|| self.login_url(&request));
+            // The lifecycle lock is held: a violation stops through
+            // `stop_locked`, never through a path that takes the lock again.
+            if let Some(url) = url
+                && let Err(reason) = self.navigate_checked(&instance, &url).await
+            {
+                return self
+                    .stop_locked(&instance, reason, false, Some(request_id))
+                    .await;
             }
         }
         self.spawn_supervisor(&instance);
         instance.state(Some(request_id.to_owned()))
+    }
+
+    /// A sign-in open against the account's running browser: the login must
+    /// belong to this account, it is bound to the running instance (whose
+    /// deadline becomes the earlier of its own and the login's expiry, and
+    /// which from now on follows the login), and the browser navigates to
+    /// the login's verification URL once it is known.
+    async fn reuse_for_sign_in(
+        &self,
+        request_id: &str,
+        existing: &Arc<Instance>,
+        login_request_id: &str,
+    ) -> StateEvent {
+        let slot = self.slot(&existing.account_id);
+        let _lifecycle = slot.lifecycle.lock().await;
+        let current = slot.instance.lock().clone();
+        if !current
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, existing))
+        {
+            return hibernated_event(
+                request_id,
+                &existing.account_id,
+                &existing.instance_id,
+                Reason::Superseded,
+                None,
+            );
+        }
+        if !matches!(
+            existing.live.lock().phase,
+            Phase::Detached | Phase::Attached
+        ) {
+            return existing
+                .state(Some(request_id.to_owned()))
+                .with_reason(Reason::Busy);
+        }
+        let previous = existing.binding.lock().clone();
+        if existing.login_request().as_deref() != Some(login_request_id) {
+            let (url, expires_at_ms) = match self.bind_login(
+                login_request_id,
+                &existing.account_id,
+                &existing.instance_id,
+                existing.incarnation,
+            ) {
+                Ok(bound) => bound,
+                Err(reason) => {
+                    return existing
+                        .state(Some(request_id.to_owned()))
+                        .with_reason(reason);
+                }
+            };
+            let purpose = Purpose::SignIn {
+                login_request_id: login_request_id.to_owned(),
+            };
+            *existing.binding.lock() =
+                Binding::new(purpose.clone(), previous.deadline_ms.min(expires_at_ms));
+            // Restart reconciliation must see a sign-in instance and stop it.
+            if let Err(error) =
+                state_file::write_instance(&self.state_dir, &existing.record(&self.boot_id))
+            {
+                tracing::warn!(%error, "browser sign-in rebinding not recorded");
+                *existing.binding.lock() = previous;
+                self.unbind_login(&purpose, &existing.instance_id);
+                return existing
+                    .state(Some(request_id.to_owned()))
+                    .with_reason(Reason::Failed);
+            }
+            self.unbind_login(&previous.purpose, &existing.instance_id);
+            if let Some(url) = url
+                && let Err(reason) = self.navigate_checked(existing, &url).await
+            {
+                return self
+                    .stop_locked(existing, reason, false, Some(request_id))
+                    .await;
+            }
+        }
+        existing.state(Some(request_id.to_owned()))
     }
 
     /// Resolve the account directory and its control record for a start:
@@ -165,7 +255,16 @@ impl BrowserManager {
                 })?;
             }
         }
-        snapshot::reconcile(&account_dir, &record, &BTreeSet::new()).map_err(|error| {
+        // Staging still reserved (a copier that may write, or a failed
+        // removal awaiting retry) is never removed here.
+        let live: BTreeSet<u64> = self
+            .staging
+            .live()
+            .get(account_id.as_str())
+            .copied()
+            .into_iter()
+            .collect();
+        snapshot::reconcile(&account_dir, &record, &live).map_err(|error| {
             tracing::warn!(%error, "browser snapshot reconciliation failed");
             Reason::Failed
         })?;
@@ -185,6 +284,7 @@ impl BrowserManager {
         purpose: Purpose,
         viewport: Viewport,
         deadline_ms: i64,
+        capacity: CapacityGuard,
     ) -> Result<Arc<Instance>, Failure> {
         let unit_name = unit::unit_name(instance_id);
         let runtime_dir = unit::runtime_directory(instance_id);
@@ -218,14 +318,13 @@ impl BrowserManager {
             launcher: &plan.launcher,
             arguments,
         };
-        unit::start(&launch).await.map_err(Failure::internal)?;
+        let mut cgroup_dir = None;
         let outcome = async {
+            unit::start(&launch).await.map_err(Failure::internal)?;
             let status = unit::wait_running(&unit_name, UNIT_START_TIMEOUT)
                 .await
                 .map_err(Failure::internal)?;
-            let cgroup_dir = status
-                .cgroup_dir()
-                .ok_or_else(|| Failure::internal(anyhow!("unit reports no cgroup")))?;
+            cgroup_dir = status.cgroup_dir();
             let readiness = Duration::from_millis(plan.contract.launch.readiness_timeout_ms);
             let mut control = Control::connect(&runtime_dir, readiness)
                 .await
@@ -234,81 +333,80 @@ impl BrowserManager {
                 .wait_ready(readiness)
                 .await
                 .map_err(Failure::launcher)?;
-            let bootstrap = host::enforce_label(BOOTSTRAP_PROFILE);
-            let sealed = host::enforce_label(SEALED_PROFILE);
-            let instance = Instance {
+            let instance = Arc::new(Instance::new(InstanceParts {
                 account_id: account_id.clone(),
                 instance_id: instance_id.to_owned(),
                 incarnation,
                 purpose,
+                deadline_ms,
                 unit: unit_name.clone(),
                 runtime_dir: runtime_dir.clone(),
-                cgroup_dir,
-                deadline: Instant::now()
-                    + Duration::from_millis(
-                        u64::try_from(deadline_ms.saturating_sub(unix_ms())).unwrap_or(0),
-                    ),
-                deadline_ms,
+                cgroup_dir: cgroup_dir
+                    .clone()
+                    .ok_or_else(|| Failure::internal(anyhow!("unit reports no cgroup")))?,
+                invocation_id: status.invocation_id.clone(),
                 scale: viewport.scale,
                 profile_revision: record.profile_revision,
                 plan: Arc::clone(&plan),
                 settings,
-                report: report.clone(),
-                control: tokio::sync::Mutex::new(control),
-                live: parking_lot::Mutex::new(Live {
-                    phase: Phase::Starting,
-                    geometry: Geometry {
-                        width: viewport.width,
-                        height: viewport.height,
-                    },
-                    verified: Verified {
-                        supervisor: verify::Pin { pid: 0, start: 0 },
-                        init: verify::Pin { pid: 0, start: 0 },
-                        display_server: verify::Pin { pid: 0, start: 0 },
-                        window_manager: verify::Pin { pid: 0, start: 0 },
-                        browser: verify::Pin { pid: 0, start: 0 },
-                    },
-                    attachment: None,
-                    detached_since: Some(Instant::now()),
-                    last_snapshot: record
-                        .current_generation
-                        .zip(record.current_generation_at_ms),
-                    last_periodic: Instant::now(),
-                    last_scan: Instant::now(),
-                    pending_navigation: None,
-                    unsaved: false,
-                }),
-            };
-            let verified = verify::verify(
-                &instance.expectations(self.uid, self.gid, status.main_pid, &bootstrap, &sealed),
-                &report,
-            )
-            .map_err(|violation| Failure {
-                reason: Reason::ConfinementUnverified,
-                detail: violation.0,
-            })?;
-            {
-                let mut live = instance.live.lock();
-                live.verified = verified;
-                live.phase = Phase::Detached;
-            }
-            let instance = Arc::new(instance);
-            state_file::write_instance(
-                &self.state_dir,
-                &instance.record(status.invocation_id.clone(), &self.boot_id),
-            )
-            .map_err(Failure::internal)?;
+                report,
+                control,
+                phase: Phase::Starting,
+                geometry: Geometry {
+                    width: viewport.width,
+                    height: viewport.height,
+                },
+                last_snapshot: record
+                    .current_generation
+                    .zip(record.current_generation_at_ms),
+                capacity: None,
+            }));
+            self.verify_started(&instance, status.main_pid)?;
+            state_file::write_instance(&self.state_dir, &instance.record(&self.boot_id))
+                .map_err(Failure::internal)?;
             Ok::<_, Failure>(instance)
         }
         .await;
-        if outcome.is_err() {
-            // Never retry with weaker isolation: the unit ends and the
-            // reservation is refunded by the caller.
-            if let Err(error) = unit::stop_and_wait(&unit_name).await {
-                tracing::warn!(%error, unit = %unit_name, "failed browser unit did not stop cleanly");
+        match outcome {
+            Ok(instance) => {
+                // The instance holds the slot reserved by the open.
+                *instance.capacity.lock() = Some(capacity);
+                Ok(instance)
+            }
+            Err(failure) => {
+                // Never retry with weaker isolation: the unit ends, and its
+                // slot is released only once that is confirmed.
+                if !unit::terminate(&unit_name, cgroup_dir.as_deref()).await {
+                    self.retain_unconfirmed(Retained {
+                        unit: unit_name,
+                        cgroup_dir,
+                        account: Some(account_id.clone()),
+                        instance: None,
+                        record: None,
+                        capacity: Some(capacity),
+                    });
+                }
+                Err(failure)
             }
         }
-        outcome
+    }
+
+    /// Full confinement verification of a freshly started instance.
+    fn verify_started(&self, instance: &Instance, main_pid: u32) -> Result<(), Failure> {
+        let bootstrap = host::enforce_label(BOOTSTRAP_PROFILE);
+        let sealed = host::enforce_label(SEALED_PROFILE);
+        let verified = verify::verify(
+            &self.expectations(instance, main_pid, &bootstrap, &sealed),
+            &instance.report,
+        )
+        .map_err(|violation| Failure {
+            reason: Reason::ConfinementUnverified,
+            detail: violation.0,
+        })?;
+        let mut live = instance.live.lock();
+        live.verified = verified;
+        live.phase = Phase::Detached;
+        Ok(())
     }
 
     pub(super) async fn hibernate(
@@ -325,7 +423,10 @@ impl BrowserManager {
         }
     }
 
-    /// Stop with the account lifecycle lock taken here.
+    /// Stop with the account lifecycle lock taken here. A graceful stop first
+    /// lets a running snapshot copy finish (outside the lock, with the
+    /// deadline and authority still enforced); a stop that must be forced
+    /// meanwhile cancels it instead.
     pub(super) async fn stop_instance(
         &self,
         instance: &Arc<Instance>,
@@ -333,16 +434,26 @@ impl BrowserManager {
         graceful: bool,
         request_id: Option<&str>,
     ) -> StateEvent {
+        let (reason, graceful) = if graceful {
+            match self.await_copy_idle(instance).await {
+                Ok(()) => (reason, true),
+                Err(forced) => (forced, false),
+            }
+        } else {
+            (reason, false)
+        };
         let slot = self.slot(&instance.account_id);
         let _lifecycle = slot.lifecycle.lock().await;
         self.stop_locked(instance, reason, graceful, request_id)
             .await
     }
 
-    /// Stop while the caller holds the account lifecycle lock. A graceful
-    /// stop lets the browser flush and copies the profile at the barrier; a
-    /// forced stop keeps the last published generation and reports that
-    /// unsaved state was lost.
+    /// Stop while the caller holds the account lifecycle lock. Any running
+    /// copy is cancelled. A graceful stop lets the browser flush and copies
+    /// the profile at the barrier; a forced stop keeps the last published
+    /// generation and reports that unsaved state was lost. The instance is
+    /// forgotten only once its unit's exit is confirmed; otherwise it stays
+    /// registered (stopping) while a retry escalates.
     pub(super) async fn stop_locked(
         &self,
         instance: &Arc<Instance>,
@@ -361,16 +472,34 @@ impl BrowserManager {
             }
             was
         };
-        let slot = self.slot(&instance.account_id);
         if already_stopping {
-            // Another path is stopping it; report the hibernated outcome
-            // once the unit is gone rather than racing the stop.
-            let _ =
-                unit::wait_gone(&instance.unit, unit::STOP_TIMEOUT + Duration::from_secs(10)).await;
-            return self.hibernated_after(instance, reason, request_id, false);
+            let registered = self
+                .slot(&instance.account_id)
+                .instance
+                .lock()
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, instance));
+            if !registered {
+                // Another path stopped it while this one waited for the lock.
+                return self.hibernated_after(instance, reason, request_id, false);
+            }
+            // Only an instance whose exit is unconfirmed stays registered
+            // while stopping; its retry owns the stop.
+            return instance
+                .state(request_id.map(ToOwned::to_owned))
+                .with_reason(reason);
+        }
+        instance.cancel_copy();
+        if let Err(error) = unit::set_frozen(&instance.cgroup_dir.join("browser"), false) {
+            tracing::warn!(%error, "browser cgroup not thawed before its stop");
         }
         self.send_state(instance.state(None).with_reason(reason));
-        let mut unsaved = instance.live.lock().unsaved;
+        if !instance.copy_released().await {
+            tracing::warn!(instance = %instance.instance_id, "cancelled browser snapshot did not let go in time");
+        }
+        // A running browser may have written since its last published
+        // snapshot; only a flushed stop-time copy proves nothing was lost.
+        let mut unsaved = true;
         let mut published = None;
         if graceful {
             match self.stop_with_snapshot(instance).await {
@@ -378,32 +507,27 @@ impl BrowserManager {
                     published = Some(generation);
                     unsaved = !flushed;
                 }
-                Ok(None) => unsaved = true,
+                Ok(None) => {}
                 Err(error) => {
                     tracing::warn!(%error, "browser graceful stop did not publish a snapshot");
-                    unsaved = true;
                 }
             }
         }
-        match unit::stop_and_wait(&instance.unit).await {
-            Ok(true) => {}
-            Ok(false) => {
-                tracing::error!(unit = %instance.unit, "browser unit is stuck after SIGKILL")
-            }
-            Err(error) => tracing::warn!(%error, unit = %instance.unit, "browser unit stop failed"),
+        if !unit::terminate(&instance.unit, Some(&instance.cgroup_dir)).await {
+            tracing::error!(unit = %instance.unit, "browser unit exit unconfirmed; instance retained");
+            self.retain_unconfirmed(Retained {
+                unit: instance.unit.clone(),
+                cgroup_dir: Some(instance.cgroup_dir.clone()),
+                account: Some(instance.account_id.clone()),
+                instance: Some(Arc::clone(instance)),
+                record: None,
+                capacity: None,
+            });
+            return instance
+                .state(request_id.map(ToOwned::to_owned))
+                .with_reason(Reason::Failed);
         }
-        if let Err(error) = state_file::remove_instance(&self.state_dir, &instance.instance_id) {
-            tracing::warn!(%error, "browser instance record not removed");
-        }
-        {
-            let mut current = slot.instance.lock();
-            if current
-                .as_ref()
-                .is_some_and(|current| Arc::ptr_eq(current, instance))
-            {
-                *current = None;
-            }
-        }
+        self.finish_stopped(instance);
         if let Some(generation) = published {
             instance.live.lock().last_snapshot = Some((generation, unix_ms()));
         }
@@ -437,7 +561,9 @@ impl BrowserManager {
 
     /// Graceful stop through the launcher with a stop-time copy. Returns the
     /// published generation and whether the browser exited gracefully (the
-    /// copy is flushed) or was killed (crash-consistent).
+    /// copy is flushed) or was killed (crash-consistent). A staging
+    /// generation the launcher may still write is left with the instance
+    /// until its unit's exit is confirmed.
     pub(super) async fn stop_with_snapshot(
         &self,
         instance: &Arc<Instance>,
@@ -445,48 +571,57 @@ impl BrowserManager {
         let account_dir = self.account_dir(&instance.account_id)?;
         let mut record = state_file::read_control(&account_dir)?;
         if record.pending.is_some() || record.profile_revision != instance.profile_revision {
-            let _ = instance
-                .control
-                .lock()
-                .await
-                .stop(GRACEFUL_WAIT, None, unit::STOP_TIMEOUT)
-                .await;
+            plain_stop(instance).await;
             return Ok(None);
         }
         let generation = record.allocate_generation();
         state_file::write_control(&account_dir, &record)?;
-        let reservation =
-            match self.admit_staging(&instance.account_id, generation, &instance.settings) {
-                Ok(reservation) => reservation,
-                Err(error) => {
-                    tracing::warn!(%error, "stop-time snapshot refused");
-                    let _ = instance
-                        .control
-                        .lock()
-                        .await
-                        .stop(GRACEFUL_WAIT, None, unit::STOP_TIMEOUT)
-                        .await;
-                    return Ok(None);
-                }
-            };
-        snapshot::create_staging(&account_dir, generation)?;
-        let outcome = instance
+        let reservation = match self.admit_staging(
+            &instance.account_id,
+            &account_dir,
+            generation,
+            &instance.settings,
+        ) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                tracing::warn!(%error, "stop-time snapshot refused");
+                plain_stop(instance).await;
+                return Ok(None);
+            }
+        };
+        if let Err(error) = snapshot::create_staging(&account_dir, generation) {
+            self.retire_staging(&account_dir, generation, reservation);
+            plain_stop(instance).await;
+            return Err(error);
+        }
+        let stopped = instance
             .control
             .lock()
             .await
             .stop(GRACEFUL_WAIT, Some(generation), unit::STOP_TIMEOUT)
-            .await?;
+            .await;
+        let outcome = match stopped {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                *instance.abandoned.lock() = Some((generation, reservation));
+                return Err(error);
+            }
+        };
+        // The launcher replied: its inline copy has ended.
         if !outcome.copied {
+            self.retire_staging(&account_dir, generation, reservation);
             bail!("launcher made no stop-time copy");
         }
-        self.publish_snapshot(
-            instance,
-            &account_dir,
-            generation,
-            reservation,
-            outcome.graceful,
-        )?;
-        Ok(Some((generation, outcome.graceful)))
+        match self.publish_snapshot(instance, &account_dir, generation) {
+            Ok(()) => {
+                drop(reservation);
+                Ok(Some((generation, outcome.graceful)))
+            }
+            Err(error) => {
+                self.retire_staging(&account_dir, generation, reservation);
+                Err(error)
+            }
+        }
     }
 
     pub(super) async fn reset_or_revoke(
@@ -573,38 +708,19 @@ impl BrowserManager {
             let event = self.stop_locked(&instance, reason, false, None).await;
             self.send_state(event);
         }
-        match self.complete_fenced(&account_dir, &mut record) {
+        if slot.instance.lock().is_some() || self.fence_blocked(&account_id) {
+            // A browser of this account may still run: the profile is not
+            // deleted and the fence stays raised until its exit is confirmed.
+            tracing::error!(account = %account_id.as_str(), "browser exit unconfirmed; fence retained");
+            return hibernated(Some(Reason::Failed), Some(record.profile_revision));
+        }
+        match complete_fenced(&account_dir, &mut record) {
             Ok(()) => hibernated(Some(reason), Some(record.profile_revision)),
             Err(error) => {
                 tracing::warn!(%error, "browser reset or revocation incomplete; fence retained");
                 hibernated(Some(Reason::Failed), Some(record.profile_revision))
             }
         }
-    }
-
-    /// Delete the profile tree and lower the fence; the control record
-    /// survives with the advanced revision.
-    pub(super) fn complete_fenced(
-        &self,
-        account_dir: &Path,
-        record: &mut ControlRecord,
-    ) -> Result<()> {
-        let pending = record
-            .pending
-            .clone()
-            .context("no fenced operation to complete")?;
-        snapshot::remove_browser_dir(account_dir)?;
-        record.profile_revision = pending.next_profile_revision;
-        record.current_generation = None;
-        record.current_generation_at_ms = None;
-        record.pending = None;
-        record.last_operation = Some(CompletedOperation {
-            kind: pending.kind,
-            operation_id: pending.operation_id,
-            profile_revision: record.profile_revision,
-            completed_at_ms: unix_ms(),
-        });
-        state_file::write_control(account_dir, record)
     }
 
     pub(super) fn query(&self, request_id: &str, account_id: &ProviderAccountId) -> StateEvent {
@@ -640,4 +756,38 @@ impl BrowserManager {
             observed_at_ms: unix_ms(),
         }
     }
+}
+
+/// Ask the launcher for a stop without a copy; the unit's termination follows.
+async fn plain_stop(instance: &Instance) {
+    let _ = instance
+        .control
+        .lock()
+        .await
+        .stop(GRACEFUL_WAIT, None, unit::STOP_TIMEOUT)
+        .await;
+}
+
+/// Delete the profile tree and lower the fence; the control record survives
+/// with the advanced revision. The writer-version fence goes with the data it
+/// guarded, so a reset or revocation also lifts `profile_newer_than_runtime`.
+pub(super) fn complete_fenced(account_dir: &Path, record: &mut ControlRecord) -> Result<()> {
+    let pending = record
+        .pending
+        .clone()
+        .context("no fenced operation to complete")?;
+    snapshot::remove_browser_dir(account_dir)?;
+    record.profile_revision = pending.next_profile_revision;
+    record.current_generation = None;
+    record.current_generation_at_ms = None;
+    record.browser_version = None;
+    record.generation_digest = None;
+    record.pending = None;
+    record.last_operation = Some(CompletedOperation {
+        kind: pending.kind,
+        operation_id: pending.operation_id,
+        profile_revision: record.profile_revision,
+        completed_at_ms: unix_ms(),
+    });
+    state_file::write_control(account_dir, record)
 }

@@ -318,6 +318,24 @@ pub fn remove_browser_dir(account_dir: &Path) -> Result<()> {
     }
 }
 
+/// Remove one abandoned `staging/gen-<n>` with the scoped, no-follow removal;
+/// an absent generation is already removed.
+///
+/// # Errors
+/// Returns when a removal fails part-way; the caller keeps the generation's
+/// staging reservation and retries.
+pub fn remove_staging(account_dir: &Path, generation: u64) -> Result<()> {
+    let Some(staging) = open_optional(&staging_root(account_dir))? else {
+        return Ok(());
+    };
+    let name = generation_name(generation);
+    match statat(&staging, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(_) => remove_entry(&staging, &name, 0),
+        Err(rustix::io::Errno::NOENT) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// The published generation directory, when the record names one that exists.
 #[must_use]
 pub fn current_snapshot(account_dir: &Path, record: &ControlRecord) -> Option<PathBuf> {
@@ -509,6 +527,13 @@ mod tests {
         assert_eq!(removed, vec!["snapshots/gen-9", "staging/gen-4"]);
         assert!(staging_root(account).join("gen-3").is_dir());
         assert!(snapshots_root(account).join("gen-2").is_dir());
+
+        // One abandoned generation is removed without following its links.
+        symlink(account, staging_root(account).join("gen-3/escape")).unwrap();
+        remove_staging(account, 3).unwrap();
+        assert!(!staging_root(account).join("gen-3").exists());
+        assert!(account.join(state_file::CONTROL_FILE).is_file());
+        remove_staging(account, 3).unwrap();
 
         remove_browser_dir(account).unwrap();
         assert!(!state_file::browser_root(account).exists());

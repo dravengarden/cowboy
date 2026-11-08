@@ -38,6 +38,12 @@ pub struct Expectations<'a> {
     pub profile_bytes: u64,
     pub instance_bytes: u64,
     pub policy_directory: &'a str,
+    /// Artifact-relative managed policy file the policy bind must be backed by.
+    pub policy_file: &'a str,
+    /// Host paths that must be hidden behind an empty read-only tmpfs mask
+    /// (the Machine state root, `/home`, `/run/user/<uid>`), as the kernel
+    /// resolves them.
+    pub masks: &'a [PathBuf],
     /// Enforce-mode labels; `None` only where no policy is expected (tests).
     pub bootstrap_label: Option<&'a str>,
     pub sealed_label: Option<&'a str>,
@@ -54,6 +60,8 @@ pub struct Pin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verified {
     pub supervisor: Pin,
+    /// The namespace relay between the supervisor and the init.
+    pub relay: Pin,
     pub init: Pin,
     pub display_server: Pin,
     pub window_manager: Pin,
@@ -61,11 +69,26 @@ pub struct Verified {
 }
 
 impl Verified {
+    /// Nothing verified yet: every pin is the impossible pid 0.
+    #[must_use]
+    pub fn unpinned() -> Self {
+        let none = Pin { pid: 0, start: 0 };
+        Self {
+            supervisor: none,
+            relay: none,
+            init: none,
+            display_server: none,
+            window_manager: none,
+            browser: none,
+        }
+    }
+
     /// Whether every pinned process still exists with its start time.
     #[must_use]
     pub fn pins_hold(&self) -> bool {
         [
             self.supervisor,
+            self.relay,
             self.init,
             self.display_server,
             self.window_manager,
@@ -86,7 +109,7 @@ pub fn verify(expect: &Expectations<'_>, report: &ReadyReport) -> Result<Verifie
     let own = Namespaces::of(std::process::id())
         .map_err(|error| Violation(format!("own namespaces unreadable: {error}")))?;
     let placement = Placement::read(expect.cgroup_dir)?;
-    let verified = placement.roles(expect, report)?;
+    let (verified, transient) = placement.roles(expect, report)?;
     let instance = Namespaces::of(verified.init.pid)
         .map_err(|error| Violation(format!("init namespaces unreadable: {error}")))?;
     if instance.as_report() != report.namespaces {
@@ -102,6 +125,19 @@ pub fn verify(expect: &Expectations<'_>, report: &ReadyReport) -> Result<Verifie
             "instance shares a namespace with the Machine".into(),
         ));
     }
+    let supervisor_pid_ns = std::fs::read_link(format!("/proc/{}/ns/pid", verified.supervisor.pid))
+        .map_err(|error| Violation(format!("supervisor pid namespace unreadable: {error}")))?;
+    let relay = Namespaces::of(verified.relay.pid)
+        .map_err(|error| Violation(format!("relay namespaces unreadable: {error}")))?;
+    let relay_children =
+        std::fs::read_link(format!("/proc/{}/ns/pid_for_children", verified.relay.pid))
+            .map_err(|error| Violation(format!("relay child pid namespace unreadable: {error}")))?;
+    check_relay_namespaces(
+        &relay,
+        &relay_children.to_string_lossy(),
+        &supervisor_pid_ns.to_string_lossy(),
+        &instance,
+    )?;
     for pin in [
         verified.display_server,
         verified.window_manager,
@@ -132,7 +168,7 @@ pub fn verify(expect: &Expectations<'_>, report: &ReadyReport) -> Result<Verifie
         &report.gid_map,
         "gid_map",
     )?;
-    check_labels(expect, report, &placement, &verified)?;
+    check_labels(expect, report, &placement, &verified, &transient)?;
     check_status(&placement, &verified)?;
     check_mounts(expect, verified.browser.pid)?;
     scan_sockets(expect.cgroup_dir)?;
@@ -146,7 +182,13 @@ pub fn verify(expect: &Expectations<'_>, report: &ReadyReport) -> Result<Verifie
 }
 
 /// No process of the cgroup subtree owns a listening TCP socket, any UDP
-/// socket or a reachable (not connected) abstract Unix socket, in any network namespace found there.
+/// socket or a reachable (not connected) abstract Unix socket, in any network
+/// namespace found there.
+///
+/// The scan fails closed: only a process confirmed gone (its `/proc` entry
+/// vanished) may be skipped. Unreadable descriptors or namespace links of a
+/// live process are a violation, and every network namespace's socket tables
+/// must be read through some live member of it.
 ///
 /// # Errors
 /// Returns the violation, or an unreadable observation as a violation.
@@ -156,95 +198,233 @@ pub fn scan_sockets(cgroup_dir: &Path) -> Result<(), Violation> {
         .into_iter()
         .map(|(_, pid)| pid)
         .collect();
+    scan_with(&HostProc, &pids)
+}
+
+/// Why a `/proc` observation is missing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Missing {
+    /// The process is confirmed gone: it owns nothing any more.
+    Exited,
+    /// The process may be alive but its evidence could not be read.
+    Unreadable(String),
+}
+
+/// The `/proc` facts the socket scan reads, so the scan's fail-closed rules
+/// can be tested against synthetic process trees.
+trait ProcView {
+    /// Every descriptor target of `pid` (descriptors closed during the read
+    /// are skipped).
+    fn fd_targets(&self, pid: u32) -> Result<Vec<String>, Missing>;
+    /// The `ns/net` identity of `pid`.
+    fn net_namespace(&self, pid: u32) -> Result<String, Missing>;
+    /// `/proc/<pid>/net/<table>`; `Ok(None)` when the process is alive and
+    /// the kernel has no such table (IPv6 disabled).
+    fn table(&self, pid: u32, table: &str) -> Result<Option<String>, Missing>;
+}
+
+struct HostProc;
+
+impl HostProc {
+    fn classify(pid: u32, error: &std::io::Error) -> Missing {
+        let vanished = matches!(
+            std::fs::symlink_metadata(format!("/proc/{pid}")),
+            Err(ref gone) if gone.kind() == std::io::ErrorKind::NotFound
+        );
+        let exit_shaped = error.kind() == std::io::ErrorKind::NotFound
+            || error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error());
+        if exit_shaped && vanished {
+            Missing::Exited
+        } else {
+            Missing::Unreadable(error.to_string())
+        }
+    }
+}
+
+impl ProcView for HostProc {
+    fn fd_targets(&self, pid: u32) -> Result<Vec<String>, Missing> {
+        let entries = std::fs::read_dir(format!("/proc/{pid}/fd"))
+            .map_err(|error| Self::classify(pid, &error))?;
+        let mut targets = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| Self::classify(pid, &error))?;
+            match std::fs::read_link(entry.path()) {
+                Ok(target) => targets.push(target.to_string_lossy().into_owned()),
+                // The descriptor was closed between the listing and the read.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    if Self::classify(pid, &error) == Missing::Exited {
+                        return Err(Missing::Exited);
+                    }
+                }
+                Err(error) => return Err(Self::classify(pid, &error)),
+            }
+        }
+        Ok(targets)
+    }
+
+    fn net_namespace(&self, pid: u32) -> Result<String, Missing> {
+        std::fs::read_link(format!("/proc/{pid}/ns/net"))
+            .map(|link| link.to_string_lossy().into_owned())
+            .map_err(|error| Self::classify(pid, &error))
+    }
+
+    fn table(&self, pid: u32, table: &str) -> Result<Option<String>, Missing> {
+        match std::fs::read_to_string(format!("/proc/{pid}/net/{table}")) {
+            Ok(text) => Ok(Some(text)),
+            Err(error) => match Self::classify(pid, &error) {
+                Missing::Unreadable(_) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                missing => Err(missing),
+            },
+        }
+    }
+}
+
+/// Tables every network namespace is scanned through: `(name, listening
+/// only, may be absent)`.
+const SOCKET_TABLES: [(&str, bool, bool); 4] = [
+    ("tcp", true, false),
+    ("tcp6", true, true),
+    ("udp", false, false),
+    ("udp6", false, true),
+];
+
+fn scan_with(proc: &impl ProcView, pids: &[u32]) -> Result<(), Violation> {
     let mut owned: BTreeMap<u64, u32> = BTreeMap::new();
-    let mut by_net: BTreeMap<String, u32> = BTreeMap::new();
-    for &pid in &pids {
-        let fds = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
-            Ok(fds) => fds,
-            // A process that exited during the scan owns nothing.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
+    let mut by_net: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    for &pid in pids {
+        let targets = match proc.fd_targets(pid) {
+            Ok(targets) => targets,
+            Err(Missing::Exited) => continue,
+            Err(Missing::Unreadable(why)) => {
                 return Err(Violation(format!(
-                    "process {pid} descriptors unreadable: {error}"
+                    "process {pid} descriptors unreadable: {why}"
                 )));
             }
         };
-        for fd in fds.flatten() {
-            if let Ok(target) = std::fs::read_link(fd.path())
-                && let Some(inode) = target
-                    .to_str()
-                    .and_then(|target| target.strip_prefix("socket:["))
-                    .and_then(|rest| rest.strip_suffix(']'))
-                    .and_then(|inode| inode.parse::<u64>().ok())
+        for target in targets {
+            if let Some(inode) = target
+                .strip_prefix("socket:[")
+                .and_then(|rest| rest.strip_suffix(']'))
+                .and_then(|inode| inode.parse::<u64>().ok())
             {
                 owned.insert(inode, pid);
             }
         }
-        if let Ok(net) = std::fs::read_link(format!("/proc/{pid}/ns/net")) {
-            by_net
-                .entry(net.to_string_lossy().into_owned())
-                .or_insert(pid);
+        match proc.net_namespace(pid) {
+            Ok(net) => by_net.entry(net).or_default().push(pid),
+            Err(Missing::Exited) => {}
+            Err(Missing::Unreadable(why)) => {
+                return Err(Violation(format!(
+                    "process {pid} network namespace unreadable: {why}"
+                )));
+            }
         }
     }
     if owned.is_empty() {
         return Ok(());
     }
-    for pid in by_net.values() {
-        for (table, listening_only) in [
-            ("tcp", true),
-            ("tcp6", true),
-            ("udp", false),
-            ("udp6", false),
-        ] {
-            let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/net/{table}")) else {
+    for (net, members) in &by_net {
+        for (table, listening_only, optional) in SOCKET_TABLES {
+            let Some(text) = read_table(proc, net, members, table, optional)? else {
                 continue;
             };
-            for line in text.lines().skip(1) {
-                let fields: Vec<&str> = line.split_whitespace().collect();
-                let (Some(state), Some(inode)) = (fields.get(3), fields.get(9)) else {
-                    continue;
-                };
-                let Ok(inode) = inode.parse::<u64>() else {
-                    continue;
-                };
-                if let Some(owner) = owned.get(&inode)
-                    && (!listening_only || *state == "0A")
-                {
-                    return Err(Violation(format!(
-                        "process {owner} owns a {table} socket{}",
-                        if listening_only {
-                            " in LISTEN state"
-                        } else {
-                            ""
-                        }
-                    )));
-                }
+            check_inet_table(&text, table, listening_only, &owned)?;
+        }
+        if let Some(text) = read_table(proc, net, members, "unix", false)? {
+            check_unix_table(&text, &owned)?;
+        }
+    }
+    Ok(())
+}
+
+/// One namespace's table, read through the first live member that can; a
+/// table no live member can read is a violation.
+fn read_table(
+    proc: &impl ProcView,
+    net: &str,
+    members: &[u32],
+    table: &str,
+    optional: bool,
+) -> Result<Option<String>, Violation> {
+    let mut last = None;
+    let mut live = false;
+    for &pid in members {
+        match proc.table(pid, table) {
+            Ok(Some(text)) => return Ok(Some(text)),
+            Ok(None) if optional => return Ok(None),
+            Ok(None) => {
+                live = true;
+                last = Some(format!("process {pid} has no {table} table"));
+            }
+            Err(Missing::Exited) => {}
+            Err(Missing::Unreadable(why)) => {
+                live = true;
+                last = Some(format!("process {pid}: {why}"));
             }
         }
-        if let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/net/unix")) {
-            for line in text.lines().skip(1) {
-                let fields: Vec<&str> = line.split_whitespace().collect();
-                let (Some(state), Some(inode), Some(path)) =
-                    (fields.get(5), fields.get(6), fields.get(7))
-                else {
-                    continue;
-                };
-                let Ok(inode) = inode.parse::<u64>() else {
-                    continue;
-                };
-                // Chromium's SO_PASSCRED socketpairs are autobound to an
-                // abstract name on first send; they are connected (state 03)
-                // and refuse every third party. Only an unconnected or
-                // listening abstract socket is reachable from outside.
-                if path.starts_with('@')
-                    && *state != "03"
-                    && let Some(owner) = owned.get(&inode)
-                {
-                    return Err(Violation(format!(
-                        "process {owner} owns a reachable abstract Unix socket"
-                    )));
+    }
+    if live {
+        return Err(Violation(format!(
+            "{table} sockets of network namespace {net} unreadable ({})",
+            last.unwrap_or_default()
+        )));
+    }
+    // Every member exited during the scan: the namespace's processes, and
+    // with them the sockets they owned, are gone.
+    Ok(None)
+}
+
+fn check_inet_table(
+    text: &str,
+    table: &str,
+    listening_only: bool,
+    owned: &BTreeMap<u64, u32>,
+) -> Result<(), Violation> {
+    for line in text.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let (Some(state), Some(inode)) = (fields.get(3), fields.get(9)) else {
+            continue;
+        };
+        let Ok(inode) = inode.parse::<u64>() else {
+            continue;
+        };
+        if let Some(owner) = owned.get(&inode)
+            && (!listening_only || *state == "0A")
+        {
+            return Err(Violation(format!(
+                "process {owner} owns a {table} socket{}",
+                if listening_only {
+                    " in LISTEN state"
+                } else {
+                    ""
                 }
-            }
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn check_unix_table(text: &str, owned: &BTreeMap<u64, u32>) -> Result<(), Violation> {
+    for line in text.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let (Some(state), Some(inode), Some(path)) = (fields.get(5), fields.get(6), fields.get(7))
+        else {
+            continue;
+        };
+        let Ok(inode) = inode.parse::<u64>() else {
+            continue;
+        };
+        // Chromium's SO_PASSCRED socketpairs are autobound to an abstract
+        // name on first send; they are connected (state 03) and refuse every
+        // third party. Only an unconnected or listening abstract socket is
+        // reachable from outside.
+        if path.starts_with('@')
+            && *state != "03"
+            && let Some(owner) = owned.get(&inode)
+        {
+            return Err(Violation(format!(
+                "process {owner} owns a reachable abstract Unix socket"
+            )));
         }
     }
     Ok(())
@@ -338,6 +518,8 @@ impl Namespaces {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Status {
     ns_pids: Vec<u32>,
+    /// Parent pid as the host sees it.
+    ppid: u32,
     no_new_privs: bool,
     /// Inheritable, permitted, effective, bounding, ambient.
     caps: [u64; 5],
@@ -360,6 +542,10 @@ fn parse_status(text: &str) -> std::io::Result<Status> {
                     .split_whitespace()
                     .map(|pid| pid.parse::<u32>().map_err(std::io::Error::other))
                     .collect::<Result<_, _>>()?;
+                continue;
+            }
+            "PPid" => {
+                status.ppid = value.parse().map_err(std::io::Error::other)?;
                 continue;
             }
             "NoNewPrivs" => {
@@ -393,8 +579,17 @@ impl Placement {
         for (sub, pid) in unit::procs_recursive(cgroup_dir)
             .map_err(|error| Violation(format!("cgroup unreadable: {error}")))?
         {
-            let status = status(pid)
-                .map_err(|error| Violation(format!("process {pid} status unreadable: {error}")))?;
+            let status = match status(pid) {
+                Ok(status) => status,
+                // A process that exited after the cgroup listing (a finished
+                // copier or helper) is no longer part of the tree.
+                Err(_) if std::fs::symlink_metadata(format!("/proc/{pid}")).is_err() => continue,
+                Err(error) => {
+                    return Err(Violation(format!(
+                        "process {pid} status unreadable: {error}"
+                    )));
+                }
+            };
             processes.insert(pid, (sub, status));
         }
         Ok(Self { processes })
@@ -421,11 +616,79 @@ impl Placement {
         found.ok_or_else(|| Violation(format!("namespace pid {ns_pid} is not in the unit cgroup")))
     }
 
+    /// The launcher's root-cgroup processes, by identity rather than count:
+    /// the supervisor is the unit's `MainPID` in the host pid namespace; the
+    /// namespace relay is its only child there, also with a single-entry
+    /// `NSpid`; the init is the relay's child and pid 1 of the instance.
+    /// Anything else in the root cgroup must be a child of the init inside
+    /// the instance pid namespace (the snapshot copier, or a child in the
+    /// instant before it moves itself into its sub-cgroup).
+    fn root_roles(&self, main_pid: u32) -> Result<RootRoles, Violation> {
+        let root: BTreeMap<u32, &Status> = self
+            .processes
+            .iter()
+            .filter(|(_, (sub, _))| sub.as_os_str().is_empty())
+            .map(|(pid, (_, status))| (*pid, status))
+            .collect();
+        let supervisor = root
+            .get(&main_pid)
+            .ok_or_else(|| Violation("supervisor is not the unit's main process".into()))?;
+        if supervisor.ns_pids.len() != 1 {
+            return Err(Violation(
+                "supervisor is not in the host pid namespace".into(),
+            ));
+        }
+        let only = |what: &str, matches: Vec<u32>| -> Result<u32, Violation> {
+            match matches.as_slice() {
+                [pid] => Ok(*pid),
+                [] => Err(Violation(format!("{what} is missing"))),
+                _ => Err(Violation(format!("{what} is ambiguous"))),
+            }
+        };
+        let relay = only(
+            "namespace relay",
+            root.iter()
+                .filter(|(pid, status)| {
+                    **pid != main_pid && status.ns_pids.len() == 1 && status.ppid == main_pid
+                })
+                .map(|(pid, _)| *pid)
+                .collect(),
+        )?;
+        let init = only(
+            "namespace init",
+            root.iter()
+                .filter(|(_, status)| {
+                    status.ns_pids.len() == 2 && status.ns_pids[1] == 1 && status.ppid == relay
+                })
+                .map(|(pid, _)| *pid)
+                .collect(),
+        )?;
+        let mut transient = Vec::new();
+        for (pid, status) in &root {
+            if [main_pid, relay, init].contains(pid) {
+                continue;
+            }
+            if status.ns_pids.len() == 2 && status.ns_pids[1] != 1 && status.ppid == init {
+                transient.push(*pid);
+                continue;
+            }
+            return Err(Violation(format!(
+                "unexpected process {pid} in the unit's root cgroup"
+            )));
+        }
+        Ok(RootRoles {
+            supervisor: main_pid,
+            relay,
+            init,
+            transient,
+        })
+    }
+
     fn roles(
         &self,
         expect: &Expectations<'_>,
         report: &ReadyReport,
-    ) -> Result<Verified, Violation> {
+    ) -> Result<(Verified, Vec<u32>), Violation> {
         let pin = |pid: u32| -> Result<Pin, Violation> {
             Ok(Pin {
                 pid,
@@ -434,42 +697,61 @@ impl Placement {
                 })?,
             })
         };
-        let mut supervisor = None;
-        let mut init = None;
-        for (pid, (sub, status)) in &self.processes {
-            if !sub.as_os_str().is_empty() {
-                continue;
-            }
-            match status.ns_pids.as_slice() {
-                [_] if supervisor.replace(*pid).is_none() => {}
-                [_, 1] if init.replace(*pid).is_none() => {}
-                _ => {
-                    return Err(Violation(format!(
-                        "unexpected process {pid} in the unit's root cgroup"
-                    )));
-                }
-            }
-        }
-        let supervisor = supervisor.ok_or_else(|| Violation("supervisor is missing".into()))?;
-        if supervisor != expect.main_pid {
-            return Err(Violation(
-                "supervisor is not the unit's main process".into(),
-            ));
-        }
-        let init = init.ok_or_else(|| Violation("namespace init is missing".into()))?;
+        let roots = self.root_roles(expect.main_pid)?;
         if report.pids.init != 1 {
             return Err(Violation(
                 "launcher init is not pid 1 of its namespace".into(),
             ));
         }
-        Ok(Verified {
-            supervisor: pin(supervisor)?,
-            init: pin(init)?,
-            display_server: pin(self.host_pid(report.pids.display_server, "display")?)?,
-            window_manager: pin(self.host_pid(report.pids.window_manager, "display")?)?,
-            browser: pin(self.host_pid(report.pids.browser, "browser")?)?,
-        })
+        Ok((
+            Verified {
+                supervisor: pin(roots.supervisor)?,
+                relay: pin(roots.relay)?,
+                init: pin(roots.init)?,
+                display_server: pin(self.host_pid(report.pids.display_server, "display")?)?,
+                window_manager: pin(self.host_pid(report.pids.window_manager, "display")?)?,
+                browser: pin(self.host_pid(report.pids.browser, "browser")?)?,
+            },
+            roots.transient,
+        ))
     }
+}
+
+/// Host pids of the launcher's own processes in the unit's root cgroup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RootRoles {
+    supervisor: u32,
+    relay: u32,
+    init: u32,
+    /// Children of the init still in the root cgroup.
+    transient: Vec<u32>,
+}
+
+/// The relay unshared the user, mount and IPC namespaces the init lives in
+/// and stays in its parent's pid namespace, while its children's pid
+/// namespace is the instance's.
+fn check_relay_namespaces(
+    relay: &Namespaces,
+    relay_children_pid: &str,
+    supervisor_pid: &str,
+    instance: &Namespaces,
+) -> Result<(), Violation> {
+    if relay.user != instance.user || relay.mnt != instance.mnt || relay.ipc != instance.ipc {
+        return Err(Violation(
+            "namespace relay is outside the instance's user, mount or IPC namespace".into(),
+        ));
+    }
+    if relay.pid != supervisor_pid {
+        return Err(Violation(
+            "namespace relay left the supervisor's pid namespace".into(),
+        ));
+    }
+    if relay_children_pid != instance.pid {
+        return Err(Violation(
+            "namespace relay's children are outside the instance pid namespace".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn check_map(path: &str, id: u32, reported: &str, label: &str) -> Result<(), Violation> {
@@ -497,14 +779,30 @@ fn check_labels(
     report: &ReadyReport,
     placement: &Placement,
     verified: &Verified,
+    transient: &[u32],
 ) -> Result<(), Violation> {
     if let Some(bootstrap) = expect.bootstrap_label {
-        for pin in [verified.supervisor, verified.init] {
-            if label(pin.pid)? != bootstrap {
+        for pid in [
+            verified.supervisor.pid,
+            verified.relay.pid,
+            verified.init.pid,
+        ] {
+            if label(pid)? != bootstrap {
                 return Err(Violation(format!(
-                    "process {} is not under the bootstrap profile",
-                    pin.pid
+                    "process {pid} is not under the bootstrap profile"
                 )));
+            }
+        }
+        for &pid in transient {
+            match label(pid) {
+                Ok(found) if found == bootstrap => {}
+                // A copier that finished during verification is gone.
+                Err(_) if std::fs::symlink_metadata(format!("/proc/{pid}")).is_err() => {}
+                Ok(_) | Err(_) => {
+                    return Err(Violation(format!(
+                        "process {pid} is not under the bootstrap profile"
+                    )));
+                }
             }
         }
         if report.labels.init != bootstrap {
@@ -663,14 +961,12 @@ fn check_mounts(expect: &Expectations<'_>, browser: u32) -> Result<(), Violation
             }
         }
     }
-    let runtime_device = host_backing(expect.runtime_root)?.0;
     for (point, size) in [
         ("/mnt/profile", Some(expect.profile_bytes)),
         ("/mnt/instance", Some(expect.instance_bytes)),
         ("/dev/shm", Some(expect.profile_bytes)),
         ("/tmp", None),
         ("/etc", None),
-        ("/home", None),
     ] {
         let mount = find(point)
             .ok_or_else(|| Violation(format!("{point} is not a mount in the instance")))?;
@@ -685,11 +981,7 @@ fn check_mounts(expect: &Expectations<'_>, browser: u32) -> Result<(), Violation
             )));
         }
     }
-    let run_user = format!("/run/user/{}", expect.uid);
-    let masked = find(&run_user).ok_or_else(|| Violation(format!("{run_user} is not masked")))?;
-    if masked.fstype != "tmpfs" {
-        return Err(Violation(format!("{run_user} is not masked with a tmpfs")));
-    }
+    check_masks(&mounts, expect.masks)?;
     let sockets =
         find("/mnt/sockets").ok_or_else(|| Violation("/mnt/sockets is not a mount".into()))?;
     let (device, root) = host_backing(expect.runtime_dir)?;
@@ -706,18 +998,75 @@ fn check_mounts(expect: &Expectations<'_>, browser: u32) -> Result<(), Violation
             return Err(Violation(format!("{absent} is still mounted")));
         }
     }
-    let policy_prefix = format!("{}/", expect.policy_directory.trim_end_matches('/'));
+    let backing = host_backing(&expect.runtime_root.join(expect.policy_file))?;
+    check_policy_bind(&mounts, expect.policy_directory, &backing)
+}
+
+/// Bytes of the empty mask tmpfs the launcher mounts.
+const MASK_BYTES: u64 = 4096;
+
+/// An empty read-only mask: `tmpfs`, `ro,nosuid,nodev,noexec`, 4 KiB.
+fn is_mask(mount: &Mount) -> bool {
+    mount.fstype == "tmpfs"
+        && ["ro", "nosuid", "nodev", "noexec"]
+            .iter()
+            .all(|flag| mount.options.contains(*flag))
+        && tmpfs_size_matches(mount, MASK_BYTES)
+}
+
+/// Every sensitive path is covered by a mask: the topmost mount holding it
+/// is a mask, and nothing but masks is mounted below it.
+fn check_masks(mounts: &[Mount], paths: &[PathBuf]) -> Result<(), Violation> {
+    for path in paths {
+        let covering = mounts
+            .iter()
+            .enumerate()
+            .filter(|(_, mount)| path.starts_with(&mount.mount_point))
+            .max_by_key(|(index, mount)| {
+                (Path::new(&mount.mount_point).components().count(), *index)
+            })
+            .map(|(_, mount)| mount)
+            .ok_or_else(|| Violation(format!("{} is not under any mount", path.display())))?;
+        if !is_mask(covering) {
+            return Err(Violation(format!(
+                "{} is not hidden behind a read-only mask",
+                path.display()
+            )));
+        }
+        if let Some(exposed) = mounts.iter().find(|mount| {
+            let point = Path::new(&mount.mount_point);
+            point != path && point.starts_with(path) && !is_mask(mount)
+        }) {
+            return Err(Violation(format!(
+                "{} re-exposes a mount below the masked {}",
+                exposed.mount_point,
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The managed policy is bound read-only at `<policy-directory>/policy.json`
+/// from exactly the artifact's policy file (`backing` is its host device and
+/// path within that device's mount root).
+fn check_policy_bind(
+    mounts: &[Mount],
+    policy_directory: &str,
+    backing: &(String, String),
+) -> Result<(), Violation> {
+    let point = format!("{}/policy.json", policy_directory.trim_end_matches('/'));
     let policy = mounts
         .iter()
-        .find(|mount| {
-            mount.mount_point.starts_with(&policy_prefix)
-                || mount.mount_point == expect.policy_directory
-        })
+        .rfind(|mount| mount.mount_point == point)
         .ok_or_else(|| Violation("browser policy is not bound".into()))?;
-    if policy.device != runtime_device {
+    if policy.device != backing.0 || policy.root.trim_end_matches('/') != backing.1 {
         return Err(Violation(
-            "browser policy is not bound from the artifact".into(),
+            "browser policy is not bound from the artifact's policy file".into(),
         ));
+    }
+    if !policy.options.contains("ro") {
+        return Err(Violation("browser policy bind is writable".into()));
     }
     Ok(())
 }
@@ -729,10 +1078,11 @@ mod tests {
     #[test]
     fn status_parsing_reads_nspid_no_new_privs_and_capability_sets() {
         let status = parse_status(
-            "Name:\tchrome\nNSpid:\t4242\t17\t3\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\nNoNewPrivs:\t1\n",
+            "Name:\tchrome\nPPid:\t4241\nNSpid:\t4242\t17\t3\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\nNoNewPrivs:\t1\n",
         )
         .unwrap();
         assert_eq!(status.ns_pids, vec![4242, 17, 3]);
+        assert_eq!(status.ppid, 4241);
         assert!(status.no_new_privs);
         assert_eq!(status.caps, [0; 5]);
         let privileged =
@@ -788,5 +1138,256 @@ mod tests {
         runtime_directory_clean(temp.path()).unwrap();
         std::fs::write(temp.path().join("extra"), b"x").unwrap();
         assert!(runtime_directory_clean(temp.path()).is_err());
+    }
+
+    fn process(sub: &str, ns_pids: &[u32], ppid: u32) -> (PathBuf, Status) {
+        (
+            PathBuf::from(sub),
+            Status {
+                ns_pids: ns_pids.to_vec(),
+                ppid,
+                no_new_privs: !sub.is_empty(),
+                caps: [0; 5],
+            },
+        )
+    }
+
+    /// The launcher's normal tree: supervisor (MainPID) → relay → init in
+    /// the root cgroup, the display and browser below.
+    fn launcher_tree() -> Placement {
+        Placement {
+            processes: BTreeMap::from([
+                (100, process("", &[100], 1)),
+                (101, process("", &[101], 100)),
+                (102, process("", &[102, 1], 101)),
+                (110, process("display", &[110, 7], 102)),
+                (111, process("display", &[111, 9], 102)),
+                (120, process("browser", &[120, 12], 102)),
+            ]),
+        }
+    }
+
+    #[test]
+    fn root_roles_accept_the_three_process_supervision_tree() {
+        let tree = launcher_tree();
+        assert_eq!(
+            tree.root_roles(100).unwrap(),
+            RootRoles {
+                supervisor: 100,
+                relay: 101,
+                init: 102,
+                transient: vec![],
+            }
+        );
+        // The snapshot copier is the init's child in the root cgroup.
+        let mut copying = launcher_tree();
+        copying.processes.insert(130, process("", &[130, 20], 102));
+        assert_eq!(copying.root_roles(100).unwrap().transient, vec![130]);
+        assert_eq!(tree.host_pid(12, "browser").unwrap(), 120);
+    }
+
+    #[test]
+    fn root_roles_reject_strays_and_broken_ancestry() {
+        // Not the unit's MainPID.
+        assert!(launcher_tree().root_roles(101).is_err());
+        // A second host-namespace process in the root cgroup.
+        let mut stray = launcher_tree();
+        stray.processes.insert(140, process("", &[140], 1));
+        assert!(stray.root_roles(100).is_err());
+        // Two relays.
+        let mut doubled = launcher_tree();
+        doubled.processes.insert(141, process("", &[141], 100));
+        assert!(doubled.root_roles(100).is_err());
+        // The init's parent is not the relay.
+        let mut orphan = launcher_tree();
+        orphan.processes.insert(102, process("", &[102, 1], 100));
+        assert!(orphan.root_roles(100).is_err());
+        // An instance process in the root cgroup that is not the init's child.
+        let mut foreign = launcher_tree();
+        foreign.processes.insert(150, process("", &[150, 30], 120));
+        assert!(foreign.root_roles(100).is_err());
+        // No relay at all (the old two-process shape).
+        let mut flat = launcher_tree();
+        flat.processes.remove(&101);
+        flat.processes.insert(102, process("", &[102, 1], 100));
+        assert!(flat.root_roles(100).is_err());
+    }
+
+    #[test]
+    fn relay_namespaces_must_be_the_instance_s_except_its_own_pid_namespace() {
+        let instance = Namespaces {
+            user: "user:[2]".into(),
+            mnt: "mnt:[3]".into(),
+            pid: "pid:[4]".into(),
+            ipc: "ipc:[5]".into(),
+        };
+        let relay = Namespaces {
+            pid: "pid:[1]".into(),
+            ..instance.clone()
+        };
+        check_relay_namespaces(&relay, "pid:[4]", "pid:[1]", &instance).unwrap();
+        assert!(check_relay_namespaces(&relay, "pid:[1]", "pid:[1]", &instance).is_err());
+        assert!(check_relay_namespaces(&relay, "pid:[4]", "pid:[9]", &instance).is_err());
+        let host_user = Namespaces {
+            user: "user:[1]".into(),
+            ..relay.clone()
+        };
+        assert!(check_relay_namespaces(&host_user, "pid:[4]", "pid:[1]", &instance).is_err());
+    }
+
+    #[derive(Default)]
+    struct FakeProc {
+        fds: BTreeMap<u32, Result<Vec<String>, Missing>>,
+        nets: BTreeMap<u32, Result<String, Missing>>,
+        tables: BTreeMap<(u32, &'static str), Result<Option<String>, Missing>>,
+    }
+
+    impl ProcView for FakeProc {
+        fn fd_targets(&self, pid: u32) -> Result<Vec<String>, Missing> {
+            self.fds.get(&pid).cloned().unwrap_or(Err(Missing::Exited))
+        }
+        fn net_namespace(&self, pid: u32) -> Result<String, Missing> {
+            self.nets.get(&pid).cloned().unwrap_or(Err(Missing::Exited))
+        }
+        fn table(&self, pid: u32, table: &str) -> Result<Option<String>, Missing> {
+            self.tables
+                .iter()
+                .find(|((owner, name), _)| *owner == pid && *name == table)
+                .map_or(Err(Missing::Exited), |(_, text)| text.clone())
+        }
+    }
+
+    const TCP_HEADER: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+
+    fn quiet_namespace(proc: &mut FakeProc, pid: u32) {
+        for table in ["tcp", "tcp6", "udp", "udp6"] {
+            proc.tables
+                .insert((pid, table), Ok(Some(TCP_HEADER.to_owned())));
+        }
+        proc.tables.insert(
+            (pid, "unix"),
+            Ok(Some(
+                "Num RefCount Protocol Flags Type St Inode Path\n".to_owned(),
+            )),
+        );
+    }
+
+    fn one_socket_tree() -> FakeProc {
+        let mut proc = FakeProc::default();
+        proc.fds
+            .insert(1, Ok(vec!["socket:[77]".into(), "/dev/null".into()]));
+        proc.nets.insert(1, Ok("net:[9]".into()));
+        proc.fds.insert(2, Ok(vec![]));
+        proc.nets.insert(2, Ok("net:[9]".into()));
+        quiet_namespace(&mut proc, 1);
+        quiet_namespace(&mut proc, 2);
+        proc
+    }
+
+    #[test]
+    fn socket_scan_reads_every_namespace_and_detects_listeners() {
+        scan_with(&one_socket_tree(), &[1, 2]).unwrap();
+        let mut listening = one_socket_tree();
+        listening.tables.insert(
+            (1, "tcp"),
+            Ok(Some(format!(
+                "{TCP_HEADER}   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 77\n"
+            ))),
+        );
+        assert!(scan_with(&listening, &[1, 2]).is_err());
+        // IPv6 tables may be absent; IPv4 ones may not.
+        let mut no_v6 = one_socket_tree();
+        no_v6.tables.insert((1, "tcp6"), Ok(None));
+        scan_with(&no_v6, &[1, 2]).unwrap();
+        let mut no_v4 = one_socket_tree();
+        no_v4.tables.insert((1, "tcp"), Ok(None));
+        no_v4.tables.insert((2, "tcp"), Ok(None));
+        assert!(scan_with(&no_v4, &[1, 2]).is_err());
+    }
+
+    #[test]
+    fn socket_scan_fails_closed_on_missing_evidence_of_live_processes() {
+        // A process that exited is skipped.
+        let mut exited = one_socket_tree();
+        exited.fds.insert(3, Err(Missing::Exited));
+        scan_with(&exited, &[1, 2, 3]).unwrap();
+        // Unreadable descriptors or namespace of a live process are not.
+        let mut hidden = one_socket_tree();
+        hidden
+            .fds
+            .insert(3, Err(Missing::Unreadable("EACCES".into())));
+        assert!(scan_with(&hidden, &[1, 2, 3]).is_err());
+        let mut no_net = one_socket_tree();
+        no_net
+            .nets
+            .insert(2, Err(Missing::Unreadable("EACCES".into())));
+        assert!(scan_with(&no_net, &[1, 2]).is_err());
+        // A table unreadable through one member is read through another.
+        let mut retry = one_socket_tree();
+        retry
+            .tables
+            .insert((1, "udp"), Err(Missing::Unreadable("EACCES".into())));
+        scan_with(&retry, &[1, 2]).unwrap();
+        retry
+            .tables
+            .insert((2, "udp"), Err(Missing::Unreadable("EACCES".into())));
+        assert!(scan_with(&retry, &[1, 2]).is_err());
+        // Members that exited are skipped; the remaining one must answer.
+        let mut gone = one_socket_tree();
+        gone.tables.insert((1, "unix"), Err(Missing::Exited));
+        scan_with(&gone, &[1, 2]).unwrap();
+    }
+
+    fn mask_line(id: u32, point: &str) -> String {
+        format!(
+            "{id} 1 0:{id} / {point} ro,nosuid,nodev,noexec,relatime - tmpfs tmpfs ro,size=4k,mode=755\n"
+        )
+    }
+
+    #[test]
+    fn sensitive_paths_must_be_covered_by_read_only_masks() {
+        let mut text = String::from("1 0 259:1 / / rw,relatime - ext4 /dev/root rw\n");
+        text.push_str(&mask_line(20, "/home"));
+        text.push_str(&mask_line(21, "/run/user/1000"));
+        text.push_str(&mask_line(22, "/srv/state"));
+        let mounts = parse_mountinfo(&text);
+        let paths = [
+            PathBuf::from("/home"),
+            PathBuf::from("/run/user/1000"),
+            PathBuf::from("/srv/state"),
+            // A state root below /home is covered by the /home mask.
+            PathBuf::from("/home/me/.local/state/cowboy"),
+        ];
+        check_masks(&mounts, &paths).unwrap();
+        assert!(check_masks(&mounts, &[PathBuf::from("/srv/other")]).is_err());
+        // A writable tmpfs is not a mask.
+        let writable = parse_mountinfo(&format!(
+            "{text}30 1 0:30 / /srv/state rw,nosuid,nodev - tmpfs tmpfs rw,size=4k\n"
+        ));
+        assert!(check_masks(&writable, &paths).is_err());
+        // A bind below a mask re-exposes host data.
+        let exposed = parse_mountinfo(&format!(
+            "{text}31 22 259:1 /srv/state/keys /srv/state/keys rw - ext4 /dev/root rw\n"
+        ));
+        assert!(check_masks(&exposed, &paths).is_err());
+    }
+
+    #[test]
+    fn the_policy_bind_must_be_the_artifact_s_exact_file() {
+        let mounts = parse_mountinfo(
+            "40 1 259:13 /state/plugins/b/content/usr/share/cowboy-browser/policy.json /etc/opt/chrome/policies/managed/policy.json ro,nosuid,nodev - ext4 /dev/nvme0n1p2 rw\n",
+        );
+        let backing = (
+            "259:13".to_owned(),
+            "/state/plugins/b/content/usr/share/cowboy-browser/policy.json".to_owned(),
+        );
+        check_policy_bind(&mounts, "/etc/opt/chrome/policies/managed", &backing).unwrap();
+        check_policy_bind(&mounts, "/etc/opt/chrome/policies/managed/", &backing).unwrap();
+        let other = (
+            "259:13".to_owned(),
+            "/state/plugins/b/content/usr/share/cowboy-browser/other.json".to_owned(),
+        );
+        assert!(check_policy_bind(&mounts, "/etc/opt/chrome/policies/managed", &other).is_err());
+        assert!(check_policy_bind(&mounts, "/etc/chromium/policies/managed", &backing).is_err());
     }
 }
