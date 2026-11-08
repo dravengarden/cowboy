@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "id": "machine-browser",
+  "version": "1.0.0",
+  "display_name": "Machine browser",
+  "description": "Owner-operated Chromium on the Machine for account sign-in, isolated per account.",
+  "supported_platforms": [
+    {
+      "os": "linux",
+      "architecture": "x86_64"
+    }
+  ],
+  "host_requirements": {
+    "kernel_min": "5.15",
+    "merged_usr": true,
+    "mount_points": [
+      "/opt",
+      "/mnt"
+    ],
+    "apparmor_features": [
+      "network_v9",
+      "unix",
+      "mount",
+      "namespaces/userns"
+    ],
+    "built_from": {
+      "id": "ubuntu",
+      "version_id": "26.04"
+    }
+  },
+  "runtime": {
+    "artifact": "runtime",
+    "launcher": "usr/libexec/cowboy-browser-launcher",
+    "browser": "opt/google/chrome/chrome",
+    "browser_version": "143.0.7499.192",
+    "display_server": "usr/bin/Xtigervnc",
+    "helpers": [
+      "usr/bin/xrandr",
+      "usr/bin/xkbcomp",
+      "usr/bin/xauth",
+      "usr/bin/matchbox-window-manager"
+    ],
+    "policy": {
+      "file": "usr/share/cowboy-browser/policy.json",
+      "directory": "/etc/opt/chrome/policies/managed"
+    }
+  },
+  "launch": {
+    "protocol": "cowboy-browser-control-v1",
+    "readiness_timeout_ms": 20000
+  }
+}

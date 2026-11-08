@@ -83,6 +83,17 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.98.0 adds the `machine_browser` Plugin kind (Plugin SDK
+1.13.0, plugin-contract 1.12.0 with `machine-browser.schema.json`, release
+schema 6, component kind `machine_browser_runtime`): a signed Linux browser
+runtime whose contract names artifact-relative executables, the browser policy
+binding and host requirements, while admission, isolation, streaming and the
+viewer stay core (`machine-browser.md`). provider-ui 3.1.24 recognises the kind
+and its release schema. It also records app-shell 1.1.40 for the
+already-committed dock change `270f49cd9`. First-party `machine-browser`
+1.0.0 is declared through `plugin_additions`; every existing Plugin advances
+one patch version for the new SDK pin. Native pins are unchanged.
+
 Scoped release 3.82.0 replaces the packaged plugin-api, app-shell and state-store
 tests' external assertion imports with Node built-ins. It versions those packages,
 state-store's dependent packages and the plugin-api consumers without changing

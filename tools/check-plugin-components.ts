@@ -1,5 +1,8 @@
 import { Command } from "./lib/command.ts";
-import { mergedComponentRegistrySource, readComponentRegistrySources } from "./component-registry.ts";
+import {
+  mergedComponentRegistrySource,
+  readComponentRegistrySources,
+} from "./component-registry.ts";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import {
@@ -33,7 +36,10 @@ interface PluginManifest {
     | "authentication_provider"
     | "code_intelligence"
     | "telemetry_backend"
-    | "workspace_extension";
+    | "workspace_extension"
+    | "memory_backend"
+    | "call_profile"
+    | "machine_browser";
   entrypoint: string;
   components: Array<{ id: string; version: string }>;
 }
@@ -44,14 +50,50 @@ interface CodeContractIdentity {
   runtime?: { components: Array<{ kind: string; version: string }> };
 }
 
+interface MachineBrowserContractIdentity {
+  id: string;
+  version: string;
+  runtime: {
+    artifact: string;
+    launcher: string;
+    browser: string;
+    display_server: string;
+    helpers: string[];
+    policy: { file: string; directory: string };
+  };
+}
+
+/** Every runtime path stays inside the signed artifact: relative, normalized,
+ * and never a helper and the policy file at once. */
+export function validateMachineBrowserContract(contract: MachineBrowserContractIdentity): void {
+  const paths = [
+    contract.runtime.launcher,
+    contract.runtime.browser,
+    contract.runtime.display_server,
+    ...contract.runtime.helpers,
+    contract.runtime.policy.file,
+  ];
+  for (const path of paths) {
+    assert(
+      /^(?!\/)(?!.*(^|\/)\.\.?(\/|$))[^\0\\]+$/.test(path) && !path.endsWith("/"),
+      `${contract.id}: unsafe machine browser runtime path ${path}`,
+    );
+  }
+  assert(
+    new Set(paths).size === paths.length,
+    `${contract.id}: duplicate machine browser runtime path`,
+  );
+  assert(
+    contract.runtime.policy.directory.startsWith("/etc/"),
+    `${contract.id}: machine browser policy directory must be below /etc`,
+  );
+}
+
 /** Local Rust builds must not be relabelled as a different private runtime. */
-export function validateCodeAdapterRuntime(
-  contract: CodeContractIdentity,
-  version: string,
-): void {
+export function validateCodeAdapterRuntime(contract: CodeContractIdentity, version: string): void {
   if (!contract.runtime) return; // historical schema-one contracts have no runtime
-  const adapters = contract.runtime.components.filter((component) =>
-    component.kind === "code_intelligence_adapter"
+  const adapters = contract.runtime.components.filter(
+    (component) => component.kind === "code_intelligence_adapter",
   );
   assert(
     adapters.length === 1 && adapters[0]!.version === version,
@@ -75,9 +117,10 @@ export async function checkRepository(): Promise<void> {
       JSON.stringify(
         await repositoryClosure(
           active.components,
-          [...readdirSync("plugins", { withFileTypes: true })].filter((entry) =>
-            entry.isDirectory() && exists(`plugins/${entry.name}/plugin.json`)
-          ).map((entry) => entry.name).sort(),
+          [...readdirSync("plugins", { withFileTypes: true })]
+            .filter((entry) => entry.isDirectory() && exists(`plugins/${entry.name}/plugin.json`))
+            .map((entry) => entry.name)
+            .sort(),
         ),
         null,
         2,
@@ -102,44 +145,31 @@ export async function checkRepository(): Promise<void> {
 
   validateReleaseHistory(registry.releases);
 
-  const activeComponents = new Map(
-    active.components.map((component) => [component.id, component]),
-  );
-  const distributableManifests = [
-    ...readdirSync("components", { withFileTypes: true }),
-  ]
+  const activeComponents = new Map(active.components.map((component) => [component.id, component]));
+  const distributableManifests = [...readdirSync("components", { withFileTypes: true })]
     .filter((entry) => entry.isDirectory())
     .flatMap((entry) =>
       ["package.json", "Cargo.toml"]
         .map((manifest) => `components/${entry.name}/${manifest}`)
-        .filter((manifest) => exists(manifest) && !internalCrate(manifest))
+        .filter((manifest) => exists(manifest) && !internalCrate(manifest)),
     )
     .sort();
   assertSameSet(
     active.components.flatMap((component) =>
-      component.package ? [component.package.manifest] : []
+      component.package ? [component.package.manifest] : [],
     ),
     distributableManifests,
     "active component package registry",
   );
   for (const component of active.components) {
-    assert(
-      validComponentId(component.id),
-      `${component.id}: invalid component id`,
-    );
-    assert(
-      exactVersion(component.version),
-      `${component.id}: invalid component version`,
-    );
+    assert(validComponentId(component.id), `${component.id}: invalid component id`);
+    assert(exactVersion(component.version), `${component.id}: invalid component version`);
     assert(
       /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(component.publisher),
       `${component.id}: invalid component publisher`,
     );
     assert(component.sources.length > 0, `${component.id}: no source roots`);
-    assert(
-      component.package !== undefined,
-      `${component.id}: no distributable package`,
-    );
+    assert(component.package !== undefined, `${component.id}: no distributable package`);
     await validatePackage(component);
     const digest = await sourceDigest(component.sources);
     assert(
@@ -149,40 +179,19 @@ export async function checkRepository(): Promise<void> {
   }
 
   const pluginEntries = [...readdirSync("plugins", { withFileTypes: true })]
-    .filter((entry) =>
-      entry.isDirectory() && exists(`plugins/${entry.name}/plugin.json`)
-    )
+    .filter((entry) => entry.isDirectory() && exists(`plugins/${entry.name}/plugin.json`))
     .map((entry) => entry.name)
     .sort();
-  assertSameSet(
-    pluginEntries,
-    Object.keys(active.plugins),
-    "active plugin registry",
-  );
+  assertSameSet(pluginEntries, Object.keys(active.plugins), "active plugin registry");
 
   for (const pluginId of pluginEntries) {
-    const manifest = await readJson<PluginManifest>(
-      `plugins/${pluginId}/plugin.json`,
-    );
-    assert(
-      manifest.schema_version === 1,
-      `${pluginId}: unsupported plugin schema`,
-    );
-    assert(
-      manifest.id === pluginId,
-      `${pluginId}: directory identity mismatch`,
-    );
+    const manifest = await readJson<PluginManifest>(`plugins/${pluginId}/plugin.json`);
+    assert(manifest.schema_version === 1, `${pluginId}: unsupported plugin schema`);
+    assert(manifest.id === pluginId, `${pluginId}: directory identity mismatch`);
     assert(manifest.publisher.length > 0, `${pluginId}: publisher is empty`);
-    validateIndependentPluginVersion(
-      pluginId,
-      manifest.version,
-      active.plugins[pluginId]!,
-    );
+    validateIndependentPluginVersion(pluginId, manifest.version, active.plugins[pluginId]!);
     validatePluginComponentClosure(registry.releases, pluginId, manifest);
-    assert(
-      exists(`plugins/${pluginId}/${manifest.entrypoint}`),
-      `${pluginId}: missing entrypoint`,
-    );
+    assert(exists(`plugins/${pluginId}/${manifest.entrypoint}`), `${pluginId}: missing entrypoint`);
     assertUnique(
       manifest.components.map((component) => component.id),
       `${pluginId}: component dependency`,
@@ -191,66 +200,37 @@ export async function checkRepository(): Promise<void> {
     const dependencies = new Map(
       manifest.components.map((component) => [component.id, component.version]),
     );
-    assert(
-      dependencies.has("cowboy.plugin-contract"),
-      `${pluginId}: missing plugin contract`,
-    );
-    assert(
-      dependencies.has("cowboy.plugin-sdk"),
-      `${pluginId}: missing plugin SDK`,
-    );
+    assert(dependencies.has("cowboy.plugin-contract"), `${pluginId}: missing plugin contract`);
+    assert(dependencies.has("cowboy.plugin-sdk"), `${pluginId}: missing plugin SDK`);
     for (const [componentId, version] of dependencies) {
       const component = activeComponents.get(componentId);
-      assert(
-        component !== undefined,
-        `${pluginId}: unknown component ${componentId}`,
-      );
-      assert(
-        component.version === version,
-        `${pluginId}: stale ${componentId}@${version}`,
-      );
+      assert(component !== undefined, `${pluginId}: unknown component ${componentId}`);
+      assert(component.version === version, `${pluginId}: stale ${componentId}@${version}`);
     }
 
     if (manifest.kind === "agent_provider") {
-      for (
-        const componentId of [
-          "cowboy.provider-sdk",
-          "cowboy.provider-ui",
-          "cowboy.provider-runtime",
-        ]
-      ) {
-        assert(
-          dependencies.has(componentId),
-          `${pluginId}: missing ${componentId}`,
-        );
+      for (const componentId of [
+        "cowboy.provider-sdk",
+        "cowboy.provider-ui",
+        "cowboy.provider-runtime",
+      ]) {
+        assert(dependencies.has(componentId), `${pluginId}: missing ${componentId}`);
       }
       const provider = await readJson<{ id: string; version: string }>(
         `plugins/${pluginId}/${manifest.entrypoint}`,
       );
-      assert(
-        provider.id === pluginId,
-        `${pluginId}: Provider payload identity mismatch`,
-      );
+      assert(provider.id === pluginId, `${pluginId}: Provider payload identity mismatch`);
       assert(
         provider.version === manifest.version,
         `${pluginId}: Provider payload version mismatch`,
       );
     } else if (manifest.kind === "code_intelligence") {
-      assert(
-        dependencies.has("cowboy.code-intelligence"),
-        `${pluginId}: missing code contract`,
-      );
+      assert(dependencies.has("cowboy.code-intelligence"), `${pluginId}: missing code contract`);
       const contract = await readJson<CodeContractIdentity>(
         `plugins/${pluginId}/${manifest.entrypoint}`,
       );
-      assert(
-        contract.id === pluginId,
-        `${pluginId}: contract identity mismatch`,
-      );
-      assert(
-        contract.version === manifest.version,
-        `${pluginId}: contract version mismatch`,
-      );
+      assert(contract.id === pluginId, `${pluginId}: contract identity mismatch`);
+      assert(contract.version === manifest.version, `${pluginId}: contract version mismatch`);
       // A Rust adapter is an optional private implementation, not a named
       // Plugin identity or the only language an external engine can use.
       const cargoPath = `plugins/${pluginId}/adapter/Cargo.toml`;
@@ -266,6 +246,30 @@ export async function checkRepository(): Promise<void> {
         );
         validateCodeAdapterRuntime(contract, manifest.version);
       }
+    } else if (manifest.kind === "machine_browser") {
+      const contract = await readJson<MachineBrowserContractIdentity>(
+        `plugins/${pluginId}/${manifest.entrypoint}`,
+      );
+      assert(contract.id === pluginId, `${pluginId}: machine browser contract identity mismatch`);
+      assert(
+        contract.version === manifest.version,
+        `${pluginId}: machine browser contract version mismatch`,
+      );
+      // The launcher is the Plugin's own static binary; its crate version is
+      // the contract version so a published runtime cannot be relabelled.
+      const cargoPath = `plugins/${pluginId}/launcher/Cargo.toml`;
+      const cargo = await readFile(cargoPath, "utf8").catch((error) => {
+        if ((error as { code?: string }).code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (cargo !== undefined) {
+        const packageBlock = cargo.split("[dependencies]", 1)[0] ?? cargo;
+        assert(
+          packageBlock.includes(`version = "${manifest.version}"`),
+          `${pluginId}: launcher package version mismatch`,
+        );
+      }
+      validateMachineBrowserContract(contract);
     } else {
       const contract = await readJson<{ id: string; version: string }>(
         `plugins/${pluginId}/${manifest.entrypoint}`,
@@ -284,16 +288,11 @@ export async function checkRepository(): Promise<void> {
   const closure = await repositoryClosure(active.components, pluginEntries);
   if (active.closure) {
     assert(
-      same(
-        closure.component_dependencies,
-        active.closure.component_dependencies,
-      ),
+      same(closure.component_dependencies, active.closure.component_dependencies),
       "component dependency snapshot changed; append a component release",
     );
     for (const id of pluginEntries) {
-      const manifest = await readJson<PluginManifest>(
-        `plugins/${id}/plugin.json`,
-      );
+      const manifest = await readJson<PluginManifest>(`plugins/${id}/plugin.json`);
       if (manifest.version === active.plugins[id]) {
         assert(
           same(closure.plugins[id], active.closure.plugins[id]),
@@ -321,10 +320,7 @@ export async function filesDigest(sourceFiles: string[]): Promise<string> {
   const chunks: Uint8Array[] = [];
   let length = 0;
   for (const file of files) {
-    assert(
-      (await lstat(file)).isFile(),
-      `${file}: release input must be a regular file`,
-    );
+    assert((await lstat(file)).isFile(), `${file}: release input must be a regular file`);
     const path = new TextEncoder().encode(`${file}\0`);
     const body = await readFile(file);
     const end = new Uint8Array([0]);
@@ -338,42 +334,31 @@ export async function filesDigest(sourceFiles: string[]): Promise<string> {
     offset += chunk.length;
   }
   const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
-  return `sha256:${
-    [...hash].map((byte) => byte.toString(16).padStart(2, "0")).join("")
-  }`;
+  return `sha256:${[...hash].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 // Match clean Git/Nix source, not an adapter's ignored target/ tree. Untracked
 // non-ignored source is included so a pre-commit check observes new input too.
 // The isolation gate copies this same list and compares SDK package bytes to
 // the in-tree build, catching ignored files used as package/host inputs.
-export async function repositorySourceFiles(
-  root: string,
-  cwd?: string,
-): Promise<string[]> {
+export async function repositorySourceFiles(root: string, cwd?: string): Promise<string[]> {
   const result = await new Command("git", {
-    args: [
-      "ls-files",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-      "--",
-      root,
-    ],
+    args: ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", root],
     ...(cwd === undefined ? {} : { cwd }),
     stdout: "piped",
     stderr: "piped",
   }).output();
   assert(result.success, "cannot enumerate Git release sources");
-  const files = new TextDecoder("utf-8", { fatal: true }).decode(result.stdout)
-    .split("\0").filter(Boolean);
+  const files = new TextDecoder("utf-8", { fatal: true })
+    .decode(result.stdout)
+    .split("\0")
+    .filter(Boolean);
   assert(files.length > 0, `${root}: no release sources`);
   assertUnique(files, `${root}: release source`);
   for (const file of files) {
     assert(confined(root, file), `${root}: source escaped Plugin directory`);
   }
-  return files.map((file) => cwd === undefined ? file : resolve(cwd, file));
+  return files.map((file) => (cwd === undefined ? file : resolve(cwd, file)));
 }
 
 export function validateIndependentPluginVersion(
@@ -381,10 +366,7 @@ export function validateIndependentPluginVersion(
   version: string,
   componentReleaseMinimum: string,
 ): void {
-  assert(
-    exactVersion(version),
-    `${pluginId}: invalid plugin version ${version}`,
-  );
+  assert(exactVersion(version), `${pluginId}: invalid plugin version ${version}`);
   assert(
     compareVersion(version, componentReleaseMinimum) >= 0,
     `${pluginId}: version predates the active component release`,
@@ -398,10 +380,7 @@ async function validatePackage(component: ComponentRecord): Promise<void> {
     [dirname(descriptor.manifest)],
     `${component.id}: source digest must cover its complete package directory`,
   );
-  assert(
-    exists(descriptor.manifest),
-    `${component.id}: package manifest is missing`,
-  );
+  assert(exists(descriptor.manifest), `${component.id}: package manifest is missing`);
   if (descriptor.kind === "npm") {
     const manifest = await readJson<{
       name?: string;
@@ -411,39 +390,23 @@ async function validatePackage(component: ComponentRecord): Promise<void> {
       dependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
     }>(descriptor.manifest);
-    assert(
-      manifest.name === descriptor.name,
-      `${component.id}: npm package name mismatch`,
-    );
-    assert(
-      manifest.version === component.version,
-      `${component.id}: npm package version mismatch`,
-    );
-    assert(
-      manifest.private !== true,
-      `${component.id}: npm package is private`,
-    );
-    assert(
-      manifest.exports !== undefined,
-      `${component.id}: npm package has no public exports`,
-    );
+    assert(manifest.name === descriptor.name, `${component.id}: npm package name mismatch`);
+    assert(manifest.version === component.version, `${component.id}: npm package version mismatch`);
+    assert(manifest.private !== true, `${component.id}: npm package is private`);
+    assert(manifest.exports !== undefined, `${component.id}: npm package has no public exports`);
     const packageRoot = dirname(descriptor.manifest);
     for (const target of exportTargets(manifest.exports)) {
-      assert(
-        target.startsWith("./"),
-        `${component.id}: export is not package-relative`,
-      );
+      assert(target.startsWith("./"), `${component.id}: export is not package-relative`);
       const exportedPath = resolve(packageRoot, target);
       assert(
         confined(packageRoot, exportedPath) && exists(exportedPath),
         `${component.id}: export escapes or is missing: ${target}`,
       );
     }
-    await validateNpmSourceClosure(
-      component,
-      packageRoot,
-      { ...manifest.dependencies, ...manifest.peerDependencies },
-    );
+    await validateNpmSourceClosure(component, packageRoot, {
+      ...manifest.dependencies,
+      ...manifest.peerDependencies,
+    });
     return;
   }
   const cargo = await readFile(descriptor.manifest, "utf8");
@@ -456,10 +419,7 @@ async function validatePackage(component: ComponentRecord): Promise<void> {
     packageBlock.includes(`version = "${component.version}"`),
     `${component.id}: Cargo package version mismatch`,
   );
-  assert(
-    !packageBlock.includes("publish = false"),
-    `${component.id}: Cargo package is private`,
-  );
+  assert(!packageBlock.includes("publish = false"), `${component.id}: Cargo package is private`);
 }
 
 // Resolve Cargo's own metadata rather than guessing TOML with a regex. This is
@@ -468,28 +428,16 @@ async function cargoPackageDependencies(): Promise<
   Map<string, Array<{ name: string; req: string; path?: string }>>
 > {
   const result = await new Command("cargo", {
-    args: [
-      "metadata",
-      "--offline",
-      "--locked",
-      "--no-deps",
-      "--format-version",
-      "1",
-    ],
+    args: ["metadata", "--offline", "--locked", "--no-deps", "--format-version", "1"],
     stdout: "piped",
     stderr: "piped",
   }).output();
-  assert(
-    result.success,
-    `Cargo metadata failed: ${new TextDecoder().decode(result.stderr)}`,
-  );
+  assert(result.success, `Cargo metadata failed: ${new TextDecoder().decode(result.stderr)}`);
   const metadata = JSON.parse(new TextDecoder().decode(result.stdout)) as {
-    packages: Array<
-      {
-        name: string;
-        dependencies: Array<{ name: string; req: string; path?: string }>;
-      }
-    >;
+    packages: Array<{
+      name: string;
+      dependencies: Array<{ name: string; req: string; path?: string }>;
+    }>;
   };
   return new Map(metadata.packages.map((pkg) => [pkg.name, pkg.dependencies]));
 }
@@ -502,13 +450,8 @@ export function resolvePackagePins(
   const result: string[] = [];
   for (const [name, version] of Object.entries(dependencies)) {
     if (!name.startsWith("@cowboy/") && !name.startsWith("cowboy-")) continue;
-    const target = components.find((component) =>
-      component.package?.name === name
-    );
-    assert(
-      target !== undefined,
-      `${owner}: unregistered Cowboy package ${name}`,
-    );
+    const target = components.find((component) => component.package?.name === name);
+    assert(target !== undefined, `${owner}: unregistered Cowboy package ${name}`);
     assert(
       exactVersion(version) && version === target.version,
       `${owner}: stale or non-exact package pin ${name}@${version}`,
@@ -556,32 +499,22 @@ async function repositoryClosure(
         if (!dependency.name.startsWith("cowboy-") && !dependency.path) {
           continue;
         }
-        const target = components.find((candidate) =>
-          candidate.package?.name === dependency.name
-        );
-        assert(
-          target !== undefined,
-          `${component.id}: unregistered local Cargo dependency`,
-        );
+        const target = components.find((candidate) => candidate.package?.name === dependency.name);
+        assert(target !== undefined, `${component.id}: unregistered local Cargo dependency`);
         assert(
           dependency.req === `=${target.version}`,
           `${component.id}: Cargo dependency is not exact`,
         );
         if (dependency.path) {
           assert(
-            resolve(dependency.path) ===
-              resolve(dirname(target.package!.manifest)),
+            resolve(dependency.path) === resolve(dirname(target.package!.manifest)),
             `${component.id}: Cargo dependency path differs from registered package`,
           );
         }
         dependencies[dependency.name] = target.version;
       }
     }
-    graph[component.id] = resolvePackagePins(
-      component.id,
-      dependencies,
-      components,
-    );
+    graph[component.id] = resolvePackagePins(component.id, dependencies, components);
   }
   const plugins: ComponentClosure["plugins"] = {};
   for (const id of pluginIds) {
@@ -597,11 +530,12 @@ async function repositoryClosure(
         digest: "",
       },
       root,
-      Object.fromEntries(manifest.components.flatMap((pin) => {
-        const pkg = components.find((component) => component.id === pin.id)
-          ?.package;
-        return pkg ? [[pkg.name, pin.version]] : [];
-      })),
+      Object.fromEntries(
+        manifest.components.flatMap((pin) => {
+          const pkg = components.find((component) => component.id === pin.id)?.package;
+          return pkg ? [[pkg.name, pin.version]] : [];
+        }),
+      ),
       files,
     );
     plugins[id] = {
@@ -655,8 +589,7 @@ function exportTargets(value: unknown): string[] {
 
 function confined(root: string, path: string): boolean {
   const pathFromRoot = relative(resolve(root), resolve(path));
-  return pathFromRoot === "" ||
-    (!pathFromRoot.startsWith("..") && !pathFromRoot.startsWith("/"));
+  return pathFromRoot === "" || (!pathFromRoot.startsWith("..") && !pathFromRoot.startsWith("/"));
 }
 
 async function collectFiles(path: string, files: string[]): Promise<void> {
@@ -666,10 +599,7 @@ async function collectFiles(path: string, files: string[]): Promise<void> {
     files.push(path);
     return;
   }
-  assert(
-    stat.isDirectory(),
-    `${path}: component source must be a file or directory`,
-  );
+  assert(stat.isDirectory(), `${path}: component source must be a file or directory`);
   for (const entry of await readdir(path, { withFileTypes: true })) {
     // A workspace member's dependency links are install output: ignored by
     // Git, never packed by npm and absent from the source digest.
@@ -683,17 +613,16 @@ function validComponentId(value: string): boolean {
 }
 
 function assertUnique(values: string[], label: string): void {
-  assert(
-    new Set(values).size === values.length,
-    `${label}: duplicate identity`,
-  );
+  assert(new Set(values).size === values.length, `${label}: duplicate identity`);
 }
 
 // Workspace crates split out of the Cowboy binaries (wire, server, machine)
 // are never published, so they are not distributable components.
 function internalCrate(manifest: string): boolean {
-  return manifest.endsWith("/Cargo.toml") &&
-    /^publish\s*=\s*false\s*$/m.test(readFileSync(manifest, "utf8"));
+  return (
+    manifest.endsWith("/Cargo.toml") &&
+    /^publish\s*=\s*false\s*$/m.test(readFileSync(manifest, "utf8"))
+  );
 }
 
 function exists(path: string): boolean {

@@ -1,6 +1,6 @@
 {
   "name": "@cowboy/plugin-contract",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "type": "module",
   "exports": {
     "./schema.json": "./schema.json",
@@ -10,7 +10,8 @@
     "./telemetry-backend-v2.schema.json": "./telemetry-backend-v2.schema.json",
     "./workspace-extension.schema.json": "./workspace-extension.schema.json",
     "./memory-backend.schema.json": "./memory-backend.schema.json",
-    "./call-profile.schema.json": "./call-profile.schema.json"
+    "./call-profile.schema.json": "./call-profile.schema.json",
+    "./machine-browser.schema.json": "./machine-browser.schema.json"
   },
   "files": [
     "schema.json",
@@ -20,7 +21,8 @@
     "telemetry-backend-v2.schema.json",
     "workspace-extension.schema.json",
     "memory-backend.schema.json",
-    "call-profile.schema.json"
+    "call-profile.schema.json",
+    "machine-browser.schema.json"
   ],
   "publishConfig": {
     "access": "public"

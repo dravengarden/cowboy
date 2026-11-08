@@ -11,6 +11,7 @@ mod code_intelligence;
 #[cfg(test)]
 mod execution_tests;
 pub mod host;
+mod machine_browser;
 mod session_extension;
 mod telemetry;
 mod workspace_extension;
@@ -20,6 +21,7 @@ pub use cli_auth::{
 };
 pub use code_intelligence::*;
 pub use host::*;
+pub use machine_browser::*;
 pub use session_extension::*;
 pub use telemetry::*;
 pub use workspace_extension::*;
@@ -43,7 +45,7 @@ pub const PLUGIN_SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
 pub const PACKAGE_SCHEMA_VERSION: u16 = 1;
 pub const RELEASE_SCHEMA_MIN_VERSION: u16 = 1;
-pub const RELEASE_SCHEMA_VERSION: u16 = 5;
+pub const RELEASE_SCHEMA_VERSION: u16 = 6;
 pub const HOST_RELEASE_SCHEMA_VERSION: u16 = 2;
 pub const WORKSPACE_RELEASE_SCHEMA_VERSION: u16 = 3;
 /// Old Catalog readers must skip execution-capable Agent payloads before
@@ -51,6 +53,9 @@ pub const WORKSPACE_RELEASE_SCHEMA_VERSION: u16 = 3;
 pub const EXECUTION_RELEASE_SCHEMA_VERSION: u16 = 4;
 /// Old Catalog readers must skip session-extension kinds they cannot decode.
 pub const SESSION_EXTENSION_RELEASE_SCHEMA_VERSION: u16 = 5;
+/// Old Catalog readers must skip the Machine browser kind, whose runtime
+/// artifact and host requirements they cannot decode.
+pub const MACHINE_BROWSER_RELEASE_SCHEMA_VERSION: u16 = 6;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_MIN_VERSION: u16 = 1;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_VERSION: u16 = 2;
 pub const CODE_INTELLIGENCE_SCHEMA_MIN_VERSION: u16 = 1;
@@ -82,6 +87,7 @@ pub enum PluginKind {
     WorkspaceExtension,
     MemoryBackend,
     CallProfile,
+    MachineBrowser,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +143,7 @@ pub enum PluginPayload {
     WorkspaceExtension(WorkspaceExtensionContract),
     MemoryBackend(MemoryBackendContract),
     CallProfile(CallProfileContract),
+    MachineBrowser(MachineBrowserContract),
 }
 
 /// Declarative identity-provider package consumed by Cowboy's built-in
@@ -378,6 +385,8 @@ pub enum PluginComponentKind {
     AcpRuntime,
     CodeIntelligenceAdapter,
     CodeIntelligenceServer,
+    /// The single browser runtime tree of a `machine_browser` Plugin.
+    MachineBrowserRuntime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -423,6 +432,7 @@ impl PluginCompatibilityRequirements {
             PluginPayload::WorkspaceExtension(contract) => contract.schema_version,
             PluginPayload::MemoryBackend(contract) => contract.schema_version,
             PluginPayload::CallProfile(contract) => contract.schema_version,
+            PluginPayload::MachineBrowser(contract) => contract.schema_version,
         };
         let requirements = Self {
             plugin_sdk_version,
@@ -492,6 +502,10 @@ impl PluginCompatibilityRequirements {
                     PluginKind::MemoryBackend | PluginKind::CallProfile
                 ) && self.host_bundle_schema.is_none(),
                 "Plugin release schema 5 is reserved for session extensions"
+            ),
+            MACHINE_BROWSER_RELEASE_SCHEMA_VERSION => ensure!(
+                self.plugin_kind == PluginKind::MachineBrowser && self.host_bundle_schema.is_none(),
+                "Plugin release schema 6 is reserved for Machine browsers"
             ),
             _ => {}
         }
@@ -682,6 +696,16 @@ impl PluginContractInventory {
                     }),
                 ),
                 "session extension payload schema (Plugin SDK 1.12)",
+            ),
+            PluginKind::MachineBrowser => (
+                1,
+                u16::from(
+                    Version::parse(&self.plugin_sdk_version).is_ok_and(|version| {
+                        let (major, minor, patch) = MACHINE_BROWSER_SDK;
+                        version >= Version::new(major, minor, patch)
+                    }),
+                ),
+                "machine browser payload schema (Plugin SDK 1.13)",
             ),
         }
     }
@@ -907,7 +931,16 @@ impl PluginPackage {
             | PluginPayload::TelemetryBackend(_)
             | PluginPayload::WorkspaceExtension(_)
             | PluginPayload::MemoryBackend(_)
-            | PluginPayload::CallProfile(_) => None,
+            | PluginPayload::CallProfile(_)
+            | PluginPayload::MachineBrowser(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn machine_browser(&self) -> Option<&MachineBrowserContract> {
+        match &self.payload {
+            PluginPayload::MachineBrowser(contract) => Some(contract),
+            _ => None,
         }
     }
 
@@ -920,7 +953,8 @@ impl PluginPackage {
             | PluginPayload::TelemetryBackend(_)
             | PluginPayload::WorkspaceExtension(_)
             | PluginPayload::MemoryBackend(_)
-            | PluginPayload::CallProfile(_) => None,
+            | PluginPayload::CallProfile(_)
+            | PluginPayload::MachineBrowser(_) => None,
         }
     }
 
@@ -936,10 +970,11 @@ impl PluginPackage {
                 | PluginPayload::WorkspaceExtension(_)
                 | PluginPayload::MemoryBackend(_)
                 | PluginPayload::CallProfile(_)
+                | PluginPayload::MachineBrowser(_)
         ) {
             ensure!(
                 files.is_none(),
-                "data-only capabilities cannot declare executable host bundles"
+                "this Plugin kind cannot declare executable host bundles"
             );
         }
         let host = files
@@ -972,6 +1007,8 @@ impl PluginPackage {
             PluginKind::MemoryBackend | PluginKind::CallProfile
         ) {
             SESSION_EXTENSION_RELEASE_SCHEMA_VERSION
+        } else if self.manifest.kind == PluginKind::MachineBrowser {
+            MACHINE_BROWSER_RELEASE_SCHEMA_VERSION
         } else {
             RELEASE_SCHEMA_MIN_VERSION
         }
@@ -1003,6 +1040,9 @@ impl PluginPackage {
                 contract.supported_platforms.iter().cloned().collect()
             }
             PluginPayload::CallProfile(contract) => {
+                contract.supported_platforms.iter().cloned().collect()
+            }
+            PluginPayload::MachineBrowser(contract) => {
                 contract.supported_platforms.iter().cloned().collect()
             }
         }
@@ -1144,6 +1184,9 @@ impl PluginRelease {
                     "call profile",
                 )?;
             }
+            PluginPayload::MachineBrowser(contract) => {
+                machine_browser::validate_release(contract, self)?;
+            }
         }
         Ok(())
     }
@@ -1180,6 +1223,11 @@ impl PluginRelease {
                     PluginPayload::MemoryBackend(_) | PluginPayload::CallProfile(_)
                 ) && self.host_bundle_digest.is_none(),
                 "release schema 5 is reserved for data-only session extensions"
+            ),
+            MACHINE_BROWSER_RELEASE_SCHEMA_VERSION => ensure!(
+                matches!(package.payload, PluginPayload::MachineBrowser(_))
+                    && self.host_bundle_digest.is_none(),
+                "release schema 6 is reserved for Machine browsers"
             ),
             EXECUTION_RELEASE_SCHEMA_VERSION => {
                 ensure!(
@@ -1305,8 +1353,9 @@ impl ReleasedPluginComponent {
             PluginComponentKind::AgentGateway => PrivateComponentKind::ProviderGateway,
             PluginComponentKind::AcpRuntime => PrivateComponentKind::AcpRuntime,
             PluginComponentKind::CodeIntelligenceAdapter
-            | PluginComponentKind::CodeIntelligenceServer => {
-                bail!("code-intelligence component cannot satisfy an agent Provider payload")
+            | PluginComponentKind::CodeIntelligenceServer
+            | PluginComponentKind::MachineBrowserRuntime => {
+                bail!("non-agent runtime component cannot satisfy an agent Provider payload")
             }
         };
         Ok(ReleasedPrivateComponent {
@@ -1365,6 +1414,23 @@ fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Resul
             PluginKind::MemoryBackend | PluginKind::CallProfile,
             PluginPayload::MemoryBackend(_) | PluginPayload::CallProfile(_),
         ) => validate_session_extension(manifest, payload)?,
+        (PluginKind::MachineBrowser, PluginPayload::MachineBrowser(contract)) => {
+            ensure!(
+                contract.id == manifest.id && contract.version == manifest.version,
+                "machine browser payload identity mismatch"
+            );
+            let (major, minor, patch) = MACHINE_BROWSER_SDK;
+            ensure!(
+                manifest
+                    .components
+                    .iter()
+                    .any(|component| component.id == "cowboy.plugin-sdk"
+                        && Version::parse(&component.version)
+                            .is_ok_and(|version| version >= Version::new(major, minor, patch))),
+                "machine browsers require Plugin SDK 1.13 or newer"
+            );
+            machine_browser::validate_contract(contract)?;
+        }
         (PluginKind::WorkspaceExtension, PluginPayload::WorkspaceExtension(contract)) => {
             ensure!(
                 contract.id == manifest.id && contract.version == manifest.version,

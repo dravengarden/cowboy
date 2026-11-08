@@ -13,7 +13,8 @@ interface PluginManifest {
     | "telemetry_backend"
     | "workspace_extension"
     | "memory_backend"
-    | "call_profile";
+    | "call_profile"
+    | "machine_browser";
   entrypoint: string;
 }
 
@@ -92,6 +93,7 @@ const PLUGIN_KINDS = {
   },
   memory_backend: { label: "Memory", translation: "memory" },
   call_profile: { label: "Agent calls", translation: "calls" },
+  machine_browser: { label: "Machine browser", translation: "browser" },
 } satisfies Record<PluginManifest["kind"], { label: string; translation: string }>;
 
 const WEBSITE_PROVIDER_ACCENTS: Partial<Record<string, { light: string; dark: string }>> = {
@@ -280,6 +282,29 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
           secondaryAccent: "#168B78",
           markViewBox: "0 0 24 24",
           markPath: "M3 3h7v4h4V3h7v7h-4v4h4v7h-7v-4h-4v4H3v-7h4v-4H3Z",
+          markMode: "stroke" as const,
+        };
+      }
+      if (manifest.kind === "machine_browser") {
+        const contract = await readJson<{
+          id: string;
+          version: string;
+          display_name: string;
+          description: string;
+        }>(joinPath(root, sourcePath, manifest.entrypoint));
+        if (contract.id !== manifest.id || contract.version !== manifest.version) {
+          throw new Error(`${manifest.id}: machine browser identity mismatch`);
+        }
+        return {
+          ...shared,
+          name: contract.display_name,
+          vendor: manifest.publisher,
+          summary: contract.description,
+          accentLight: "#1F6F8B",
+          accentDark: "#7CC4DD",
+          secondaryAccent: "#168B78",
+          markViewBox: "0 0 24 24",
+          markPath: "M3 5h18v12H3V5Zm0 4h18M7 7h.01M10 7h.01M9 21h6",
           markMode: "stroke" as const,
         };
       }

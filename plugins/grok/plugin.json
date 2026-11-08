@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
   "id": "grok",
-  "version": "3.1.54",
-  "component_release": "3.82.0",
+  "version": "3.1.55",
+  "component_release": "3.98.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",
   "components": [
     {
       "id": "cowboy.plugin-contract",
-      "version": "1.11.0"
+      "version": "1.12.0"
     },
     {
       "id": "cowboy.plugin-sdk",
-      "version": "1.12.4"
+      "version": "1.13.0"
     },
     {
       "id": "cowboy.plugin-api",
@@ -25,7 +25,7 @@
     },
     {
       "id": "cowboy.provider-ui",
-      "version": "3.1.23"
+      "version": "3.1.24"
     },
     {
       "id": "cowboy.provider-runtime",

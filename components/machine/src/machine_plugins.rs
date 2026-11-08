@@ -332,6 +332,7 @@ fn ensure_machine_installable_kind(package: &PluginPackage) -> Result<()> {
                 | cowboy_plugin_sdk::PluginKind::WorkspaceExtension
                 | cowboy_plugin_sdk::PluginKind::MemoryBackend
                 | cowboy_plugin_sdk::PluginKind::CallProfile
+                | cowboy_plugin_sdk::PluginKind::MachineBrowser
         ),
         "Machine installer received a Controller-only Plugin kind"
     );
@@ -568,6 +569,7 @@ impl MachinePluginStore {
                 | PluginPayload::WorkspaceExtension(_)
                 | PluginPayload::MemoryBackend(_)
                 | PluginPayload::CallProfile(_)
+                | PluginPayload::MachineBrowser(_)
         ) {
             return self
                 .install_non_agent_plugin(
@@ -815,6 +817,7 @@ impl MachinePluginStore {
                 | cowboy_plugin_sdk::PluginKind::WorkspaceExtension
                 | cowboy_plugin_sdk::PluginKind::MemoryBackend
                 | cowboy_plugin_sdk::PluginKind::CallProfile
+                | cowboy_plugin_sdk::PluginKind::MachineBrowser
         ) {
             self.validate_extension_dependencies(&plugin_package)?;
             Self::activate(&self.plugin_root(provider_id), &generation_name)?;
@@ -3954,8 +3957,11 @@ fn provider_staging_projection(artifacts: &PluginRuntimeArtifacts) -> PlatformRu
                     PluginComponentKind::AgentAdapter => PrivateComponentKind::ProviderAdapter,
                     PluginComponentKind::AgentGateway => PrivateComponentKind::ProviderGateway,
                     PluginComponentKind::AcpRuntime => PrivateComponentKind::AcpRuntime,
+                    // Non-agent runtimes reuse the Provider staging layout; the
+                    // Machine's own launch plans, not this label, decide what runs.
                     PluginComponentKind::CodeIntelligenceAdapter
-                    | PluginComponentKind::CodeIntelligenceServer => {
+                    | PluginComponentKind::CodeIntelligenceServer
+                    | PluginComponentKind::MachineBrowserRuntime => {
                         PrivateComponentKind::ProviderAdapter
                     }
                 },
