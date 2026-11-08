@@ -48,6 +48,8 @@ const GRACEFUL_WAIT: Duration = Duration::from_secs(8);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(3);
 const SUPERVISOR_TICK: Duration = Duration::from_secs(1);
 const SOCKET_SCAN_INTERVAL: Duration = Duration::from_secs(10);
+/// How often the advertised capability is recomputed while connected.
+const CAPABILITY_WATCH_INTERVAL: Duration = Duration::from_secs(30);
 /// Fixed X display number inside each instance's private namespaces.
 const DISPLAY: &str = ":7";
 const TMP_BYTES: u64 = 256 << 20;
@@ -269,10 +271,63 @@ impl BrowserManager {
                 browser: Event::State(instance.state(None)),
             });
         }
+        self.watch_capability(id, events);
         UplinkGuard {
             manager: Arc::downgrade(self),
             id,
         }
+    }
+
+    /// Re-announce the browser capability whenever it changes while this
+    /// uplink is current: a Plugin installed, upgraded or removed, or the host
+    /// policy appearing or disappearing, must not wait for a reconnect.
+    fn watch_capability(
+        self: &Arc<Self>,
+        uplink: u64,
+        events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    ) {
+        let manager = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut announced: Option<Option<Capability>> = None;
+            let mut tick = tokio::time::interval(CAPABILITY_WATCH_INTERVAL);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                let Some(manager) = manager.upgrade() else {
+                    return;
+                };
+                if !manager
+                    .uplink
+                    .lock()
+                    .as_ref()
+                    .is_some_and(|current| current.id == uplink)
+                {
+                    return;
+                }
+                let current = manager.capability();
+                // The hello already carried the first observation.
+                let changed = announced
+                    .as_ref()
+                    .is_some_and(|previous| *previous != current);
+                if announced.is_none() {
+                    announced = Some(current);
+                    continue;
+                }
+                if changed {
+                    let event = match &current {
+                        Some(capability) => Event::Capability(capability.clone()),
+                        None => Event::CapabilityLost,
+                    };
+                    if events
+                        .send(MachineEvent::Browser { browser: event })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    announced = Some(current);
+                }
+            }
+        });
     }
 
     /// Whether this Machine can run browsers, and with which Plugin
