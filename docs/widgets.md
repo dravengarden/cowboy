@@ -4,8 +4,11 @@ Status: design for review, revision 4 (2026-11-08); nothing here is built or
 activated. Revision 1 received an Astra Max design review ("request changes",
 16 findings, 6 blocking); revision 2 a second ("request changes", 15
 findings, 4 blocking); revision 3 a third ("request changes", 14 findings,
-5 blocking). Every finding is resolved below and none was rejected
-([§1](#1-review-findings-and-resolutions)). Statements marked
+5 blocking); revision 4 a fourth ("request changes", 13 findings, 5
+blocking). Findings of revisions 1–3 are resolved below and none was
+rejected; the revision-4 findings are recorded **open** in
+[§1.4](#14-revision-4-astra-max-251963f05-open) with proposed resolutions,
+pending the owner's decision on scope (§1.4, last paragraph). Statements marked
 **[unverified]** are inferred from code or history and still need evidence.
 
 Related: [`agent-api.md`](agent-api.md) (the MCP read/execute/receipt surface
@@ -111,6 +114,44 @@ typing-free, auditable decisions within measured bounds.
 | R12 | State changes could prevent reading an immutable pinned revision (P2) | Pinned reads are bound to the document's `sha256`; only current-document reads restart, and only on `revision` change | §6.1 |
 | R13 | Token prefix arithmetic was wrong; tests did not enforce thresholds (P2) | Prefix totals recomputed from complete exchanges; the contract test measures publish and update envelopes with results against the same baselines the gates use | §11 |
 | R14 | Field-level domains, units and serialization unspecified (P2) | Units and integer domains fixed in the contract comments and §5.3; uniqueness scopes and serialization rules stated; the checker enforces option-label length, empty labels, message bounds and ids on actionable nodes | §5.3 |
+
+### 1.4 Revision 4 (Astra Max, `251963f05`) — open
+
+| # | Finding (severity) | Proposed resolution (not yet applied) |
+|---|---|---|
+| N1 | Delivery attribution is unspecified: `dispatched_cmids` records only cmid, dispatch epoch and echo status; `remote_runtime.rs` discards turn identity when projecting completion (P1) | Define the interaction → queue command → worker incarnation → turn mapping with the runtime's existing turn id, carry it into the Hub's dispatched-prompt record, and accept as evidence only output and `turn_end` tagged with that turn; align the contract's `delivered` definition (error exclusion, output alternative) |
+| N2 | An unknown Clear commit has no recovery protocol (P1) | Give Clear a stable operation id and `expected_generation`; make it a conditional update; on `unknown`, read the durable generation to decide applied-or-not before touching memory or reopening the session to effects |
+| N3 | The awaited Clear transaction can overtake buffered `AppendEvent` writes (P1) | Route Clear through the store writer as an acknowledged, in-order barrier (the writer flushes the pending batch first, as it does today), and fence every persisted event and anchor with the generation so a late buffered event of the old generation is dropped |
+| N4 | Cancellation versus dispatch is not arbitrated; the matrix row "never sent until cancelled" is false while a cancellation is uncommitted (P1) | Record a durable `cancel_requested` intent (acknowledged) before touching the queue; the dispatch CAS requires `cancel_requested = false`; promise cancellation only after its commit and state that a prompt whose cancellation never became durable may still dispatch |
+| N5 | Artifact pinning races collection: a pin of an old unreferenced artifact can land between GC's root enumeration and unlink (P1) | Pin admission refreshes the artifact's age (as `put_bytes` does) and GC re-checks `widget_artifact_refs` immediately before each unlink under the same lock; add the paused-collector fixture |
+| N6 | The existing turn Retry path (`cowboy-retry:` cmid from the last user prompt) bypasses the widget ledger (P2) | Refuse that path for widget-originated prompts with a link to `widget_action_retry`, or route it through the retry operation with the original interaction identity |
+| N7 | Retry admission is incomplete: refusal list contradicts §8.3 limits, lost-response replay undefined, W5 contradicts the retry exception (P2) | Idempotency on `retry_interaction_id`, full refusal set, chain limit of one, projection of retry/duplicate links in snapshots, W5 amended |
+| N8 | The worst-case message checker ranks by raw UTF-8, not serialized contribution; control characters escape to more bytes (P2) | Rank by the complete serialized contribution (raw plus JSON-escaped copies); bound `reason` and handles; add the control-character vector |
+| N9 | Read and lookup pages are not packed against the complete encoded response (P2) | Byte-aware packing including metadata and escaping, actual continuation offsets, same accounting for lookup pages |
+| N10 | Selection domains ambiguous: option values not required unique, single-choice cardinality, newline/control characters in labels (P2) | Unique option values per choice, valid initial `value`, unique submitted selections, effective cardinality one for single choices in `interactionSignature`, labels restricted to a single line without control characters |
+| N11 | `PublishResult` cannot represent the generation-CAS refusal (P2) | Add `cleared` to `PublishResult` with retry semantics and a concurrent-Clear vector |
+| N12 | The update gate passes against an inflated baseline: the one-line status fixture is a sentence plus a checklist (197 B); against the 108-byte sentence the update is 4.06× (P2) | Separate the baselines in the fixtures; set the update bound against the real sentence (which the current design fails at 2.5×) or accept the measured ratio explicitly as a product decision |
+| N13 | Controller acceptance of unknown types with `fallback` contradicts the closed union (P2) | Reject every unknown type at the Controller; reserve `unsupported` parsing for a newer document meeting an older Web client |
+
+Rulings: decision 17 request changes (N1); 18 conditional (N2–N4); 19
+request changes (N6, N7); 20 the no-savings claim approved, the gate
+evidence rejected (N12).
+
+**Where this leaves the design.** Four rounds have converged the document
+model, presentation, extensibility and trust boundary (R5, R9, R11, R12 and
+the earlier 7, 8, 9, 10, 13, 14 are resolved), while every round has found
+new gaps in the same three places: proof of delivery for interactive taps,
+Clear versus in-flight work, and artifact retention. Those are the parts of
+the design that specify a transactional subsystem over the write-behind Hub
+in prose. Three ways forward are open to the owner: continue iterating the
+full interactive design with Astra Max; narrow Phase 1 to **display-only
+widgets plus the inline carrier** (no `button`/`choice`, so N1, N4, N6 and
+N7 fall away and N2, N3, N5 shrink to the Clear barrier and the GC pin), with
+interactions returning as Phase 2 once the worker can acknowledge a prompt;
+or stop here and carry the open findings into implementation as work items.
+The second option is recommended: it keeps what the history evidence asked
+for most (tables, status, images, in-place updates on a phone) and defers
+the one capability whose correctness depends on runtime changes.
 
 Rulings on decisions are folded into §14.
 
