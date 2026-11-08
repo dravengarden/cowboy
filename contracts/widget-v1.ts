@@ -60,20 +60,31 @@ export const WIDGET_LIMITS = {
   groups: 32,
   galleryImages: 24,
   patchOps: 64,
-  /** Serialized `InteractionRecord`, by construction of its bounded fields. */
-  interactionRecordBytes: 4 * 1024,
+  /** Worst-case composed message of any prompt node (its label, or the
+   *  choice label plus the `max_selected` longest option labels), measured
+   *  as UTF-8 bytes of the message string; validated at publish. */
+  messageBytes: 2 * 1024,
+  /** Serialized `InteractionRecord`; follows from `messageBytes` and the
+   *  other bounded fields and is re-checked at admission. */
+  interactionRecordBytes: 6 * 1024,
   /** Interaction summaries carried inside a snapshot; full records are paged. */
   snapshotInteractions: 5,
+  /** Serialized `WidgetSnapshot` (document plus bounded metadata). */
+  snapshotBytes: 32 * 1024,
   interactionsPerWidget: 200,
   widgetsPerSession: 500,
   openWidgetsPerSession: 200,
   lookupIds: 200,
+  /** A lookup page; at least `lookupBytes / snapshotBytes` snapshots fit. */
   lookupBytes: 256 * 1024,
+  /** Bootstrap entries per page. */
+  bootstrapEntries: 500,
 } as const;
 
-/** Ids name nodes, groups, option values and agent-chosen widget ids:
- *  `[A-Za-z0-9_-]{1,64}`. They are addressing only: no identifier chosen by
- *  an agent is ever copied into a message attributed to the person. */
+/** Ids name nodes, groups, option values, agent-chosen widget ids and
+ *  client-chosen interaction ids: `[A-Za-z0-9_-]{1,64}`. They are addressing
+ *  only: no identifier chosen by an agent is ever copied into a message
+ *  attributed to the person. */
 export const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** The Controller-assigned public handle of a widget (`w17`), shown in the
@@ -120,8 +131,10 @@ export type JsonObject = { [key: string]: JsonValue };
 export type Ref =
   /** `https:` only. Opens through the host's remote-link confirmation. */
   | { kind: "url"; url: string }
+  /** `seq` is an integer ≥ 0. */
   | { kind: "session"; session_id: string; seq?: number }
-  /** Relative to the session's execution root; opens Code Review. */
+  /** Relative to the session's execution root; opens Code Review. `line` is
+   *  an integer ≥ 1. */
   | { kind: "file"; path: string; line?: number }
   | { kind: "document"; document_id: string }
   | { kind: "call"; call_id: string }
@@ -133,9 +146,10 @@ export type ImageSource =
    *  Allowed in published documents, where the Controller verifies and pins
    *  it; not allowed in the inline carrier. */
   | { kind: "artifact"; url: string }
-  /** The `index`-th image block of the tool result stored at `seq` in this
-   *  session. Every `publish`/`replace`/`patch` resolves it to an `artifact`
-   *  source before storing; the inline carrier resolves it at render time. */
+  /** The `index`-th (integer ≥ 0, default 0) image block of the tool result
+   *  stored at `seq` (integer ≥ 0) in this session. Every
+   *  `publish`/`replace`/`patch` resolves it to an `artifact` source before
+   *  storing; the inline carrier resolves it at render time. */
   | { kind: "event"; seq: number; index?: number }
   /** A small still image (icon, glyph): ≤ `inlineImageBytes`, intrinsic size
    *  ≤ `inlineImagePixels` square, no animation; verified by the Controller,
@@ -215,7 +229,10 @@ export type ContentNode =
 export type Column = {
   label: string;
   align?: "start" | "center" | "end";
-  /** Formats a plain cell value; a `Cell` object may still override tone/link. */
+  /** Formats a plain cell value; a `Cell` object may still override tone/link.
+   *  Units: `percent` is a fraction 0..1; `bytes` an integer byte count;
+   *  `duration` seconds; `date` epoch milliseconds or an RFC 3339 string;
+   *  `number` any finite double. A value of the wrong shape renders as text. */
   format?: "text" | "number" | "percent" | "bytes" | "duration" | "date" | "code" | "status";
   /** Prefer shrinking (`min`) or growing (`max`) this column when wide. */
   width?: "auto" | "min" | "max";
@@ -244,7 +261,7 @@ export type StatusNode =
   | (NodeBase & { type: "status"; label: string; tone: Tone; detail?: string })
   | (NodeBase & {
       type: "progress";
-      /** 0..1; omitted means indeterminate. */
+      /** Finite, 0..1; omitted means indeterminate. */
       value?: number;
       label?: string;
       detail?: string;
@@ -291,8 +308,11 @@ export type MediaNode =
 
 export type InputNode = ButtonNode | ChoiceNode;
 
+/** Every remotely actionable node names itself: `id` is required on a
+ *  button and on a choice so a `widget_action` can address it. */
 export type ButtonNode = NodeBase & {
   type: "button";
+  id: string;
   /** The visible intent; for `prompt` it is the message the agent receives. */
   label: string;
   action: Action;
@@ -314,10 +334,14 @@ export type ButtonNode = NodeBase & {
  *  option labels, after the exact message has been shown. */
 export type ChoiceNode = NodeBase & {
   type: "choice";
-  label?: string;
+  id: string;
+  /** The question being answered: required, non-empty, unique among the
+   *  widget's interactive labels, and part of the composed message. */
+  label: string;
   options: Option[];
   multiple?: boolean;
-  /** ≤ `maxSelected`; defaults to `maxSelected` when `multiple`. */
+  /** Integer 1..`maxSelected`; defaults to 1, or to `maxSelected` when
+   *  `multiple`. Part of the choice's interaction signature. */
   max_selected?: number;
   value?: string | string[];
   submit?: { label?: string; confirm?: string };
@@ -357,26 +381,49 @@ export interface WidgetDocument {
 }
 
 /** The user message the Controller composes for a `prompt` interaction
- *  (docs/widgets.md §8.2). Line one is the visible label (for a choice,
- *  "Decision: " and the selected labels); line two names only the public
- *  handle, the revision and, for a choice, the selected labels. The Rust
- *  composer mirrors this function and the shared fixtures hold both to it. */
+ *  (docs/widgets.md §8.2). Line one is the visible label; for a choice it
+ *  is the question (the choice label) followed by the selected option
+ *  labels. Line two names only the public handle, the revision and, for a
+ *  choice, the question and the selected labels again. The Rust composer
+ *  mirrors this function and the shared fixtures hold both to it. */
 export function composeInteractionMessage(
   handle: string,
   revision: number,
   label: string,
   selected?: readonly string[],
 ): string {
-  const reference: { widget: string; revision: number; selected?: string[] } = {
+  const reference: { widget: string; revision: number; question?: string; selected?: string[] } = {
     widget: handle,
     revision,
   };
   let first = label;
   if (selected !== undefined) {
-    first = `Decision: ${selected.join(", ")}`;
+    first = `${label} → ${selected.join(", ")}`;
+    reference.question = label;
     reference.selected = [...selected];
   }
   return `[widget ${handle} r${revision}] ${first}\n${JSON.stringify(reference)}`;
+}
+
+/** Canonical interaction signature of a decision group (docs/widgets.md
+ *  §8.4): a decided group resets, and a pending selection is discarded,
+ *  exactly when this value changes between revisions. Field order is fixed;
+ *  the string is hashed with SHA-256 on both sides. */
+export function interactionSignature(nodes: readonly InputNode[]): string {
+  const entries = nodes.map((node) =>
+    node.type === "button"
+      ? { id: node.id, type: node.type, label: node.label, disabled: node.disabled ?? false }
+      : {
+          id: node.id,
+          type: node.type,
+          label: node.label,
+          multiple: node.multiple ?? false,
+          max_selected: node.max_selected ?? (node.multiple ? WIDGET_LIMITS.maxSelected : 1),
+          options: node.options.map((option) => [option.value, option.label]),
+        },
+  );
+  entries.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return JSON.stringify(entries);
 }
 
 // Transport (docs/widgets.md §6). The agent-facing API is discovered with
@@ -483,9 +530,11 @@ export type ListResult = {
 
 /** `widgets.read`. A whole document can exceed the 16 KiB read budget, so
  *  `document` is a text window over the compact JSON (default 1,000 chars,
- *  max 4,000); restart when `state_version` changes between pages.
- *  `revision` reads a pinned earlier revision. Interaction records are paged
- *  by cursor with at least one record per page. */
+ *  max 4,000). A current-document read restarts when `revision` changes
+ *  between pages; a pinned read (`revision` given) is immutable and its
+ *  pages are bound to `document.sha256`, so interaction settlement or later
+ *  revisions never interrupt it. Interaction records are paged by cursor
+ *  with at least one record per page. */
 export type ReadSelection = "meta" | "document" | "interactions";
 export type ReadArguments = {
   session_id?: string;
@@ -503,6 +552,9 @@ export type ReadResult =
       meta: WidgetMeta;
       document?: {
         revision: number;
+        /** Content identity of the compact JSON being windowed. */
+        sha256: string;
+        pinned: boolean;
         text: string;
         range: { offset: number; next: number | null; total: number };
       };
@@ -525,22 +577,31 @@ export type InteractionRecord = {
   revision: number;
   state_version: number;
   transcript_generation: number;
-  /** Visible intent: the button label or the choice label. */
+  /** Visible intent: the button label, or the choice label (the question). */
   label: string;
   /** Visible labels of the selected options, for a choice. */
   selected?: string[];
   /** The exact user message the Controller composed. */
   message: string;
+  /** SHA-256 of `message`; the dispatcher verifies the queued prompt against it. */
+  message_sha256: string;
   at_ms: number;
-  /** admitted: recorded durably, waiting to enter or sitting in the session
-   *  queue; dispatched: handed to the agent after a durable write-ahead
-   *  mark; delivered: the message's echo is in the durable transcript;
-   *  uncertain: dispatched but no echo after the worker was replaced, so
-   *  delivery cannot be proven and is never replayed blindly; cancelled:
-   *  removed from the queue or fenced by a transcript Clear; failed: refused
-   *  by the session. */
+  /** admitted: recorded durably; the relay keeps it in the session queue.
+   *  dispatched: the durable `admitted → dispatched` CAS succeeded and the
+   *  prompt was then handed to the worker. delivered: the turn that the
+   *  dispatched prompt started ended with a non-cancel stop reason (the
+   *  transcript echo is not evidence). uncertain: dispatched, and the
+   *  turn's end cannot be attributed; never replayed blindly. cancelled:
+   *  deleted from the queue or fenced by a Clear before dispatch. failed:
+   *  refused by the session before the handoff. */
   state: "admitted" | "dispatched" | "delivered" | "uncertain" | "cancelled" | "failed";
   reason?: string;
+  /** Set on a record created by `widget_action_retry`. */
+  retry_of?: string;
+  /** Set on an `uncertain` record once a retry exists; a late proof of the
+   *  original marks the retry `duplicate_of` the original. */
+  retried_by?: string;
+  duplicate_of?: string;
 };
 
 export type InteractionSummary = Pick<
@@ -566,9 +627,12 @@ export type WidgetSnapshot = {
   origin: { kind: "mcp"; operation: string } | { kind: "repaired" };
   closed: boolean;
   document: WidgetDocument;
+  /** Content identity of `document`'s compact JSON. */
+  documentSha256: string;
   /** Newest last; bounded by `snapshotInteractions`. Full records: `widgets.read`. */
   recentInteractions: InteractionSummary[];
-  /** Group id → the interaction that decided it and the revision it was decided on. */
+  /** Group id → the interaction that decided it and the revision it was
+   *  decided on; at most `groups` entries. */
   decided: Record<string, { interaction_id: string; revision: number }>;
 };
 
@@ -595,8 +659,10 @@ export type WidgetState = {
   epoch: string;
   transcript_generation: number;
   entries: WidgetStateEntry[];
-  /** False when the session has more widgets than the entry budget. */
+  /** False when more entries follow; `next` fetches them so the client can
+   *  always obtain the complete authoritative index. */
   complete: boolean;
+  next: string | null;
 };
 
 /** `POST /api/sessions/:id/widgets/lookup`. A response from another epoch or
@@ -644,6 +710,20 @@ export type WidgetActionCommand = {
   selected?: Record<string, string[]>;
 };
 
+/** Client → Controller: send an `uncertain` (or `failed`) interaction again
+ *  under a new id. The retry copies the original's pinned intent (label,
+ *  selection, revision, message) regardless of the widget's current revision
+ *  or closure, records `retry_of`, and is refused only when the widget is
+ *  cleared, the original is not `uncertain`/`failed`, or a retry already
+ *  exists. A late proof of the original marks the retry a duplicate. */
+export type WidgetActionRetryCommand = {
+  type: "widget_action_retry";
+  session_id: string;
+  widget_id: string;
+  interaction_id: string;
+  retry_interaction_id: string;
+};
+
 export type WidgetActionRefusal =
   | "stale_revision"
   | "stale_state"
@@ -657,7 +737,10 @@ export type WidgetActionRefusal =
   | "group_decided"
   | "in_flight"
   | "invalid_selection"
+  | "message_too_large"
   | "interaction_limit"
+  | "not_retryable"
+  | "already_retried"
   | "rate_limited"
   | "session_unavailable"
   | "conflict";

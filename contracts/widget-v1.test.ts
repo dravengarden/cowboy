@@ -11,8 +11,13 @@ import {
   progressPatch,
   statusTable,
   statusTableMarkdown,
+  twoQuestions,
 } from "./widget-v1.examples.ts";
 import {
+  type ChoiceNode,
+  composeInteractionMessage,
+  type InputNode,
+  interactionSignature,
   type ListItem,
   type Node,
   WIDGET_HANDLE_PATTERN,
@@ -45,19 +50,33 @@ function countListItems(items: ListItem[]): number {
   return total;
 }
 
+/** The largest message a choice can produce: its question plus the
+ *  `max_selected` longest option labels (docs/widgets.md §5.3). */
+function worstCaseChoiceMessage(node: ChoiceNode): string {
+  const limit = node.max_selected ?? (node.multiple ? WIDGET_LIMITS.maxSelected : 1);
+  const longest = node.options
+    .map((option) => option.label)
+    .sort((a, b) => bytes(b) - bytes(a))
+    .slice(0, limit);
+  return composeInteractionMessage("w9999999", 999_999_999, node.label, longest);
+}
+
 /** Walks a document the way both validators must: bounded nodes, depth,
  *  unique ids, unique interactive labels, identifier-shaped option values,
- *  the per-type collection limits and the aggregate rendering budgets. */
-function check(document: WidgetDocument): { nodes: number; depth: number } {
+ *  ids on every actionable node, the per-type collection limits, the
+ *  worst-case message bound and the aggregate rendering budgets. */
+function check(document: WidgetDocument): { nodes: number; depth: number; inputs: InputNode[] } {
   const ids = new Set<string>();
   const labels = new Set<string>();
   const groups = new Set<string>();
+  const inputs: InputNode[] = [];
   let nodes = 0;
   let deepest = 0;
   let cells = 0;
   let items = 0;
   let images = 0;
   const label = (text: string): void => {
+    if (text.trim().length === 0) throw new Error("empty interactive label");
     if (chars(text) > WIDGET_LIMITS.labelChars) throw new Error("label too long");
     if (labels.has(text)) throw new Error(`duplicate interactive label ${text}`);
     labels.add(text);
@@ -100,23 +119,39 @@ function check(document: WidgetDocument): { nodes: number; depth: number } {
         if (chars(node.text) > WIDGET_LIMITS.textChars) throw new Error("text too long");
         break;
       case "choice": {
+        inputs.push(node);
         if (node.options.length > WIDGET_LIMITS.options) throw new Error("too many options");
-        if ((node.max_selected ?? 1) > WIDGET_LIMITS.maxSelected)
-          throw new Error("max_selected too large");
+        const limit = node.max_selected ?? (node.multiple ? WIDGET_LIMITS.maxSelected : 1);
+        if (!Number.isInteger(limit) || limit < 1 || limit > WIDGET_LIMITS.maxSelected) {
+          throw new Error("max_selected out of range");
+        }
         items += node.options.length;
         const optionLabels = new Set<string>();
         for (const option of node.options) {
           if (!WIDGET_ID_PATTERN.test(option.value))
             throw new Error(`prose option value ${option.value}`);
+          if (chars(option.label) > WIDGET_LIMITS.labelChars)
+            throw new Error("option label too long");
           if (optionLabels.has(option.label)) throw new Error("duplicate option label");
           optionLabels.add(option.label);
         }
-        if (node.label !== undefined) label(node.label);
+        label(node.label);
+        if (bytes(worstCaseChoiceMessage(node)) > WIDGET_LIMITS.messageBytes) {
+          throw new Error("choice message too large");
+        }
         if (node.group !== undefined) groups.add(node.group);
         break;
       }
       case "button":
+        inputs.push(node);
         label(node.label);
+        if (
+          node.action.kind === "prompt" &&
+          bytes(composeInteractionMessage("w9999999", 999_999_999, node.label)) >
+            WIDGET_LIMITS.messageBytes
+        ) {
+          throw new Error("button message too large");
+        }
         if (node.group !== undefined) groups.add(node.group);
         break;
       case "image":
@@ -149,7 +184,7 @@ function check(document: WidgetDocument): { nodes: number; depth: number } {
   if (chars(document.summary ?? "") > WIDGET_LIMITS.summaryChars)
     throw new Error("summary too long");
   if (bytes(document) > WIDGET_LIMITS.documentBytes) throw new Error("document too large");
-  return { nodes, depth: deepest };
+  return { nodes, depth: deepest, inputs };
 }
 
 const examples: [string, WidgetDocument, string][] = [
@@ -164,13 +199,26 @@ for (const [name, document, markdown] of examples) {
     if (nodes < 2 || depth < 2) throw new Error(`example too trivial: ${name}`);
   });
 
-  // docs/widgets.md §11 records how each example compares with the Markdown
-  // an agent writes today in the same language. This only guards against the
-  // contract drifting into a shape that dwarfs the prose it replaces; the
-  // measured ratios live in the design document.
-  test(`widget example does not dwarf its Markdown: ${name}`, () => {
-    const ratio = bytes(document) / bytes(markdown);
-    if (ratio > 4) throw new Error(`${name}: widget is ${ratio.toFixed(2)}× the Markdown`);
+  // docs/widgets.md §11: publication is bounded overhead. The gate counts
+  // the complete `cowboy_execute` envelope and its result against the
+  // same-language Markdown report.
+  test(`publication stays within the documented overhead bound: ${name}`, () => {
+    const envelope = {
+      action: "widgets.publish",
+      arguments: { widget_id: "example-widget", document },
+      operation: "example-widget-publish-1",
+    };
+    const result = {
+      status: "committed",
+      widget_id: "example-widget",
+      handle: "w17",
+      revision: 1,
+      state_version: 1,
+      warnings: [],
+    };
+    const ratio = (bytes(envelope) + bytes(result)) / bytes(markdown);
+    if (ratio > 4.5)
+      throw new Error(`${name}: publication is ${ratio.toFixed(2)}× the Markdown report`);
   });
 }
 
@@ -187,9 +235,39 @@ test("the hostile document is valid and its identifiers never reach the message"
   }
   if (!hostileTapMessage.includes("The stale Cargo target directory"))
     throw new Error("visible label missing");
+  if (!hostileTapMessage.includes("Which cache may be removed?"))
+    throw new Error("question missing");
 });
 
-test("a patch update envelope is bounded and far below re-sending the card", () => {
+test("two questions with identical option labels compose different messages", () => {
+  const { inputs } = check(twoQuestions);
+  const [cache, backups] = inputs as [ChoiceNode, ChoiceNode];
+  const a = composeInteractionMessage("w5", 1, cache.label, ["Yes"]);
+  const b = composeInteractionMessage("w5", 1, backups.label, ["Yes"]);
+  if (a === b) throw new Error("question is not part of the message");
+  if (!a.includes("Delete the cache?") || !b.includes("Delete the backups?"))
+    throw new Error("question missing");
+});
+
+test("the interaction signature changes with selection mode and cardinality", () => {
+  const { inputs } = check(twoQuestions);
+  const [cache] = inputs as [ChoiceNode, ChoiceNode];
+  const base = interactionSignature([cache]);
+  if (interactionSignature([{ ...cache, multiple: true }]) === base)
+    throw new Error("multiple ignored");
+  if (
+    interactionSignature([{ ...cache, multiple: true, max_selected: 2 }]) ===
+    interactionSignature([{ ...cache, multiple: true }])
+  ) {
+    throw new Error("max_selected ignored");
+  }
+  if (interactionSignature([{ ...cache, label: "Delete the cache now?" }]) === base)
+    throw new Error("label ignored");
+  if (interactionSignature([{ ...cache, fallback: "x" }]) !== base)
+    throw new Error("display-only change reset the group");
+});
+
+test("an update envelope is bounded overhead against a one-line status and below a full re-send", () => {
   const envelope = {
     action: "widgets.update",
     arguments: {
@@ -199,13 +277,19 @@ test("a patch update envelope is bounded and far below re-sending the card", () 
     },
     operation: "deploy-1b9f121-update-2",
   };
+  const result = {
+    status: "committed",
+    widget_id: "deploy-1b9f121",
+    revision: 2,
+    state_version: 3,
+    warnings: [],
+  };
+  const update = bytes(envelope) + bytes(result);
   if (progressPatch.length > WIDGET_LIMITS.patchOps) throw new Error("too many ops");
-  if (bytes(envelope) > WIDGET_LIMITS.documentBytes / 8)
-    throw new Error("patch envelope too large");
-  // Re-sending the report as Markdown means the card plus the new status line.
-  if (bytes(envelope) >= bytes(approvalMarkdown) + bytes(progressMarkdown)) {
-    throw new Error("patch envelope is not cheaper than re-sending the report");
-  }
+  if (update > 2.5 * bytes(progressMarkdown))
+    throw new Error("update exceeds 2.5× a one-line status");
+  if (update >= bytes(approvalMarkdown) + bytes(progressMarkdown))
+    throw new Error("update is not below re-sending the report");
 });
 
 for (const [name, message, visible] of [
@@ -214,7 +298,11 @@ for (const [name, message, visible] of [
     approvalTapMessage,
     approval.root.type === "card" ? (approval.root.actions ?? []).map((b) => b.label) : [],
   ],
-  ["hostile", hostileTapMessage, ["Decision: The stale Cargo target directory"]],
+  [
+    "hostile",
+    hostileTapMessage,
+    ["Which cache may be removed? → The stale Cargo target directory"],
+  ],
 ] as const) {
   test(`the composed tap message carries only what the person saw: ${name}`, () => {
     const lines = message.split("\n");
@@ -224,11 +312,11 @@ for (const [name, message, visible] of [
     if (!visible.includes(match[3] as never)) throw new Error("first line is not a visible label");
     const reference = JSON.parse(lines[1] ?? "") as Record<string, unknown>;
     for (const key of Object.keys(reference)) {
-      if (!["widget", "revision", "selected"].includes(key)) throw new Error(`hidden field ${key}`);
+      if (!["widget", "revision", "question", "selected"].includes(key))
+        throw new Error(`hidden field ${key}`);
     }
     if (reference["widget"] !== match[1] || reference["revision"] !== Number(match[2]))
       throw new Error("reference mismatch");
-    if (bytes(message) > WIDGET_LIMITS.interactionRecordBytes / 2)
-      throw new Error("message too large");
+    if (bytes(message) > WIDGET_LIMITS.messageBytes) throw new Error("message too large");
   });
 }

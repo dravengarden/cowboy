@@ -1,9 +1,10 @@
 # Cowboy Widgets: agent-authored structured UI over Cowboy MCP
 
-Status: design for review, revision 3 (2026-11-08); nothing here is built or
+Status: design for review, revision 4 (2026-11-08); nothing here is built or
 activated. Revision 1 received an Astra Max design review ("request changes",
 16 findings, 6 blocking); revision 2 a second ("request changes", 15
-findings, 4 blocking). Every finding is resolved below and none was rejected
+findings, 4 blocking); revision 3 a third ("request changes", 14 findings,
+5 blocking). Every finding is resolved below and none was rejected
 ([§1](#1-review-findings-and-resolutions)). Statements marked
 **[unverified]** are inferred from code or history and still need evidence.
 
@@ -35,13 +36,19 @@ authoritative in Controller tables, projected as one anchored transcript row
 that older clients still read as a plain notice, rendered by a Cowboy-owned
 React + MUI renderer whose components adapt to the width they are given, and
 acted on through taps that become user messages composed by the Controller
-**from what the person saw and nothing else**. Agents author data, never
-code, never hidden instructions, and no agent-chosen identifier is ever
-attributed to the person. Phase 1 is deliberately narrow: grouping, tables,
-key/value, lists and steps, status and progress, images and typed
-references, buttons and choices. Its token case is bounded and honest:
-publication is UX overhead; savings exist only where a report would be
-re-sent in full or an answer would be typed and parsed.
+**from what the person saw and nothing else**: the button label, or the
+question and the chosen answers, the widget's public handle and the revision
+it was decided on. Agents author data, never code, never hidden
+instructions, and no agent-chosen identifier is ever attributed to the
+person. Delivery of such a message is proven by the turn it started, never
+by the transcript echo, and an unproven delivery is shown as uncertain and
+retried only by the person. Phase 1 is deliberately narrow: grouping,
+tables, key/value, lists and steps, status and progress, images and typed
+references, buttons and choices. Its token case is bounded and honest: a
+widget costs 2–4× a terse report to publish and about twice a one-line
+status to update; it **does not save tokens** and the design does not claim
+it does; it buys in-place updates, readable Mobile rendering and
+typing-free, auditable decisions within measured bounds.
 
 ## 1. Review findings and resolutions
 
@@ -85,6 +92,25 @@ re-sent in full or an answer would be typed and parsed.
 | F13 | The image bound limits geometry, not decoding (P2) | `data` images are still PNG/JPEG/WebP with intrinsic size ≤ 256 × 256 verified by the Controller before storing; SVG deferred; the inline carrier cannot carry `data` images | §5.4 |
 | F14 | The token comparison overstates savings (P2) | Full envelopes measured: an update costs 2.2× a one-line status and 0.9× a re-sent report; break-even stated per prefix; the gate stops the design on failure instead of narrowing | §11 |
 | F15 | Validator parity lacks precise units and vectors; byte boundaries misdescribed (P2) | Units fixed (bytes vs scalar chars, node vs JSON depth, safe numbers); 1 MiB raw frame vs 32 KiB re-serialized arguments; the example checker counts nested items and per-type limits; shared Unicode, numeric, recursive-budget and patch-sequencing vectors | §5.3, §13 |
+
+### 1.3 Revision 3 (Astra Max, `a17877541`)
+
+| # | Finding (severity) | Resolution | Section |
+|---|---|---|---|
+| R1 | The transcript echo is not delivery proof: it is synthesized before the provider request and for cancelled held prompts (P1) | Evidence is the turn the dispatched prompt started: `delivered` only when that turn ends with a non-cancel stop reason or produced agent output, attributed through the Hub's dispatched-prompt bookkeeping; the echo is never evidence; everything else stays `uncertain`; a worker-side `prompt_accepted` signal is a Phase 2 Machine change | §8.3 |
+| R2 | Recovery can dispatch a restored queue copy of an already dispatched interaction; the writer can exhaust retries and still persist a mark (P1) | A commit-acknowledged store operation with `committed`/`failed`/`unknown`; handoff only after a successful `admitted → dispatched` CAS under the generation; restored queue entries reconciled against the ledger before drain is enabled; content hash verified at handoff; `unknown` never hands off | §6.3, §8.3 |
+| R3 | Clear has no durable serialization point; a publisher can commit against the old generation; a crash loses Clear (P1) | Clear commits first (generation bump, tombstones, cancellations, event deletion in one awaited transaction) and only then clears memory and acknowledges; every widget write, admission and handoff is a conditional update on the session's generation row, so the database serializes them with Clear; handed-off work at Clear becomes `uncertain`, never proven `cancelled` | §6.3, §8.3, W6, W10 |
+| R4 | Pinned revisions do not retain their artifacts; inline `artifact` links have no root (P1) | `widget_artifact_refs` is keyed by revision and retains the union of the current and every pinned revision; the inline carrier may not reference artifacts at all (sources or links) | §5.4, §6.3, §6.4 |
+| R5 | Choice messages discard the question being answered (P1) | A choice `label` is required, non-empty and unique among the widget's interactive labels, and the composed message carries the question with the selected answers | §5.3, §8.2 |
+| R6 | Record and snapshot byte bounds were false; `interaction_id` unbounded (P2) | A per-node worst-case message bound (2 KiB) validated at publish; record ≤ 6 KiB by construction and re-checked at admission; snapshot ≤ 32 KiB; `interaction_id` follows the id pattern; lookup pages fit at least eight snapshots | §5.3, §6.5 |
+| R7 | Send-again cannot pass admission (P2) | `widget_action_retry` copies the original pinned intent, records `retry_of`, bypasses revision/closure/group checks, is refused only when cleared, not retryable or already retried; late proof marks the retry a duplicate | §8.3 |
+| R8 | Queue-to-draft preserves the cmid and reopens editing (P2) | Delete-only enforced across queue edit, queue-to-draft and resubmission for `widget:` cmids; the dispatcher verifies the queued content against the ledger's message hash | §8.4 |
+| R9 | Reconciliation misses widgets absent from the cache (P2) | Bootstrap paginates to a complete index; the client reconciles entries that are missing locally or stale | §6.5 |
+| R10 | The interaction signature omitted selection mode (P2) | `interactionSignature` in the contract is canonical: ids, type, label, disabled, `multiple`, effective `max_selected`, option values and labels | §8.4 |
+| R11 | Prompt nodes could omit `id` (P2) | `id` is required on every button and choice | §5.3 |
+| R12 | State changes could prevent reading an immutable pinned revision (P2) | Pinned reads are bound to the document's `sha256`; only current-document reads restart, and only on `revision` change | §6.1 |
+| R13 | Token prefix arithmetic was wrong; tests did not enforce thresholds (P2) | Prefix totals recomputed from complete exchanges; the contract test measures publish and update envelopes with results against the same baselines the gates use | §11 |
+| R14 | Field-level domains, units and serialization unspecified (P2) | Units and integer domains fixed in the contract comments and §5.3; uniqueness scopes and serialization rules stated; the checker enforces option-label length, empty labels, message bounds and ids on actionable nodes | §5.3 |
 
 Rulings on decisions are folded into §14.
 
@@ -155,12 +181,13 @@ Goals, in priority order:
    summary, progress list or image must be legible at 320 CSS px and dense
    on Desktop without the agent describing layout.
 2. **Bounded, honest token overhead.** Publishing a widget costs more than a
-   terse Markdown reply and must stay within a measured bound; the only
-   token savings this design claims are avoiding a re-sent full report and
-   replacing a typed-and-parsed answer with a fixed-shape message. Both are
-   measured per prefix of a complete, same-language exchange, with every
-   envelope counted (§11), and the measurement is a ship gate that stops the
-   design if it fails.
+   terse Markdown reply, updating it costs more than a one-line status, and
+   this design claims no net token saving (§11). What it claims is a bound:
+   publication ≤ 4.5× the same-language report, an update ≤ 2.5× a one-line
+   status and below re-sending the report, a decision message ≤ 2 KiB and
+   fixed in shape. The bounds are measured on complete exchanges with every
+   envelope counted, per prefix, and the measurement is a ship gate that
+   stops the design if it fails.
 3. **Act without typing, without delegating authority.** A widget can offer
    the next decision as buttons or choices; the answer reaches the agent as
    an ordinary, auditable user message that contains only what the person
@@ -267,9 +294,27 @@ decision groups per document; the transcript draws at most 20 rows of a
 table and the inspector pages the rest; a multiple choice submits at most 12
 options; per session, 200 open and 500 total widgets, 200 interactions per
 widget. A patch applies all ops in order against the running result, or
-none, and the result must satisfy every bound. Interactive labels are unique
-within a widget and option labels within a choice, because labels, not ids,
-identify what the person chose (§8.2).
+none, and the result must satisfy every bound.
+
+Actionable nodes name themselves and read as sentences: every `button` and
+`choice` has an `id`; a choice has a non-empty `label` (the question);
+interactive labels are unique within a widget and option labels within a
+choice, because labels, not ids, identify what the person chose (§8.2). The
+worst-case composed message of every prompt node (its label, or the question
+plus the `max_selected` longest option labels, through
+`composeInteractionMessage`) must fit `messageBytes` (2 KiB), so an
+interaction record is ≤ 6 KiB and a snapshot ≤ 32 KiB by construction
+rather than by hope; both are re-checked when built.
+
+Field domains are part of the contract: `percent` cells are fractions 0..1,
+`bytes` integer byte counts, `duration` seconds, `date` epoch milliseconds
+or RFC 3339 strings, `progress.value` finite 0..1; `seq` and `index` are
+integers ≥ 0, `line` ≥ 1, `max_selected` an integer 1..12; identifiers
+(`id`, `group`, option `value`, `widget_id`, `interaction_id`) follow
+`WIDGET_ID_PATTERN`; a value of the wrong shape in a formatted cell renders
+as text. Serialization is compact JSON (no insignificant whitespace), UTF-8,
+object keys in the order given, escapes only where JSON requires them; sizes
+are measured on that form.
 
 Validation is **fail-closed at the Controller**: wrong shape, a bound
 exceeded, an unknown node type without `fallback`, an unknown property on a
@@ -309,7 +354,7 @@ Images use `ImageSource` with rules per carrier:
 
 | Source | Published widget | Inline carrier |
 |---|---|---|
-| `artifact` (`/api/artifacts/<64 hex>.<ext>`) | verified to exist, recorded in `widget_artifact_refs` on every write | not allowed; renders `alt` |
+| `artifact` (`/api/artifacts/<64 hex>.<ext>`) | verified to exist, recorded in `widget_artifact_refs` for the revision on every write | not allowed as an image source or a `Ref`; renders `alt` or the label as text |
 | `event` (image block of a tool result at `seq`) | resolved to `artifact` and recorded on every write (publish, replace, patch) | resolved by the Web at render time; retained by the referenced tool event |
 | `data` (PNG, JPEG, WebP ≤ 8 KiB) | Controller decodes the header: intrinsic size ≤ 256 × 256, still image (animated WebP and APNG rejected) | not allowed |
 
@@ -330,10 +375,12 @@ same-owner session) and `widgets.read({session_id?, widget_id, select:
 "meta"|"document"|"interactions", revision?, offset?, chars?, after?,
 limit?})`. A valid document can be 24 KiB and the read budget is 16 KiB, so
 `document` is a text window over the compact JSON (default 1,000 chars, max
-4,000) carrying the document `revision`; a changed `state_version` between
-pages means restart. `revision` reads a **pinned** earlier revision, which
+4,000) carrying the document `revision` and `sha256`. A current-document
+read restarts only when `revision` changes between pages; a **pinned** read
+(`revision` given) is immutable, bound to its `sha256`, and never
+interrupted by interaction settlement or later revisions. A pinned revision
 exists for every revision a decision was made on (§6.3). `interactions`
-returns records by cursor, at least one per page, each ≤ 4 KiB by
+returns records by cursor, at least one per page, each ≤ 6 KiB by
 construction. Read outcomes: `ok`, `unknown_widget`, `cleared`,
 `unknown_revision`.
 
@@ -413,7 +460,7 @@ later list of `(widget_id, state_version, closed)`.
 
 ### 6.3 Durable store
 
-Three new tables and one column; `session_widgets` is authoritative and the
+Four new tables and one column; `session_widgets` is authoritative and the
 transcript row is a projection:
 
 ```sql
@@ -422,63 +469,79 @@ ALTER TABLE sessions ADD COLUMN transcript_generation INTEGER NOT NULL DEFAULT 0
 session_widgets(session_id REFERENCES sessions ON DELETE CASCADE, widget_id,
                 handle, transcript_generation, revision, state_version,
                 published_version, closed, cleared_at_ms NULL, seq NULL,
-                published_at_ms, updated_at_ms, document, decided,
-                PRIMARY KEY (session_id, widget_id))
-widget_revisions(session_id, widget_id, revision, document, pinned_by_interaction,
-                 created_at_ms, PRIMARY KEY (session_id, widget_id, revision))
+                published_at_ms, updated_at_ms, document, document_sha256,
+                decided, PRIMARY KEY (session_id, widget_id))
+widget_revisions(session_id, widget_id, revision, document, document_sha256,
+                 pinned_by_interaction, created_at_ms,
+                 PRIMARY KEY (session_id, widget_id, revision))
 widget_interactions(session_id, widget_id, interaction_id, request_hash,
                     transcript_generation, revision, state_version, node_id,
-                    group_id, label, selected, message, state, reason, cmid,
+                    group_id, label, selected, message, message_sha256,
+                    state, reason, retry_of, retried_by, duplicate_of, cmid,
                     created_at_ms, PRIMARY KEY (session_id, interaction_id))
-widget_artifact_refs(session_id, widget_id, artifact_name,
-                     PRIMARY KEY (session_id, widget_id, artifact_name))
+widget_artifact_refs(session_id, widget_id, revision, artifact_name,
+                     PRIMARY KEY (session_id, widget_id, revision, artifact_name))
 ```
 
+- **Generation CAS at the database.** Every widget write, interaction
+  admission, dispatch mark and retry runs in a transaction that performs a
+  conditional update on the session's row (`UPDATE sessions SET
+  transcript_generation = transcript_generation WHERE id = $1 AND
+  transcript_generation = $expected`); zero rows means the generation moved
+  and the transaction aborts with `cleared`. PostgreSQL serializes these
+  with Clear through the row lock; SQLite through its single writer. An
+  in-process per-session fence (an async mutex shared by publication,
+  admission, handoff and Clear) reduces contention; correctness does not
+  depend on it.
+- **Commit-acknowledged writes.** The store gains an awaited operation beside
+  the write-behind `StoreWrite` channel: the caller receives `committed`,
+  `failed` or `unknown` (timeout or lost reply). Widget admissions, dispatch
+  marks, cancellations and Clear use it. `unknown` is treated as "possibly
+  committed": the caller never performs the effect the mark guards and
+  retries the same conditional statement until it reads a definite answer.
 - **Writes.** `publish`/`update` validate, resolve every `event` image
   source to an `artifact`, verify `artifact` and `data` sources, write the
-  row (`state_version + 1`, `revision + 1` for agent writes), replace the
-  widget's `widget_artifact_refs`, and record the operation result, all in
-  one transaction that also reads the session's current
-  `transcript_generation` and refuses with `cleared` when the widget's
-  generation is older.
+  row (`state_version + 1`, `revision + 1` for agent writes, new
+  `document_sha256`), insert the new revision's `widget_artifact_refs`, drop
+  the refs of revisions that are neither current nor pinned, and record the
+  operation result, all in one generation-checked transaction.
 - **Pinned revisions.** The first interaction admitted on a revision copies
   that revision's document into `widget_revisions`; later writes never
-  touch it. `widgets.read({revision})` serves it; the Web's "decided on r1
-  — view" opens it. Unpinned earlier revisions are not kept.
+  touch it, and its `widget_artifact_refs` rows are kept for as long as the
+  widget row exists. `widgets.read({revision})` serves it bound to its
+  `sha256`; the Web's "decided on r1 — view" opens it.
 - **Publication is at-least-once from the table.** A snapshot carries the
-  `state_version` it was built from. Pushing it through the Hub (hot log,
-  batch writer, fan-out) and receiving the batch writer's confirmation sets
-  `published_version = max(published_version, that snapshot's
-  state_version)`; a later state that finished persisting earlier can never
-  be acknowledged by an older snapshot. A sweep (on start and every few
-  seconds while any row lags) republishes rows with `published_version <
-  state_version` from their current state, origin `repaired`. W4 therefore
-  promises eventual publication of the **latest** state, not of every
-  intermediate one.
-- **Generation fence.** `clear_transcript` in the Hub increments the
-  session's `transcript_generation` in memory, cancels every `admitted`
-  widget prompt of the session, removes queued widget prompts (`widget:`
-  cmids) from the queue, and sends `ClearEvents` carrying the new
-  generation; the store writer deletes events and anchors, persists the
-  generation, sets `cleared_at_ms` on every widget row of the older
-  generation and marks their `admitted`/`dispatched`-unproven interactions
-  `cancelled (cleared)` in that same transaction. Hub reduction, store
-  reduction, the sweep and dispatch (§8.3) all compare generations and drop
-  or cancel anything older. A publisher that read an uncleared row, paused
-  and resumed after Clear is rejected at push time because its snapshot's
-  generation is stale, and its transaction cannot commit because the row's
-  generation no longer matches. Tombstoned rows are deleted after 24 h and
-  do not count against the 500-widget cap.
-- **Interactions** (§8.3) append a `widget_interactions` row and bump
-  `state_version` without touching `revision`, so a person's tap never makes
-  the agent's next CAS write conflict.
-- **Artifact retention.** No text scanning. References are extracted from
-  the validated document (image sources and `artifact` refs) into
-  `widget_artifact_refs` on every write; the collector unions that table
-  with its existing `events` and Call-result roots, joining only rows whose
-  widget is not tombstoned past the 24 h grace. The inline carrier needs no
-  retention change because it may reference only `event` sources, which the
-  referenced tool event already retains.
+  `state_version` it was built from and the row's generation. Pushing it
+  through the Hub (hot log, batch writer, fan-out) and receiving the batch
+  writer's confirmation sets `published_version = max(published_version,
+  that snapshot's state_version)`. A sweep (on start and every few seconds
+  while any row lags) republishes rows with `published_version <
+  state_version` from their current state, origin `repaired`, skipping
+  tombstoned rows. W4 promises eventual publication of the **latest** state.
+- **Clear is durable first.** `clear_transcript` takes the session fence,
+  then commits one awaited transaction: `transcript_generation + 1`,
+  `cleared_at_ms` on every widget row of the old generation, every
+  `admitted` interaction of the session `cancelled (cleared)`, every
+  `dispatched` one without delivery evidence `uncertain (cleared)`, and the
+  event and anchor deletion that `clear_events` performs today. Only after
+  `committed` does it clear the hot log, remove queued `widget:` prompts,
+  fan out and acknowledge to the client; on `failed` or `unknown` it reports
+  the failure and clears nothing. A publisher that read the old generation
+  cannot commit afterwards (its conditional update finds zero rows); a
+  snapshot built before the Clear is dropped by both reducers on its stale
+  generation; a dispatcher mid-handoff fails its CAS (§8.3). Tombstoned
+  rows do not count against the 500-widget cap.
+- **Retention and cascades.** Child rows (`widget_revisions`,
+  `widget_interactions`, `widget_artifact_refs`) live exactly as long as
+  their widget row. A tombstoned widget and its children are purged 30 days
+  after `cleared_at_ms` (interaction records are audit evidence); deleting
+  a session cascades everything at once. The artifact collector unions
+  `widget_artifact_refs` of non-purged widgets with its existing `events`
+  and Call-result roots, so an image stays fetchable while any current or
+  pinned revision that shows it is still readable; after the purge the usual
+  24 h grace applies. No text scanning is needed: references are extracted
+  from the validated document, and the inline carrier may not reference
+  artifacts at all (§6.4).
 
 ### 6.4 Inline carrier (read-only)
 
@@ -491,9 +554,11 @@ handle, revision or receipt, is not listed by `widgets.list`, cannot be
 updated in place, and its interactive nodes render inert with their labels
 (the Controller never saw the document, so it cannot admit an action against
 it). Unknown types render `fallback` or the unsupported chip. Its only image
-source is `event`; `artifact` and `data` sources render `alt`. It exists
-because it costs no tool round trip and is what a model produces after
-reading one example; it is not a second interaction path.
+source is `event`; `artifact` and `data` image sources render `alt`, and an
+`artifact` `Ref` renders its label as plain text, because nothing roots an
+artifact for an inline document. It exists because it costs no tool round
+trip and is what a model produces after reading one example; it is not a
+second interaction path.
 
 ### 6.5 Web client
 
@@ -508,18 +573,20 @@ the exhaustive case; `applyEnvelope` merges a snapshot in place like
 String(env.seq)`.
 
 Reconciliation: the bootstrap carries `widget_state {epoch,
-transcript_generation, entries, complete}` for the session's widgets (open
-and closed, ≤ 500, each with `seq`). A client discards every cached widget
-absent from a complete list, treats an incomplete list as "reconcile
-everything cached" (W8), and asks `POST /api/sessions/:id/widgets/lookup
-{widget_ids ≤ 200, epoch, transcript_generation, after?}` for cached widgets
-whose `state_version` is older. The answer carries the same epoch and
-generation or is discarded and reconciliation restarts; each id has an
-outcome: `current` with the snapshot (placed at its `seq` when the row is
-not in the cache or the tail), `cleared` or `unknown` (the cached row is
-removed). A page is ≤ 256 KiB and a snapshot ≤ 28 KiB (24 KiB document plus
-bounded metadata and five summaries), so at least nine snapshots fit and
-`next` resumes the rest; progress is guaranteed.
+transcript_generation, entries, complete, next}` for the session's widgets
+(open and closed, each with `seq`), paginated so the client always obtains
+the complete authoritative index. Against that index the client discards
+every cached widget it does not list and asks `POST
+/api/sessions/:id/widgets/lookup {widget_ids ≤ 200, epoch,
+transcript_generation, after?}` for every entry that is **missing locally or
+stale** (`state_version` newer than the cached one) — including widgets
+created while the device was away and already outside the reconnect tail.
+The answer carries the same epoch and generation or is discarded and
+reconciliation restarts; each id has an outcome: `current` with the snapshot
+(placed at its `seq` when the row is not in the cache or the tail),
+`cleared` or `unknown` (the cached row is removed). A page is ≤ 256 KiB and
+a snapshot ≤ 32 KiB by construction (§5.3), so at least eight snapshots fit
+and `next` resumes the rest; progress is guaranteed.
 
 Every integration file (`MarkdownImpl.tsx`, `TranscriptItems.tsx`,
 `derive.ts`, `Transcript.tsx`, `tools/blocks.tsx`) is at its
@@ -543,14 +610,17 @@ limits.
 - **W5 Closure.** `closed` is monotonic; after it the document does not
   change and no interaction is admitted; already admitted interactions still
   settle, each settlement advancing `state_version`.
-- **W6 Clear.** A cleared widget is never published again, its unproven
-  interactions are cancelled, and repair distinguishes `cleared_at_ms` from
-  a missing projection.
+- **W6 Clear.** Clear is durable before it is visible. A cleared widget is
+  never published again; its not-yet-dispatched interactions are cancelled;
+  its dispatched ones become uncertain, never proven cancelled; repair
+  distinguishes `cleared_at_ms` from a missing projection.
 - **W7 Interaction.** An interaction is admitted at most once per
-  `interaction_id`; its record, message and queue entry agree; the message
-  names the revision it was made on and that revision stays readable;
-  dispatch is marked before it happens and delivery is proven by the echo or
-  reported as uncertain, never assumed.
+  `interaction_id`; its record, message and queue entry agree and the
+  dispatcher verifies that agreement; the message names the revision it was
+  made on and that revision and its artifacts stay readable; dispatch
+  happens only after its durable mark is acknowledged; delivery is proven by
+  the turn the prompt started, never by the transcript echo, and otherwise
+  reported as uncertain.
 - **W8 Completeness.** Bootstrap and lookup say whether they are complete
   and which epoch and generation they describe; a client treats an
   incomplete or mismatched answer as "reconcile again", never as "nothing
@@ -558,6 +628,9 @@ limits.
 - **W9 Generation.** Every widget row, snapshot, interaction and queued
   widget prompt carries its transcript generation; nothing from an older
   generation is reduced, published, dispatched or admitted.
+- **W10 Serialization.** Every generation-bearing write is a conditional
+  update on the session's generation row, so the database, not the process,
+  orders it against Clear; an unacknowledged write never guards an effect.
 
 ## 7. Presentation
 
@@ -676,77 +749,121 @@ surfaces.
 ```
 
 ```
-[widget w3 r4] Decision: The stale Cargo target directory
-{"widget":"w3","revision":4,"selected":["The stale Cargo target directory"]}
+[widget w3 r4] Which cache may be removed? → The stale Cargo target directory
+{"widget":"w3","revision":4,"question":"Which cache may be removed?","selected":["The stale Cargo target directory"]}
 ```
 
-Line one is the button label, or "Decision: " followed by the selected
-option labels. Line two names the Controller-assigned handle, the revision
-and, for a choice, the selected labels again. **No agent-chosen identifier
-appears**: not the widget id, not the node id, not option values, not group
-names. Labels identify the node because interactive labels are unique within
-a widget and option labels within a choice (§5.3); the agent authored them
-and maps them trivially. `composeInteractionMessage` in the contract is the
-normative composer; the Rust composer mirrors it and the shared fixtures,
-including the hostile-identifier vector, hold both to it. The agent is told
-in the help topic that a decision applies to the revision it names, that the
-pinned revision is readable with `widgets.read({revision})`, and that a
-moved revision never authorises substitution.
+Line one is the button label, or the choice's question followed by the
+selected option labels. Line two names the Controller-assigned handle, the
+revision and, for a choice, the question and the selected labels again. The
+question is part of the message because two choices may both offer "Yes";
+`twoQuestions` in the examples is the collision vector. **No agent-chosen
+identifier appears**: not the widget id, not the node id, not option values,
+not group names. Labels identify the node because interactive labels are
+unique within a widget and option labels within a choice (§5.3); the agent
+authored them and maps them trivially. `composeInteractionMessage` in the
+contract is the normative composer; the Rust composer mirrors it and the
+shared fixtures, including the hostile-identifier and collision vectors,
+hold both to it. The agent is told in the help topic that a decision applies
+to the revision it names, that the pinned revision is readable with
+`widgets.read({revision})`, and that a moved revision never authorises
+substitution.
 
-### 8.3 Durable admission, relay, dispatch and proof of delivery
+### 8.3 Durable admission, relay, acknowledged handoff and proof of delivery
 
-The session queue persists write-behind (`StoreWrite::UpdatePending`), so it
-cannot be the ledger; `widget_interactions` is, and the queue's existing
-cmid idempotency is used as the dedup mechanism, not as the record.
+The session queue persists write-behind (`StoreWrite::UpdatePending`), the
+transcript echo of a user message is synthesized by the worker **before**
+the provider request (`src/acp.rs`, `AgentCommand::Prompt`) and also for a
+held prompt that is cancelled before reaching ACP (`src/remote_runtime.rs`
+`cancel`), and the store writer may exhaust its retries. None of them can
+therefore be the record or the proof. `widget_interactions` is the record,
+the acknowledged conditional write is the gate, and the turn the prompt
+started is the proof.
 
 1. **Admit.** The Web sends `widget_action {session_id, widget_id,
    revision, state_version, transcript_generation, node_id, interaction_id,
-   selected?}` (`selected` holds option values per choice id, which the
-   Controller maps to labels). In one transaction the Controller checks the
-   widget is open and not cleared, the generation, revision and state
-   version match what the person saw, the node exists, is `prompt`-bearing
-   and not disabled, its group is undecided, the selection is 1 value for a
-   single choice or 1..`max_selected` for a multiple one and every value is
-   an option of that choice; then inserts the record (`admitted`, request
-   hash, label, selected labels, composed message, generation), pins the
-   revision if this is its first decision, records the group as decided,
-   bumps `state_version`, and replies `widget_action_result {outcome:
-   admitted}`. A repeated `interaction_id` with the same hash returns
-   `replayed` with the record's current state **before** any staleness check;
-   a different hash is `conflict`. Refusals (`stale_revision`,
-   `stale_state`, `stale_generation`, `closed`, `cleared`, `unknown_node`,
-   `not_interactive`, `disabled`, `group_decided`, `in_flight`,
-   `invalid_selection`, `interaction_limit`, `rate_limited`,
-   `session_unavailable`) are stateless: nothing is recorded, and a retry
-   with the same id is evaluated afresh.
-2. **Relay.** A relay enqueues every `admitted` record as a prompt with
+   selected?}`. In one generation-checked transaction the Controller checks
+   the widget is open and not cleared, revision and state version match what
+   the person saw, the node exists, carries `prompt` and is not disabled,
+   its group is undecided, the selection is 1 value for a single choice or
+   1..`max_selected` for a multiple one and every value is an option of that
+   choice; composes the message (§8.2) and checks it against `messageBytes`;
+   inserts the record (`admitted`, request hash, label, selected labels,
+   message and its SHA-256, generation), pins the revision if this is its
+   first decision, records the group as decided, bumps `state_version`, and
+   replies `widget_action_result {outcome: admitted}`. A repeated
+   `interaction_id` with the same hash returns `replayed` with the record's
+   current state **before** any staleness check; a different hash is
+   `conflict`. Refusals are stateless: nothing is recorded, and a retry with
+   the same id is evaluated afresh.
+2. **Relay.** A relay keeps every `admitted` record present in the session
+   queue as a prompt whose content is exactly the record's message, with
    `cmid = widget:<interaction_id>`, `promptOrigin {actor:"human",
-   source:"widget"}` (a new `source`, not a new actor) and the record's
-   generation. `tracks_delivery` gains the `widget:` prefix, so
-   `prompt_already_accepted` refuses a duplicate whether the original is
-   queued, dispatched or echoed. The ledger does not transition on enqueue:
-   `queued` is a derived display state (the queue contains the cmid), so a
-   lost write-behind queue entry is simply re-enqueued by the relay after a
-   restart.
-3. **Dispatch (write-ahead).** When the queue head is a widget prompt, the
-   dispatcher first checks the record's generation against the session's,
-   then durably marks the record `dispatched` (through the store writer,
-   awaited), and only then hands the prompt to the worker. A generation
-   mismatch cancels the record and drops the prompt.
-4. **Proof.** The user message's echo lands in `events` with its `cmid`; the
-   store writer marks the record `delivered` in the same batch. A record
-   that is `dispatched` without an echo when the worker is replaced or the
-   Controller restarts becomes `uncertain`: it is shown to the person as
-   "may not have reached the agent" with a product-owned Send-again that
-   creates a **new** interaction; it is never replayed blindly.
-5. **Recovery.** On start: `admitted` rows are re-enqueued (dedup by cmid);
-   `dispatched` rows are resolved against `events` by cmid to `delivered`
-   or `uncertain`; cancelled rows are left alone; rows of an older
-   generation are `cancelled (cleared)`.
+   source:"widget"}` and the record's generation. `tracks_delivery` gains
+   the `widget:` prefix, so `prompt_already_accepted` refuses a duplicate
+   whether the original is queued, dispatched or echoed. The ledger does not
+   transition on enqueue: "queued" is a derived display state.
+3. **Reconcile the queue before it drains.** On Controller start, and when a
+   session's queue is restored, every restored entry with a `widget:` cmid
+   is checked against the ledger before drain is enabled: it stays only if
+   its record is `admitted` in the current generation and the content hash
+   matches `message_sha256`; otherwise it is removed. `admitted` records
+   without an entry are re-enqueued. Enqueue dedup protects against
+   duplicates; this step protects against a stale persisted copy draining
+   after its record moved on.
+4. **Hand off only after an acknowledged CAS.** When the queue head is a
+   widget prompt, the dispatcher takes the session fence, verifies the
+   content hash, and issues the acknowledged conditional write `admitted →
+   dispatched` under the current generation. `committed`: hand the prompt to
+   the worker and `note_dispatched`. `failed` (the record is no longer
+   `admitted`, or the generation moved): drop the queue entry. `unknown`:
+   hand nothing off, keep the entry, retry the same statement; if the retry
+   reads the record as already `dispatched` while this process knows it has
+   not handed off, it hands off exactly once; if the process has restarted in
+   between, the record is `dispatched` without a handoff and resolves to
+   `uncertain` (step 5).
+5. **Proof.** The Hub already attributes a turn to the dispatched prompt
+   that started it (`dispatched_cmids`, as Superagent follow-ups use
+   **[unverified in detail]**). A record becomes `delivered` when that turn
+   ends with a non-cancel, non-error stop reason or produced any agent
+   output. It becomes `uncertain` when the turn ends cancelled, errored or
+   interrupted before any output, when the worker is replaced or the
+   Controller restarts while it is `dispatched`, or when a Clear fences it
+   while dispatched. The echo is never consulted. A later Phase 2 worker
+   signal (`prompt_accepted` after the ACP request is acknowledged) can turn
+   `uncertain` into `failed` or `delivered` sooner; it needs a Machine
+   release and is not assumed here.
+6. **Retry.** `widget_action_retry {interaction_id, retry_interaction_id}`
+   is the person's explicit Send-again for an `uncertain` or `failed`
+   record. It copies the original's pinned intent (label, selection,
+   revision, message) regardless of the widget's current revision, closure
+   or group state, records `retry_of`/`retried_by`, and is refused only when
+   the widget is cleared (`cleared`), the original is not retryable
+   (`not_retryable`) or a retry exists (`already_retried`). If proof for the
+   original arrives later, the retry is marked `duplicate_of` the original;
+   both messages remain visible to the person and the agent.
+7. **Cancel.** Deleting a widget prompt from the queue first records
+   `cancelled (removed)` through the acknowledged write, then removes the
+   entry; on `unknown` the entry stays and the deletion is retried.
+
+| Crash or fault point | Ledger | Queue after restart | Outcome |
+|---|---|---|---|
+| after admission commit, before enqueue | `admitted` | re-enqueued (step 3) | sent once |
+| after enqueue, queue state lost | `admitted` | re-enqueued | sent once |
+| after enqueue, queue state persisted | `admitted` | kept after hash check | sent once |
+| cancellation write exhausted | `admitted` | entry kept, deletion retried | never sent until cancelled |
+| CAS acknowledged, process dies before handoff | `dispatched` | entry removed by reconciliation | `uncertain`, Send-again offered |
+| CAS acknowledgement lost, process alive | `admitted` or `dispatched` | entry kept | retry CAS; handoff once or `uncertain` |
+| handoff done, turn never ends (worker replaced) | `dispatched` | entry gone | `uncertain` |
+| turn ends cancelled / errored before output | `dispatched` | — | `uncertain` |
+| turn ends normally | `delivered` | — | proven |
+| echo present without provider request | any | — | ignored as evidence |
+| Clear during awaited CAS | CAS fails on generation → `cancelled`; or already `dispatched` → `uncertain` | entries removed | nothing from the old generation dispatches |
+| restored stale queue copy of a dispatched record | `dispatched` | removed before drain | never re-sent |
 
 The Web shows admitted → queued → dispatched → delivered on the control with
-the unsent → sent → stalled timing used for permission replies, and
-`uncertain` with its Send-again.
+the unsent → sent → stalled timing used for permission replies, `uncertain`
+with its Send-again, and `cancelled`/`failed` plainly.
 
 ### 8.4 Decision groups, pending input, the queue
 
@@ -757,17 +874,22 @@ the unsent → sent → stalled timing used for permission replies, and
 - **Decided and reset.** Admission records `decided[group] = {interaction,
   revision}`. A later agent write (`replace` or `patch`; the rule is
   computed on the resulting document, so both behave alike) **resets** a
-  group only when the group's *interaction signature* changes: the set of
-  interactive node ids in the group and, per node, its type, label,
-  `disabled`, and for a choice its option values and labels and
-  `max_selected`. Reordering or changing surrounding display nodes does not
-  reset a decision; changing what the person would be deciding does.
+  group only when the group's canonical interaction signature changes.
+  `interactionSignature` in the contract defines it: the group's actionable
+  node ids and, per node, its type, label, `disabled`, and for a choice
+  `multiple`, the effective `max_selected` after defaults, and its option
+  values and labels in order. Reordering or changing surrounding display
+  nodes does not reset a decision; changing what the person would be
+  deciding does. Fixtures cover both.
 - **Pending selection.** A choice keeps the person's unsent selection across
   snapshots only while the choice's signature is unchanged; otherwise the
   selection resets and the control shows "updated".
-- **Queue rows.** A queued widget prompt cannot be edited (the Hub refuses
-  `queue_edit` for `widget:` cmids); it can be deleted, which marks the
-  record `cancelled (removed)`. There is no expiry beyond the queue's own.
+- **Queue rows are delete-only on every path.** The Hub refuses
+  `queue_edit`, `queued_to_draft` and any resubmission that would carry a
+  `widget:` cmid (`edit_refused`); deleting the entry cancels the record
+  (§8.3 step 7). The dispatcher verifies the queued content against
+  `message_sha256` before any handoff, so a prompt that somehow diverged
+  from its record is dropped and the record cancelled rather than sent.
 - **Decided on an earlier revision.** When the widget's revision has moved
   past a decision's revision, the control shows "decided on r1 · view" and
   opens the pinned revision.
@@ -850,34 +972,34 @@ the surfaces never look alike.
 
 Measured on the sampled history and the worked examples
 (`contracts/widget-v1.examples.ts`, Markdown and widget in the same
-language), counting the **full `cowboy_execute` envelope and its result**
-for the agent side. Bytes are shown because tokenizer traces are the ship
-gate below, not this table **[unverified]**:
+language), counting the **complete `cowboy_execute` envelope and its
+result** for the agent side; the same arithmetic is what
+`contracts/widget-v1.test.ts` holds the examples to. Bytes are shown because
+tokenizer traces are the ship gate below, not this table **[unverified]**:
 
-| Step | Markdown today | Widget (envelope + result) |
-|---|---|---|
-| 2,112 historical tables, publish | median 322 chars | **+7%** median (p10 +3%, p90 +14%); table only, no envelope |
-| Approval report, publish | 286 B | 1,025 + 111 = **1,136 B** (4.0×) |
-| Status table, publish | 458 B | about 1,000 B (2.2×) |
-| Comparison, publish | 499 B | about 1,050 B (2.1×) |
-| One status update | 197 B (one line) · 483 B (report re-sent with the line) | 342 + 96 = **438 B** (2.2× the line · 0.9× the re-sent report) |
-| The person's answer | a typed sentence the agent then parses | **97 B** fixed shape (`approvalTapMessage`) |
+| Step | Markdown today | Widget (envelope + result) | Ratio |
+|---|---|---|---|
+| 2,112 historical tables, publish | median 322 chars | +7% median (p10 +3%, p90 +14%); table only, no envelope | 1.07× |
+| Status table, publish | 458 B | 1,085 B | 2.4× |
+| Comparison, publish | 499 B | 1,167 B | 2.3× |
+| Approval report, publish | 286 B | 1,151 B | 4.0× |
+| One status update | 197 B one line · 483 B report re-sent with the line | 438 B | 2.2× the line · 0.9× the re-sent report |
+| The person's answer | a typed sentence the agent then parses | 97 B button · ≈200 B choice with question | fixed shape |
 
-Honest reading. Publication costs 2–4× a terse report. An **update costs
-more than a one-line status and slightly less than re-sending the report**;
-it pays only where the report would otherwise be re-sent in full, which the
-history puts at 10% of tables as a floor. A decision costs a fixed 97 bytes
-instead of a typed sentence plus the agent's parsing, and it removes a
-typing step for the person, which is a UX gain the token count does not
-capture. Break-even by prefix, on these examples: after publish the widget
-is 850 B behind Markdown; after the first update it is 805 B behind against
-a one-line status and 300 B behind against a re-sent report; it never catches
-up on tokens alone within three updates. **The design therefore does not
-claim net token savings**; it claims a bounded overhead (≤ 4× at
-publication, ≤ 2.5× per update against a one-line status) in exchange for
-in-place updates, readable Mobile rendering and typed-free, auditable
-decisions, and it saves tokens only against the full re-send pattern and
-against prose answers.
+Prefix totals on the approval exchange: after publication the widget has
+cost 1,151 B against 286 B (865 B behind); after one update 1,589 B against
+483 B with a one-line status (1,106 B behind) or 769 B with the report
+re-sent (820 B behind); each further update narrows the gap by 45 B against
+full re-sends and widens it by 241 B against one-line statuses, so
+break-even against the full re-send pattern would need about nineteen
+updates and never comes against terse statuses. **The design therefore
+claims no token saving at all.** What it claims is a bound — publication
+≤ 4.5× the same-language report, an update ≤ 2.5× a one-line status and
+below re-sending the report, a decision message ≤ 2 KiB — in exchange for
+in-place updates, readable Mobile rendering and typing-free, auditable
+decisions. The one measurable token effect in the design's favour is on the
+person's side: a decision is a 97–200 byte fixed-shape message instead of a
+typed sentence plus the agent's parsing of it.
 
 What keeps the overhead bounded: patches instead of re-sends; references
 instead of content (an image is ~70 bytes); fixed-shape answers; nothing
@@ -891,18 +1013,19 @@ and its tokenizer traces): tokenize, with the Claude and Codex tokenizers,
 the three archetypes as complete same-language lifecycles — cold and warm
 help discovery, publish envelope and result, receipt read, two patch
 envelopes and results, one tap message, the agent's read of it — and the
-Markdown lifecycle of the same exchange (report, re-sent report with the
-status line, typed answer), reporting each prefix separately. Phase 1 ships
-only if measured publication is ≤ 4× and each update ≤ 2.5× its Markdown
-counterpart and the lifecycle with one re-sent report is ≤ 1.0×; otherwise
-the design stops here and is reworked, not narrowed automatically.
+Markdown lifecycle of the same exchange (report, one-line status, report
+re-sent with the line, typed answer), reporting each prefix separately
+against each baseline. Phase 1 ships only if measured publication is ≤ 4.5×
+its report, each update ≤ 2.5× the one-line status and below the re-sent
+report, and warm discovery plus one publish stays under 4 K tokens;
+otherwise the design stops here and is reworked, not narrowed automatically.
 
 ## 12. Phases
 
 | Phase | Content | Components | Release boundary |
 |---|---|---|---|
-| 1 | Contract v1 (18 types); `button`/`choice` with `prompt`/`open`/`copy`; `widgets.publish/update/list/read`, receipts, help topic; `sessions.transcript_generation`, `session_widgets`, `widget_revisions`, `widget_interactions`, `widget_artifact_refs`; notice-projected anchored rows, acknowledged publication watermark and sweep, Clear fence and tombstones, bootstrap `widget_state` and lookup; `widget_action` admission, relay, write-ahead dispatch, echo proof, recovery; inline read-only carrier; Mobile and Desktop renderers with preview lines and the entered region; `session.events` widget kind; collector root | Controller + Web (three tables, one column) | no Machine release |
-| 2 | `form` fields if elicitation proves insufficient; `control` actions behind the product confirm and an explicit allowlist; pin a widget to the Desktop side pane / Mobile dock; `metric`, `distribution`, `grid`, `tabs`; SVG `data` images under a bounded policy; image sources from execution-machine files through the verified artifact delivery used by image Calls | Controller + Web; **Machine release** for file sources | explicit maintenance boundary |
+| 1 | Contract v1 (18 types); `button`/`choice` with `prompt`/`open`/`copy`; `widgets.publish/update/list/read`, receipts, help topic; `sessions.transcript_generation`, `session_widgets`, `widget_revisions`, `widget_interactions`, `widget_artifact_refs`; commit-acknowledged store operation and durable-first Clear; notice-projected anchored rows, acknowledged publication watermark and sweep, bootstrap `widget_state` (paged) and lookup; `widget_action` admission, relay, queue reconciliation, acknowledged CAS handoff, turn-attributed delivery proof, `uncertain` and `widget_action_retry`; inline read-only carrier; Mobile and Desktop renderers with preview lines and the entered region; `session.events` widget kind; collector root | Controller + Web (four tables, one column) | no Machine release |
+| 2 | Worker `prompt_accepted` signal so `uncertain` resolves sooner; `form` fields if elicitation proves insufficient; `control` actions behind the product confirm and an explicit allowlist; pin a widget to the Desktop side pane / Mobile dock; `metric`, `distribution`, `grid`, `tabs`; SVG `data` images under a bounded policy; image sources from execution-machine files through the verified artifact delivery used by image Calls | Controller + Web; **Machine release** for the worker signal and file sources | explicit maintenance boundary |
 | 3 | `widget_template` Plugin kind; Call children's result documents rendered as parent widgets; live `Ref` badges; `chart` | Controller, Web, Plugin SDK | separate reviewed contracts |
 
 Phase 1 ships readers before writers: the Web renderer and reducer cases
@@ -919,17 +1042,26 @@ guidance; the §11 gate runs before the domain is enabled.
   with actions and no id; Unicode and numeric edge cases; patch sequencing;
   the hostile-identifier document and its composed message. Run by Rust
   (PostgreSQL and SQLite) and Bun.
-- Fault injection on both databases at every handoff boundary: crash after
-  commit before publication (sweep republishes); an older snapshot
+- Fault injection on both databases at every row of the §8.3 matrix: crash
+  after commit before publication (sweep republishes); an older snapshot
   acknowledged after a newer state (watermark stays correct); store-writer
-  restart between two snapshots (one row); Clear against a publisher holding
-  a pre-Clear snapshot (dropped) and against an already queued interaction
-  (removed and cancelled) and an `admitted` one (never relayed); Controller
-  restart with `admitted` rows (relayed once; cmid dedup observed) and with
-  `dispatched` rows with and without an echo (`delivered` / `uncertain`,
-  never re-sent); duplicate `widget_action` (replayed); stale tap (refused
-  with `current`); queue edit of a widget prompt (refused), delete
-  (cancelled).
+  restart between two snapshots (one row); an exhausted or rejected
+  acknowledged write (no handoff, retried); a lost acknowledgement with and
+  without a restart (handoff once / `uncertain`); a restored stale queue copy
+  of a dispatched record (removed before drain); a synthetic echo without a
+  provider request (not evidence); a turn ending cancelled (`uncertain`);
+  Clear during each awaited handoff and against a publisher holding a
+  pre-Clear snapshot (dropped), an already queued interaction (removed and
+  cancelled), an `admitted` one (never relayed) and a dispatched one
+  (`uncertain`, not cancelled); Clear whose commit fails (nothing cleared,
+  error reported); Controller restart with `admitted` rows (relayed once;
+  cmid dedup observed); duplicate `widget_action` (replayed); stale tap
+  (refused with `current`); queue edit, queue-to-draft and resubmission of
+  a widget prompt (refused), delete (cancelled); retry of an `uncertain`
+  record and a late proof afterwards (duplicate marked); a pinned revision
+  read while the widget is updated and interactions settle (uninterrupted);
+  worst-case record and snapshot fixtures (12 longest labels, 32 decided
+  groups) within their byte bounds.
 - Reducer tests mirroring `backgroundTasksReconcile.test.ts` T1 and
   `persistence_tests.rs` T3/T4: a cached open widget at seq 10 and a
   200-event reconnect tail must show the newest `state_version`; a cached
@@ -979,8 +1111,12 @@ guidance; the §11 gate runs before the domain is enabled.
 | 9 | Row carried as a `notice` with `_cowboy.widget` | r2 approve with limited promise | §6.2 recognised before the notice branch; repeated legacy lines documented |
 | 10 | Closure immutable, `reopen` removed | r2 approve with F8 clarification | §6.2/W5: document frozen, admitted interactions settle |
 | 11 | Phase 1 catalog of 18 types | r2 approve | unchanged |
-| 12 | Controller-assigned public handle replaces every agent identifier in messages (new) | — | §6.1, §8.2; for review |
-| 13 | Interaction ledger with write-ahead dispatch, echo proof and explicit `uncertain` (new) | — | §8.3; for review |
-| 14 | Transcript generation as the Clear fence (new column) (new) | — | §6.3, W9; for review |
-| 15 | Decision-pinned revisions readable through `widgets.read({revision})` (new) | — | §6.3; for review |
-| 16 | Queued widget prompts are delete-only (new) | — | §8.4; for review |
+| 12 | Controller-assigned public handle replaces every agent identifier in messages | r3 request changes (R5) | §8.2: the choice question is part of the message; collision vector |
+| 13 | Interaction ledger with explicit `uncertain` | r3 request changes (R1, R2, R7) | §8.3: turn-attributed proof, acknowledged CAS handoff, queue reconciliation, retry operation, crash-point matrix |
+| 14 | Transcript generation as the Clear fence | r3 request changes (R3) | §6.3: Clear durable first; generation CAS at the database; dispatched work becomes uncertain |
+| 15 | Decision-pinned revisions | r3 request changes (R4, R12) | §6.3: refs per revision retained for pinned ones; reads bound to `sha256` |
+| 16 | Queued widget prompts are delete-only | r3 request changes (R2, R8) | §8.4: every mutation path refused; content hash verified at handoff |
+| 17 | Delivery evidence is the turn the prompt started, never the echo (new) | — | §8.3; for review |
+| 18 | A commit-acknowledged store operation gates every widget effect (new) | — | §6.3; for review |
+| 19 | `widget_action_retry` as the only Send-again (new) | — | §8.3; for review |
+| 20 | The design claims bounded overhead and no token saving (new) | — | §3, §11; for review |

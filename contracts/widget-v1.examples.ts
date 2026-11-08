@@ -92,6 +92,7 @@ export const comparison: WidgetDocument = {
       {
         type: "choice",
         id: "pick",
+        label: "Which option should I implement?",
         options: [
           { value: "a", label: "Go with A" },
           { value: "b", label: "Go with B" },
@@ -222,3 +223,33 @@ export const hostileChoice: WidgetDocument = {
 export const hostileTapMessage = composeInteractionMessage("w3", 4, "Which cache may be removed?", [
   "The stale Cargo target directory",
 ]);
+
+/** Two choices whose options both read "Yes": the composed messages differ
+ *  because the question is part of the message. */
+export const twoQuestions: WidgetDocument = {
+  schema: WIDGET_SCHEMA,
+  title: "Cleanup",
+  root: {
+    type: "stack",
+    children: [
+      {
+        type: "choice",
+        id: "cache",
+        label: "Delete the cache?",
+        options: [
+          { value: "y", label: "Yes" },
+          { value: "n", label: "No" },
+        ],
+      },
+      {
+        type: "choice",
+        id: "backups",
+        label: "Delete the backups?",
+        options: [
+          { value: "y", label: "Yes" },
+          { value: "n", label: "No" },
+        ],
+      },
+    ],
+  },
+};
