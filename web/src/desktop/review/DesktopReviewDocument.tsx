@@ -58,7 +58,7 @@ function ReviewFileTabs({
               data-review-file-tab={tab.document.path}
               data-review-file-tab-kind={tab.document.kind}
               data-review-file-tab-preview={tab.preview ? "true" : undefined}
-              title={`${tab.document.path}${tab.document.kind === "diff" ? " (changes)" : ""}`}
+              title={`${tab.document.path}${tab.document.kind === "diff" ? " (changes)" : tab.document.kind === "commit" ? ` (commit ${tab.document.oid.slice(0, 8)})` : ""}`}
               onDoubleClick={() => onKeep(key)}
               onAuxClick={(event) => {
                 if (event.button === 1) onClose(key);
@@ -69,8 +69,10 @@ function ReviewFileTabs({
                   <Box component="span" sx={{ fontStyle: tab.preview ? "italic" : "normal" }}>
                     {tabLabel(tab.document)}
                   </Box>
-                  {tab.document.kind === "diff" && (
-                    <Box component="span" sx={{ fontSize: "0.65rem", color: "text.secondary" }}>Δ</Box>
+                  {tab.document.kind !== "source" && (
+                    <Box component="span" sx={{ fontSize: "0.65rem", color: "text.secondary" }}>
+                      {tab.document.kind === "commit" ? `@${tab.document.oid.slice(0, 7)}` : "Δ"}
+                    </Box>
                   )}
                   <IconButton
                     component="span"
@@ -164,7 +166,7 @@ export function DesktopReviewDocument({
       )}
       {document && ready?.truncated && (
         <Alert severity="info" sx={{ mx: 1, mt: 0.5, py: 0 }}>
-          Only the first part of this {document.kind === "diff" ? "diff" : "file"} is shown.
+          Only the first part of this {document.kind === "source" ? "file" : "diff"} is shown.
         </Alert>
       )}
       {document && !ready && load?.state !== "error" && (
@@ -176,7 +178,7 @@ export function DesktopReviewDocument({
         <ReviewCodeEditor
           documentKey={ready?.key ?? "loading"}
           path={document.path}
-          kind={document.kind}
+          kind={document.kind === "source" ? "source" : "diff"}
           text={ready?.text ?? ""}
           wrap={wrap}
           fontSize={fontSize}

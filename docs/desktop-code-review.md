@@ -1,6 +1,6 @@
 # Desktop Code Review
 
-**Status: design proposal r3 (2026-11-08); D0 and the D1 core implemented, D1b–D4 planned.** r3 records the
+**Status: design proposal r3 (2026-11-08); D0, D1 and D1b implemented (Remote PR still in the classic layout), D2–D4 planned.** r3 records the
 owner's answers to the r2 open questions. r2 folds in a
 Codex Astra Max design review of r1 (managed call
 `call-53884a467577cfb02c34574f`: verdict *needs-attention*, five high and ten
@@ -536,7 +536,8 @@ together" reads "Prompt and the work pane".
 | --- | --- | --- |
 | D0 seam (implemented) | Work-pane view tabs; `review.open`/`review.focus` and the gated `␣V` group; `REVIEW` status segment; `Esc` policy; `DesktopPane` `review`; the approval dock hosted by the work pane; FOCUS.md updated; the current `ReviewApp` still renders inside | `just desktop-browser-gate`; shortcut audit lists no uncovered control; an approval arriving while Review is open is answerable at the pane's full width; Mobile screenshots and chunks unchanged |
 | D1 workbench (core implemented) | Width tiers, Navigator with list grammar and tabs, Document as read-only Vim buffer (unified diff, source, file tabs, `]c ]f ]u gt`, `Enter`/`␣VS`), editor-scoped Vim additions, device-local state and reveal adapter, comparison/unread/mark | Keyboard-only scripted review of a 50-file change at 1100, 1440 and 1728 px; no synced tab writes from Desktop; Composer and Review mounted together with a vimrc mapping of `]c` still owned by the user; `H` across width tiers without remount |
-| D1b (planned) | History and Worktrees tabs, the context control (`␣VX`: linked sessions, project checkout, bound worktrees, Remote PR), Navigator resize; until then `␣VL` switches Review to the classic (phone) layout, which keeps them | the same acceptance plus the classic layout's suites |
+| D1b (implemented) | History (commit drill-in, commit tabs) and Worktrees tabs, the context control `␣VX` (this Session, project checkout, linked, bound and same-project sessions; a per-device choice), Review settings `␣V,`, a resizable Navigator in Resize mode | `tools/cdp-review-acceptance.ts` (15 trusted-input steps, both themes) |
+| D1c (planned) | Remote PR in the workbench; until then `␣VL` switches to the classic (phone) layout, which has it | the Remote PR suites in the workbench |
 | D2 tools | Streaming patch decoder and `@codemirror/merge` split view (patch-only), Inspector (Outline, Hunks, Problems, Details), `K` `gd` `gr` `gO` `]d`, checks `␣VK` with context gating, Review settings | Decoder fixtures pass; split and unified agree on every hunk of the fixture; hover/definition round trips under the measured `review_read_completed` budget |
 | D2b sides | Comparison-bound side windows; expanded context in the split layout | Expanded old-side text equals `git show <base>:<path>` for the fixture; an edited worktree never changes it |
 | D3 agent loop | Delegation contract, Explain/Review forks as kept-source preview tabs, findings projection with anchor states, `␣VS` on a problem | A managed review's findings land on their lines at `exact`, move to `heuristic`/`unmapped` after an edit, and disappear with a deleted fork; a prose result is shown as text |
@@ -548,7 +549,13 @@ files, file tabs and the footer (path, `+n −m`, hunk position, Mark reviewed,
 Send to Prompt). Two deviations from the table above: the leader has no
 nested groups, so file-tab commands are `␣VQ` close and `␣VP` keep instead of
 a `␣VB` sub-group, and Review settings stay in the classic layout. The
-Desktop code font is at least 12 px. The context is the Session's worktree
+Desktop code font is at least 12 px, so the phone's smaller sizes in the
+shared Review settings do not shrink it. A context chosen with `␣VX` is
+stored per device for the Session (`cowboy.desktop.reviewContext.v1`) and
+resolved like the folder's review directory; it never writes the synced
+`directory` default. After a switch, focus moves to the new context's
+Changes, because the menu's own focus restoration would land on a row the
+switch unmounts. The context is the Session's worktree
 or its folder's review directory; an agent's reveal opens a file only in the
 Session's own worktree. `tools/cdp-review-acceptance.ts` drives the
 workbench with trusted keys in both themes and is part of

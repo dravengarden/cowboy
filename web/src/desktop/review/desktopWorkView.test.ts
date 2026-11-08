@@ -19,11 +19,28 @@ test("only Review is stored, newest change last, within the limit", () => {
 });
 
 test("a Session remembers its view on this device", () => {
-  saveDesktopWorkView("one", "review");
-  assertEquals(loadDesktopWorkView("one"), "review");
-  assertEquals(loadDesktopWorkView("two"), "conversation");
-  saveDesktopWorkView("one", "conversation");
-  assertEquals(loadDesktopWorkView("one"), "conversation");
+  // Bun has no Web Storage; give this test its own so it does not depend on
+  // which other test file installed one first.
+  const values = new Map<string, string>();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+      removeItem: (key: string) => void values.delete(key),
+    },
+  });
+  try {
+    saveDesktopWorkView("one", "review");
+    assertEquals(loadDesktopWorkView("one"), "review");
+    assertEquals(loadDesktopWorkView("two"), "conversation");
+    saveDesktopWorkView("one", "conversation");
+    assertEquals(loadDesktopWorkView("one"), "conversation");
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+    else delete (globalThis as { localStorage?: unknown }).localStorage;
+  }
 });
 
 test("work view requests carry only a known view", () => {

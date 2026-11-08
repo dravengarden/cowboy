@@ -1,3 +1,4 @@
+import { isDesktopSplitterId } from "./desktopSplitterKeyboard";
 import {
   createContext,
   useCallback,
@@ -28,7 +29,7 @@ import {
 
 export type DesktopPane = "sessions" | "prompt" | "conversation";
 export type WorkspaceMode = "normal" | "search" | "command";
-export type DesktopSplitterId = "sessions-prompt" | "prompt-conversation";
+export type DesktopSplitterId = "sessions-prompt" | "prompt-conversation" | "review-navigator";
 
 interface DesktopWorkspaceContextValue {
   focusedPane: DesktopPane;
@@ -256,11 +257,7 @@ export function DesktopWorkspaceProvider({
       if (event.type === "pointerdown" && event.target instanceof Element) {
         const splitter = event.target.closest<HTMLElement>("[data-desktop-splitter]")
           ?.dataset.desktopSplitter;
-        setSelectedSplitter(
-          splitter === "sessions-prompt" || splitter === "prompt-conversation"
-            ? splitter
-            : null,
-        );
+        setSelectedSplitter(isDesktopSplitterId(splitter) ? splitter : null);
       }
       const pane = paneFromTarget(event.target);
       if (pane) setFocusedPane(pane);

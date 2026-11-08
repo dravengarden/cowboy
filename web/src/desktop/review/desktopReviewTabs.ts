@@ -12,7 +12,9 @@ export type DesktopReviewDocument =
     readonly scope: CodeDiffScope;
     readonly comparison?: string | undefined;
   }
-  | { readonly kind: "source"; readonly path: string };
+  | { readonly kind: "source"; readonly path: string }
+  /** One file of a commit, from History: its diff against the first parent. */
+  | { readonly kind: "commit"; readonly oid: string; readonly path: string };
 
 export interface DesktopReviewTab {
   readonly document: DesktopReviewDocument;
@@ -28,9 +30,9 @@ export const NO_REVIEW_TABS: DesktopReviewTabs = { tabs: [], active: null };
 export const DESKTOP_REVIEW_TAB_LIMIT = 24;
 
 export function reviewDocumentKey(document: DesktopReviewDocument): string {
-  return document.kind === "diff"
-    ? `diff\0${document.comparison ?? document.scope}\0${document.path}`
-    : `source\0${document.path}`;
+  if (document.kind === "diff") return `diff\0${document.comparison ?? document.scope}\0${document.path}`;
+  if (document.kind === "commit") return `commit\0${document.oid}\0${document.path}`;
+  return `source\0${document.path}`;
 }
 
 /** Open `document`: an open tab is selected; otherwise it replaces the preview
@@ -109,6 +111,7 @@ function validDocument(value: unknown): value is DesktopReviewDocument {
   const record = value as Record<string, unknown>;
   if (typeof record.path !== "string" || record.path.length === 0) return false;
   if (record.kind === "source") return true;
+  if (record.kind === "commit") return typeof record.oid === "string" && /^[0-9a-f]{7,64}$/.test(record.oid);
   return record.kind === "diff" &&
     (record.scope === "combined" || record.scope === "staged" || record.scope === "unstaged") &&
     (record.comparison === undefined || typeof record.comparison === "string");

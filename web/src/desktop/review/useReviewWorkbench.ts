@@ -68,6 +68,10 @@ export function useReviewWorkbench(active: boolean) {
     updateTabs((state) => openReviewDocument(state, { kind: "source", path }));
     focusDocument();
   }, [focusDocument, updateTabs]);
+  const openCommit = useCallback((oid: string, path: string): void => {
+    updateTabs((state) => openReviewDocument(state, { kind: "commit", oid, path }));
+    focusDocument();
+  }, [focusDocument, updateTabs]);
   const markEntry = useCallback((key: string, mark: string | undefined): void => {
     if (!context.stateKey || !mark) {
       notify("Open the diff to mark it reviewed", "info");
@@ -138,6 +142,7 @@ export function useReviewWorkbench(active: boolean) {
     root,
     open,
     openSource,
+    openCommit,
     markOpen: () => openKey && markEntry(openKey, openMark),
     markEntry,
     send,

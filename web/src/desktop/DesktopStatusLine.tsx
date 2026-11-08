@@ -121,10 +121,11 @@ const REVIEW_NAVIGATOR_HINTS: RegionHint[] = [
   { keys: "J/K", label: "Row" },
   { keys: "L/Enter", label: "Open" },
   { keys: "H", label: "Collapse/up" },
-  { keys: "[/]", label: "Changes/Files" },
+  { keys: "[/]", label: "Tab" },
   { keys: "/", label: "Filter" },
   { keys: "'", label: "Labels" },
   { keys: DESKTOP_SHORTCUTS.reviewMark, label: "Mark" },
+  { keys: DESKTOP_SHORTCUTS.reviewContext, label: "Context" },
   { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
 ];
 

@@ -9,19 +9,24 @@ import {
   DesktopReviewNavigator,
   REVIEW_FILTER_FOCUS_EVENT,
   REVIEW_NAVIGATOR_REGION,
+  REVIEW_NAVIGATOR_TABS,
   type ReviewNavigatorTab,
 } from "./DesktopReviewNavigator";
 import { openReviewDocument } from "./desktopReviewTabs";
 import { REVIEW_TREE_LEFT_EVENT } from "./ReviewFilesList";
 import { entryKey } from "./ReviewChangesList";
+import { setReviewContextChoice } from "./desktopReviewContextChoice";
 import { useReviewWorkbenchCommands } from "./useReviewWorkbenchCommands";
 import { REVIEW_DOCUMENT_REGION, type ReviewWorkbench, useReviewWorkbench } from "./useReviewWorkbench";
 import { useElementWidth } from "./useReviewTabsState";
+import { ReviewNavigatorSplitter, useNavigatorWidth } from "./ReviewNavigatorSplitter";
+import { DesktopModal } from "../DesktopModal";
+import { ReviewSettingsContent } from "../../mobile/review/ReviewSettings";
 
 /** Below this Review width the Navigator folds to a rail and opens as an
  *  inset list (docs/desktop-code-review.md "Inner width policy"). */
 const COMPACT_WIDTH = 900;
-const NAVIGATOR_WIDTH = 300;
+const NAVIGATOR_OVERLAY_WIDTH = 340;
 
 function focusedRow(): HTMLElement | null {
   const active = document.activeElement;
@@ -70,6 +75,8 @@ function EmptyDocument({ review }: { review: ReviewWorkbench }): React.JSX.Eleme
 }
 
 interface ViewControls {
+  readonly openContext: () => void;
+  readonly openSettings: () => void;
   readonly compact: boolean;
   readonly overlay: boolean;
   readonly showNavigator: (tab: ReviewNavigatorTab) => void;
@@ -86,6 +93,8 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
   const { compact, overlay, showNavigator, leaveOverlay } = controls;
   useReviewWorkbenchCommands({
     showNavigator,
+    openContext: controls.openContext,
+    openSettings: controls.openSettings,
     openComparison: () => {
       showNavigator("changes");
       controls.requestComparison();
@@ -106,16 +115,20 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
     toggleNavigator: () => compact ? controls.setOverlay((value) => !value) : controls.setFolded((value) => !value),
     navigatorOpen: () => focusedRow()?.click(),
     navigatorLeft: () => {
+      // The list owning the row decides (a tree collapses or climbs, History
+      // leaves a commit); a row with nowhere to go closes the inset list.
       const row = focusedRow();
       const path = row?.dataset.reviewTreePath;
-      const expanded = row?.getAttribute("aria-expanded") === "true";
-      if (!row || (!expanded && !path?.includes("/"))) {
-        leaveOverlay();
-        return;
-      }
-      row.dispatchEvent(new CustomEvent(REVIEW_TREE_LEFT_EVENT, { bubbles: true, cancelable: true }));
+      const treeRoot = path !== undefined && row?.getAttribute("aria-expanded") !== "true" && !path.includes("/");
+      const event = new CustomEvent(REVIEW_TREE_LEFT_EVENT, { bubbles: true, cancelable: true });
+      if (row && !treeRoot) row.dispatchEvent(event);
+      if (!row || treeRoot || (!event.defaultPrevented && path === undefined)) leaveOverlay();
     },
-    navigatorTab: () => controls.setTab((value) => value === "changes" ? "files" : "changes"),
+    navigatorTab: (offset) => controls.setTab((value) => {
+      const index = REVIEW_NAVIGATOR_TABS.findIndex((item) => item.value === value);
+      const length = REVIEW_NAVIGATOR_TABS.length;
+      return REVIEW_NAVIGATOR_TABS[(index + offset + length) % length]!.value;
+    }),
     navigatorFilter: () => {
       document.querySelector(`[data-desktop-region="${REVIEW_NAVIGATOR_REGION}"]`)
         ?.dispatchEvent(new CustomEvent(REVIEW_FILTER_FOCUS_EVENT));
@@ -130,6 +143,45 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
   });
 }
 
+/** The Document region: the open file, its tabs and footer. Focus that
+ *  reaches the region before the editor exists is handed on when it mounts. */
+function ReviewDocumentRegion({ review }: { review: ReviewWorkbench }): React.JSX.Element {
+  return (
+    <Box
+      data-desktop-region={REVIEW_DOCUMENT_REGION}
+      tabIndex={-1}
+      onFocus={(event) => {
+        if (event.target === event.currentTarget) review.editor.current?.focus();
+      }}
+      sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", outline: "none" }}
+    >
+      <DesktopReviewDocument
+        tabs={review.tabs}
+        document={review.document}
+        load={review.load}
+        status={{ hunk: review.hunk, reviewed: review.openReviewed }}
+        wrap={review.settings.softWrap}
+        fontSize={Math.max(12, review.settings.codeFontSize)}
+        restoreLine={review.restoreLine}
+        onSelectTab={(key) => review.updateTabs((state) => ({ ...state, active: key }))}
+        onCloseTab={(key) => review.closeTab(key)}
+        onKeepTab={(key) => review.keepTab(key)}
+        onAction={review.onAction}
+        onCursorLine={review.onCursorLine}
+        onView={(view) => {
+          review.editor.current = view;
+          // Focus reached the Document before its text: hand it on now.
+          const region = view?.dom.closest<HTMLElement>(`[data-desktop-region="${REVIEW_DOCUMENT_REGION}"]`);
+          if (view && region && document.activeElement === region) view.focus();
+        }}
+        onMark={() => review.markOpen()}
+        onSend={() => review.send(false)}
+        empty={<EmptyDocument review={review} />}
+      />
+    </Box>
+  );
+}
+
 /**
  * Desktop Review (docs/desktop-code-review.md D1): the Navigator beside a
  * read-only Vim Document, sized from the pane's own width.
@@ -139,21 +191,27 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const width = useElementWidth(root);
   const compact = width > 0 && width < COMPACT_WIDTH;
+  const [navigatorWidth, setNavigatorWidth] = useNavigatorWidth(width);
   const [folded, setFolded] = useState(false);
   const [overlay, setOverlay] = useState(false);
   const [tab, setTab] = useState<ReviewNavigatorTab>("changes");
-  const [filters, setFilters] = useState<Record<ReviewNavigatorTab, string>>({ changes: "", files: "" });
+  const [filters, setFilters] = useState<Record<ReviewNavigatorTab, string>>({ changes: "", files: "", history: "", worktrees: "" });
+  const [contextRequest, setContextRequest] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [compareRequest, setCompareRequest] = useState(0);
   const navigatorShown = compact ? overlay : !folded;
   const { workspace } = review;
-  const focusNavigator = (): void => {
+  // Rows may arrive a few frames later (a new tab or context loads them);
+  // until one does, the region itself holds focus so keys stay in Review.
+  const focusNavigator = (frames = 60): void => {
     requestAnimationFrame(() => {
       const region = document.querySelector<HTMLElement>(`[data-desktop-region="${REVIEW_NAVIGATOR_REGION}"]`);
       const row = region?.querySelector<HTMLElement>("[data-desktop-item].Mui-selected") ??
         region?.querySelector<HTMLElement>("[data-desktop-item]");
       workspace.focusRegion(REVIEW_NAVIGATOR_REGION);
-      row?.focus();
+      if (row) row.focus();
+      else if (frames > 0) focusNavigator(frames - 1);
     });
   };
   const showNavigator = (next: ReviewNavigatorTab): void => {
@@ -167,6 +225,11 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
     if (compact && overlay) setOverlay(false);
   };
   useReviewViewCommands(review, {
+    openContext: () => {
+      showNavigator(tab);
+      setContextRequest((value) => value + 1);
+    },
+    openSettings: () => setSettingsOpen(true),
     compact,
     overlay,
     showNavigator,
@@ -179,6 +242,20 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
   });
   const navigator = review.target && (
     <DesktopReviewNavigator
+      context={review.context}
+      contextRequest={contextRequest}
+      onReviewContext={(value) => {
+        const agent = review.context.agentSessionId;
+        if (agent) setReviewContextChoice(agent, value === `session::${agent}` ? null : value);
+        setTab("changes");
+        // The menu would restore focus to a row that this switch unmounts.
+        focusNavigator();
+      }}
+      openCommitPath={review.document?.kind === "commit" ? review.document : undefined}
+      onOpenCommit={(oid, path) => {
+        leaveOverlay();
+        review.openCommit(oid, path);
+      }}
       sessionId={review.target.sessionId}
       tab={tab}
       onTab={setTab}
@@ -210,9 +287,10 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
       sx={{ flex: 1, minHeight: 0, display: "flex", position: "relative" }}
     >
       {navigator && navigatorShown && !compact && (
-        <Box sx={{ width: NAVIGATOR_WIDTH, flexShrink: 0, borderRight: 1, borderColor: "divider", minHeight: 0 }}>
-          {navigator}
-        </Box>
+        <>
+          <Box sx={{ width: navigatorWidth, flexShrink: 0, minHeight: 0 }}>{navigator}</Box>
+          <ReviewNavigatorSplitter width={navigatorWidth} available={width} onWidth={setNavigatorWidth} />
+        </>
       )}
       {navigator && !navigatorShown && (
         <Box sx={{ width: desktopSize(36), flexShrink: 0, borderRight: 1, borderColor: "divider", display: "flex", flexDirection: "column", alignItems: "center", pt: 0.5, gap: 0.5 }}>
@@ -228,43 +306,15 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
         <Paper
           elevation={8}
           data-review-navigator-overlay
-          sx={{ position: "absolute", zIndex: 4, top: 0, bottom: 0, left: 0, width: `min(${String(NAVIGATOR_WIDTH + 40)}px, 85%)`, borderRadius: 0 }}
+          sx={{ position: "absolute", zIndex: 4, top: 0, bottom: 0, left: 0, width: `min(${String(NAVIGATOR_OVERLAY_WIDTH)}px, 85%)`, borderRadius: 0 }}
         >
           {navigator}
         </Paper>
       )}
-      <Box
-        data-desktop-region={REVIEW_DOCUMENT_REGION}
-        tabIndex={-1}
-        onFocus={(event) => {
-          if (event.target === event.currentTarget) review.editor.current?.focus();
-        }}
-        sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", outline: "none" }}
-      >
-        <DesktopReviewDocument
-          tabs={review.tabs}
-          document={review.document}
-          load={review.load}
-          status={{ hunk: review.hunk, reviewed: review.openReviewed }}
-          wrap={review.settings.softWrap}
-          fontSize={Math.max(12, review.settings.codeFontSize)}
-          restoreLine={review.restoreLine}
-          onSelectTab={(key) => review.updateTabs((state) => ({ ...state, active: key }))}
-          onCloseTab={(key) => review.closeTab(key)}
-          onKeepTab={(key) => review.keepTab(key)}
-          onAction={review.onAction}
-          onCursorLine={review.onCursorLine}
-          onView={(view) => {
-            review.editor.current = view;
-            // Focus reached the Document before its text: hand it on now.
-            const region = view?.dom.closest<HTMLElement>(`[data-desktop-region="${REVIEW_DOCUMENT_REGION}"]`);
-            if (view && region && document.activeElement === region) view.focus();
-          }}
-          onMark={() => review.markOpen()}
-          onSend={() => review.send(false)}
-          empty={<EmptyDocument review={review} />}
-        />
-      </Box>
+      <ReviewDocumentRegion review={review} />
+      <DesktopModal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Review settings" width={640}>
+        <ReviewSettingsContent />
+      </DesktopModal>
     </Box>
   );
 }

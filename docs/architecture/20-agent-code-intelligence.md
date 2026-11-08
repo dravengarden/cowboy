@@ -869,6 +869,19 @@ uniquely resolvable, otherwise candidates or `stale/ambiguous`.
   `trust_level: "trusted"`, and that it reaches the original execution binding
   without credentials in the runtime. Otherwise Codex push is delivered from the
   Cowboy side at the next safe point.
+
+  Implemented from the Cowboy side; no Codex hook is used. A Controller task
+  watches Codex-family sessions with Project language servers on that are not
+  managed children. When an ACP `edit` tool call completes, its diff and
+  location paths (unverified hints) inside the execution worktree choose the
+  files, and the same `code.post_edit` read runs after a 300 ms settle. The
+  turn is captured when the edit is observed; a `deliver: true` result is
+  steered into that turn at its next checkpoint, so an ended or later turn
+  refuses it and no turn is reopened. One observation runs per session; edits
+  meanwhile join the next one. The row is a Cowboy-origin prompt
+  (`code_intelligence`, captioned "Code intelligence after an edit") carrying
+  the same escaped JSON as the Claude row. Shell-made changes, subagents and
+  delivery identity states are not covered.
 - **Coverage.** Push triggers on any tool completion with a watcher-observed
   change set since the tool started (shell, formatters), not on
   `apply_patch`/Edit only.

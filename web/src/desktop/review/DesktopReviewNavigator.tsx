@@ -5,9 +5,23 @@ import { LeaderKeycap } from "../commands/DesktopKeycap";
 import type { GitReviewEntry } from "../../mobile/review/gitReviewModel";
 import { ReviewChangesList } from "./ReviewChangesList";
 import { ReviewFilesList } from "./ReviewFilesList";
+import { ReviewContextMenu } from "./ReviewContextMenu";
+import { ReviewHistoryList } from "./ReviewHistoryList";
+import { ReviewWorktreesList } from "./ReviewWorktreesList";
+import type { DesktopReviewContext } from "./useDesktopReviewContext";
 import type { DesktopReviewChanges } from "./useDesktopReviewChanges";
 
-export type ReviewNavigatorTab = "changes" | "files";
+export type ReviewNavigatorTab = "changes" | "files" | "history" | "worktrees";
+export const REVIEW_NAVIGATOR_TABS: readonly {
+  value: ReviewNavigatorTab;
+  label: string;
+  leaderKey: string;
+}[] = [
+  { value: "changes", label: "Changes", leaderKey: "VC" },
+  { value: "files", label: "Files", leaderKey: "VF" },
+  { value: "history", label: "History", leaderKey: "VH" },
+  { value: "worktrees", label: "Worktrees", leaderKey: "VW" },
+];
 export const REVIEW_NAVIGATOR_REGION = "review.navigator";
 export const REVIEW_FILTER_FOCUS_EVENT = "cowboy:review-filter-focus";
 
@@ -17,6 +31,11 @@ export const REVIEW_FILTER_FOCUS_EVENT = "cowboy:review-filter-focus";
  * from the shared list grammar; `L`/`H`/`[`/`]`/`/` are its own commands.
  */
 export function DesktopReviewNavigator({
+  context,
+  contextRequest,
+  onReviewContext,
+  openCommitPath,
+  onOpenCommit,
   sessionId,
   tab,
   onTab,
@@ -33,6 +52,11 @@ export function DesktopReviewNavigator({
   onOpenSource,
   dataRevision,
 }: {
+  context: DesktopReviewContext;
+  contextRequest: number;
+  onReviewContext: (value: string) => void;
+  openCommitPath: { oid: string; path: string } | undefined;
+  onOpenCommit: (oid: string, path: string) => void;
   sessionId: string;
   tab: ReviewNavigatorTab;
   onTab: (tab: ReviewNavigatorTab) => void;
@@ -68,27 +92,30 @@ export function DesktopReviewNavigator({
       tabIndex={-1}
       sx={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", outline: "none" }}
     >
+      <ReviewContextMenu context={context} openRequest={contextRequest} onChoose={onReviewContext} />
       <Tabs
         value={tab}
+        variant="scrollable"
+        scrollButtons={false}
         onChange={(_event, next: ReviewNavigatorTab) => onTab(next)}
         aria-label="Review navigator"
         sx={{ minHeight: desktopSize(32), px: 0.5, borderBottom: 1, borderColor: "divider", flexShrink: 0 }}
       >
-        {(["changes", "files"] as const).map((value) => (
+        {REVIEW_NAVIGATOR_TABS.map(({ value, label, leaderKey }) => (
           <Tab
             key={value}
             value={value}
             tabIndex={-1}
             data-review-navigator-tab={value}
             disableRipple
-            label={value === "changes" ? "Changes" : "Files"}
-            icon={<LeaderKeycap leaderKey={value === "changes" ? "VC" : "VF"} />}
+            label={label}
+            icon={<LeaderKeycap leaderKey={leaderKey} />}
             iconPosition="end"
             sx={{ minHeight: desktopSize(32), minWidth: 0, px: 1, py: 0, gap: 0.5, textTransform: "none", fontSize: "0.75rem", "& .MuiTab-icon": { m: 0 } }}
           />
         ))}
       </Tabs>
-      <InputBase
+      {(tab === "changes" || tab === "files") && <InputBase
         inputRef={field}
         value={filter}
         onChange={(event) => onFilter(event.target.value)}
@@ -108,7 +135,18 @@ export function DesktopReviewNavigator({
           }
         }}
         sx={{ mx: 1, my: 0.5, px: 1, fontSize: "0.78rem", borderRadius: 1, bgcolor: "action.hover", flexShrink: 0 }}
-      />
+      />}
+      {tab === "history" && context.target && (
+        <ReviewHistoryList
+          sessionId={sessionId}
+          dataRevision={dataRevision}
+          openCommitPath={openCommitPath}
+          onOpen={onOpenCommit}
+        />
+      )}
+      {tab === "worktrees" && context.target && (
+        <ReviewWorktreesList target={context.target} onReview={onReviewContext} />
+      )}
       {tab === "changes"
         ? (
           <ReviewChangesList
@@ -122,7 +160,7 @@ export function DesktopReviewNavigator({
             onOpen={onOpenEntry}
           />
         )
-        : (
+        : tab === "files" && (
           <ReviewFilesList
             sessionId={sessionId}
             filter={filter}

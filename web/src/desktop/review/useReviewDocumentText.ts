@@ -4,6 +4,7 @@ import {
   fetchCodeDiffPage,
   fetchCodeFile,
   fetchCodeFilePage,
+  fetchGitCommitDiff,
 } from "../../mobile/review/codeApi";
 import { loadCodeDiff } from "../../mobile/review/diffCache";
 import type { ReviewSettings } from "../../mobile/review/reviewSettingsModel";
@@ -97,6 +98,22 @@ async function readSource(
   };
 }
 
+async function readCommit(
+  sessionId: string,
+  document: Extract<DesktopReviewDocument, { kind: "commit" }>,
+  signal: AbortSignal,
+): Promise<ReviewDocumentText> {
+  const diff = await fetchGitCommitDiff(sessionId, document.oid, document.path, signal);
+  return {
+    key: reviewDocumentKey(document),
+    text: diff.text,
+    revision: diff.revision,
+    added: diff.added,
+    removed: diff.removed,
+    truncated: diff.truncated,
+  };
+}
+
 /** The text of the open Review document, reread when the worktree changes. */
 export function useReviewDocumentText(
   sessionId: string | undefined,
@@ -113,6 +130,8 @@ export function useReviewDocumentText(
     setLoad((previous) => previous?.key === key ? previous : { key, value: { state: "loading" } });
     const read = document.kind === "diff"
       ? readDiff(sessionId, document, settings, controller.signal)
+      : document.kind === "commit"
+      ? readCommit(sessionId, document, controller.signal)
       : readSource(sessionId, document, controller.signal);
     void read.then(
       (value) => {
