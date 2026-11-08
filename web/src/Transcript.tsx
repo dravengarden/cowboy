@@ -132,7 +132,7 @@ import { watchTranscriptScroll } from "./transcriptScrollWatch";
 import { isImeKeyEvent } from "./imeKey";
 import { ToolDetailsBrowser } from "./ToolDetailsBrowser";
 import { ItemView, OptimisticUserBubble, CompactingWidget, ErrorDetails } from "./TranscriptItems";
-import { TranscriptSkeleton, TranscriptLoadingFill, ScrollbackLoadingSkeleton, ConversationEmptyState, type ConversationEmptyContext } from "./TranscriptPlaceholders";
+import { TranscriptSkeleton, TranscriptLoadingFill, ScrollbackLoadingSkeleton, ConversationEmptyState, type ConversationEmptyContext, fallbackConversationContext } from "./TranscriptPlaceholders";
 export { ToolCard } from "./TranscriptItems";
 export { ToolDetailsBrowser } from "./ToolDetailsBrowser";
 
@@ -911,15 +911,7 @@ export function Transcript({
   });
   const showClearedEmptyState = (isLive || status === "exited") && !loading &&
     shouldShowClearedConversationEmptyState(items.map((item) => item.kind));
-  const conversationContext: ConversationEmptyContext = emptyContext ?? {
-    provider,
-    providerVersion,
-    providerDigest,
-    project: cwd ? cwd.replace(/\/+$/, "").split("/").at(-1) ?? null : null,
-    machine: null,
-    model: null,
-    reasoning: null,
-  };
+  const conversationContext = emptyContext ?? fallbackConversationContext({ provider, providerVersion, providerDigest, cwd });
 
   // Tool details deliberately browses only the retained history window. Never
   // page an entire long-running session merely to make its denominator exact:
@@ -1412,6 +1404,7 @@ export function Transcript({
     optimisticCount: optimisticMsgs.length,
     cleared: showClearedEmptyState,
     fresh: showFreshSessionEmptyState,
+    unstarted: !loading && (paging?.reachedStart ?? true) && allItems.every((item) => item.kind === "lifecycle"),
   });
   // "stick-to-bottom" UX, done properly this time:
   //
@@ -2753,12 +2746,13 @@ export function Transcript({
             outranks the skeleton; cleared / fresh keep losing to a real
             restore in flight, then carry the same startup modifier. */
         }
-        {emptyPresentation?.kind === "preparing"
+        {emptyPresentation?.kind === "preparing" || emptyPresentation?.kind === "blocked"
           ? (
             <ConversationEmptyState
               sessionId={sessionId}
-              kind="preparing"
-              preparing
+              kind={emptyPresentation.kind}
+              preparing={emptyPresentation.preparing}
+              crashDetail={crashDetail}
               context={conversationContext}
               desktop={desktopNavigation}
             />
@@ -3102,7 +3096,7 @@ export function Transcript({
           In-flow (flexShrink:0) so it sits below the scroll area, above the
           composer — never covering the last message. */
       }
-      {statusBar && (status !== "exited" || (optimisticMsgs.length === 0 && emptyPresentation === null)) && (
+      {statusBar && emptyPresentation?.kind !== "blocked" && (status !== "exited" || (optimisticMsgs.length === 0 && emptyPresentation === null)) && (
         <SessionStatusBar status={status} crashDetail={crashDetail} />
       )}
       {

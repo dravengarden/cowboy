@@ -350,7 +350,7 @@ export function ScrollbackLoadingSkeleton({
 // Empty conversations are usable workspaces, including before the first worker
 // starts. Keep configuration reachable without requiring a throwaway message.
 
-export type ConversationEmptyKind = "preparing" | "ready" | "cleared";
+export type ConversationEmptyKind = "preparing" | "blocked" | "ready" | "cleared";
 
 export interface ConversationEmptyContext {
   provider: string;
@@ -360,6 +360,23 @@ export interface ConversationEmptyContext {
   machine: string | null;
   model: string | null;
   reasoning: string | null;
+}
+
+/** The empty-state context of a transcript whose host supplied none. */
+export function fallbackConversationContext(input: {
+  provider: string;
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
+  cwd: string | null | undefined;
+}): ConversationEmptyContext {
+  const { cwd, ...provider } = input;
+  return {
+    ...provider,
+    project: cwd ? cwd.replace(/\/+$/, "").split("/").at(-1) ?? null : null,
+    machine: null,
+    model: null,
+    reasoning: null,
+  };
 }
 
 export function focusPrimaryComposer(): void {
@@ -375,6 +392,7 @@ export function ConversationEmptyState({
   kind,
   preparing,
   sleeping = false,
+  crashDetail = null,
   context,
   desktop,
 }: {
@@ -386,17 +404,13 @@ export function ConversationEmptyState({
   // conversationEmptyPresentation.
   preparing: boolean;
   sleeping?: boolean;
+  /** Why a `blocked` startup stopped. */
+  crashDetail?: string | null;
   context: ConversationEmptyContext;
   desktop: boolean;
 }): React.JSX.Element {
-  const agent = providerPresentation(
-    context.provider,
-    context.providerVersion,
-    context.providerDigest,
-  ).agent;
-  const location = [context.project, context.machine].filter(Boolean).join(
-    " on ",
-  );
+  const agent = providerPresentation(context.provider, context.providerVersion, context.providerDigest).agent;
+  const location = [context.project, context.machine].filter(Boolean).join(" on ");
   const title = kind === "preparing"
     ? "Preparing session"
     : kind === "cleared"
@@ -456,6 +470,7 @@ export function ConversationEmptyState({
     return event.target.closest("[data-conversation-empty-settings], [data-session-start-settings], [data-session-handoff]") ===
       null;
   };
+  if (kind === "blocked") return <PreparingConversation sessionId={sessionId} location={location} blocked={{ detail: crashDetail }} />;
   if (kind === "preparing" && committed) return <PreparingConversation sessionId={sessionId} location={location} />;
   return (
     <Stack

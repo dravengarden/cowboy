@@ -36,7 +36,8 @@ test("new session navigation precedes Machine preparation completion", () => {
   );
   assertEquals(created >= 0 && active > created && settle > active, true);
   assertEquals(
-    /<ConversationEmptyState\s+sessionId=\{sessionId\}\s+kind="preparing"/u.test(transcriptSource),
+    /emptyPresentation\?\.kind === "preparing" \|\| emptyPresentation\?\.kind === "blocked"\s+\? \(\s+<ConversationEmptyState\s+sessionId=\{sessionId\}\s+kind=\{emptyPresentation\.kind\}/u
+      .test(transcriptSource),
     true,
   );
   assertEquals(transcriptSource.includes("Preparing session"), true);
