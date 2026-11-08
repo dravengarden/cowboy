@@ -18,7 +18,12 @@ pub(in crate::server) struct Readiness {
 }
 
 impl Readiness {
-    fn ready(&self, control: &MachineControl, session: &str, binding: &BindingV1) -> bool {
+    pub(super) fn ready(
+        &self,
+        control: &MachineControl,
+        session: &str,
+        binding: &BindingV1,
+    ) -> bool {
         self.entries
             .lock()
             .get(session)
@@ -146,7 +151,7 @@ pub(in crate::server) fn end_turn_for_lost_environment(
 /// through the read-only Describe used by dispatch preflight.
 async fn confirm_lost(state: &AppState, session: &str, binding: &BindingV1) -> bool {
     use crate::execution_protocol::Command;
-    matches!(
+    let lost = matches!(
         state
             .machine_control
             .execution_request(
@@ -165,7 +170,13 @@ async fn confirm_lost(state: &AppState, session: &str, binding: &BindingV1) -> b
         Ok(Response::Refused {
             reason: crate::machine_protocol::execution::Refusal::EnvironmentLost
         })
-    )
+    );
+    if lost {
+        state
+            .hub
+            .mark_execution_lost(session, &binding.environment.incarnation);
+    }
+    lost
 }
 
 #[derive(Deserialize)]
@@ -247,7 +258,7 @@ pub(in crate::server) async fn recover(
         }
     }
     let fence = Fence(&state, &session);
-    match checked(&state, &session, Some(&grant), request).await {
+    match checked(&state, &session, Some(&grant), request, false).await {
         Ok((value, reload)) => {
             drop(fence);
             if reload
@@ -266,6 +277,7 @@ async fn checked(
     session: &str,
     grant: Option<&Grant>,
     request: RecoverRequest,
+    target_lost: bool,
 ) -> Result<(serde_json::Value, bool), String> {
     let intent = request.intent;
     intent.validate()?;
@@ -319,8 +331,8 @@ async fn checked(
             "Session has unfinished work; explicitly request interruption or wait for idle".into(),
         );
     }
-    if !authority_current(state, session, grant).await {
-        return Err("Local Operator authority changed".into());
+    if !authority_current(state, session, grant, target_lost).await {
+        return Err(authority_refusal(grant, ""));
     }
     if expected == &original {
         if !store
@@ -335,18 +347,10 @@ async fn checked(
             .accept_execution_recovery(session, &original, pending.clone())?;
     }
     if !already_committed && grant.is_some() {
-        state.hub.set_paused(session, true);
-        // No target effects can pass the intent fence. Cancel is allowed even
-        // when launch is unavailable and does not start a replacement worker.
-        let _ = state.supervisor.send(session, AgentCommand::Cancel);
-        state.hub.set_status(
-            session,
-            Status::Interrupted,
-            Some("Execution environment maintenance; history retained".into()),
-        );
+        pause_for_operator_maintenance(state, session);
     }
-    if !authority_current(state, session, grant).await {
-        return Err("Local Operator authority changed; recovery remains fenced".into());
+    if !authority_current(state, session, grant, target_lost).await {
+        return Err(authority_refusal(grant, "; recovery remains fenced"));
     }
     // Only automatic recovery retries a target that is not ready; an explicit
     // Operator request keeps its exact diagnostic and repeats on request.
@@ -397,8 +401,8 @@ async fn checked(
             return Err("Recovery operation differs from the installed binding".into());
         }
     } else {
-        if !authority_current(state, session, grant).await {
-            return Err("Local Operator authority changed; target receipt retained".into());
+        if !authority_current(state, session, grant, target_lost).await {
+            return Err(authority_refusal(grant, "; target receipt retained"));
         }
         let meta = state
             .hub
@@ -449,6 +453,18 @@ async fn checked(
         "outcome":"recovered","runtime_readiness":"observe_session","queue":if grant.is_some() {"paused_for_inspection"} else {"pending_delivery"}}),
         reload,
     ))
+}
+
+fn pause_for_operator_maintenance(state: &AppState, session: &str) {
+    state.hub.set_paused(session, true);
+    // No target effects can pass the intent fence. Cancel is allowed even
+    // when launch is unavailable and does not start a replacement worker.
+    let _ = state.supervisor.send(session, AgentCommand::Cancel);
+    state.hub.set_status(
+        session,
+        Status::Interrupted,
+        Some("Execution environment maintenance; history retained".into()),
+    );
 }
 
 /// The binding a target recovery response proves: a freshly prepared one, or
@@ -519,25 +535,47 @@ fn recovery_action(
 
 /// Dispatch owns one not-yet-delivered prompt. An idle surviving worker may
 /// be replaced only after target-proven loss; an active turn or child may not.
-async fn authority_current(state: &AppState, session: &str, grant: Option<&Grant>) -> bool {
+/// Automatic recovery has no Operator grant: it stops because the session is
+/// not idle, and must not report that as an authority change.
+fn authority_refusal(grant: Option<&Grant>, detail: &str) -> String {
+    if grant.is_some() {
+        format!("Local Operator authority changed{detail}")
+    } else {
+        format!("Session has unfinished work; execution recovery waits until it is idle{detail}")
+    }
+}
+
+async fn authority_current(
+    state: &AppState,
+    session: &str,
+    grant: Option<&Grant>,
+    target_lost: bool,
+) -> bool {
     if let Some(grant) = grant {
         return grant.current();
     }
-    if !idle_for_recovery(state, session) {
+    if !idle_for_recovery(state, session, target_lost) {
         return false;
     }
     let Some(store) = &state.store else {
         return false;
     };
     matches!(store.managed_call_counts(session).await, Ok((0, _)))
-        && idle_for_recovery(state, session)
+        && idle_for_recovery(state, session, target_lost)
 }
 
-fn idle_for_recovery(state: &AppState, session: &str) -> bool {
+/// Background shells run in the execution lifetime, and the worker never hears
+/// that they ended once the target has lost it. A count kept after that proof
+/// is stale and must not hold the session's prompts forever.
+fn background_work_blocks_recovery(background_tasks: u32, target_lost: bool) -> bool {
+    background_tasks > 0 && !target_lost
+}
+
+fn idle_for_recovery(state: &AppState, session: &str, target_lost: bool) -> bool {
     let Some(info) = state.hub.session_info(session) else {
         return false;
     };
-    info.meta.background_tasks == 0
+    !background_work_blocks_recovery(info.meta.background_tasks, target_lost)
         && info.meta.status != Status::Busy
         && state
             .runtime_router
@@ -704,7 +742,9 @@ async fn preflight(
                 state.execution_readiness.remember(&state.machine_control, session, &previous, target_connection);
                 return worker_recovery_for_ready_target(state, session, &previous).await;
             }
-            Response::Refused { reason: crate::machine_protocol::execution::Refusal::EnvironmentLost } => {}
+            Response::Refused { reason: crate::machine_protocol::execution::Refusal::EnvironmentLost } => {
+                state.hub.mark_execution_lost(session, &previous.environment.incarnation);
+            }
             Response::Refused { reason } if transient(reason) => return Err(target_not_ready()),
             _ => return Err("Execution target unavailable or identity changed; retained prompt was not delivered".into()),
         }
@@ -715,7 +755,32 @@ async fn preflight(
             previous,
         }
     };
-    prepare_auto_recovery(state, session, intent).await
+    prepare_auto_recovery(state, session, intent, true).await
+}
+
+pub(super) fn verified(state: &AppState, session: &str, binding: &BindingV1) -> bool {
+    state
+        .execution_readiness
+        .ready(&state.machine_control, session, binding)
+}
+
+/// Whether the target proves this session's execution lifetime is gone.
+/// Replacing the worker cannot repair that: a new one binds the same dead
+/// lifetime and crashes before readiness.
+pub(in crate::server) async fn target_proved_lost(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+) -> bool {
+    let Some(record) = &meta.execution_binding else {
+        return false;
+    };
+    if record.managed().is_some() {
+        return false;
+    }
+    let Ok(binding) = record.decode() else {
+        return false;
+    };
+    confirm_lost(state, &meta.id, &binding).await
 }
 
 /// Clear also starts a native agent. Verify its target before discarding
@@ -773,18 +838,21 @@ async fn worker_recovery_for_ready_target(
     }
     // A committed binding can outlive its Controller before worker replacement.
     // Observe the same target-owned receipt, then finish the original operation.
-    prepare_auto_recovery(state, session, intent).await
+    prepare_auto_recovery(state, session, intent, false).await
 }
 
 async fn prepare_auto_recovery(
     state: &Arc<AppState>,
     session: &str,
     intent: RecoveryV1,
+    target_lost: bool,
 ) -> Result<Option<RecoveryV1>, String> {
     {
         let mut maintenance = state.execution_closures.lock();
+        // The reconciler and a prompt may race here: the loser waits and
+        // retries rather than failing the send.
         if maintenance.contains_key(session) {
-            return Err("Execution maintenance is already in progress".into());
+            return Err(target_not_ready());
         }
         maintenance.insert(session.into(), super::Maintenance::Recover);
     }
@@ -799,7 +867,7 @@ async fn prepare_auto_recovery(
         intent: intent.clone(),
         interrupt_active_turn: false,
     };
-    let (_, reload) = checked(state, session, None, request).await?;
+    let (_, reload) = checked(state, session, None, request, target_lost).await?;
     drop(fence);
     tracing::info!(session, "prepared lost target for admitted prompt delivery");
     // Runtime worker replacement belongs to the same admission lease as the
@@ -936,6 +1004,21 @@ mod dispatch_safety_tests {
         assert!(readiness.ready(&control, "sess-1", &next));
         readiness.forget("sess-1", &next);
         assert!(!readiness.ready(&control, "sess-1", &next));
+    }
+
+    #[test]
+    fn background_work_only_holds_recovery_while_its_lifetime_may_be_alive() {
+        assert!(background_work_blocks_recovery(1, false));
+        assert!(!background_work_blocks_recovery(1, true));
+        assert!(!background_work_blocks_recovery(0, false));
+    }
+
+    #[test]
+    fn only_a_grant_refusal_reports_an_authority_change() {
+        let automatic = authority_refusal(None, "; recovery remains fenced");
+        assert!(automatic.starts_with("Session has unfinished work"));
+        assert!(automatic.ends_with("; recovery remains fenced"));
+        assert!(!automatic.contains("authority"));
     }
 
     #[test]

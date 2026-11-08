@@ -879,6 +879,12 @@ impl Supervisor {
         // Every launch, revive, reset, reload and Provider upgrade builds its
         // declaration here, so this is the one boundary Trash must hold.
         refuse_trashed(&self.hub, session_id)?;
+        if self.hub.execution_lifetime_lost(session_id) {
+            return Err(
+                "The execution environment was lost; send a message or Reload to recover it"
+                    .to_owned(),
+            );
+        }
         self.session_declaration(session_id, None)
     }
 
@@ -1914,6 +1920,27 @@ mod tests {
         hub.set_agent_session_id("s", "native-original".into());
         hub.set_status("s", Status::Exited, None);
         (hub, intent)
+    }
+
+    #[tokio::test]
+    async fn no_launch_binds_a_lifetime_the_target_proved_lost() {
+        let root = TestDir::new();
+        let (hub, intent) = recovered_session_fixture(&root);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
+        let bound = hub
+            .session_info("s")
+            .and_then(|info| info.meta.execution_binding)
+            .and_then(|record| record.decode().ok())
+            .unwrap();
+
+        hub.mark_execution_lost("s", "an-older-incarnation");
+        assert!(supervisor.start_session("s").is_ok());
+
+        hub.mark_execution_lost("s", &bound.environment.incarnation);
+        let error = supervisor.start_session("s").unwrap_err();
+        assert!(error.contains("execution environment was lost"), "{error}");
+        assert!(intent.accepts(&bound));
     }
 
     #[tokio::test]

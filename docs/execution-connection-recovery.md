@@ -542,6 +542,20 @@ The reboot fixture covers both a cold agent and an idle agent that remains on
 the runtime host while only the target keeper is lost. Automatic replacement
 also preserves the user's queue pause setting.
 
+### Idle sessions after a reboot
+
+A prompt's preflight is not the only thing that starts a worker: Reload and
+Provider updates do too, and a worker launched on a lost lifetime can only fail
+closed before readiness. The Controller therefore runs a reconciler that
+Describes every idle, unpaused bound session once per target connection and
+recreates a proven-lost lifetime through that same preflight, at most four per
+30-second pass. Once a target proves a lifetime lost, `start_session` refuses to
+launch on it, Reload recovers instead of replacing the worker, and a Provider
+update is refused until the lifetime is back. A background-task count does not
+hold automatic recovery after that proof, because the shells it counted died
+with the lifetime. Busy, paused, dormant and crashed sessions are left to their
+own paths: a prompt or Reload recovers them.
+
 ### A turn in progress when the target reboots
 
 Recovery waits for an idle session, so an agent that was mid-turn kept calling

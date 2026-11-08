@@ -121,12 +121,13 @@ pub(super) async fn api_session_reload(
         };
     }
     let reload_key = provider_fence_key_for_session(&state.hub, &session_id);
-    let reload_fence = state.plugin_lifecycle_fences.read();
-    if let Some(refusal) = reload_key
-        .as_ref()
-        .and_then(|key| reload_fence.get(key))
-        .and_then(|fence| provider_fence_refusal(*fence))
-    {
+    let fence_refusal = |fences: &HashMap<_, _>| {
+        reload_key
+            .as_ref()
+            .and_then(|key| fences.get(key))
+            .and_then(|fence| provider_fence_refusal(*fence))
+    };
+    if let Some(refusal) = fence_refusal(&state.plugin_lifecycle_fences.read()) {
         return (StatusCode::CONFLICT, refusal).into_response();
     }
     tracing::info!(
@@ -141,10 +142,30 @@ pub(super) async fn api_session_reload(
     {
         return (StatusCode::ACCEPTED, "preparing the workspace").into_response();
     }
-    match state
-        .supervisor
-        .reload_session(&session_id, query.confirm_active_turn)
-    {
+    // A worker replacement cannot repair a dead keeper, so recreate a lost
+    // target first. Any other target state keeps the ordinary Reload.
+    let recovery = if execution::recovery::target_proved_lost(&state, &info.meta).await {
+        match execution::recovery::before_reset(&state, &session_id).await {
+            Ok(recovery) => recovery,
+            Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+        }
+    } else {
+        None
+    };
+    // Held from here so a Plugin change cannot begin during the replacement.
+    let reload_fence = state.plugin_lifecycle_fences.read();
+    if let Some(refusal) = fence_refusal(&reload_fence) {
+        return (StatusCode::CONFLICT, refusal).into_response();
+    }
+    let result = match recovery {
+        Some(intent) => state
+            .supervisor
+            .recover_execution_session(&session_id, intent),
+        None => state
+            .supervisor
+            .reload_session(&session_id, query.confirm_active_turn),
+    };
+    match result {
         Ok(()) => (StatusCode::ACCEPTED, "reloading").into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }
