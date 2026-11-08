@@ -238,6 +238,12 @@ fn table(node: &Map<String, Value>, path: &str, budget: &mut Budget) -> Checked 
                     ],
                     true,
                 )?;
+                one_of(
+                    map.get("width"),
+                    &format!("{at}.width"),
+                    &["auto", "min", "max"],
+                    true,
+                )?;
             }
         }
     }
@@ -258,6 +264,9 @@ fn table(node: &Map<String, Value>, path: &str, budget: &mut Budget) -> Checked 
         &["auto", "cards", "fit"],
         true,
     )?;
+    if node.get("sort").is_some_and(|sort| !sort.is_boolean()) {
+        return Err(Invalid::at(&field("sort"), "expected a boolean"));
+    }
     budget.cells += rows.len() * columns.len();
     Ok(())
 }
@@ -783,6 +792,15 @@ mod tests {
         let mut ragged = approval();
         ragged["root"] = json!({"type":"table","columns":["a","b"],"rows":[["1"]]});
         assert_eq!(validate(&ragged).unwrap_err().path, "root.rows[0]");
+        let mut table = approval();
+        table["root"] = json!({"type":"table","sort":true,
+            "columns":["a",{"label":"b","width":"min","format":"bytes"}],"rows":[["1",2]]});
+        validate(&table).unwrap();
+        table["root"]["sort"] = json!("yes");
+        assert_eq!(validate(&table).unwrap_err().path, "root.sort");
+        table["root"]["sort"] = json!(false);
+        table["root"]["columns"][1]["width"] = json!("wide");
+        assert_eq!(validate(&table).unwrap_err().path, "root.columns[1].width");
         let mut bidi = approval();
         bidi["title"] = json!("Deploy \u{202E}evil");
         assert_eq!(validate(&bidi).unwrap_err().path, "title");

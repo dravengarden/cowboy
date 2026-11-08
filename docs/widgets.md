@@ -77,7 +77,19 @@ typing-free, auditable decisions within measured bounds.
   widgets with the transcript. The Web renders widget notices through the
   slice 1 renderer with the handle and a closed chip
   (`web/src/NoticeRow.tsx`, `web/src/widgets/widgetRows.ts`).
-- Not built yet: interactions, the inspector, table sort and image sources.
+- **Slice 3 (Web, Controller validation): inspector and table sort.** The
+  row header shows the handle, the update age and **Open**, which shows the
+  whole widget in the inspector (`web/src/widgets/WidgetInspector.tsx`): a
+  `DesktopModal` on Desktop (Esc closes and focus returns to Open), the cover
+  sheet on phone and iPad. The transcript preview draws 20 table rows and 50
+  top-level list or kv items (`previewItems`); the inspector draws everything
+  and pages tables by 50 (`inspectorPageRows`). `sort: true` sorts by header
+  (a picker in card layout) by typed value with empty cells last
+  (`widgetTableModel.ts`); the row and its inspector share one sort. Column
+  `width: "min" | "max"` hints apply. The Controller validates `sort` and
+  `width`.
+- Not built yet: interactions, the Desktop entered-region keys and inspector
+  command (§7.5), and image sources.
 
 ## 1. Review findings and resolutions
 
