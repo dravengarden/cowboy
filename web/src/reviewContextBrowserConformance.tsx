@@ -364,8 +364,10 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
           revision: context,
           added: 1,
           removed: 1,
-          text:
-            "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n",
+          // Other files have two hunks so hunk navigation has somewhere to go.
+          text: path === "src/app.ts"
+            ? "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n"
+            : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-a\n+b\n@@ -40 +40 @@\n-c\n+d\n`,
           truncated: false,
         });
       }
