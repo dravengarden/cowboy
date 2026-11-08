@@ -155,8 +155,9 @@ impl BrowserManager {
             self.spawn_snapshot(instance);
         }
         let pending = instance.live.lock().pending_navigation.take();
-        if let Some(url) = pending
-            && let Err(Navigation::Violation(reason)) = self.navigate_checked(instance, &url).await
+        if let Some((expected, url)) = pending
+            && let Err(Navigation::Violation(reason)) =
+                self.navigate_checked(instance, &expected, &url).await
         {
             let event = self.stop_instance(instance, reason, false, None).await;
             self.send_state(event);

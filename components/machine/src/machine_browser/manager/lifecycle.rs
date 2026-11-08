@@ -155,8 +155,11 @@ impl BrowserManager {
             }
             let url = pending_navigation.or_else(|| self.login_url(&request));
             if let Some(url) = url {
-                match self.navigate_checked(instance, &url).await {
-                    Ok(()) => {}
+                match self
+                    .navigate_checked(instance, &instance.purpose(), &url)
+                    .await
+                {
+                    Ok(()) | Err(Navigation::Superseded) => {}
                     Err(Navigation::Violation(reason)) => {
                         return self
                             .stop_locked(instance, reason, false, Some(request_id))
@@ -216,6 +219,9 @@ impl BrowserManager {
                 .state(Some(request_id.to_owned()))
                 .with_reason(Reason::Busy);
         }
+        // Rebinding is serialized with navigations: one requested under the
+        // previous binding either landed before this or is superseded.
+        let rebinding = existing.navigation.lock().await;
         let previous = existing.binding.lock().clone();
         let url = if existing.login_request().as_deref() == Some(login_request_id) {
             let failed = existing.live.lock().failed_navigation.clone();
@@ -253,8 +259,12 @@ impl BrowserManager {
             self.unbind_login(&previous.purpose, &existing.instance_id);
             url
         };
+        drop(rebinding);
+        let bound = Purpose::SignIn {
+            login_request_id: login_request_id.to_owned(),
+        };
         if let Some(url) = url {
-            match self.navigate_checked(existing, &url).await {
+            match self.navigate_checked(existing, &bound, &url).await {
                 Ok(()) => {}
                 Err(Navigation::Violation(reason)) => {
                     return self
@@ -265,6 +275,12 @@ impl BrowserManager {
                     return existing
                         .state(Some(request_id.to_owned()))
                         .with_reason(Reason::Failed);
+                }
+                // The instance began stopping meanwhile: not a sign-in browser.
+                Err(Navigation::Superseded) => {
+                    return existing
+                        .state(Some(request_id.to_owned()))
+                        .with_reason(Reason::Superseded);
                 }
             }
         }

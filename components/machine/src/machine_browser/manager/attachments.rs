@@ -308,8 +308,11 @@ impl BrowserManager {
         if instance.purpose() != Purpose::Tab {
             return Err("only tab browsers accept owner navigation".into());
         }
-        match self.navigate_checked(&instance, url).await {
+        match self.navigate_checked(&instance, &Purpose::Tab, url).await {
             Ok(()) => Ok(instance.state(Some(request_id.to_owned()))),
+            Err(Navigation::Superseded) => Ok(instance
+                .state(Some(request_id.to_owned()))
+                .with_reason(Reason::Superseded)),
             Err(Navigation::Violation(reason)) => Ok(self
                 .stop_instance(&instance, reason, false, Some(request_id))
                 .await),
@@ -334,12 +337,28 @@ impl BrowserManager {
     /// one is awaited (or cancelled when it overruns). A caller holding the
     /// lifecycle lock must quiesce copies before taking it (a running copy
     /// needs the lock to publish).
+    ///
+    /// `expected` is the binding the navigation was requested under. It is
+    /// checked under the instance's navigation lock, which sign-in
+    /// rebinding also takes, so a navigation for a login (or a tab) the
+    /// instance no longer serves is [`Navigation::Superseded`] and never
+    /// reaches the launcher.
     pub(super) async fn navigate_checked(
         &self,
         instance: &Arc<Instance>,
+        expected: &Purpose,
         url: &str,
     ) -> Result<(), Navigation> {
         let _copies = self.quiesce_copies(instance).await;
+        let _navigation = instance.navigation.lock().await;
+        if instance.purpose() != *expected
+            || !matches!(
+                instance.live.lock().phase,
+                Phase::Detached | Phase::Attached
+            )
+        {
+            return Err(Navigation::Superseded);
+        }
         #[cfg(test)]
         let trusted = self
             .trust_confinement
@@ -385,6 +404,9 @@ pub(super) enum Navigation {
     /// The launcher rejected the navigation or did not answer in time; the
     /// instance is intact and a later navigation may succeed.
     Rejected,
+    /// The instance no longer serves the binding the navigation was
+    /// requested under, or is stopping: nothing was sent.
+    Superseded,
 }
 
 impl Live {

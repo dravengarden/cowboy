@@ -230,3 +230,36 @@ async fn a_rejected_sign_in_navigation_fails_the_open_and_a_repeat_retries_it() 
         .unwrap();
     assert_eq!(third.reason, None);
 }
+
+#[tokio::test]
+async fn a_queued_challenge_navigation_never_lands_after_a_rebinding() {
+    let mut fixture = fixture().await;
+    fixture
+        .manager
+        .trust_confinement
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    fixture.instance.binding.lock().purpose = Purpose::SignIn {
+        login_request_id: "login-a".into(),
+    };
+    // Login A's challenge queues behind the navigation lock (as it would
+    // behind a snapshot copy or a sign-in rebinding).
+    let held = fixture.instance.navigation.lock().await;
+    fixture
+        .manager
+        .login_challenge("login-a", "https://claude.ai/oauth/authorize?stale");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The instance is rebound to login B before the challenge proceeds.
+    fixture.instance.binding.lock().purpose = Purpose::SignIn {
+        login_request_id: "login-b".into(),
+    };
+    drop(held);
+    // Login A's navigation is superseded: nothing reaches the launcher.
+    let mut reader = tokio::io::BufReader::new(&mut fixture.launcher);
+    let mut line = String::new();
+    let sent = tokio::time::timeout(Duration::from_millis(500), reader.read_line(&mut line)).await;
+    assert!(
+        sent.is_err(),
+        "a superseded navigation reached the launcher: {line}"
+    );
+    assert!(fixture.instance.live.lock().failed_navigation.is_none());
+}

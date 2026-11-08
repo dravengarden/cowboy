@@ -135,7 +135,9 @@ struct Live {
     last_snapshot: Option<(u64, i64)>,
     last_periodic: Instant,
     last_scan: Instant,
-    pending_navigation: Option<String>,
+    /// A navigation that arrived before the instance was ready, with the
+    /// binding it was requested under.
+    pending_navigation: Option<(Purpose, String)>,
     /// The URL whose navigation the launcher last rejected or did not
     /// answer in time; cleared by the next successful navigation. A repeated
     /// sign-in open for the bound login retries while it is set.
@@ -203,6 +205,10 @@ pub struct Instance {
     settings: Settings,
     report: ReadyReport,
     control: tokio::sync::Mutex<Control>,
+    /// Serializes a navigation (binding check, verification, launcher
+    /// command) with sign-in rebinding, so a navigation requested under one
+    /// binding never lands after the instance was rebound to another.
+    navigation: tokio::sync::Mutex<()>,
     live: parking_lot::Mutex<Live>,
     /// The running snapshot copy, if any.
     copy: parking_lot::Mutex<Option<CopyJob>>,
@@ -233,6 +239,7 @@ impl Instance {
             settings: parts.settings,
             report: parts.report,
             control: tokio::sync::Mutex::new(parts.control),
+            navigation: tokio::sync::Mutex::new(()),
             live: parking_lot::Mutex::new(Live {
                 phase: parts.phase,
                 geometry: parts.geometry,
@@ -717,12 +724,15 @@ impl BrowserManager {
         let Some(instance) = self.bound_instance(request_id) else {
             return;
         };
+        let expected = Purpose::SignIn {
+            login_request_id: request_id.to_owned(),
+        };
         let ready = {
             let mut live = instance.live.lock();
             if matches!(live.phase, Phase::Detached | Phase::Attached) {
                 true
             } else {
-                live.pending_navigation = Some(url.to_owned());
+                live.pending_navigation = Some((expected.clone(), url.to_owned()));
                 false
             }
         };
@@ -733,7 +743,7 @@ impl BrowserManager {
                 // A rejected navigation is recorded on the instance; the
                 // owner's repeated sign-in open retries it.
                 if let Err(Navigation::Violation(reason)) =
-                    manager.navigate_checked(&instance, &url).await
+                    manager.navigate_checked(&instance, &expected, &url).await
                 {
                     let event = manager.stop_instance(&instance, reason, false, None).await;
                     manager.send_state(event);
