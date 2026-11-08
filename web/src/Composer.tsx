@@ -58,9 +58,9 @@ import { ProviderQuotaStatus } from "./ProviderQuotaStatus";
 import {
   SessionContextCue,
   SessionHandedOffDock,
-  useHandedOff,
   useAnnouncedSessionContext,
 } from "./SessionContextCue";
+import { useHandedOff } from "./sessionHistory";
 import { PermissionOverlay } from "./PermissionOverlay";
 import { useApprovalDockOwns } from "./approvalDockStore";
 import { CallApprovalOverlay } from "./CallApprovalOverlay";

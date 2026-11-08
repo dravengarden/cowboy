@@ -55,6 +55,7 @@
     "session_context::send": "sessions.context_send",
     "session_context::fork": "sessions.fork",
     "session_context::duplicate": "sessions.duplicate",
+    "session_context::continue_here": "exception:browser — keeping a handed-off session open only lifts a Web read-only presentation; agents and scripts were never refused writes to it.",
     "config_revert::get": "sessions.config_revert",
     "config_revert::restore": "sessions.config_revert_restore",
     "api_observability_batch": "exception:streams — telemetry ingestion remains collector/browser-owned; MCP consumes bounded diagnostics.",

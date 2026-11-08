@@ -40,6 +40,8 @@ pub const SESSION_CONTEXT_PREFIX: &str = "session_context:";
 pub const SESSION_CONTEXT_CARRIER_PREFIX: &str = "session_context_carrier:";
 /// The session a continuation was created from; the destination id follows.
 pub const SESSION_CONTINUED_FROM_PREFIX: &str = "session_continued_from:";
+/// A handed-off source the user chose to keep working in; the source id follows.
+pub const SESSION_HANDOFF_RESUMED_PREFIX: &str = "session_handoff_resumed:";
 /// A fork's source and pending native fork; the destination id follows.
 pub const SESSION_FORK_PREFIX: &str = "session_fork:";
 /// Per-session opt-in for idle Provider updates; the session id follows.
@@ -69,6 +71,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_CONTEXT_PREFIX,
             SESSION_CONTEXT_CARRIER_PREFIX,
             SESSION_CONTINUED_FROM_PREFIX,
+            SESSION_HANDOFF_RESUMED_PREFIX,
             SESSION_FORK_PREFIX,
             SESSION_PROVIDER_AUTO_UPDATE_PREFIX,
             AGENT_TOOLS_PREFIX,
@@ -101,6 +104,7 @@ pub fn examples() -> Vec<String> {
         format!("{SESSION_CONTEXT_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_CARRIER_PREFIX}sess-1"),
         format!("{SESSION_CONTINUED_FROM_PREFIX}sess-1"),
+        format!("{SESSION_HANDOFF_RESUMED_PREFIX}sess-1"),
         format!("{SESSION_FORK_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_AUTO_UPDATE_PREFIX}sess-1"),
         format!("{AGENT_TOOLS_PREFIX}codex"),

@@ -91,6 +91,7 @@ pub(super) fn restored_busy(id: &str) -> RestoredSession {
     RestoredSession {
         meta: SessionMeta {
             continued_from: None,
+            handoff_resumed: false,
             forked_from: None,
             id: id.to_owned(),
             provider: "codex".to_owned(),

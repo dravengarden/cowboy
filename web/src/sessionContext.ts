@@ -21,6 +21,8 @@ export interface ContextDelivery {
   error?: string | null;
   session?: SessionMeta;
   source_trashed?: boolean;
+  /** Why the handoff left its source out of Trash. */
+  source_kept?: string;
 }
 export interface SessionContext {
   revision: number;
@@ -184,6 +186,13 @@ export async function saveSessionContext(
   configured.add(id);
   sends.delete(id);
   return saved;
+}
+
+/** Keep working in a handed-off session beside its continuation. */
+export async function continueHere(id: string): Promise<void> {
+  await json<unknown>(`/api/sessions/${encodeURIComponent(id)}/continue-here`, {
+    method: "POST",
+  });
 }
 
 export function useSessionContext(id: string, active = true) {

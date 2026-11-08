@@ -148,6 +148,9 @@ pub struct Delivery {
     /// The handoff moved its source to Trash, reported once to undo it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub source_trashed: bool,
+    /// Why the handoff left its source out of Trash, as read-only history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kept: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -692,6 +695,7 @@ mod tests {
                 state: "preparing".into(),
                 error: None,
                 source_trashed: false,
+                source_kept: None,
             }),
             injection: Some(Injection {
                 cmid: "admitted".into(),
@@ -723,6 +727,7 @@ mod tests {
                     state: "accepted".into(),
                     error: None,
                     source_trashed: false,
+                    source_kept: None,
                 }),
                 injection: Some(Injection {
                     cmid: cmid.into(),

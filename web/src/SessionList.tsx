@@ -36,7 +36,8 @@ import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { requestPickSession } from "./sessionPickRequest";
 import { openSessionSettings, requestNewFrom } from "./sessionSettingsOpen";
-import { SessionNextMessageBadge, useContinuation } from "./SessionContextCue";
+import { SessionNextMessageBadge } from "./SessionContextCue";
+import { useHistorySession, useHistorySessionIds } from "./sessionHistory";
 import { isManagedChild } from "./managedCalls";
 import { SessionRowTitle } from "./SessionRowTitle";
 import { SessionActionBadge, SessionAttentionMenu } from "./SessionAttention";
@@ -450,13 +451,9 @@ export function SessionList({
         row: SessionMeta;
         el: HTMLElement;
     } | null>(null);
-    // Sources of a continuation, as a stable value so a `sessions` frame for
-    // another reason re-renders no row.
-    const handedOffIds = useStoreSelector((snapshot) =>
-        snapshot.sessions.flatMap((entry) => entry.continued_from ? [entry.continued_from] : []).sort().join("\n"));
-    const handedOff = useMemo(() => new Set(handedOffIds.split("\n")), [handedOffIds]);
+    const handedOff = useHistorySessionIds();
     // A handed-off session is history; continuing it again would split the work.
-    const menuHandedOff = useContinuation(menuAnchor?.row.id ?? "") !== undefined;
+    const menuHandedOff = useHistorySession(menuAnchor?.row.id ?? "");
     useSystemNotificationPreferences();
     const menuSessionMuted = menuAnchor
         ? sessionNotificationsMuted(menuAnchor.row.id)

@@ -2934,6 +2934,7 @@ mod tests {
     fn fixture_session_meta() -> SessionMeta {
         SessionMeta {
             continued_from: None,
+            handoff_resumed: false,
             forked_from: None,
             id: "sess-1".to_owned(),
             provider: "codex".to_owned(),

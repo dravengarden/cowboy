@@ -262,8 +262,8 @@ pub(super) fn machine_routes() -> Router<Arc<AppState>> {
     .route("/api/machines/{id}/maintenance", put(session_maintenance::configure))
 }
 
-/// Session, execution, draft, managed-call, history and WebSocket routes.
-pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
+/// Draft documents, including copies a session made of them.
+fn draft_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/drafts", get(draft_documents::list))
         .route(
@@ -284,6 +284,11 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/sessions/{id}/draft-copies/{cmid}",
             delete(draft_documents::undo_copy).layer(DefaultBodyLimit::max(12 * 1024 * 1024)),
         )
+}
+
+/// Session, execution, draft, managed-call, history and WebSocket routes.
+pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
+    draft_routes()
         .route(
             "/api/sessions",
             post(api_new_session).layer(middleware::from_fn_with_state(
@@ -381,6 +386,10 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             post(session_context::send).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
         )
         .route("/api/sessions/{id}/fork", post(session_context::fork))
+        .route(
+            "/api/sessions/{id}/continue-here",
+            post(session_context::continue_here),
+        )
         .route(
             "/api/sessions/{id}/duplicate",
             post(session_context::duplicate).layer(middleware::from_fn_with_state(

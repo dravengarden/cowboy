@@ -12,6 +12,7 @@ import {
   CLOSE_SESSION_SETTINGS_EVENT,
   COMPOSER_FOCUS_EVENT,
   requestNewFrom,
+  SESSION_NEW_FROM_EVENT,
 } from "./sessionSettingsOpen";
 import { Sheet } from "./Sheet";
 import { announceContext, type SessionContext } from "./sessionContext";
@@ -130,6 +131,10 @@ export async function runSessionContextBrowserConformance(
     if (url.endsWith("/hibernate")) {
       writes.push({ url, body: {} });
       return new Response(null, { status: 204 });
+    }
+    if (url.endsWith("/continue-here")) {
+      writes.push({ url, body: {} });
+      return Response.json({ session: null });
     }
     if (url.endsWith("/fork") || url.endsWith("/duplicate")) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -397,22 +402,38 @@ export async function runSessionContextBrowserConformance(
           ?.includes("Continued from")),
         `${mode}: links show how each session relates to this one`,
       );
-      await until(() => Boolean(exactButton("Fork")));
+      await until(() => Boolean(exactButton("Fork…")));
       check(
         container.querySelectorAll("[data-session-handed-off]").length === 1 &&
           Boolean(exactButton("Move to Trash")),
         `${mode}: only a session that was continued is history, and it can be cleared away`,
       );
-      exactButton("Fork").click();
-      await until(() => writes.some((write) => write.url.endsWith("/duplicate")));
+      const forkRequests: unknown[] = [];
+      const takeForkRequest = (event: Event) =>
+        forkRequests.push((event as CustomEvent).detail?.sessionId);
+      document.addEventListener(SESSION_NEW_FROM_EVENT, takeForkRequest);
+      exactButton("Fork…").click();
+      document.removeEventListener(SESSION_NEW_FROM_EVENT, takeForkRequest);
       check(
-        writes.some((write) =>
-          write.url.endsWith(`/${sessions[1]!.id}/duplicate`) &&
-          write.body.provider_account_id === "mink"
-        ),
-        `${mode}: forking keeps this agent's subscription in a new session`,
+        forkRequests.length === 1 && forkRequests[0] === sessions[1]!.id &&
+          !writes.some((write) => write.url.endsWith("/duplicate") || write.url.endsWith("/fork")),
+        `${mode}: Fork opens this session's options instead of forking at once`,
       );
-      await until(() => !button("Forking"));
+      exactButton("Continue here").click();
+      await until(() => writes.some((write) => write.url.endsWith("/continue-here")));
+      check(
+        writes.some((write) => write.url.endsWith(`/${sessions[1]!.id}/continue-here`)),
+        `${mode}: Continue here asks to keep working in the source`,
+      );
+      await until(() => !button("Reopening"));
+      const resumed = sessions.map((session) =>
+        session.id === sessions[1]!.id ? { ...session, handoff_resumed: true } : session
+      );
+      Socket.active.at(-1)?.publish({ type: "sessions", sessions: resumed });
+      await until(() => container.querySelectorAll("[data-session-handed-off]").length === 0);
+      check(true, `${mode}: a source kept as a second line of work leaves history`);
+      Socket.active.at(-1)?.publish({ type: "sessions", sessions });
+      await until(() => container.querySelectorAll("[data-session-handed-off]").length === 1);
       writes.length = 0;
       check(
         !contextReads.some((url) => url.includes(`/${sessions[2]!.id}/context`)),
@@ -1075,6 +1096,35 @@ export async function runSessionContextBrowserConformance(
     flushSync(() => root.render(null));
     Socket.active.at(-1)?.publish({ type: "machines", machines: [machine], resync: true });
     await runCreateDefaultsBrowserChecks(sessions[1]!, "Claude · Mink");
+    // History keeps a fork with options, but nothing that would split the work.
+    container.style.cssText = "width:680px;max-width:100%;margin:auto";
+    flushSync(() => root.render(
+      <SurfaceContext.Provider
+        value={classifySurface({
+          finePointer: true,
+          hover: true,
+          tabletWidth: false,
+          touchCapable: false,
+          desktopHost: true,
+        })}
+      >
+        <BrowserProductTheme>
+          <CssBaseline />
+          <SessionContextSettings session={sessions[1]!} />
+        </BrowserProductTheme>
+      </SurfaceContext.Provider>,
+    ));
+    Socket.active.at(-1)?.publish({ type: "sessions", sessions });
+    await until(() => Boolean(exactButton("Fork")) && !exactButton("Fork")!.disabled);
+    exactButton("Fork")!.click();
+    await until(() => Boolean(container.querySelector("[data-new-session-fork-run]")));
+    check(
+      !container.querySelector("[data-new-session-continue-run]") &&
+        !container.querySelector("[data-new-session-continue]") &&
+        !button("Select sessions") && !button("Replace or fork"),
+      "history: Settings offers a configurable fork and no Replace or links",
+    );
+    flushSync(() => root.render(null));
     sessions[1] = { ...sessions[1]!, title: "network", trashed_at_ms: Date.now() };
     sessions[3] = { ...sessions[3]!, status: "starting", continued_from: sessions[1]!.id };
     for (const width of [360, 680]) {

@@ -5,6 +5,7 @@ mod test_support;
 pub(super) fn session(id: &str) -> SessionMeta {
     SessionMeta {
         continued_from: None,
+        handoff_resumed: false,
         forked_from: None,
         id: id.to_owned(),
         provider: "codex".to_owned(),

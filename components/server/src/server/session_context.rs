@@ -143,6 +143,7 @@ pub(super) async fn initialize(
             state: "preparing".into(),
             error: None,
             source_trashed: false,
+            source_kept: None,
         }),
         injection: initial_cmid.map(|cmid| Injection {
             cmid,
@@ -708,6 +709,7 @@ async fn deliver(
         state: "preparing".into(),
         error: None,
         source_trashed: false,
+        source_kept: None,
     };
     context.delivery = Some(delivery.clone());
     save(&state, &id, &context).await?;
@@ -767,38 +769,55 @@ async fn deliver(
     }
     context.delivery = Some(delivery.clone());
     save(&state, &id, &context).await?;
-    // The work moved on, so the original leaves the list and stops holding a
-    // Machine slot. It stays readable until Trash retention ends. Best effort:
-    // a refusal only leaves it as read-only history beside the continuation.
-    // Background activity belongs to the old account. It must neither block
-    // sending to the new one nor be retired by the continuation's cleanup.
-    if target_id != id
-        && state
-            .hub
-            .session_info(&id)
-            .is_some_and(|source| source.meta.background_tasks == 0)
+    if target_id != id {
+        retire_source(&state, &auth.principal, &id, &mut context, &mut delivery).await;
+    }
+    Ok(delivery)
+}
+
+/// The work moved on, so the original leaves the list and stops holding a
+/// Machine slot. It stays readable until Trash retention ends. Best effort:
+/// a refusal only leaves it as read-only history beside the continuation,
+/// with the reason recorded for its dock. Background activity belongs to the
+/// old account. It must neither block sending to the new one nor be retired
+/// by the continuation's cleanup.
+async fn retire_source(
+    state: &Arc<AppState>,
+    principal: &ProductPrincipal,
+    id: &str,
+    context: &mut Context,
+    delivery: &mut Delivery,
+) {
+    // A new handoff returns a source the user had kept working in to history.
+    state.hub.set_handoff_resumed(id, false);
+    let kept = if state
+        .hub
+        .session_info(id)
+        .is_some_and(|source| source.meta.background_tasks > 0)
     {
-        match super::session_trash::trash(&state, &auth.principal, &[], std::slice::from_ref(&id)) {
-            Ok(()) => {
-                delivery.source_trashed = true;
-                // A replayed receipt still offers Undo. Trash itself succeeded,
-                // so a failed write only loses that offer; Restore remains.
-                context.delivery = Some(delivery.clone());
-                if let Err(reason) = save(&state, &id, &context).await {
-                    tracing::info!(session = %id, %reason, "handoff Trash outcome not recorded");
-                }
-            }
+        "Background work was still running, so it stayed out of Trash.".to_owned()
+    } else {
+        match super::session_trash::trash(state, principal, &[], &[id.to_owned()]) {
+            Ok(()) => String::new(),
             Err(reason) => {
                 tracing::info!(session = %id, %reason, "handed-off session stayed out of Trash");
-                if state.supervisor.has_live_worker(&id)
-                    && let Err(reason) = state.supervisor.hibernate_session(&id)
+                if state.supervisor.has_live_worker(id)
+                    && let Err(reason) = state.supervisor.hibernate_session(id)
                 {
                     tracing::info!(session = %id, %reason, "handed-off session kept its idle worker");
                 }
+                format!("Trash refused it: {reason}")
             }
         }
+    };
+    delivery.source_trashed = kept.is_empty();
+    delivery.source_kept = (!kept.is_empty()).then_some(kept);
+    // A replayed receipt still offers Undo, and a kept source says why.
+    // The outcome itself stands, so a failed write only loses that note.
+    context.delivery = Some(delivery.clone());
+    if let Err(reason) = save(state, id, context).await {
+        tracing::info!(session = %id, %reason, "handoff Trash outcome not recorded");
     }
-    Ok(delivery)
 }
 
 pub(super) async fn send(
@@ -823,6 +842,38 @@ pub(super) async fn send(
         Err(_) => {
             failure("Send outcome is unknown; inspect session context before retrying".into())
         }
+    }
+}
+
+/// Keep working in a handed-off source beside its continuation. This is the
+/// user's explicit choice of two lines of work; the Web stops showing the
+/// source as read-only history. A later handoff from it clears the choice.
+pub(super) async fn continue_here(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
+    Path(id): Path<String>,
+) -> Response {
+    let result = current_authority(&state, &auth)
+        .and_then(|()| owned(&state, &auth.principal, &id))
+        .and_then(|_| {
+            if state
+                .hub
+                .session_list()
+                .iter()
+                .any(|meta| meta.continued_from.as_deref() == Some(id.as_str()))
+            {
+                state.hub.set_handoff_resumed(&id, true);
+                Ok(())
+            } else {
+                Err("No session continues this one".to_owned())
+            }
+        });
+    match result {
+        Ok(()) => Json(serde_json::json!({
+            "session": state.hub.session_info(&id).map(|info| info.meta),
+        }))
+        .into_response(),
+        Err(error) => failure(error),
     }
 }
 
@@ -940,6 +991,7 @@ mod tests {
                 state: "preparing".into(),
                 error: None,
                 source_trashed: false,
+                source_kept: None,
             }),
             ..Context::default()
         };
