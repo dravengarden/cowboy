@@ -174,4 +174,61 @@ impl MachinePluginStore {
         // Do not set leader_exited, login_succeeded, identity or logout.succeeded.
         logout::persist(&directory, &profile)
     }
+
+    /// Before a new login, end logins abandoned by an exited owner (for
+    /// example a Machine replaced mid-login). Termination of the contained
+    /// tree is proved first; the abandoned generation never produced an
+    /// identity, so it is recorded as failed and the next preparation retires
+    /// it. A live owner, a completed identity or any logout is left untouched.
+    pub async fn recover_abandoned_native_logins(
+        &self,
+        provider: &str,
+        request: &str,
+    ) -> Result<()> {
+        validate_plugin_id(provider)?;
+        validate_auth_candidate_id(request)?;
+        let root = self.native_profile_root(provider);
+        let generations = match fs::read_dir(root.join("generations")) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            result => result?,
+        };
+        let mut abandoned = Vec::new();
+        {
+            let _guard = self.auth_candidates.lock();
+            for entry in generations {
+                let name = entry?.file_name().to_string_lossy().into_owned();
+                let Ok(generation) = name.parse::<u64>() else {
+                    continue;
+                };
+                let (_, profile) = self.read_native_profile_for_cleanup(provider, generation)?;
+                if profile.request != request
+                    && !profile.revoked
+                    && !profile.leader_exited
+                    && !profile.process_tree_exited
+                    && profile.identity.is_none()
+                    && profile.logout.is_none()
+                    && profile.process.is_some()
+                {
+                    abandoned.push((generation, profile));
+                }
+            }
+        }
+        for (generation, snapshot) in abandoned {
+            let Some(process) = &snapshot.process else {
+                continue;
+            };
+            if !process.recover().await? {
+                continue;
+            }
+            let _guard = self.auth_candidates.lock();
+            let (directory, mut profile) =
+                self.read_native_profile_for_cleanup(provider, generation)?;
+            ensure!(profile == snapshot, "native login reservation changed");
+            profile.leader_exited = true;
+            profile.process_tree_exited = true;
+            profile.login_succeeded = false;
+            logout::persist(&directory, &profile)?;
+        }
+        Ok(())
+    }
 }

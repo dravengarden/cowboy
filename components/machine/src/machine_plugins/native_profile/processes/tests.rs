@@ -284,3 +284,62 @@ async fn native_crash_fixture() {
     fs::write(root.join("ready"), store.account_id.as_str()).unwrap();
     std::future::pending::<()>().await;
 }
+
+#[tokio::test]
+async fn a_login_abandoned_by_an_exited_owner_is_retired_before_the_next_login() {
+    let temp = tempfile::tempdir().unwrap();
+    let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+    let store = MachinePluginStore::new(
+        temp.path(),
+        crate::machine_protocol::Platform::Linux,
+        "x86_64".into(),
+    )
+    .unwrap()
+    .for_account(&account)
+    .unwrap();
+    let (directory, mut profile) = pending(&store);
+    // A live owner is a concurrent login, never an orphan.
+    store
+        .recover_abandoned_native_logins("claude-code", "login-2")
+        .await
+        .unwrap();
+    assert!(
+        !store
+            .read_native_profile_metadata("claude-code", 1)
+            .unwrap()
+            .1
+            .leader_exited
+    );
+    // The request being prepared is not abandoned by its own retry.
+    past_owner(profile.process.as_mut().unwrap());
+    logout::persist(&directory, &profile).unwrap();
+    store
+        .recover_abandoned_native_logins("claude-code", &profile.request)
+        .await
+        .unwrap();
+    assert!(
+        !store
+            .read_native_profile_metadata("claude-code", 1)
+            .unwrap()
+            .1
+            .leader_exited
+    );
+    store
+        .recover_abandoned_native_logins("claude-code", "login-2")
+        .await
+        .unwrap();
+    let (_, recovered) = store
+        .read_native_profile_metadata("claude-code", 1)
+        .unwrap();
+    assert!(recovered.leader_exited && recovered.process_tree_exited);
+    assert!(!recovered.login_succeeded && recovered.identity.is_none());
+    store
+        .retire_failed_native_logins("claude-code", "login-2")
+        .unwrap();
+    let (_, retired) = store
+        .read_native_profile_for_cleanup("claude-code", 1)
+        .unwrap();
+    assert!(retired.revoked);
+    assert!(!directory.join("home").exists());
+    validate_reservation(&store.native_profile_root("claude-code"), "login-2").unwrap();
+}

@@ -1697,12 +1697,16 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
             }
             continue;
         }
+        // Stops still reach the Machine: an account revocation must fence a
+        // named session whose binding never became launchable.
         if command
             .session_id()
             .is_some_and(|id| !shared.hub.accepts_runtime_projection(id))
             && !matches!(
                 command,
-                CoreCommand::StopSession { .. } | CoreCommand::Cancel { .. }
+                CoreCommand::StopSession { .. }
+                    | CoreCommand::Cancel { .. }
+                    | CoreCommand::QuiesceAccountSession { .. }
             )
         {
             continue;
@@ -4502,6 +4506,58 @@ mod tests {
             commands.push(command);
         }
         commands
+    }
+
+    #[tokio::test]
+    async fn account_quiesce_reaches_a_named_session_that_cannot_launch() {
+        let hub = Hub::new();
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        hub.create_session(crate::core::SessionRegistration {
+            id: "unlaunched".to_owned(),
+            provider: "claude-code".to_owned(),
+            provider_version: "1".to_owned(),
+            provider_generation_digest: "sha256:provider".to_owned(),
+            provider_account_id: account.clone(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "ovh".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: "/tmp".to_owned(),
+            title: "test".to_owned(),
+            origin: crate::model::SessionOrigin::Web,
+            system: false,
+            owner_user_id: Some("owner".to_owned()),
+            owner_username: None,
+        });
+        assert!(!hub.accepts_runtime_projection("unlaunched"));
+        let runtime = RemoteRuntime::for_test(hub, Vec::new());
+        runtime.queue(
+            "prompt".into(),
+            CoreCommand::Prompt {
+                session_id: "unlaunched".into(),
+                command_id: "prompt".into(),
+                turn_id: "turn".into(),
+                content: Vec::new(),
+                cmid: None,
+                trace: None,
+                echo_artifacts: false,
+            },
+        );
+        let _stop = runtime
+            .quiesce_account_session("revoke", "unlaunched", &account)
+            .unwrap();
+        let commands = pending_wire_commands(&runtime).await;
+        assert!(
+            matches!(
+                commands.as_slice(),
+                [CoreCommand::QuiesceAccountSession { session_id, .. }] if session_id == "unlaunched"
+            ),
+            "{commands:?}"
+        );
     }
 
     #[tokio::test]

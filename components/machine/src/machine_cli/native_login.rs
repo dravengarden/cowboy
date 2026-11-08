@@ -63,6 +63,10 @@ async fn run(
 ) -> Result<(), String> {
     let deadline = tokio::time::Instant::now() + login_process::TIMEOUT;
     login_process::check(&login.cancel, deadline).map_err(|error| error.detail().to_owned())?;
+    providers
+        .recover_abandoned_native_logins(provider, request)
+        .await
+        .map_err(|_| "an interrupted native login is still running; retry shortly".to_owned())?;
     let prepared = providers
         .prepare_native_profile(provider, request, spec)
         .map_err(|_| {
