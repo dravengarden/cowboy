@@ -18,9 +18,25 @@ Machine has no browser capability.
   glibc from the pinned Ubuntu release, with every symlink replaced by a copy
   and every ELF object audited against the tree alone. Inside an instance the
   artifact's `usr/` and `opt/` are the whole userland.
+  - `lock.sh` resolves the closure in a throwaway rootless Docker
+    `ubuntu:26.04` container and writes `packages.lock.json` (every .deb's
+    URL, version, size and SHA-256) and the Chrome version into
+    `contract.json`. Rerun it for a Chrome or Ubuntu update.
+  - `build.ts` assembles the tree from the lock alone (no Docker), adds the
+    launcher, `policy.json` and `nsswitch.conf`, audits, packs
+    `dist/plugins/machine-browser/runtime-linux-x86_64.tar.gz` and writes the
+    `runtime-artifacts.json` that `just plugin-bind-runtime` consumes:
+    `bun plugins/machine-browser/runtime/build.ts <artifact-base-url>`.
+  - `default.nix` is the launcher's static musl build, exposed by the root
+    flake as `cowboy-browser-launcher-portable`.
+  - `conformance.sh` runs the built tree in a pristine `ubuntu:26.04`
+    container as an unprivileged user (no `AppArmor`) and verifies the
+    launcher contract from outside; `conformance_probe.py` is its Machine
+    stand-in.
 - `launcher/` is the static supervisor binary (`cowboy-browser-launcher`):
   namespaces, mounts, sealing, the three processes, the control protocol and
-  snapshot copies. Its crate version is the Plugin version.
+  snapshot copies. Its crate version is the Plugin version. The wire contract
+  as implemented is `PROTOCOL.md`.
 - `policy.json` is the managed browser policy bound into every instance.
 
 `just plugin-check` validates the contract against the registry and the

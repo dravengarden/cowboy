@@ -419,7 +419,7 @@ mod tests {
                 "kernel_min": "5.15",
                 "merged_usr": true,
                 "mount_points": ["/opt", "/mnt"],
-                "apparmor_features": ["network_v9", "unix", "mount", "namespaces/userns"],
+                "apparmor_features": ["network_v9", "unix", "mount", "namespaces/userns_create"],
                 "built_from": {"id": "ubuntu", "version_id": "26.04"}
             },
             "runtime": {

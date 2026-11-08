@@ -655,6 +655,9 @@
       cowboy-mcp-relay-portable = import ./plugins/claude-code/relay/default.nix {
         inherit pkgs rustToolchain;
       };
+      cowboy-browser-launcher-portable = import ./plugins/machine-browser/runtime/default.nix {
+        inherit pkgs rustToolchain;
+      };
 
       release-revision = if self ? rev then self.rev else null;
       release-source = lane: bootstrap: {
@@ -987,6 +990,7 @@
         cowboy-zed-adapter-portable = cowboy-zed-adapter-portable;
         cowboy-zed-server = cowboy-zed-server;
         cowboy-mcp-relay-portable = cowboy-mcp-relay-portable;
+        cowboy-browser-launcher-portable = cowboy-browser-launcher-portable;
         cowboy-web = cowboy-web;
         # Optional local conformance tool, never part of a product runtime.
         cowboy-idb-test-browser = pkgs.firefox;

@@ -1,0 +1,43 @@
+[package]
+name = "cowboy-browser-launcher"
+version = "1.0.0"
+edition = "2024"
+publish = false
+license = "MIT"
+rust-version = "1.97.1"
+description = "Supervisor of one Machine browser instance: namespaces, mounts, sealed children, the control protocol and profile snapshots"
+
+# Standalone: Plugin runtime bytes carry their own lock and never change the
+# Cowboy workspace lock.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+rustix = { version = "1", features = ["event", "fs", "mount", "pipe", "process", "rand", "stdio", "thread"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[lints.rust]
+warnings = "deny"
+# Only `raw.rs` opts back in, for the handful of syscalls rustix has no safe
+# wrapper for.
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+too_many_lines = "allow"

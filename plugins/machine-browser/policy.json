@@ -1,0 +1,34 @@
+{
+  "RemoteDebuggingAllowed": false,
+  "DeveloperToolsAvailability": 2,
+  "DownloadRestrictions": 3,
+  "AllowFileSelectionDialogs": false,
+  "URLBlocklist": [
+    "file://*",
+    "chrome://*"
+  ],
+  "URLAllowlist": [
+    "chrome://newtab"
+  ],
+  "ExtensionInstallBlocklist": [
+    "*"
+  ],
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "PasswordManagerEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "BackgroundModeEnabled": false,
+  "MetricsReportingEnabled": false,
+  "DefaultBrowserSettingEnabled": false,
+  "PromotionalTabsEnabled": false,
+  "QuicAllowed": false,
+  "WebRtcIPHandling": "disable_non_proxied_udp",
+  "BuiltInDnsClientEnabled": false,
+  "DnsOverHttpsMode": "off",
+  "DefaultGeolocationSetting": 2,
+  "DefaultNotificationsSetting": 2,
+  "AudioCaptureAllowed": false,
+  "VideoCaptureAllowed": false,
+  "RestoreOnStartup": 5
+}
