@@ -2,26 +2,39 @@
  * the current state, the lifecycle bar with its confirmations, and the
  * remote-clipboard row. Pure presentation over `BrowserModel`. */
 import { Button, CircularProgress, Stack, Typography } from "@mui/material";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ConfirmSheet } from "../Sheet";
 import { copyText } from "../clipboard";
-import { type BrowserScale, type BrowserStateEvent, browserStateLabel } from "./api";
+import {
+  type BrowserScale,
+  type BrowserStateEvent,
+  type BrowserTarget,
+  browserStateLabel,
+} from "./api";
 import { type BrowserModel, browserRunning, looksLikeAuthorizationCode } from "./browserModel";
+import {
+  type ConfirmKind,
+  type Confirmation,
+  type ResetTarget,
+  confirmationCurrent,
+  confirmationFor,
+} from "./confirmation";
 
+/** Commands that follow a confirmation take the target it captured. */
 export interface BrowserCommands {
   open(): void;
-  attach(takeover: boolean): void;
+  attach(takeover: boolean, target?: BrowserTarget): void;
   detach(): void;
-  hibernate(): void;
+  hibernate(target?: BrowserTarget): void;
   snapshot(): void;
-  reset(): void;
-  restart(): void;
+  reset(target?: ResetTarget): void;
+  restart(target?: BrowserTarget): void;
   refresh(): void;
   dismiss(): void;
   notice(message: string): void;
 }
 
-type Confirm = "takeover" | "hibernate" | "reset" | "restart";
+type Confirm = ConfirmKind;
 
 const CONFIRM_TEXT: Record<
   Confirm,
@@ -108,6 +121,26 @@ export function BrowserPrimaryAction({
   return <Typography variant="body2">The browser is stopping…</Typography>;
 }
 
+/** Send exactly the confirmed command to the browser it captured. */
+function runConfirmed(confirm: Confirmation, commands: BrowserCommands): void {
+  switch (confirm.kind) {
+    case "takeover":
+      commands.attach(true, confirm.target);
+      break;
+    case "hibernate":
+      commands.hibernate(confirm.target);
+      break;
+    case "reset":
+      commands.reset(confirm.target);
+      break;
+    case "restart":
+      commands.restart(confirm.target);
+      break;
+    default:
+      break;
+  }
+}
+
 export function BrowserActionBar({
   model,
   state,
@@ -127,7 +160,14 @@ export function BrowserActionBar({
   onUseCode?: ((code: string) => void) | undefined;
   onClose: () => void;
 }): React.JSX.Element {
-  const [confirm, setConfirm] = useState<Confirm | undefined>(undefined);
+  const [confirm, setConfirm] = useState<Confirmation | undefined>(undefined);
+  // The confirmation captures the browser shown when it opens and closes
+  // without acting once the panel shows another one.
+  const current = confirm !== undefined && confirmationCurrent(confirm, model);
+  useEffect(() => {
+    if (confirm && !current) setConfirm(undefined);
+  }, [confirm, current]);
+  const ask = (kind: Confirm): void => setConfirm(confirmationFor(kind, model));
   const busy = Boolean(model.busy);
   const running = browserRunning(state?.state);
   // Deleting a retained profile stays the owner's while either gate is
@@ -140,25 +180,10 @@ export function BrowserActionBar({
   const scaleMismatch = running && state?.scale !== undefined && state.scale !== preferredScale;
   const remote = model.remoteClipboard;
   const confirmed = (): void => {
-    switch (confirm) {
-      case "takeover":
-        commands.attach(true);
-        break;
-      case "hibernate":
-        commands.hibernate();
-        break;
-      case "reset":
-        commands.reset();
-        break;
-      case "restart":
-        commands.restart();
-        break;
-      default:
-        break;
-    }
+    if (confirm && current) runConfirmed(confirm, commands);
     setConfirm(undefined);
   };
-  const text = confirm ? CONFIRM_TEXT[confirm] : undefined;
+  const text = confirm && current ? CONFIRM_TEXT[confirm.kind] : undefined;
   const minHeight = desktop ? 32 : 44;
   return (
     <Stack spacing={1} data-machine-browser-actions sx={{ "& .MuiButton-root": { minHeight } }}>
@@ -190,12 +215,7 @@ export function BrowserActionBar({
       )}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
         {!model.viewer && (
-          <BrowserPrimaryAction
-            model={model}
-            state={state}
-            commands={commands}
-            onConfirm={setConfirm}
-          />
+          <BrowserPrimaryAction model={model} state={state} commands={commands} onConfirm={ask} />
         )}
         {model.viewer && (
           <Button disabled={busy} onClick={commands.detach}>
@@ -203,7 +223,7 @@ export function BrowserActionBar({
           </Button>
         )}
         {running && (
-          <Button disabled={busy} onClick={() => setConfirm("hibernate")}>
+          <Button disabled={busy} onClick={() => ask("hibernate")}>
             Hibernate…
           </Button>
         )}
@@ -213,12 +233,12 @@ export function BrowserActionBar({
           </Button>
         )}
         {scaleMismatch && (
-          <Button disabled={busy} onClick={() => setConfirm("restart")}>
+          <Button disabled={busy} onClick={() => ask("restart")}>
             Restart for this screen…
           </Button>
         )}
         {resettable && (
-          <Button disabled={busy} color="error" onClick={() => setConfirm("reset")}>
+          <Button disabled={busy} color="error" onClick={() => ask("reset")}>
             Reset profile…
           </Button>
         )}
@@ -246,7 +266,7 @@ export function BrowserActionBar({
           }
         >
           <Typography variant="body2">{text.body}</Typography>
-          {confirm === "takeover" && (
+          {confirm?.kind === "takeover" && (
             <Typography variant="caption" color="text.secondary">
               Current state: {browserStateLabel(state?.state)}.
             </Typography>

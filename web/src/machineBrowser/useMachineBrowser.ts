@@ -7,6 +7,7 @@ import { productSessionSignal } from "../productSessionEnd";
 import { productSyncPrincipal } from "../productSyncIdentity";
 import {
   type BrowserResult,
+  type BrowserTarget,
   type BrowserViewport,
   MachineBrowserError,
   type MachineBrowserApi,
@@ -18,12 +19,13 @@ import {
   type BrowserEvent,
   type BrowserModel,
   INITIAL_BROWSER_MODEL,
-  pinnedMachine,
   pollPeriod,
+  readTicket,
   reduceBrowser,
   resetTarget,
-  targetOf,
+  shownTarget,
 } from "./browserModel";
+import type { ResetTarget } from "./confirmation";
 
 export interface MachineBrowserInput {
   account: string;
@@ -42,13 +44,16 @@ export interface MachineBrowserController {
   dispatch: (event: BrowserEvent) => void;
   refresh(): void;
   /** Open (or, for a sign-in, re-validate) the browser; `takeover` mounts
-   * the viewer over another attachment when the open answers attached. */
-  open(viewport: BrowserViewport, takeover?: boolean): void;
-  hibernate(): void;
+   * the viewer over another attachment when the open answers attached, and
+   * only over `expected` when the owner confirmed that browser. */
+  open(viewport: BrowserViewport, takeover?: boolean, expected?: BrowserTarget): void;
+  /** Instance commands name `target`, the browser a confirmation captured,
+   * else the one shown now (`shownTarget`). */
+  hibernate(target?: BrowserTarget): void;
   snapshot(): void;
-  reset(): void;
+  reset(target?: ResetTarget): void;
   /** Hibernate, then reopen at another device scale. */
-  restart(viewport: BrowserViewport): void;
+  restart(viewport: BrowserViewport, target?: BrowserTarget): void;
 }
 
 const READ_TIMEOUT_MS = 15_000;
@@ -84,13 +89,19 @@ export function useMachineBrowser({
   const signal = (timeoutMs: number): AbortSignal =>
     AbortSignal.any([productSessionSignal(), AbortSignal.timeout(timeoutMs)]);
 
+  // Each read is tagged with its generation and the Machine it was pinned
+  // to; an answer that is no longer the newest read, or whose pin no longer
+  // matches the panel (a viewer mounted meanwhile), is discarded.
+  const readGeneration = useRef(0);
   const refresh = useCallback(() => {
-    api.read(account, signal(READ_TIMEOUT_MS), pinnedMachine(modelRef.current)).then(
+    const ticket = readTicket(readGeneration, () => modelRef.current);
+    const current = (): boolean => live() && ticket.current();
+    api.read(account, signal(READ_TIMEOUT_MS), ticket.pinned).then(
       (read) => {
-        if (live()) dispatch({ type: "read", read, now: Date.now() });
+        if (current()) dispatch({ type: "read", read, now: Date.now() });
       },
       (cause: unknown) => {
-        if (live()) dispatch({ type: "read_failed", message: errorText(cause) });
+        if (current()) dispatch({ type: "read_failed", message: errorText(cause) });
       },
     );
   }, [account, api, live]);
@@ -118,12 +129,15 @@ export function useMachineBrowser({
       call: (signal: AbortSignal) => Promise<BrowserResult>,
       timeoutMs: number,
       takeover = false,
+      expected?: BrowserTarget,
     ): void => {
       if (modelRef.current.busy) return;
       dispatch({ type: "busy", action });
       call(signal(timeoutMs)).then(
         (result) => {
-          if (live()) dispatch({ type: "result", action, result, now: Date.now(), takeover });
+          if (live()) {
+            dispatch({ type: "result", action, result, now: Date.now(), takeover, expected });
+          }
         },
         (cause: unknown) => {
           if (live()) dispatch({ type: "failed", action, message: errorText(cause) });
@@ -140,33 +154,44 @@ export function useMachineBrowser({
     [account, api, dataset, signInRequest],
   );
   const open = useCallback(
-    (viewport: BrowserViewport, takeover = false) =>
-      run("open", (abort) => openCall(viewport, abort), OPEN_TIMEOUT_MS, takeover),
+    (viewport: BrowserViewport, takeover = false, expected?: BrowserTarget) =>
+      run("open", (abort) => openCall(viewport, abort), OPEN_TIMEOUT_MS, takeover, expected),
     [openCall, run],
   );
-  // Every command names the Machine and instance the panel shows.
-  const hibernate = useCallback(() => {
-    const target = targetOf(modelRef.current.read);
-    if (!target) return;
-    run("hibernate", (abort) => api.hibernate(account, dataset, target, abort), COMMAND_TIMEOUT_MS);
-  }, [account, api, dataset, run]);
+  // Every command names the Machine and instance the panel shows, or the
+  // one a confirmation captured.
+  const hibernate = useCallback(
+    (captured?: BrowserTarget) => {
+      const target = captured ?? shownTarget(modelRef.current);
+      if (!target) return;
+      run(
+        "hibernate",
+        (abort) => api.hibernate(account, dataset, target, abort),
+        COMMAND_TIMEOUT_MS,
+      );
+    },
+    [account, api, dataset, run],
+  );
   const snapshot = useCallback(() => {
-    const target = targetOf(modelRef.current.read);
+    const target = shownTarget(modelRef.current);
     if (!target) return;
     run("snapshot", (abort) => api.snapshot(account, dataset, target, abort), COMMAND_TIMEOUT_MS);
   }, [account, api, dataset, run]);
-  const reset = useCallback(() => {
-    const target = resetTarget(modelRef.current.read);
-    if (!target) return;
-    run(
-      "reset",
-      (abort) => api.reset(account, dataset, target.machine_id, target.revision, abort),
-      COMMAND_TIMEOUT_MS,
-    );
-  }, [account, api, dataset, run]);
+  const reset = useCallback(
+    (captured?: ResetTarget) => {
+      const target = captured ?? resetTarget(modelRef.current.read);
+      if (!target) return;
+      run(
+        "reset",
+        (abort) => api.reset(account, dataset, target.machine_id, target.revision, abort),
+        COMMAND_TIMEOUT_MS,
+      );
+    },
+    [account, api, dataset, run],
+  );
   const restart = useCallback(
-    (viewport: BrowserViewport) => {
-      const target = targetOf(modelRef.current.read);
+    (viewport: BrowserViewport, captured?: BrowserTarget) => {
+      const target = captured ?? shownTarget(modelRef.current);
       if (!target) return;
       run(
         "open",

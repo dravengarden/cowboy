@@ -272,13 +272,15 @@ function browserCommands(
     open: () => browser.open(viewportNow()),
     // A sign-in panel never attaches directly: the sign-in open lets the
     // Machine validate and bind this login first, then the viewer mounts.
-    attach: (takeover) =>
-      signIn ? browser.open(viewportNow(), takeover) : dispatch({ type: "attach", takeover }),
+    attach: (takeover, target) =>
+      signIn
+        ? browser.open(viewportNow(), takeover, target)
+        : dispatch({ type: "attach", takeover, target }),
     detach: () => dispatch({ type: "detach" }),
     hibernate: browser.hibernate,
     snapshot: browser.snapshot,
     reset: browser.reset,
-    restart: () => browser.restart(viewportNow()),
+    restart: (target) => browser.restart(viewportNow(), target),
     refresh: browser.refresh,
     dismiss: () => dispatch({ type: "dismiss" }),
     notice: (message) => dispatch({ type: "notice", message }),

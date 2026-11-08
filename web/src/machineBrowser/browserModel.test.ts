@@ -11,11 +11,15 @@ import {
   looksLikeAuthorizationCode,
   openRefused,
   pinnedMachine,
+  CHANGED_BEFORE_CONFIRM,
   pollPeriod,
+  readTicket,
   reduceBrowser,
   resetTarget,
+  shownTarget,
   targetOf,
 } from "./browserModel";
+import { confirmationCurrent, confirmationFor } from "./confirmation";
 
 const account = "11111111-2222-4333-8444-555555555555";
 function event(
@@ -348,4 +352,146 @@ test("a stopping answer naming no instance offers nothing to command or attach",
   assertEquals(reduceBrowser(model, { type: "attach", takeover: false }).viewer, undefined);
   // The panel keeps reading that Machine until its answer settles.
   assertEquals(pinnedMachine(model), "alpha");
+});
+
+/** A sign-in open on alpha mounted the viewer. */
+function viewerOnAlpha(): BrowserModel {
+  return reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "result",
+    action: "open",
+    result: { machine_id: "alpha", state: event("detached") },
+    now: 1,
+  });
+}
+
+test("a read for another Machine never replaces the mounted viewer's browser", () => {
+  const mounted = viewerOnAlpha();
+  assertEquals(mounted.viewer?.target, shown("alpha"));
+  // A poll pinned to beta finishes after the open mounted the viewer.
+  const late = reduceBrowser(mounted, {
+    type: "read",
+    read: read(event("detached", { observed_at_ms: 9 }), "beta"),
+    now: 2,
+  });
+  assertEquals(late.read, mounted.read);
+  assertEquals(late.viewer, mounted.viewer);
+  assertEquals(shownTarget(late), shown("alpha"));
+  // An older incarnation on the viewer's own Machine is stale too.
+  const newer = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "result",
+    action: "open",
+    result: {
+      machine_id: "alpha",
+      state: event("detached", { instance: shown("alpha", 3).instance }),
+    },
+    now: 1,
+  });
+  const older = reduceBrowser(newer, {
+    type: "read",
+    read: read(event("detached"), "alpha"),
+    now: 2,
+  });
+  assertEquals(older.read, newer.read);
+  // A newer instance on the viewer's Machine replaced its browser: the
+  // viewer ends rather than commanding the new instance by mistake.
+  const replaced = reduceBrowser(mounted, {
+    type: "read",
+    read: read(event("detached", { instance: shown("alpha", 2).instance }), "alpha"),
+    now: 3,
+  });
+  assertEquals(replaced.viewer, undefined);
+  assertEquals(targetOf(replaced.read), shown("alpha", 2));
+});
+
+test("a read ticket is obsolete once a newer read starts or the pin moves", () => {
+  const generations = { current: 0 };
+  let model: BrowserModel = { ...INITIAL_BROWSER_MODEL, read: read(event("detached"), "beta") };
+  const first = readTicket(generations, () => model);
+  assertEquals(first.pinned, "beta");
+  assertEquals(first.current(), true);
+  // An open on alpha mounts the viewer before the beta poll answers.
+  model = viewerOnAlpha();
+  assertEquals(first.current(), false);
+  const second = readTicket(generations, () => model);
+  assertEquals(second.pinned, "alpha");
+  const third = readTicket(generations, () => model);
+  assertEquals(second.current(), false);
+  assertEquals(third.current(), true);
+});
+
+test("a confirmation acts on the browser shown when it opened, or not at all", () => {
+  const placement = (machine: string, revision: number) => ({
+    account_id: account,
+    machine_id: machine,
+    instance_id: `b-${machine}`,
+    profile_revision: revision,
+    last_open_ms: 1,
+  });
+  const onAlpha: BrowserModel = {
+    ...INITIAL_BROWSER_MODEL,
+    loaded: true,
+    read: { ...read(null, "alpha"), placements: [placement("alpha", 3), placement("beta", 7)] },
+  };
+  const reset = confirmationFor("reset", onAlpha);
+  assertEquals(reset, { kind: "reset", target: { machine_id: "alpha", revision: 3 } });
+  if (!reset) throw new Error("no reset target");
+  assertEquals(confirmationCurrent(reset, onAlpha), true);
+  // Polling switches the panel to a running browser on beta: the reset
+  // confirmation no longer applies and must close without deleting beta.
+  const onBeta = reduceBrowser(onAlpha, {
+    type: "read",
+    read: { ...read(event("detached", { profile_revision: 7 }), "beta"), placements: [] },
+    now: 2,
+  });
+  assertEquals(confirmationCurrent(reset, onBeta), false);
+  // A changed revision on the same Machine is a different reset too.
+  const bumped = reduceBrowser(onAlpha, {
+    type: "read",
+    read: { ...read(event("hibernated", { profile_revision: 4 }), "alpha"), placements: [] },
+    now: 2,
+  });
+  assertEquals(confirmationCurrent(reset, bumped), false);
+  // Instance confirmations capture the viewer's browser while one is mounted.
+  const hibernate = confirmationFor("hibernate", viewerOnAlpha());
+  assertEquals(hibernate, { kind: "hibernate", target: shown("alpha") });
+  if (!hibernate) throw new Error("no hibernate target");
+  assertEquals(confirmationCurrent(hibernate, onBeta), false);
+  assertEquals(confirmationFor("restart", onAlpha), undefined);
+});
+
+test("a confirmed takeover never attaches to a browser that replaced the confirmed one", () => {
+  const attachedAlpha = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "read",
+    read: read(event("attached"), "alpha"),
+    now: 1,
+  });
+  const onBeta = reduceBrowser(attachedAlpha, {
+    type: "read",
+    read: read(event("attached"), "beta"),
+    now: 2,
+  });
+  const refused = reduceBrowser(onBeta, {
+    type: "attach",
+    takeover: true,
+    target: shown("alpha"),
+  });
+  assertEquals(refused.viewer, undefined);
+  assertEquals(refused.error, CHANGED_BEFORE_CONFIRM);
+  const taken = reduceBrowser(attachedAlpha, {
+    type: "attach",
+    takeover: true,
+    target: shown("alpha"),
+  });
+  assertEquals(taken.viewer?.target, shown("alpha"));
+  // A sign-in takeover goes through an open; another answer is refused.
+  const signIn = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "result",
+    action: "open",
+    result: { machine_id: "beta", state: event("attached") },
+    now: 3,
+    takeover: true,
+    expected: shown("alpha"),
+  });
+  assertEquals(signIn.viewer, undefined);
+  assertEquals(signIn.error, CHANGED_BEFORE_CONFIRM);
 });

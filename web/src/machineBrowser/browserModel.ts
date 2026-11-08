@@ -43,9 +43,18 @@ export type BrowserEvent =
       now: number;
       /** An open asked to take over an attached display (sign-in entry). */
       takeover?: boolean;
+      /** The browser the owner confirmed taking over; another answer never
+       * takes a display over. */
+      expected?: BrowserTarget | undefined;
     }
   | { type: "failed"; action: BrowserAction; message: string }
-  | { type: "attach"; takeover: boolean }
+  | {
+      type: "attach";
+      takeover: boolean;
+      /** The browser the owner confirmed; nothing attaches once the panel
+       * shows another one. */
+      target?: BrowserTarget | undefined;
+    }
   | { type: "detach" }
   | { type: "stream_state"; state: BrowserStateEvent }
   | { type: "viewer_ended"; message: string }
@@ -65,12 +74,35 @@ export function targetOf(
   return { machine_id: read.machine_id, instance: { account_id, instance_id, incarnation } };
 }
 
-function sameTarget(left: BrowserTarget, right: BrowserTarget | undefined): boolean {
+export function sameTarget(left: BrowserTarget, right: BrowserTarget | undefined): boolean {
   return (
     right !== undefined &&
     left.machine_id === right.machine_id &&
     left.instance.instance_id === right.instance.instance_id &&
     left.instance.incarnation === right.instance.incarnation
+  );
+}
+
+/** The Machine and instance every instance command names: the mounted
+ * viewer's while one is mounted, else the browser the panel shows. */
+export function shownTarget(model: BrowserModel): BrowserTarget | undefined {
+  return model.viewer?.target ?? targetOf(model.read);
+}
+
+/** Whether a read describes something other than the mounted viewer's
+ * browser and must not replace it: another Machine's answer (a poll that
+ * finished after an open mounted the viewer elsewhere) or an older
+ * incarnation on the viewer's Machine. A newer instance there, or an answer
+ * that no instance runs, describes the viewer's browser ending. */
+export function staleForViewer(model: BrowserModel, read: BrowserRead): boolean {
+  const viewer = model.viewer?.target;
+  if (!viewer) return false;
+  if (read.machine_id !== viewer.machine_id) return true;
+  const state = read.state;
+  return (
+    state !== null &&
+    namesInstance(state) &&
+    state.instance.incarnation < viewer.instance.incarnation
   );
 }
 
@@ -82,6 +114,22 @@ export function pinnedMachine(model: BrowserModel): string | undefined {
   if (model.awaitingOpen) return model.awaitingOpen.machine_id;
   const state = model.read?.state?.state;
   return state && state !== "hibernated" ? (model.read?.machine_id ?? undefined) : undefined;
+}
+
+/** Tags one state read with its generation and the Machine it is pinned to.
+ * Its answer applies only while it is still the newest read and the panel
+ * is still pinned there: a poll for another Machine that finishes after an
+ * open mounted the viewer is obsolete. */
+export function readTicket(
+  generations: { current: number },
+  model: () => BrowserModel,
+): { pinned: string | undefined; current: () => boolean } {
+  const generation = ++generations.current;
+  const pinned = pinnedMachine(model());
+  return {
+    pinned,
+    current: () => generation === generations.current && pinned === pinnedMachine(model()),
+  };
 }
 
 /** The Machine and profile revision a reset applies to, taken together from
@@ -168,6 +216,9 @@ export function looksLikeAuthorizationCode(text: string): boolean {
   return value.length > 0 && value.length <= 4096 && !/\s/.test(value);
 }
 
+export const CHANGED_BEFORE_CONFIRM =
+  "The browser shown changed before you confirmed; nothing was done.";
+
 const EMPTY_READ: BrowserRead = { machine_id: null, state: null, placements: [], admission: null };
 
 function nextGeneration(model: BrowserModel): number {
@@ -192,7 +243,14 @@ function withRead(model: BrowserModel, read: BrowserRead, now: number): BrowserM
     loaded: true,
     startingSince: starting ? (model.startingSince ?? now) : undefined,
   };
-  if (model.viewer && state && viewerEnds(state)) {
+  // The viewer ends with its instance: stopped, superseded, or replaced by
+  // a newer instance on its Machine (`staleForViewer` drops older ones).
+  const replaced =
+    model.viewer !== undefined &&
+    state !== null &&
+    namesInstance(state) &&
+    !sameTarget(model.viewer.target, targetOf(read));
+  if (model.viewer && state && (viewerEnds(state) || replaced)) {
     return {
       ...next,
       viewer: undefined,
@@ -233,6 +291,7 @@ function withRead(model: BrowserModel, read: BrowserRead, now: number): BrowserM
 export function reduceBrowser(model: BrowserModel, event: BrowserEvent): BrowserModel {
   switch (event.type) {
     case "read":
+      if (staleForViewer(model, event.read)) return { ...model, loaded: true };
       return withRead(model, event.read, event.now);
     case "read_failed":
       return { ...model, loaded: true, error: event.message };
@@ -263,6 +322,9 @@ export function reduceBrowser(model: BrowserModel, event: BrowserEvent): Browser
           };
         }
         if (state.state === "attached" && event.takeover && target) {
+          if (event.expected && !sameTarget(event.expected, target)) {
+            return { ...next, error: CHANGED_BEFORE_CONFIRM };
+          }
           return { ...next, viewer: { takeover: true, generation: nextGeneration(model), target } };
         }
         if (state.state === "starting" && target) return { ...next, awaitingOpen: target };
@@ -284,6 +346,9 @@ export function reduceBrowser(model: BrowserModel, event: BrowserEvent): Browser
       // Attach to the browser the panel shows, by Machine and instance.
       const target = targetOf(model.read);
       if (!target) return model;
+      if (event.target && !sameTarget(event.target, target)) {
+        return { ...model, error: CHANGED_BEFORE_CONFIRM };
+      }
       return {
         ...model,
         viewer: { takeover: event.takeover, generation: nextGeneration(model), target },

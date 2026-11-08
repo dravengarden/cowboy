@@ -1029,7 +1029,19 @@ displays.
   Machine with that Machine's profile revision (from its state, else its
   placement). While the panel shows a live browser, is attached or awaits a
   starting open, its state reads carry that Machine, so a newer browser of
-  the same account on another Machine never replaces what it shows. A
+  the same account on another Machine never replaces what it shows. Each
+  read is tagged with its generation and pinned Machine; an answer that is
+  no longer the newest read, or whose pin no longer matches the panel (an
+  open mounted the viewer meanwhile), is discarded. While the viewer is
+  mounted, the shown state and every instance command come from the
+  viewer's Machine and instance: a read for another Machine or an older
+  incarnation never replaces it, and a newer instance on the viewer's
+  Machine ends the viewer. A confirmation (takeover, hibernate, restart,
+  reset) captures the Machine and instance, or the Machine and profile
+  revision for a reset, shown when it opens and sends exactly that; it
+  closes without acting once the panel shows another target, and a
+  confirmed takeover never attaches to a browser that replaced the confirmed
+  one. A
   `browser_instance_changed` refusal tells the owner to check the current
   state; nothing is retried against another browser.
 - **Outcomes.** Snapshot and reset answer HTTP 200 with the Machine's state;
