@@ -558,6 +558,21 @@ test("the record estimator is an upper bound over every permitted selection", ()
       };
       if (bytes(record) > estimate)
         throw new Error(`selection ${a},${b} exceeds the estimate: ${bytes(record)} > ${estimate}`);
+      // Every enumerated field at every valid value must stay within the estimate.
+      for (const state of [
+        "admitted",
+        "dispatched",
+        "delivered",
+        "uncertain",
+        "cancelled",
+        "failed",
+      ] as const) {
+        for (const cancelRequested of [true, false]) {
+          const variant = { ...record, state, cancel_requested: cancelRequested };
+          if (bytes(variant) > estimate)
+            throw new Error(`variant ${state}/${cancelRequested} exceeds the estimate`);
+        }
+      }
     }
   }
 });
@@ -576,6 +591,66 @@ test("a maximal snapshot around a maximal document fits the snapshot bound", () 
   const snapshot = worstCaseSnapshotBytes(document);
   if (snapshot > WIDGET_LIMITS.snapshotBytes)
     throw new Error(`maximal snapshot is ${snapshot} bytes`);
+  // Independently constructed snapshots with every boolean and state value
+  // must stay within the estimate.
+  const id = "x".repeat(WIDGET_LIMITS.idChars);
+  for (const closed of [true, false]) {
+    for (const retryable of [true, false]) {
+      for (const state of [
+        "admitted",
+        "dispatched",
+        "delivered",
+        "uncertain",
+        "cancelled",
+        "failed",
+      ] as const) {
+        const decided: Record<string, { interaction_id: string; revision: number }> = {};
+        for (let index = 0; index < WIDGET_LIMITS.groups; index += 1) {
+          decided[`g${String(index).padStart(WIDGET_LIMITS.idChars - 1, "0")}`] = {
+            interaction_id: id,
+            revision: WIDGET_LIMITS.maxCounter,
+          };
+        }
+        const constructed = {
+          widgetId: id,
+          handle: "w".padEnd(WIDGET_LIMITS.handleChars, "9"),
+          revision: WIDGET_LIMITS.maxCounter,
+          stateVersion: WIDGET_LIMITS.maxCounter,
+          transcriptGeneration: WIDGET_LIMITS.maxCounter,
+          indexVersion: WIDGET_LIMITS.maxCounter,
+          seq: WIDGET_LIMITS.maxCounter,
+          publishedAtMs: WIDGET_LIMITS.maxTimestampMs,
+          updatedAtMs: WIDGET_LIMITS.maxTimestampMs,
+          origin: { kind: "mcp", operation: "o".repeat(128) },
+          closed,
+          document,
+          documentSha256: "f".repeat(64),
+          recentInteractions: Array.from({ length: WIDGET_LIMITS.snapshotInteractions }, () => ({
+            interaction_id: id,
+            node_id: id,
+            group: id,
+            revision: WIDGET_LIMITS.maxCounter,
+            state,
+            at_ms: WIDGET_LIMITS.maxTimestampMs,
+            retry_of: id,
+            retried_by: id,
+            duplicate_of: id,
+          })),
+          outstanding: Array.from({ length: WIDGET_LIMITS.outstandingPerWidget }, () => ({
+            interaction_id: id,
+            node_id: id,
+            state,
+            ownership: "released",
+            retryable,
+          })),
+          decided,
+        };
+        if (bytes(constructed) > snapshot) {
+          throw new Error(`snapshot variant ${closed}/${retryable}/${state} exceeds the estimate`);
+        }
+      }
+    }
+  }
   if (Math.floor(WIDGET_LIMITS.lookupBytes / WIDGET_LIMITS.snapshotBytes) < 5)
     throw new Error("lookup page fits too few snapshots");
 });
