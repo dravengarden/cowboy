@@ -751,6 +751,24 @@ source mismatch detection, not watcher frontiers or automatic baselines.
   classifies `bufferLanguage` as passive, so no Machine release is needed; an
   older adapter rejects the unknown field and the original observation is
   kept. A file a Code pane also holds stays `stale`.
+
+  Source `680d83d46` passed the complete pinned gate. The exact static 1.39.0
+  adapter (`5c1e8c71…`) / unchanged 1.15.0 server (`b2171b6e…`) passed native
+  sync/navigation conformance, including a real exclusive-owner reload,
+  shared-owner refusal and unchanged source through the distributable
+  adapter's socket, and signed install/drain. Controller transaction
+  `1794127149954701623-680d83d46f3f` succeeded and committed with the running
+  executable matching the release. The signed package (composite
+  `sha256:ccfe12562186857759f130aef1aa667d47f40149c3ffa50c7b37f833a05d641d`)
+  was published with all three URLs matching their digests; operation
+  `hawk-zed-1-39-0-agent-refresh` completed with Machine receipt `applied`
+  (installation `installation-310bda29…`), 1.38.0 remaining the rollback
+  generation. A real MCP read of a temporary Go file returned
+  `document_current`/`no_baseline`; after a disk edit, one read (273 ms)
+  reloaded the agent-only mirror and returned the new SHA-256 with gopls
+  `document_current` and `comparison: complete` (introduced 1, persisting 1,
+  two ambiguous `UndeclaredName` candidates). The serving adapter's executable
+  hash matched 1.39.0. The fixture was removed after verifying its hash.
 - **Hunk overlap** orders diagnostics within the budget (`in_edit` before
   `elsewhere`); it never asserts that an edit caused a diagnostic and never
   replaces the baseline comparison.
