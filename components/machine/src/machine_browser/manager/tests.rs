@@ -6,10 +6,17 @@ use super::*;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 
 mod confirmation;
+mod fake_units;
+mod inventory;
+
+use fake_units::{FakeUnit, FakeUnits};
 
 struct Fixture {
     _temp: tempfile::TempDir,
     manager: Arc<BrowserManager>,
+    /// The synthetic systemd the manager lists, observes and stops units
+    /// through; the fixture's unit is live and never confirms its exit.
+    units: Arc<FakeUnits>,
     account: ProviderAccountId,
     /// The fake launcher's side of the control connection.
     launcher: tokio::net::UnixStream,
@@ -47,7 +54,19 @@ async fn fixture() -> Fixture {
         "x86_64".into(),
     )
     .unwrap();
-    let manager = BrowserManager::new(&state, Arc::new(store), None, || None).unwrap();
+    let units = Arc::new(FakeUnits::default());
+    units.set(
+        "cowboy-browser-inst-1",
+        FakeUnit::live("invocation").unstoppable(),
+    );
+    let manager = BrowserManager::build(
+        &state,
+        Arc::new(store),
+        None,
+        || None,
+        Arc::clone(&units) as Arc<dyn UnitControl>,
+    )
+    .unwrap();
     let account: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
     let revision = state_file::read_control(&manager.account_dir(&account).unwrap())
         .unwrap()
@@ -98,6 +117,7 @@ async fn fixture() -> Fixture {
     Fixture {
         _temp: temp,
         manager,
+        units,
         account,
         launcher: accepted.unwrap().0,
         cgroup,
@@ -245,10 +265,8 @@ async fn an_unconfirmed_unit_blocks_its_account_fence() {
     let fixture = fixture().await;
     assert!(!fixture.manager.fence_blocked(&fixture.account));
     fixture.manager.unconfirmed.lock().insert(
-        "cowboy-browser-inst-1".into(),
-        Unconfirmed {
-            account: Some(fixture.account.as_str().to_owned()),
-        },
+        1,
+        Unconfirmed::unit("cowboy-browser-inst-1", Some(&fixture.account)),
     );
     assert!(fixture.manager.fence_blocked(&fixture.account));
     let other: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
@@ -258,7 +276,7 @@ async fn an_unconfirmed_unit_blocks_its_account_fence() {
         .manager
         .unconfirmed
         .lock()
-        .insert("cowboy-browser-x".into(), Unconfirmed { account: None });
+        .insert(2, Unconfirmed::unit("cowboy-browser-x", None));
     assert!(fixture.manager.fence_blocked(&other));
 }
 
@@ -407,7 +425,7 @@ async fn an_uninstall_drain_holds_opens_and_refuses_unconfirmed_exits() {
         .manager
         .unconfirmed
         .lock()
-        .insert("cowboy-browser-x".into(), Unconfirmed { account: None });
+        .insert(1, Unconfirmed::unit("cowboy-browser-x", None));
     assert!(fixture.manager.drain_instances(&|| Ok(())).await.is_err());
     assert_eq!(draining(), 0);
 }

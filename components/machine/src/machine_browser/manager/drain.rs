@@ -96,9 +96,11 @@ impl BrowserManager {
     }
 
     /// Hibernate every instance once in-flight starts settled. `authority`
-    /// is re-checked before every stop: an uninstall whose execution lease
-    /// ended stops nothing more. Repeating a drain is harmless; it stops
-    /// only what still runs.
+    /// is re-checked before every stop, after the stop's own waits (a
+    /// running copy, the account lifecycle lock) and immediately before it
+    /// changes anything: an uninstall whose execution lease ended stops
+    /// nothing more. Repeating a drain is harmless; it stops only what still
+    /// runs.
     pub(super) async fn drain_instances(
         &self,
         authority: &DrainAuthority<'_>,
@@ -106,10 +108,12 @@ impl BrowserManager {
         authority()?;
         let hold = self.starts.drain().await;
         for instance in self.running() {
-            authority().context("uninstall authority ended during the browser drain")?;
+            let authorized =
+                || authority().context("uninstall authority ended during the browser drain");
+            authorized()?;
             let event = self
-                .stop_instance(&instance, Reason::Reclaim, true, None)
-                .await;
+                .stop_instance_if(&instance, Reason::Reclaim, true, None, authorized)
+                .await?;
             self.send_state(event);
         }
         let running = self.running().len();
@@ -118,6 +122,10 @@ impl BrowserManager {
             running == 0 && unconfirmed == 0,
             "{} browser instance(s) could not be confirmed stopped",
             running + unconfirmed
+        );
+        ensure!(
+            !self.inventory_unresolved(),
+            "the browser unit inventory is incomplete"
         );
         Ok(Box::new(hold))
     }

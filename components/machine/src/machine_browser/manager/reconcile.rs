@@ -2,100 +2,59 @@
 //! `Tab` instances, fenced operations and snapshot storage. A unit is
 //! forgotten only once its exit is confirmed; until then its record stays and
 //! its account's fence stays raised.
+//!
+//! The unit inventory is one explicit phase: an inventory-wide fence is raised
+//! before any record is read and lowered only once a pass has accounted for
+//! every live unit invocation (registered as an adopted instance, or retained
+//! until its confirmed exit). While it is raised every account's reset and
+//! revocation completion and every open are held, so a termination retry that
+//! finishes meanwhile cannot complete a fence of an account whose browser the
+//! inventory has not reached yet.
 
 use super::*;
 
-/// The `unconfirmed` entry that stands for an incomplete unit inventory:
-/// any unit may still run for any account until a listing succeeds.
-pub(super) const INVENTORY_UNKNOWN: &str = "<browser unit inventory>";
-
 impl BrowserManager {
+    /// Raise the inventory fence and run the first inventory pass; an
+    /// incomplete pass keeps the fence raised and is retried in full in the
+    /// background.
     pub(super) async fn reconcile_units(self: &Arc<Self>) -> Result<()> {
-        // Unreadable records leave every live unit unrecorded: it is stopped
-        // rather than adopted, which is always safe.
-        let records = state_file::read_instances(&self.state_dir).unwrap_or_else(|error| {
-            tracing::warn!(%error, "browser instance records unreadable; stopping every unit");
-            Vec::new()
-        });
-        let mut recorded = BTreeSet::new();
-        for record in records {
-            recorded.insert(record.unit.clone());
-            if let Err(error) = self.reconcile_record(record).await {
-                tracing::warn!(%error, "browser instance record reconciliation failed");
+        self.inventory_pending
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        match self.inventory_pass().await {
+            Ok(()) => {
+                self.inventory_pending
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
             }
-        }
-        let units = match unit::list_units().await {
-            Ok(units) => units,
             Err(error) => {
                 self.retry_inventory();
-                return Err(error.context("browser unit inventory unavailable; every fence held"));
-            }
-        };
-        self.stop_unrecorded(units, &recorded).await;
-        Ok(())
-    }
-
-    /// Stop every listed unit not in `known`. An unrecorded unit may have
-    /// run for any account, so an unconfirmed one holds every account's
-    /// fence.
-    async fn stop_unrecorded(&self, units: Vec<String>, known: &BTreeSet<String>) {
-        for unit_name in units {
-            if known.contains(&unit_name) {
-                continue;
-            }
-            tracing::warn!(unit = %unit_name, "stopping unrecorded browser unit");
-            let (cgroup, invocation) = thaw_browser_cgroup(&unit_name).await;
-            if !unit::terminate(&unit_name, cgroup.as_deref(), invocation.as_deref()).await {
-                self.retain_unconfirmed(Retained {
-                    unit: unit_name,
-                    cgroup_dir: cgroup,
-                    invocation_id: invocation,
-                    account: None,
-                    instance: None,
-                    record: None,
-                    capacity: Some(self.capacity.force_reserve()),
-                    outcome: StopOutcome::unreported(Reason::Failed),
-                });
+                Err(error.context("browser unit inventory incomplete; every fence held"))
             }
         }
     }
 
-    /// The unit listing failed: hold every account's fence and every open
-    /// (as an unrecorded unit would) and retry the listing until it succeeds,
-    /// then stop whatever no record, registered instance or retained unit
-    /// accounts for.
+    /// Keep the inventory fence raised and repeat full passes until one
+    /// accounts for every live invocation, then lower it and resume the
+    /// fenced operations it held.
     pub(super) fn retry_inventory(&self) {
-        self.unconfirmed
-            .lock()
-            .insert(INVENTORY_UNKNOWN.to_owned(), Unconfirmed { account: None });
+        self.inventory_pending
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let Some(manager) = self.this.upgrade() else {
             return;
         };
         tokio::spawn(async move {
-            let units = loop {
+            loop {
                 tokio::time::sleep(termination::RETRY_INTERVAL).await;
-                match unit::list_units().await {
-                    Ok(units) => break units,
+                match manager.inventory_pass().await {
+                    Ok(()) => break,
                     Err(error) => {
-                        tracing::error!(%error, "browser unit inventory still unavailable")
+                        tracing::error!(%error, "browser unit inventory still incomplete");
                     }
                 }
-            };
-            let mut known: BTreeSet<String> = manager.unconfirmed.lock().keys().cloned().collect();
-            known.extend(
-                manager
-                    .running()
-                    .iter()
-                    .map(|instance| instance.unit.clone()),
-            );
-            known.extend(
-                state_file::read_instances(&manager.state_dir)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|record| record.unit),
-            );
-            manager.stop_unrecorded(units, &known).await;
-            manager.unconfirmed.lock().remove(INVENTORY_UNKNOWN);
+            }
+            manager
+                .inventory_pending
+                .store(false, std::sync::atomic::Ordering::SeqCst);
             tracing::info!("browser unit inventory completed after retry");
             if let Err(error) = manager.reconcile_accounts().await {
                 tracing::warn!(%error, "browser fence resumption incomplete");
@@ -103,11 +62,134 @@ impl BrowserManager {
         });
     }
 
+    /// One full inventory pass. Every readable record the manager does not
+    /// already account for is reconciled (adopted, cleared once its
+    /// invocation is gone, or retained), then every listed unit's live
+    /// invocation is classified: one registered or retained by the manager
+    /// is accounted for, any other (unrecorded, or a replacement of a
+    /// recorded invocation) is stopped, or retained when its exit is
+    /// unconfirmed. `Ok` only when every live invocation is accounted for.
+    pub(super) async fn inventory_pass(self: &Arc<Self>) -> Result<()> {
+        // Unreadable records leave every live unit unrecorded: it is stopped
+        // rather than adopted, which is always safe.
+        let records = state_file::read_instances(&self.state_dir).unwrap_or_else(|error| {
+            tracing::warn!(%error, "browser instance records unreadable; stopping every unit");
+            Vec::new()
+        });
+        for record in records {
+            if self.record_accounted(&record) {
+                continue;
+            }
+            if let Err(error) = self.reconcile_record(record).await {
+                tracing::warn!(%error, "browser instance record reconciliation failed");
+            }
+        }
+        let units = self
+            .units
+            .list()
+            .await
+            .context("browser unit listing unavailable")?;
+        let mut unclassified = 0_usize;
+        for unit_name in units {
+            if !self.reconcile_listed(&unit_name).await {
+                unclassified += 1;
+            }
+        }
+        ensure!(
+            unclassified == 0,
+            "{unclassified} browser unit(s) could not be classified"
+        );
+        Ok(())
+    }
+
+    /// Whether a record's instance is registered or retained already (an
+    /// earlier, incomplete pass reached it).
+    fn record_accounted(&self, record: &InstanceRecord) -> bool {
+        self.running()
+            .iter()
+            .any(|instance| instance.instance_id == record.instance_id)
+            || self
+                .unconfirmed
+                .lock()
+                .values()
+                .any(|retained| retained.record.as_deref() == Some(&record.instance_id))
+    }
+
+    /// Classify one listed unit; `false` when its invocation cannot be told
+    /// apart from one the manager already accounts for.
+    async fn reconcile_listed(&self, unit_name: &str) -> bool {
+        let status = match self.units.show(unit_name).await {
+            Ok(status) => status,
+            Err(error) if self.unit_claimed(unit_name) => {
+                // A replacement cannot be told from the claimed invocation.
+                tracing::warn!(%error, unit = %unit_name, "claimed browser unit unobservable; inventory incomplete");
+                return false;
+            }
+            Err(error) => {
+                // Unclaimed: whatever runs under the name is stopped.
+                tracing::warn!(%error, unit = %unit_name, "stopping unobservable unrecorded browser unit");
+                self.stop_unrecorded(unit_name, None, None).await;
+                return true;
+            }
+        };
+        if status.gone() {
+            return true;
+        }
+        if status.invocation_id.is_empty() {
+            if self.unit_claimed(unit_name) {
+                tracing::warn!(unit = %unit_name, "claimed browser unit reports no invocation; inventory incomplete");
+                return false;
+            }
+            self.stop_unrecorded(unit_name, status.cgroup_dir(), None)
+                .await;
+            return true;
+        }
+        if self.invocation_accounted(unit_name, &status.invocation_id) {
+            return true;
+        }
+        tracing::warn!(unit = %unit_name, invocation = %status.invocation_id, "stopping unrecorded browser unit invocation");
+        let invocation = status.invocation_id.clone();
+        self.stop_unrecorded(unit_name, status.cgroup_dir(), Some(invocation))
+            .await;
+        true
+    }
+
+    /// Stop a unit invocation no record accounts for; one whose exit is
+    /// unconfirmed is retained with every account's fence held (it may have
+    /// run for any account).
+    async fn stop_unrecorded(
+        &self,
+        unit_name: &str,
+        cgroup: Option<PathBuf>,
+        invocation: Option<String>,
+    ) {
+        if let Some(cgroup) = &cgroup {
+            let _ = unit::set_frozen(&cgroup.join("browser"), false);
+        }
+        if self
+            .units
+            .terminate(unit_name, cgroup.as_deref(), invocation.as_deref())
+            .await
+        {
+            return;
+        }
+        self.retain_unconfirmed(Retained {
+            unit: unit_name.to_owned(),
+            cgroup_dir: cgroup,
+            invocation_id: invocation,
+            account: None,
+            instance: None,
+            record: None,
+            capacity: Some(self.capacity.force_reserve()),
+            outcome: StopOutcome::unreported(Reason::Failed),
+        });
+    }
+
     pub(super) async fn reconcile_record(self: &Arc<Self>, record: InstanceRecord) -> Result<()> {
         if record.boot_id != self.boot_id {
             return self.discard_record(&record, "other boot");
         }
-        let status = match unit::show(&record.unit).await {
+        let status = match self.units.show(&record.unit).await {
             Ok(status) => status,
             Err(error) => {
                 // Unobservable is not gone: the unit keeps its record,
@@ -117,12 +199,15 @@ impl BrowserManager {
                 return Err(error.context("surviving browser unit unobservable; retained"));
             }
         };
-        if status.gone() {
-            return self.discard_record(&record, "unit ended");
+        // The recorded invocation ended (a reused unit name runs another
+        // one only after it did). A replacement invocation is not this
+        // record's: the unit listing classifies it as unrecorded.
+        if unit::invocation_gone(&status, Some(&record.invocation_id)) {
+            return self.discard_record(&record, "unit ended or replaced");
         }
-        if !status.live() || status.invocation_id != record.invocation_id {
+        if !status.live() {
             return self
-                .stop_recorded(&record, "unit ended or replaced", Reason::Failed)
+                .stop_recorded(&record, "unit ending", Reason::Failed)
                 .await;
         }
         // A sign-in instance's login did not survive the restart.
@@ -163,9 +248,13 @@ impl BrowserManager {
         why: &str,
         reason: Reason,
     ) -> Result<()> {
-        let (cgroup, _) = thaw_browser_cgroup(&record.unit).await;
-        let cgroup = cgroup.or_else(|| Some(record.cgroup_dir.clone()));
-        if unit::terminate(&record.unit, cgroup.as_deref(), Some(&record.invocation_id)).await {
+        let _ = unit::set_frozen(&record.cgroup_dir.join("browser"), false);
+        let cgroup = Some(record.cgroup_dir.clone());
+        if self
+            .units
+            .terminate(&record.unit, cgroup.as_deref(), Some(&record.invocation_id))
+            .await
+        {
             return self.discard_record(record, why);
         }
         self.retain_recorded(record, cgroup, reason);
@@ -354,19 +443,4 @@ impl BrowserManager {
         }
         Ok(())
     }
-}
-
-/// Thaw a unit's `browser/` sub-cgroup before stopping it, so a stop never
-/// waits on frozen processes; returns the unit's cgroup and invocation when
-/// systemd reports them.
-async fn thaw_browser_cgroup(unit_name: &str) -> (Option<PathBuf>, Option<String>) {
-    let Ok(status) = unit::show(unit_name).await else {
-        return (None, None);
-    };
-    let cgroup = status.cgroup_dir();
-    if let Some(cgroup) = &cgroup {
-        let _ = unit::set_frozen(&cgroup.join("browser"), false);
-    }
-    let invocation = (!status.invocation_id.is_empty()).then_some(status.invocation_id);
-    (cgroup, invocation)
 }

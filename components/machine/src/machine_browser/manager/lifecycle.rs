@@ -35,12 +35,7 @@ impl BrowserManager {
         // An earlier unit of this account (or of an unknown one, or with the
         // same unit name) whose exit is unconfirmed may still run: a new
         // start could be killed by its termination retry or run beside it.
-        if self.fence_blocked(&account_id)
-            || self
-                .unconfirmed
-                .lock()
-                .contains_key(&unit::unit_name(&instance_id))
-        {
+        if self.fence_blocked(&account_id) || self.unit_retained(&unit::unit_name(&instance_id)) {
             return hibernated(Reason::Busy);
         }
         // Held until this open returns, so an uninstall drain waits for the
@@ -393,7 +388,9 @@ impl BrowserManager {
             Err(failure) => {
                 // Never retry with weaker isolation: the unit ends, and its
                 // slot is released only once that is confirmed.
-                if !unit::terminate(&unit_name, cgroup_dir.as_deref(), invocation_id.as_deref())
+                if !self
+                    .units
+                    .terminate(&unit_name, cgroup_dir.as_deref(), invocation_id.as_deref())
                     .await
                 {
                     self.retain_unconfirmed(Retained {
@@ -404,8 +401,18 @@ impl BrowserManager {
                         instance: None,
                         record: None,
                         capacity: Some(capacity),
-                        // The open answers the failure itself.
-                        outcome: StopOutcome::unreported(failure.reason),
+                        // The open answered the failure; the confirmed exit
+                        // reports the incarnation's terminal state, which
+                        // `Query` reports as stopping until then.
+                        outcome: StopOutcome {
+                            reason: failure.reason,
+                            unsaved: true,
+                            reference: Some(InstanceRef {
+                                account_id: account_id.clone(),
+                                instance_id: instance_id.to_owned(),
+                                incarnation,
+                            }),
+                        },
                     });
                 }
                 Err(failure)
@@ -456,6 +463,25 @@ impl BrowserManager {
         graceful: bool,
         request_id: Option<&str>,
     ) -> StateEvent {
+        let Ok(event) = self
+            .stop_instance_if(instance, reason, graceful, request_id, || {
+                Ok::<(), std::convert::Infallible>(())
+            })
+            .await;
+        event
+    }
+
+    /// [`Self::stop_instance`] that evaluates `authorized` after every wait
+    /// (copy, lifecycle lock), immediately before the stop changes anything;
+    /// a refusal stops nothing and is returned.
+    pub(super) async fn stop_instance_if<E>(
+        &self,
+        instance: &Arc<Instance>,
+        reason: Reason,
+        graceful: bool,
+        request_id: Option<&str>,
+        authorized: impl FnOnce() -> Result<(), E>,
+    ) -> Result<StateEvent, E> {
         let (reason, graceful) = if graceful {
             match self.await_copy_idle(instance).await {
                 Ok(()) => (reason, true),
@@ -466,8 +492,11 @@ impl BrowserManager {
         };
         let slot = self.slot(&instance.account_id);
         let _lifecycle = slot.lifecycle.lock().await;
-        self.stop_locked(instance, reason, graceful, request_id)
-            .await
+        // Nothing below awaits before the phase changes.
+        authorized()?;
+        Ok(self
+            .stop_locked(instance, reason, graceful, request_id)
+            .await)
     }
 
     /// Stop while the caller holds the account lifecycle lock. Any running
@@ -538,12 +567,14 @@ impl BrowserManager {
         if let Some(generation) = published {
             instance.live.lock().last_snapshot = Some((generation, unix_ms()));
         }
-        if !unit::terminate(
-            &instance.unit,
-            Some(&instance.cgroup_dir),
-            Some(&instance.invocation_id),
-        )
-        .await
+        if !self
+            .units
+            .terminate(
+                &instance.unit,
+                Some(&instance.cgroup_dir),
+                Some(&instance.invocation_id),
+            )
+            .await
         {
             tracing::error!(unit = %instance.unit, "browser unit exit unconfirmed; instance retained");
             self.retain_unconfirmed(Retained {
@@ -760,6 +791,16 @@ impl BrowserManager {
             .account_dir(account_id)
             .and_then(|dir| state_file::read_control(&dir))
             .unwrap_or_default();
+        // A browser that may still run is never reported absent.
+        if let Some(unresolved) = self.unresolved_state(account_id) {
+            return StateEvent {
+                request_id: Some(request_id.to_owned()),
+                snapshot_generation: record.current_generation,
+                snapshot_at_ms: record.current_generation_at_ms,
+                profile_revision: Some(record.profile_revision),
+                ..unresolved
+            };
+        }
         StateEvent {
             request_id: Some(request_id.to_owned()),
             instance: InstanceRef {

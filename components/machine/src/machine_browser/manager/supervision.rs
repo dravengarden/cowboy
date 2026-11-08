@@ -25,13 +25,14 @@ impl BrowserManager {
     /// One supervision tick; `true` once the instance is gone.
     pub(super) async fn supervise(self: &Arc<Self>, instance: &Arc<Instance>) -> bool {
         let now = Instant::now();
-        let (phase, lease_expired, grace_expired, scan_due, snapshot_due) = {
+        let (phase, expired_attachment, grace_expired, scan_due, snapshot_due) = {
             let live = instance.live.lock();
             (
                 live.phase,
                 live.attachment
                     .as_ref()
-                    .is_some_and(|attachment| attachment.lease_expires <= now),
+                    .filter(|attachment| attachment.lease_expires <= now)
+                    .map(|attachment| attachment.id.clone()),
                 live.detached_since
                     .is_some_and(|since| since + instance.settings.hibernate_after <= now),
                 live.last_scan + SOCKET_SCAN_INTERVAL <= now,
@@ -57,16 +58,9 @@ impl BrowserManager {
             self.send_state(event);
             return true;
         }
-        if lease_expired {
-            let mut live = instance.live.lock();
-            if let Some(attachment) = live.attachment.take()
-                && let Some(stream) = attachment.stream
-            {
-                stream.cancel();
-            }
-            live.phase = Phase::Detached;
-            live.detached_since = Some(now);
-            drop(live);
+        if let Some(attachment_id) = expired_attachment
+            && expire_attachment(instance, &attachment_id, now)
+        {
             self.send_state(instance.state(None));
         }
         if grace_expired && instance.live.lock().phase == Phase::Detached {
@@ -141,4 +135,28 @@ impl BrowserManager {
         }
         Ok(())
     }
+}
+
+/// Detach the attachment whose lease was seen expired, re-checked under the
+/// live lock: only an attached instance whose current attachment is still
+/// that one and still expired is detached. A stop that began meanwhile (and
+/// took the attachment), a renewal or a takeover leaves everything as it is,
+/// and `Stopping` never goes back to `Detached`. `true` when it detached.
+pub(super) fn expire_attachment(instance: &Instance, attachment_id: &str, now: Instant) -> bool {
+    let mut live = instance.live.lock();
+    let still_expired = live.phase == Phase::Attached
+        && live.attachment.as_ref().is_some_and(|attachment| {
+            attachment.id == attachment_id && attachment.lease_expires <= now
+        });
+    if !still_expired {
+        return false;
+    }
+    if let Some(attachment) = live.attachment.take()
+        && let Some(stream) = attachment.stream
+    {
+        stream.cancel();
+    }
+    live.phase = Phase::Detached;
+    live.detached_since = Some(now);
+    true
 }

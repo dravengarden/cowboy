@@ -190,8 +190,10 @@ unit's exit is confirmed; otherwise the uninstall step stays pending
 (`slot_fenced`) and nothing is unlinked. The drain runs only for a step the
 journal would execute at that moment (owner, admission, execution lease,
 installation CAS, slot fences and the exact installed target all hold), and
-the lease is re-checked before every individual stop, so a stale or orphaned
-uninstall stops no browser. It needs no journal entry of its own: it changes
+the lease is re-checked before every individual stop, after that stop's own
+waits (a running copy, the account lifecycle lock) and immediately before it
+changes the instance's phase, so a stale or orphaned uninstall stops no
+browser. An incomplete restart inventory also keeps the drain pending. It needs no journal entry of its own: it changes
 no Plugin state, a repeated drain stops only what still runs, and a
 hibernated browser reopens. Starts and drains share one gate: a drain refuses
 new starts at once and waits until every start already admitted (including
@@ -604,7 +606,11 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
 - `ready` is accepted only after [confinement verification](#confinement-verification).
 - `attached` requires a live attachment lease. `detached` starts the
   `browser.hibernate_after` grace (default 120 s); expiry hibernates
-  (graceful stop with snapshot). A sign-in-bound instance's deadline is
+  (graceful stop with snapshot). Lease expiry detaches only after
+  re-checking, under the instance's state lock, that the instance is still
+  `attached` with the same attachment still expired: a stop, renewal or
+  takeover that happened meanwhile wins, and `stopping` never returns to
+  `detached`. A sign-in-bound instance's deadline is
   `min(login expiry, browser.max_runtime)`.
 - Every mutation (`hibernate`, `resize`, `navigate`, `snapshot`, `stop`)
   carries the expected incarnation; attach, detach, resize and stream cleanup
@@ -721,15 +727,31 @@ login request, unit name and systemd invocation ID, boot ID, incarnation,
 deadline, `profile_revision`, and the launcher's reported pids, start times
 and namespace identities. At Machine start:
 
+- the unit inventory is one fenced phase: before any record is read an
+  inventory-wide fence holds every account's reset and revocation completion
+  and every open, and it is lowered only once a pass has accounted for every
+  live unit invocation, that is registered it as an adopted instance or
+  retained it until its exit is confirmed. A termination retry that confirms
+  an exit meanwhile therefore completes no fence of an account the inventory
+  has not reached;
 - a record whose boot ID differs from the current boot is cleared (the unit
   cannot have survived);
+- a record whose invocation is gone (the unit was collected, or its name now
+  runs another invocation) is cleared; a replacement invocation is not that
+  record's and is classified like any unrecorded one;
 - a record with a live unit of the same invocation ID is adopted as
   `detached` only after the installation, executables and
   `host_requirements` re-verify, the account is still enabled and unfenced,
   the deadline has not passed, a memory reservation is re-taken, and
   [confinement verification](#confinement-verification) passes against the
   recorded identities; otherwise the unit is stopped;
-- a live `cowboy-browser-*` unit without a record is stopped;
+- every listed `cowboy-browser-*` unit is observed for its live invocation;
+  one that no registered instance or retained termination is bound to
+  (unrecorded, or a replacement) is stopped, bound to that invocation, and
+  if its exit is unconfirmed it is retained with a capacity slot and every
+  account's fences held. An unobservable unit nobody claims is stopped
+  whatever runs under its name; one that is claimed leaves the inventory
+  incomplete;
 - every stop here uses the confirmed termination above: a record is cleared
   only once its unit's exit is confirmed, and a pending reset or revocation
   of its account (of every account, for an unrecorded unit) is completed only
@@ -737,9 +759,10 @@ and namespace identities. At Machine start:
 - a recorded unit that cannot be observed (`systemctl show` fails) is not
   treated as gone: it keeps its record, a capacity slot, its account's fences
   and admission held, and a retry bound to its recorded invocation stops it.
-  When the unit listing itself fails, every account's fences and opens stay
-  held until a retried listing succeeds and every unit no record, registered
-  instance or retained unit accounts for is stopped;
+  When the unit listing fails (or a claimed unit cannot be classified), the
+  inventory fence stays raised and the whole pass is retried: records that
+  became readable meanwhile are reconciled like any other, never exempted,
+  and only invocations the manager has registered or retained are skipped;
 - abandoned staging directories are reconciled against the staging ledger;
 - a sign-in-bound record is stopped at reconciliation, because the Machine's
   native logins do not survive a restart: a lost Controller connection
@@ -1241,9 +1264,20 @@ the text above:
   in that order (leases, attachments, resizes and navigation do not wait
   behind them), so an open and a revocation sent in that order apply in that
   order.
-- Browser-control `Query` for an account without a running instance, and
-  every `Reset`/`Revoke` answer, is a `hibernated` observation with
-  `instance_id: ""` and `incarnation: 0`.
+- Browser-control `Query` for an account with a registered instance answers
+  that instance's state (`stopping` while its exit is unconfirmed). Without
+  one it never reports absence while a browser may still run for the
+  account: a retained incarnation of the account whose exit is unconfirmed
+  (a restart-retained record, or a failed start) answers `stopping` with that
+  `InstanceRef` and the reason it is being stopped; a unit of unknown
+  ownership or incarnation whose exit is unconfirmed, or an incomplete
+  restart inventory, answers `stopping` with `instance_id: ""`,
+  `incarnation: 0` and reason `busy`. Both carry the account's profile
+  revision and current snapshot. A command naming the retained incarnation
+  answers the same `stopping` observation. Otherwise `Query`, and every
+  `Reset`/`Revoke` answer, is a `hibernated` observation with
+  `instance_id: ""` and `incarnation: 0`. A failed start whose exit is
+  confirmed later reports that incarnation's terminal `hibernated`.
 - `BrowserAttach` replaces any live attachment (takeover) and the old
   stream's close cannot touch the replacement because the attachment id
   differs; lease renewals are bounded to 30 s from now whatever the

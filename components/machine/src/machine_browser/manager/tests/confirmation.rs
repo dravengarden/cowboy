@@ -54,7 +54,7 @@ async fn reply_ok(launcher: &mut tokio::net::UnixStream, command: &serde_json::V
     launcher.write_all(reply.as_bytes()).await.unwrap();
 }
 
-fn uplink(
+pub(super) fn uplink(
     manager: &Arc<BrowserManager>,
 ) -> (
     UplinkGuard,
@@ -71,7 +71,9 @@ fn uplink(
     (guard, received, logins)
 }
 
-fn states(received: &mut tokio::sync::mpsc::UnboundedReceiver<MachineEvent>) -> Vec<StateEvent> {
+pub(super) fn states(
+    received: &mut tokio::sync::mpsc::UnboundedReceiver<MachineEvent>,
+) -> Vec<StateEvent> {
     let mut states = Vec::new();
     while let Ok(event) = received.try_recv() {
         if let MachineEvent::Browser {
@@ -129,7 +131,8 @@ async fn an_unobservable_survivor_keeps_its_record_capacity_fence_and_admission(
             .manager
             .unconfirmed
             .lock()
-            .contains_key(&record.unit)
+            .values()
+            .any(|retained| retained.unit == record.unit)
     );
     assert!(fixture.manager.fence_blocked(&fixture.account));
     assert_eq!(fixture.manager.capacity.used(), used + 1);
@@ -147,12 +150,11 @@ async fn an_unobservable_survivor_keeps_its_record_capacity_fence_and_admission(
     // Nor is an open admitted (the revocation fence aside).
     fixture.manager.unconfirmed.lock().clear();
     state_file::write_control(&account_dir, &ControlRecord::default()).unwrap();
-    fixture.manager.unconfirmed.lock().insert(
-        record.unit.clone(),
-        Unconfirmed {
-            account: Some(fixture.account.as_str().to_owned()),
-        },
-    );
+    fixture
+        .manager
+        .unconfirmed
+        .lock()
+        .insert(1, Unconfirmed::unit(&record.unit, Some(&fixture.account)));
     let (account, instance_id, purpose, viewport) = open_tab(&fixture, "inst-2");
     let refused = fixture
         .manager
@@ -178,10 +180,8 @@ async fn an_open_is_refused_while_a_unit_of_the_same_name_is_unconfirmed() {
     *fixture.manager.slot(&fixture.account).instance.lock() = None;
     let other: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
     fixture.manager.unconfirmed.lock().insert(
-        unit::unit_name("inst-9"),
-        Unconfirmed {
-            account: Some(other.as_str().to_owned()),
-        },
+        1,
+        Unconfirmed::unit(&unit::unit_name("inst-9"), Some(&other)),
     );
     assert!(!fixture.manager.fence_blocked(&fixture.account));
     let (account, instance_id, purpose, viewport) = open_tab(&fixture, "inst-9");
@@ -200,27 +200,28 @@ async fn a_confirmed_retry_reports_the_terminal_state_and_the_fence_completion()
     fixture.instance.live.lock().phase = Phase::Stopping;
     let account_dir = pend_revocation(&fixture, "op-7");
     fixture.manager.unconfirmed.lock().insert(
-        fixture.instance.unit.clone(),
-        Unconfirmed {
-            account: Some(fixture.account.as_str().to_owned()),
-        },
+        1,
+        Unconfirmed::unit(&fixture.instance.unit, Some(&fixture.account)),
     );
     fixture
         .manager
-        .release_retained(Retained {
-            unit: fixture.instance.unit.clone(),
-            cgroup_dir: Some(fixture.cgroup.clone()),
-            invocation_id: Some(fixture.instance.invocation_id.clone()),
-            account: Some(fixture.account.clone()),
-            instance: Some(Arc::clone(&fixture.instance)),
-            record: None,
-            capacity: None,
-            outcome: StopOutcome {
-                reason: Reason::Revoked,
-                unsaved: true,
-                reference: None,
+        .release_retained(
+            1,
+            Retained {
+                unit: fixture.instance.unit.clone(),
+                cgroup_dir: Some(fixture.cgroup.clone()),
+                invocation_id: Some(fixture.instance.invocation_id.clone()),
+                account: Some(fixture.account.clone()),
+                instance: Some(Arc::clone(&fixture.instance)),
+                record: None,
+                capacity: None,
+                outcome: StopOutcome {
+                    reason: Reason::Revoked,
+                    unsaved: true,
+                    reference: None,
+                },
             },
-        })
+        )
         .await;
     assert!(fixture.manager.unconfirmed.lock().is_empty());
     assert!(

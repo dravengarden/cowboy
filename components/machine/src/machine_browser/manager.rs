@@ -45,6 +45,7 @@ mod supervision;
 mod termination;
 #[cfg(test)]
 mod tests;
+mod units;
 
 use capacity::{CapacityGuard, CapacityLedger};
 use drain::StartGate;
@@ -52,6 +53,7 @@ use launch::{VersionOrder, compare_versions, launch_arguments};
 use lifecycle::complete_fenced;
 use snapshots::CopyJob;
 use termination::{Leftover, Retained, StopOutcome, Unconfirmed};
+use units::{Systemd, UnitControl};
 
 /// Longest an open waits for memory headroom; an owner is waiting.
 const MEMORY_WAIT: Duration = Duration::from_secs(15);
@@ -341,9 +343,18 @@ pub struct BrowserManager {
     leftover_staging: parking_lot::Mutex<Vec<Leftover>>,
     /// Machine-wide instance slots, reserved before any asynchronous start.
     capacity: Arc<CapacityLedger>,
-    /// Units whose exit could not be confirmed, by unit name. Their accounts'
-    /// reset and revocation fences stay raised until a retry confirms exit.
-    unconfirmed: parking_lot::Mutex<HashMap<String, Unconfirmed>>,
+    /// Unit invocations whose exit could not be confirmed, by retention
+    /// ticket (one unit name may stand for more than one invocation). Their
+    /// accounts' reset and revocation fences stay raised until a retry
+    /// confirms exit.
+    unconfirmed: parking_lot::Mutex<HashMap<u64, Unconfirmed>>,
+    next_retention: std::sync::atomic::AtomicU64,
+    /// Raised while the restart inventory has not accounted for every live
+    /// unit invocation: any unit may still run for any account, so every
+    /// account's fences and opens are held.
+    inventory_pending: std::sync::atomic::AtomicBool,
+    /// systemd, or a synthetic unit inventory in tests.
+    units: Arc<dyn UnitControl>,
     /// Unit starts against Plugin-uninstall drains: opens are refused while
     /// a drain holds it, and a drain waits for admitted starts to settle.
     starts: Arc<StartGate>,
@@ -366,6 +377,22 @@ impl BrowserManager {
         device_config: Option<crate::config::Handle>,
         headroom: fn() -> Option<u64>,
     ) -> Result<Arc<Self>> {
+        Self::build(
+            state_dir,
+            providers,
+            device_config,
+            headroom,
+            Arc::new(Systemd),
+        )
+    }
+
+    fn build(
+        state_dir: &Path,
+        providers: Arc<MachinePluginStore>,
+        device_config: Option<crate::config::Handle>,
+        headroom: fn() -> Option<u64>,
+        units: Arc<dyn UnitControl>,
+    ) -> Result<Arc<Self>> {
         let boot_id = crate::boot_identity::current()?
             .context("kernel boot identity unavailable")?
             .to_string();
@@ -384,6 +411,9 @@ impl BrowserManager {
             leftover_staging: parking_lot::Mutex::new(Vec::new()),
             capacity: Arc::new(CapacityLedger::default()),
             unconfirmed: parking_lot::Mutex::new(HashMap::new()),
+            next_retention: std::sync::atomic::AtomicU64::new(1),
+            inventory_pending: std::sync::atomic::AtomicBool::new(false),
+            units,
             starts: Arc::new(StartGate::default()),
             masks: sensitive_paths(state_dir, uid),
             receipts: parking_lot::Mutex::new(VecDeque::new()),
@@ -746,7 +776,8 @@ impl BrowserManager {
     }
 
     /// The running instance `reference` names, or the hibernated or
-    /// superseded observation to answer with.
+    /// superseded observation to answer with. An incarnation retained until
+    /// its exit is confirmed answers as `stopping`, never as absent.
     fn current(&self, reference: &InstanceRef) -> Result<Arc<Instance>, Box<StateEvent>> {
         let slot = self.slot(&reference.account_id);
         let instance = slot.instance.lock().clone();
@@ -760,13 +791,19 @@ impl BrowserManager {
             Some(instance) => Err(Box::new(
                 instance.state(None).with_reason(Reason::Superseded),
             )),
-            None => Err(Box::new(hibernated_event(
-                "",
-                &reference.account_id,
-                &reference.instance_id,
-                Reason::Superseded,
-                None,
-            ))),
+            None => Err(Box::new(
+                self.unresolved_state(&reference.account_id)
+                    .filter(|unresolved| unresolved.instance == *reference)
+                    .unwrap_or_else(|| {
+                        hibernated_event(
+                            "",
+                            &reference.account_id,
+                            &reference.instance_id,
+                            Reason::Superseded,
+                            None,
+                        )
+                    }),
+            )),
         }
     }
 
