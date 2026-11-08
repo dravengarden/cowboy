@@ -20,12 +20,15 @@ use crate::core::SessionMeta;
 
 mod acquire;
 mod baselines;
+mod codex_push;
 mod diagnostics;
 mod hover;
 mod post_edit;
 mod summary;
 
 pub(in crate::server) async fn maintain_holdings(state: std::sync::Arc<AppState>) {
+    // Codex post-edit delivery shares this Controller-lifetime task.
+    let push = tokio::spawn(codex_push::run(std::sync::Arc::clone(&state)));
     let mut shutdown = state.shutdown.clone();
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -35,6 +38,7 @@ pub(in crate::server) async fn maintain_holdings(state: std::sync::Arc<AppState>
             _ = tick.tick() => acquire::release_stale(&state).await,
         }
     }
+    push.abort();
 }
 
 /// Smaller than Review's bound: replies pass the 256 KiB broker limit.
