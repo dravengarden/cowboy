@@ -73,6 +73,9 @@ pub fn origin_from_cmid(cmid: Option<&str>) -> PromptOrigin {
         Some(value) if value.starts_with("cowboy-superagent:") => {
             PromptOrigin::cowboy("superagent")
         }
+        Some(value) if value.starts_with("cowboy-code-intelligence:") => {
+            PromptOrigin::cowboy("code_intelligence")
+        }
         Some(value)
             if value
                 .strip_prefix("agent-")
