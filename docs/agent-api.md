@@ -460,6 +460,9 @@ receipt means navigation state was saved, not that an online browser rendered
 the file. Observe `sync.read` for `mobile-review:<session>`; the client adopts
 the selection when viewing that session's worktree. A different bound code
 context retains its own tabs. Both Codex and Claude use this shared interface.
+An optional 1-based `line` (`"line": 42`) is recorded with the reveal as
+`reveal {path, line, revision}`; Desktop Review opens the file with its cursor
+on that line. Mobile shows the file as before.
 
 Worktree's **Changed documents** entry filters the existing Git comparison to
 Markdown paths, including renamed and deleted documents. Click a row for its

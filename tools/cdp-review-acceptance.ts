@@ -83,13 +83,19 @@ const viewport = (width: number, height: number) =>
 
 try {
   await viewport(1680, 960);
-  await until(`document.querySelector("[data-desktop-work-view='review']")`, "work-pane tabs");
+  // The first mount loads the whole fixture bundle; a busy host needs longer.
+  await until(`document.querySelector("[data-desktop-work-view='review']")`, "work-pane tabs", 30_000);
   // A reveal before Review was ever opened shows it with the named file.
   await sleep(300);
   await page.evaluate(`globalThis.__reviewFixture.sync("mobile-review:worktree", {mode:"files",tabs:[{path:"README.md",pinned:false}],active:"README.md",progress:{},positions:{},open_revision:1,reveal_revision:1}, 1000)`);
   await until(`document.querySelector("[data-desktop-review-workbench]")`, "a reveal shows the workbench");
   await until(`${activeTab} === "README.md"`, "the reveal opens the named file before Review had mounted");
   results.push("An agent's reveal before Review was opened shows Review with the named file");
+  // A reveal payload names the file and line; `active` (another file here,
+  // as after the phone browsed on) is not what the agent asked for.
+  await page.evaluate(`globalThis.__reviewFixture.sync("mobile-review:worktree", {mode:"files",tabs:[{path:"README.md",pinned:false},{path:"src/app.ts",pinned:false}],active:"src/app.ts",progress:{},positions:{},open_revision:2,reveal_revision:2,reveal:{path:"README.md",line:3,revision:2}}, 1001)`);
+  await until(`${activeTab} === "README.md" && document.querySelector("[data-review-cursor-line='3']")`, "the reveal payload's line is shown");
+  results.push("A reveal payload opens its own file at its line, not the later active path");
   const back = await page.evaluate<{ x: number; y: number }>(`(() => {
     const r = document.querySelector("[data-desktop-work-view='conversation']").getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
@@ -259,6 +265,9 @@ try {
   await keys("g", "d");
   await until(`${activeTab} === "src/app.ts"`, "gd opens the definition");
   await until(`${focusIn("review.document")} && document.querySelector("[data-desktop-review-editor]")?.dataset.reviewDocumentKey === "source\\0src/app.ts"`, "the definition's buffer is focused");
+  // The jump finishes asynchronously (tab, read, focus hand-off); a person
+  // never types the next motion within its few frames, a loaded host might.
+  await sleep(400);
   await keys("g", "T");
   await until(`${activeTab} === "README.md"`, "gT returns to the file");
   results.push("Language: the diagnostic is underlined and listed, K shows the hover, Escape returns, gd opens the definition");

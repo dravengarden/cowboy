@@ -752,7 +752,7 @@ fn command(name: &str) -> Option<(&'static str, &'static str)> {
             "session_id id text content fire_at_ms delivery",
         ),
         "drafts.unschedule" => ("unschedule_draft", "session_id id"),
-        "sessions.review_open" => ("sync", "session_id path"),
+        "sessions.review_open" => ("sync", "session_id path line"),
         "sync.apply" => ("sync", "state name args"),
         _ => return None,
     })
@@ -760,15 +760,23 @@ fn command(name: &str) -> Option<(&'static str, &'static str)> {
 
 fn command_value(name: &str, input: &Value, operation: &str) -> Result<Value, &'static str> {
     if name == "sessions.review_open" {
-        only_keys(input, &["session_id", "path"]).map_err(|_| "invalid_argument")?;
+        only_keys(input, &["session_id", "path", "line"]).map_err(|_| "invalid_argument")?;
         let session = arg_str(input, "session_id").map_err(|_| "invalid_argument")?;
         let path = input["path"].as_str().ok_or("invalid_argument")?;
+        let mut args = json!({"path": path, "reveal": true});
+        if let Some(line) = input.get("line") {
+            let line = line
+                .as_u64()
+                .filter(|line| (1..=u64::from(u32::MAX)).contains(line))
+                .ok_or("invalid_argument")?;
+            args["line"] = json!(line);
+        }
         return command_value(
             "sync.apply",
             &json!({
                 "state": format!("mobile-review:{session}"),
                 "name": "open",
-                "args": {"path": path, "reveal": true}
+                "args": args
             }),
             operation,
         );

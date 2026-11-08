@@ -417,9 +417,13 @@ the phone's tabs) and does not follow `active` in general. Its **reveal
 adapter** reads, at the moment `reveal_revision` increases, the `active` path
 and the state's context (`directory`, bindings) from the same patch, and opens
 that path in Desktop's local preview tab; a second reveal before the first is
-painted replaces it. That narrow read of `active` is the documented exception
-until writers add an optional `reveal {path, context, revision}` payload to
-`open` (readers first, D4), after which the adapter prefers it.
+painted replaces it. `open` with `reveal` now also records `reveal {path, line?, revision}`
+(`src/core/mobile_review.rs`), bound to the `reveal_revision` it set, and
+`sessions.review_open` takes an optional 1-based `line`. The adapter
+prefers that payload (`revealedFile`) and reads `active` only when the state
+comes from a writer that predates it; a line moves Desktop's cursor without
+taking focus. The context stays the Session's own worktree, so the payload
+names no context.
 
 Device-local layout state is UI preference and is not exposed through Cowboy
 MCP, the same documented exception as `cowboy:desktop-collapsed-panes`. No new
@@ -617,11 +621,10 @@ helpers. `readRemoteReview` moved from `RemoteReviewApp.tsx` into
 `mobile/` and Mobile never imports `desktop/review`. Three parts of the
 plan remain open: Desktop still renders `ReviewSettingsContent` from
 `mobile/review` inside its settings modal (a settings form, not a review
-surface; it moves when a second Desktop settings form needs it); the `open`
-reveal payload needs a change to the agent writers of `mobile-review:<sid>`
-and stays with the narrow `active` read; and the pane model keeps D0's
-three panes, with Review as the work pane's view rather than a
-`DesktopPane`.
+surface; it moves when a second Desktop settings form needs it), and the
+pane model keeps D0's three panes, with Review as the work pane's view
+rather than a `DesktopPane`. The `open` reveal payload landed after D4 (see
+"Reveal").
 
 D2b deviates from "Editor engine": it does not add `@codemirror/merge`. A
 patch-only split needs no diff algorithm, because the alignment comes from
