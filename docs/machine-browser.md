@@ -917,7 +917,7 @@ framing. Counters record bytes and frames.
 | Route | Effect |
 |---|---|
 | `GET /api/provider-accounts/{account}/browser` | state, geometry, scale, deadline, snapshot generation and time, Machine, reasons; `machine_id=` keeps the read on that Machine |
-| `POST /api/provider-accounts/{account}/browser/open` | open as `Tab` (no URL body); an optional `machine_id` opens only on that Machine: `browser_not_placed` without the account's placement there, `browser_machine_unavailable` when it is not connected or cannot run browsers (never another Machine) |
+| `POST /api/provider-accounts/{account}/browser/open` | open as `Tab` (no URL body); an optional `machine_id` opens only on that Machine: `browser_not_placed` unless the account has a placement or native credentials there (an account with neither anywhere, never signed in, may name its first Machine), `browser_machine_unavailable` when it is not connected or cannot run browsers (never another Machine) |
 | `POST /api/provider-accounts/{account}/logins/{request}/browser` | open bound to that sign-in; no URL in the body; owner and account checked against the login receipt |
 | `POST .../browser/navigate` | `Tab` instances only, owner-supplied `https` URL, bounded; names `machine_id` and `instance` |
 | `POST .../browser/resize` | bounded geometry; carries the attachment, `machine_id` and `instance` |

@@ -211,8 +211,10 @@ pub(in crate::server) fn named_instance(
 /// The Machine an account's browser runs on: its existing placement when it
 /// is connected and capable, else a Machine holding the account's native
 /// credential generation. Nothing else may host it. `pinned` names the only
-/// acceptable Machine (a restart reopens where it stopped): it needs the
-/// account's placement there and is never replaced by another Machine.
+/// acceptable Machine (a restart reopens where it stopped) and is never
+/// replaced by another Machine: it needs the account's placement or native
+/// credential generation there, except for an account with neither anywhere
+/// (never signed in, no browser), whose owner chooses its first Machine.
 async fn machine_for(
     state: &AppState,
     owner: &str,
@@ -225,7 +227,15 @@ async fn machine_for(
         .await
         .map_err(|_| "unavailable")?;
     if let Some(machine) = pinned {
-        placed_on(&placements, machine)?;
+        if placed_on(&placements, machine).is_err() {
+            let native = store
+                .native_generation_machines(owner, account_id)
+                .await
+                .map_err(|_| "unavailable")?;
+            if !first_machine_allowed(&placements, &native, machine) {
+                return Err("browser_not_placed");
+            }
+        }
         let capable = state
             .browsers
             .capability(machine)
@@ -280,6 +290,17 @@ fn connection_for(state: &AppState, machine_id: &str) -> Result<ConnectionToken,
         return Err("machine_unavailable");
     }
     Ok(connection)
+}
+
+/// Whether a pinned open may create the account's placement on `machine`:
+/// the Machine holds the account's native credentials, or the account has
+/// no placement and no native credentials anywhere yet.
+fn first_machine_allowed(
+    placements: &[crate::store::provider_accounts::browser_placements::Placement],
+    native: &[String],
+    machine: &str,
+) -> bool {
+    native.iter().any(|native| native == machine) || (placements.is_empty() && native.is_empty())
 }
 
 /// Stable per-account instance id: one browser per account and Machine.
@@ -1383,6 +1404,16 @@ mod tests {
         // A reset names its Machine; one without the account's profile is refused.
         assert_eq!(placed_on(&placements, "alpha"), Ok(()));
         assert_eq!(placed_on(&placements, "delta"), Err("browser_not_placed"));
+        // A pinned open may create a placement only where the account's
+        // credentials live, or anywhere for an account with neither yet.
+        assert!(!first_machine_allowed(&placements, &[], "delta"));
+        assert!(first_machine_allowed(
+            &placements,
+            &["delta".to_owned()],
+            "delta"
+        ));
+        assert!(first_machine_allowed(&[], &[], "delta"));
+        assert!(!first_machine_allowed(&[], &["gamma".to_owned()], "delta"));
         assert_eq!(error_status("browser_not_placed"), StatusCode::NOT_FOUND);
     }
 
