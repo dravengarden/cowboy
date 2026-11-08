@@ -2132,7 +2132,7 @@ struct CodeLanguageCapabilities {
     outline: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct CodeBufferVersion {
     replica_id: u32,

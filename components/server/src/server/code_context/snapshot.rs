@@ -12,7 +12,7 @@ pub(in crate::server) enum SourceState {
     Unavailable,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(in crate::server) struct BufferSnapshot {
     instance: String,
@@ -22,7 +22,7 @@ pub(in crate::server) struct BufferSnapshot {
     content: Content,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Content {
     sha256: String,
@@ -30,6 +30,10 @@ struct Content {
 }
 
 impl BufferSnapshot {
+    pub(in crate::server) fn matches_content(&self, sha256: &str) -> bool {
+        self.bounded() && self.content.sha256 == sha256
+    }
+
     pub(super) fn identifies(&self, instance: &str, buffer: &str, epoch: &str) -> bool {
         self.bounded()
             && self.instance == instance

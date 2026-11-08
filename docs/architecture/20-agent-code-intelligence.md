@@ -734,7 +734,8 @@ immediately.
 | `code.outline(path)`, `code.symbols(query, {limit?})` | syntax structure (tree-sitter tags; implemented, `heuristic`); language-engine refinement later |
 | `code.diagnostics(paths)` | implemented: diagnostics and counts with a per-file state from per-server analysis-frontier evidence (`document_current`, `stale`, otherwise `last_observed`), or `not_open`/`restricted`/`refused`/`unavailable`. A file no Code pane holds is acquired for the agent (`acquired: true`, see Acquisition) and waited on for up to 4 s. Baseline comparison comes with P2 |
 | `code.summary()` | implemented: passive counts over this session's tracked files (`coverage: agent_observed_files`), without acquisition or idle-time refresh. No usable observations means `counts: null`/`unobserved`; `partial` counts exclude unavailable files. Counts are never project totals, and Controller restart discards the tracked set until files are read again |
-| `code.definition/references/implementations(locator)`, `code.hover(locator)` | after owned-navigation acceptance only |
+| `code.hover({path,row,column,sha256})` | implemented over already-open Session buffers: zero-based UTF-16 position and exact content hash, original policy/route fences, identical bounded native snapshot before/after. Five-second read bound; at most 8 blocks / 2,000 text characters with explicit truncation; escaped envelopes over 12 KiB are refused. Never acquires a buffer or destination; stale locations are refused |
+| `code.definition/references/implementations(locator)` | after owned-navigation acceptance only |
 
 Locators are an exact UTF-16 position or an opaque versioned symbol handle
 bound to a content snapshot; `{path, line, symbol}` is accepted only when

@@ -125,6 +125,16 @@ pub(in crate::server) async fn observe_open_buffer(
     session: &crate::machine_control::SessionReadScope,
     path: &str,
 ) -> anyhow::Result<ZedAdapterResponse> {
+    query_open_buffer(state, session, path, Query::Language).await
+}
+
+/// Query only an existing buffer of the exact non-projecting Session root.
+pub(in crate::server) async fn query_open_buffer(
+    state: &crate::server::AppState,
+    session: &crate::machine_control::SessionReadScope,
+    path: &str,
+    query: Query,
+) -> anyhow::Result<ZedAdapterResponse> {
     let observed = session.session();
     let (worktree, path) = zed_language_target(observed.machine_id(), observed.cwd(), path)
         .filter(|(worktree, _)| {
@@ -137,7 +147,7 @@ pub(in crate::server) async fn observe_open_buffer(
     let request = serde_json::to_value(Request {
         worktree: &worktree,
         path: &path,
-        query: Query::Language,
+        query,
     })?;
     super::session::adapter_request(
         &state.hub,

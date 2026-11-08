@@ -20,6 +20,7 @@ use crate::core::SessionMeta;
 
 mod acquire;
 mod diagnostics;
+mod hover;
 mod summary;
 
 pub(in crate::server) async fn maintain_holdings(state: std::sync::Arc<AppState>) {
@@ -57,6 +58,7 @@ pub(super) async fn read(
             only_keys(args, &["paths"])?;
             Request::Diagnostics(paths(args)?)
         }
+        "code.hover" => Request::Hover(hover::Locator::parse(args)?),
         "code.summary" => {
             only_keys(args, &[])?;
             Request::Summary
@@ -85,6 +87,13 @@ pub(super) async fn read(
             format!("invalid_argument: {message}")
         }
     };
+    if let Request::Hover(locator) = request {
+        let value = hover::read(state, observed, locator).await;
+        if !session::current(&state.hub, &state.machine_control, observed) {
+            return Err("code_context_changed".into());
+        }
+        return Ok(value);
+    }
     if let Request::Diagnostics(paths) = request {
         super::super::managed_calls::touch_code_observation(state, observed).await;
         let value = diagnostics::read(state, observed, paths).await;
@@ -118,7 +127,9 @@ pub(super) async fn read(
                 .map_err(failed)?;
             json!({"state":"complete","precision":"heuristic","path":path,"symbols":symbols})
         }
-        Request::Diagnostics(_) | Request::Summary => unreachable!("answered above"),
+        Request::Diagnostics(_) | Request::Summary | Request::Hover(_) => {
+            unreachable!("answered above")
+        }
         Request::Symbols(query, limit) => {
             let found = workspace_symbols(state, &scope, cwd, query, limit)
                 .await
@@ -139,6 +150,7 @@ pub(super) async fn read(
 enum Request {
     Search(ContentSearchParams),
     Diagnostics(Vec<String>),
+    Hover(hover::Locator),
     Summary,
     Outline(String),
     Symbols(String, usize),

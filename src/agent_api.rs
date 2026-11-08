@@ -74,6 +74,7 @@ pub const READ_OPERATIONS: &[&str] = &[
     "code.outline",
     "code.symbols",
     "code.diagnostics",
+    "code.hover",
     "code.summary",
     "code.checks",
     "accounts.list",
@@ -564,7 +565,7 @@ export interface Cowboy {
 // page_required: pass {limit:50}; an unpaged list above 50 fails instead of truncating.
 "#,
 CODE_SDK: r#"
-type CodeP=Promise<unknown>;export interface Cowboy{code: {search(q:string,o?:object):CodeP;outline(path:string):CodeP;symbols(q:string,o?:object):CodeP;diagnostics(paths:string[]):CodeP;summary():CodeP;checks():CodeP}} // help("code")
+type CodeP=Promise<unknown>;export interface Cowboy{code: {search(q:string,o?:object):CodeP;outline(path:string):CodeP;symbols(q:string,o?:object):CodeP;diagnostics(paths:string[]):CodeP;hover(locator:object):CodeP;summary():CodeP;checks():CodeP}} // help("code")
 "#,
 PREFERENCES_READ_SDK: r#"
 export interface Cowboy { preferences: {
@@ -614,11 +615,22 @@ export interface Cowboy {
   };
 }
 export type CodeDiagnostic = {severity:"error"|"warning"|"information"|"hint";line:number;column:number;endLine:number;endColumn?:number;source:string|null;message:string;code?:string|null;provenance?:{instance:string;buffer:string;bufferEpoch:string;server:string;sourceKind:number;registration:string|null}|null};
+export type CodeBufferSnapshot = {instance:string;buffer:string;bufferEpoch:string;version:{replicaId:number;timestamp:number}[];content:{sha256:string;utf8Bytes:number}};
+export interface Cowboy {
+  code: { // existing buffers only; no acquisition. row/column: zero-based UTF-16, sha256 from bufferSnapshot.content
+    hover(locator:{path:string;row:number;column:number;sha256:string}):Promise<{
+      path:string;state:"complete"|"stale"|"not_open"|"restricted"|"unavailable";
+      precision?:"language_server";bufferSnapshot?:CodeBufferSnapshot;
+      contents?:{text:string;language:string|null;markdown:boolean}[];truncated?:boolean}>;
+  };
+}
+// Hover requires exact matching source and stable native buffer identity/version before and after the query.
+// A changed hash/version is stale, never silently relocated. Empty contents means no hover observed, not validated code.
 export interface Cowboy {
   code: { // language engine's diagnostics; opens files no Code pane holds (acquired:true) when Project language servers is on
     diagnostics(paths:string[]): Promise<{coverage:"open_buffers";files:({path:string;acquired?:true;
       state:"document_current"|"stale"|"last_observed";sourceState?:"matching"|"changed"|"unavailable";counts:Record<"error"|"warning"|"information"|"hint",number>;diagnostics:CodeDiagnostic[];truncated:boolean;
-      analysis?:{server:string;state:"document_current"|"stale"|"unknown";reason:string|null}[];bufferSnapshot?:{instance:string;buffer:string;bufferEpoch:string;version:{replicaId:number;timestamp:number}[];content:{sha256:string;utf8Bytes:number}}|null}
+      analysis?:{server:string;state:"document_current"|"stale"|"unknown";reason:string|null}[];bufferSnapshot?:CodeBufferSnapshot|null}
       | {path:string;state:"not_open"|"restricted"|"refused"|"unavailable"})[]}>; // 1..20 paths, <=50 per file, 1-based
   };
 }
