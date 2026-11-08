@@ -36,6 +36,7 @@ mod observations;
 mod review_defaults;
 mod session_reads;
 mod usage_reads;
+mod widgets;
 pub(super) use actions::{invoke, read_parent};
 /// Concurrent programs across the Controller; excess is refused, not queued.
 static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
@@ -537,6 +538,9 @@ impl SessionHost<'_> {
             | "configuration.read"
             | "usage.diagnostics" => observations::read(self.state, self.meta, op, args).await?,
             "api.help" => help(args)?,
+            "widgets.list" | "widgets.read" => {
+                widgets::read(self.state, self.meta, op, args).await?
+            }
             _ => return Ok(None),
         }))
     }

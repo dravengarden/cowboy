@@ -65,6 +65,8 @@ pub const READ_OPERATIONS: &[&str] = &[
     "configuration.read",
     "documents.list",
     "documents.read",
+    "widgets.list",
+    "widgets.read",
     "preferences.schema",
     "preferences.get",
     "superagent.catalog",
@@ -95,6 +97,8 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "code.check",
     "code.post_edit",
     "documents.mutate",
+    "widgets.publish",
+    "widgets.update",
     "preferences.update",
     "superagent.follow_up",
     "superagent.propose",
@@ -250,7 +254,8 @@ export type DraftChange =
   | {type:"write";body:string;attachments:unknown[]} // explicit replacement
   | {type:"rename";title:string} | {type:"move";parent_id:string|null}
   | {type:"trash"} | {type:"restore"};
-// cowboy_receipt({domain:"calls"|"documents"|"preferences"|"control",operation}) needs no sandbox.
+// widgets.publish / widgets.update: structured UI rows in this transcript; types: cowboy_read({help:"widgets"}).
+// cowboy_receipt({domain:"calls"|"documents"|"widgets"|"preferences"|"control",operation}) needs no sandbox.
 // Call admission returns call_id/state; use cowboy_read to wait/result. A running,
 // failed, interrupted or partial review is never evidence of a clean review.
 // Document receipt returns committed + document_id, or unknown. A replay never edits twice.
@@ -265,6 +270,7 @@ pub const HELP_TOPICS: &[&str] = &[
     "machines",
     "configuration",
     "documents",
+    "widgets",
     "preferences",
     "superagent",
     "code",
@@ -325,6 +331,9 @@ pub fn help(topic: &str) -> Option<serde_json::Value> {
         "code" => {
             Some(json!({"api":API_VERSION,"types":([SDK_HEADER,CODE_SDK,CODE_TYPES].concat())}))
         }
+        "widgets" => Some(
+            json!({"api":API_VERSION,"types":([SDK_HEADER,TEXT_TYPES,WIDGETS_SDK,WIDGETS_TYPES].concat())}),
+        ),
         "actions" | "review" | "receipts" => Some(
             // Account and preference actions live in their own topics; embedding
             // them here more than tripled the most common review discovery.
@@ -350,6 +359,7 @@ pub fn revision() -> &'static str {
             PREFERENCES_TYPES,
             control::SDK,
             SUPERAGENT_SDK,
+            WIDGETS_TYPES,
         ] {
             hash.update(source.as_bytes());
         }
@@ -387,15 +397,11 @@ export type TextRange = { offset: number; next: number | null; total: number };
 // text_window_required: pass {offset:0}; unwindowed large reads fail.
 "#,
 SESSION_VIEW: r#"
-export type SessionView = {
-  id: string; title: string; provider: string; provider_version:string;
-  provider_account_id: string;
-  status: "starting" | "running" | "busy" | "exited" | "crashed" | "interrupted" | string;
-  machine: string; workspace: string | null; cwd: string; paused: boolean;
+export type SessionView = {id:string;title:string;provider:string;provider_version:string;
+  provider_account_id:string;status:"starting"|"running"|"busy"|"exited"|"crashed"|"interrupted"|string;
+  machine:string;workspace:string|null;cwd:string;paused:boolean;
   execution:{machine:string;workspace:string;cwd:string}|null;
-  queued: number; drafts: number; events: number; background_tasks: number;
-  context: { used: number; size: number } | null;
-};
+  queued:number;drafts:number;events:number;background_tasks:number;context:{used:number;size:number}|null};
 export type SessionUsageView = {session_id:string;provider:string;account:string|null;context:SessionView["context"];usage:{used:number;size:number;observed_at_ms:number;raw:unknown}|null};
 // Session usage is context/cost reported by that exact Provider generation, not account quota.
 "#,
@@ -411,11 +417,9 @@ export type EventQuery = {
   chars?: number; // text/item default400/max4000
   kinds?: EventKind[]; // default excludes "lifecycle"
 };
-export type EventItem = {
-  seq: Seq; to: Seq; kind: EventKind; text?: string; truncated?: true;
-  tool?: { id: string; title?: string; status?: string; kind?: string };
-};
-export type EventPage = { items: EventItem[]; reached_start: boolean; more: boolean; next: {after:Seq}|{before:Seq}|null };
+export type EventItem = {seq:Seq;to:Seq;kind:EventKind;text?:string;truncated?:true;
+  tool?:{id:string;title?:string;status?:string;kind?:string}};
+export type EventPage = {items:EventItem[];reached_start:boolean;more:boolean;next:{after:Seq}|{before:Seq}|null};
 export type HistoryPage = EventPage & {source:"durable"|"memory"};
 export type EventDetailQuery = {path?:string;offset?:number;chars?:number;limit?:number;describe?:boolean;expected?:string};
 export type EventDetail = {seq:Seq;source:"durable"|"memory";revision:string;page:{path:string;kind:string;data:unknown;range:TextRange}};
@@ -551,11 +555,9 @@ export interface Cowboy {
 // This read does not wake a worker. Discover preferences for existing scoped writes; never edit raw settings keys.
 "#,
 DOCUMENTS_SDK: r#"
-export type DocumentMeta = {
-  id: string; kind: "document" | "folder"; title: string; parent_id: string | null;
-  revision: number; body_revision: number; metadata_revision: number; updated_at_ms: number; deleted: boolean;
-};
-export type Document = DocumentMeta & { body: string; attachments: number; range: TextRange };
+export type DocumentMeta = {id:string;kind:"document"|"folder";title:string;parent_id:string|null;
+  revision:number;body_revision:number;metadata_revision:number;updated_at_ms:number;deleted:boolean};
+export type Document = DocumentMeta & {body:string;attachments:number;range:TextRange};
 export interface Cowboy {
   documents: { // owner's Drafts; id order; last id resumes, default50/max200
     list(q?: {after?: string; limit?: number; include_deleted?: boolean}): Promise<DocumentMeta[]>;
@@ -564,6 +566,9 @@ export interface Cowboy {
 }
 // Text pages carry body_revision: restart if it changes between reads.
 // page_required: pass {limit:50}; an unpaged list above 50 fails instead of truncating.
+"#,
+WIDGETS_SDK: r#"
+export interface Cowboy{widgets: {list(q?:object):unknown;read(id:string,q?:TextWindow):unknown}}//help("widgets")
 "#,
 CODE_SDK: r#"
 type CodeP=Promise<unknown>;export interface Cowboy{code: {search(q:string,o?:object):CodeP;outline(path:string):CodeP;symbols(q:string,o?:object):CodeP;diagnostics(paths:string[]):CodeP;hover(locator:object):CodeP;summary():CodeP;checks():CodeP}} // help("code")
@@ -673,6 +678,45 @@ export interface Cowboy {
 // Gitignore-aware; hidden files, binaries, >2MiB files and symlinks are skipped. Smart case unless case_sensitive.
 // limit default100/max200, <=20 per file; line/column are 1-based (UTF-16 column). partial: a bound stopped the scan.
 "#;
+
+/// Write side and document model of `widgets`; only in `help("widgets")`.
+const WIDGETS_TYPES: &str = r##"
+// A widget is a cowboy.widget/1 JSON document drawn as one row of this transcript; a later write
+// replaces the row in place. Prose stays Markdown: publish only a table/status you will update,
+// an image, or a decision with fixed options. Inputs render inert (not yet clickable).
+// cowboy_execute({action:"widgets.publish",operation,arguments:{widget_id?:Id,document:WidgetDocument}})
+//   -> {status:"committed",widget_id,handle,revision:1,state_version} | error exists|widget_limit|invalid_widget{path,message}
+// cowboy_execute({action:"widgets.update",operation,arguments:{widget_id,expected_revision,change}})
+//   change: {type:"replace",document} | {type:"patch",ops:PatchOp[]} | {type:"close",summary?}
+//   -> committed{revision,state_version,closed} | error revision_conflict{current}|unknown_widget|closed|invalid_widget
+// PatchOp: {op:"set"|"append",path,value} | {op:"remove",path}; path = JSON Pointer "/summary" or "#<node id>/steps/1/state".
+// All ops apply or none; a missing path is invalid. Receipts: cowboy_receipt({domain:"widgets",operation}).
+// widgets.list -> {widgets:{widget_id,handle,title,summary,revision,state_version,closed,updated_at_ms}[],next}
+// widgets.read(id,{offset,chars}) -> that meta + document (compact JSON text window) + range.
+type Id = string; // [A-Za-z0-9_-]{1,64}
+type Tone = "neutral"|"info"|"success"|"warning"|"error"|"running";
+type Ref = {kind:"url";url:string /* https: only */}|{kind:"file";path:string;line?:number};
+type Cell = string|number|boolean|null|{v:string|number|boolean|null;tone?:Tone;to?:Ref};
+type WidgetDocument = {schema:"cowboy.widget/1";title:string;summary?:string;root:Node;
+  presentation?:{inline?:boolean;height?:"xs"|"sm"|"md"|"lg"}};
+type Node = {id?:Id;fallback?:string} & (
+  | {type:"stack";direction?:"column"|"row";gap?:"xs"|"sm"|"md"|"lg";children:Node[]}
+  | {type:"card";title?:string;subtitle?:string;status?:{label:string;tone?:Tone};children:Node[];actions?:Node[]}
+  | {type:"section";title:string;collapsed?:boolean;children:Node[]} | {type:"divider"}
+  | {type:"text";text:string /* inline Markdown */;variant?:"title"|"subtitle"|"body"|"caption";tone?:Tone}
+  | {type:"kv";items:{k:string;v:string|number|boolean|null;tone?:Tone}[]}
+  | {type:"list";items:{text:string;tone?:Tone;children?:unknown[]}[];ordered?:boolean}
+  | {type:"table";columns:(string|{label:string;align?:"start"|"center"|"end";
+      format?:"text"|"number"|"percent"|"bytes"|"duration"|"date"|"code"|"status"})[];rows:Cell[][];caption?:string}
+  | {type:"link";label:string;to:Ref} | {type:"file";path:string;line?:number;summary?:string}
+  | {type:"status";label:string;tone:Tone} | {type:"progress";value?:number /* 0..1 */;label?:string;tone?:Tone}
+  | {type:"steps";steps:{label:string;state:"pending"|"active"|"done"|"failed"|"skipped";detail?:string}[]}
+  | {type:"alert";severity:"info"|"success"|"warning"|"error";title?:string;text:string}
+  | {type:"image";alt:string;src:object} /* shows alt only for now */
+  | {type:"button";id:Id;label:string;action:{kind:"prompt"}} | {type:"choice";id:Id;label:string;options:{value:Id;label:string}[]});
+// Bounds: 24 KiB, 400 nodes, depth 12, table 200x12, 2000 cells/document; percent cells are 0..1, bytes integers,
+// duration seconds. Labels are one printable line; unknown node types are refused.
+"##;
 
 pub const STATUS_DESCRIPTION: &str = "This Cowboy session in one call: status, queue/draft counts, placement, and whether managed agent calls are enabled. No arguments.";
 

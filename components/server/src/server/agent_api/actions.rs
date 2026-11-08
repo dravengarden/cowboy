@@ -715,6 +715,9 @@ async fn execute(
                 .await,
             ))
         }
+        "widgets.publish" | "widgets.update" => {
+            super::widgets::execute(state, meta, action, args, operation).await
+        }
         "documents.mutate" => {
             let input = document_input(args)?;
             let owner = document_owner(&state.hub, state.store.as_ref(), meta).await?;
@@ -875,6 +878,7 @@ async fn receipt(
                 None => Ok(success(json!({"status":"unknown"}))),
             }
         }
+        "widgets" => super::widgets::receipt(state, meta, &input.operation).await,
         "documents" => {
             let owner = document_owner(&state.hub, state.store.as_ref(), meta).await?;
             let id = state
