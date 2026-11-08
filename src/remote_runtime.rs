@@ -1697,17 +1697,10 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
             }
             continue;
         }
-        // Stops still reach the Machine: an account revocation must fence a
-        // named session whose binding never became launchable.
         if command
             .session_id()
             .is_some_and(|id| !shared.hub.accepts_runtime_projection(id))
-            && !matches!(
-                command,
-                CoreCommand::StopSession { .. }
-                    | CoreCommand::Cancel { .. }
-                    | CoreCommand::QuiesceAccountSession { .. }
-            )
+            && !account_stop::delivered_without_projection(&command)
         {
             continue;
         }

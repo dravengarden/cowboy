@@ -180,6 +180,17 @@ impl RemoteRuntime {
     }
 }
 
+/// Stops still reach the Machine for a session the Hub cannot project: an
+/// account revocation must fence a named session that never became launchable.
+pub(super) fn delivered_without_projection(command: &CoreCommand) -> bool {
+    matches!(
+        command,
+        CoreCommand::StopSession { .. }
+            | CoreCommand::Cancel { .. }
+            | CoreCommand::QuiesceAccountSession { .. }
+    )
+}
+
 fn command_supported_for_readmission(
     session: &crate::runtime_wire::StartSession,
     binding: &crate::provider_account::PreparedBinding,

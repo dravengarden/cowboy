@@ -2356,20 +2356,8 @@ impl Broker {
             && match &session {
                 Some(session) => session.provider_account_id == account_id,
                 None => {
-                    self.args
-                        .provider_store
-                        .account_stop_matches(&session_id, &account_id)
-                        .unwrap_or(false)
-                        || self
-                            .args
-                            .provider_store
-                            .account_worker_exit(&session_id)
-                            .ok()
-                            .flatten()
-                            .is_some_and(|receipt| receipt.account == account_id)
-                        || self
-                            .fence_unlaunched_account_session(&session_id, &account_id)
-                            .await
+                    self.absent_account_session_matches(&session_id, &account_id)
+                        .await
                 }
             };
         if !scope_matches {
@@ -2916,47 +2904,6 @@ impl Broker {
         // An existing lifecycle fence belongs to the caller, not this helper.
         self.workers.lock().remove(session_id);
         true
-    }
-
-    /// A revocation can target a session whose worker never started here
-    /// (for example, one that failed before launch). Fence it and record that
-    /// absence only when no launch was journaled and nothing runs for it.
-    async fn fence_unlaunched_account_session(
-        &self,
-        session: &str,
-        account: &crate::provider_account::ProviderAccountId,
-    ) -> bool {
-        if self.launching.lock().contains(session)
-            || self.workers.lock().contains_key(session)
-            || self.direct_worker_pids.lock().contains_key(session)
-        {
-            return false;
-        }
-        if self.args.spawn_mode == SpawnMode::SystemdUser {
-            let unit = format!("{}.service", worker_unit_name(&self.args.socket, session));
-            match systemd_exit::unit_inactive(&unit).await {
-                Ok(true) => {}
-                Ok(false) => return false,
-                Err(error) => {
-                    tracing::warn!(session, %error, "unlaunched worker unit state unconfirmed");
-                    return false;
-                }
-            }
-        }
-        match self
-            .args
-            .provider_store
-            .fence_unlaunched_account_session(session, account)
-        {
-            Ok(()) => {
-                tracing::info!(session, "fenced named session that never launched here");
-                true
-            }
-            Err(error) => {
-                tracing::warn!(session, %error, "unlaunched session fence refused");
-                false
-            }
-        }
     }
 
     fn direct_account_stop_recoverable(
