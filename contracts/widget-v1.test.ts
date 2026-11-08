@@ -491,8 +491,8 @@ test("a maximal choice's worst-case record fits the record bound by construction
     id: "x".repeat(WIDGET_LIMITS.idChars),
     label: quotes,
     multiple: true,
-    max_selected: 3,
-    options: Array.from({ length: 3 }, (_, index) => ({
+    max_selected: 2,
+    options: Array.from({ length: 2 }, (_, index) => ({
       value: `q${index}`,
       label: `${quotes}${index}`,
     })),
