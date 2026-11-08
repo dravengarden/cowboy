@@ -151,6 +151,10 @@ struct Live {
     /// the next successful navigation and by a sign-in rebinding. A
     /// repeated sign-in open retries it only for that same login.
     failed_navigation: Option<(Purpose, String)>,
+    /// A navigation the launcher never answered may still land: the
+    /// instance serves no further navigation or sign-in rebinding and is
+    /// on its way to a stop. Set under the navigation lock.
+    navigation_unsettled: bool,
 }
 
 /// What an instance runs for and until when. A `Tab` instance reused for a
@@ -260,6 +264,7 @@ impl Instance {
                 last_scan: Instant::now(),
                 pending_navigation: None,
                 failed_navigation: None,
+                navigation_unsettled: false,
             }),
             copy: parking_lot::Mutex::new(None),
             copy_holds: std::sync::atomic::AtomicUsize::new(0),

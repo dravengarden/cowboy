@@ -351,12 +351,7 @@ impl BrowserManager {
     ) -> Result<(), Navigation> {
         let _copies = self.quiesce_copies(instance).await;
         let _navigation = instance.navigation.lock().await;
-        if instance.purpose() != *expected
-            || !matches!(
-                instance.live.lock().phase,
-                Phase::Detached | Phase::Attached
-            )
-        {
+        if instance.purpose() != *expected || !instance.live.lock().navigable() {
             return Err(Navigation::Superseded);
         }
         #[cfg(test)]
@@ -391,6 +386,9 @@ impl BrowserManager {
             // No reply: the helper may still navigate later, under whatever
             // binding the instance has by then. The instance is not reused.
             tracing::warn!(%error, instance = %instance.instance_id, "browser navigation outcome unknown");
+            // Fenced before the navigation lock is released, so a waiting
+            // rebinding sees it; the caller then stops the instance.
+            instance.live.lock().navigation_unsettled = true;
             return Err(Navigation::Violation(Reason::Failed));
         }
         let mut live = instance.live.lock();
@@ -419,6 +417,12 @@ pub(super) enum Navigation {
 }
 
 impl Live {
+    /// Whether the instance may navigate or be rebound to a sign-in: it is
+    /// running and no earlier navigation's effect is still unsettled.
+    pub(super) fn navigable(&self) -> bool {
+        matches!(self.phase, Phase::Detached | Phase::Attached) && !self.navigation_unsettled
+    }
+
     /// Whether `attachment_id` is the instance's current, unexpired
     /// attachment of an attached instance: the authority a viewer command
     /// such as resize acts under.

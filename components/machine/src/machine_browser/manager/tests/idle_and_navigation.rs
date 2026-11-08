@@ -33,6 +33,7 @@ fn an_idle_stop_requires_the_same_expired_detached_interval() {
         last_scan: now,
         pending_navigation: None,
         failed_navigation: None,
+        navigation_unsettled: false,
     };
     assert!(supervision::still_idle(
         &live(Phase::Detached, Some(since), false),
@@ -369,4 +370,75 @@ async fn an_unanswered_sign_in_navigation_stops_the_instance_instead_of_reusing_
     assert_ne!(answer.reason, None);
     assert_eq!(fixture.instance.live.lock().phase, Phase::Stopping);
     assert!(fixture.instance.live.lock().failed_navigation.is_none());
+}
+
+#[tokio::test]
+async fn a_rebinding_waiting_on_an_unanswered_navigation_is_refused() {
+    let mut fixture = fixture().await;
+    fixture
+        .manager
+        .trust_confinement
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let logins: LoginSessions = Arc::default();
+    let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+    let _uplink = fixture.manager.attach(
+        events,
+        reqwest::Url::parse("https://controller.invalid/").unwrap(),
+        &logins,
+    );
+    logins.lock().insert(
+        "login-b".into(),
+        login(&fixture.account, unix_ms() + 60_000),
+    );
+    // An owner navigation of the tab reaches the launcher, which never
+    // answers.
+    let reference = InstanceRef {
+        account_id: fixture.account.clone(),
+        instance_id: fixture.instance.instance_id.clone(),
+        incarnation: fixture.instance.incarnation,
+    };
+    let navigation = {
+        let manager = Arc::clone(&fixture.manager);
+        tokio::spawn(async move {
+            manager
+                .navigate("n1", &reference, "https://example.com/tab")
+                .await
+        })
+    };
+    let mut reader = tokio::io::BufReader::new(&mut fixture.launcher);
+    let mut line = String::new();
+    tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+        .await
+        .expect("the navigation did not reach the launcher")
+        .unwrap();
+    // Meanwhile a sign-in open for login B waits for the navigation lock.
+    let open = {
+        let manager = Arc::clone(&fixture.manager);
+        let account = fixture.account.clone();
+        tokio::spawn(async move {
+            manager
+                .open(
+                    "o1",
+                    account,
+                    "inst-1".into(),
+                    Purpose::SignIn {
+                        login_request_id: "login-b".into(),
+                    },
+                    Viewport {
+                        width: 1280,
+                        height: 800,
+                        scale: 1,
+                    },
+                )
+                .await
+        })
+    };
+    let refused = tokio::time::timeout(Duration::from_secs(10), open)
+        .await
+        .expect("the open did not finish")
+        .unwrap();
+    assert_ne!(refused.reason, None, "an unsettled instance was rebound");
+    assert_ne!(fixture.instance.login_request().as_deref(), Some("login-b"));
+    let _ = tokio::time::timeout(Duration::from_secs(10), navigation).await;
+    assert_eq!(fixture.instance.live.lock().phase, Phase::Stopping);
 }

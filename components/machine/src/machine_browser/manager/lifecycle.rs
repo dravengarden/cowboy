@@ -222,6 +222,13 @@ impl BrowserManager {
         // Rebinding is serialized with navigations: one requested under the
         // previous binding either landed before this or is superseded.
         let rebinding = existing.navigation.lock().await;
+        // Recheck after the wait: a navigation may have begun stopping the
+        // instance, or left an unsettled effect, while this open waited.
+        if !existing.live.lock().navigable() {
+            return existing
+                .state(Some(request_id.to_owned()))
+                .with_reason(Reason::Busy);
+        }
         let previous = existing.binding.lock().clone();
         let url = if existing.login_request().as_deref() == Some(login_request_id) {
             // Only a failure recorded under this same login is retried; a
