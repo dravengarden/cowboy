@@ -233,6 +233,23 @@ remove that fence. Legacy `default` accounts retain their existing migration
 boundary, and cleanup/Wipe remain possible. The fence is deleted only when the
 separate native-owned lifecycle passes acceptance; it is not that implementation.
 
+Owner-operated Machine browser, decided 2026-11-08: the owner may sign in
+through a real, unmodified browser that runs on the account's Machine beside
+the native login, operated from the owner's device through Cowboy's
+authenticated remote display ([machine-browser.md](machine-browser.md)). Cowboy
+relays the display and the owner's own input between the owner's device and
+that Machine-local browser while the owner is attached; it never reads,
+stores, forwards or persists page content, cookies, session tokens or typed
+input as data, and the Controller keeps no copy of the stream. The browser
+profile is Machine-local, account-owned state under the same directory and
+revocation lifecycle as the native credentials. The authorization code still
+reaches the native login only through the existing owner-submitted input
+path. This is the owner's remote-display path to their own browser on their
+own Machine, not third-party collection or intermediation of credentials;
+Anthropic's rule does not explicitly address it, and the owner accepted this
+reading. It is enabled per account, off by default, and is revisited if the
+vendor's terms change.
+
 Directory separation prevents accidental mixing but is not a security boundary
 against an agent with host filesystem access. Strong instance isolation needs
 enforced filesystem, process, inherited-descriptor and local-IPC boundaries,
