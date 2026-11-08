@@ -1,3 +1,5 @@
+import { reportCodeRead } from "./reviewReadTelemetry";
+
 export type CodeChangeStatus =
   | "modified"
   | "added"
@@ -273,17 +275,27 @@ async function codeFetch<T>(
   signal?: AbortSignal,
   cache?: RequestCache,
 ): Promise<T> {
-  const response = await fetch(url, {
-    ...(signal ? { signal } : {}),
-    ...(cache ? { cache } : {}),
-  });
+  const startedAt = performance.now();
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...(signal ? { signal } : {}),
+      ...(cache ? { cache } : {}),
+    });
+  } catch (error) {
+    if (!signal?.aborted) reportCodeRead(url, startedAt, "network");
+    throw error;
+  }
   if (!response.ok) {
+    reportCodeRead(url, startedAt, response.status);
     throw new CodeApiError(response.status);
   }
   const body = await response.json() as T & { apiVersion?: number };
   if (body.apiVersion !== 1) {
+    reportCodeRead(url, startedAt, "version");
     throw new Error("Unsupported Code API version");
   }
+  reportCodeRead(url, startedAt, 200);
   return body;
 }
 
