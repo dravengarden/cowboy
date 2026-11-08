@@ -5087,20 +5087,7 @@ impl SqliteStorage {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("DELETE SQLite events for {session_id}"))?;
-        sqlx::query("DELETE FROM transcript_anchors WHERE session_id = ?1")
-            .bind(session_id)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("DELETE SQLite transcript anchors for {session_id}"))?;
-        sqlx::query(
-            "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) VALUES (?1, ?2, 0, ?3)",
-        )
-        .bind(session_id)
-        .bind(crate::transcript_anchors::BACKFILL_SENTINEL)
-        .bind(now_ms())
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("INSERT SQLite anchor sentinel for {session_id}"))?;
+        super::session_widgets::clear_transcript_projections_sqlite(&mut tx, session_id).await?;
         sqlx::query("UPDATE managed_agent_calls SET dismissed = TRUE WHERE parent_session_id = ?1 AND json_extract(document, '$.created_at_ms') < ?2")
             .bind(session_id)
             .bind(calls_before_ms)

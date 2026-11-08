@@ -177,6 +177,8 @@ pub mod prompt_origin;
 pub mod provider;
 #[cfg(feature = "full")]
 pub mod transcript_anchors;
+#[cfg(feature = "full")]
+pub mod widgets;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::provider_account;
 #[cfg(any(feature = "full", feature = "machine-host"))]

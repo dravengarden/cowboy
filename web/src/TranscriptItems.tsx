@@ -1,3 +1,4 @@
+import { NoticeRow } from "./NoticeRow";
 import { ScrollEdges } from "@cowboy/app-shell";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { ProtectedImage } from "./ProtectedImage";
@@ -6,7 +7,7 @@ import { Box, Button, CircularProgress, IconButton, keyframes, Paper, Stack, Too
 import { alpha, type Theme } from "@mui/material/styles";
 import { DESKTOP_INSET_RADIUS } from "./desktop/DesktopEmbeddedControl";
 import { shortcutKey } from "./desktop/commands/imeShortcut";
-import { CheckCircleOutline, ChevronRight, CleaningServices, Close, CloudUpload, ErrorOutline, ExpandLess, ExpandMore, HelpOutlineRounded, InfoOutlined, Refresh, Undo, UnfoldLess, WarningAmberRounded } from "@mui/icons-material";
+import { CheckCircleOutline, ChevronRight, CleaningServices, Close, CloudUpload, ErrorOutline, ExpandLess, ExpandMore, HelpOutlineRounded, Refresh, Undo, UnfoldLess, WarningAmberRounded } from "@mui/icons-material";
 import { PendingCallRow, TaskRow } from "./TaskRow";
 import { callKey, subagentKey } from "./backgroundTasks";
 import { type BackgroundTasks } from "./useBackgroundTasks";
@@ -1243,30 +1244,8 @@ export const ItemView = memo(function ItemView({
         </Box>
       );
     }
-    case "notice": {
-      const color = item.severity === "error"
-        ? "error.main"
-        : item.severity === "warning"
-        ? "warning.main"
-        : "text.secondary";
-      return (
-        <Box role="status" sx={{ ...LIFECYCLE_ROW_SX, color }}>
-          {item.severity === "error"
-            ? <ErrorOutline sx={LIFECYCLE_ICON_SX} />
-            : item.severity === "warning"
-            ? <WarningAmberRounded sx={LIFECYCLE_ICON_SX} />
-            : <InfoOutlined sx={LIFECYCLE_ICON_SX} />}
-          <Box sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
-            <Box component="span" sx={{ fontWeight: 600 }}>{item.title}</Box>
-            {item.description && (
-              <Box sx={{ color: "text.secondary", whiteSpace: "pre-wrap" }}>
-                {item.description}
-              </Box>
-            )}
-          </Box>
-        </Box>
-      );
-    }
+    case "notice":
+      return <NoticeRow item={item} />;
   }
 });
 

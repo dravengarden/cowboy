@@ -278,10 +278,9 @@ function parseNode(value: unknown, path: string, depth: number, budget: Budget):
   return value as unknown as ParsedNode;
 }
 
-/** Parses the body of a ```cowboy-widget fence. */
-export function parseWidgetSource(raw: string): ParseResult {
+/** Validates an already parsed document (a published widget snapshot). */
+export function parseWidgetValue(value: unknown): ParseResult {
   try {
-    const value = strictJson(raw, WIDGET_LIMITS.documentBytes, WIDGET_LIMITS.jsonDepth);
     if (!isObject(value)) fail("document", "expected an object");
     if (value["schema"] !== WIDGET_SCHEMA) fail("schema", `expected ${WIDGET_SCHEMA}`);
     line(value["title"], "title", WIDGET_LIMITS.titleChars);
@@ -295,9 +294,17 @@ export function parseWidgetSource(raw: string): ParseResult {
     return { ok: true, document: { ...(value as unknown as WidgetDocument), root } };
   } catch (error) {
     if (error instanceof Invalid) return { ok: false, error: error.message };
-    if (error instanceof Error && error.message === "invalid_json") {
-      return { ok: false, error: "not valid JSON (or over the size or depth bound)" };
-    }
     throw error;
   }
+}
+
+/** Parses the body of a ```cowboy-widget fence. */
+export function parseWidgetSource(raw: string): ParseResult {
+  let value: unknown;
+  try {
+    value = strictJson(raw, WIDGET_LIMITS.documentBytes, WIDGET_LIMITS.jsonDepth);
+  } catch {
+    return { ok: false, error: "not valid JSON (or over the size or depth bound)" };
+  }
+  return parseWidgetValue(value);
 }

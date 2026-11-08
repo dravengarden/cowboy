@@ -295,6 +295,17 @@ impl Store {
         dispatch!(self, advance_plugin_install(intent, from, to, problem))
     }
 
+    /// Retire an operation that failed or was interrupted while still
+    /// `Prepared`. The Machine step is sent only after `Installing` commits,
+    /// so this evidence proves nothing was dispatched.
+    pub async fn abort_unsent_plugin_install(
+        &self,
+        intent: &InstallIntent,
+    ) -> Result<InstallOperation> {
+        intent.validate()?;
+        dispatch!(self, abort_unsent_plugin_install(intent))
+    }
+
     /// Startup only: no Machine commands or authentication writes. Each
     /// interrupted phase becomes fenced evidence, never a renewed grant.
     pub async fn recover_plugin_installs(&self, service: &str) -> Result<Vec<InstallOperation>> {
@@ -427,6 +438,36 @@ macro_rules! implement_journal {
                     .bind(now).execute(&mut *tx).await?;
                 ensure!(changed.rows_affected() == 1, "install phase changed");
                 tx.commit().await.context("committing install progress")
+            }
+
+            async fn abort_unsent_plugin_install(&self, intent: &InstallIntent) -> Result<InstallOperation> {
+                let mut tx = self.pool.begin().await?;
+                sqlx::query($durability).execute(&mut *tx).await?;
+                sqlx::query($lock).execute(&mut *tx).await?;
+                let record = sqlx::query_as::<_, Record>("SELECT * FROM plugin_install_operations WHERE operation_id = $1")
+                    .bind(&intent.operation_id).fetch_one(&mut *tx).await?;
+                let resolved = record.staging_resolved_at_ms.is_some();
+                let saved = record.decode()?;
+                ensure!(
+                    saved.intent == *intent && saved.phase == InstallPhase::NeedsAttention
+                        && saved.attention_from == Some(InstallPhase::Prepared)
+                        && saved.machine_receipt.is_none() && !resolved,
+                    "install was not retired before dispatch"
+                );
+                let aborted = InstallOperation {
+                    phase: InstallPhase::Aborted, problem: Some(InstallProblem::TransportNotSent),
+                    attention_from: None,
+                    updated_at_ms: chrono::Utc::now().timestamp_millis().max(saved.updated_at_ms), ..saved
+                };
+                aborted.validate()?;
+                let changed = sqlx::query(
+                    "UPDATE plugin_install_operations SET phase = 'aborted', problem = $2, attention_from = NULL, updated_at_ms = $3 \
+                     WHERE operation_id = $1 AND phase = 'needs_attention' AND attention_from = 'prepared'"
+                ).bind(&intent.operation_id).bind(serde_json::to_string(&InstallProblem::TransportNotSent)?)
+                    .bind(aborted.updated_at_ms).execute(&mut *tx).await?;
+                ensure!(changed.rows_affected() == 1, "install phase changed");
+                tx.commit().await.context("committing unsent install abort")?;
+                Ok(aborted)
             }
 
             async fn record_plugin_install_receipt(&self, intent: &InstallIntent, receipt: &InstallReceipt, document: &str) -> Result<InstallOperation> {

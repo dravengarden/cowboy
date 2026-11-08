@@ -336,3 +336,58 @@ async fn unknown_schema_or_corrupt_evidence_aborts_recovery_transaction() {
         );
     }
 }
+
+#[tokio::test]
+async fn only_an_install_retired_before_dispatch_can_be_aborted_without_the_machine() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    let mut unsent = fixture("unsent");
+    unsent.plugin_id = "unsent".into();
+    let mut dispatched = fixture("dispatched");
+    dispatched.plugin_id = "dispatched".into();
+    for (intent, phase) in [
+        (&unsent, InstallPhase::Prepared),
+        (&dispatched, InstallPhase::Installing),
+    ] {
+        store.begin_plugin_install(intent).await.unwrap();
+        advance(&store, intent, phase).await;
+        store
+            .advance_plugin_install(
+                intent,
+                phase,
+                InstallPhase::NeedsAttention,
+                Some(InstallProblem::StorageFailure),
+            )
+            .await
+            .unwrap();
+    }
+    assert!(
+        store
+            .abort_unsent_plugin_install(&dispatched)
+            .await
+            .is_err()
+    );
+    let aborted = store.abort_unsent_plugin_install(&unsent).await.unwrap();
+    assert_eq!(aborted.phase, InstallPhase::Aborted);
+    assert_eq!(aborted.problem, Some(InstallProblem::TransportNotSent));
+    assert_eq!(
+        store
+            .plugin_install_operation(&unsent.operation_id)
+            .await
+            .unwrap()
+            .map(|op| op.phase),
+        Some(InstallPhase::Aborted)
+    );
+    assert!(store.abort_unsent_plugin_install(&unsent).await.is_err());
+    let fenced = store.recover_plugin_installs("service-test").await.unwrap();
+    assert_eq!(
+        fenced
+            .iter()
+            .map(|op| op.intent.plugin_id.as_str())
+            .collect::<Vec<_>>(),
+        ["dispatched"]
+    );
+}

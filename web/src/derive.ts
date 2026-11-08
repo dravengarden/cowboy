@@ -3,6 +3,7 @@
 // latest plan, and unresolved permission requests. This is the multi-agent
 // transcript model — no code editor / file tree / git, just the conversation.
 
+import { placeNotice, widgetOfNotice, type WidgetRowData } from "./widgets/widgetRows";
 import { stripImageTokens } from "./attachments";
 import { crashDetailsMatch, prettifyCrashDetail, rpcErrorKind } from "./crashDetail";
 import { type Elicitation, elicitationOf } from "./elicitation";
@@ -120,7 +121,7 @@ export type RenderItem = { key: string } & (
   }
   // An advisory `notice` (`session.notices` client capability), e.g. a model
   // fallback or a rate-limit warning. Not part of the agent's reply.
-  | { kind: "notice"; severity: string; title: string; description: string | null }
+  | { kind: "notice"; severity: string; title: string; description: string | null; widget?: WidgetRowData | undefined }
   // First row of a fork: the agent natively continues this source conversation.
   | { kind: "forked"; sourceSessionId: string; sourceTitle: string; atMessage: boolean }
 );
@@ -211,8 +212,8 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
         a.summary === b.summary && a.error === b.error &&
         a.completedSeq === b.completedSeq;
     case "notice":
-      return b.kind === "notice" && a.severity === b.severity &&
-        a.title === b.title && a.description === b.description;
+      return b.kind === "notice" && a.severity === b.severity && a.title === b.title &&
+        a.description === b.description && a.widget?.stateVersion === b.widget?.stateVersion;
     case "forked":
       return b.kind === "forked" && a.sourceSessionId === b.sourceSessionId &&
         a.sourceTitle === b.sourceTitle && a.atMessage === b.atMessage;
@@ -641,16 +642,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
           case "notice": {
             const title = typeof u.title === "string" ? u.title.trim() : "";
             if (!title) break;
-            const description = typeof u["description"] === "string"
-              ? u["description"].trim()
-              : "";
-            items.push({
-              kind: "notice",
-              key: String(env.seq),
-              severity: typeof u["severity"] === "string" ? u["severity"] : "info",
-              title,
-              description: description || null,
-            });
+            const description = typeof u["description"] === "string" ? u["description"].trim() : "";
+            placeNotice(items, { kind: "notice", key: String(env.seq), title, description: description || null,
+              severity: typeof u["severity"] === "string" ? u["severity"] : "info", widget: widgetOfNotice(u) });
             cursor = null;
             break;
           }

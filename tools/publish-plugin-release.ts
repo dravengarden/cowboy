@@ -33,14 +33,19 @@ interface PluginRelease {
 const pluginId = process.argv.slice(2)[0] ?? "";
 const catalogRoot = process.argv.slice(2)[1] ?? "";
 const publicKeyPath = process.argv.slice(2)[2] ?? "";
+// Third-party publishers build outside this repository and pass their output.
+const outputRoot = process.argv.slice(2)[3];
 if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(pluginId)) {
   throw new Error("Plugin id must use lowercase kebab-case");
 }
 if (!catalogRoot.startsWith("/")) {
   throw new Error("Catalog root must be absolute");
 }
+if (outputRoot !== undefined && !outputRoot.startsWith("/")) {
+  throw new Error("Plugin output directory must be absolute");
+}
 
-const sourceRoot = `dist/plugins/${pluginId}`;
+const sourceRoot = outputRoot ?? `dist/plugins/${pluginId}`;
 const packagePath = `${sourceRoot}/${pluginId}.cowboy-plugin`;
 const releasePath = `${sourceRoot}/${pluginId}.release.json`;
 const release = JSON.parse(
