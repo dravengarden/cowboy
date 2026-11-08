@@ -58,6 +58,7 @@ primary phone/desktop product path.
 - [`widgets.md`](widgets.md) — Cowboy Widgets design (for review): agent-authored structured UI documents over Cowboy MCP, anchored transcript rows, a MUI renderer with Mobile/Desktop behaviour per component, actions that become user messages, measured token budget and phases
 - [`session-extension-plugins.md`](session-extension-plugins.md) — `memory_backend` (Matrix) and `call_profile` (Review) Plugin kinds, Machine-private memory bindings and staged delivery to sessions
 - [`mcp-bindings.md`](mcp-bindings.md) — Signed MCP installation, explicit session policy, epoch/CAS revocation and remaining relay integration
+- [`mcp-plugin-authoring.md`](mcp-plugin-authoring.md) — Third-party MCP Plugin procedure: contract, sources, build/sign/publish, install and session grant
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Parent-scoped cross-Provider Calls implementation, CLI and desktop/mobile lifecycle UI, with production acceptance boundaries
 - [`managed-native-capabilities.md`](managed-native-capabilities.md) — General Calls extension contract, on-demand image generation/editing, isolated native profiles, verified cross-machine artifacts and token costs
 - [`releases/native-calls-images-2026-10-18.md`](releases/native-calls-images-2026-10-18.md) — Native image Calls source, signed Plugin closure, exact-artifact validation, worker maintenance and recovery boundaries

@@ -451,8 +451,11 @@ fn reconciliation_accepts_only_an_exact_interrupted_machine_boundary() {
     };
     assert!(super::super::reconciliation_candidate(&operation));
 
+    // Retired before Installing committed: provably never dispatched.
     operation.attention_from = Some(InstallPhase::Prepared);
-    assert!(!super::super::reconciliation_candidate(&operation));
+    operation.problem = Some(InstallProblem::StorageFailure);
+    assert!(super::super::reconciliation_candidate(&operation));
+    operation.problem = Some(InstallProblem::UnknownMachineOutcome);
     operation.attention_from = Some(InstallPhase::Installing);
     operation.machine_receipt = Some(machine_receipt(
         &intent.machine_step().unwrap(),

@@ -511,7 +511,12 @@ async fn run_admitted(effects: LiveEffects, mut fence: InstallationFence) -> Res
         let mut progress = Progress::new(store, &effects.intent);
         match coordinate(&effects, &mut fence, &mut progress).await {
             Ok(outcome) => outcome,
-            Err(_) => {
+            Err(error) => {
+                tracing::warn!(
+                    operation = %effects.intent.operation_id,
+                    error = %format!("{error:#}"),
+                    "Plugin installation stopped before a terminal phase"
+                );
                 progress.storage_failure().await;
                 Outcome::NeedsReconcile
             }
@@ -547,6 +552,8 @@ fn reconciliation_candidate(operation: &InstallOperation) -> bool {
                         || receipt.outcome.retryable_staging_failure()
                 })
             }
+            // Interrupted before Installing committed: never dispatched.
+            Some(InstallPhase::Prepared) => operation.machine_receipt.is_none(),
             Some(InstallPhase::MachineAcknowledged) => matches!(
                 operation
                     .machine_receipt
@@ -724,13 +731,8 @@ pub(super) async fn confirmed_reconcile_install(
     {
         return StatusCode::FORBIDDEN.into_response();
     }
-    match store.plugin_install_staging_resolution(&operation_id).await {
-        Ok(Some(resolution)) => {
-            fence.finish(reconciled_fence_state(&before));
-            return staging_resolution_response(&before, &resolution);
-        }
-        Ok(None) => {}
-        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    if let Some(response) = resolve_without_machine(store, &before, &mut fence).await {
+        return response;
     }
     let receipt = if before.attention_from == Some(InstallPhase::MachineAcknowledged) {
         before
@@ -871,6 +873,38 @@ pub(super) async fn confirmed_reconcile_install(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     reconciliation_response(&completed)
+}
+
+/// Outcomes that need no Machine observation: an already audited staging
+/// resolution, or an operation retired before it was dispatched.
+async fn resolve_without_machine(
+    store: &Store,
+    before: &InstallOperation,
+    fence: &mut InstallationReconciliationFence,
+) -> Option<Response> {
+    match store
+        .plugin_install_staging_resolution(&before.intent.operation_id)
+        .await
+    {
+        Ok(Some(resolution)) => {
+            fence.finish(reconciled_fence_state(before));
+            return Some(staging_resolution_response(before, &resolution));
+        }
+        Ok(None) => {}
+        Err(_) => return Some(StatusCode::SERVICE_UNAVAILABLE.into_response()),
+    }
+    if before.attention_from != Some(InstallPhase::Prepared) {
+        return None;
+    }
+    Some(
+        match store.abort_unsent_plugin_install(&before.intent).await {
+            Ok(aborted) => {
+                fence.finish(reconciled_fence_state(before));
+                reconciliation_response(&aborted)
+            }
+            Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
+    )
 }
 
 /// Re-applies the Provider authentication envelope to the Machine after a
