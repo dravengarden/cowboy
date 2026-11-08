@@ -9,6 +9,7 @@ import {
 import { loadCodeDiff } from "../../mobile/review/diffCache";
 import type { ReviewSettings } from "../../mobile/review/reviewSettingsModel";
 import { type DesktopReviewDocument, reviewDocumentKey } from "./desktopReviewTabs";
+import { pullFile } from "./pullPatches";
 
 /** Pages read for one document before it is shown as cut short: 64 diff
  *  pages are the server's 16 MiB diff bound; 16 file windows are 4 MiB. */
@@ -31,6 +32,7 @@ export type ReviewDocumentLoad =
   | { readonly state: "error"; readonly message: string };
 
 function failure(reason: unknown): string {
+  if (reason instanceof PullFileGone) return reason.message;
   if (reason instanceof CodeApiError) {
     if (reason.status === 404) return "This file is not in the worktree any more.";
     if (reason.status === 409 || reason.status === 410) return "The file changed while it was read. Refreshing…";
@@ -114,6 +116,25 @@ async function readCommit(
   };
 }
 
+/** A PR file's patch from memory; a reload forgets it (pullPatches.ts). */
+function readPull(document: Extract<DesktopReviewDocument, { kind: "pr" }>): Promise<ReviewDocumentText> {
+  const ref = pullFile(document.repositoryId, document.number, document.revision, document.path);
+  if (!ref) return Promise.reject(new PullFileGone("Reopen this file from the Pull request tab (␣VG)."));
+  if (ref.file.patch === null) {
+    return Promise.reject(new PullFileGone("No text patch is available: a binary file, or a rename without text changes."));
+  }
+  return Promise.resolve({
+    key: reviewDocumentKey(document),
+    text: ref.file.patch,
+    revision: document.revision,
+    added: ref.file.additions,
+    removed: ref.file.deletions,
+    truncated: ref.file.limited,
+  });
+}
+
+class PullFileGone extends Error {}
+
 /** The text of the open Review document, reread when the worktree changes. */
 export function useReviewDocumentText(
   sessionId: string | undefined,
@@ -130,6 +151,8 @@ export function useReviewDocumentText(
     setLoad((previous) => previous?.key === key ? previous : { key, value: { state: "loading" } });
     const read = document.kind === "diff"
       ? readDiff(sessionId, document, settings, controller.signal)
+      : document.kind === "pr"
+      ? readPull(document)
       : document.kind === "commit"
       ? readCommit(sessionId, document, controller.signal)
       : readSource(sessionId, document, controller.signal);

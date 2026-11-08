@@ -8,7 +8,7 @@ import { desktopReviewShown } from "./desktopWorkView";
 import { REVIEW_NAVIGATOR_REGION } from "./DesktopReviewNavigator";
 
 export interface ReviewWorkbenchActions {
-  readonly showNavigator: (tab: "changes" | "files" | "history" | "worktrees") => void;
+  readonly showNavigator: (tab: "changes" | "files" | "history" | "worktrees" | "pulls") => void;
   readonly openContext: () => void;
   readonly openSettings: () => void;
   readonly openComparison: () => void;
@@ -74,6 +74,7 @@ export function useReviewWorkbenchCommands(actions: ReviewWorkbenchActions): voi
       leader("review.files", "VF", "Review: Files", () => a().showNavigator("files")),
       leader("review.history", "VH", "Review: History", () => a().showNavigator("history")),
       leader("review.worktrees", "VW", "Review: Worktrees", () => a().showNavigator("worktrees")),
+      leader("review.pulls", "VG", "Review: Pull request", () => a().showNavigator("pulls")),
       leader("review.context", "VX", "Review: Choose what to review…", () => a().openContext()),
       leader("review.settings", "V,", "Review: Settings", () => a().openSettings()),
       leader("review.compare", "VA", "Review: Compare against…", () => a().openComparison()),

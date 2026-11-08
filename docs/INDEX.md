@@ -55,6 +55,7 @@ primary phone/desktop product path.
 - [`call-capabilities.md`](call-capabilities.md) — Call capabilities: per-capability session policy, versioned identity and discovery state over the existing Calls lifecycle (background tasks Phase 4, first slice)
 - [`subagents.md`](subagents.md) — ACP subagents: child-session routing, one bounded live row per subagent, attributed permission requests, stopping one subagent (Machine protocol 40), not-reporting rows, per-model usage, ACP bridge forwarding and adapter behavior
 - [`tool-results.md`](tool-results.md) — Provider-independent MCP result retention, Cowboy/Matrix tool presentation and Desktop/Mobile inspection
+- [`widgets.md`](widgets.md) — Cowboy Widgets design (for review): agent-authored structured UI documents over Cowboy MCP, anchored transcript rows, a MUI renderer with Mobile/Desktop behaviour per component, actions that become user messages, measured token budget and phases
 - [`session-extension-plugins.md`](session-extension-plugins.md) — `memory_backend` (Matrix) and `call_profile` (Review) Plugin kinds, Machine-private memory bindings and staged delivery to sessions
 - [`mcp-bindings.md`](mcp-bindings.md) — Signed MCP installation, explicit session policy, epoch/CAS revocation and remaining relay integration
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Parent-scoped cross-Provider Calls implementation, CLI and desktop/mobile lifecycle UI, with production acceptance boundaries

@@ -648,7 +648,7 @@ composition-check:
     bun run typecheck
     bun test ./tools/generate-composition-contract_test.ts
     bun tools/generate-composition-contract.ts
-    bun test ./contracts/composition.test.ts ./contracts/composition-check.test.ts
+    bun test ./contracts/composition.test.ts ./contracts/composition-check.test.ts ./contracts/widget-v1.test.ts
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --lib composition::
     cargo build --locked --bin cowboy
     bun tools/composition-link-conformance.ts "$(realpath target/debug/cowboy)"

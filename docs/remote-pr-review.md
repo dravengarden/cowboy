@@ -1,6 +1,8 @@
 # Session remote pull request review
 
-Mobile Review has a Remote PR source alongside the local worktree. It opens a
+Mobile Review has a Remote PR source alongside the local worktree; Desktop
+Review offers the same binding, files and viewed marks in its Pull request
+tab ([desktop-code-review.md](desktop-code-review.md)). It opens a
 list of open PRs authored by the Machine’s current GitHub CLI user across
 repositories. Select a row to associate and review it. Bottom actions provide
 Back, filters, refresh and a secondary URL/number entry. Filters select authored,

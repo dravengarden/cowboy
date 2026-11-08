@@ -209,6 +209,23 @@ try {
   await until(`document.activeElement?.dataset.reviewCommit`, "H returns to the commits");
   results.push("History: ␣VH, L opens a commit's files, Enter opens its diff as a commit tab, H returns");
 
+  await keys(" ", "v", "g");
+  await until(`document.querySelector("[data-review-navigator-tab='pulls'][aria-selected='true']")`, "␣VG shows Pull request");
+  await until(`document.querySelector("[data-review-pull='dravengarden/cowboy#42']")`, "the picker lists the account's pull requests");
+  await page.evaluate(`document.querySelector("[data-review-pull='dravengarden/cowboy#42']").focus()`);
+  await key("Enter");
+  await until(`document.querySelector("[data-review-pull-file='web/src/pr-one.ts']")`, "Enter binds the PR and lists its files");
+  await page.evaluate(`document.querySelector("[data-review-pull-file='web/src/pr-one.ts']").focus()`);
+  await key("l");
+  await until(`document.querySelector("[data-review-file-tab-kind='pr'][aria-selected='true']")`, "L opens the PR file as a PR tab");
+  await until(`document.querySelector("[data-desktop-review-editor]")?.textContent.includes("pull one")`, "the PR patch is shown");
+  await keys("]", "f");
+  await until(`document.querySelector("[data-desktop-review-editor]")?.textContent.includes("pull two")`, "]f moves to the PR's next file");
+  await keys(" ", "v", "m");
+  await until(`document.querySelector("[data-review-pull-facts]")?.textContent.includes("1/2 viewed")`, "␣VM marks the PR file viewed");
+  await shot("7-pull-request");
+  results.push("Pull request: ␣VG lists the account's PRs; Enter binds #42, L opens a file, ]f the next, ␣VM marks it viewed");
+
   await keys(" ", "v", "w");
   await until(`document.querySelector("[data-review-worktree]")`, "␣VW lists the worktrees");
   await keys(" ", "v", "x");

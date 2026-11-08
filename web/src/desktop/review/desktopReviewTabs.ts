@@ -14,7 +14,16 @@ export type DesktopReviewDocument =
   }
   | { readonly kind: "source"; readonly path: string }
   /** One file of a commit, from History: its diff against the first parent. */
-  | { readonly kind: "commit"; readonly oid: string; readonly path: string };
+  | { readonly kind: "commit"; readonly oid: string; readonly path: string }
+  /** One file of a remote pull request at one revision. Its patch lives only
+   *  in memory (pullPatches.ts), so these tabs are not restored on reload. */
+  | {
+    readonly kind: "pr";
+    readonly repositoryId: string;
+    readonly number: string;
+    readonly revision: string;
+    readonly path: string;
+  };
 
 export interface DesktopReviewTab {
   readonly document: DesktopReviewDocument;
@@ -32,6 +41,9 @@ export const DESKTOP_REVIEW_TAB_LIMIT = 24;
 export function reviewDocumentKey(document: DesktopReviewDocument): string {
   if (document.kind === "diff") return `diff\0${document.comparison ?? document.scope}\0${document.path}`;
   if (document.kind === "commit") return `commit\0${document.oid}\0${document.path}`;
+  if (document.kind === "pr") {
+    return `pr\0${document.repositoryId}\0${document.number}\0${document.revision}\0${document.path}`;
+  }
   return `source\0${document.path}`;
 }
 

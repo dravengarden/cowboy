@@ -881,7 +881,23 @@ uniquely resolvable, otherwise candidates or `stale/ambiguous`.
   meanwhile join the next one. The row is a Cowboy-origin prompt
   (`code_intelligence`, captioned "Code intelligence after an edit") carrying
   the same escaped JSON as the Claude row. Shell-made changes, subagents and
-  delivery identity states are not covered.
+  delivery identity states are not covered. Workers without next-checkpoint
+  controls refuse that mode before any effect; delivery then uses ordinary
+  current-turn steering with the same turn target.
+
+  Hawk's Controller runs this from `1b9114700` (transaction
+  `1794139112893649931-1b911470086f`, `succeeded` / `committed`; Web
+  `bc59fbd81`). In a new Codex 3.5.21 session, the first run showed the
+  pipeline reaching steering but `sleep 8` ended the turn first; the second
+  was refused as "next checkpoint is unavailable in this running worker",
+  which led to the fallback. The third created a Go file, introduced an
+  undefined name and ran `sleep 25`: the Controller logged
+  `cowboy.code.post_edit_push` `nothing_to_deliver` for the clean file and
+  `injected` after the edit. The row (`introduced: 1`,
+  `undefined: thirdMissing`) entered the same turn before the shell call, and
+  the model quoted it. Delivery is therefore bounded by the edit's turn:
+  a turn that ends within the observation (a few seconds, longer for a cold
+  file) receives nothing. The session was trashed.
 - **Coverage.** Push triggers on any tool completion with a watcher-observed
   change set since the tool started (shell, formatters), not on
   `apply_patch`/Edit only.
