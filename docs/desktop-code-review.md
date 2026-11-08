@@ -1,6 +1,7 @@
 # Desktop Code Review
 
-**Status: design proposal r2 (2026-11-08), not implemented.** r2 folds in a
+**Status: design proposal r3 (2026-11-08), not implemented.** r3 records the
+owner's answers to the r2 open questions. r2 folds in a
 Codex Astra Max design review of r1 (managed call
 `call-53884a467577cfb02c34574f`: verdict *needs-attention*, five high and ten
 medium findings, none rejected; see [Review record](#review-record)). Normative
@@ -135,7 +136,10 @@ projection, not a transient layer. Consequences:
   header tab, or the palette's *Return to the Conversation*.
 - **`Esc` never leaves Review.** It unwinds Visual mode, a pending chord, the
   hover popover, the filter field or an inset list, and then does nothing, as
-  in a Vim buffer. The earlier Desktop behaviour where Review's Agent action
+  in a Vim buffer. `Esc` is pressed constantly while reading code (leaving
+  Visual, closing hover, cancelling `/`), so a product-mode exit on it would
+  be an easy slip; leaving is always a deliberate `␣C` (owner decision). The
+  earlier Desktop behaviour where Review's Agent action
   and Send to Agent return to the Conversation is dropped: the Prompt is
   already beside the code.
 - **Agent-driven reveal** (`open {path, reveal}` on the synced state, used by
@@ -222,7 +226,7 @@ status line.
 | `gO` | Outline in the Inspector (Vim's `gO`) |
 | `Ctrl-O` / `Ctrl-I` | Jump list back / forward, across files |
 | `V` `v` | Visual selection; a click on a line number selects the line and a Shift-click extends it, as on Mobile |
-| `Enter` | Send the selection (or cursor line) to the Prompt: appends the location plus the text to the Composer and focuses it in Insert at the end. A folded Prompt is restored first (FOCUS.md: an explicit jump restores). Nothing is sent to the agent until `Mod+Enter` |
+| `Enter` | Send the selection (or cursor line) to the Prompt: appends the location plus the text to the Composer and focuses it in Insert at the end. A folded Prompt is unfolded first (FOCUS.md: an explicit jump restores), even when that moves Review to a narrower width tier; Review keeps its cursor and file, and `␣W]` folds the Prompt again after sending. Nothing is sent to the agent until `Mod+Enter`. `␣VS` never unfolds |
 | `Esc` | Leave Visual / cancel a pending key / close the hover; otherwise nothing |
 
 In a diff, a location names file lines, new side first, not diff rows
@@ -259,6 +263,18 @@ Changes keeps the complete queue for `]f`/`[f` and mounts rows in windows, as
 Mobile does. The Changes header shows the comparison button (`␣VA`), unread
 toggle (`␣VU`), fetch time and counts; a file row shows status, path shortened
 from the left, `+n −m` and its reviewed mark.
+
+A file row also carries a **problem badge** in its trailing slot: the count of
+that file's mapped problems (AI findings at `exact`/`heuristic`, check
+findings on verifiable lines, language errors), coloured by the highest
+severity (error/critical-high in `error`, medium in `warning`, low in `info`
+theme tokens), with an accessible label such as "2 findings, highest high".
+`unmapped` and stale findings are not counted, so the badge never points at a
+line the Document cannot show; they stay in the Inspector's Problems with
+their state. Rows without problems reserve no space. The badge is a read-out,
+not a control, so it has no slot; `]d` inside the file and the Problems list
+are the actions. This lets a reviewer choose the next file by risk without
+opening each one.
 
 ### Inspector: what is beside the code
 
@@ -542,7 +558,7 @@ together" reads "Prompt and the work pane".
   split toggle; no long task regression against the baseline.
 - Mobile 390 px regression: no Desktop review chunk loaded.
 
-## Decisions taken in r2 (owner may revise)
+## Decisions (r2, with r3 owner answers)
 
 1. Review is a persistent view of the work pane, selected by `␣V`/`␣C` and
    header tabs; `Esc` never leaves it.
@@ -569,16 +585,17 @@ together" reads "Prompt and the work pane".
 11. The approval dock belongs to the work pane, visible under either view.
 12. Explain opens the fork beside a kept source tab and reuses a live fork's
     tab.
+13. `Enter` unfolds a folded Prompt; Navigator file rows carry a problem
+    badge of mapped problems only (r3).
 
-## Open questions
+## Owner decisions on the r2 open questions
 
-- Should `Esc` in Document Normal mode return to the Conversation, as FOCUS.md's
-  "then product mode" clause could be read, or stay inert as in Vim (r2)? The
-  review did not object to inert.
-- Should `Enter` restore a folded Prompt (FOCUS.md's jump rule) or only append
-  and announce, given that restoring shrinks Review to Compact at 1440 px?
-- Should AI findings also mark the Navigator rows (count badge) or stay in the
-  Inspector and gutter?
+1. `Esc` in the Document never leaves Review: it is too frequent while
+   reading code to double as a product-mode exit. Leaving is `␣C`.
+2. `Enter` unfolds a folded Prompt before appending, accepting the narrower
+   width tier; `␣VS` stays in place and never unfolds.
+3. AI findings (and other mapped problems) show as a severity-coloured count
+   badge on Navigator file rows; unmapped and stale findings are not counted.
 
 ## Review record
 
