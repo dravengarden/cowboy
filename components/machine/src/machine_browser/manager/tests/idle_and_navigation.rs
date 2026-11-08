@@ -110,6 +110,36 @@ async fn an_attach_while_a_grace_stop_waits_keeps_the_instance_running() {
     );
 }
 
+#[tokio::test]
+async fn a_login_ended_stop_spares_an_instance_rebound_to_another_login_meanwhile() {
+    let fixture = fixture().await;
+    fixture.instance.binding.lock().purpose = Purpose::SignIn {
+        login_request_id: "login-a".into(),
+    };
+    // The stop waits for the account lifecycle lock (as it would behind a
+    // snapshot publication or a sign-in open).
+    let slot = fixture.manager.slot(&fixture.account);
+    let held = slot.lifecycle.lock().await;
+    fixture.manager.login_ended("login-a");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // A sign-in open rebinds the same instance to login B meanwhile.
+    fixture.instance.binding.lock().purpose = Purpose::SignIn {
+        login_request_id: "login-b".into(),
+    };
+    drop(held);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_ne!(fixture.instance.live.lock().phase, Phase::Stopping);
+    assert!(
+        fixture
+            .manager
+            .slot(&fixture.account)
+            .instance
+            .lock()
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &fixture.instance))
+    );
+}
+
 /// Answer the next launcher command, which must be a navigation to `url`.
 async fn answer_navigation(launcher: &mut tokio::net::UnixStream, url: &str, ok: bool) {
     let mut reader = tokio::io::BufReader::new(&mut *launcher);

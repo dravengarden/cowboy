@@ -52,11 +52,29 @@ impl BrowserManager {
         }
         if let Some(reason) = self.login_binding_broken(instance) {
             // A login that ended keeps what it signed in; a binding that no
-            // longer matches is an authority failure and stops at once.
+            // longer matches is an authority failure and stops at once. The
+            // graceful wait may let a sign-in open rebind the instance to
+            // another, active login: the stop proceeds only if the same
+            // login is still bound and still broken, under the lifecycle
+            // lock with the phase change.
             let graceful = reason == Reason::LoginEnded;
-            let event = self.stop_instance(instance, reason, graceful, None).await;
-            self.send_state(event);
-            return true;
+            let login = instance.login_request();
+            let stopped = self
+                .stop_instance_if(instance, reason, graceful, None, || {
+                    if instance.login_request() == login
+                        && self.login_binding_broken(instance) == Some(reason)
+                    {
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
+                })
+                .await;
+            if let Ok(event) = stopped {
+                self.send_state(event);
+                return true;
+            }
+            return false;
         }
         if let Some(attachment_id) = expired_attachment
             && expire_attachment(instance, &attachment_id, now)

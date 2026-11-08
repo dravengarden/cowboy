@@ -749,11 +749,24 @@ impl BrowserManager {
             return;
         };
         let manager = Arc::clone(self);
+        let ended = request_id.to_owned();
         tokio::spawn(async move {
-            let event = manager
-                .stop_instance(&instance, Reason::LoginEnded, true, None)
+            // The graceful stop may wait for a copy and the lifecycle lock;
+            // a sign-in open can rebind the instance to another login
+            // meanwhile. Stop only if it is still bound to the ended login,
+            // checked under the lifecycle lock with the phase change.
+            let stopped = manager
+                .stop_instance_if(&instance, Reason::LoginEnded, true, None, || {
+                    if instance.login_request().as_deref() == Some(ended.as_str()) {
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
+                })
                 .await;
-            manager.send_state(event);
+            if let Ok(event) = stopped {
+                manager.send_state(event);
+            }
         });
     }
 
