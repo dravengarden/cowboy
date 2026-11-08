@@ -97,6 +97,10 @@ state-store's dependent packages and the plugin-api consumers without changing
 native pins. It removes the temporary root `@std/assert` dependency; package
 closure validation remains strict and historical release records stay unchanged.
 
+Scoped release 3.101.0 records app-shell 1.1.41 for the already-committed
+tool detail control change in `278c013ba`, which 3.100.0 did not cover. No
+Plugin closure or native pin changes.
+
 Release 3.98.0 records Zed Plugin 1.39.0 (agent-owned mirror reload) and
 app-shell 1.1.40 for the already-committed floating-island changes in
 `270f49cd9`, which 3.97.0 did not cover. The worker registry input follows the
