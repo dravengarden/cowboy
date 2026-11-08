@@ -207,6 +207,11 @@ async fn deliver(
         return;
     };
     let Some(text) = note(&value) else {
+        tracing::info!(
+            event_name = "cowboy.code.post_edit_push",
+            session,
+            outcome = "nothing_to_deliver"
+        );
         return;
     };
     let cmid = format!("{CMID_PREFIX}{}", uuid::Uuid::new_v4().simple());
@@ -221,9 +226,16 @@ async fn deliver(
     ) {
         Ok(delivery) => {
             let outcome = delivery.outcome().await;
-            tracing::debug!(session, outcome, "post-edit diagnostics steering");
+            tracing::info!(event_name = "cowboy.code.post_edit_push", session, outcome);
         }
-        Err(reason) => tracing::debug!(session, reason, "post-edit diagnostics not delivered"),
+        Err(reason) => {
+            tracing::info!(
+                event_name = "cowboy.code.post_edit_push",
+                session,
+                outcome = "not_delivered",
+                reason
+            );
+        }
     }
 }
 
