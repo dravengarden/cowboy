@@ -9,6 +9,7 @@ import {
   STARTING_FAST_POLL_MS,
   autoEntry,
   looksLikeAuthorizationCode,
+  openRefused,
   pollPeriod,
   reduceBrowser,
 } from "./browserModel";
@@ -53,6 +54,42 @@ test("an open that answers detached mounts the viewer; a refused open explains i
   assertEquals(refused.viewer, undefined);
   assertEquals(refused.error.length > 0, true);
   assertEquals(refused.error.includes("_"), false);
+});
+
+test("a refused sign-in open never mounts the viewer or takes the display over", () => {
+  for (const [state, reason] of [
+    ["detached", "login_mismatch"],
+    ["attached", "login_mismatch"],
+    ["attached", "failed"],
+    ["detached", "busy"],
+    ["starting", "busy"],
+  ] as const) {
+    const answer = event(state, { reason });
+    assertEquals(openRefused(answer), true, `${state}/${reason}`);
+    const model = reduceBrowser(INITIAL_BROWSER_MODEL, {
+      type: "result",
+      action: "open",
+      result: { machine_id: "ovh", state: answer },
+      now: 10,
+      takeover: true,
+    });
+    assertEquals(model.viewer, undefined, `${state}/${reason}`);
+    assertEquals(model.awaitingOpen, undefined, `${state}/${reason}`);
+    assertEquals(model.busy, undefined);
+    assertEquals(model.error.length > 0, true);
+    assertEquals(model.error.includes("_"), false);
+  }
+  // Without a reason the same answers are ordinary successes.
+  assertEquals(openRefused(event("detached")), false);
+  assertEquals(openRefused(event("hibernated", { reason: "capacity" })), false);
+  const bound = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "result",
+    action: "open",
+    result: { machine_id: "ovh", state: event("attached") },
+    now: 10,
+    takeover: true,
+  });
+  assertEquals(bound.viewer, { takeover: true, generation: 1 });
 });
 
 test("a starting open polls fast and attaches once the instance runs", () => {

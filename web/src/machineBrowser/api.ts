@@ -360,6 +360,10 @@ const ERROR_TEXT: Record<string, string> = {
   invalid_viewport: "This screen size is outside the supported range.",
   invalid_argument: "The Service did not accept the request.",
   login_inactive: "This sign-in is no longer active on its Machine. Start the sign-in again.",
+  login_mismatch:
+    "This sign-in is not the account’s active native login, so the browser was not opened for it.",
+  browser_sign_in_refused:
+    "The Machine did not bind this sign-in to the running browser. Check the browser state and retry.",
   login_operation_not_found: "This sign-in could not be found. Start the sign-in again.",
   invalid_login_reference: "This sign-in reference is not valid.",
   unavailable: "The Service is temporarily unavailable.",

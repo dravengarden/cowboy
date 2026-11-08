@@ -46,6 +46,8 @@ test("admission and refusal codes never reach people raw", () => {
     "browser_attach_refused",
     "browser_attach_failed",
     "login_inactive",
+    "login_mismatch",
+    "browser_sign_in_refused",
     "invalid_viewport",
     "resize_failed",
   ];

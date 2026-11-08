@@ -65,6 +65,15 @@ export function viewerEnds(state: BrowserStateEvent): boolean {
   return !browserRunning(state.state) || state.reason === "superseded";
 }
 
+/** Whether an open was refused although the Machine answered with a live
+ * instance: reusing a running browser for a sign-in answers with that
+ * browser's own state, and a reason on it (`login_mismatch`, `busy`,
+ * `failed`, ...) means the sign-in was not bound. Such an answer never
+ * mounts the viewer or takes the display over. */
+export function openRefused(state: BrowserStateEvent): boolean {
+  return state.state !== "hibernated" && state.reason !== undefined;
+}
+
 /** How the panel enters a browser it was asked to show at once. A sign-in
  * panel always goes through the sign-in open, even for a running browser,
  * so the Machine validates and binds the login before anything attaches; a
@@ -178,6 +187,13 @@ export function reduceBrowser(model: BrowserModel, event: BrowserEvent): Browser
       const next = withRead({ ...model, busy: undefined }, read, event.now);
       const state = event.result.state;
       if (event.action === "open") {
+        if (openRefused(state)) {
+          return {
+            ...next,
+            awaitingOpen: undefined,
+            error: `The browser was not opened. ${browserReasonText(state.reason) ?? ""}`.trim(),
+          };
+        }
         if (state.state === "detached") {
           return { ...next, viewer: { takeover: false, generation: nextGeneration(model) } };
         }
