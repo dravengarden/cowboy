@@ -2367,6 +2367,9 @@ impl Broker {
                             .ok()
                             .flatten()
                             .is_some_and(|receipt| receipt.account == account_id)
+                        || self
+                            .fence_unlaunched_account_session(&session_id, &account_id)
+                            .await
                 }
             };
         if !scope_matches {
@@ -2913,6 +2916,47 @@ impl Broker {
         // An existing lifecycle fence belongs to the caller, not this helper.
         self.workers.lock().remove(session_id);
         true
+    }
+
+    /// A revocation can target a session whose worker never started here
+    /// (for example, one that failed before launch). Fence it and record that
+    /// absence only when no launch was journaled and nothing runs for it.
+    async fn fence_unlaunched_account_session(
+        &self,
+        session: &str,
+        account: &crate::provider_account::ProviderAccountId,
+    ) -> bool {
+        if self.launching.lock().contains(session)
+            || self.workers.lock().contains_key(session)
+            || self.direct_worker_pids.lock().contains_key(session)
+        {
+            return false;
+        }
+        if self.args.spawn_mode == SpawnMode::SystemdUser {
+            let unit = format!("{}.service", worker_unit_name(&self.args.socket, session));
+            match systemd_exit::unit_inactive(&unit).await {
+                Ok(true) => {}
+                Ok(false) => return false,
+                Err(error) => {
+                    tracing::warn!(session, %error, "unlaunched worker unit state unconfirmed");
+                    return false;
+                }
+            }
+        }
+        match self
+            .args
+            .provider_store
+            .fence_unlaunched_account_session(session, account)
+        {
+            Ok(()) => {
+                tracing::info!(session, "fenced named session that never launched here");
+                true
+            }
+            Err(error) => {
+                tracing::warn!(session, %error, "unlaunched session fence refused");
+                false
+            }
+        }
     }
 
     fn direct_account_stop_recoverable(
@@ -6358,6 +6402,54 @@ mod tests {
             crashed.exit_detail.as_deref(),
             Some("Plugin requires install attempt reconciliation")
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn account_quiesce_fences_a_session_that_never_launched_here() {
+        let (mut broker, _launch, _worker_rx) = reconnecting_worker_fixture();
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            crate::machine_plugins::MachinePluginStore::new(
+                temp.path(),
+                crate::machine_protocol::Platform::Linux,
+                "x86_64".into(),
+            )
+            .unwrap(),
+        );
+        broker.args.provider_store = store.clone();
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let broker = Arc::new(broker);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        while rx.try_recv().is_ok() {}
+        broker
+            .quiesce_account_session("never".into(), "stop".into(), account.clone())
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(Frame::CommandAck { accepted: true, .. })
+        ));
+        assert!(store.account_stop_matches("never", &account).unwrap());
+        assert!(
+            store
+                .account_worker_exit("never")
+                .unwrap()
+                .is_some_and(|receipt| receipt.unlaunched && receipt.tree_exited)
+        );
+        // A launch still in flight is not proof of absence.
+        broker.launching.lock().insert("starting".into());
+        broker
+            .quiesce_account_session("starting".into(), "stop".into(), account.clone())
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(Frame::CommandAck {
+                accepted: false,
+                ..
+            })
+        ));
+        assert!(store.account_worker_exit("starting").unwrap().is_none());
     }
 
     #[tokio::test(start_paused = true)]
