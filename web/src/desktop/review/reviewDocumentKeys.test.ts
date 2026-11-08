@@ -18,6 +18,8 @@ test("bracket and g prefixes resolve Review motions", () => {
   assertEquals(reviewDocumentAction({ ...normal, keyBuffer: "g", count: 3 }, "t", none), { kind: "nthTab", n: 3 });
   assertEquals(reviewDocumentAction({ ...normal, keyBuffer: "g", count: 2 }, "T", none), { kind: "tab", offset: -2 });
   assertEquals(reviewDocumentAction(normal, "<CR>", none), { kind: "send" });
+  assertEquals(reviewDocumentAction({ ...normal, keyBuffer: "]" }, "d", none), { kind: "problem", offset: 1 });
+  assertEquals(reviewDocumentAction({ ...normal, keyBuffer: "g" }, "O", none), { kind: "outline" });
 });
 
 test("Vim keeps everything else, pending operators and Visual motions", () => {

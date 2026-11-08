@@ -222,16 +222,25 @@ Document is a read-only codemirror-vim buffer with the Desktop Vim runtime and
 the user's vimrc; Insert is refused. Review adds, per editor and below any user
 mapping of the same keys: `]c`/`[c` hunk, `]f`/`[f` file over the complete
 change queue (the Unread filter does not change it), `]u`/`[u` unreviewed
-file, `gt`/`gT`/`{n}gt` file tab, and `Enter` (Normal or Visual), which
+file, `]d`/`[d` the next problem the Inspector places, `gO` the outline in
+the Inspector, `gt`/`gT`/`{n}gt` file tab, and `Enter` (Normal or Visual), which
 appends the lines with their location to the Prompt and focuses it, unfolding
 a folded Prompt. The Review group (`␣V`, while Review is shown): `V` focus,
 `C`/`F`/`H`/`W`/`G` Changes/Files/History/Worktrees/Pull request, `X` what to review (the
 Session's default, its project checkout, linked, bound or same-project
 sessions; per device, and choosing never moves the Agent), `,` Review
-settings, `A` compare against, `U` unread only, `M` mark
+settings, `O` the outline, `]` fold the Inspector, `K` run a project check, `A` compare against, `U` unread only, `M` mark
 reviewed (the focused row, else the open file), `S` send and stay, `Q` close
 the file tab, `P` keep it, `[` fold the Navigator, `L` the classic layout.
-In History `L` opens a commit's files and their diffs open as commit tabs;
+From 1320 px of Review width the Inspector (`review.inspector`) sits on the
+right with the open file's Outline, Hunks, Problems and Details; narrower, it
+folds and `␣VO`/`␣V]`/`gO` open it inset. Its rows are a Cowboy list and
+`Enter` moves the Document's cursor to the row. Problems are the latest
+project-check findings: a source file places them on its lines, a
+working-tree diff only through the verified projection (owned buffers, the
+complete patch, never a `committed:` comparison); otherwise they are listed
+but not placed. `␣VK` runs the declared check, only for the Session's own
+worktree. In History `L` opens a commit's files and their diffs open as commit tabs;
 `H` returns to the commits. In Worktrees `L` reviews a worktree: one a
 session owns as that session, an unowned one on this Service's Machine as a
 worktree context. In Pull request the Session's bound PR lists its files (20 a page; `]f`

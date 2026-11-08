@@ -21,11 +21,74 @@ import { REVIEW_DOCUMENT_REGION, type ReviewWorkbench, useReviewWorkbench } from
 import { useElementWidth } from "./useReviewTabsState";
 import { ReviewNavigatorSplitter, useNavigatorWidth } from "./ReviewNavigatorSplitter";
 import { DesktopModal } from "../DesktopModal";
+import { focusOutline, REVIEW_INSPECTOR_REGION, REVIEW_RUN_CHECK_EVENT, ReviewInspector } from "./ReviewInspector";
 import { ReviewSettingsContent } from "../../mobile/review/ReviewSettings";
+
+/** The Inspector's placement: beside the Document from 1320 px of Review
+ *  width (foldable with ␣V]), else inset on the right when asked for. */
+function useInspectorPanel(width: number, closeNavigatorInset: () => void) {
+  const beside = width >= INSPECTOR_WIDTH_FLOOR;
+  const [folded, setFolded] = useState(false);
+  const [inset, setInset] = useState(false);
+  const show = (): void => {
+    if (beside) setFolded(false);
+    else {
+      setInset(true);
+      closeNavigatorInset();
+    }
+  };
+  const region = (): HTMLElement | null => document.querySelector(`[data-desktop-region="${REVIEW_INSPECTOR_REGION}"]`);
+  return {
+    beside,
+    shown: beside ? !folded : inset,
+    show,
+    commands: {
+      show: () => {
+        show();
+        focusOutline(region());
+      },
+      toggle: () => beside ? setFolded((value) => !value) : setInset((value) => !value),
+      runCheck: () => {
+        show();
+        requestAnimationFrame(() => region()?.dispatchEvent(new CustomEvent(REVIEW_RUN_CHECK_EVENT)));
+      },
+    },
+  };
+}
+
+function InspectorRegion({ review, panel }: {
+  review: ReviewWorkbench;
+  panel: ReturnType<typeof useInspectorPanel>;
+}): React.JSX.Element {
+  return (
+    <Box
+      data-desktop-region={REVIEW_INSPECTOR_REGION}
+      data-review-inspector-placement={panel.beside ? "beside" : "inset"}
+      tabIndex={-1}
+      sx={{
+        display: panel.shown ? "block" : "none",
+        width: panel.beside ? INSPECTOR_WIDTH : `min(${String(INSPECTOR_WIDTH + 40)}px, 85%)`,
+        flexShrink: 0,
+        borderLeft: 1,
+        borderColor: "divider",
+        minHeight: 0,
+        outline: "none",
+        bgcolor: "background.paper",
+        ...(panel.beside ? {} : { position: "absolute", zIndex: 4, top: 0, bottom: 0, right: 0, boxShadow: 8 }),
+      }}
+    >
+      <ReviewInspector review={review} onShow={panel.show} />
+    </Box>
+  );
+}
 
 /** Below this Review width the Navigator folds to a rail and opens as an
  *  inset list (docs/desktop-code-review.md "Inner width policy"). */
 const COMPACT_WIDTH = 900;
+/** From this Review width the Inspector sits beside the Document; below it
+ *  folds and opens inset on the right (one side panel at a time). */
+const INSPECTOR_WIDTH_FLOOR = 1320;
+const INSPECTOR_WIDTH = 300;
 const NAVIGATOR_OVERLAY_WIDTH = 340;
 
 function focusedRow(): HTMLElement | null {
@@ -75,6 +138,7 @@ function EmptyDocument({ review }: { review: ReviewWorkbench }): React.JSX.Eleme
 }
 
 interface ViewControls {
+  readonly inspector: { show: () => void; toggle: () => void; runCheck: () => void };
   readonly openContext: () => void;
   readonly openSettings: () => void;
   readonly compact: boolean;
@@ -94,6 +158,7 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
   useReviewWorkbenchCommands({
     showNavigator,
     openContext: controls.openContext,
+    inspector: controls.inspector,
     openSettings: controls.openSettings,
     openComparison: () => {
       showNavigator("changes");
@@ -159,7 +224,7 @@ function ReviewDocumentRegion({ review }: { review: ReviewWorkbench }): React.JS
         tabs={review.tabs}
         document={review.document}
         load={review.load}
-        status={{ hunk: review.hunk, reviewed: review.openReviewed }}
+        status={{ line: review.cursorLine, hunk: review.hunk, reviewed: review.openReviewed }}
         wrap={review.settings.softWrap}
         fontSize={Math.max(12, review.settings.codeFontSize)}
         restoreLine={review.restoreLine}
@@ -224,7 +289,9 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
   const leaveOverlay = (): void => {
     if (compact && overlay) setOverlay(false);
   };
+  const inspector = useInspectorPanel(width, () => setOverlay(false));
   useReviewViewCommands(review, {
+    inspector: inspector.commands,
     openContext: () => {
       showNavigator(tab);
       setContextRequest((value) => value + 1);
@@ -317,6 +384,7 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
         </Paper>
       )}
       <ReviewDocumentRegion review={review} />
+      {review.target && <InspectorRegion review={review} panel={inspector} />}
       <DesktopModal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Review settings" width={640}>
         <ReviewSettingsContent />
       </DesktopModal>

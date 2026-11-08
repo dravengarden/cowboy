@@ -26,6 +26,8 @@ export interface DesktopReviewChanges {
   readonly dataRevision: number;
   readonly loading: boolean;
   readonly error: boolean;
+  /** How language reads reach this context's buffers (manifest). */
+  readonly bufferMode: "legacy" | "owned" | "unavailable" | undefined;
   readonly setComparison: (comparison: string | null) => void;
   readonly refresh: () => void;
 }
@@ -58,6 +60,7 @@ export function useDesktopReviewChanges(
   const [dataRevision, setDataRevision] = useState(0);
   const [refreshRequest, setRefreshRequest] = useState(0);
   const manifestRevision = useRef<string | undefined>(undefined);
+  const [bufferMode, setBufferMode] = useState<{ sessionId: string; mode: DesktopReviewChanges["bufferMode"] }>();
   const activity = useControlPlaneSessionActivity(sessionId);
 
   useEffect(() => {
@@ -120,6 +123,7 @@ export function useDesktopReviewChanges(
       const observer = controller;
       void fetchCodeManifest(sessionId, observer.signal).then((manifest) => {
         if (observer.signal.aborted) return;
+        setBufferMode({ sessionId, mode: manifest.bufferMode });
         const previous = manifestRevision.current;
         manifestRevision.current = manifest.revision;
         if (previous && previous !== manifest.revision) {
@@ -162,6 +166,7 @@ export function useDesktopReviewChanges(
     dataRevision,
     loading,
     error,
+    bufferMode: bufferMode?.sessionId === sessionId ? bufferMode?.mode : undefined,
     setComparison,
     refresh,
   };

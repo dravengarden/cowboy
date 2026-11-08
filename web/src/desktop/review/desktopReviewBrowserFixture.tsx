@@ -39,7 +39,7 @@ export function mountDesktopReviewWorkbench(): void {
   for (const key of Object.keys(localStorage)) {
     if (key.startsWith("cowboy.desktop.reviewTabs.v1:")) localStorage.removeItem(key);
   }
-  const fixture = renderReviewContextPreview(true, false, true, true, false, false, () => (
+  const fixture = renderReviewContextPreview(true, false, true, true, false, true, () => (
     <SurfaceContext.Provider value={{ kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true }}>
       <DesktopWorkspaceProvider>
         <DesktopCommandProvider>

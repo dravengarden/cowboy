@@ -53,6 +53,17 @@ function adjacentPullPath(pull: PullFileRef, offset: 1 | -1, accept: (path: stri
 
 export const REVIEW_DOCUMENT_REGION = "review.document";
 
+/** The change-list marks that still hold for their files. */
+function useReviewedMarks(
+  progress: Readonly<Record<string, string>>,
+  queue: readonly GitReviewEntry[],
+): ReadonlySet<string> {
+  return useMemo(() => currentReviewMarks(
+    progress,
+    queue.map((entry) => ({ key: entryKey(entry), fingerprint: entry.change.fingerprint })),
+  ), [progress, queue]);
+}
+
 /** Everything the Desktop Review workbench reads and does, without layout. */
 export function useReviewWorkbench(active: boolean) {
   const workspace = useDesktopWorkspace();
@@ -65,12 +76,11 @@ export function useReviewWorkbench(active: boolean) {
   const load = useReviewDocumentText(target?.sessionId, document, settings, changes.dataRevision);
   const editor = useRef<EditorView | null>(null);
   const positions = useRef(new Map<string, number>());
+  // `]d`/`[d` and `gO` belong to the Inspector, which the view owns.
+  const inspectorAction = useRef<((action: ReviewDocumentAction, view: EditorView) => void) | undefined>(undefined);
   const [cursorLine, setCursorLine] = useState(1);
   const ready = load?.state === "ready" ? load.value : undefined;
-  const reviewed = useMemo(() => currentReviewMarks(
-    context.synced.progress,
-    changes.queue.map((entry) => ({ key: entryKey(entry), fingerprint: entry.change.fingerprint })),
-  ), [changes.queue, context.synced.progress]);
+  const reviewed = useReviewedMarks(context.synced.progress, changes.queue);
   const pull = document?.kind === "pr"
     ? pullFile(document.repositoryId, document.number, document.revision, document.path)
     : undefined;
@@ -158,6 +168,10 @@ export function useReviewWorkbench(active: boolean) {
         return;
       case "send":
         send(false);
+        return;
+      case "problem":
+      case "outline":
+        inspectorAction.current?.(action, view);
     }
   }, [changes.queue, context.synced.progress, cursorLine, document, open, openKey, openPull, pull, reviewed, send, updateTabs]);
 
@@ -177,6 +191,8 @@ export function useReviewWorkbench(active: boolean) {
     document,
     load,
     editor,
+    inspectorAction,
+    cursorLine,
     reviewed,
     openKey,
     restoreLine: document ? positions.current.get(reviewDocumentKey(document)) : undefined,

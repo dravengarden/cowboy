@@ -1,6 +1,6 @@
 # Desktop Code Review
 
-**Status: design proposal r3 (2026-11-08); D0, D1, D1b and D1c implemented, D2–D4 planned.** r3 records the
+**Status: design proposal r3 (2026-11-08); D0, D1, D1b, D1c and D2a implemented, D2b–D4 planned.** r3 records the
 owner's answers to the r2 open questions. r2 folds in a
 Codex Astra Max design review of r1 (managed call
 `call-53884a467577cfb02c34574f`: verdict *needs-attention*, five high and ten
@@ -538,6 +538,7 @@ together" reads "Prompt and the work pane".
 | D1 workbench (core implemented) | Width tiers, Navigator with list grammar and tabs, Document as read-only Vim buffer (unified diff, source, file tabs, `]c ]f ]u gt`, `Enter`/`␣VS`), editor-scoped Vim additions, device-local state and reveal adapter, comparison/unread/mark | Keyboard-only scripted review of a 50-file change at 1100, 1440 and 1728 px; no synced tab writes from Desktop; Composer and Review mounted together with a vimrc mapping of `]c` still owned by the user; `H` across width tiers without remount |
 | D1b (implemented) | History (commit drill-in, commit tabs) and Worktrees tabs, the context control `␣VX` (this Session, project checkout, linked, bound and same-project sessions; a per-device choice), Review settings `␣V,`, a resizable Navigator in Resize mode | `tools/cdp-review-acceptance.ts` (15 trusted-input steps, both themes) |
 | D1c (implemented) | Remote PR in the workbench: the Pull request tab (`␣VG`) binds a PR through the synced `remote_review`, lists its files and opens them as in-memory `pr` tabs with viewed marks in the synced progress; Desktop ignores the phone's `remote_selected` | the acceptance's Pull request step against an opt-in GitHub fixture |
+| D2a (implemented) | Inspector (Outline, Hunks, Problems, Details) beside or inset, `]d`/`[d`, `gO`, `␣VO`, `␣V]`, `␣VK`; Problems are check findings, placed only on source lines or through the verified diff projection; language diagnostics wait for D2c's buffer leases | acceptance Inspector steps (check, `]d`, `gO`, inset at narrow width) |
 | D2 tools | Streaming patch decoder and `@codemirror/merge` split view (patch-only), Inspector (Outline, Hunks, Problems, Details), `K` `gd` `gr` `gO` `]d`, checks `␣VK` with context gating, Review settings | Decoder fixtures pass; split and unified agree on every hunk of the fixture; hover/definition round trips under the measured `review_read_completed` budget |
 | D2b sides | Comparison-bound side windows; expanded context in the split layout | Expanded old-side text equals `git show <base>:<path>` for the fixture; an edited worktree never changes it |
 | D3 agent loop | Delegation contract, Explain/Review forks as kept-source preview tabs, findings projection with anchor states, `␣VS` on a problem | A managed review's findings land on their lines at `exact`, move to `heuristic`/`unmapped` after an edit, and disappear with a deleted fork; a prose result is shown as text |

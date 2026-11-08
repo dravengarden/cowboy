@@ -193,6 +193,26 @@ try {
   await shot("3-files");
   results.push("Files: ␣VF, L expands, H goes to the parent and collapses");
 
+  // The Inspector beside the Document: outline, problems, ]d and gO.
+  await until(`getComputedStyle(document.querySelector("[data-review-inspector-placement='beside']")).display !== "none"`, "a wide Review shows the Inspector beside the Document");
+  await page.evaluate(`document.querySelector("[data-review-tree-path='README.md']").focus()`);
+  await key("l");
+  await until(`${activeTab} === "README.md"`, "L opens README.md");
+  await until(`document.querySelector("[data-review-inspector-section='outline']")?.textContent.includes("Project guide")`, "the Inspector shows the outline");
+  await keys(" ", "v", "k");
+  await until(`document.querySelector("[data-review-problem='3']")`, "␣VK runs the check and its finding is listed");
+  await keys(" ", "v", "v");
+  await keys("g", "g");
+  await until(`document.querySelector("[data-review-cursor-line='1']")`, "gg reaches line 1");
+  await keys("]", "d");
+  await until(`document.querySelector("[data-review-cursor-line='3']")`, "]d moves to the finding's line");
+  await keys("g", "O");
+  await until(`document.activeElement?.closest("[data-review-inspector-section='outline']")`, "gO focuses the outline");
+  await key("Enter");
+  await until(`document.querySelector("[data-review-cursor-line='1']")`, "Enter on a symbol moves the cursor to it");
+  await shot("8-inspector");
+  results.push("Inspector: outline and problems beside the Document; ␣VK runs the check, ]d reaches its finding, gO focuses the outline and Enter jumps");
+
   await keys(" ", "v", "h");
   await until(`document.querySelector("[data-review-navigator-tab='history'][aria-selected='true']")`, "␣VH shows History");
   await until(`document.querySelector("[data-review-commit]")`, "commits load");
@@ -275,6 +295,14 @@ try {
 
   await viewport(1180, 900);
   await until(`document.querySelector("[data-review-compact='true']")`, "a narrow Review is compact");
+  check(
+    await page.evaluate<boolean>(`getComputedStyle(document.querySelector("[data-desktop-region='review.inspector']")).display === "none"`),
+    "a narrow Review folds the Inspector",
+  );
+  await keys(" ", "v", "]");
+  await until(`getComputedStyle(document.querySelector("[data-review-inspector-placement='inset']")).display !== "none"`, "␣V] opens the Inspector inset");
+  await keys(" ", "v", "]");
+  await until(`getComputedStyle(document.querySelector("[data-desktop-region='review.inspector']")).display === "none"`, "␣V] folds it again");
   await keys(" ", "v", "c");
   await until(`document.querySelector("[data-review-navigator-overlay]")`, "␣VC opens the inset Navigator");
   await shot("4-compact");

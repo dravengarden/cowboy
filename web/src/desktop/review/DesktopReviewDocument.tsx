@@ -116,6 +116,7 @@ function ReviewFileTabs({
 }
 
 export interface ReviewDocumentStatus {
+  readonly line: number;
   readonly hunk: { index: number; total: number } | undefined;
   readonly reviewed: boolean | undefined;
 }
@@ -208,6 +209,9 @@ export function DesktopReviewDocument({
               <Box component="span" sx={{ color: "error.main" }}>−{ready.removed ?? 0}</Box>
             </Typography>
           )}
+          <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-cursor-line={status.line}>
+            Ln {status.line}
+          </Typography>
           {status.hunk && status.hunk.total > 0 && (
             <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-hunk-position>
               Hunk {status.hunk.index}/{status.hunk.total} <DesktopKeycap keyLabel="]c" quiet />

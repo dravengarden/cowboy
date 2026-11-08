@@ -12,7 +12,11 @@ export type ReviewDocumentAction =
   | { readonly kind: "unreviewed"; readonly offset: 1 | -1 }
   | { readonly kind: "tab"; readonly offset: number }
   | { readonly kind: "nthTab"; readonly n: number }
-  | { readonly kind: "send" };
+  | { readonly kind: "send" }
+  /** `]d`/`[d`: the next problem the Inspector places in this Document. */
+  | { readonly kind: "problem"; readonly offset: 1 | -1 }
+  /** `gO`: the outline, in the Inspector (Vim's `gO`). */
+  | { readonly kind: "outline" };
 
 export interface ReviewVimInput {
   /** codemirror-vim's pending multi-key prefix (`]`, `g`). */
@@ -27,6 +31,7 @@ const BRACKETS: Readonly<Record<string, ReviewDocumentAction["kind"]>> = {
   c: "hunk",
   f: "file",
   u: "unreviewed",
+  d: "problem",
 };
 
 /** The Review action for the next Vim token, or null to leave it to Vim. */
@@ -41,13 +46,14 @@ export function reviewDocumentAction(
   if (sequence === "<CR>") return { kind: "send" };
   if (input.visual) return null;
   if ((input.keyBuffer === "]" || input.keyBuffer === "[") && BRACKETS[key]) {
-    const kind = BRACKETS[key] as "hunk" | "file" | "unreviewed";
+    const kind = BRACKETS[key] as "hunk" | "file" | "unreviewed" | "problem";
     return { kind, offset: input.keyBuffer === "]" ? 1 : -1 };
   }
   if (sequence === "gt") {
     return input.count > 0 ? { kind: "nthTab", n: input.count } : { kind: "tab", offset: 1 };
   }
   if (sequence === "gT") return { kind: "tab", offset: -Math.max(1, input.count) };
+  if (sequence === "gO") return { kind: "outline" };
   return null;
 }
 

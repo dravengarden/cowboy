@@ -133,6 +133,8 @@ const REVIEW_DOCUMENT_HINTS: RegionHint[] = [
   { keys: "]c/[c", label: "Hunk" },
   { keys: "]f/[f", label: "File" },
   { keys: "]u", label: "Unreviewed" },
+  { keys: "]d", label: "Problem" },
+  { keys: "gO", label: "Outline" },
   { keys: "gt/gT", label: "Tab" },
   { keys: "V", label: "Select" },
   { keys: "Enter", label: "Send" },

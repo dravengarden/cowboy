@@ -226,7 +226,10 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
     );
     const json = (value: unknown) => Response.json(value);
     if (checksEnabled && url.pathname.endsWith("/checks")) {
-      const run = { runId: "fixture-check", check: "lint", state: "passed", startedAtMs: Date.now(), diagnostics: [], truncated: false, outputTruncated: false };
+      const desktopFixture = (globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests === true;
+      const run = { runId: "fixture-check", check: "lint", state: desktopFixture ? "failed" : "passed", startedAtMs: Date.now(),
+        diagnostics: desktopFixture ? [{ path: "README.md", line: 3, column: 1, severity: "warning", message: "Fixture finding" }] : [],
+        truncated: false, outputTruncated: false };
       if (init?.method === "POST") {
         checkStarted = true;
         return json({ status: "accepted", run });
@@ -270,6 +273,13 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       const clean = context === "project" || context === "copy";
       const branch = context === "worktree" ? "feature/review" : "main";
       const path = url.searchParams.get("path") ?? "";
+      if (url.pathname.endsWith("/intelligence/outline")) {
+        if (!(globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests) return new Response("unavailable", { status: 404 });
+        const at = (row: number) => ({ row, column: 0 });
+        return json({ apiVersion: 1, path, symbols: [
+          { name: "Project guide", kind: 2, start: at(0), end: at(2), selectionStart: at(0), selectionEnd: at(0), children: [] },
+        ] });
+      }
       if (url.pathname.endsWith("/manifest")) {
         return json({
           apiVersion: 1,
