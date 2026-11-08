@@ -121,12 +121,15 @@ export function ReviewInspector({ review, onShow }: {
   const own = review.target?.own === true;
   const runCheck = useRunCheck(review.target?.sessionId ?? "");
   const runnable = own && data.checks?.allowed === true && data.checks.runnable === true && !!data.checks.epoch;
+  // Rows are unified patch rows; a split diff shows them on its own rows.
   const jump = (row: number | undefined): void => {
     const view = review.editor.current;
     if (!view || row === undefined) return;
-    revealEditorLine(view, row);
+    revealEditorLine(view, review.viewRowOf(row));
     view.focus();
   };
+  const viewRowOf = useRef(review.viewRowOf);
+  viewRowOf.current = review.viewRowOf;
   const latest = useRef(data);
   latest.current = data;
   const latestShow = useRef(onShow);
@@ -139,7 +142,7 @@ export function ReviewInspector({ review, onShow }: {
         return;
       }
       if (action.kind !== "problem") return;
-      const rows = latest.current.problems.flatMap((problem) => problem.row === undefined ? [] : [problem.row]);
+      const rows = latest.current.problems.flatMap((problem) => problem.row === undefined ? [] : [viewRowOf.current(problem.row)]);
       const cursor = view.state.doc.lineAt(view.state.selection.main.head).number;
       const row = adjacentLine([...new Set(rows)].sort((a, b) => a - b), cursor, action.offset);
       if (row === undefined) notify(rows.length === 0 ? "No problems placed in this document" : "No more problems", "info");

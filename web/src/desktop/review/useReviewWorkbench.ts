@@ -31,6 +31,11 @@ import { useDesktopReviewChanges } from "./useDesktopReviewChanges";
 import { useDesktopReviewContext } from "./useDesktopReviewContext";
 import { useReviewDocumentText } from "./useReviewDocumentText";
 import { useReviewTabsState } from "./useReviewTabsState";
+import { useReviewDiffLayout } from "./reviewDiffLayout";
+import { type SplitDiff, splitDiff, splitRowOf } from "./splitDiffModel";
+import { decodePatch } from "./unifiedPatchDecoder";
+import type { ReviewDocumentText } from "./useReviewDocumentText";
+import type { DesktopReviewDocument } from "./desktopReviewTabs";
 import { type PullFileRef, pullFile } from "./pullPatches";
 import {
   remoteFileKey,
@@ -53,6 +58,20 @@ function adjacentPullPath(pull: PullFileRef, offset: 1 | -1, accept: (path: stri
 
 export const REVIEW_DOCUMENT_REGION = "review.document";
 
+/** The open diff laid out side by side, when the split layout is chosen. */
+function useSplitDiff(
+  document: DesktopReviewDocument | undefined,
+  ready: ReviewDocumentText | undefined,
+): SplitDiff | undefined {
+  const layout = useReviewDiffLayout();
+  return useMemo(
+    () => layout === "split" && document && document.kind !== "source" && ready
+      ? splitDiff(decodePatch(ready.text, ready.truncated))
+      : undefined,
+    [document, layout, ready],
+  );
+}
+
 /** The change-list marks that still hold for their files. */
 function useReviewedMarks(
   progress: Readonly<Record<string, string>>,
@@ -62,6 +81,31 @@ function useReviewedMarks(
     progress,
     queue.map((entry) => ({ key: entryKey(entry), fingerprint: entry.change.fingerprint })),
   ), [progress, queue]);
+}
+
+/** Append a remark to the Agent's Prompt: the given text, else the
+ *  Document's selection with its location. `stay` keeps focus in Review. */
+function useSendRemark(
+  agentSessionId: string | undefined,
+  document: DesktopReviewDocument | undefined,
+  ready: ReviewDocumentText | undefined,
+  root: string | undefined,
+  split: SplitDiff | undefined,
+  editor: { readonly current: EditorView | null },
+): (stay: boolean, text?: string) => void {
+  const workspace = useDesktopWorkspace();
+  return useCallback((stay: boolean, text?: string): void => {
+    const agent = agentSessionId;
+    const view = editor.current;
+    const message = text ?? (view && document
+      ? documentRemark(view, document, root, split && ready ? { text: ready.text, rows: split.unifiedRows } : undefined)
+      : undefined);
+    if (!agent || !message) return;
+    appendDraftText(agent, message);
+    // After Vim has left Visual mode and settled its own focus.
+    if (!stay) requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
+    else notify("Added to the Prompt", "info");
+  }, [agentSessionId, document, editor, ready, root, split, workspace]);
 }
 
 /** Everything the Desktop Review workbench reads and does, without layout. */
@@ -80,6 +124,7 @@ export function useReviewWorkbench(active: boolean) {
   const inspectorAction = useRef<((action: ReviewDocumentAction, view: EditorView) => void) | undefined>(undefined);
   const [cursorLine, setCursorLine] = useState(1);
   const ready = load?.state === "ready" ? load.value : undefined;
+  const split = useSplitDiff(document, ready);
   const reviewed = useReviewedMarks(context.synced.progress, changes.queue);
   const pull = document?.kind === "pr"
     ? pullFile(document.repositoryId, document.number, document.revision, document.path)
@@ -122,16 +167,7 @@ export function useReviewWorkbench(active: boolean) {
     const done = revisionMatches(context.synced.progress, key, mark);
     mutateMobileReview(context.stateKey, "markReviewed", { key, revision: done ? null : mark });
   }, [context.stateKey, context.synced.progress]);
-  const send = useCallback((stay: boolean, text?: string): void => {
-    const agent = context.agentSessionId;
-    const view = editor.current;
-    const message = text ?? (view && document ? documentRemark(view, document, root) : undefined);
-    if (!agent || !message) return;
-    appendDraftText(agent, message);
-    // After Vim has left Visual mode and settled its own focus.
-    if (!stay) requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
-    else notify("Added to the Prompt", "info");
-  }, [context.agentSessionId, document, root, workspace]);
+  const send = useSendRemark(context.agentSessionId, document, ready, root, split, editor);
 
   const onAction = useCallback((action: ReviewDocumentAction, view: EditorView): void => {
     switch (action.kind) {
@@ -196,7 +232,10 @@ export function useReviewWorkbench(active: boolean) {
     reviewed,
     openKey,
     restoreLine: document ? positions.current.get(reviewDocumentKey(document)) : undefined,
-    hunk: document?.kind === "diff" && ready ? hunkPosition(ready.text, cursorLine) : undefined,
+    hunk: document?.kind !== "source" && ready ? hunkPosition(split?.right.text ?? ready.text, cursorLine) : undefined,
+    split,
+    /** The Document row showing unified patch row `row` (a split has its own rows). */
+    viewRowOf: (row: number) => split ? splitRowOf(split, row) : row,
     openReviewed: openKey && openMark ? revisionMatches(context.synced.progress, openKey, openMark) : undefined,
     root,
     open,

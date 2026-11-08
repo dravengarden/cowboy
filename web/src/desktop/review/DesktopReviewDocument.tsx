@@ -18,6 +18,9 @@ import {
   reviewDocumentKey,
 } from "./desktopReviewTabs";
 import { ReviewCodeEditor } from "./ReviewCodeEditor";
+import { ReviewSplitMirror } from "./ReviewSplitMirror";
+import type { SplitDiff } from "./splitDiffModel";
+import { useState } from "react";
 import type { ReviewDocumentAction } from "./reviewDocumentKeys";
 import type { ReviewDocumentLoad } from "./useReviewDocumentText";
 
@@ -143,6 +146,7 @@ export function DesktopReviewDocument({
   onMark,
   onSend,
   empty,
+  split,
 }: {
   tabs: DesktopReviewTabs;
   document: ReviewDocumentRef | undefined;
@@ -160,8 +164,10 @@ export function DesktopReviewDocument({
   onMark: () => void;
   onSend: () => void;
   empty: React.ReactNode;
+  split?: SplitDiff | undefined;
 }): React.JSX.Element {
   const ready = load?.state === "ready" ? load.value : undefined;
+  const [scrollTop, setScrollTop] = useState(0);
   return (
     <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <ReviewFileTabs tabs={tabs} onSelect={onSelectTab} onClose={onCloseTab} onKeep={onKeepTab} />
@@ -179,12 +185,17 @@ export function DesktopReviewDocument({
       )}
       {document && load?.state !== "error" && (
         // Mounted across documents, so a file change never drops Vim's focus;
-        // the next text replaces the state when it arrives.
+        // the next text replaces the state when it arrives. A split adds the
+        // old side as a passive mirror; the new side keeps the Vim buffer.
+        <Box sx={{ flex: 1, minHeight: 0, display: "flex" }} data-review-diff-layout={split ? "split" : "unified"}>
+        {split && <ReviewSplitMirror path={document.path} side={split.left} fontSize={fontSize} scrollTop={scrollTop} />}
         <ReviewCodeEditor
-          documentKey={ready?.key ?? "loading"}
+          documentKey={split ? `${ready?.key ?? "loading"}:split` : ready?.key ?? "loading"}
           path={document.path}
           kind={document.kind === "source" ? "source" : "diff"}
-          text={ready?.text ?? ""}
+          text={split?.right.text ?? ready?.text ?? ""}
+          side={split?.right}
+          onScroll={split ? setScrollTop : undefined}
           wrap={wrap}
           fontSize={fontSize}
           restoreLine={restoreLine}
@@ -192,6 +203,7 @@ export function DesktopReviewDocument({
           onCursorLine={onCursorLine}
           onView={onView}
         />
+        </Box>
       )}
       {document && (
         <Toolbar

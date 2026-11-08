@@ -1,6 +1,6 @@
 # Desktop Code Review
 
-**Status: design proposal r3 (2026-11-08); D0, D1, D1b, D1c and D2a implemented, D2b–D4 planned.** r3 records the
+**Status: design proposal r3 (2026-11-08); D0, D1, D1b, D1c, D2a and D2b implemented, D2c–D4 planned.** r3 records the
 owner's answers to the r2 open questions. r2 folds in a
 Codex Astra Max design review of r1 (managed call
 `call-53884a467577cfb02c34574f`: verdict *needs-attention*, five high and ten
@@ -539,6 +539,7 @@ together" reads "Prompt and the work pane".
 | D1b (implemented) | History (commit drill-in, commit tabs) and Worktrees tabs, the context control `␣VX` (this Session, project checkout, linked, bound and same-project sessions; a per-device choice), Review settings `␣V,`, a resizable Navigator in Resize mode | `tools/cdp-review-acceptance.ts` (15 trusted-input steps, both themes) |
 | D1c (implemented) | Remote PR in the workbench: the Pull request tab (`␣VG`) binds a PR through the synced `remote_review`, lists its files and opens them as in-memory `pr` tabs with viewed marks in the synced progress; Desktop ignores the phone's `remote_selected` | the acceptance's Pull request step against an opt-in GitHub fixture |
 | D2a (implemented) | Inspector (Outline, Hunks, Problems, Details) beside or inset, `]d`/`[d`, `gO`, `␣VO`, `␣V]`, `␣VK`; Problems are check findings, placed only on source lines or through the verified diff projection; language diagnostics wait for D2c's buffer leases | acceptance Inspector steps (check, `]d`, `gO`, inset at narrow width) |
+| D2b (implemented) | Split diff (`␣VD`, per device): an incremental decoder (`unifiedPatchDecoder.ts`) and an aligned two-sided layout (`splitDiffModel.ts`); the new side is the Vim buffer, the old side a passive mirror that follows its scroll; selections, `]c`, the Inspector and remarks map split rows to patch rows | decoder tests at every cut offset; acceptance split step |
 | D2 tools | Streaming patch decoder and `@codemirror/merge` split view (patch-only), Inspector (Outline, Hunks, Problems, Details), `K` `gd` `gr` `gO` `]d`, checks `␣VK` with context gating, Review settings | Decoder fixtures pass; split and unified agree on every hunk of the fixture; hover/definition round trips under the measured `review_read_completed` budget |
 | D2b sides | Comparison-bound side windows; expanded context in the split layout | Expanded old-side text equals `git show <base>:<path>` for the fixture; an edited worktree never changes it |
 | D3 agent loop | Delegation contract, Explain/Review forks as kept-source preview tabs, findings projection with anchor states, `␣VS` on a problem | A managed review's findings land on their lines at `exact`, move to `heuristic`/`unmapped` after an edit, and disappear with a deleted fork; a prose result is shown as text |
@@ -565,6 +566,17 @@ workbench with trusted keys in both themes and is part of
 With D1c the workbench covers everything the classic layout offers on
 Desktop. `␣VL` stays as a fallback until D4 removes the Mobile UI imports
 from Desktop; it is not needed for any task.
+
+D2b deviates from "Editor engine": it does not add `@codemirror/merge`. A
+patch-only split needs no diff algorithm, because the alignment comes from
+the patch (deletions face the additions that follow them, the shorter side
+padded), and the dependency would change the locked web inputs. Two
+CodeMirror views carry the sides; both get the file's grammar, since the
+split rows hold plain code. The loader joins only revision-matched pages
+before the decoder runs, and the decoder itself is incremental and tested at
+every cut offset, so a page boundary inside a hunk or a line cannot change
+the result. Expanded context remains D2's later step (comparison-bound side
+windows); until then the split shows the patch's hunks only.
 
 D0 keeps the Desktop pane model at three panes: Review is the region
 `conversation.review` of the Conversation pane rather than a fourth

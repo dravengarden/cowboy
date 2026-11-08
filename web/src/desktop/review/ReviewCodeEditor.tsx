@@ -14,6 +14,8 @@ import { createImeAutoInsertVim } from "../vim/imeAutoInsertVim";
 import { parseVimConfig } from "../vim/vimConfig";
 import { vimCommandKey } from "../vim/vimCommandKey";
 import { reviewDiffDecorations } from "./reviewDiffDecorations";
+import type { SplitSide } from "./splitDiffModel";
+import { splitSideExtensions } from "./splitSideExtensions";
 import { revealEditorLine } from "./reviewEditorSelection";
 import {
   type ReviewDocumentAction,
@@ -101,6 +103,8 @@ export function ReviewCodeEditor({
   onAction,
   onCursorLine,
   onView,
+  side,
+  onScroll,
 }: {
   documentKey: string;
   path: string;
@@ -112,15 +116,22 @@ export function ReviewCodeEditor({
   onAction: (action: ReviewDocumentAction, view: EditorView) => void;
   onCursorLine: (line: number) => void;
   onView: (view: EditorView | null) => void;
+  /** The new side of a split diff: plain code with its own row model. */
+  side?: SplitSide | undefined;
+  /** The scroller's position, for a split's mirror side. */
+  onScroll?: ((top: number) => void) | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
+  const onScrollRef = useRef(onScroll);
+  onScrollRef.current = onScroll;
   const actions = useRef({ onAction, onCursorLine });
   actions.current = { onAction, onCursorLine };
   const [language, setLanguage] = useState<{ key: string; support: LanguageSupport | null }>();
+  const highlighted = kind === "source" || side !== undefined;
   useEffect(() => {
-    if (kind !== "source") return undefined;
+    if (!highlighted) return undefined;
     let current = true;
     void loadCodeLanguage(path, text.slice(0, 200)).then((support) => {
       if (current) setLanguage({ key: documentKey, support });
@@ -128,7 +139,7 @@ export function ReviewCodeEditor({
     return () => {
       current = false;
     };
-  }, [documentKey, kind, path, text]);
+  }, [documentKey, highlighted, path, text]);
   const support = language?.key === documentKey ? language.support : null;
 
   const extensions = useMemo((): Extension[] => [
@@ -137,13 +148,23 @@ export function ReviewCodeEditor({
     reviewKeys((action, editor) => actions.current.onAction(action, editor)),
     cmTheme(theme, true),
     syntaxHighlighting(reviewHighlightStyle(theme.palette.mode)),
-    reviewLineGutter(kind, (row) => {
-      const editor = view.current;
-      if (editor) revealEditorLine(editor, row);
-      return true;
-    }),
-    ...(kind === "diff" ? [reviewDiffDecorations(theme)] : support ? [support] : []),
-    ...(wrap ? [EditorView.lineWrapping] : []),
+    ...(side
+      ? [splitSideExtensions(theme, side), ...(support ? [support] : [])]
+      : [
+        reviewLineGutter(kind, (row) => {
+          const editor = view.current;
+          if (editor) revealEditorLine(editor, row);
+          return true;
+        }),
+        ...(kind === "diff" ? [reviewDiffDecorations(theme)] : support ? [support] : []),
+      ]),
+    // A split's two sides scroll together row for row, so neither wraps.
+    ...(wrap && !side ? [EditorView.lineWrapping] : []),
+    ...(onScrollRef.current ? [EditorView.domEventHandlers({
+      scroll: (_event, editor) => {
+        onScrollRef.current?.(editor.scrollDOM.scrollTop);
+      },
+    })] : []),
     EditorView.updateListener.of((update) => {
       if (update.selectionSet || update.docChanged) {
         actions.current.onCursorLine(update.state.doc.lineAt(update.state.selection.main.head).number);
@@ -159,7 +180,7 @@ export function ReviewCodeEditor({
         borderRightColor: theme.palette.divider,
       },
     }),
-  ], [fontSize, kind, support, theme, wrap]);
+  ], [fontSize, kind, side, support, theme, wrap]);
 
   useEffect(() => {
     if (!host.current) return undefined;

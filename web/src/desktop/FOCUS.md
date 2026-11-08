@@ -229,7 +229,8 @@ a folded Prompt. The Review group (`␣V`, while Review is shown): `V` focus,
 `C`/`F`/`H`/`W`/`G` Changes/Files/History/Worktrees/Pull request, `X` what to review (the
 Session's default, its project checkout, linked, bound or same-project
 sessions; per device, and choosing never moves the Agent), `,` Review
-settings, `O` the outline, `]` fold the Inspector, `K` run a project check, `A` compare against, `U` unread only, `M` mark
+settings, `D` unified or split diff (per device; in a split the new side
+holds the Vim buffer and the old side follows its scroll), `O` the outline, `]` fold the Inspector, `K` run a project check, `A` compare against, `U` unread only, `M` mark
 reviewed (the focused row, else the open file), `S` send and stay, `Q` close
 the file tab, `P` keep it, `[` fold the Navigator, `L` the classic layout.
 From 1320 px of Review width the Inspector (`review.inspector`) sits on the

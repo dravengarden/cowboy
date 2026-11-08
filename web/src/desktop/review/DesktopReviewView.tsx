@@ -19,6 +19,8 @@ import { setReviewContextChoice } from "./desktopReviewContextChoice";
 import { useReviewWorkbenchCommands } from "./useReviewWorkbenchCommands";
 import { REVIEW_DOCUMENT_REGION, type ReviewWorkbench, useReviewWorkbench } from "./useReviewWorkbench";
 import { useElementWidth } from "./useReviewTabsState";
+import { toggleReviewDiffLayout } from "./reviewDiffLayout";
+import { notify } from "../../store";
 import { ReviewNavigatorSplitter, useNavigatorWidth } from "./ReviewNavigatorSplitter";
 import { DesktopModal } from "../DesktopModal";
 import { focusOutline, REVIEW_INSPECTOR_REGION, REVIEW_RUN_CHECK_EVENT, ReviewInspector } from "./ReviewInspector";
@@ -203,6 +205,9 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
       review.workspace.focusRegion(REVIEW_DOCUMENT_REGION);
     },
     refresh: review.changes.refresh,
+    toggleDiffLayout: () => {
+      notify(toggleReviewDiffLayout() === "split" ? "Split diff" : "Unified diff", "info");
+    },
     hasDocument: review.document !== undefined,
     overlay: compact && overlay,
   });
@@ -242,6 +247,7 @@ function ReviewDocumentRegion({ review }: { review: ReviewWorkbench }): React.JS
         onMark={() => review.markOpen()}
         onSend={() => review.send(false)}
         empty={<EmptyDocument review={review} />}
+        split={review.split}
       />
     </Box>
   );
