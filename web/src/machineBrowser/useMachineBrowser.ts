@@ -22,9 +22,10 @@ import {
   RESTART_CONFIRM_ATTEMPTS,
   RESTART_CONFIRM_INTERVAL_MS,
   confirmStopped,
+  modelFor,
   pollPeriod,
   readTicket,
-  reduceBrowser,
+  reduceAccountBrowser,
   resetTarget,
   shownTarget,
 } from "./browserModel";
@@ -48,8 +49,14 @@ export interface MachineBrowserController {
   refresh(): void;
   /** Open (or, for a sign-in, re-validate) the browser; `takeover` mounts
    * the viewer over another attachment when the open answers attached, and
-   * only over `expected` when the owner confirmed that browser. */
-  open(viewport: BrowserViewport, takeover?: boolean, expected?: BrowserTarget): void;
+   * only over `expected` when the owner confirmed that browser. `machine`
+   * pins the open to the Machine the owner chose for a first open. */
+  open(
+    viewport: BrowserViewport,
+    takeover?: boolean,
+    expected?: BrowserTarget,
+    machine?: string,
+  ): void;
   /** Instance commands name `target`, the browser a confirmation captured,
    * else the one shown now (`shownTarget`). */
   hibernate(target?: BrowserTarget): void;
@@ -97,6 +104,46 @@ async function restartOn(
   return reopen(abort, target.machine_id);
 }
 
+/** The panel's model, bound to one account: switching accounts starts from
+ * nothing, and every event is tagged with the account that produced it so a
+ * late answer or viewer callback of another account is discarded
+ * (`reduceAccountBrowser`). `modelRef` follows the shown model. */
+function useAccountModel(account: string): {
+  model: BrowserModel;
+  modelRef: { current: BrowserModel };
+  dispatch: (event: BrowserEvent) => void;
+} {
+  const [bound, send] = useReducer(reduceAccountBrowser, {
+    account,
+    model: INITIAL_BROWSER_MODEL,
+  });
+  const model = modelFor(bound, account);
+  const modelRef = useRef(model);
+  modelRef.current = model;
+  const dispatch = useCallback(
+    (event: BrowserEvent) => send({ kind: "event", account, event }),
+    [account],
+  );
+  useEffect(() => send({ kind: "bind", account }), [account]);
+  return { model, modelRef, dispatch };
+}
+
+/** Whether an answer may still be applied: the panel is mounted and the
+ * product session and principal are the ones it was opened for. */
+function useLive(owner: string): () => boolean {
+  const alive = useRef(false);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  return useCallback(
+    () => alive.current && !productSessionSignal().aborted && productSyncPrincipal() === owner,
+    [owner],
+  );
+}
+
 export function useMachineBrowser({
   account,
   dataset,
@@ -106,14 +153,8 @@ export function useMachineBrowser({
   signInRequest,
   api = machineBrowserApi,
 }: MachineBrowserInput): MachineBrowserController {
-  const [model, dispatch] = useReducer(reduceBrowser, INITIAL_BROWSER_MODEL);
-  const alive = useRef(false);
-  const modelRef = useRef(model);
-  modelRef.current = model;
-  const live = useCallback(
-    () => alive.current && !productSessionSignal().aborted && productSyncPrincipal() === owner,
-    [owner],
-  );
+  const { model, modelRef, dispatch } = useAccountModel(account);
+  const live = useLive(owner);
   const signal = (timeoutMs: number): AbortSignal =>
     AbortSignal.any([productSessionSignal(), AbortSignal.timeout(timeoutMs)]);
 
@@ -139,17 +180,11 @@ export function useMachineBrowser({
       if (inFlight.current === done) inFlight.current = undefined;
     });
     return done;
-  }, [account, api, live]);
+  }, [account, api, dispatch, live]);
   // A poll never overtakes a read still in flight (which would discard it):
   // it waits for that one, and the next poll is scheduled after it settles.
   const poll = useCallback(() => inFlight.current ?? refresh(), [refresh]);
 
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
   useEffect(() => {
     if (active) refresh();
   }, [active, browserEnabled, refresh]);
@@ -182,7 +217,7 @@ export function useMachineBrowser({
         },
       );
     },
-    [live],
+    [dispatch, live],
   );
   const openCall = useCallback(
     (viewport: BrowserViewport, abort: AbortSignal, machine?: string): Promise<BrowserResult> =>
@@ -192,8 +227,14 @@ export function useMachineBrowser({
     [account, api, dataset, signInRequest],
   );
   const open = useCallback(
-    (viewport: BrowserViewport, takeover = false, expected?: BrowserTarget) =>
-      run("open", (abort) => openCall(viewport, abort), OPEN_TIMEOUT_MS, takeover, expected),
+    (viewport: BrowserViewport, takeover = false, expected?: BrowserTarget, machine?: string) =>
+      run(
+        "open",
+        (abort) => openCall(viewport, abort, machine),
+        OPEN_TIMEOUT_MS,
+        takeover,
+        expected,
+      ),
     [openCall, run],
   );
   // Every command names the Machine and instance the panel shows, or the

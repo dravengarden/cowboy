@@ -269,7 +269,7 @@ function browserCommands(
   };
   const { dispatch } = browser;
   return {
-    open: () => browser.open(viewportNow()),
+    open: (machine) => browser.open(viewportNow(), false, undefined, machine),
     // A sign-in panel never attaches directly: the sign-in open lets the
     // Machine validate and bind this login first, then the viewer mounts.
     attach: (takeover, target) =>

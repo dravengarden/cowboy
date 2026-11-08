@@ -109,6 +109,7 @@ import {
 import { useSubscriptionAccounts } from "../subscriptionAccounts";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
 import { registeredUsageAccounts, type UsageAccountCard } from "../usageAccounts";
+import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
 import { DesktopModal } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
 import { compactOptionName } from "./runConfigOptions";
@@ -749,14 +750,10 @@ function DesktopUsageExtras(
   );
 }
 
-function DesktopProviderUsage({
-  account,
-  schedule,
-  onUsageChanged,
-  onRefresh,
-  refreshing,
-}: {
+function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, refreshing, action }: {
   account: UsageAccountCard;
+  /** Account-level controls beside the heading (the browser entry). */
+  action?: React.ReactNode;
   schedule: { fire_at_ms: number } | undefined;
   onUsageChanged: () => Promise<void>;
   onRefresh: (() => Promise<void>) | undefined;
@@ -783,6 +780,7 @@ function DesktopProviderUsage({
         <Box>
           <Typography variant="subtitle2" fontWeight={750}>{account.title}</Typography>
           {account.subtitle && <Typography variant="caption" color="text.secondary">{account.subtitle}</Typography>}
+          {action}
         </Box>
         {onRefresh && <NetworkButton size="small" disabled={refreshing} networkAction={onRefresh}
           startIcon={refreshing ? <CircularProgress size={14} /> : <Refresh fontSize="small" />}>
@@ -1463,8 +1461,8 @@ export function DesktopTopBarControls({
                     refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : account.native?.refreshing ?? false}
                     onRefresh={account.collector ? () => requestUsageRefresh(account.collector)
                       : account.native?.available ? () => native.refresh(account.id) : undefined}
-                    onUsageChanged={() =>
-                      loadUsage(false)}
+                    onUsageChanged={() => loadUsage(false)}
+                    action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} />}
                   />
                 </Stack>
               ))}

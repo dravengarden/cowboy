@@ -19,10 +19,13 @@ import {
   confirmationCurrent,
   confirmationFor,
 } from "./confirmation";
+import { MachineBrowserChooser } from "./MachineBrowserChooser";
+import { needsMachineChoice } from "./entryRules";
 
 /** Commands that follow a confirmation take the target it captured. */
 export interface BrowserCommands {
-  open(): void;
+  /** `machine` pins the open to the Machine the owner chose. */
+  open(machine?: string): void;
   attach(takeover: boolean, target?: BrowserTarget): void;
   detach(): void;
   hibernate(target?: BrowserTarget): void;
@@ -70,11 +73,14 @@ const CONFIRM_TEXT: Record<
 export function BrowserPrimaryAction({
   model,
   state,
+  signIn = false,
   commands,
   onConfirm,
 }: {
   model: BrowserModel;
   state: BrowserStateEvent | null;
+  /** A sign-in panel opens where its login runs and never offers a choice. */
+  signIn?: boolean;
   commands: BrowserCommands;
   onConfirm: (kind: Confirm) => void;
 }): React.JSX.Element | null {
@@ -89,9 +95,18 @@ export function BrowserPrimaryAction({
       </Stack>
     );
   }
+  if ((!state || state.state === "hibernated") && !signIn && needsMachineChoice(model.read)) {
+    return (
+      <MachineBrowserChooser
+        read={model.read}
+        busy={Boolean(model.busy)}
+        onOpen={(machine) => commands.open(machine)}
+      />
+    );
+  }
   if (!state || state.state === "hibernated") {
     return (
-      <Button variant="contained" disabled={Boolean(model.busy)} onClick={commands.open}>
+      <Button variant="contained" disabled={Boolean(model.busy)} onClick={() => commands.open()}>
         Open browser
       </Button>
     );
@@ -215,7 +230,13 @@ export function BrowserActionBar({
       )}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
         {!model.viewer && (
-          <BrowserPrimaryAction model={model} state={state} commands={commands} onConfirm={ask} />
+          <BrowserPrimaryAction
+            model={model}
+            state={state}
+            signIn={signIn}
+            commands={commands}
+            onConfirm={ask}
+          />
         )}
         {model.viewer && (
           <Button disabled={busy} onClick={commands.detach}>

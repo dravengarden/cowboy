@@ -507,3 +507,38 @@ export function pollPeriod(model: BrowserModel, now: number): number | undefined
   }
   return POLL_IDLE_MS;
 }
+
+/** The panel's model together with the one account it describes. */
+export interface AccountBrowserModel {
+  account: string;
+  model: BrowserModel;
+}
+
+/** `bind` switches the panel to an account and starts it from nothing;
+ * `event` carries the account whose request or viewer produced it. */
+export type AccountBrowserAction =
+  | { kind: "bind"; account: string }
+  | { kind: "event"; account: string; event: BrowserEvent };
+
+/** One panel never mixes accounts: binding another account drops the
+ * previous account's read, viewer target and remote clipboard, and an event
+ * from another account (a request still in flight, a closing viewer) is
+ * discarded instead of applied to this one. */
+export function reduceAccountBrowser(
+  state: AccountBrowserModel,
+  action: AccountBrowserAction,
+): AccountBrowserModel {
+  if (action.kind === "bind") {
+    return action.account === state.account
+      ? state
+      : { account: action.account, model: INITIAL_BROWSER_MODEL };
+  }
+  if (action.account !== state.account) return state;
+  const model = reduceBrowser(state.model, action.event);
+  return model === state.model ? state : { account: state.account, model };
+}
+
+/** The model shown for `account`: nothing until the panel is bound to it. */
+export function modelFor(state: AccountBrowserModel, account: string): BrowserModel {
+  return state.account === account ? state.model : INITIAL_BROWSER_MODEL;
+}

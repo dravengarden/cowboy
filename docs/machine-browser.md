@@ -916,7 +916,7 @@ framing. Counters record bytes and frames.
 
 | Route | Effect |
 |---|---|
-| `GET /api/provider-accounts/{account}/browser` | state, geometry, scale, deadline, snapshot generation and time, Machine, reasons; `machine_id=` keeps the read on that Machine |
+| `GET /api/provider-accounts/{account}/browser` | state, geometry, scale, deadline, snapshot generation and time, Machine, reasons; `machine_id=` keeps the read on that Machine; `choose_machine` (no placement and no native credentials anywhere: the first open must name a Machine) and `capable_machines` (`[{machine_id}]`, Machines whose current connection speaks the browser protocol and reported an available browser capability) |
 | `POST /api/provider-accounts/{account}/browser/open` | open as `Tab` (no URL body); an optional `machine_id` opens only on that Machine: `browser_not_placed` unless the account has a placement or native credentials there (an account with neither anywhere, never signed in, may name its first Machine), `browser_machine_unavailable` when it is not connected or cannot run browsers (never another Machine) |
 | `POST /api/provider-accounts/{account}/logins/{request}/browser` | open bound to that sign-in; no URL in the body; owner and account checked against the login receipt |
 | `POST .../browser/navigate` | `Tab` instances only, owner-supplied `https` URL, bounded; names `machine_id` and `instance` |
@@ -941,7 +941,9 @@ Enablement has two layers, both default off: the Service setting
 per-account `browser_enabled` flag in the account registry, changed through
 `accounts.update` with `{type: "set_browser_enabled"}`. Existing accounts stay
 disabled until the owner enables each one; the first enablement is the test
-account only. Cowboy MCP exposes the state read (`accounts.browser`) and the
+account only. `GET /api/provider-accounts` reports the gate as
+`machine_browser: "enabled" | "not_enabled"` so account cards can explain a
+closed gate without a per-account read. Cowboy MCP exposes the state read (`accounts.browser`) and the
 lifecycle actions through `control.apply` with the same receipts as other
 account operations, per the MCP discovery rule in `AGENTS.md`.
 
@@ -1133,6 +1135,29 @@ displays.
   incarnation or login-request change and when the viewer closes.
 - **Passkeys** are not transported by RFB; the sign-in guidance names the
   email or one-time-code path.
+- **First Machine.** When the state read reports `choose_machine` (never
+  signed in, no placement), the tab panel replaces "Open browser" with a
+  Machine chooser listing only `capable_machines` (display names from the
+  Machine list) and opens with that `machine_id`; with none offered it says
+  so and opens nothing. The chosen Machine becomes the placement, so later
+  opens need no choice. A sign-in panel never offers the chooser.
+- **Entries.** Every named-account card offers the panel: the account
+  management card ("Browser…", beside the enable toggle) and every usage
+  card ("Browser", Mobile Info sheet and Desktop usage panel). A usage-card
+  entry opens only the account's ordinary tab browser; it never uses the
+  sign-in open and never enables anything. With the gate closed, the account
+  disabled or its browser not enabled, the entry is disabled with a one-line
+  reason and, for the account-level cases, a link to account management.
+  Provider cards that are not named registry accounts (the Service-collected
+  legacy default account of each Provider) have no entry: the browser routes
+  refuse them (`named_account_required`, or `account_unavailable` for an id
+  outside the registry).
+- **Isolation in the panel.** A panel is bound to one account: its model is
+  keyed by that account, switching accounts starts from an empty model (no
+  read, viewer target, pinned Machine or remote clipboard), and every
+  request result and viewer callback is tagged with the account that issued
+  it, so a late answer for another account is discarded. Each entry mounts
+  its own sheet keyed by the account id; two cards never share a viewer.
 
 Desktop mounts the viewer in the account panel ("Browser") and inside the
 sign-in dialog; the cross-device route

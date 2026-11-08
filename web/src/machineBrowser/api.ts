@@ -64,6 +64,11 @@ export interface BrowserRead {
   state: BrowserStateEvent | null;
   placements: BrowserPlacement[];
   admission: string | null;
+  /** The account has no placement and no native credentials anywhere
+   * (never signed in): its first open names a Machine the owner chose. */
+  choose_machine?: boolean;
+  /** Connected Machines that can run a browser now, the choices offered. */
+  capable_machines?: { machine_id: string }[];
 }
 
 /** Every lifecycle route answers with the Machine's observation. */
@@ -163,7 +168,11 @@ export function validBrowserRead(value: unknown): value is BrowserRead {
     (value.state === null || validBrowserState(value.state)) &&
     (value.admission === null || text(value.admission)) &&
     Array.isArray(value.placements) &&
-    value.placements.every(validPlacement)
+    value.placements.every(validPlacement) &&
+    (value.choose_machine === undefined || typeof value.choose_machine === "boolean") &&
+    (value.capable_machines === undefined ||
+      (Array.isArray(value.capable_machines) &&
+        value.capable_machines.every((machine) => record(machine) && text(machine.machine_id))))
   );
 }
 

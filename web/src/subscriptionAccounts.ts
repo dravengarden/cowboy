@@ -21,6 +21,8 @@ export interface SubscriptionSnapshot {
   revoked_accounts?: string[];
   session_admission: string;
   session_providers?: string[];
+  /** The Service gate of the optional Machine browser (`accounts.machine_browser`). */
+  machine_browser?: "enabled" | "not_enabled";
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -36,6 +38,7 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
     (value.display_preferences === undefined || validSubscriptionDisplay(value.display_preferences)) &&
     (value.session_providers === undefined || (Array.isArray(value.session_providers) && value.session_providers.every(text))) &&
     (value.revoked_accounts === undefined || (Array.isArray(value.revoked_accounts) && value.revoked_accounts.every(text))) &&
+    (value.machine_browser === undefined || value.machine_browser === "enabled" || value.machine_browser === "not_enabled") &&
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
     Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
       text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean" &&

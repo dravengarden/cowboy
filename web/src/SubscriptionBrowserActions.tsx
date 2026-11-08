@@ -34,6 +34,7 @@ export function SubscriptionBrowserActions({
       </Button>
       {open && (
         <MachineBrowserSheet
+          key={account.id}
           open
           onClose={() => setOpen(false)}
           owner={owner}

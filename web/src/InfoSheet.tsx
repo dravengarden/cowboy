@@ -75,6 +75,7 @@ import { QuotaMeter } from "./InfoMetricVisuals";
 import { ClientStorageInfoSection, ServiceStorageInfoSection } from "./InfoRuntimeMetrics";
 import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
+import { AccountBrowserEntry } from "./machineBrowser/AccountBrowserEntry";
 import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard } from "./usageAccounts";
 import { useProviderCatalog } from "./providerCatalog";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
@@ -128,18 +129,11 @@ function LimitRow({ limit }: { limit: UsageLimit }): React.JSX.Element {
   return <QuotaMeter label={limit.label} remaining={limit.remaining} resetsLabel={resetText(limit.resetsAt)} />;
 }
 
-function ProviderUsageCard({
-  account,
-  usage,
-  schedule,
-  now,
-  onUsageChanged,
-  onRefresh,
-  refreshing = false,
-  children,
-}: {
+function ProviderUsageCard({ account, usage, schedule, now, onUsageChanged, onRefresh, refreshing = false, children, action }: {
   account: UsageAccountCard;
   children?: React.ReactNode;
+  /** Account-level controls shown on the card itself (the browser entry). */
+  action?: React.ReactNode;
   usage: ProviderUsage;
   schedule: { fire_at_ms: number } | undefined;
   now: number;
@@ -158,22 +152,15 @@ function ProviderUsageCard({
       onRefresh={onRefresh}
       refreshing={refreshing}
       children={children}
+      action={action}
     />
   );
 }
 
-function ProviderUsageCardBody({
-  account: identity,
-  usage,
-  schedule,
-  now,
-  onUsageChanged,
-  onRefresh,
-  refreshing,
-  children,
-}: {
+function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsageChanged, onRefresh, refreshing, children, action }: {
   account: UsageAccountCard;
   children?: React.ReactNode;
+  action?: React.ReactNode;
   usage: ProviderUsage;
   schedule: { fire_at_ms: number } | undefined;
   now: number;
@@ -422,6 +409,7 @@ function ProviderUsageCardBody({
           )}
         </PluginSlot>
         </Box>
+        {action}
         {!!(detailsContext.creditDetails?.length || manageUrl || usage.activity || usage.observed_at_ms > 0 || Children.toArray(children).length) && (
           <Accordion
             disableGutters
@@ -806,6 +794,7 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
           onRefresh={account.collector ? () => loadProvider(account.collector!)
             : account.native?.available ? () => native.refresh(account.id) : undefined}
           refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : account.native?.refreshing ?? false}
+          action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} />}
         >
           {execution && account.collector && (
             <UsageExecutorPicker
