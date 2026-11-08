@@ -11,6 +11,10 @@ pub type LocalFuture<T> = Pin<Box<dyn Future<Output = T>>>;
 pub struct ControllerHooks {
     pub serve: fn(crate::cli::ServeArgs) -> LocalFuture<anyhow::Result<()>>,
     pub init_tracing: fn(),
+    pub launch_mcp: fn(
+        &crate::core::Hub,
+        &crate::core::SessionMeta,
+    ) -> anyhow::Result<Option<Box<crate::mcp_binding::NativeLaunchPlan>>>,
     pub launch_extensions:
         fn(&crate::core::Hub, &crate::core::SessionMeta) -> crate::runtime_wire::SessionExtensions,
 }
@@ -47,5 +51,27 @@ pub fn launch_extensions(
             memory_tools: false,
             memory_recall: false,
         },
+    }
+}
+
+/// A configured binding cannot silently become a launch without MCP.
+pub fn launch_mcp(
+    hub: &crate::core::Hub,
+    session: &crate::core::SessionMeta,
+) -> anyhow::Result<Option<Box<crate::mcp_binding::NativeLaunchPlan>>> {
+    match HOOKS.get() {
+        Some(hooks) => (hooks.launch_mcp)(hub, session),
+        None => {
+            let key = format!(
+                "{}{}",
+                crate::core::settings_keys::SESSION_MCP_BINDINGS_PREFIX,
+                session.id
+            );
+            anyhow::ensure!(
+                hub.setting(&key).is_none_or(|value| value.is_null()),
+                "MCP launch requires the Controller"
+            );
+            Ok(None)
+        }
     }
 }

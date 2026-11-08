@@ -1,3 +1,5 @@
+import { type MachinePluginKind, type PluginKind, machinePluginKinds, pluginKinds } from "./pluginKinds.ts";
+
 /**
  * Cowboy Provider UI SDK v2.
  *
@@ -527,14 +529,7 @@ export interface PluginCompatibilityRequirements {
   manifest_schema: number;
   package_schema: number;
   release_schema: number;
-  plugin_kind:
-    | "agent_provider"
-    | "authentication_provider"
-    | "code_intelligence"
-    | "telemetry_backend"
-    | "workspace_extension"
-    | "memory_backend"
-    | "call_profile";
+  plugin_kind: PluginKind;
   payload_schema: number;
   host_bundle_schema?: number;
   host_schema?: number;
@@ -692,13 +687,7 @@ export interface MachineProviderInventory {
 export interface MachinePluginInventory {
   plugin_id: string;
   plugin_version: string;
-  plugin_kind:
-    | "agent_provider"
-    | "code_intelligence"
-    | "telemetry_backend"
-    | "workspace_extension"
-    | "memory_backend"
-    | "call_profile";
+  plugin_kind: MachinePluginKind;
   generation_digest: string;
   contract_fingerprint: string;
   state: MachineProviderInventory["state"];
@@ -1055,16 +1044,7 @@ export function validateMachinePluginInventory(
       !isIdentifier(raw.plugin_id) ||
       typeof raw.plugin_version !== "string" ||
       !parseSemanticVersion(raw.plugin_version) ||
-      ![
-        "agent_provider",
-        "code_intelligence",
-        "telemetry_backend",
-        "workspace_extension",
-        "memory_backend",
-        "call_profile",
-      ].includes(
-        String(raw.plugin_kind),
-      ) ||
+      !machinePluginKinds.has(String(raw.plugin_kind)) ||
       typeof raw.generation_digest !== "string" ||
       !isDigest(raw.generation_digest) ||
       typeof raw.contract_fingerprint !== "string" ||
@@ -2758,16 +2738,7 @@ export function validatePluginCompatibilityRequirements(
     (input.plugin_sdk_version !== undefined &&
       (typeof input.plugin_sdk_version !== "string" ||
         !parseSemanticVersion(input.plugin_sdk_version))) ||
-    ![
-      "agent_provider",
-      "authentication_provider",
-      "code_intelligence",
-      "telemetry_backend",
-      "workspace_extension",
-      "memory_backend",
-      "call_profile",
-    ]
-      .includes(String(input.plugin_kind)) ||
+    !pluginKinds.has(String(input.plugin_kind)) ||
     ![
       input.manifest_schema,
       input.package_schema,
@@ -2794,6 +2765,9 @@ export function validatePluginCompatibilityRequirements(
     (input.release_schema === 5 &&
       (input.plugin_kind !== "memory_backend" &&
           input.plugin_kind !== "call_profile" ||
+        input.host_bundle_schema !== undefined)) ||
+    (input.release_schema === 6 &&
+      (input.plugin_kind !== "mcp_server" ||
         input.host_bundle_schema !== undefined))
   ) {
     throw new Error("Invalid Plugin release compatibility requirements");
@@ -2862,6 +2836,62 @@ function pluginCompatibilityProblem(
     plugin_id: entry.provider_id,
     plugin_version: entry.provider_version,
   }, target);
+}
+
+function pluginPayloadInterval(
+  requirements: PluginCompatibilityRequirements,
+  inventory: PluginContractInventory,
+) {
+  return requirements.plugin_kind === "agent_provider"
+    ? [
+      inventory.min_agent_provider_schema,
+      inventory.max_agent_provider_schema,
+      "Agent Provider payload schema",
+    ] as const
+    : requirements.plugin_kind === "authentication_provider"
+    ? [
+      inventory.min_authentication_provider_schema,
+      inventory.max_authentication_provider_schema,
+      "Authentication Provider payload schema",
+    ] as const
+    : requirements.plugin_kind === "workspace_extension"
+    ? [
+      1,
+      compareProviderVersions(inventory.plugin_sdk_version, "1.9.0") >= 0
+        ? 1
+        : 0,
+      "workspace extension payload schema (Plugin SDK 1.9)",
+    ] as const
+    : requirements.plugin_kind === "telemetry_backend"
+    ? [
+      1,
+      compareProviderVersions(inventory.plugin_sdk_version, "1.8.0") >= 0
+        ? 2
+        : compareProviderVersions(inventory.plugin_sdk_version, "1.7.0") >= 0
+        ? 1
+        : 0,
+      "telemetry payload schema (Plugin SDK 1.7/1.8)",
+    ] as const
+    : requirements.plugin_kind === "mcp_server"
+    ? [
+      1,
+      compareProviderVersions(inventory.plugin_sdk_version, "1.13.0") >= 0 ? 1 : 0,
+      "MCP server payload schema (Plugin SDK 1.13)",
+    ] as const
+    : requirements.plugin_kind === "memory_backend" ||
+        requirements.plugin_kind === "call_profile"
+    ? [
+      1,
+      compareProviderVersions(inventory.plugin_sdk_version, "1.12.0") >= 0
+        ? 1
+        : 0,
+      "session extension payload schema (Plugin SDK 1.12)",
+    ] as const
+    : [
+      inventory.min_code_intelligence_schema,
+      inventory.max_code_intelligence_schema,
+      "code-intelligence payload schema",
+    ] as const;
 }
 
 export function genericPluginCompatibilityProblem(
@@ -2965,50 +2995,7 @@ export function genericPluginCompatibilityProblem(
       };
     }
   }
-  const payloadInterval = requirements.plugin_kind === "agent_provider"
-    ? [
-      inventory.min_agent_provider_schema,
-      inventory.max_agent_provider_schema,
-      "Agent Provider payload schema",
-    ] as const
-    : requirements.plugin_kind === "authentication_provider"
-    ? [
-      inventory.min_authentication_provider_schema,
-      inventory.max_authentication_provider_schema,
-      "Authentication Provider payload schema",
-    ] as const
-    : requirements.plugin_kind === "workspace_extension"
-    ? [
-      1,
-      compareProviderVersions(inventory.plugin_sdk_version, "1.9.0") >= 0
-        ? 1
-        : 0,
-      "workspace extension payload schema (Plugin SDK 1.9)",
-    ] as const
-    : requirements.plugin_kind === "telemetry_backend"
-    ? [
-      1,
-      compareProviderVersions(inventory.plugin_sdk_version, "1.8.0") >= 0
-        ? 2
-        : compareProviderVersions(inventory.plugin_sdk_version, "1.7.0") >= 0
-        ? 1
-        : 0,
-      "telemetry payload schema (Plugin SDK 1.7/1.8)",
-    ] as const
-    : requirements.plugin_kind === "memory_backend" ||
-        requirements.plugin_kind === "call_profile"
-    ? [
-      1,
-      compareProviderVersions(inventory.plugin_sdk_version, "1.12.0") >= 0
-        ? 1
-        : 0,
-      "session extension payload schema (Plugin SDK 1.12)",
-    ] as const
-    : [
-      inventory.min_code_intelligence_schema,
-      inventory.max_code_intelligence_schema,
-      "code-intelligence payload schema",
-    ] as const;
+  const payloadInterval = pluginPayloadInterval(requirements, inventory);
   const payload = unsupported(
     requirements.payload_schema,
     payloadInterval[0],

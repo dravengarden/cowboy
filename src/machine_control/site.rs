@@ -80,7 +80,8 @@ fn claimed_site(command: &MachineCommand) -> Option<ClaimedSite<'_>> {
         | MachineCommand::ManagedCallReply { .. }
         | MachineCommand::MemoryRelayReply { .. }
         // The Controller selects the home Machine from its own configuration.
-        | MachineCommand::MemoryRelay { .. } => return None,
+        | MachineCommand::MemoryRelay { .. }
+        | MachineCommand::McpTransport { .. } => return None,
     };
     Some(ClaimedSite { service, machine })
 }

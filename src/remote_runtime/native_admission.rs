@@ -192,6 +192,18 @@ fn unchanged(before: &crate::core::SessionMeta, current: &crate::core::SessionMe
         && current.provider_behavior == before.provider_behavior
 }
 
+// Re-evaluate after queueing and after native-account awaits; a prepared launch
+// is not permission to ignore a policy configured while it was waiting.
+fn mcp_launch_current(hub: &crate::core::Hub, command: &CoreCommand) -> bool {
+    let Some(launch) = launch(command) else {
+        return true;
+    };
+    hub.session_info(&launch.session_id).is_some_and(|info| {
+        crate::controller_hooks::launch_mcp(hub, &info.meta)
+            .is_ok_and(|plan| plan == launch.mcp_plan)
+    })
+}
+
 /// False is a pre-write denial. Any failure after starting a write closes the
 /// transport: partially written frames must never be treated as safe rejection.
 pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
@@ -214,6 +226,9 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
         .and_then(|id| shared.hub.session_info(id))
         .map(|info| info.meta);
     if command.session_id().is_some() && meta.is_none() {
+        return Ok(false);
+    }
+    if !mcp_launch_current(&shared.hub, &command) {
         return Ok(false);
     }
     let named = launch(&command).is_some_and(|session| !session.provider_account_id.is_default())
@@ -271,17 +286,7 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
         let command = command.clone();
         let result = store
             .with_native_session_release_binding(owner, &operation, &completion, &meta, || async {
-                anyhow::ensure!(
-                    !shared.shutdown.load(Ordering::Acquire),
-                    "runtime_disconnected"
-                );
-                let current = shared
-                    .hub
-                    .session_info(&meta.id)
-                    .context("session_unavailable")?
-                    .meta;
-                anyhow::ensure!(!current.closing, "session_closing");
-                anyhow::ensure!(unchanged(&meta, &current), "native_session_binding_changed");
+                validate_delivery(shared, &meta, &command)?;
                 started.store(true, Ordering::Release);
                 write_broker_frame(writer, &Frame::CoreCommand { command }).await
             })
@@ -306,3 +311,26 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
 /// How long admission waits for a just-reloaded session's stored binding.
 const BINDING_ATTEMPTS: u32 = 40;
 const BINDING_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
+
+fn validate_delivery(
+    shared: &Shared,
+    meta: &crate::core::SessionMeta,
+    command: &CoreCommand,
+) -> Result<()> {
+    anyhow::ensure!(
+        !shared.shutdown.load(Ordering::Acquire),
+        "runtime_disconnected"
+    );
+    let current = shared
+        .hub
+        .session_info(&meta.id)
+        .context("session_unavailable")?
+        .meta;
+    anyhow::ensure!(!current.closing, "session_closing");
+    anyhow::ensure!(unchanged(meta, &current), "native_session_binding_changed");
+    anyhow::ensure!(
+        mcp_launch_current(&shared.hub, command),
+        "mcp_launch_changed"
+    );
+    Ok(())
+}

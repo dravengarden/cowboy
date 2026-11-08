@@ -28,6 +28,7 @@ use crate::persistence::EventReducer;
 use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 
 mod code_scope;
+mod mcp_launch;
 mod review_defaults;
 mod session_continuation;
 mod session_fork;
@@ -2088,6 +2089,7 @@ impl Drop for ContextEditGuard {
 type InFlightConfig = HashMap<String, (serde_json::Value, std::time::Instant)>;
 
 struct HubInner {
+    mcp_launch: Mutex<Option<std::sync::Arc<mcp_launch::Resolver>>>,
     sessions: Mutex<HashMap<String, Session>>,
     context_edits: Mutex<HashSet<String>>,
     /// Internal auth/admin state restored from the durable settings table.
@@ -2357,6 +2359,7 @@ impl Hub {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         Self {
             inner: std::sync::Arc::new(HubInner {
+                mcp_launch: Mutex::new(None),
                 sessions: Mutex::new(HashMap::new()),
                 settings: Mutex::new(HashMap::new()),
                 context_edits: Mutex::new(HashSet::new()),
@@ -3868,17 +3871,7 @@ impl Hub {
             if persist && let Some(tx) = self.inner.store_tx.as_ref() {
                 let _ = tx.send(StoreWrite::DeleteSession(session_id.to_owned()));
             }
-            for prefix in [
-                settings_keys::SESSION_RESOURCE_WAIT_PREFIX,
-                settings_keys::SESSION_QUEUE_PAUSED_PREFIX,
-                settings_keys::SESSION_DELIVERY_POLICY_PREFIX,
-                settings_keys::SESSION_DELIVERY_HOLD_PREFIX,
-                settings_keys::SESSION_CONTEXT_PREFIX,
-                settings_keys::SESSION_CONTEXT_CARRIER_PREFIX,
-                settings_keys::SESSION_CONTINUED_FROM_PREFIX,
-                settings_keys::SESSION_FORK_PREFIX,
-                settings_keys::SESSION_CONFIG_REVERT_PREFIX,
-            ] {
+            for prefix in settings_keys::SESSION_STATE_PREFIXES {
                 let key = format!("{prefix}{session_id}");
                 if self.setting(&key).is_some() {
                     self.set_setting(key, serde_json::Value::Null);

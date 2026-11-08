@@ -90,10 +90,16 @@ try {
       // memory client (memory.mjs, agent-calls.mjs) reads the bundled copy.
       await writeFile(
         `${destination}/app/${filename}`,
-        (await readFile(`${root}/${source}`, "utf8")).replaceAll(
-          '"@cowboy/memory-client"',
-          '"./matrix-client.mjs"',
-        ),
+        (await readFile(`${root}/${source}`, "utf8"))
+          .replaceAll('"@cowboy/memory-client"', '"./matrix-client.mjs"')
+          .replaceAll(
+            '"../../../components/provider-runtime/mcp-bindings.mjs"',
+            '"./mcp-bindings.mjs"',
+          )
+          .replaceAll(
+            '"../../../components/provider-runtime/execution-connection.mjs"',
+            '"./execution-connection.mjs"',
+          ),
       );
       digests[source] = await sha256(`${root}/${source}`);
     }
@@ -102,6 +108,18 @@ try {
       `${destination}/app/matrix-client.mjs`,
     );
     digests["matrix-client.mjs"] = await sha256(`${destination}/app/matrix-client.mjs`);
+    await copyFile(
+      `${repository}/components/provider-runtime/mcp-bindings.mjs`,
+      `${destination}/app/mcp-bindings.mjs`,
+    );
+    digests["mcp-bindings.mjs"] = await sha256(`${destination}/app/mcp-bindings.mjs`);
+    await copyFile(
+      `${repository}/components/provider-runtime/execution-connection.mjs`,
+      `${destination}/app/execution-connection.mjs`,
+    );
+    digests["execution-connection.mjs"] = await sha256(
+      `${destination}/app/execution-connection.mjs`,
+    );
     // Where the host ships jemalloc (Ubuntu's libjemalloc2 on OVH), the two
     // resident Node processes return freed native memory within a second
     // instead of keeping glibc's fragmented peak. launch.mjs removes the

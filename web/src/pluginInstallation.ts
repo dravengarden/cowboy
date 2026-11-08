@@ -26,7 +26,8 @@ type MachinePluginKind =
   | "telemetry_backend"
   | "workspace_extension"
   | "memory_backend"
-  | "call_profile";
+  | "call_profile"
+  | "mcp_server";
 const machinePhases = [
   "prepared",
   "staging",
@@ -242,6 +243,7 @@ export function decodeInstallEvidence(
         "workspace_extension",
         "memory_backend",
         "call_profile",
+        "mcp_server",
       ] as const,
       row.plugin_kind,
     ),

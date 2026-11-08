@@ -505,11 +505,11 @@ CONFIGURATION_SDK: r#"
 export interface Cowboy {
   configuration: {
     schema(scope:"service"|"device", q?:Selection): Promise<Selected>; // typed TOML registry, defaults/constraints/reload classes
-    read(scope:"service"|"session"|"tools", q?:Selection & {session_id?:string}): Promise<Selected & {revision:string}>;
+    read(scope:"service"|"session"|"tools"|"mcp", q?:Selection & {session_id?:string}): Promise<Selected & {revision:string}>;
   };
 }
 // service: effective config-file fields + sources/reload classes. session: exact Provider options and DB preferences.
-// tools: built-in/agent defaults, session overrides and effective Tools policy. Other sessions must share your owner.
+// tools: effective Tools policy. mcp: bindings and policy/launch/worker/runtime readiness. Same-owner sessions only.
 // This read does not wake a worker. Discover preferences for existing scoped writes; never edit raw settings keys.
 "#,
 DOCUMENTS_SDK: r#"

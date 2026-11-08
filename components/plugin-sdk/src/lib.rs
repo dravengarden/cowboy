@@ -11,6 +11,9 @@ mod code_intelligence;
 #[cfg(test)]
 mod execution_tests;
 pub mod host;
+mod mcp_discovery;
+mod mcp_server;
+pub use mcp_discovery::{McpToolDefinition, validate_mcp_discovery};
 mod session_extension;
 mod telemetry;
 mod workspace_extension;
@@ -20,6 +23,7 @@ pub use cli_auth::{
 };
 pub use code_intelligence::*;
 pub use host::*;
+pub use mcp_server::*;
 pub use session_extension::*;
 pub use telemetry::*;
 pub use workspace_extension::*;
@@ -43,7 +47,7 @@ pub const PLUGIN_SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
 pub const PACKAGE_SCHEMA_VERSION: u16 = 1;
 pub const RELEASE_SCHEMA_MIN_VERSION: u16 = 1;
-pub const RELEASE_SCHEMA_VERSION: u16 = 5;
+pub const RELEASE_SCHEMA_VERSION: u16 = 6;
 pub const HOST_RELEASE_SCHEMA_VERSION: u16 = 2;
 pub const WORKSPACE_RELEASE_SCHEMA_VERSION: u16 = 3;
 /// Old Catalog readers must skip execution-capable Agent payloads before
@@ -82,6 +86,7 @@ pub enum PluginKind {
     WorkspaceExtension,
     MemoryBackend,
     CallProfile,
+    McpServer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +142,7 @@ pub enum PluginPayload {
     WorkspaceExtension(WorkspaceExtensionContract),
     MemoryBackend(MemoryBackendContract),
     CallProfile(CallProfileContract),
+    McpServer(McpServerContract),
 }
 
 /// Declarative identity-provider package consumed by Cowboy's built-in
@@ -378,6 +384,7 @@ pub enum PluginComponentKind {
     AcpRuntime,
     CodeIntelligenceAdapter,
     CodeIntelligenceServer,
+    McpServer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -423,6 +430,7 @@ impl PluginCompatibilityRequirements {
             PluginPayload::WorkspaceExtension(contract) => contract.schema_version,
             PluginPayload::MemoryBackend(contract) => contract.schema_version,
             PluginPayload::CallProfile(contract) => contract.schema_version,
+            PluginPayload::McpServer(contract) => contract.schema_version,
         };
         let requirements = Self {
             plugin_sdk_version,
@@ -485,6 +493,10 @@ impl PluginCompatibilityRequirements {
             EXECUTION_RELEASE_SCHEMA_VERSION => ensure!(
                 self.plugin_kind == PluginKind::AgentProvider,
                 "Plugin release schema 4 is reserved for execution-capable Agents"
+            ),
+            MCP_SERVER_RELEASE_SCHEMA => ensure!(
+                self.plugin_kind == PluginKind::McpServer && self.host_bundle_schema.is_none(),
+                "release schema 6 is reserved for MCP servers"
             ),
             SESSION_EXTENSION_RELEASE_SCHEMA_VERSION => ensure!(
                 matches!(
@@ -671,6 +683,14 @@ impl PluginContractInventory {
                     }
                 }),
                 "telemetry payload schema (Plugin SDK 1.7/1.8)",
+            ),
+            PluginKind::McpServer => (
+                1,
+                u16::from(
+                    Version::parse(&self.plugin_sdk_version)
+                        .is_ok_and(|v| v >= Version::new(1, 13, 0)),
+                ),
+                "MCP server schema (Plugin SDK 1.13)",
             ),
             // Derived from the attested SDK version like the other data-only kinds.
             PluginKind::MemoryBackend | PluginKind::CallProfile => (
@@ -907,7 +927,8 @@ impl PluginPackage {
             | PluginPayload::TelemetryBackend(_)
             | PluginPayload::WorkspaceExtension(_)
             | PluginPayload::MemoryBackend(_)
-            | PluginPayload::CallProfile(_) => None,
+            | PluginPayload::CallProfile(_)
+            | PluginPayload::McpServer(_) => None,
         }
     }
 
@@ -920,7 +941,8 @@ impl PluginPackage {
             | PluginPayload::TelemetryBackend(_)
             | PluginPayload::WorkspaceExtension(_)
             | PluginPayload::MemoryBackend(_)
-            | PluginPayload::CallProfile(_) => None,
+            | PluginPayload::CallProfile(_)
+            | PluginPayload::McpServer(_) => None,
         }
     }
 
@@ -936,10 +958,11 @@ impl PluginPackage {
                 | PluginPayload::WorkspaceExtension(_)
                 | PluginPayload::MemoryBackend(_)
                 | PluginPayload::CallProfile(_)
+                | PluginPayload::McpServer(_)
         ) {
             ensure!(
                 files.is_none(),
-                "data-only capabilities cannot declare executable host bundles"
+                "this Plugin kind cannot declare executable Controller host bundles"
             );
         }
         let host = files
@@ -965,6 +988,8 @@ impl PluginPackage {
             .is_some_and(|provider| provider.manifest.runtime.behavior.execution.is_some())
         {
             EXECUTION_RELEASE_SCHEMA_VERSION
+        } else if self.manifest.kind == PluginKind::McpServer {
+            MCP_SERVER_RELEASE_SCHEMA
         } else if self.manifest.kind == PluginKind::WorkspaceExtension {
             WORKSPACE_RELEASE_SCHEMA_VERSION
         } else if matches!(
@@ -1003,6 +1028,9 @@ impl PluginPackage {
                 contract.supported_platforms.iter().cloned().collect()
             }
             PluginPayload::CallProfile(contract) => {
+                contract.supported_platforms.iter().cloned().collect()
+            }
+            PluginPayload::McpServer(contract) => {
                 contract.supported_platforms.iter().cloned().collect()
             }
         }
@@ -1120,6 +1148,7 @@ impl PluginRelease {
             PluginPayload::CodeIntelligence(contract) => {
                 code_intelligence::validate_release(contract, self)?;
             }
+            PluginPayload::McpServer(contract) => mcp_server::validate_release(contract, self)?,
             PluginPayload::AuthenticationProvider(_) => ensure!(
                 self.runtime_artifacts.is_empty(),
                 "Authentication Plugin cannot declare Machine runtime artifacts"
@@ -1173,6 +1202,11 @@ impl PluginRelease {
                 matches!(package.payload, PluginPayload::WorkspaceExtension(_))
                     && self.host_bundle_digest.is_none(),
                 "release schema 3 is reserved for data-only workspace extensions"
+            ),
+            MCP_SERVER_RELEASE_SCHEMA => ensure!(
+                matches!(package.payload, PluginPayload::McpServer(_))
+                    && self.host_bundle_digest.is_none(),
+                "release schema 6 is reserved for MCP servers"
             ),
             SESSION_EXTENSION_RELEASE_SCHEMA_VERSION => ensure!(
                 matches!(
@@ -1305,7 +1339,8 @@ impl ReleasedPluginComponent {
             PluginComponentKind::AgentGateway => PrivateComponentKind::ProviderGateway,
             PluginComponentKind::AcpRuntime => PrivateComponentKind::AcpRuntime,
             PluginComponentKind::CodeIntelligenceAdapter
-            | PluginComponentKind::CodeIntelligenceServer => {
+            | PluginComponentKind::CodeIntelligenceServer
+            | PluginComponentKind::McpServer => {
                 bail!("code-intelligence component cannot satisfy an agent Provider payload")
             }
         };
@@ -1330,60 +1365,17 @@ impl ReleasedPluginComponent {
     }
 }
 
-fn validate_session_extension(manifest: &PluginManifest, payload: &PluginPayload) -> Result<()> {
-    let (id, version) = match (manifest.kind, payload) {
-        (PluginKind::MemoryBackend, PluginPayload::MemoryBackend(contract)) => {
-            contract.validate()?;
-            (&contract.id, &contract.version)
-        }
-        (PluginKind::CallProfile, PluginPayload::CallProfile(contract)) => {
-            contract.validate()?;
-            (&contract.id, &contract.version)
-        }
-        _ => bail!("plugin kind does not match its payload"),
-    };
-    ensure!(
-        *id == manifest.id && *version == manifest.version,
-        "session extension payload identity mismatch"
-    );
-    let (major, minor, patch) = SESSION_EXTENSION_SDK;
-    ensure!(
-        manifest
-            .components
-            .iter()
-            .any(|component| component.id == "cowboy.plugin-sdk"
-                && Version::parse(&component.version)
-                    .is_ok_and(|version| version >= Version::new(major, minor, patch))),
-        "session extensions require Plugin SDK 1.12 or newer"
-    );
-    Ok(())
-}
-
 fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Result<()> {
     match (manifest.kind, payload) {
+        (PluginKind::McpServer, PluginPayload::McpServer(contract)) => {
+            mcp_server::validate_manifest(manifest, contract)?;
+        }
         (
             PluginKind::MemoryBackend | PluginKind::CallProfile,
             PluginPayload::MemoryBackend(_) | PluginPayload::CallProfile(_),
-        ) => validate_session_extension(manifest, payload)?,
+        ) => session_extension::validate_manifest(manifest, payload)?,
         (PluginKind::WorkspaceExtension, PluginPayload::WorkspaceExtension(contract)) => {
-            ensure!(
-                contract.id == manifest.id && contract.version == manifest.version,
-                "extension payload identity mismatch"
-            );
-            ensure!(
-                manifest
-                    .components
-                    .iter()
-                    .any(|c| c.id == "cowboy.plugin-sdk"
-                        && Version::parse(&c.version).is_ok_and(|v| v
-                            >= Version::new(
-                                1,
-                                if contract.schema_version >= 2 { 10 } else { 9 },
-                                0
-                            ))),
-                "workspace extension schema requires a compatible Plugin SDK"
-            );
-            contract.validate()?;
+            workspace_extension::validate_manifest(manifest, contract)?;
         }
         (PluginKind::TelemetryBackend, PluginPayload::TelemetryBackend(contract)) => {
             ensure!(

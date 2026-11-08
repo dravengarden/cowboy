@@ -41,6 +41,17 @@ impl MachineControl {
         machine_id: &str,
         request: Request,
     ) -> Result<Response, String> {
+        let connection = self.operation_connection(machine_id)?;
+        self.execution_request_on_connection(&connection, request)
+            .await
+    }
+
+    pub(super) async fn execution_request_on_connection(
+        &self,
+        connection: &super::ConnectionToken,
+        request: Request,
+    ) -> Result<Response, String> {
+        let machine_id = connection.machine_id();
         let timeout = if matches!(
             request.action,
             Action::Prepare { .. } | Action::Recover { .. }
@@ -50,7 +61,6 @@ impl MachineControl {
             std::time::Duration::from_secs(30)
         };
         let id = self.request_id("execution")?;
-        let connection = self.operation_connection(machine_id)?;
         let (response, _pending) = self.begin_request(
             machine_id,
             &id,
@@ -59,10 +69,10 @@ impl MachineControl {
                 request: Box::new(request),
             },
             ReplyKind::Execution,
-            Some(RequestBinding::Connection(&connection)),
+            Some(RequestBinding::Connection(connection)),
         )?;
         let response = tokio::time::timeout(timeout, response).await;
-        if !self.is_current(&connection) {
+        if !self.is_current(connection) {
             return Err("Execution Machine connection changed; observe the original operation before proceeding".to_owned());
         }
         match response {

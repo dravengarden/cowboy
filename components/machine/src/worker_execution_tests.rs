@@ -220,6 +220,7 @@ async fn native_worker_execution() {
     let state = root.path().join("long-machine-state-directory".repeat(4));
     let configuration = Configuration {
         schema: 1,
+        agent_cli: None,
         retention: None,
         host_command: input_path("keeper"),
         executor: wire::Executor {

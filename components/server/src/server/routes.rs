@@ -299,10 +299,7 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/sessions/{id}/calls/approval",
             post(managed_calls::decide_approval),
         )
-        .route(
-            "/api/sessions/{id}/tools",
-            get(agent_tools::session).put(agent_tools::configure_session),
-        )
+        .merge(session_tool_routes())
         .route("/api/agent-tools", get(agent_tools::list))
         .route(
             "/api/folders",
@@ -461,4 +458,13 @@ pub(super) fn code_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/code/sessions/{id}/buffer",
             put(api_code_buffer_open).delete(api_code_buffer_close),
         )
+}
+
+fn session_tool_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route(
+            "/api/sessions/{id}/tools",
+            get(agent_tools::session).put(agent_tools::configure_session),
+        )
+        .merge(mcp_bindings::routes())
 }

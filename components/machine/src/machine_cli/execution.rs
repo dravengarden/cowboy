@@ -28,6 +28,7 @@ mod abandonment;
 mod liveness;
 mod preparation;
 mod recovery;
+mod retention;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,6 +36,8 @@ pub struct Configuration {
     pub schema: u16,
     pub host_command: PathBuf,
     pub executor: keeper::Executor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_cli: Option<keeper::Executor>,
     #[serde(default)]
     pub retention: Option<Retention>,
 }
@@ -177,6 +180,9 @@ impl Manager {
                         .is_some_and(crate::service_identity::valid_service_id),
                 "invalid execution component configuration"
             );
+            if let Some(cli) = &config.agent_cli {
+                keeper::agent_cli_directory(cli).map_err(anyhow::Error::msg)?;
+            }
             if let Some(retention) = &config.retention {
                 ensure!(
                     retention.command.is_absolute()
@@ -776,39 +782,28 @@ impl Manager {
                 .storage_environment(Path::new(&binding.workspace.cwd))
                 .map_err(|_| Refusal::WorkspaceUnavailable)?,
         );
+        let agent_cli = if managed.is_none() {
+            config.agent_cli.clone()
+        } else {
+            None
+        };
+        if let Some(cli) = &agent_cli {
+            keeper::prepend_agent_cli(cli, &mut environment)
+                .map_err(|_| Refusal::PreparationFailed)?;
+        }
         if environment.len() > crate::execution_target_environment::MAX {
             return Err(Refusal::PreparationFailed);
         }
         std::fs::create_dir(directory).map_err(|_| Refusal::EnvironmentLost)?;
         std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
             .map_err(|_| Refusal::PreparationFailed)?;
-        if let Some(retention) = &config.retention {
-            let status = tokio::time::timeout(
-                Duration::from_secs(20),
-                tokio::process::Command::new(&retention.command)
-                    .arg("--add-root")
-                    .arg(directory.join("executor-root"))
-                    .arg("--indirect")
-                    .arg("--realise")
-                    .arg(&retention.closure)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .kill_on_drop(true)
-                    .status(),
-            )
-            .await
-            .map_err(|_| Refusal::PreparationFailed)?
-            .map_err(|_| Refusal::PreparationFailed)?;
-            if !status.success() {
-                return Err(Refusal::PreparationFailed);
-            }
-        }
+        retention::retain(config.retention.as_ref(), directory, agent_cli.as_ref()).await?;
         let contract = LaunchContract {
             schema: 1,
             session_id: session_id.to_owned(),
             binding: binding.clone(),
             executor: config.executor.clone(),
+            agent_cli,
             capability: format!("{}{}", random_id(), random_id()),
             environment,
             call_context,

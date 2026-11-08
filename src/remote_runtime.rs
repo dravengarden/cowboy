@@ -27,6 +27,7 @@ pub mod account_stop;
 mod broker_protocol;
 mod native_admission;
 mod startup_watch;
+mod worker_authority;
 use crate::runtime_wire::{
     CoreCommand, Frame, FrameReader, PROTOCOL_VERSION, PeerRole, RuntimeEvent, StartSession,
     WorkerSnapshot, WorkerState, read_frame, write_frame,
@@ -577,28 +578,6 @@ impl RemoteRuntime {
                         .and_then(|binding| binding.decode().ok())
                         .is_some_and(|binding| binding == request.binding)
             })
-    }
-
-    /// Resolve call authority from this runtime's current worker observation.
-    /// A broker registry placeholder or a disconnected/resetting runtime is not
-    /// evidence of a live caller, even when its durable launch still matches.
-    pub fn managed_call_authority(
-        &self,
-        service: &str,
-        parent: &crate::core::SessionMeta,
-    ) -> Result<crate::managed_calls::authority::Authority> {
-        anyhow::ensure!(self.connected(), "parent runtime is disconnected");
-        // Match merge_worker_snapshots' lock order (workers, then resetting).
-        let workers = self.shared.workers.lock();
-        let resetting = self.shared.resetting.lock();
-        anyhow::ensure!(
-            !resetting.contains(&parent.id),
-            "parent worker is resetting"
-        );
-        let worker = workers
-            .get(&parent.id)
-            .ok_or_else(|| anyhow::anyhow!("parent worker is unavailable"))?;
-        crate::managed_calls::authority::Authority::for_worker(service, parent, worker)
     }
 
     /// `(provider, sha256:<hex>)` Provider generations the Machine's reported
@@ -1721,7 +1700,7 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
                         session_id: session_id.to_owned(),
                         command_id: key,
                         accepted: false,
-                        reason: Some("Native account launch admission denied".into()),
+                        reason: Some("Worker launch admission denied".into()),
                     },
                     writer,
                 )
@@ -1763,6 +1742,18 @@ fn subagent_cancel_supported(shared: &Shared) -> bool {
 }
 
 fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
+    let planned = match command {
+        CoreCommand::EnsureSession { session } => session.mcp_plan.is_some(),
+        CoreCommand::RecoverExecutionSession { session, .. }
+        | CoreCommand::ReadmitAccountSession { session, .. } => session.mcp_plan.is_some(),
+        _ => false,
+    };
+    if planned
+        && shared.protocol.load(Ordering::Acquire)
+            < crate::runtime_wire::MCP_LAUNCH_PROTOCOL_VERSION
+    {
+        return false;
+    }
     let forking = match command {
         CoreCommand::EnsureSession { session } => session.native_fork.is_some(),
         CoreCommand::RecoverExecutionSession { session, .. } => session.native_fork.is_some(),
@@ -1833,7 +1824,7 @@ async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
         if !native_admission::send(shared, writer, CoreCommand::EnsureSession { session }).await? {
             shared
                 .hub
-                .broadcast_error(Some(id), "Native account recovery admission denied".into());
+                .broadcast_error(Some(id), "Worker recovery admission denied".into());
         }
     }
     Ok(())
@@ -1848,6 +1839,7 @@ fn snapshot_satisfies_ensure(worker: &WorkerSnapshot, session: &StartSession) ->
     };
     if launch.cwd != session.cwd
         || launch.execution_binding != session.execution_binding
+        || launch.mcp_plan != session.mcp_plan
         || launch.provider != session.provider
         || launch.provider_account_id != session.provider_account_id
         || launch.provider_version != session.provider_version
@@ -4054,6 +4046,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             }),
             state: WorkerState::Busy,
@@ -4144,6 +4137,169 @@ mod tests {
         assert!(
             runtime
                 .managed_call_authority("service-test", &parent)
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_policy_rechecked_before_delivery_still_allows_stop() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "test".into(),
+            crate::core::SessionOrigin::Api,
+            false,
+        );
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let launch = snapshot("s").launch.unwrap();
+        let mut output = Vec::new();
+        assert!(
+            native_admission::send(
+                &runtime.shared,
+                &mut output,
+                CoreCommand::EnsureSession {
+                    session: launch.clone()
+                }
+            )
+            .await
+            .unwrap()
+        );
+        output.clear();
+        hub.load_settings(vec![(
+            format!(
+                "{}s",
+                crate::core::settings_keys::SESSION_MCP_BINDINGS_PREFIX
+            ),
+            serde_json::json!({"bindings":[{"name":"suger"}]}),
+        )]);
+        assert!(
+            !native_admission::send(
+                &runtime.shared,
+                &mut output,
+                CoreCommand::EnsureSession { session: launch }
+            )
+            .await
+            .unwrap()
+        );
+        assert!(output.is_empty());
+        assert!(
+            native_admission::send(
+                &runtime.shared,
+                &mut output,
+                CoreCommand::StopSession {
+                    session_id: "s".into(),
+                    command_id: "stop-s".into()
+                }
+            )
+            .await
+            .unwrap()
+        );
+        assert!(!output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_launch_protocol_refuses_retained_workers_and_stale_adoption() {
+        let runtime = RemoteRuntime::for_test(Hub::new(), vec![snapshot("s")]);
+        let mut launch = snapshot("s").launch.unwrap();
+        assert!(
+            serde_json::to_value(&launch)
+                .unwrap()
+                .get("mcp_plan")
+                .is_none()
+        );
+        runtime.shared.protocol.store(5, Ordering::Release);
+        assert!(command_supported(
+            &runtime.shared,
+            &CoreCommand::EnsureSession {
+                session: launch.clone()
+            }
+        ));
+        launch.mcp_plan = Some(
+            serde_json::from_value(serde_json::json!({
+                "schema":1,"command":"/bin/cowboy",
+                "bindings":[{"name":"suger","descriptor":"/private/suger.json"}]
+            }))
+            .unwrap(),
+        );
+        assert_eq!(launch.minimum_protocol(), 6);
+        assert!(!command_supported(
+            &runtime.shared,
+            &CoreCommand::EnsureSession {
+                session: launch.clone()
+            }
+        ));
+        runtime.shared.protocol.store(6, Ordering::Release);
+        assert!(command_supported(
+            &runtime.shared,
+            &CoreCommand::EnsureSession {
+                session: launch.clone()
+            }
+        ));
+        assert!(!snapshot_satisfies_ensure(&snapshot("s"), &launch));
+    }
+
+    #[tokio::test]
+    async fn mcp_launch_authority_requires_exact_ready_worker_plan() {
+        let parent: crate::core::SessionMeta = serde_json::from_value(serde_json::json!({
+            "id":"s", "provider":"codex", "machine_id":"hawk",
+            "workspace_id":"project", "cwd":"/tmp", "title":"Parent", "status":"running"
+        }))
+        .unwrap();
+        let plan: crate::mcp_binding::NativeLaunchPlan =
+            serde_json::from_value(serde_json::json!({
+                "schema":1,"command":"/nix/store/fixture/bin/cowboy",
+                "bindings":[{"name":"suger","descriptor":"/private/binding.json"}]
+            }))
+            .unwrap();
+        let runtime = RemoteRuntime::for_test(Hub::new(), vec![snapshot("s")]);
+        runtime.connect_for_test();
+        assert!(
+            runtime
+                .mcp_launch_authority("service-test", &parent, &plan)
+                .is_err()
+        );
+        runtime
+            .shared
+            .workers
+            .lock()
+            .get_mut("s")
+            .unwrap()
+            .launch
+            .as_mut()
+            .unwrap()
+            .mcp_plan = Some(Box::new(plan.clone()));
+        assert!(
+            runtime
+                .mcp_launch_authority("service-test", &parent, &plan)
+                .is_ok()
+        );
+        let mut changed = plan.clone();
+        changed.bindings[0].descriptor = "/private/replacement.json".into();
+        assert!(
+            runtime
+                .mcp_launch_authority("service-test", &parent, &changed)
+                .is_err()
+        );
+        runtime.shared.workers.lock().get_mut("s").unwrap().state = WorkerState::Starting;
+        assert!(
+            runtime
+                .mcp_launch_authority("service-test", &parent, &plan)
+                .is_err()
+        );
+        runtime.shared.workers.lock().get_mut("s").unwrap().state = WorkerState::Running;
+        runtime.shared.resetting.lock().insert("s".into());
+        assert!(
+            runtime
+                .mcp_launch_authority("service-test", &parent, &plan)
+                .is_err()
+        );
+        runtime.shared.resetting.lock().clear();
+        runtime.shared.connected.store(false, Ordering::Release);
+        assert!(
+            runtime
+                .mcp_launch_authority("service-test", &parent, &plan)
                 .is_err()
         );
     }

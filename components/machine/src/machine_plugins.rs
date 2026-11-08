@@ -21,19 +21,26 @@ mod code_navigation_conformance;
 mod code_sync_conformance;
 mod extensions;
 mod installation;
+mod mcp_servers;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use mcp_servers::tests::conformance as mcp_conformance;
 mod native_identity;
 mod native_profile;
 pub mod native_usage;
+#[cfg(target_os = "linux")]
+pub use mcp_servers::{McpProcess, McpSessions};
+pub use mcp_servers::{PreparedMcpBinding, PreparedMcpServer};
 pub use native_profile::LogoutPreparation;
 mod operations;
 mod remove_projection;
 mod session_extensions;
 mod telemetry;
 use crate::machine_protocol::plugin_install::InstallPhase;
-use installation::InstallGuard;
+use installation::{InstallGuard, ensure_machine_installable_kind};
 
 pub use operations::lease::{CodeBufferSyncInvocation, CodeBufferSyncOwner};
 pub use operations::lease::{CodeNavigationInvocation, CodeNavigationOwner};
+pub use operations::lease::{McpInvocation, McpOwner};
 pub use operations::maintenance::complete_absent_uninstall;
 pub use operations::{UninstallAccess, lease::PluginExecutionScope};
 pub use session_extensions::{SESSION_EXTENSIONS_DISABLED, SESSION_EXTENSIONS_ENV};
@@ -103,6 +110,7 @@ pub struct ProviderLaunchContext {
     pub remove_environment_prefixes: BTreeSet<String>,
     pub home: Option<PathBuf>,
     pub execution_jsonrpc: bool,
+    pub mcp_bindings: bool,
 }
 
 #[derive(Debug)]
@@ -317,22 +325,6 @@ enum PreparedProviderAuth {
 struct ProviderActivationSnapshot {
     active: Option<String>,
     rollback: Option<String>,
-}
-
-fn ensure_machine_installable_kind(package: &PluginPackage) -> Result<()> {
-    ensure!(
-        matches!(
-            package.manifest.kind,
-            cowboy_plugin_sdk::PluginKind::AgentProvider
-                | cowboy_plugin_sdk::PluginKind::CodeIntelligence
-                | cowboy_plugin_sdk::PluginKind::TelemetryBackend
-                | cowboy_plugin_sdk::PluginKind::WorkspaceExtension
-                | cowboy_plugin_sdk::PluginKind::MemoryBackend
-                | cowboy_plugin_sdk::PluginKind::CallProfile
-        ),
-        "Machine installer received a Controller-only Plugin kind"
-    );
-    Ok(())
 }
 
 mod account_stop;
@@ -565,6 +557,7 @@ impl MachinePluginStore {
                 | PluginPayload::WorkspaceExtension(_)
                 | PluginPayload::MemoryBackend(_)
                 | PluginPayload::CallProfile(_)
+                | PluginPayload::McpServer(_)
         ) {
             return self
                 .install_non_agent_plugin(
@@ -812,6 +805,7 @@ impl MachinePluginStore {
                 | cowboy_plugin_sdk::PluginKind::WorkspaceExtension
                 | cowboy_plugin_sdk::PluginKind::MemoryBackend
                 | cowboy_plugin_sdk::PluginKind::CallProfile
+                | cowboy_plugin_sdk::PluginKind::McpServer
         ) {
             self.validate_extension_dependencies(&plugin_package)?;
             Self::activate(&self.plugin_root(provider_id), &generation_name)?;
@@ -1885,6 +1879,11 @@ impl MachinePluginStore {
         );
         let command = runtime_command(&package_path, &payload.launch_command)?;
         Ok(ProviderLaunchContext {
+            mcp_bindings: package
+                .manifest
+                .runtime
+                .required_capabilities
+                .contains(&cowboy_provider_sdk::RuntimeCapability::ProviderMcpBindingsV1),
             execution_jsonrpc: package
                 .manifest
                 .runtime
@@ -3996,13 +3995,12 @@ fn provider_staging_projection(artifacts: &PluginRuntimeArtifacts) -> PlatformRu
             .map(|component| ReleasedPrivateComponent {
                 kind: match component.kind {
                     PluginComponentKind::AgentCli => PrivateComponentKind::ProviderCli,
-                    PluginComponentKind::AgentAdapter => PrivateComponentKind::ProviderAdapter,
                     PluginComponentKind::AgentGateway => PrivateComponentKind::ProviderGateway,
                     PluginComponentKind::AcpRuntime => PrivateComponentKind::AcpRuntime,
-                    PluginComponentKind::CodeIntelligenceAdapter
-                    | PluginComponentKind::CodeIntelligenceServer => {
-                        PrivateComponentKind::ProviderAdapter
-                    }
+                    PluginComponentKind::AgentAdapter
+                    | PluginComponentKind::CodeIntelligenceAdapter
+                    | PluginComponentKind::CodeIntelligenceServer
+                    | PluginComponentKind::McpServer => PrivateComponentKind::ProviderAdapter,
                 },
                 slot: component.slot.clone(),
                 dependency: component.dependency.clone(),

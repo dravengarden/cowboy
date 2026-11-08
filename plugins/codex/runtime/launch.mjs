@@ -1,3 +1,4 @@
+import { codexMcpBindings, bindingConfiguration } from "./bindings.mjs";
 // This Provider owns both argument parsing and its patched native RPC client.
 // The client spawns the exact CODEX_PATH directly, including these -c options.
 import { spawnSync } from "node:child_process";
@@ -233,26 +234,40 @@ export async function main(args) {
       ...agentCallsConfiguration(configuration, userCodexConfig(), agentCallsPrompt(extensions)),
     );
   }
-  process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   applyDefaultAuthRequest();
   const cowboyMcp = Boolean(
     process.env.COWBOY_EXECUTION_DESCRIPTOR || process.env.COWBOY_CALL_CONTEXT,
   );
   // The bridge reads the same configuration again when it starts native.
   const memory = inspection ? null : await memoryConfiguration("codex", { extensions });
+  let nativeNames;
+  let bindings = [];
+  if (!inspection && extensions?.mcp != null) {
+    const { readExecutionDescriptor } = await import("./cowboy-execution.mjs");
+    const path = process.env.COWBOY_EXECUTION_DESCRIPTOR;
+    const descriptor = path ? await readExecutionDescriptor(path) : undefined;
+    nativeNames = nativeMcpServerNames(process.env.CODEX_PATH, configuration);
+    if (memory?.tools) nativeNames.push(memory.server);
+    bindings = await codexMcpBindings(extensions, descriptor, nativeNames);
+    configuration.push(...bindingConfiguration(bindings, descriptor));
+    nativeNames.push(...bindings.map((entry) => entry.name));
+  }
+  process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   if (!inspection && (cowboyMcp || memory)) {
     if (!isAbsolute(process.env.CODEX_PATH ?? "")) {
       throw new Error("Remote execution requires an exact Machine-bound CLI");
     }
     process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE = process.env.CODEX_PATH;
     process.env.COWBOY_PRIVATE_CODEX_BRIDGE = fileURLToPath(import.meta.url);
-    applyAwaitedMcpServers(
-      injectedMcpServerNames({
+    applyAwaitedMcpServers([
+      ...injectedMcpServerNames({
         cowboy: cowboyMcp,
         memory,
-        listServers: () => nativeMcpServerNames(process.env.CODEX_PATH, configuration),
+        listServers: () =>
+          nativeNames ?? nativeMcpServerNames(process.env.CODEX_PATH, configuration),
       }),
-    );
+      ...bindings.map((entry) => entry.name),
+    ]);
   } else {
     delete process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE;
     delete process.env.COWBOY_PRIVATE_CODEX_BRIDGE;

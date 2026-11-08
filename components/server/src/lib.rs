@@ -25,5 +25,6 @@ pub fn install_controller_hooks() {
         serve: |args| Box::pin(server::serve(args)),
         init_tracing: server::init_tracing,
         launch_extensions: server::launch_extensions,
+        launch_mcp: server::launch_mcp,
     });
 }

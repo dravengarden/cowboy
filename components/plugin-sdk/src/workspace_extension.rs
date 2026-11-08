@@ -274,6 +274,31 @@ pub(crate) fn validate_release(
     Ok(())
 }
 
+pub(crate) fn validate_manifest(
+    manifest: &crate::PluginManifest,
+    contract: &WorkspaceExtensionContract,
+) -> Result<()> {
+    ensure!(
+        contract.id == manifest.id && contract.version == manifest.version,
+        "extension payload identity mismatch"
+    );
+    ensure!(
+        manifest
+            .components
+            .iter()
+            .any(|c| c.id == "cowboy.plugin-sdk"
+                && semver::Version::parse(&c.version).is_ok_and(|v| v
+                    >= semver::Version::new(
+                        1,
+                        if contract.schema_version >= 2 { 10 } else { 9 },
+                        0
+                    ))),
+        "workspace extension schema requires a compatible Plugin SDK"
+    );
+    contract.validate()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

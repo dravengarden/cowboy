@@ -814,6 +814,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cowboy-codeact-runtime"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "rand 0.8.8",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "cowboy-machine"
 version = "0.1.0"
 dependencies = [
@@ -856,7 +867,7 @@ dependencies = [
 
 [[package]]
 name = "cowboy-plugin-sdk"
-version = "1.12.4"
+version = "1.13.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -894,6 +905,7 @@ dependencies = [
  "chrono",
  "clap",
  "cowboy",
+ "cowboy-codeact-runtime",
  "cowboy-machine",
  "cowboy-plugin-sdk",
  "cowboy-provider-sdk",

@@ -27,12 +27,14 @@ use crate::runtime_wire::{
 };
 
 const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
+mod mcp_launch;
 pub mod startup_gate;
 const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 const BROKER_CONNECTION_STABLE_AFTER: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct WorkerArgs {
+    pub mcp_plan: Option<Box<crate::mcp_binding::NativeLaunchPlan>>,
     pub socket: PathBuf,
     pub session_id: String,
     pub provider: String,
@@ -548,11 +550,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         .map(|managed| managed.profile);
     let prepared = provider::prepare(&args.provider, profile).await?;
     let mut spec = prepared.spec.clone();
-    // This reserved host projection must never come from a parent process.
-    spec.package_remove_env
-        .insert(crate::worker_execution::DESCRIPTOR_ENV.to_owned());
-    spec.package_remove_env
-        .insert(startup_gate::LAUNCH_ENV.to_owned());
+    let _mcp_descriptor = mcp_launch::configure(&args, &prepared, &mut spec)?;
     let provider_behavior = (!args.provider_generation_digest.is_empty())
         .then(|| crate::provider::behavior(&args.provider));
     let configuration = provider_behavior.as_ref().map_or_else(
@@ -601,6 +599,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         adopt_only: false,
         execution_binding: args.execution_binding.clone(),
         extensions: None,
+        mcp_plan: args.mcp_plan.clone(),
         native_fork: args.native_fork.clone().map(Box::new),
     };
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
@@ -2028,6 +2027,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            mcp_plan: None,
             native_fork: None,
         });
         let sink = RemoteSink {

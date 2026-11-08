@@ -136,6 +136,19 @@ try {
     );
     await copyFile(`${root}/launch.mjs`, `${targetRoot}/app/cowboy-launch.mjs`);
     await copyFile(`${root}/execution-mcp.mjs`, `${targetRoot}/app/execution-mcp.mjs`);
+    await writeFile(
+      `${targetRoot}/app/bindings.mjs`,
+      (await readFile(`${root}/bindings.mjs`, "utf8")).replaceAll(
+        '"../../../components/provider-runtime/',
+        '"./',
+      ),
+    );
+    for (const file of ["mcp-bindings.mjs", "execution-probe.mjs", "execution-connection.mjs"]) {
+      await copyFile(
+        `${repository}/components/provider-runtime/${file}`,
+        `${targetRoot}/app/${file}`,
+      );
+    }
     await cp(`${glue}/node_modules/ws`, `${targetRoot}/app/node_modules/ws`, {
       recursive: true,
     });
@@ -161,6 +174,10 @@ try {
       patch_sha256: await sha256(`${root}/adapter.patch`),
       launcher_sha256: await sha256(`${root}/launch.mjs`),
       memory_bridge_sha256: await sha256(`${targetRoot}/app/memory.mjs`),
+      binding_launcher_sha256: await sha256(`${targetRoot}/app/bindings.mjs`),
+      binding_plan_sha256: await sha256(`${targetRoot}/app/mcp-bindings.mjs`),
+      binding_probe_sha256: await sha256(`${targetRoot}/app/execution-probe.mjs`),
+      execution_connection_sha256: await sha256(`${targetRoot}/app/execution-connection.mjs`),
       mcp_process_bridge_sha256: await sha256(`${targetRoot}/app/execution-mcp.mjs`),
       glue_lock_sha256: await sha256(`${root}/package-lock.json`),
       memory_client_sha256: await sha256(`${targetRoot}/app/matrix-client.mjs`),

@@ -13,8 +13,12 @@
 mod agent_tools;
 mod config_revert;
 pub(crate) use agent_tools::launch_extensions;
+pub(crate) use mcp_bindings::launch_mcp;
 mod dormant_pins;
 mod folder_defaults;
+mod mcp_bindings;
+mod state;
+use state::AppState;
 mod memory_reclaim;
 mod memory_relay;
 mod secure_transport;
@@ -189,77 +193,6 @@ impl ProviderAuthReconciliation {
             .filter(|(request_id, _)| active_request_id == Some(request_id.as_str()))
             .cloned()
     }
-}
-
-struct AppState {
-    service_id: String,
-    service_config_path: PathBuf,
-    /// The Service configuration file, with live fields following edits.
-    service_config: crate::config::Handle,
-    hub: Hub,
-    supervisor: Arc<Supervisor>,
-    /// Kept for read-only storage metrics (`/api/metrics`). `None` in-memory.
-    store: Option<Store>,
-    persistence_health: Option<Arc<PersistenceHealth>>,
-    shutdown: watch::Receiver<bool>,
-    runtime_health: Arc<RuntimeHealth>,
-    runtime_router: Arc<RuntimeRouter>,
-    machine_control: Arc<MachineControl>,
-    machine_snapshots: MachineSnapshots,
-    session_maintenance: session_maintenance::Coordinator,
-    plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
-    plugin_storage: crate::plugin_storage::PluginStorage,
-    provider_catalog: Arc<crate::provider_catalog::ProviderCatalog>,
-    provider_auth: Arc<crate::provider_service::ProviderAuthService>,
-    provider_auth_sync: provider_auth_sync::Coordinator,
-    provider_auth_executors: parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
-    plugin_uninstall_plans: parking_lot::Mutex<HashMap<String, PluginUninstallPlan>>,
-    plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans,
-    telemetry_resolution_plans: Arc<telemetry_binding::resolution::surface::Plans>,
-    telemetry_recovery_plans: Arc<telemetry_binding::recovery::surface::Plans>,
-    telemetry_binding_plans: Arc<telemetry_binding::surface::Plans>,
-    telemetry_binding_fence: crate::telemetry_binding::LegacyFence,
-    telemetry_writer_admission:
-        Option<Arc<crate::telemetry_plugin::writer_admission::WriterAdmission>>,
-    plugin_lifecycle_fences: PluginLifecycleFences,
-    session_create_replays: Arc<session_create_replay::Replays>,
-    desired_machine_components: Arc<crate::machine_convergence::DesiredComponentSource>,
-    component_convergence: Arc<crate::machine_convergence::ConvergenceState>,
-    convergence_freeze: Arc<crate::machine_convergence::ConvergenceFreeze>,
-    desired_machine_plugins: Arc<crate::machine_convergence::PluginDesiredSource>,
-    web_root: PathBuf,
-    web_roots: web_roots::WebRoots,
-    usage: UsageService,
-    diff_snapshots: DiffSnapshotCache,
-    file_cursors: code_reads::file_pages::PageCursors,
-    code_cache: crate::code_cache::CodeCache,
-    code_buffers: Arc<code_buffers::Owners>,
-    code_navigation_admission: bool,
-    project_placement: crate::project_placement::Store,
-    execution_preparations: parking_lot::Mutex<std::collections::HashSet<String>>,
-    workspace_preparations: parking_lot::Mutex<std::collections::HashSet<String>>,
-    execution_readiness: execution::recovery::Readiness,
-    lost_turns: execution::recovery::LostTurns,
-    execution_closures:
-        Arc<parking_lot::Mutex<std::collections::HashMap<String, execution::Maintenance>>>,
-    managed_calls: Arc<managed_calls::Coordinator>,
-    memory_relay: memory_relay::Relay,
-    /// Machines permitted to have their Code reads executed on the
-    /// Controller's own filesystem. A hello's declared connection mode is a
-    /// request; this set is the permission.
-    colocated_machines: std::collections::BTreeSet<String>,
-    zed_adapter_socket: Option<PathBuf>,
-    observability: Observability,
-    web_push: Arc<WebPushService>,
-    notifications: notifications::Presence,
-    public_origins: Arc<Vec<String>>,
-    product_auth_enabled: bool,
-    product_authentication: Arc<crate::auth_plugins::ProductAuthentication>,
-    oidc_transactions: Arc<crate::oidc::OidcTransactions>,
-    oidc_native_handoffs: Arc<crate::oidc::NativeHandoffs>,
-    device_authorizations: Arc<crate::client_auth::DeviceAuthorizations>,
-    device_access: Arc<crate::client_auth::DeviceAccessSessions>,
-    capacity_runtime: Arc<ActiveCapacityRuntime>,
 }
 
 #[derive(Default)]
@@ -705,7 +638,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         lost_turns: Default::default(),
         execution_closures: Arc::default(),
         managed_calls: Arc::default(),
-        memory_relay: memory_relay::Relay::default(),
+        extensions: state::SessionExtensions::default(),
         colocated_machines: args.colocated_machines.iter().cloned().collect(),
         zed_adapter_socket: args.zed_adapter_socket,
         observability,

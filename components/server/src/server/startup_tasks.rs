@@ -198,6 +198,7 @@ pub(super) fn spawn_dispatcher(
     state: &Arc<AppState>,
     dispatch_rx: mpsc::Receiver<DispatchReq>,
 ) -> tokio::task::JoinHandle<()> {
+    super::mcp_bindings::launch::start(state);
     state.runtime_health.set_dispatcher(true);
     let dispatcher_health = Arc::clone(&state.runtime_health);
     let dispatcher_state = Arc::clone(state);

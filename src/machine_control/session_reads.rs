@@ -260,3 +260,31 @@ impl MachineControl {
 
 #[cfg(test)]
 mod tests;
+
+impl super::MachineControl {
+    pub async fn adapter_request_on_connection(
+        &self,
+        connection: &ConnectionToken,
+        adapter: &str,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let response = self
+            .adapter_request_bound(
+                &connection.0.machine_id,
+                adapter,
+                payload,
+                // Session routes execute in a session worktree, not in an
+                // advertised root, so there is no Machine-owned identity to
+                // carry. That gap stays recorded, never faked with another.
+                None,
+                Some(super::RequestBinding::Connection(connection)),
+            )
+            .await;
+        // A reply can be completed just before replacement, while its receiver
+        // is still parked. Correlation alone does not cover that handoff.
+        if !self.is_current(connection) {
+            return Err("Machine operation connection is no longer current".to_owned());
+        }
+        response.map_err(String::from)
+    }
+}

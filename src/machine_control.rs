@@ -24,6 +24,12 @@ mod code_buffer_sync;
 mod execution;
 mod installation;
 pub mod local_roots;
+mod mcp_transport;
+mod native_mcp;
+pub use native_mcp::{
+    NativeMcpLaunchPlan, NativeMcpLaunchPreparation, NativeMcpPreparation,
+    NativeMcpSessionPreparation,
+};
 #[cfg(test)]
 mod projects_tests;
 mod session_reads;
@@ -142,6 +148,7 @@ pub struct PluginHostBinding {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ReplyKind {
+    Mcp,
     NativeBinding,
     NativeLogout,
     LoginStop,
@@ -191,6 +198,7 @@ impl From<AdapterFailure> for String {
 }
 
 pub enum Reply {
+    Mcp(serde_json::Value),
     NativeBinding(Option<Box<crate::provider_account::PreparedBinding>>),
     NativeLogout(Option<crate::provider_account::NativeLogoutObservation>),
     LoginStop(Option<crate::provider_account::LoginStopObservation>),
@@ -222,6 +230,7 @@ pub enum Reply {
 impl Reply {
     const fn kind(&self) -> ReplyKind {
         match self {
+            Self::Mcp(_) => ReplyKind::Mcp,
             Self::NativeProfile(_) => ReplyKind::NativeProfile,
             Self::NativeLogout(_) => ReplyKind::NativeLogout,
             Self::LoginStop(_) => ReplyKind::LoginStop,
@@ -635,6 +644,9 @@ impl MachineControl {
         if !live.is_current(token) {
             return;
         }
+        let Some(event) = live.complete_transport_reply(token, event) else {
+            return;
+        };
         let machine_id = &token.0.machine_id;
         match event {
             MachineEvent::NativeBindingPrepared {
@@ -666,12 +678,6 @@ impl MachineControl {
                 profile,
             } => {
                 live.complete(token, &request_id, Reply::NativeProfile(profile));
-            }
-            MachineEvent::ExecutionResponse {
-                request_id,
-                response,
-            } => {
-                live.complete(token, &request_id, Reply::Execution(response));
             }
             MachineEvent::TelemetryRecoveryAuditObservation {
                 request_id,
@@ -985,32 +991,6 @@ impl MachineControl {
 
     /// Keep a multi-call operation on its original authenticated connection.
     /// This is transport continuity, not Session/native resource authority.
-    pub async fn adapter_request_on_connection(
-        &self,
-        connection: &ConnectionToken,
-        adapter: &str,
-        payload: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        let response = self
-            .adapter_request_bound(
-                &connection.0.machine_id,
-                adapter,
-                payload,
-                // Session routes execute in a session worktree, not in an
-                // advertised root, so there is no Machine-owned identity to
-                // carry. That gap stays recorded, never faked with another.
-                None,
-                Some(RequestBinding::Connection(connection)),
-            )
-            .await;
-        // A reply can be completed just before replacement, while its receiver
-        // is still parked. Correlation alone does not cover that handoff.
-        if !self.is_current(connection) {
-            return Err("Machine operation connection is no longer current".to_owned());
-        }
-        response.map_err(String::from)
-    }
-
     /// `workspace_incarnation` is the Machine-minted root identity the calling
     /// observation was resolved against, or `None` for reads that have no
     /// advertised root. It is never synthesised here.

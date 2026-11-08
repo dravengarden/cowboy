@@ -1,3 +1,4 @@
+import { verifyExecutionCli } from "./bindings.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -18,7 +19,13 @@ export { callGuidance, memoryConfiguration, sessionExtensions };
 
 // Core MCP uses the parent's gateway on the execution target. Native Codex
 // owns environment placement; no runtime-host command or copied credential.
-export function agentApiConfiguration({ environmentId, cwd, callContext, servers = [] } = {}) {
+export function agentApiConfiguration({
+  environmentId,
+  cwd,
+  callContext,
+  servers = [],
+  command = "cowboy",
+} = {}) {
   if (!environmentId && !callContext) return [];
   if (environmentId && (typeof cwd !== "string" || !cwd.startsWith("/"))) {
     throw new Error("Remote Cowboy MCP requires its target working directory");
@@ -35,7 +42,7 @@ export function agentApiConfiguration({ environmentId, cwd, callContext, servers
   return [
     ...configuration,
     "-c",
-    `mcp_servers.${name}={command="cowboy",args=["mcp"],${placement},enabled=true,tool_timeout_sec=75}`,
+    `mcp_servers.${name}={command=${JSON.stringify(command)},args=["mcp"],${placement},enabled=true,tool_timeout_sec=75}`,
   ];
 }
 
@@ -161,8 +168,14 @@ async function runNative(args, execution, descriptor) {
     servers = nativeMcpServerNames(process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE, configuration);
     if (config?.tools) servers.push(config.server);
   }
+  const extensions = await sessionExtensions();
+  const command =
+    extensions?.mcp == null
+      ? "cowboy"
+      : await verifyExecutionCli(descriptor, extensions.mcp.command);
   configuration.push(
     ...agentApiConfiguration({
+      command,
       environmentId: descriptor?.binding.environment.id,
       cwd: descriptor?.binding.workspace.cwd,
       callContext: process.env.COWBOY_CALL_CONTEXT,

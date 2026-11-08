@@ -471,6 +471,11 @@ impl Supervisor {
         meta.require_runtime_launch()?;
         self.runtime_restrictions
             .check(&meta.provider, &meta.machine_id)?;
+        let mcp_plan = crate::controller_hooks::launch_mcp(&self.hub, &meta)
+            .map_err(|error| error.to_string())?;
+        let extensions = mcp_plan
+            .as_ref()
+            .map(|_| crate::controller_hooks::launch_extensions(&self.hub, &meta));
         let configuration = session_configuration(&meta);
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
@@ -497,7 +502,8 @@ impl Supervisor {
             fallback_for: None,
             adopt_only: false,
             execution_binding: meta.execution_binding,
-            extensions: None,
+            extensions,
+            mcp_plan,
             native_fork,
         });
         Ok(())
@@ -899,6 +905,8 @@ impl Supervisor {
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
         let extensions = Some(crate::controller_hooks::launch_extensions(&self.hub, &meta));
+        let mcp_plan = crate::controller_hooks::launch_mcp(&self.hub, &meta)
+            .map_err(|error| error.to_string())?;
         let agent_session_id = self.hub.agent_session_id_for_resume(session_id);
         let native_fork = if agent_session_id.is_none() {
             self.hub.pending_native_fork(session_id).map(Box::new)
@@ -924,6 +932,7 @@ impl Supervisor {
             adopt_only: false,
             execution_binding: meta.execution_binding,
             extensions,
+            mcp_plan,
             native_fork,
         })
     }
@@ -1495,6 +1504,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             }),
             state: WorkerState::Crashed,
@@ -1545,6 +1555,36 @@ mod tests {
         let router = RuntimeRouter::new();
         router.install("hawk".to_owned(), runtime);
         Supervisor::new(hub, root, 0, router)
+    }
+
+    #[tokio::test]
+    async fn configured_mcp_requires_controller_preparation_before_queueing_launch() {
+        let root = TestDir::new();
+        let hub = Hub::new();
+        preparing_web_session(&hub, &root.path().display().to_string());
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        runtime.connect_for_test();
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone());
+        assert!(supervisor.start_session("s").is_ok());
+        let key = format!(
+            "{}s",
+            crate::core::settings_keys::SESSION_MCP_BINDINGS_PREFIX
+        );
+        hub.load_settings(vec![(
+            key.clone(),
+            serde_json::json!({"bindings":[{"name":"suger"}]}),
+        )]);
+        let error = supervisor.start_session("s").unwrap_err();
+        assert!(error.contains("MCP"), "{error}");
+        let spec = crate::provider::remote_generation("codex").unwrap();
+        assert!(
+            supervisor
+                .ensure_worker("s", &spec, root.path(), None)
+                .is_err()
+        );
+        assert!(runtime.pending_for_test().is_empty());
+        hub.load_settings(vec![(key, serde_json::Value::Null)]);
+        assert!(supervisor.start_session("s").is_ok());
     }
 
     #[tokio::test]

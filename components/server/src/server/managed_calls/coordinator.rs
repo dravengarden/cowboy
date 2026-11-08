@@ -38,9 +38,28 @@ const CLOSE_ATTEMPTS: u32 = 5;
 struct GrantEntry {
     grant: Grant,
     authority: Authority,
+    mcp_epoch: Option<String>,
     installed_on: Option<ConnectionToken>,
     retry_after: Option<Instant>,
 }
+
+impl GrantEntry {
+    fn accepts_installation(
+        &self,
+        current: Option<&(Authority, Option<String>)>,
+        acknowledged: bool,
+        connected: bool,
+    ) -> bool {
+        acknowledged
+            && connected
+            && current.is_some_and(|(authority, epoch)| {
+                self.authority.accepts(authority) && self.mcp_epoch == *epoch
+            })
+    }
+}
+
+#[cfg(test)]
+mod grant_tests;
 
 #[derive(Default)]
 pub(in crate::server) struct Coordinator {
@@ -125,7 +144,7 @@ impl Coordinator {
 
 fn reconcile(state: &Arc<AppState>) {
     let coordinator = &state.managed_calls;
-    let mut desired: HashMap<String, Authority> = HashMap::new();
+    let mut desired: HashMap<String, (Authority, Option<String>)> = HashMap::new();
     for meta in state.hub.session_list() {
         if meta.closing
             || meta.system
@@ -140,7 +159,11 @@ fn reconcile(state: &Arc<AppState>) {
             continue;
         };
         if let Ok(authority) = runtime.managed_call_authority(&state.service_id, &meta) {
-            desired.insert(meta.id, authority);
+            let epoch = state
+                .extensions
+                .launches
+                .grant_epoch(state, &meta, &authority);
+            desired.insert(meta.id, (authority, epoch));
         }
     }
     let mut revoked = Vec::new();
@@ -148,9 +171,9 @@ fn reconcile(state: &Arc<AppState>) {
     {
         let mut grants = coordinator.grants.lock();
         grants.retain(|parent, entry| {
-            let keep = desired
-                .get(parent)
-                .is_some_and(|authority| entry.authority.accepts(authority));
+            let keep = desired.get(parent).is_some_and(|(authority, epoch)| {
+                entry.authority.accepts(authority) && entry.mcp_epoch == *epoch
+            });
             if !keep {
                 revoked.push((
                     entry.grant.clone(),
@@ -159,7 +182,7 @@ fn reconcile(state: &Arc<AppState>) {
             }
             keep
         });
-        for (parent, authority) in desired {
+        for (parent, (authority, mcp_epoch)) in desired {
             let machine = authority.placement().machine_id.clone();
             let Some((connection, _)) = state.machine_control.connection_protocol(&machine) else {
                 continue;
@@ -172,8 +195,11 @@ fn reconcile(state: &Arc<AppState>) {
                     // action protocols (MACHINE_PROTOCOL_FLOOR).
                     agent_api: true,
                     agent_actions: true,
+                    // Exact ready launch proves the pinned CLI probe completed.
+                    mcp: mcp_epoch.is_some(),
                 },
                 authority,
+                mcp_epoch,
                 installed_on: None,
                 retry_after: None,
             });
@@ -222,13 +248,22 @@ fn reconcile(state: &Arc<AppState>) {
                 },
             )
             .await;
+            let current = current_authority(&state, &parent).map(|(meta, authority)| {
+                let epoch = state
+                    .extensions
+                    .launches
+                    .grant_epoch(&state, &meta, &authority);
+                (authority, epoch)
+            });
             let mut grants = state.managed_calls.grants.lock();
             if let Some(entry) = grants.get_mut(&parent)
                 && entry.grant == grant
             {
-                if matches!(result, Ok(execution::Response::CallGateway))
-                    && state.machine_control.is_current(&connection)
-                {
+                if entry.accepts_installation(
+                    current.as_ref(),
+                    matches!(result, Ok(execution::Response::CallGateway)),
+                    state.machine_control.is_current(&connection),
+                ) {
                     entry.installed_on = Some(connection);
                     entry.retry_after = None;
                 } else {
@@ -263,7 +298,7 @@ pub(super) async fn execution_action(
 /// Authenticate one forwarded action. Returns the parent's current metadata
 /// and ledger only when the grant is the one installed for this exact
 /// connection and the live authority still equals the issued authority.
-fn authorize(
+pub(in crate::server) fn authorize(
     state: &AppState,
     connection: &ConnectionToken,
     grant: &Grant,
@@ -285,17 +320,44 @@ fn authorize(
         {
             return Err("permission_denied");
         }
-        entry.authority.clone()
+        (entry.authority.clone(), entry.mcp_epoch.clone())
     };
     let (meta, current) =
         current_authority(state, &grant.parent_session_id).ok_or("permission_denied")?;
-    if !issued.accepts(&current) {
+    if !issued.0.accepts(&current)
+        || (grant.mcp
+            && state
+                .extensions
+                .launches
+                .grant_epoch(state, &meta, &current)
+                != issued.1)
+    {
         return Err("permission_denied");
     }
     let store = state.store.clone().ok_or("capacity")?;
     let ledger =
         Ledger::for_parent(store, &state.service_id, &meta).map_err(|_| "permission_denied")?;
     Ok((meta, ledger))
+}
+
+/// Report only a live grant acknowledged on its original execution connection.
+pub(in crate::server) fn mcp_ready(state: &AppState, parent: &str) -> bool {
+    let installed = {
+        let grants = state.managed_calls.grants.lock();
+        grants.get(parent).and_then(|entry| {
+            entry
+                .grant
+                .mcp
+                .then(|| {
+                    entry
+                        .installed_on
+                        .clone()
+                        .map(|connection| (entry.grant.clone(), connection))
+                })
+                .flatten()
+        })
+    };
+    installed.is_some_and(|(grant, connection)| authorize(state, &connection, &grant).is_ok())
 }
 
 /// Handle one forwarded gateway action.
@@ -316,6 +378,10 @@ pub(in crate::server) async fn handle(
         // Authorization precedes admission, so a refusal proves non-admission.
         Err(code) => return error(code, "not_submitted"),
     };
+    if let Action::Mcp { request } = action {
+        return super::super::mcp_bindings::relay::handle(state, connection, &grant, *request)
+            .await;
+    }
     dispatch(state, &meta, &ledger, &grant, action).await
 }
 
@@ -328,6 +394,7 @@ async fn dispatch(
     action: Action,
 ) -> Value {
     match action {
+        Action::Mcp { .. } => error("invalid_contract", "not_submitted"),
         Action::AgentStatus {} => super::super::agent_api::status(state, meta, grant),
         Action::AgentInvoke {
             action,
@@ -441,9 +508,10 @@ pub(in crate::server) async fn dispatch_calls_from(
             Err(_) => error("capacity", "not_submitted"),
         },
         Action::Cancel { call_id } => cancel(state, ledger, &call_id).await,
-        Action::AgentStatus {} | Action::AgentRead { .. } | Action::AgentInvoke { .. } => {
-            error("invalid_contract", "not_submitted")
-        }
+        Action::Mcp { .. }
+        | Action::AgentStatus {}
+        | Action::AgentRead { .. }
+        | Action::AgentInvoke { .. } => error("invalid_contract", "not_submitted"),
     }
 }
 

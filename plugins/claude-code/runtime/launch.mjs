@@ -22,7 +22,7 @@ import {
   parseRound,
   structuredMessage,
 } from "./managed.mjs";
-import { mcpToolPrefix, nativeMcpServers, targetMcpServers, withCowboyMcp } from "./mcp.mjs";
+import { mcpToolPrefix, nativeMcpServers, targetMcpServers, sessionMcpServers } from "./mcp.mjs";
 import {
   BUNDLED_SKILLS,
   SKILL_PLUGIN,
@@ -1200,9 +1200,15 @@ async function native(args) {
     const mcp = managed ? { entries: [], omitted: [] } : targetMcpServers(await mcpInputsStarted);
     tools.endStartup();
     startupPhase("target-discovery");
-    const mcpEntries = withCowboyMcp(mcp.entries, !managed).filter(
-      (entry) => !(memory?.tools && entry.name === memoryConfigured.server),
-    );
+    const mcpEntries = await sessionMcpServers(mcp.entries, {
+      extensions,
+      managed,
+      memory: memory?.tools ? memoryConfigured.server : undefined,
+      probe: (argv) => {
+        tools.connection.assertAgentCli(argv[0]);
+        return tools.command(argv, 10000, undefined, { cancelOnError: true });
+      },
+    });
     tools.mcpServers = new Map(
       mcpEntries
         .filter((entry) => entry.placement === "target")

@@ -16,13 +16,14 @@
 // Natively these run beside the user's project, so here a stdio server runs on
 // the target (mcp-proxy.mjs relays its stdio) and a remote server is reached
 // from where the session runs, as WebFetch is.
+import { prepareMcpBindings } from "../../../components/provider-runtime/mcp-bindings.mjs";
 import { posix } from "node:path";
 
 const MAX_SERVERS = 64;
 
 // Reserved session-local server. The keeper injects the live parent context
 // when it spawns the command; no credential crosses into the Provider runtime.
-export function withCowboyMcp(entries, enabled) {
+export function withCowboyMcp(entries, enabled, command = "cowboy") {
   if (!enabled) return entries;
   return [
     ...entries.filter((entry) => entry.name !== "cowboy"),
@@ -30,7 +31,7 @@ export function withCowboyMcp(entries, enabled) {
       name: "cowboy",
       scope: "session",
       placement: "target",
-      argv: ["cowboy", "mcp"],
+      argv: [command, "mcp"],
       env: {},
     },
   ];
@@ -233,4 +234,16 @@ export function nativeMcpServers(entries, relay) {
 // The tool-name prefix native gives a server's tools.
 export function mcpToolPrefix(name) {
   return "mcp__" + name.replace(/[^a-zA-Z0-9_-]/g, "_") + "__";
+}
+
+export async function sessionMcpServers(entries, { extensions, managed, memory, probe }) {
+  if (managed) return [];
+  const bindings = await prepareMcpBindings(extensions, {
+    managed: Boolean(managed),
+    servers: [...entries.map((entry) => entry.name), "cowboy", memory],
+    probe,
+  });
+  return withCowboyMcp([...entries, ...bindings], !managed, bindings[0]?.argv[0]).filter(
+    (entry) => entry.name !== memory,
+  );
 }
