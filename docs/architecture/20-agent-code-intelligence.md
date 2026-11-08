@@ -721,6 +721,19 @@ source mismatch detection, not watcher frontiers or automatic baselines.
   Controller memory, bounded to 64 files per scope and 512 overall (least
   recently observed first); a restart discards them. Pre-write capture waits
   for executor receipts, so a read boundary may precede several edits.
+
+  The read boundary shipped in `02d1da0c3`; Hawk's Controller runs it through
+  the concurrent activation of descendant `270f49cd9`, transaction
+  `1794123221502657538-270f49cd9f4c` (`succeeded` / `committed`), whose running
+  executable matched the active release. A real MCP read of a temporary Go
+  file returned gopls `document_current`, its exact 62-byte SHA-256, the
+  `UndeclaredName` finding and `comparison: unknown/no_baseline`. After a disk
+  edit, repeated reads stayed `stale` with `sourceState: changed` and the old
+  snapshot, so the comparison stayed `unknown/not_current`. The fixture was
+  removed after verifying its hash. In production a comparison therefore needs
+  the native mirror to observe new text: until an agent-owned reload on source
+  change (or a write receipt) exists, disk edits by tools do not produce one.
+  Reopening a buffer is reported as `buffer_replaced`.
 - **Hunk overlap** orders diagnostics within the budget (`in_edit` before
   `elsewhere`); it never asserts that an edit caused a diagnostic and never
   replaces the baseline comparison.
