@@ -635,3 +635,46 @@ async fn same_release_reinstall_rejects_stale_preview_and_retains_exact_receipt(
         unavailable(StepUnavailable::SlotFenced)
     );
 }
+
+#[tokio::test]
+#[cfg(feature = "full")]
+async fn browser_drain_requires_the_authority_execution_would_check() {
+    let root = tempfile::tempdir().unwrap();
+    let publisher =
+        crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("publisher"))
+            .unwrap();
+    let desired = super::super::tests::telemetry_release(&publisher, "1.0.0");
+    let path = root.path().join("machine");
+    let store = MachinePluginStore::new(&path, Platform::Linux, "x86_64".into()).unwrap();
+    store.install(&desired).await.unwrap();
+    store.enable_installation_tracking().await.unwrap();
+    let installed = store.inventory().unwrap().remove(0);
+    let mut request = step();
+    request.schema = 2;
+    request.generation_digest = installed.generation_digest.clone();
+    request.contract_fingerprint = installed.contract_fingerprint.clone();
+    request.installation_revision = installed.installation_revision.clone();
+    let scope = lease::PluginExecutionScope::new(Some("service-a"), "machine-a");
+    let lease = scope.uninstall(&request).unwrap();
+    assert!(store.uninstall_drain_authorized(&request, true, &lease));
+    // Reader-only admission never drains.
+    assert!(!store.uninstall_drain_authorized(&request, false, &lease));
+    // A stale installation revision (a reinstall since the plan) never drains.
+    store.install(&desired).await.unwrap();
+    assert!(!store.uninstall_drain_authorized(&request, true, &lease));
+    let current = store.inventory().unwrap().remove(0);
+    let mut fresh = request.clone();
+    fresh.operation_id.push('2');
+    fresh.installation_revision = current.installation_revision;
+    let fresh_lease = scope.uninstall(&fresh).unwrap();
+    assert!(store.uninstall_drain_authorized(&fresh, true, &fresh_lease));
+    // A lease for another request, or one that expired, never drains.
+    assert!(!store.uninstall_drain_authorized(&fresh, true, &lease));
+    fresh_lease.expire_for_test();
+    assert!(!store.uninstall_drain_authorized(&fresh, true, &fresh_lease));
+    // A lost connection never drains.
+    let other = lease::PluginExecutionScope::new(Some("service-a"), "machine-a");
+    let orphaned = other.uninstall(&fresh).unwrap();
+    drop(other);
+    assert!(!store.uninstall_drain_authorized(&fresh, true, &orphaned));
+}

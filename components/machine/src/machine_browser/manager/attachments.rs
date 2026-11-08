@@ -89,21 +89,36 @@ impl BrowserManager {
                 }
             }),
         );
-        {
+        // The phase was read before the resize was awaited; a stop (reset,
+        // revocation, hibernation) may have begun meanwhile. Every stop sets
+        // `Stopping` and takes the attachment under this lock, so checking
+        // here, where the attachment is installed, is atomic with it.
+        let refused = {
             let mut live = instance.live.lock();
-            if let Some(previous) = live.attachment.take()
-                && let Some(previous_stream) = previous.stream
-            {
-                previous_stream.cancel();
+            if matches!(live.phase, Phase::Detached | Phase::Attached) {
+                if let Some(previous) = live.attachment.take()
+                    && let Some(previous_stream) = previous.stream
+                {
+                    previous_stream.cancel();
+                }
+                live.attachment = Some(Attachment {
+                    id: attachment_id.clone(),
+                    lease_expires: Instant::now()
+                        + Duration::from_millis(u64::try_from(LEASE_EXPIRY_MS).unwrap_or(30_000)),
+                    stream: Some(stream),
+                });
+                live.phase = Phase::Attached;
+                live.detached_since = None;
+                None
+            } else {
+                Some(stream)
             }
-            live.attachment = Some(Attachment {
-                id: attachment_id.clone(),
-                lease_expires: Instant::now()
-                    + Duration::from_millis(u64::try_from(LEASE_EXPIRY_MS).unwrap_or(30_000)),
-                stream: Some(stream),
-            });
-            live.phase = Phase::Attached;
-            live.detached_since = None;
+        };
+        if let Some(stream) = refused {
+            stream.cancel();
+            return instance
+                .state(Some(request_id.to_owned()))
+                .with_reason(Reason::Busy);
         }
         if let Err(error) = instance
             .control
@@ -300,11 +315,19 @@ impl BrowserManager {
     /// returned, never acted on here, so a caller holding the account
     /// lifecycle lock stops through `stop_locked` and every other caller
     /// through `stop_instance`.
+    ///
+    /// A snapshot copy binds `/mnt/publish` in the instance's mount
+    /// namespace, which verification rightly rejects. So no copy runs while
+    /// this verifies and navigates: new copies are refused, and a running
+    /// one is awaited (or cancelled when it overruns). A caller holding the
+    /// lifecycle lock must quiesce copies before taking it (a running copy
+    /// needs the lock to publish).
     pub(super) async fn navigate_checked(
         &self,
         instance: &Arc<Instance>,
         url: &str,
     ) -> Result<(), Reason> {
+        let _copies = self.quiesce_copies(instance).await;
         let bootstrap = host::enforce_label(BOOTSTRAP_PROFILE);
         let sealed = host::enforce_label(SEALED_PROFILE);
         let supervisor = instance.live.lock().verified.supervisor.pid;

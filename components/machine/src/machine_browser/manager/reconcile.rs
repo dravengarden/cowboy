@@ -5,9 +5,18 @@
 
 use super::*;
 
+/// The `unconfirmed` entry that stands for an incomplete unit inventory:
+/// any unit may still run for any account until a listing succeeds.
+pub(super) const INVENTORY_UNKNOWN: &str = "<browser unit inventory>";
+
 impl BrowserManager {
     pub(super) async fn reconcile_units(self: &Arc<Self>) -> Result<()> {
-        let records = state_file::read_instances(&self.state_dir)?;
+        // Unreadable records leave every live unit unrecorded: it is stopped
+        // rather than adopted, which is always safe.
+        let records = state_file::read_instances(&self.state_dir).unwrap_or_else(|error| {
+            tracing::warn!(%error, "browser instance records unreadable; stopping every unit");
+            Vec::new()
+        });
         let mut recorded = BTreeSet::new();
         for record in records {
             recorded.insert(record.unit.clone());
@@ -15,42 +24,115 @@ impl BrowserManager {
                 tracing::warn!(%error, "browser instance record reconciliation failed");
             }
         }
-        for unit_name in unit::list_units().await? {
-            if recorded.contains(&unit_name) {
+        let units = match unit::list_units().await {
+            Ok(units) => units,
+            Err(error) => {
+                self.retry_inventory();
+                return Err(error.context("browser unit inventory unavailable; every fence held"));
+            }
+        };
+        self.stop_unrecorded(units, &recorded).await;
+        Ok(())
+    }
+
+    /// Stop every listed unit not in `known`. An unrecorded unit may have
+    /// run for any account, so an unconfirmed one holds every account's
+    /// fence.
+    async fn stop_unrecorded(&self, units: Vec<String>, known: &BTreeSet<String>) {
+        for unit_name in units {
+            if known.contains(&unit_name) {
                 continue;
             }
             tracing::warn!(unit = %unit_name, "stopping unrecorded browser unit");
-            let cgroup = thaw_browser_cgroup(&unit_name).await;
-            if !unit::terminate(&unit_name, cgroup.as_deref()).await {
-                // Its account is unknown: every account's fence waits for it.
+            let (cgroup, invocation) = thaw_browser_cgroup(&unit_name).await;
+            if !unit::terminate(&unit_name, cgroup.as_deref(), invocation.as_deref()).await {
                 self.retain_unconfirmed(Retained {
                     unit: unit_name,
                     cgroup_dir: cgroup,
+                    invocation_id: invocation,
                     account: None,
                     instance: None,
                     record: None,
                     capacity: Some(self.capacity.force_reserve()),
+                    outcome: StopOutcome::unreported(Reason::Failed),
                 });
             }
         }
-        Ok(())
+    }
+
+    /// The unit listing failed: hold every account's fence and every open
+    /// (as an unrecorded unit would) and retry the listing until it succeeds,
+    /// then stop whatever no record, registered instance or retained unit
+    /// accounts for.
+    pub(super) fn retry_inventory(&self) {
+        self.unconfirmed
+            .lock()
+            .insert(INVENTORY_UNKNOWN.to_owned(), Unconfirmed { account: None });
+        let Some(manager) = self.this.upgrade() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let units = loop {
+                tokio::time::sleep(termination::RETRY_INTERVAL).await;
+                match unit::list_units().await {
+                    Ok(units) => break units,
+                    Err(error) => {
+                        tracing::error!(%error, "browser unit inventory still unavailable")
+                    }
+                }
+            };
+            let mut known: BTreeSet<String> = manager.unconfirmed.lock().keys().cloned().collect();
+            known.extend(
+                manager
+                    .running()
+                    .iter()
+                    .map(|instance| instance.unit.clone()),
+            );
+            known.extend(
+                state_file::read_instances(&manager.state_dir)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|record| record.unit),
+            );
+            manager.stop_unrecorded(units, &known).await;
+            manager.unconfirmed.lock().remove(INVENTORY_UNKNOWN);
+            tracing::info!("browser unit inventory completed after retry");
+            if let Err(error) = manager.reconcile_accounts().await {
+                tracing::warn!(%error, "browser fence resumption incomplete");
+            }
+        });
     }
 
     pub(super) async fn reconcile_record(self: &Arc<Self>, record: InstanceRecord) -> Result<()> {
         if record.boot_id != self.boot_id {
             return self.discard_record(&record, "other boot");
         }
-        let status = unit::show(&record.unit).await?;
+        let status = match unit::show(&record.unit).await {
+            Ok(status) => status,
+            Err(error) => {
+                // Unobservable is not gone: the unit keeps its record,
+                // capacity and its account's fences and admission held
+                // while a retry bound to its recorded invocation stops it.
+                self.retain_recorded(&record, Some(record.cgroup_dir.clone()), Reason::Failed);
+                return Err(error.context("surviving browser unit unobservable; retained"));
+            }
+        };
         if status.gone() {
             return self.discard_record(&record, "unit ended");
         }
         if !status.live() || status.invocation_id != record.invocation_id {
-            return self.stop_recorded(&record, "unit ended or replaced").await;
+            return self
+                .stop_recorded(&record, "unit ended or replaced", Reason::Failed)
+                .await;
         }
         // A sign-in instance's login did not survive the restart.
         if record.purpose != Purpose::Tab {
             return self
-                .stop_recorded(&record, "sign-in login ended with the Machine restart")
+                .stop_recorded(
+                    &record,
+                    "sign-in login ended with the Machine restart",
+                    Reason::LoginEnded,
+                )
                 .await;
         }
         match self.adopt(&record, &status).await {
@@ -62,7 +144,8 @@ impl BrowserManager {
             }
             Err(error) => {
                 tracing::warn!(%error, instance = %record.instance_id, "browser instance not adopted; stopping");
-                self.stop_recorded(&record, "adoption failed").await
+                self.stop_recorded(&record, "adoption failed", Reason::Failed)
+                    .await
             }
         }
     }
@@ -74,25 +157,52 @@ impl BrowserManager {
 
     /// Stop a recorded, unadopted unit; its record is cleared only once the
     /// exit is confirmed.
-    async fn stop_recorded(&self, record: &InstanceRecord, why: &str) -> Result<()> {
-        let cgroup = thaw_browser_cgroup(&record.unit)
-            .await
-            .or_else(|| Some(record.cgroup_dir.clone()));
-        if unit::terminate(&record.unit, cgroup.as_deref()).await {
+    async fn stop_recorded(
+        &self,
+        record: &InstanceRecord,
+        why: &str,
+        reason: Reason,
+    ) -> Result<()> {
+        let (cgroup, _) = thaw_browser_cgroup(&record.unit).await;
+        let cgroup = cgroup.or_else(|| Some(record.cgroup_dir.clone()));
+        if unit::terminate(&record.unit, cgroup.as_deref(), Some(&record.invocation_id)).await {
             return self.discard_record(record, why);
         }
-        self.retain_unconfirmed(Retained {
-            unit: record.unit.clone(),
-            cgroup_dir: cgroup,
-            account: ProviderAccountId::try_from(record.account_id.clone()).ok(),
-            instance: None,
-            record: Some(record.instance_id.clone()),
-            capacity: Some(self.capacity.force_reserve()),
-        });
+        self.retain_recorded(record, cgroup, reason);
         bail!(
             "browser unit {} exit unconfirmed; record retained",
             record.unit
         )
+    }
+
+    /// Keep a recorded unit as running (record, capacity slot, its account's
+    /// fence and admission) while a retry bound to its recorded invocation
+    /// confirms its exit.
+    pub(super) fn retain_recorded(
+        &self,
+        record: &InstanceRecord,
+        cgroup_dir: Option<PathBuf>,
+        reason: Reason,
+    ) {
+        let account = ProviderAccountId::try_from(record.account_id.clone()).ok();
+        self.retain_unconfirmed(Retained {
+            unit: record.unit.clone(),
+            cgroup_dir,
+            invocation_id: Some(record.invocation_id.clone()),
+            account: account.clone(),
+            instance: None,
+            record: Some(record.instance_id.clone()),
+            capacity: Some(self.capacity.force_reserve()),
+            outcome: StopOutcome {
+                reason,
+                unsaved: true,
+                reference: account.map(|account_id| InstanceRef {
+                    account_id,
+                    instance_id: record.instance_id.clone(),
+                    incarnation: record.incarnation,
+                }),
+            },
+        });
     }
 
     pub(super) async fn adopt(
@@ -226,6 +336,9 @@ impl BrowserManager {
                 }
                 complete_fenced(&account_dir, &mut record)?;
                 tracing::info!(account = %account_id.as_str(), "resumed fenced browser operation");
+                if let Some(completed) = &record.last_operation {
+                    self.report_fence_completed(&account_id, completed);
+                }
             }
             let live: BTreeSet<u64> = self
                 .staging
@@ -244,10 +357,16 @@ impl BrowserManager {
 }
 
 /// Thaw a unit's `browser/` sub-cgroup before stopping it, so a stop never
-/// waits on frozen processes; returns the unit's cgroup when systemd reports
-/// one.
-async fn thaw_browser_cgroup(unit_name: &str) -> Option<PathBuf> {
-    let cgroup = unit::show(unit_name).await.ok()?.cgroup_dir()?;
-    let _ = unit::set_frozen(&cgroup.join("browser"), false);
-    Some(cgroup)
+/// waits on frozen processes; returns the unit's cgroup and invocation when
+/// systemd reports them.
+async fn thaw_browser_cgroup(unit_name: &str) -> (Option<PathBuf>, Option<String>) {
+    let Ok(status) = unit::show(unit_name).await else {
+        return (None, None);
+    };
+    let cgroup = status.cgroup_dir();
+    if let Some(cgroup) = &cgroup {
+        let _ = unit::set_frozen(&cgroup.join("browser"), false);
+    }
+    let invocation = (!status.invocation_id.is_empty()).then_some(status.invocation_id);
+    (cgroup, invocation)
 }

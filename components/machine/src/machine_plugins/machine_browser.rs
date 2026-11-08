@@ -9,12 +9,19 @@ use super::*;
 pub trait BrowserDrain: Send + Sync {
     /// Hibernate every running instance (gracefully, with its stop-time
     /// snapshot where possible) and confirm each unit's exit. The returned
-    /// hold refuses new opens until dropped.
+    /// hold refuses new opens until dropped. `authority` is checked before
+    /// the drain and again before every individual stop; once it fails the
+    /// drain stops nothing more.
     ///
     /// # Errors
-    /// Returns when an instance could not be confirmed stopped.
-    fn drain(&self) -> DrainFuture<'_>;
+    /// Returns when an instance could not be confirmed stopped or the
+    /// authority ended.
+    fn drain<'a>(&'a self, authority: &'a DrainAuthority<'a>) -> DrainFuture<'a>;
 }
+
+/// Whether the uninstall that requested a drain may still act: its execution
+/// lease is connected and unexpired.
+pub type DrainAuthority<'a> = dyn Fn() -> Result<()> + Send + Sync + 'a;
 
 /// What a drain resolves to: a hold that refuses new opens while it lives.
 pub type DrainFuture<'a> = std::pin::Pin<

@@ -7,23 +7,18 @@ impl MachinePluginStore {
     /// Drain every running Machine browser instance before `plugin_id`'s
     /// active generation is removed, when it is the Machine browser Plugin.
     /// The returned hold refuses new browser opens until it is dropped (after
-    /// the uninstall finished or failed).
+    /// the uninstall finished or failed). `authority` is re-checked before
+    /// every individual stop.
     ///
     /// # Errors
-    /// Returns when a running instance could not be confirmed stopped; the
-    /// uninstall must not proceed.
+    /// Returns when a running instance could not be confirmed stopped or the
+    /// authority ended; the uninstall must not proceed.
     pub(super) async fn drain_browsers(
         &self,
         plugin_id: &str,
+        authority: &machine_browser::DrainAuthority<'_>,
     ) -> Result<Option<Box<dyn std::any::Any + Send>>> {
-        let is_browser = self
-            .inventory_one(plugin_id)
-            .ok()
-            .flatten()
-            .is_some_and(|installed| {
-                installed.plugin_kind == cowboy_plugin_sdk::PluginKind::MachineBrowser
-            });
-        if !is_browser {
+        if !self.is_browser_plugin(plugin_id) {
             return Ok(None);
         }
         let Some(drain) = self
@@ -36,10 +31,39 @@ impl MachinePluginStore {
             return Ok(None);
         };
         drain
-            .drain()
+            .drain(authority)
             .await
             .map(Some)
             .context("draining Machine browser instances before uninstall")
+    }
+
+    /// The local (Machine-owner) uninstall's drain: its own authority holds
+    /// throughout, but the exact target is checked before any browser stops.
+    ///
+    /// # Errors
+    /// Returns when the active generation changed or the drain failed.
+    pub(super) async fn drain_local(
+        &self,
+        plugin_id: &str,
+        expected_digest: &str,
+    ) -> Result<Option<Box<dyn std::any::Any + Send>>> {
+        if let Some(active) = self.inventory_one(plugin_id)? {
+            ensure!(
+                active.generation_digest == expected_digest,
+                "active Plugin generation changed; refresh the uninstall plan"
+            );
+        }
+        self.drain_browsers(plugin_id, &|| Ok(())).await
+    }
+
+    /// Whether `plugin_id`'s active installation is a Machine browser.
+    pub(super) fn is_browser_plugin(&self, plugin_id: &str) -> bool {
+        self.inventory_one(plugin_id)
+            .ok()
+            .flatten()
+            .is_some_and(|installed| {
+                installed.plugin_kind == cowboy_plugin_sdk::PluginKind::MachineBrowser
+            })
     }
 
     pub(super) fn uninstall_inner(

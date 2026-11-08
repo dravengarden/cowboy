@@ -7,6 +7,22 @@ use super::*;
 /// How long a stop waits for a cancelled copy to let go of the control
 /// connection and its staging generation.
 const COPY_RELEASE_WAIT: Duration = Duration::from_secs(5);
+/// How long a navigation waits for a running copy to finish before it
+/// cancels it: the copy's own bound (the browser is frozen meanwhile and
+/// could not navigate anyway).
+const COPY_QUIESCE_WAIT: Duration = SNAPSHOT_TIMEOUT.saturating_add(FREEZE_TIMEOUT);
+
+/// Refuses new copies of one instance while held (a navigation verifies
+/// and navigates).
+pub(super) struct CopyHold<'a>(&'a Instance);
+
+impl Drop for CopyHold<'_> {
+    fn drop(&mut self) {
+        self.0
+            .copy_holds
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 /// A running snapshot copy. Any stop cancels it and waits until it has let
 /// go of the control connection and handed its staging over.
@@ -51,6 +67,20 @@ impl Instance {
         self.copy.lock().is_some()
     }
 
+    /// Refuse new copies until the hold drops. Taken under the copy lock,
+    /// where admission registers a job, so a copy is either visible to the
+    /// holder or refused.
+    pub(super) fn hold_copies(&self) -> CopyHold<'_> {
+        let _copy = self.copy.lock();
+        self.copy_holds
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        CopyHold(self)
+    }
+
+    pub(super) fn copies_held(&self) -> bool {
+        self.copy_holds.load(std::sync::atomic::Ordering::SeqCst) > 0
+    }
+
     pub(super) fn cancel_copy(&self) {
         if let Some(job) = self.copy.lock().as_ref() {
             let _ = job.cancel.send(true);
@@ -74,6 +104,25 @@ impl Instance {
 }
 
 impl BrowserManager {
+    /// Refuse new copies of `instance` and wait until none runs: a running
+    /// copy is awaited within its own bound, then cancelled. The caller must
+    /// not hold the account lifecycle lock while a copy may run.
+    pub(super) async fn quiesce_copies<'a>(&self, instance: &'a Arc<Instance>) -> CopyHold<'a> {
+        let hold = instance.hold_copies();
+        if let Some(mut done) = instance.copy_done()
+            && tokio::time::timeout(COPY_QUIESCE_WAIT, done.wait_for(|done| *done))
+                .await
+                .is_err()
+        {
+            tracing::warn!(instance = %instance.instance_id, "browser snapshot overran; cancelled for a navigation");
+            instance.cancel_copy();
+            if !instance.copy_released().await {
+                tracing::warn!(instance = %instance.instance_id, "cancelled browser snapshot did not let go in time");
+            }
+        }
+        hold
+    }
+
     pub(super) async fn snapshot_now(
         self: &Arc<Self>,
         request_id: &str,
@@ -149,15 +198,16 @@ impl BrowserManager {
             _ = cancel.wait_for(|cancelled| *cancelled) => None,
             guard = slot.lifecycle.lock() => Some(guard),
         };
+        // The copier finished: nothing writes the staging any more.
         let published = match lifecycle {
-            Some(_lifecycle) => self.publish_snapshot(instance, &account_dir, generation),
-            None => Err(anyhow!("snapshot cancelled before publication")),
+            Some(_lifecycle) => {
+                self.publish_snapshot(instance, &account_dir, generation, reservation)
+            }
+            None => {
+                self.retire_staging(&account_dir, generation, reservation);
+                Err(anyhow!("snapshot cancelled before publication"))
+            }
         };
-        match published {
-            Ok(()) => drop(reservation),
-            // The copier finished: nothing writes the staging any more.
-            Err(_) => self.retire_staging(&account_dir, generation, reservation),
-        }
         drop(registration);
         published
     }
@@ -175,6 +225,10 @@ impl BrowserManager {
         ensure!(
             !instance.copy_running(),
             "a browser snapshot is already in progress"
+        );
+        ensure!(
+            !instance.copies_held(),
+            "a browser navigation is being verified"
         );
         let account_dir = self.account_dir(&instance.account_id)?;
         let mut record = state_file::read_control(&account_dir)?;
@@ -196,10 +250,18 @@ impl BrowserManager {
         }
         let (cancel_tx, cancel) = tokio::sync::watch::channel(false);
         let (done, done_rx) = tokio::sync::watch::channel(false);
-        *instance.copy.lock() = Some(CopyJob {
-            cancel: cancel_tx,
-            done: done_rx,
-        });
+        {
+            let mut copy = instance.copy.lock();
+            if instance.copies_held() {
+                drop(copy);
+                self.retire_staging(&account_dir, generation, reservation);
+                bail!("a browser navigation is being verified");
+            }
+            *copy = Some(CopyJob {
+                cancel: cancel_tx,
+                done: done_rx,
+            });
+        }
         Ok(AdmittedCopy {
             account_dir,
             generation,
@@ -267,24 +329,58 @@ impl BrowserManager {
         }
     }
 
+    /// Publish a finished copy and settle its staging accounting on every
+    /// path: a refused or failed publication removes the staging before the
+    /// budget is released; one that failed after its rename is reconciled
+    /// against the durable control record first (it may be published after
+    /// all, or be an orphan to remove), and keeps its budget reserved while
+    /// that cannot be done. The caller holds the account lifecycle lock.
     pub(super) fn publish_snapshot(
         &self,
         instance: &Arc<Instance>,
         account_dir: &Path,
         generation: u64,
+        reservation: StagingReservation,
     ) -> Result<()> {
-        let mut record = state_file::read_control(account_dir)?;
-        ensure!(
-            record.pending.is_none() && record.profile_revision == instance.profile_revision,
-            "browser profile was reset during the snapshot; staging discarded"
-        );
-        let stats = snapshot::publish(
+        let mut record = match state_file::read_control(account_dir) {
+            Ok(record)
+                if record.pending.is_none()
+                    && record.profile_revision == instance.profile_revision =>
+            {
+                record
+            }
+            Ok(_) => {
+                self.retire_staging(account_dir, generation, reservation);
+                bail!("browser profile was reset during the snapshot; staging discarded");
+            }
+            Err(error) => {
+                self.retire_staging(account_dir, generation, reservation);
+                return Err(error);
+            }
+        };
+        let stats = match snapshot::publish(
             account_dir,
             generation,
             &mut record,
             snapshot::Bounds::for_profile(instance.settings.profile_max_bytes),
             unix_ms(),
-        )?;
+        ) {
+            Ok(stats) => {
+                drop(reservation);
+                stats
+            }
+            Err(failure) if failure.renamed => {
+                if !self.settle_renamed(account_dir, generation, reservation) {
+                    return Err(failure.error);
+                }
+                tracing::warn!(error = %failure, generation, "browser snapshot publication reported a failure but is recorded");
+                snapshot::TreeStats::default()
+            }
+            Err(failure) => {
+                self.retire_staging(account_dir, generation, reservation);
+                return Err(failure.error);
+            }
+        };
         // The profile stays potentially dirty: the browser keeps writing (RFB
         // input, timers, sync) after a copy taken while it runs.
         let mut live = instance.live.lock();
@@ -298,6 +394,53 @@ impl BrowserManager {
             "browser profile snapshot published"
         );
         Ok(())
+    }
+
+    /// Settle a generation renamed into `snapshots/` whose publication then
+    /// failed: `true` when the durable control record names it (published),
+    /// otherwise it is removed by reconciliation against that record. Only
+    /// then is its budget released; a reconciliation that fails keeps the
+    /// budget reserved for a retry before the account's next admission.
+    pub(super) fn settle_renamed(
+        &self,
+        account_dir: &Path,
+        generation: u64,
+        reservation: StagingReservation,
+    ) -> bool {
+        let account = account_dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let settled = state_file::read_control(account_dir).and_then(|record| {
+            if record.current_generation == Some(generation) {
+                return Ok(true);
+            }
+            let live: BTreeSet<u64> = self
+                .staging
+                .live()
+                .get(&account)
+                .copied()
+                .into_iter()
+                .collect();
+            snapshot::reconcile(account_dir, &record, &live)?;
+            Ok(false)
+        });
+        match settled {
+            Ok(published) => {
+                drop(reservation);
+                published
+            }
+            Err(error) => {
+                tracing::warn!(%error, generation, "unpublished browser snapshot not reconciled; budget retained");
+                self.leftover_staging.lock().push(Leftover {
+                    account_dir: account_dir.to_path_buf(),
+                    generation,
+                    reservation,
+                    renamed: true,
+                });
+                false
+            }
+        }
     }
 
     /// Reserve one staging generation, after retrying the removal of the

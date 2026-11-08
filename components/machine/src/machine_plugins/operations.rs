@@ -415,17 +415,28 @@ impl MachinePluginStore {
         let _lifecycle = self.lifecycle.lock().await;
         // A browser Plugin's instances are drained (and their exit confirmed)
         // before its generation is unlinked; an unconfirmed instance leaves
-        // the step pending rather than acknowledged.
+        // the step pending rather than acknowledged. Only a step the journal
+        // would execute now (owner, lease, installation CAS, slot fences and
+        // the exact target all hold) may stop browsers, and the lease is
+        // re-checked before every individual stop. The drain is idempotent
+        // (it stops only what still runs) and needs no journal entry of its
+        // own: it changes no Plugin state, and a hibernated browser reopens.
         let _drained = match access {
-            UninstallAccess::Execute(_)
-                if admission_enabled
-                    && step.validate().is_ok()
-                    && service == Some(step.service_id.as_str())
+            UninstallAccess::Execute(lease)
+                if service == Some(step.service_id.as_str())
                     && machine == step.machine_id
-                    && self.operations.query(step) == (StepLookup::NotFound {}) =>
+                    && self.is_browser_plugin(&step.plugin_id)
+                    && self.uninstall_drain_authorized(step, admission_enabled, lease) =>
             {
-                match self.drain_browsers(&step.plugin_id).await {
+                let authority = || lease.before_effect();
+                match self.drain_browsers(&step.plugin_id, &authority).await {
                     Ok(hold) => hold,
+                    // A lease that ended meanwhile is answered by execution
+                    // below exactly as without a drain.
+                    Err(error) if lease.before_effect().is_err() => {
+                        tracing::warn!(error = %format!("{error:#}"), plugin = %step.plugin_id, "browser drain stopped: uninstall lease ended");
+                        None
+                    }
                     Err(error) => {
                         tracing::warn!(error = %format!("{error:#}"), plugin = %step.plugin_id, "uninstall deferred");
                         return StepObservation {
@@ -474,6 +485,27 @@ impl MachinePluginStore {
         } else {
             found
         }
+    }
+
+    /// Whether `execute_uninstall_step` would run this step's effect now:
+    /// the same admission, lease, installation-CAS, slot-fence and target
+    /// checks, evaluated before any browser is drained for it.
+    pub(super) fn uninstall_drain_authorized(
+        &self,
+        step: &UninstallStep,
+        admission_enabled: bool,
+        lease: &UninstallExecutionLease,
+    ) -> bool {
+        admission_enabled
+            && step.validate().is_ok()
+            && lease.matches(step)
+            && lease.before_effect().is_ok()
+            && self.operations.query(step) == (StepLookup::NotFound {})
+            && !(self.operations.installations.requires_cas()
+                && step.installation_revision.is_none())
+            && self.operations.installations.admits(step)
+            && self.operations.ensure_unfenced(&step.plugin_id).is_ok()
+            && self.step_target_matches(step).unwrap_or(false)
     }
 
     fn execute_uninstall_step(

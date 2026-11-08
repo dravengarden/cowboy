@@ -7,7 +7,7 @@
 use super::*;
 
 /// How often an unconfirmed unit's termination is retried.
-const RETRY_INTERVAL: Duration = Duration::from_secs(15);
+pub(super) const RETRY_INTERVAL: Duration = Duration::from_secs(15);
 
 /// A unit whose processes may still be running.
 pub(super) struct Unconfirmed {
@@ -16,10 +16,24 @@ pub(super) struct Unconfirmed {
     pub(super) account: Option<String>,
 }
 
+/// A generation whose cleanup failed; its staging budget stays reserved
+/// until a retry before the account's next admission completes it.
+pub(super) struct Leftover {
+    pub(super) account_dir: PathBuf,
+    pub(super) generation: u64,
+    pub(super) reservation: StagingReservation,
+    /// Renamed into `snapshots/` before its publication failed: settled
+    /// against the durable control record rather than removed from staging.
+    pub(super) renamed: bool,
+}
+
 /// What to release once an unconfirmed unit's exit is finally confirmed.
 pub(super) struct Retained {
     pub(super) unit: String,
     pub(super) cgroup_dir: Option<PathBuf>,
+    /// The systemd invocation the termination is bound to, when known: a
+    /// later invocation of the same unit name is never stopped by the retry.
+    pub(super) invocation_id: Option<String>,
     pub(super) account: Option<ProviderAccountId>,
     /// The registered instance, still in its account slot.
     pub(super) instance: Option<Arc<Instance>>,
@@ -28,6 +42,31 @@ pub(super) struct Retained {
     pub(super) record: Option<String>,
     /// A capacity slot held for an unregistered unit.
     pub(super) capacity: Option<CapacityGuard>,
+    /// The stop the confirmed exit completes, reported then as the
+    /// incarnation's terminal `hibernated` observation.
+    pub(super) outcome: StopOutcome,
+}
+
+/// Why a retained incarnation was stopped, and whose observation its
+/// confirmed exit completes.
+pub(super) struct StopOutcome {
+    pub(super) reason: Reason,
+    pub(super) unsaved: bool,
+    /// The incarnation to report when no instance is registered (a recorded
+    /// unit at restart); `None` when nobody awaits a report (a failed start
+    /// already answered its open).
+    pub(super) reference: Option<InstanceRef>,
+}
+
+impl StopOutcome {
+    /// A stop nobody awaits a separate report of.
+    pub(super) fn unreported(reason: Reason) -> Self {
+        Self {
+            reason,
+            unsaved: true,
+            reference: None,
+        }
+    }
 }
 
 impl BrowserManager {
@@ -60,7 +99,13 @@ impl BrowserManager {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(RETRY_INTERVAL).await;
-                if unit::terminate(&retained.unit, retained.cgroup_dir.as_deref()).await {
+                if unit::terminate(
+                    &retained.unit,
+                    retained.cgroup_dir.as_deref(),
+                    retained.invocation_id.as_deref(),
+                )
+                .await
+                {
                     break;
                 }
                 tracing::error!(unit = %retained.unit, "browser unit exit still unconfirmed; retrying");
@@ -70,12 +115,33 @@ impl BrowserManager {
         });
     }
 
-    async fn release_retained(&self, retained: Retained) {
-        if let Some(instance) = &retained.instance {
+    /// Release what a unit held once its exit is confirmed, report the
+    /// incarnation's terminal `hibernated` observation (so the Controller
+    /// leaves `stopping` and any reclaim waiting on it settles), then
+    /// complete the fenced operations it blocked, reporting each completion.
+    pub(super) async fn release_retained(&self, retained: Retained) {
+        let outcome = retained.outcome;
+        let terminal = if let Some(instance) = &retained.instance {
             let slot = self.slot(&instance.account_id);
             let _lifecycle = slot.lifecycle.lock().await;
             self.finish_stopped(instance);
-        }
+            Some(self.hibernated_after(instance, outcome.reason, None, outcome.unsaved))
+        } else {
+            outcome.reference.map(|reference| {
+                let event = hibernated_event(
+                    "",
+                    &reference.account_id,
+                    &reference.instance_id,
+                    outcome.reason,
+                    None,
+                );
+                StateEvent {
+                    instance: reference,
+                    unsaved_state_lost: outcome.unsaved,
+                    ..event
+                }
+            })
+        };
         if let Some(instance_id) = &retained.record
             && let Err(error) = state_file::remove_instance(&self.state_dir, instance_id)
         {
@@ -83,9 +149,41 @@ impl BrowserManager {
         }
         drop(retained.capacity);
         self.unconfirmed.lock().remove(&retained.unit);
+        if let Some(event) = terminal {
+            self.send_state(event);
+        }
         if let Err(error) = self.reconcile_accounts().await {
             tracing::warn!(%error, "browser fence resumption incomplete");
         }
+    }
+
+    /// Report a fenced operation completed after the fact (startup or a
+    /// confirmed exit): the account's `hibernated` observation with the
+    /// operation's reason and the advanced revision. A reset's request ID is
+    /// its operation ID, so its earlier `failed` receipt is replaced and a
+    /// replay answers with the completion.
+    pub(super) fn report_fence_completed(
+        &self,
+        account_id: &ProviderAccountId,
+        completed: &CompletedOperation,
+    ) {
+        let reason = match completed.kind {
+            OperationKind::Reset => Reason::OwnerRequest,
+            OperationKind::Revoke => Reason::Revoked,
+        };
+        let mut event =
+            hibernated_event("", account_id, "", reason, Some(completed.profile_revision));
+        if completed.kind == OperationKind::Reset {
+            let mut receipts = self.receipts.lock();
+            if let Some((_, receipt)) = receipts
+                .iter_mut()
+                .find(|(id, _)| *id == completed.operation_id)
+            {
+                event.request_id = Some(completed.operation_id.clone());
+                *receipt = event.clone();
+            }
+        }
+        self.send_state(event);
     }
 
     /// Forget an instance whose unit is confirmed gone: its record, its
@@ -132,11 +230,12 @@ impl BrowserManager {
             Ok(()) => drop(reservation),
             Err(error) => {
                 tracing::warn!(%error, generation, "abandoned browser staging not removed; budget retained");
-                self.leftover_staging.lock().push((
-                    account_dir.to_path_buf(),
+                self.leftover_staging.lock().push(Leftover {
+                    account_dir: account_dir.to_path_buf(),
                     generation,
                     reservation,
-                ));
+                    renamed: false,
+                });
             }
         }
     }
@@ -148,12 +247,24 @@ impl BrowserManager {
             let mut all = self.leftover_staging.lock();
             let (mine, others) = std::mem::take(&mut *all)
                 .into_iter()
-                .partition(|(dir, _, _)| dir == account_dir);
+                .partition(|leftover: &Leftover| leftover.account_dir == account_dir);
             *all = others;
             mine
         };
-        for (account_dir, generation, reservation) in leftovers {
-            self.retire_staging(&account_dir, generation, reservation);
+        for leftover in leftovers {
+            if leftover.renamed {
+                self.settle_renamed(
+                    &leftover.account_dir,
+                    leftover.generation,
+                    leftover.reservation,
+                );
+            } else {
+                self.retire_staging(
+                    &leftover.account_dir,
+                    leftover.generation,
+                    leftover.reservation,
+                );
+            }
         }
     }
 }

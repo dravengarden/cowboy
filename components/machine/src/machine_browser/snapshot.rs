@@ -235,29 +235,59 @@ fn walk(
     Ok(())
 }
 
+/// A publication that failed, and how far it got.
+#[derive(Debug)]
+pub struct PublishFailure {
+    /// `staging/gen-<n>` was already renamed to `snapshots/gen-<n>`: the
+    /// staging path is gone and the generation must be reconciled against
+    /// the durable control record (it is published exactly when that record
+    /// names it).
+    pub renamed: bool,
+    pub error: anyhow::Error,
+}
+
+impl std::fmt::Display for PublishFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{:#}", self.error)
+    }
+}
+
 /// Publish `staging/gen-<n>` as the account's current snapshot generation:
 /// validate and fsync the tree, rename it into `snapshots/`, fsync, update the
-/// control record atomically, then prune every other generation.
+/// control record atomically, then prune every other generation. A failed
+/// prune leaves the publication standing (the record names the generation);
+/// reconciliation removes what remains.
 ///
 /// # Errors
-/// Returns when validation or any durable step fails; the staging tree is
-/// left for reconciliation and the record is unchanged.
+/// Returns the phase a failed step was in; `record` is unchanged then.
 pub fn publish(
     account_dir: &Path,
     generation: u64,
     record: &mut ControlRecord,
     bounds: Bounds,
     now_ms: i64,
-) -> Result<TreeStats> {
+) -> Result<TreeStats, PublishFailure> {
+    let staged = |error: anyhow::Error| PublishFailure {
+        renamed: false,
+        error,
+    };
+    let renamed = |error: anyhow::Error| PublishFailure {
+        renamed: true,
+        error,
+    };
     let staging = staging_root(account_dir).join(generation_name(generation));
-    let stats = validate_tree(&staging, bounds, true)?;
-    let staging_parent: File =
-        rustix::fs::open(staging_root(account_dir), DIRECTORY, Mode::empty())?.into();
-    fsync(&staging_parent)?;
+    let stats = validate_tree(&staging, bounds, true).map_err(staged)?;
     let snapshots = snapshots_root(account_dir);
-    std::fs::create_dir_all(&snapshots)?;
-    crate::provider_account::prepare_private_directory(&snapshots)?;
-    let snapshots_dir: File = rustix::fs::open(&snapshots, DIRECTORY, Mode::empty())?.into();
+    let opened = (|| -> Result<(File, File)> {
+        let staging_parent: File =
+            rustix::fs::open(staging_root(account_dir), DIRECTORY, Mode::empty())?.into();
+        fsync(&staging_parent)?;
+        std::fs::create_dir_all(&snapshots)?;
+        crate::provider_account::prepare_private_directory(&snapshots)?;
+        let snapshots_dir: File = rustix::fs::open(&snapshots, DIRECTORY, Mode::empty())?.into();
+        Ok((staging_parent, snapshots_dir))
+    })();
+    let (staging_parent, snapshots_dir) = opened.map_err(staged)?;
     let name = generation_name(generation);
     renameat(
         &staging_parent,
@@ -265,12 +295,19 @@ pub fn publish(
         &snapshots_dir,
         name.as_str(),
     )
-    .with_context(|| format!("publishing snapshot {name}"))?;
-    fsync(&snapshots_dir)?;
+    .with_context(|| format!("publishing snapshot {name}"))
+    .map_err(staged)?;
+    fsync(&snapshots_dir).map_err(|error| renamed(error.into()))?;
+    let previous = (record.current_generation, record.current_generation_at_ms);
     record.current_generation = Some(generation);
     record.current_generation_at_ms = Some(now_ms);
-    state_file::write_control(account_dir, record)?;
-    prune(&snapshots_dir, Some(generation))?;
+    if let Err(error) = state_file::write_control(account_dir, record) {
+        (record.current_generation, record.current_generation_at_ms) = previous;
+        return Err(renamed(error));
+    }
+    if let Err(error) = prune(&snapshots_dir, Some(generation)) {
+        tracing::warn!(%error, generation, "superseded browser snapshot not pruned; left for reconciliation");
+    }
     Ok(stats)
 }
 
@@ -539,5 +576,40 @@ mod tests {
         assert!(!state_file::browser_root(account).exists());
         assert!(account.join(state_file::CONTROL_FILE).is_file());
         remove_browser_dir(account).unwrap();
+    }
+
+    #[test]
+    fn a_failure_after_the_rename_reports_its_phase_and_reconciles_away() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if rustix::process::geteuid().is_root() {
+            return; // Permissions cannot make the record unwritable.
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let account = temp.path();
+        let bounds = Bounds::for_profile(1 << 20);
+        let mut record = ControlRecord::default();
+        create_staging(account, 1).unwrap();
+        publish(account, 1, &mut record, bounds, 1).unwrap();
+        let staging = create_staging(account, 2).unwrap();
+        std::fs::write(staging.join("Local State"), b"{}").unwrap();
+        // The record beside `browser/` cannot be replaced any more.
+        std::fs::set_permissions(account, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let failure = publish(account, 2, &mut record, bounds, 2).unwrap_err();
+        std::fs::set_permissions(account, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(failure.renamed, "{failure}");
+        assert_eq!(record.current_generation, Some(1));
+        assert!(!staging.exists());
+        assert!(snapshots_root(account).join("gen-2").is_dir());
+        // The durable record is the authority: the renamed generation is an
+        // orphan and goes, the published one stays.
+        let durable = state_file::read_control(account).unwrap();
+        assert_eq!(durable.current_generation, Some(1));
+        let removed = reconcile(account, &durable, &BTreeSet::new()).unwrap();
+        assert_eq!(removed, vec!["snapshots/gen-2"]);
+        assert!(snapshots_root(account).join("gen-1").is_dir());
+        // A failure before the rename leaves the staging in place.
+        let mut record = durable;
+        let failure = publish(account, 3, &mut record, bounds, 3).unwrap_err();
+        assert!(!failure.renamed);
     }
 }

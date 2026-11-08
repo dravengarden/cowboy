@@ -47,10 +47,11 @@ mod termination;
 mod tests;
 
 use capacity::{CapacityGuard, CapacityLedger};
+use drain::StartGate;
 use launch::{VersionOrder, compare_versions, launch_arguments};
 use lifecycle::complete_fenced;
 use snapshots::CopyJob;
-use termination::{Retained, Unconfirmed};
+use termination::{Leftover, Retained, StopOutcome, Unconfirmed};
 
 /// Longest an open waits for memory headroom; an owner is waiting.
 const MEMORY_WAIT: Duration = Duration::from_secs(15);
@@ -196,6 +197,8 @@ pub struct Instance {
     live: parking_lot::Mutex<Live>,
     /// The running snapshot copy, if any.
     copy: parking_lot::Mutex<Option<CopyJob>>,
+    /// Navigations refusing new copies; changed under the `copy` lock.
+    copy_holds: std::sync::atomic::AtomicUsize,
     /// A staging generation a copier of this unit may still be writing; it is
     /// removed and its budget released only once the unit's exit is
     /// confirmed.
@@ -233,6 +236,7 @@ impl Instance {
                 pending_navigation: None,
             }),
             copy: parking_lot::Mutex::new(None),
+            copy_holds: std::sync::atomic::AtomicUsize::new(0),
             abandoned: parking_lot::Mutex::new(None),
             capacity: parking_lot::Mutex::new(parts.capacity),
         }
@@ -334,14 +338,15 @@ pub struct BrowserManager {
     staging: Arc<StagingLedger>,
     /// Abandoned staging generations whose scoped removal failed; their
     /// budget stays reserved until a retry removes them.
-    leftover_staging: parking_lot::Mutex<Vec<(PathBuf, u64, StagingReservation)>>,
+    leftover_staging: parking_lot::Mutex<Vec<Leftover>>,
     /// Machine-wide instance slots, reserved before any asynchronous start.
     capacity: Arc<CapacityLedger>,
     /// Units whose exit could not be confirmed, by unit name. Their accounts'
     /// reset and revocation fences stay raised until a retry confirms exit.
     unconfirmed: parking_lot::Mutex<HashMap<String, Unconfirmed>>,
-    /// Outstanding Plugin-uninstall drains; opens are refused while any holds.
-    draining: Arc<std::sync::atomic::AtomicUsize>,
+    /// Unit starts against Plugin-uninstall drains: opens are refused while
+    /// a drain holds it, and a drain waits for admitted starts to settle.
+    starts: Arc<StartGate>,
     /// Host paths every instance must hide behind a read-only mask.
     masks: Vec<PathBuf>,
     receipts: parking_lot::Mutex<VecDeque<(String, StateEvent)>>,
@@ -379,7 +384,7 @@ impl BrowserManager {
             leftover_staging: parking_lot::Mutex::new(Vec::new()),
             capacity: Arc::new(CapacityLedger::default()),
             unconfirmed: parking_lot::Mutex::new(HashMap::new()),
-            draining: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            starts: Arc::new(StartGate::default()),
             masks: sensitive_paths(state_dir, uid),
             receipts: parking_lot::Mutex::new(VecDeque::new()),
             headroom,

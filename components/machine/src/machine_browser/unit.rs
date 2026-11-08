@@ -19,6 +19,36 @@ pub const RUNTIME_DIRECTORY_PARENT: &str = "cowboy-browser";
 /// `TimeoutStopSec` of the unit: the launcher's graceful stop must fit in it.
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(20);
 const POLL: Duration = Duration::from_millis(100);
+/// Longest any single `systemctl` or `systemd-run` invocation may take; a
+/// stalled user manager must never hold a stop (or the account queue behind
+/// it) indefinitely.
+pub const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Longest the systemd phase of [`terminate`] (stop, wait, `SIGKILL`, wait)
+/// may take before the `cgroup.kill` fallback runs.
+const SYSTEMD_PHASE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Run one bounded subprocess: killed when `timeout` passes (or the future
+/// is dropped), and reported as an error then.
+///
+/// # Errors
+/// Returns when the program cannot be spawned or does not finish in time.
+pub async fn run_bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Output> {
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let child = command.spawn()?;
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(output) => Ok(output?),
+        // Dropping the wait future drops the child, which kills it.
+        Err(_) => bail!("timed out after {}s", timeout.as_secs_f32()),
+    }
+}
+
+async fn systemctl(arguments: &[&str]) -> Result<std::process::Output> {
+    run_bounded(Command::new("systemctl").args(arguments), SYSTEMCTL_TIMEOUT).await
+}
 
 #[must_use]
 pub fn unit_name(instance_id: &str) -> String {
@@ -135,12 +165,12 @@ pub async fn start(launch: &Launch<'_>) -> Result<()> {
         existing.load_state,
         existing.active_state
     );
-    let output = Command::new("systemd-run")
-        .args(systemd_run_arguments(launch))
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-        .context("starting systemd-run for the browser unit")?;
+    let output = run_bounded(
+        Command::new("systemd-run").args(systemd_run_arguments(launch)),
+        SYSTEMCTL_TIMEOUT,
+    )
+    .await
+    .context("starting systemd-run for the browser unit")?;
     ensure!(
         output.status.success(),
         "systemd-run exited {}: {}",
@@ -189,17 +219,14 @@ impl UnitStatus {
 /// # Errors
 /// Returns when `systemctl` cannot be run or answers unexpectedly.
 pub async fn show(unit: &str) -> Result<UnitStatus> {
-    let output = Command::new("systemctl")
-        .args([
-            "--user",
-            "show",
-            unit,
-            "--property=LoadState,ActiveState,SubState,MainPID,InvocationID,ControlGroup,Result",
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-        .with_context(|| format!("querying browser unit {unit}"))?;
+    let output = systemctl(&[
+        "--user",
+        "show",
+        unit,
+        "--property=LoadState,ActiveState,SubState,MainPID,InvocationID,ControlGroup,Result",
+    ])
+    .await
+    .with_context(|| format!("querying browser unit {unit}"))?;
     ensure!(
         output.status.success(),
         "systemctl show {unit} exited {}: {}",
@@ -262,15 +289,14 @@ pub async fn wait_running(unit: &str, timeout: Duration) -> Result<UnitStatus> {
     }
 }
 
-/// `systemctl --user stop`; a unit that is already gone is not an error.
+/// `systemctl --user stop --no-block`: the stop job is enqueued and the
+/// caller waits for collection itself, so no call blocks on the unit's own
+/// stop timeout. A unit that is already gone is not an error.
 ///
 /// # Errors
 /// Returns when systemd refuses the stop for another reason.
 pub async fn stop(unit: &str) -> Result<()> {
-    let output = Command::new("systemctl")
-        .args(["--user", "stop", unit])
-        .stdin(std::process::Stdio::null())
-        .output()
+    let output = systemctl(&["--user", "stop", "--no-block", unit])
         .await
         .with_context(|| format!("stopping browser unit {unit}"))?;
     if output.status.success() || show(unit).await?.gone() {
@@ -288,10 +314,7 @@ pub async fn stop(unit: &str) -> Result<()> {
 /// # Errors
 /// Returns when systemd refuses the signal and the unit still exists.
 pub async fn kill(unit: &str) -> Result<()> {
-    let output = Command::new("systemctl")
-        .args(["--user", "kill", "--signal=SIGKILL", unit])
-        .stdin(std::process::Stdio::null())
-        .output()
+    let output = systemctl(&["--user", "kill", "--signal=SIGKILL", unit])
         .await
         .with_context(|| format!("killing browser unit {unit}"))?;
     if output.status.success() || show(unit).await?.gone() {
@@ -338,21 +361,53 @@ pub async fn stop_and_wait(unit: &str) -> Result<bool> {
     wait_gone(unit, Duration::from_secs(10)).await
 }
 
-/// Stop the unit and confirm that none of its processes remain: systemd's
-/// stop with its own `SIGKILL` escalation first, then `cgroup.kill` on the
-/// unit's cgroup and a wait for it to empty. `true` only when the exit is
-/// verified (the unit was collected, or its cgroup is gone or unpopulated);
-/// a caller that gets `false` must keep treating the instance as running.
-pub async fn terminate(unit: &str, cgroup_dir: Option<&Path>) -> bool {
-    match stop_and_wait(unit).await {
-        Ok(true) => return true,
-        Ok(false) => tracing::error!(%unit, "browser unit is still present after SIGKILL"),
-        Err(error) => tracing::warn!(%error, %unit, "browser unit stop failed"),
+/// Whether `status` shows that the invocation a caller stopped is gone: the
+/// unit was collected, or the name now belongs to another invocation (a
+/// unit name is reused across starts; the old invocation must have ended for
+/// a new one to start, and the new one must never be stopped in its place).
+#[must_use]
+pub fn invocation_gone(status: &UnitStatus, invocation_id: Option<&str>) -> bool {
+    if status.gone() {
+        return true;
     }
-    let cgroup = match cgroup_dir {
-        Some(dir) => Some(dir.to_path_buf()),
-        None => show(unit).await.ok().and_then(|status| status.cgroup_dir()),
-    };
+    invocation_id.is_some_and(|expected| {
+        !expected.is_empty() && !status.invocation_id.is_empty() && status.invocation_id != expected
+    })
+}
+
+/// Stop the unit and confirm that none of its processes remain: systemd's
+/// stop with its own `SIGKILL` escalation first (bounded as a whole), then
+/// `cgroup.kill` on the unit's cgroup and a wait for it to empty. `true`
+/// only when the exit is verified (the unit was collected, its name belongs
+/// to another invocation, or its cgroup is gone or unpopulated); a caller
+/// that gets `false` must keep treating the instance as running.
+///
+/// `invocation_id`, when known, binds the termination to that invocation:
+/// a unit of the same name with another invocation ID is never stopped or
+/// killed, and counts as the original having exited.
+pub async fn terminate(unit: &str, cgroup_dir: Option<&Path>, invocation_id: Option<&str>) -> bool {
+    match show(unit).await {
+        Ok(status) if invocation_gone(&status, invocation_id) => return true,
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, %unit, "browser unit unobservable before its stop"),
+    }
+    match tokio::time::timeout(SYSTEMD_PHASE_TIMEOUT, stop_and_wait(unit)).await {
+        Ok(Ok(true)) => return true,
+        Ok(Ok(false)) => tracing::error!(%unit, "browser unit is still present after SIGKILL"),
+        Ok(Err(error)) => tracing::warn!(%error, %unit, "browser unit stop failed"),
+        Err(_) => tracing::error!(%unit, "systemd did not stop the browser unit in time"),
+    }
+    // The retained cgroup path is preferred: it needs no answer from systemd.
+    let observed = show(unit).await.ok();
+    if observed
+        .as_ref()
+        .is_some_and(|status| invocation_gone(status, invocation_id) && !status.gone())
+    {
+        return true;
+    }
+    let cgroup = cgroup_dir
+        .map(Path::to_path_buf)
+        .or_else(|| observed.and_then(|status| status.cgroup_dir()));
     let Some(cgroup) = cgroup else {
         tracing::error!(%unit, "browser unit cgroup unknown; exit unconfirmed");
         return false;
@@ -426,20 +481,18 @@ pub async fn wait_cgroup_empty(dir: &Path, timeout: Duration) -> Result<bool> {
 /// # Errors
 /// Returns when `systemctl` cannot list units.
 pub async fn list_units() -> Result<Vec<String>> {
-    let output = Command::new("systemctl")
-        .args([
-            "--user",
-            "list-units",
-            "--all",
-            "--plain",
-            "--no-legend",
-            "--no-pager",
-            &format!("{UNIT_PREFIX}*.service"),
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-        .context("listing browser units")?;
+    let pattern = format!("{UNIT_PREFIX}*.service");
+    let output = systemctl(&[
+        "--user",
+        "list-units",
+        "--all",
+        "--plain",
+        "--no-legend",
+        "--no-pager",
+        &pattern,
+    ])
+    .await
+    .context("listing browser units")?;
     ensure!(
         output.status.success(),
         "systemctl list-units exited {}",
@@ -549,6 +602,44 @@ mod tests {
         let removed = temp.path().join("gone.service");
         assert!(cgroup_empty(&removed).unwrap());
         kill_cgroup(&removed).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stalled_subprocess_is_killed_at_its_bound() {
+        let started = std::time::Instant::now();
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        let error = run_bounded(&mut command, Duration::from_millis(200))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let mut command = Command::new("sh");
+        command.args(["-c", "echo ok"]);
+        let output = run_bounded(&mut command, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+    }
+
+    #[test]
+    fn termination_is_bound_to_the_original_invocation() {
+        let status = |load: &str, invocation: &str| UnitStatus {
+            load_state: load.into(),
+            active_state: "active".into(),
+            invocation_id: invocation.into(),
+            ..UnitStatus::default()
+        };
+        // Collected: gone whatever the invocation.
+        assert!(invocation_gone(&status("not-found", ""), Some("a")));
+        // The same invocation still runs.
+        assert!(!invocation_gone(&status("loaded", "a"), Some("a")));
+        // A replacement reuses the name: the original is gone and the
+        // replacement must not be stopped in its place.
+        assert!(invocation_gone(&status("loaded", "b"), Some("a")));
+        // Without a known invocation (or an observed one) nothing is assumed.
+        assert!(!invocation_gone(&status("loaded", "b"), None));
+        assert!(!invocation_gone(&status("loaded", ""), Some("a")));
     }
 
     #[test]

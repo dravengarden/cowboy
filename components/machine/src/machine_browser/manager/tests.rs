@@ -5,6 +5,8 @@
 use super::*;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 
+mod confirmation;
+
 struct Fixture {
     _temp: tempfile::TempDir,
     manager: Arc<BrowserManager>,
@@ -395,14 +397,10 @@ async fn an_uninstall_drain_holds_opens_and_refuses_unconfirmed_exits() {
     let fixture = fixture().await;
     // The fixture's instance is not a real unit; forget it for this test.
     *fixture.manager.slot(&fixture.account).instance.lock() = None;
-    let draining = || {
-        fixture
-            .manager
-            .draining
-            .load(std::sync::atomic::Ordering::SeqCst)
-    };
-    let hold = fixture.manager.drain_instances().await.unwrap();
+    let draining = || fixture.manager.starts.counts().0;
+    let hold = fixture.manager.drain_instances(&|| Ok(())).await.unwrap();
     assert_eq!(draining(), 1);
+    assert!(fixture.manager.starts.enter().is_none());
     drop(hold);
     assert_eq!(draining(), 0);
     fixture
@@ -410,7 +408,7 @@ async fn an_uninstall_drain_holds_opens_and_refuses_unconfirmed_exits() {
         .unconfirmed
         .lock()
         .insert("cowboy-browser-x".into(), Unconfirmed { account: None });
-    assert!(fixture.manager.drain_instances().await.is_err());
+    assert!(fixture.manager.drain_instances(&|| Ok(())).await.is_err());
     assert_eq!(draining(), 0);
 }
 

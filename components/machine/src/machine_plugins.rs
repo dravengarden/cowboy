@@ -873,7 +873,7 @@ impl MachinePluginStore {
     pub async fn uninstall(&self, provider_id: &str, expected_digest: &str) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
         self.operations.ensure_legacy_allowed(provider_id)?;
-        let _drained = self.drain_browsers(provider_id).await?;
+        let _drained = self.drain_local(provider_id, expected_digest).await?;
         self.uninstall_inner(provider_id, expected_digest, || Ok(()))
     }
 

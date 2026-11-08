@@ -32,9 +32,22 @@ impl BrowserManager {
         if slot.instance.lock().is_some() {
             return hibernated(Reason::Busy);
         }
-        if self.draining.load(std::sync::atomic::Ordering::SeqCst) > 0 {
-            return hibernated(Reason::NotAvailable);
+        // An earlier unit of this account (or of an unknown one, or with the
+        // same unit name) whose exit is unconfirmed may still run: a new
+        // start could be killed by its termination retry or run beside it.
+        if self.fence_blocked(&account_id)
+            || self
+                .unconfirmed
+                .lock()
+                .contains_key(&unit::unit_name(&instance_id))
+        {
+            return hibernated(Reason::Busy);
         }
+        // Held until this open returns, so an uninstall drain waits for the
+        // start to settle (and see the instance) instead of missing it.
+        let Some(_start) = self.starts.enter() else {
+            return hibernated(Reason::NotAvailable);
+        };
         let plan = match self.providers.machine_browser_runtime() {
             Ok(Some(plan)) => Arc::new(plan),
             Ok(None) => return hibernated(Reason::NotAvailable),
@@ -82,7 +95,7 @@ impl BrowserManager {
             .reserve(
                 settings.memory_max,
                 self.headroom,
-                || false,
+                || self.starts.draining(),
                 MEMORY_WAIT,
                 MEMORY_POLL,
             )
@@ -153,6 +166,8 @@ impl BrowserManager {
         login_request_id: &str,
     ) -> StateEvent {
         let slot = self.slot(&existing.account_id);
+        // Outside the lifecycle lock: a running copy publishes under it.
+        let _copies = self.quiesce_copies(existing).await;
         let _lifecycle = slot.lifecycle.lock().await;
         let current = slot.instance.lock().clone();
         if !current
@@ -319,12 +334,14 @@ impl BrowserManager {
             arguments,
         };
         let mut cgroup_dir = None;
+        let mut invocation_id = None;
         let outcome = async {
             unit::start(&launch).await.map_err(Failure::internal)?;
             let status = unit::wait_running(&unit_name, UNIT_START_TIMEOUT)
                 .await
                 .map_err(Failure::internal)?;
             cgroup_dir = status.cgroup_dir();
+            invocation_id = Some(status.invocation_id.clone()).filter(|id| !id.is_empty());
             let readiness = Duration::from_millis(plan.contract.launch.readiness_timeout_ms);
             let mut control = Control::connect(&runtime_dir, readiness)
                 .await
@@ -376,14 +393,19 @@ impl BrowserManager {
             Err(failure) => {
                 // Never retry with weaker isolation: the unit ends, and its
                 // slot is released only once that is confirmed.
-                if !unit::terminate(&unit_name, cgroup_dir.as_deref()).await {
+                if !unit::terminate(&unit_name, cgroup_dir.as_deref(), invocation_id.as_deref())
+                    .await
+                {
                     self.retain_unconfirmed(Retained {
                         unit: unit_name,
                         cgroup_dir,
+                        invocation_id,
                         account: Some(account_id.clone()),
                         instance: None,
                         record: None,
                         capacity: Some(capacity),
+                        // The open answers the failure itself.
+                        outcome: StopOutcome::unreported(failure.reason),
                     });
                 }
                 Err(failure)
@@ -513,24 +535,37 @@ impl BrowserManager {
                 }
             }
         }
-        if !unit::terminate(&instance.unit, Some(&instance.cgroup_dir)).await {
+        if let Some(generation) = published {
+            instance.live.lock().last_snapshot = Some((generation, unix_ms()));
+        }
+        if !unit::terminate(
+            &instance.unit,
+            Some(&instance.cgroup_dir),
+            Some(&instance.invocation_id),
+        )
+        .await
+        {
             tracing::error!(unit = %instance.unit, "browser unit exit unconfirmed; instance retained");
             self.retain_unconfirmed(Retained {
                 unit: instance.unit.clone(),
                 cgroup_dir: Some(instance.cgroup_dir.clone()),
+                invocation_id: Some(instance.invocation_id.clone()),
                 account: Some(instance.account_id.clone()),
                 instance: Some(Arc::clone(instance)),
                 record: None,
                 capacity: None,
+                // The confirmed exit reports the stop's own reason.
+                outcome: StopOutcome {
+                    reason,
+                    unsaved,
+                    reference: None,
+                },
             });
             return instance
                 .state(request_id.map(ToOwned::to_owned))
                 .with_reason(Reason::Failed);
         }
         self.finish_stopped(instance);
-        if let Some(generation) = published {
-            instance.live.lock().last_snapshot = Some((generation, unix_ms()));
-        }
         self.hibernated_after(instance, reason, request_id, unsaved)
     }
 
@@ -612,16 +647,8 @@ impl BrowserManager {
             self.retire_staging(&account_dir, generation, reservation);
             bail!("launcher made no stop-time copy");
         }
-        match self.publish_snapshot(instance, &account_dir, generation) {
-            Ok(()) => {
-                drop(reservation);
-                Ok(Some((generation, outcome.graceful)))
-            }
-            Err(error) => {
-                self.retire_staging(&account_dir, generation, reservation);
-                Err(error)
-            }
-        }
+        self.publish_snapshot(instance, &account_dir, generation, reservation)?;
+        Ok(Some((generation, outcome.graceful)))
     }
 
     pub(super) async fn reset_or_revoke(
