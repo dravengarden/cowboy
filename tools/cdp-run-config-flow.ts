@@ -443,6 +443,7 @@ async function replaceOrForkSelects(driver: AcceptanceDriver): Promise<void> {
     return { x: r.left + r.width / 2, y: r.top + r.height / 2, native: field.tagName === "SELECT" };
   })()`);
   check(fork && !fork.native, `The new agent's options are Desktop lists: ${JSON.stringify(fork)}`);
+  if (!fork) throw new Error("The new agent's options did not render");
   for (const type of ["mousePressed", "mouseReleased"]) {
     await page.send("Input.dispatchMouseEvent", { type, x: fork.x, y: fork.y, button: "left", clickCount: 1 });
   }

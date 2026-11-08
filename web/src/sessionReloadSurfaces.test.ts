@@ -23,8 +23,9 @@ test("a session row opens Replace or fork with the actions modal's own letter", 
   assert(appSource.includes('f: "replaceOrFork",'));
   assert(appSource.includes('["F", "Replace or fork"],'));
   assert(appSource.includes('case "replaceOrFork":'));
-  // History, system and managed child conversations have no next agent.
-  assert(appSource.includes("!sessions.some((entry) => entry.continued_from === session.id)"));
+  // History, system and managed child conversations have no next agent; a
+  // source kept open with Continue here is not history.
+  assert(appSource.includes("!handedOff.has(session.id)"));
 });
 
 test("mobile reload is a labeled session action behind the shared confirmation", () => {
