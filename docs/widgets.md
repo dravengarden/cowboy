@@ -6,11 +6,11 @@ activated. Revision 1 received an Astra Max design review ("request changes",
 findings, 4 blocking); revision 3 a third ("request changes", 14 findings,
 5 blocking); revision 4 a fourth ("request changes", 13 findings, 5
 blocking); revision 5 a fifth ("request changes", 10 findings, 3 blocking);
-revision 6 a sixth ("request changes", 6 findings, 1 blocking). The owner
-chose to keep the full interactive design (2026-11-08) rather than narrow
-Phase 1 to display-only widgets. Every finding is resolved below and none
-was rejected ([§1](#1-review-findings-and-resolutions)); revision 7 is the
-current text. Statements marked
+revision 6 a sixth ("request changes", 6 findings, 1 blocking); revision 7
+a seventh ("request changes", 6 findings, 1 blocking). The owner chose to
+keep the full interactive design (2026-11-08) rather than narrow Phase 1 to
+display-only widgets. Every finding is resolved below and none was rejected
+([§1](#1-review-findings-and-resolutions)); revision 8 is the current text. Statements marked
 **[unverified]** are inferred from code or history and still need evidence.
 
 Related: [`agent-api.md`](agent-api.md) (the MCP read/execute/receipt surface
@@ -87,7 +87,7 @@ typing-free, auditable decisions within measured bounds.
 | F3 | Naming a revision does not preserve the target approved at that revision (P1) | Revisions a decision was made on are pinned in `widget_revisions`; `widgets.read({revision})` returns them; the message names the revision; help tells the agent a moved revision never authorises substitution | §6.1, §6.3, §8.2 |
 | F4 | Retention changes do not cover the extraction path; queries filter on string prefix; `event` sources re-enter on patch (P1) | No text scanning: references are extracted semantically from the validated document on publish, replace and patch into `widget_artifact_refs`, which the collector unions as a root; `event` sources are normalised on every write; the inline carrier may use only `event` sources | §5.4, §6.3, §6.4 |
 | F5 | Publication acknowledgement needs an explicit version (P2) | `published_version = max(published_version, acknowledged snapshot version)` after the durable write, under the generation fence; W4 promises eventual publication of the latest version | §6.3, W4 |
-| F6 | Interactions can exceed read and lookup budgets (P2) | Selection ≤ 12 options, labels ≤ 200 chars, records ≤ 4 KiB by construction; snapshots carry 5 summaries; records are paged with at least one per page; snapshots ≤ 28 KiB so a 256 KiB lookup page always progresses; `groups` ≤ 32 | §5.3, §6.1, §6.5 |
+| F6 | Interactions can exceed read and lookup budgets (P2) | Selection ≤ 12 options, labels ≤ 200 chars, records ≤ 4 KiB by construction; snapshots carry 5 summaries; records are paged with at least one per page; snapshots ≤ 210 KiB so a 256 KiB lookup page always progresses; `groups` ≤ 32 | §5.3, §6.1, §6.5 |
 | F7 | Reconciliation lacks deletion and placement information (P2) | Per-id lookup outcomes `current`/`cleared`/`unknown`, epoch and generation on every response, anchor `seq` in snapshots and entries, continuation cursor, absence in a complete bootstrap means removal | §6.5 |
 | F8 | Immutable closure contradicts pending delivery updates (P2) | Close freezes the document and forbids new admissions; admitted interactions still settle and advance `state_version` | §6.2, W5 |
 | F9 | Queue editing breaks the immutable interaction/message association (P2) | Widget prompts in the queue cannot be edited, only deleted (`cancelled`) | §8.4 |
@@ -145,7 +145,7 @@ typing-free, auditable decisions within measured bounds.
 | G4 | `LABEL_PATTERN` reported with doubled backslashes (P2) | The committed source is `/^[^\p{Cc}\p{Zl}\p{Zp}\p{Cf}]+$/u` with a single escape (the examples pass); line and paragraph separators and format characters are now excluded too, with positive and negative label tests | §5.3, contract |
 | G5 | Late delivery proof is discarded once an attempt is `uncertain`; `retried_by` missing from summaries (P2) | Attempt identities stay searchable; a late `TurnEnd(T, E)` moves `uncertain → delivered` and marks an existing retry `duplicate_of`, serialized through the record's conditional update; summaries carry both links | §8.3, contract |
 | G6 | A crash between `cancel_requested` and `cancelled` strands an admitted record (P2) | Startup reconciliation settles every admitted record with a durable intent: queue copies removed, `cancelled (removed)`, snapshot published, before drain is enabled | §8.3 |
-| G7 | The 6 KiB record bound fails with five attempts; `stop_reason` unbounded (P2) | `worstCaseRecordBytes` reserves every bounded field at maximum (message, selected labels, five attempts, reason, links) and is validated at publish against 8 KiB; `stop_reason` ≤ 64 chars | §5.3, contract |
+| G7 | The 6 KiB record bound fails with five attempts; `stop_reason` unbounded (P2) | `worstCaseRecordBytes` reserves every bounded field at maximum (message, selected labels, five attempts, reason, links) and is validated at publish against 10 KiB; `stop_reason` ≤ 64 chars | §5.3, contract |
 | G8 | `widgets.list` not packed (P2) | List pages are packed against the complete encoded response with a continuation cursor after the last included entry | §6.1 |
 | G9 | 512 B is an example budget, not a three-op bound; §3 contradicted §11 (P2) | The bound is scoped to a benchmark update class (≤ 3 ops, paths and values ≤ 64 chars); general patches are bounded by the patch and document limits; §3 and §11 now state the same thing | §3, §11 |
 | G10 | The checker let a single choice carry `max_selected: 13` (P3) | The raw field is validated 1..12 independently of the effective cardinality; vector added | §5.3, contract |
@@ -163,6 +163,17 @@ typing-free, auditable decisions within measured bounds.
 
 Also fixed: the stale "≤ 6 KiB" interaction read claim (§6.1) and explicit
 wire domains for counters and timestamps (`maxCounter`, `maxTimestampMs`).
+
+### 1.7 Revision 7 (Astra Max, `95123ed3c`)
+
+| # | Finding (severity) | Resolution | Section |
+|---|---|---|---|
+| 1 | `uncertain` released ownership while delivery remained possible; "no worker + disconnected" does not revoke broker-held commands; `complete_turn` ignores identity (P1) | Transport **ownership** is a separate per-attempt state from delivery: held from the CAS until a terminal transport event — the attempt's `TurnEnd`, a proven-unsent return or Stop, or the broker's acknowledged `CommandRevoked` (dropped undelivered → the attempt is `returned`; delivered to an epoch that has exited → `uncertain`); an attempt can be `uncertain` for delivery and still hold ownership; while any attempt is held the Hub dispatches nothing and an idle snapshot releases nothing; `complete_turn` releases the guard only for the dispatched turn id | §8.3 step 5, contract |
+| 2 | The capability prerequisite did not cover retry or the receiving worker; "stay untouched" contradicted the Machine release (P2) | Fail-closed capability discovery from the Machine handshake; `widget_action`, `widget_action_retry` and the handoff all refuse `capability_missing`; widget commands carry `requires: ["widget_delivery_v1"]` and a broker or worker without it rejects them (`returned`); a generation fallback revokes open attempts; the worker-generation files change in the Machine release and the sentence says so | §8.3, §12, contract |
+| 3 | Printable ASCII still escapes (`"`, `\`), so the record estimate was not an upper bound (P2) | Metadata strings use an alphabet with no escaped character (`METADATA_PATTERN`); runtime text is normalized (`normalizeMetadata`) before storage; the independent record test uses adversarial metadata through the normalizer | §5.3, contract |
+| 4 | Capability changes had no ordered snapshot update (P2) | `interactive` leaves the widget snapshot; the session-level `cowboy_delivery_capabilities` projection (already used for Steer targets) carries `widget_delivery`, and the renderer combines it with every widget | §6.2, §8.3, contract |
+| 5 | The index version had no durable storage or transaction contract (P2) | `sessions.widget_index_version` and `session_widgets.index_version` are written atomically with creation and tombstoning; the bootstrap reads counter and entries in one transaction and filters pages by `index_version ≤ watermark` | §6.3, §6.5 |
+| 6 | The benchmark class maximum was computed with unescaped single-byte values (P2) | The class is defined by JSON-escaped UTF-8 bytes (paths and values ≤ 64 bytes escaped) and its maximum, built with quote and emoji values, is bounded at 1 KiB | §3, §11, contract |
 
 Rulings on decisions are folded into §14.
 
@@ -242,9 +253,10 @@ Goals, in priority order:
    terse Markdown reply, updating it costs more than a one-line status for
    any report smaller than about 330 bytes, and this design claims no net
    token saving (§11). What it claims is a bound: publication ≤ 4.5× the
-   same-language report; a benchmark update (≤ 3 `set` ops with paths and
-   string values ≤ 64 chars, a widget id ≤ 64 and an operation id ≤ 128
-   chars) ≤ 1 KiB of envelope and result at the class maximum, with general
+   same-language report; a benchmark update (≤ 3 `set` ops whose paths and
+   string values are ≤ 64 bytes in JSON-escaped UTF-8, a widget id ≤ 64 and
+   an operation id ≤ 128 chars) ≤ 1 KiB of envelope and result at the class
+   maximum, with general
    patches bounded only by the patch and document limits; a decision message
    ≤ 2 KiB and fixed in shape. The bounds are measured on complete exchanges with every envelope
    counted, per prefix, and the measurement is a ship gate that stops the
@@ -374,8 +386,11 @@ twice inside the message's JSON line — selects the effective cardinality of
 them, and places every identifier and counter at its maximum
 (`idChars`, `maxCounter`, `maxTimestampMs`), five attempts, a maximal
 `reason` and all retry links; metadata strings (`reason`, `stop_reason`,
-handles, identifiers) are printable ASCII by contract so their size is their
-length; the result must fit `interactionRecordBytes` (8 KiB). The
+handles, identifiers) use an alphabet without any JSON-escaped character
+(`METADATA_PATTERN`: letters, digits, space, `_ . : -`), and runtime text
+such as a provider stop reason is normalized into it (`normalizeMetadata`)
+before storage, so their serialized size is their length; the result must
+fit `interactionRecordBytes` (10 KiB). The
 worst-case snapshot (`worstCaseSnapshotBytes`) reserves 32 decided groups,
 five linked summaries and every metadata field at its maximum around the
 document and must fit `snapshotBytes` (36 KiB). Both are validated at
@@ -468,7 +483,7 @@ read restarts only when `revision` changes between pages; a **pinned** read
 interrupted by interaction settlement or later revisions. A pinned revision
 exists for every revision a decision was made on (§6.3). `interactions`
 returns records by cursor, at least one per page. Read outcomes: `ok`, `unknown_widget`, `cleared`,
-`unknown_revision` (records are ≤ 8 KiB by construction). Pages — document
+`unknown_revision` (records are ≤ 10 KiB by construction). Pages — document
 windows, interaction records, pinned `revisions` — are packed against the
 **complete encoded response** including
 `WidgetMeta` and escaping, to `readPageBytes` (12 KiB) under the 16 KiB
@@ -543,6 +558,13 @@ lookup and client merge. Every snapshot also carries the session's
 `transcriptGeneration`; a reducer drops a snapshot from an older generation
 (§6.3).
 
+Whether prompt controls are live is **not** widget state: the session's
+`cowboy_delivery_capabilities` projection (the update Steer targets already
+use) carries `widget_delivery: "v1" | null` for the session's current worker
+generation, is re-emitted on every generation change and reconnect, and the
+renderer combines it with every widget row, so an upgrade enables and a
+fallback disables controls without touching any widget's `stateVersion`.
+
 Closure freezes the document and forbids new interactions; interactions
 already admitted still settle (`dispatched`, `delivered`, `uncertain`,
 `cancelled`, `failed`) and each settlement advances `stateVersion`. A closed
@@ -557,12 +579,13 @@ transcript row is a projection:
 
 ```sql
 ALTER TABLE sessions ADD COLUMN transcript_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN widget_index_version INTEGER NOT NULL DEFAULT 0;
 
 session_widgets(session_id REFERENCES sessions ON DELETE CASCADE, widget_id,
-                handle, transcript_generation, revision, state_version,
-                published_version, closed, cleared_at_ms NULL, seq NULL,
-                published_at_ms, updated_at_ms, document, document_sha256,
-                decided, PRIMARY KEY (session_id, widget_id))
+                handle, transcript_generation, index_version, revision,
+                state_version, published_version, closed, cleared_at_ms NULL,
+                seq NULL, published_at_ms, updated_at_ms, document,
+                document_sha256, decided, PRIMARY KEY (session_id, widget_id))
 widget_revisions(session_id, widget_id, revision, document, document_sha256,
                  pinned_by_interaction, created_at_ms,
                  PRIMARY KEY (session_id, widget_id, revision))
@@ -606,7 +629,16 @@ widget_artifact_refs(session_id, widget_id, revision, artifact_name,
   row (`state_version + 1`, `revision + 1` for agent writes, new
   `document_sha256`), insert the new revision's `widget_artifact_refs`, drop
   the refs of revisions that are neither current nor pinned, and record the
-  operation result, all in one generation-checked transaction.
+  operation result, all in one generation-checked transaction. A creation
+  additionally increments `sessions.widget_index_version` and stores the
+  new value as the row's `index_version` in that same transaction; a
+  tombstone increments the counter too. The bootstrap reads the counter and
+  the entries in one transaction (PostgreSQL repeatable read; SQLite single
+  writer), labels every page with that counter, orders entries by
+  `(index_version, widget_id)` and includes only rows with
+  `index_version ≤` the label, so continuation pages describe the same
+  index and a concurrent creation never appears in an index that does not
+  carry its version.
 - **Pinned revisions.** The first interaction admitted on a revision copies
   that revision's document into `widget_revisions`; later writes never
   touch it, and its `widget_artifact_refs` rows are kept for as long as the
@@ -965,43 +997,72 @@ a widget command is written to exactly one connection.
    open without a handoff and resolves to `uncertain` (step 5). At most five
    attempts are recorded per interaction; exhausting them makes the record
    `uncertain`.
-5. **Write once, never retransmit, keep ownership.** The runtime keeps a
-   `CoreCommand::Prompt` in `pending` until its `CommandAck` and, on
-   reconnect, clears `sent` and retransmits every pending command; the
-   worker's `seen_commands` dedup is per process, so a replacement worker
-   would execute a retransmitted prompt again, outside any dispatch CAS.
-   Widget commands opt out: the runtime marks a widget command `written` the
+5. **Write once, never retransmit; ownership is its own state.** The
+   runtime keeps a `CoreCommand::Prompt` in `pending` until its `CommandAck`
+   and, on reconnect, clears `sent` and retransmits every pending command;
+   the worker's `seen_commands` dedup is per process; and a Machine broker
+   that has no worker for the session holds the command for the next one
+   (`route_worker` → `queue_pending`, `flush_pending`). Widget commands opt
+   out of retransmission: the runtime marks a widget command `written` the
    moment it is handed to a connection and, on reconnect, removes a
    written-but-unacknowledged widget command from `pending` instead of
    resending it; a command never written is still pending and is written
-   once to the next connection. Removal from `pending` must not remove the
-   session's protection against overlapping dispatch: `pending_prompt_for`
-   is what lets `idle_snapshot_guard` release the Hub's dispatch guard, and a
-   dropped command may still be travelling from the Machine to a worker. The
-   runtime therefore keeps every **unresolved attempt** (written, not
-   returned, not yet proven or settled) in a per-session set that
-   `pending_prompt_for` and `idle_snapshot_guard` consult exactly as they
-   consult `pending`; an idle snapshot cannot release the guard, and the
-   Hub cannot dispatch another prompt, until the attempt reaches
-   `delivered`, `uncertain` or `returned`, or the worker epoch that could
-   still receive it is revoked (the broker reports no worker and the
-   connection the command was written to is gone). The attempt's epoch is
-   bound by the first `TurnStarted` carrying its `turn_id`; a second
-   `TurnStarted` for the same turn from another epoch marks the attempt
+   once to the next connection.
+
+   Removing a command from `pending` must not remove the session's
+   protection against overlapping dispatch, and **delivery uncertainty must
+   not release transport ownership**. Each attempt therefore has an
+   `ownership` state separate from the record's delivery state: `held` from
+   the dispatch CAS, `released` only by a terminal transport event — the
+   attempt's own `TurnEnd(T, E)` with any stop reason; a proven-unsent
+   return or Stop; or the broker's acknowledged answer to a revocation fence.
+   The fence is `RevokeCommand {command_id}` → `CommandRevoked {command_id,
+   outcome}`: `dropped` means the broker still held the command undelivered
+   and discarded it, so the attempt is `returned` (record back to
+   `admitted`); `delivered_to: E` means a worker epoch received it, so
+   ownership stays held until that epoch's `TurnEnd(T, E)` or, if the broker
+   reports that epoch exited without one, the attempt becomes `uncertain`
+   and is released. The runtime issues the fence whenever it drops a
+   written-but-unacknowledged widget command, whenever the bound epoch exits
+   without `TurnEnd(T)`, and whenever the session's worker generation falls
+   back to one without the capability. `pending_prompt_for` and
+   `idle_snapshot_guard` consult the held attempts exactly as they consult
+   `pending`; while any attempt of the session is held, an idle snapshot
+   releases nothing and the Hub dispatches nothing. `complete_turn` is made
+   identity-aware for widget-owned turns: it releases the dispatch guard only
+   for a `TurnEnd` carrying the dispatched turn id, and a late or unrelated
+   `TurnEnd` is ignored. The attempt's epoch is bound by the first
+   `TurnStarted` carrying its `turn_id` or by the broker's `delivered_to`,
+   whichever arrives first; a conflicting second binding marks the attempt
    `uncertain` rather than re-binding it.
+
+   **Capability, fail closed.** Interactions require the Machine capability
+   bundle `widget_delivery_v1` (step 6): the Controller learns it from the
+   Machine handshake for the session's current worker generation and keeps it
+   in the session-level `cowboy_delivery_capabilities` projection;
+   `widget_action` and `widget_action_retry` refuse `capability_missing`
+   without it, the dispatcher re-checks it before the CAS, every widget
+   command carries `requires: ["widget_delivery_v1"]`, and a broker or
+   worker that cannot honour the requirement rejects the command
+   (`CommandAck {accepted: false, reason: capability_missing}` → `returned`),
+   including a command held across a fallback to an older generation. A
+   fallback also triggers the revocation fence for the session's open
+   attempts, and the projection flips the controls inert.
 6. **Proof: the turn, identified.** The turn's identity is the pair
    `(worker_epoch, turn_id)`, exactly what Steer already targets. Three
-   Controller-only changes make it usable (no Machine, wire or
-   worker-generation file changes; `agent_model.rs`, `acp.rs`, `worker.rs`
-   and `runtime_wire.rs` are hashed into the worker generation and stay
-   untouched): `apply_event` receives the frame's `worker_epoch` and
+   Controller-side changes make it usable for display and attribution —
+   `apply_event` receives the frame's `worker_epoch` and
    `runtime_seq`; on `TurnStarted {turn_id, command_id}` the Controller
    binds the attempt's turn to that epoch (one write, so one epoch); and the
    `TurnEnded {turn_id, stop_reason}` projection stamps `{turn_id,
    worker_epoch}` onto the persisted `TurnEnd` envelope through the reserved
    payload-key mechanism the echo's cmid already uses (`persistence.rs`),
    with a Controller-side envelope round-trip fixture beside
-   `contracts/protocol/event.json`, which only covers the bare `Event`.
+   `contracts/protocol/event.json`, which only covers the bare `Event`. The
+   worker-generation files (`agent_model.rs`, `acp.rs`, `worker.rs`,
+   `runtime_wire.rs`, the Machine broker) change only inside the
+   `widget_delivery_v1` Machine release below; display widgets need none of
+   it.
 
    **Evidence.** A record becomes `delivered` when a `TurnEnd` carrying the
    attempt's `turn_id` and its bound `worker_epoch` ends with `EndTurn`,
@@ -1073,14 +1134,17 @@ a widget command is written to exactly one connection.
    widgets therefore require a worker generation that stamps `TurnEnded`
    from the prompt task itself** (and tags the active prompt's `Update`
    events with its `turn_id`, and distinguishes "cancelled before send" from
-   a provider `Cancelled`), advertised as the capability
-   `widget_turn_identity`. That is a Machine release and an explicit
-   maintenance boundary, and it is a Phase 1 prerequisite for `button` and
-   `choice`: a session whose worker generation lacks the capability renders
-   prompt controls inert with the notice "interactions need a newer worker"
-   (`interactive: false`, `inertReason: worker_capability_missing` on the
-   snapshot) and refuses `widget_action` with `capability_missing`; display
-   widgets work everywhere.
+   a provider `Cancelled`), together with the `requires` field on worker
+   commands, the broker's capability check for held and routed commands, and
+   `RevokeCommand`/`CommandRevoked` with `delivered_to` — advertised in the
+   Machine handshake as the capability bundle `widget_delivery_v1`. That is a
+   Machine release and an explicit maintenance boundary, and it is a Phase 1
+   prerequisite for `button` and `choice`: a session whose current worker
+   generation lacks the bundle shows prompt controls inert with the notice
+   "interactions need a newer worker" (from the session's
+   `cowboy_delivery_capabilities` projection, never from widget state) and
+   refuses `widget_action` and `widget_action_retry` with
+   `capability_missing`; display widgets work everywhere.
 7. **Retry.** `widget_action_retry {interaction_id, retry_interaction_id}`
    is the only Send-again for an `uncertain` or `failed` record. It copies
    the original's pinned intent (label, selection, revision, message)
@@ -1265,11 +1329,12 @@ tokenizer traces are the ship gate below, not this table **[unverified]**:
 | The person's answer | a typed sentence the agent then parses | 97 B button · ≈200 B choice with question | fixed shape |
 
 An update's cost does not grow with the report: a **benchmark update** (≤ 3
-`set` ops with paths and string values ≤ 64 chars, a widget id ≤ 64 and an
-operation id ≤ 128 chars) measures 438 B for `progressPatch` and is bounded
-at 1 KiB at the class maximum (`benchmarkUpdateBytes`, constructed in the
-test), while a general patch is bounded only by the patch and document
-limits (an op may set an 8 K-char text). Patching therefore beats
+`set` ops whose paths and string values are ≤ 64 bytes in JSON-escaped
+UTF-8, a widget id ≤ 64 and an operation id ≤ 128 chars, counters at their
+maxima) measures 438 B for `progressPatch` and is bounded at 1 KiB at the
+class maximum (`benchmarkUpdateBytes`, constructed in the test with quote
+and emoji values), while a general patch is bounded only by the patch and
+document limits (an op may set an 8 K-char text). Patching therefore beats
 re-sending a report only when the report is larger than about 330 bytes: the **median historical
 table is at that boundary and the top third is above it**; against a
 one-sentence status, patching never wins. Prefix totals on the approval
@@ -1316,7 +1381,7 @@ bounds on the committed examples today.
 
 | Phase | Content | Components | Release boundary |
 |---|---|---|---|
-| 1 | Contract v1 (18 types); display widgets on Controller + Web alone; `button`/`choice` with `prompt`/`open`/`copy` **gated on the worker capability `widget_turn_identity`**; `widgets.publish/update/list/read`, receipts, help topic; `sessions.transcript_generation` and `widget_index_version`, `session_widgets`, `widget_revisions`, `widget_interactions`, `widget_artifact_refs`; acknowledged in-order store-writer variants, generation stamping on envelopes and durable-first Clear with an operation identity; notice-projected anchored rows, acknowledged publication watermark and sweep, bootstrap `widget_state` (paged, index-versioned) and lookup; `widget_action` admission, relay, queue reconciliation with cancellation settlement, acknowledged CAS handoff with recorded attempts, write-once widget commands with retained dispatch ownership, turn identity carried from `prompt_traced` through `apply_event` to the persisted `TurnEnd` envelope with its round-trip fixture, late proof, `uncertain` and `widget_action_retry`; the artifact pin lock; inline read-only carrier; Mobile and Desktop renderers with preview lines and the entered region; `session.events` widget kind; collector root | Controller + Web (four tables, two columns) for display; **Machine release** (worker generation with prompt-owned `TurnEnded` identity) before interactions are enabled | display: no Machine release; interactions: explicit maintenance boundary |
+| 1 | Contract v1 (18 types); display widgets on Controller + Web alone; `button`/`choice` with `prompt`/`open`/`copy` **gated on the Machine capability bundle `widget_delivery_v1`** (prompt-owned `TurnEnded` identity, `requires` on commands with broker/worker refusal, `RevokeCommand`/`CommandRevoked` with `delivered_to`, stop-before-send distinguished); `widgets.publish/update/list/read`, receipts, help topic; `sessions.transcript_generation` and `widget_index_version`, `session_widgets`, `widget_revisions`, `widget_interactions`, `widget_artifact_refs`; acknowledged in-order store-writer variants, generation stamping on envelopes and durable-first Clear with an operation identity; notice-projected anchored rows, acknowledged publication watermark and sweep, bootstrap `widget_state` (paged, index-versioned) and lookup; `widget_action` admission, relay, queue reconciliation with cancellation settlement, acknowledged CAS handoff with recorded attempts, write-once widget commands with ownership as its own state and the revocation fence, identity-aware `complete_turn`, capability projection through `cowboy_delivery_capabilities`, turn identity carried from `prompt_traced` through `apply_event` to the persisted `TurnEnd` envelope with its round-trip fixture, late proof, `uncertain` and `widget_action_retry`; the artifact pin lock; inline read-only carrier; Mobile and Desktop renderers with preview lines and the entered region; `session.events` widget kind; collector root | Controller + Web (four tables, three columns) for display; **Machine release** (`widget_delivery_v1`: worker, broker and wire) before interactions are enabled | display: no Machine release; interactions: explicit maintenance boundary |
 | 2 | Delayed acknowledgement of tracked `TurnEnded` if not already in Phase 1; `form` fields if elicitation proves insufficient; `control` actions behind the product confirm and an explicit allowlist; pin a widget to the Desktop side pane / Mobile dock; `metric`, `distribution`, `grid`, `tabs`; SVG `data` images under a bounded policy; image sources from execution-machine files through the verified artifact delivery used by image Calls | Controller + Web; **Machine release** for the worker signal and file sources | explicit maintenance boundary |
 | 3 | `widget_template` Plugin kind; Call children's result documents rendered as parent widgets; live `Ref` badges; `chart` | Controller, Web, Plugin SDK | separate reviewed contracts |
 
@@ -1381,7 +1446,7 @@ guidance; the §11 gate runs before the domain is enabled.
   response budget and continues after the last included entry. Labels: the
   positive and negative label vectors; a single choice with
   `max_selected: 13` refused; duplicate initial values refused; the maximal
-  record fixture within 8 KiB, constructed independently for every permitted
+  record fixture within 10 KiB, constructed independently for every permitted
   selection; the maximal snapshot fixture within 36 KiB; the benchmark class
   maximum within 1 KiB. Ownership: a reconnect that drops a written widget
   command followed by an idle snapshot before `TurnStarted` does not release
@@ -1391,7 +1456,17 @@ guidance; the §11 gate runs before the domain is enabled.
   controls inert and refuses `widget_action` with `capability_missing`.
   Index: a live snapshot arriving during a bootstrap fetch is kept because
   its `indexVersion` exceeds the index's, while a widget tombstoned before
-  the index is removed.
+  the index is removed; a restart reconstructs `indexVersion` from the row;
+  a creation concurrent with a paged bootstrap is absent from every page of
+  that index. Ownership: a dropped written command keeps ownership until
+  `CommandRevoked`; `dropped` reopens the record as `returned`,
+  `delivered_to` an exited epoch settles `uncertain`; a late unrelated
+  `TurnEnd` does not release the dispatch guard; a generation fallback
+  revokes open attempts, flips the projection inert and makes `widget_action`
+  and `widget_action_retry` refuse `capability_missing`; a held command
+  routed to a worker without the capability is rejected and `returned`.
+  Metadata: adversarial stop reasons and reasons are normalized into the
+  alphabet before storage and the independent record stays within 10 KiB.
 - Reducer tests mirroring `backgroundTasksReconcile.test.ts` T1 and
   `persistence_tests.rs` T3/T4: a cached open widget at seq 10 and a
   200-event reconnect tail must show the newest `state_version`; a cached
@@ -1446,14 +1521,16 @@ guidance; the §11 gate runs before the domain is enabled.
 | 14 | Transcript generation as the Clear fence | r3 request changes (R3) | §6.3: Clear durable first; generation CAS at the database; dispatched work becomes uncertain |
 | 15 | Decision-pinned revisions | r3 request changes (R4, R12) | §6.3: refs per revision retained for pinned ones; reads bound to `sha256` |
 | 16 | Queued widget prompts are delete-only | r3 request changes (R2, R8) | §8.4: every mutation path refused; content hash verified at handoff |
-| 17 | Delivery evidence is the turn the prompt started, never the echo | r4, r5, r6 request changes (N1, G1/G2/G5, H1) | §8.3: unresolved attempts keep dispatch ownership; interactions require the `widget_turn_identity` worker capability (prompt-owned `TurnEnded`) |
+| 17 | Delivery evidence is the turn the prompt started, never the echo | r4–r7 request changes (N1, G1/G2/G5, H1, r7 #1/#2) | §8.3: ownership is its own per-attempt state released only by terminal transport events or the revocation fence; `complete_turn` identity-aware; capability enforced at admission, retry, handoff and broker delivery |
 | 18 | A commit-acknowledged store operation gates every widget effect | r4 conditional; r5 conditional (G6) | §8.3 step 3 settles committed cancellation intents at start |
-| 19 | `widget_action_retry` as the only Send-again | r4 request changes; r5 request changes (G5) | §8.3: late proof serialized with retry admission, `duplicate_of`/`retried_by` projected, missing-original and mismatch refusals |
+| 19 | `widget_action_retry` as the only Send-again | r4, r5, r7 request changes (G5, r7 #2) | §8.3: late proof serialized with retry admission, links projected, missing-original, mismatch and capability refusals |
 | 20 | The design claims bounded overhead and no token saving | r4/r5 claim approved; evidence corrected (G9) | §3 and §11 agree; benchmark class defined |
-| 21 | An update's bound is a constant for a benchmark update class, not for arbitrary patches | r5 request changes (G9); r6 request changes (H6) | §11: class maximum computed and bounded at 1 KiB |
+| 21 | An update's bound is a constant for a benchmark update class, not for arbitrary patches | r5, r6, r7 request changes (G9, H6, r7 #6) | §11: class defined by escaped bytes; maximum built with quote and emoji values, bounded at 1 KiB |
 | 22 | Clear is an identified, conditional, acknowledged writer operation | r5 approve | retained |
-| 23 | A widget command is written to exactly one connection and never retransmitted | r6 request changes (H1) | §8.3 step 5: unresolved attempts retain dispatch ownership |
+| 23 | A widget command is written to exactly one connection and never retransmitted | r6, r7 request changes (H1, r7 #1) | §8.3 step 5: ownership separate from delivery, released only by terminal transport events or the acknowledged fence |
 | 24 | Artifact pin admission and collection share one lock | r6 approve | retained |
 | 25 | A Stop during configuration startup settles the decision as cancelled, never relayed | r6 request changes (H2) | contract aligned |
-| 26 | Interactive widgets require the `widget_turn_identity` worker capability; display widgets do not (new) | — | §8.3, §12; for review |
-| 27 | Bootstrap absence is ordered by a per-session index version (new) | — | §6.5; for review |
+| 26 | Interactive widgets require the `widget_delivery_v1` Machine capability bundle; display widgets do not | r7 request changes (#2, #4) | enforced at admission, retry, handoff and broker delivery; projected through `cowboy_delivery_capabilities`, not widget state |
+| 27 | Bootstrap absence is ordered by a per-session index version | r7 request changes (#5) | §6.3: durable counter and creation version written atomically; consistent paged read |
+| 28 | Transport ownership is a per-attempt state distinct from delivery, released only by terminal transport events or the revocation fence (new) | — | §8.3; for review |
+| 29 | `RevokeCommand`/`CommandRevoked` with `delivered_to` is the acknowledged fence that eliminates broker-held delivery (new) | — | §8.3; for review |

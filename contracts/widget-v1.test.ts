@@ -26,6 +26,8 @@ import {
   WIDGET_HANDLE_PATTERN,
   WIDGET_ID_PATTERN,
   WIDGET_LIMITS,
+  METADATA_PATTERN,
+  normalizeMetadata,
   type WidgetDocument,
   worstCaseMessageBytes,
   worstCaseRecordBytes,
@@ -536,7 +538,7 @@ test("the record estimator is an upper bound over every permitted selection", ()
         message_sha256: "f".repeat(64),
         at_ms: WIDGET_LIMITS.maxTimestampMs,
         state: "uncertain",
-        reason: "r".repeat(WIDGET_LIMITS.reasonChars),
+        reason: normalizeMetadata('"'.repeat(300), WIDGET_LIMITS.reasonChars),
         cancel_requested: true,
         attempts: Array.from({ length: WIDGET_LIMITS.attemptsPerInteraction }, () => ({
           command_id: "c".repeat(WIDGET_LIMITS.idChars),
@@ -544,7 +546,11 @@ test("the record estimator is an upper bound over every permitted selection", ()
           worker_epoch: "e".repeat(WIDGET_LIMITS.idChars),
           dispatched_at_ms: WIDGET_LIMITS.maxTimestampMs,
           outcome: "uncertain",
-          stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
+          // Adversarial runtime text is normalized before it is stored.
+          stop_reason: normalizeMetadata('"\\'.repeat(64), WIDGET_LIMITS.stopReasonChars),
+          ownership: "released",
+          released_by: "revoked_delivered_worker_exited",
+          delivered_to: "e".repeat(WIDGET_LIMITS.idChars),
         })),
         retry_of: id,
         retried_by: id,
@@ -582,11 +588,13 @@ test("the benchmark update class maximum fits its bound", () => {
       expected_revision: WIDGET_LIMITS.maxCounter,
       change: {
         type: "patch",
-        ops: Array.from({ length: 3 }, (_, index) => ({
-          op: "set",
-          path: `#${"p".repeat(62)}${index}`,
-          value: "v".repeat(64),
-        })),
+        // Values whose JSON-escaped form is exactly 64 bytes: 32 quote marks
+        // (two bytes each escaped) and 16 four-byte emoji.
+        ops: [
+          { op: "set", path: `#${"p".repeat(63)}`, value: '"'.repeat(32) },
+          { op: "set", path: `#${"q".repeat(63)}`, value: "😀".repeat(16) },
+          { op: "set", path: `#${"r".repeat(63)}`, value: "v".repeat(64) },
+        ],
       },
     },
     operation: "o".repeat(128),
@@ -601,4 +609,22 @@ test("the benchmark update class maximum fits its bound", () => {
   const total = bytes(envelope) + bytes(result);
   if (total > WIDGET_LIMITS.benchmarkUpdateBytes)
     throw new Error(`benchmark class maximum is ${total} bytes`);
+});
+
+test("metadata normalization keeps every stored metadata string inside the alphabet", () => {
+  for (const raw of [
+    '"quoted"',
+    "back\\slash",
+    "tab\tnew\nline",
+    "中文 reason",
+    "EndTurn",
+    'error: provider refused "x"',
+  ]) {
+    const normalized = normalizeMetadata(raw, WIDGET_LIMITS.stopReasonChars);
+    if (!METADATA_PATTERN.test(normalized)) throw new Error(`not normalized: ${normalized}`);
+    if (bytes(JSON.stringify(normalized)) !== normalized.length + 2)
+      throw new Error("alphabet still escapes");
+    if (normalized.length > WIDGET_LIMITS.stopReasonChars) throw new Error("not truncated");
+  }
+  if (normalizeMetadata("EndTurn", 64) !== "EndTurn") throw new Error("plain text changed");
 });

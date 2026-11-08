@@ -68,8 +68,9 @@ export const WIDGET_LIMITS = {
   /** Serialized `InteractionRecord` with every bounded field at its maximum
    *  (message, selected labels, five attempts, reason, retry links); computed
    *  by `worstCaseRecordBytes` at publish for every prompt node and re-checked
-   *  at admission, so later attempts can never push a record past it. */
-  interactionRecordBytes: 8 * 1024,
+   *  at admission, so later attempts can never push a record past it. A read
+   *  page holds at least one record and stays under the 16 KiB result cap. */
+  interactionRecordBytes: 10 * 1024,
   reasonChars: 200,
   handleChars: 16,
   stopReasonChars: 64,
@@ -92,8 +93,9 @@ export const WIDGET_LIMITS = {
   maxCounter: 2 ** 31 - 1,
   maxTimestampMs: 2 ** 53 - 1,
   /** The benchmark update class of docs/widgets.md §11: ≤ 3 `set` ops whose
-   *  paths and string values are ≤ 64 chars, a widget id ≤ 64 chars and an
-   *  operation id ≤ 128 chars; its envelope plus result never exceed this. */
+   *  paths and string values are ≤ 64 bytes in JSON-escaped UTF-8 (without
+   *  the quotes), a widget id ≤ 64 chars and an operation id ≤ 128 chars,
+   *  counters at their maxima; its envelope plus result never exceed this. */
   benchmarkUpdateBytes: 1024,
   interactionsPerWidget: 200,
   widgetsPerSession: 500,
@@ -116,9 +118,19 @@ export const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 export const WIDGET_HANDLE_PATTERN = /^w[1-9][0-9]*$/;
 
 /** Controller- and runtime-written metadata strings (`reason`,
- *  `stop_reason`, handles, identifiers) are printable ASCII, so their
- *  serialized size equals their length. */
-export const ASCII_PATTERN = /^[\x20-\x7E]+$/;
+ *  `stop_reason`, handles, identifiers) use an alphabet without any
+ *  JSON-escaped character, so their serialized size equals their length.
+ *  Runtime text (a provider stop reason) is normalized with
+ *  `normalizeMetadata` before it is stored. */
+export const METADATA_PATTERN = /^[A-Za-z0-9 _.:-]+$/;
+
+/** Maps every character outside `METADATA_PATTERN` to `_` and truncates. */
+export function normalizeMetadata(text: string, maxChars: number): string {
+  const normalized = Array.from(text)
+    .map((character) => (METADATA_PATTERN.test(character) ? character : "_"))
+    .join("");
+  return normalized.slice(0, maxChars) || "_";
+}
 
 /** Visible labels (titles, summaries, interactive labels, option labels)
  *  are one line of printable text: no control characters (`Cc`), no line or
@@ -580,6 +592,8 @@ export type WidgetMeta = {
   closed: boolean;
   /** Anchor seq of the transcript row; null until first published. */
   seq: number | null;
+  /** The session's widget index version at creation (docs/widgets.md §6.5). */
+  index_version: number;
   published_at_ms: number;
   updated_at_ms: number;
   interactions: number;
@@ -682,7 +696,7 @@ export type InteractionRecord = {
    *  withdrawn by the person's Stop before any send (`stopped`). failed:
    *  refused by the session before the handoff. */
   state: "admitted" | "dispatched" | "delivered" | "uncertain" | "cancelled" | "failed";
-  /** ≤ `reasonChars`, `ASCII_PATTERN`. */
+  /** ≤ `reasonChars`, `METADATA_PATTERN`. */
   reason?: string;
   /** A durable cancellation intent recorded before the queue entry is
    *  touched; the dispatch CAS requires it to be false. */
@@ -721,6 +735,9 @@ function maximalRecord(node: InputNode, selected: string[] | undefined): Interac
     dispatched_at_ms: WIDGET_LIMITS.maxTimestampMs,
     outcome: "uncertain",
     stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
+    ownership: "released",
+    released_by: "revoked_delivered_worker_exited",
+    delivered_to: "e".repeat(WIDGET_LIMITS.idChars),
   };
   return {
     interaction_id: id,
@@ -799,8 +816,6 @@ export function worstCaseSnapshotBytes(document: WidgetDocument): number {
     updatedAtMs: WIDGET_LIMITS.maxTimestampMs,
     origin: { kind: "mcp", operation: "o".repeat(128) },
     closed: true,
-    interactive: false,
-    inertReason: "worker_capability_missing",
     document,
     documentSha256: "f".repeat(64),
     recentInteractions: Array.from({ length: WIDGET_LIMITS.snapshotInteractions }, () => summary),
@@ -821,13 +836,29 @@ export type DispatchAttempt = {
   dispatched_at_ms: number;
   /** open: handed off, no attributed end yet; delivered / uncertain: as the
    *  record state; returned: the runtime gave the prompt back before any
-   *  provider request and requeued it under its cmid; cancelled: withdrawn
-   *  by the person's Stop before any send, settled without relay. A widget
-   *  command is written to exactly one connection and never retransmitted
-   *  (§8.3), so one epoch per attempt is exact. */
+   *  provider request (rejected first ack, `UndeliveredPrompt`, or the
+   *  broker dropped it undelivered on revocation) and it is requeued under
+   *  its cmid; cancelled: withdrawn by the person's Stop before any send,
+   *  settled without relay. A widget command is written to exactly one
+   *  connection and never retransmitted (§8.3); its epoch is bound by the
+   *  first `TurnStarted` or by the broker's `delivered_to`. */
   outcome: "open" | "delivered" | "uncertain" | "returned" | "cancelled";
-  /** ≤ `stopReasonChars`, `ASCII_PATTERN`; longer runtime text is truncated. */
+  /** ≤ `stopReasonChars`, `METADATA_PATTERN` after `normalizeMetadata`. */
   stop_reason?: string;
+  /** Transport ownership, separate from delivery (docs/widgets.md §8.3
+   *  step 5): `held` from the dispatch CAS until a terminal transport event
+   *  releases it; while any attempt of the session is held, no other prompt
+   *  may be dispatched and an idle snapshot cannot release the guard. */
+  ownership: "held" | "released";
+  released_by?:
+    | "turn_end"
+    | "returned"
+    | "cancelled"
+    | "revoked_dropped"
+    | "revoked_delivered_worker_exited";
+  /** Worker epoch the broker reports having delivered the command to, from
+   *  `CommandRevoked`; null when the broker dropped it undelivered. */
+  delivered_to?: string | null;
 };
 
 export type InteractionSummary = Pick<
@@ -864,11 +895,6 @@ export type WidgetSnapshot = {
   updatedAtMs: number;
   origin: { kind: "mcp"; operation: string } | { kind: "repaired" };
   closed: boolean;
-  /** False when prompt controls must render inert: the session's worker
-   *  generation lacks prompt-owned turn identity (`widget_turn_identity`),
-   *  which interactions require (docs/widgets.md §8.3). */
-  interactive: boolean;
-  inertReason?: "worker_capability_missing";
   document: WidgetDocument;
   /** Content identity of `document`'s compact JSON. */
   documentSha256: string;
@@ -877,6 +903,17 @@ export type WidgetSnapshot = {
   /** Group id → the interaction that decided it and the revision it was
    *  decided on; at most `groups` entries. */
   decided: Record<string, { interaction_id: string; revision: number }>;
+};
+
+/** Whether this session's current worker generation can carry widget
+ *  interactions. Carried by the session-level `cowboy_delivery_capabilities`
+ *  projection (the same update Steer targets already use), never by a
+ *  widget snapshot, so a generation change re-renders every widget's
+ *  controls without touching widget state (docs/widgets.md §8.3). Prompt
+ *  controls render inert while `widget_delivery` is null. */
+export type WidgetDeliveryCapability = {
+  widget_delivery: "v1" | null;
+  reason?: "worker_capability_missing" | "machine_capability_missing";
 };
 
 export type WidgetRow = {
@@ -964,8 +1001,9 @@ export type WidgetActionCommand = {
  *  is admitted idempotently on `retry_interaction_id` (a replay returns the
  *  retry's current state). Refusals: `cleared`, `not_retryable` (the
  *  original is not `uncertain`/`failed`), `already_retried`, `retry_chain`
- *  (the original is itself a retry), `in_flight`, `interaction_limit`,
- *  `rate_limited`, `session_unavailable`, `conflict`. A late proof of the
+ *  (the original is itself a retry), `capability_missing` (the session's
+ *  current worker generation cannot carry interactions), `in_flight`,
+ *  `interaction_limit`, `rate_limited`, `session_unavailable`, `conflict`. A late proof of the
  *  original marks the retry `duplicate_of` it. The session's ordinary turn
  *  Retry routes widget-originated prompts here. */
 export type WidgetActionRetryCommand = {
