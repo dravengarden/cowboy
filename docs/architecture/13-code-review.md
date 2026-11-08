@@ -33,7 +33,9 @@ The process, licensing, trust, and version-pinning contract is defined in
 [14-zed-code-provider.md](14-zed-code-provider.md).
 
 Desktop shows the same Review in the Conversation pane (`␣V`), so the Prompt
-stays beside the code. Its layout is still the phone's single column.
+stays beside the code. Its layout is still the phone's single column; the
+keyboard-first Desktop workbench that replaces it is proposed in
+[desktop-code-review.md](../desktop-code-review.md).
 
 ## Reading and control layout
 
