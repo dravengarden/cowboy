@@ -1,8 +1,10 @@
 //! Durable Machine browser placements: where an account's browser profile
-//! lives. Written when an open is admitted, read for state queries and
-//! captured into the account's revocation plan. Never dispatch authority or
-//! evidence that an instance is running.
+//! lives. Committed under the owner lock before an open is dispatched, read
+//! for state queries and captured into the account's revocation plan under
+//! the same lock. Removed only by confirmed revocation evidence. Never
+//! dispatch authority or evidence that an instance is running.
 use super::super::{StorageBackend, Store};
+use super::Registry;
 use crate::provider_account::ProviderAccountId;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -17,7 +19,94 @@ pub struct Placement {
     pub last_open_ms: i64,
 }
 
+/// Why the owner lock refused to admit a placement; the open fails with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// The account does not exist, is disabled or is being revoked.
+    AccountUnavailable,
+    /// The owner has not enabled the browser for the account.
+    BrowserNotEnabled,
+}
+
+impl Refusal {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::AccountUnavailable => "account_unavailable",
+            Self::BrowserNotEnabled => "browser_not_enabled",
+        }
+    }
+}
+
 impl Store {
+    /// Commit the placement an open is about to create, before the open is
+    /// dispatched, under the owner lock that revocation capture takes. A
+    /// revocation that begins afterwards captures it; one that began before
+    /// is seen here as an unavailable account and refuses the open. An
+    /// existing placement keeps its profile revision; a new one starts at 0
+    /// until the Machine reports its revision. The placement is retained
+    /// whatever the open's outcome: an unanswered open may still have run.
+    pub async fn admit_browser_placement(
+        &self,
+        owner: &str,
+        account: &ProviderAccountId,
+        machine_id: &str,
+        instance_id: &str,
+        now_ms: i64,
+    ) -> Result<std::result::Result<(), Refusal>> {
+        macro_rules! admit { ($db:expr) => {{
+            let mut tx = $db.pool.begin().await?;
+            let locked = sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")
+                .bind(owner).execute(&mut *tx).await?;
+            if locked.rows_affected() != 1 {
+                return Ok(Err(Refusal::AccountUnavailable));
+            }
+            let value: String = sqlx::query_scalar("SELECT value FROM provider_account_registries WHERE owner_user_id=$1")
+                .bind(owner).fetch_one(&mut *tx).await?;
+            let registry: Registry = serde_json::from_str(&value)?;
+            let Some(entry) = registry.accounts.iter().find(|entry| &entry.id == account) else {
+                return Ok(Err(Refusal::AccountUnavailable));
+            };
+            if !entry.available() {
+                return Ok(Err(Refusal::AccountUnavailable));
+            }
+            if !entry.browser_enabled {
+                return Ok(Err(Refusal::BrowserNotEnabled));
+            }
+            sqlx::query("INSERT INTO browser_placements (owner_user_id,account_id,machine_id,instance_id,profile_revision,last_open_ms) VALUES ($1,$2,$3,$4,0,$5) ON CONFLICT (owner_user_id,account_id,machine_id) DO UPDATE SET instance_id=excluded.instance_id,last_open_ms=excluded.last_open_ms")
+                .bind(owner).bind(account.as_str()).bind(machine_id).bind(instance_id).bind(now_ms)
+                .execute(&mut *tx).await?;
+            tx.commit().await?;
+        }} }
+        match &self.backend {
+            StorageBackend::Postgres(db) => admit!(db),
+            StorageBackend::Sqlite(db) => admit!(db),
+        }
+        Ok(Ok(()))
+    }
+
+    /// Record the profile revision the Machine reported for an existing
+    /// placement. Never creates one: a placement removed by revocation
+    /// evidence stays removed.
+    pub async fn record_browser_profile_revision(
+        &self,
+        owner: &str,
+        account: &ProviderAccountId,
+        machine_id: &str,
+        profile_revision: u64,
+    ) -> Result<()> {
+        macro_rules! write { ($db:expr) => {{
+            sqlx::query("UPDATE browser_placements SET profile_revision=$4 WHERE owner_user_id=$1 AND account_id=$2 AND machine_id=$3")
+                .bind(owner).bind(account.as_str()).bind(machine_id)
+                .bind(i64::try_from(profile_revision).unwrap_or(i64::MAX))
+                .execute(&$db.pool).await?;
+        }} }
+        match &self.backend {
+            StorageBackend::Postgres(db) => write!(db),
+            StorageBackend::Sqlite(db) => write!(db),
+        }
+        Ok(())
+    }
+
     pub async fn upsert_browser_placement(&self, owner: &str, placement: &Placement) -> Result<()> {
         macro_rules! write { ($db:expr) => {{
             sqlx::query("INSERT INTO browser_placements (owner_user_id,account_id,machine_id,instance_id,profile_revision,last_open_ms) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (owner_user_id,account_id,machine_id) DO UPDATE SET instance_id=excluded.instance_id,profile_revision=excluded.profile_revision,last_open_ms=excluded.last_open_ms")
@@ -56,6 +145,30 @@ impl Store {
                     last_open_ms,
                 },
             )
+            .collect())
+    }
+
+    /// Every placement on one Machine, across owners: what a reconnected
+    /// Machine is asked about.
+    pub async fn browser_placements_on_machine(
+        &self,
+        machine_id: &str,
+    ) -> Result<Vec<(String, ProviderAccountId)>> {
+        macro_rules! read { ($db:expr) => {
+            sqlx::query_as::<_, (String, String)>("SELECT owner_user_id,account_id FROM browser_placements WHERE machine_id=$1 ORDER BY owner_user_id,account_id")
+                .bind(machine_id).fetch_all(&$db.pool).await?
+        }; }
+        let rows = match &self.backend {
+            StorageBackend::Postgres(db) => read!(db),
+            StorageBackend::Sqlite(db) => read!(db),
+        };
+        Ok(rows
+            .into_iter()
+            .filter_map(|(owner, account)| {
+                ProviderAccountId::try_from(account)
+                    .ok()
+                    .map(|account| (owner, account))
+            })
             .collect())
     }
 
@@ -152,6 +265,192 @@ mod tests {
         assert!(
             store
                 .browser_placements("owner", &account)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    async fn sqlite_store(dir: &tempfile::TempDir) -> Store {
+        let store = Store::connect(
+            &format!(
+                "sqlite://{}?mode=rwc",
+                dir.path().join("browser.db").display()
+            ),
+            dir.path().join("artifacts"),
+        )
+        .await
+        .unwrap();
+        store.migrate().await.unwrap();
+        store
+    }
+
+    async fn apply(
+        store: &Store,
+        owner: &str,
+        operation: &str,
+        change: super::super::Change,
+    ) -> super::super::Receipt {
+        let revision = store
+            .provider_accounts(owner)
+            .await
+            .map_or(0, |registry| registry.revision);
+        match store
+            .mutate_provider_accounts(
+                owner,
+                operation,
+                &super::super::Mutation {
+                    expected_revision: revision,
+                    change,
+                },
+            )
+            .await
+            .unwrap()
+        {
+            super::super::MutationResult::Applied(receipt) => receipt,
+            other => panic!("{operation}: {other:?}"),
+        }
+    }
+
+    async fn created_account(store: &Store, owner: &str) -> ProviderAccountId {
+        apply(
+            store,
+            owner,
+            "create",
+            super::super::Change::Create {
+                provider_id: "claude-code".into(),
+                label: "Test".into(),
+            },
+        )
+        .await
+        .account_id
+    }
+
+    async fn enable_browser(store: &Store, owner: &str, account: &ProviderAccountId) {
+        apply(
+            store,
+            owner,
+            "enable-browser",
+            super::super::Change::SetBrowserEnabled {
+                id: account.clone(),
+                enabled: true,
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn placements_are_admitted_only_for_an_enabled_browser_and_keep_their_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = sqlite_store(&dir).await;
+        let owner = "owner";
+        let missing: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        assert_eq!(
+            store
+                .admit_browser_placement(owner, &missing, "ovh", "b-1", 1)
+                .await
+                .unwrap(),
+            Err(Refusal::AccountUnavailable)
+        );
+        let account = created_account(&store, owner).await;
+        // The account exists, but its browser is off: nothing is placed.
+        assert_eq!(
+            store
+                .admit_browser_placement(owner, &account, "ovh", "b-1", 1)
+                .await
+                .unwrap(),
+            Err(Refusal::BrowserNotEnabled)
+        );
+        assert!(
+            store
+                .browser_placements(owner, &account)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        enable_browser(&store, owner, &account).await;
+        store
+            .admit_browser_placement(owner, &account, "ovh", "b-1", 10)
+            .await
+            .unwrap()
+            .unwrap();
+        let placed = store.browser_placements(owner, &account).await.unwrap();
+        assert_eq!(
+            (placed[0].profile_revision, placed[0].last_open_ms),
+            (0, 10)
+        );
+        store
+            .record_browser_profile_revision(owner, &account, "ovh", 4)
+            .await
+            .unwrap();
+        // A later admission keeps the reported revision.
+        store
+            .admit_browser_placement(owner, &account, "ovh", "b-1", 20)
+            .await
+            .unwrap()
+            .unwrap();
+        let placed = store.browser_placements(owner, &account).await.unwrap();
+        assert_eq!(
+            (placed[0].profile_revision, placed[0].last_open_ms),
+            (4, 20)
+        );
+        assert_eq!(
+            store.browser_placements_on_machine("ovh").await.unwrap(),
+            vec![(owner.to_owned(), account.clone())]
+        );
+    }
+
+    #[tokio::test]
+    async fn revocation_captures_admitted_placements_and_refuses_later_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = sqlite_store(&dir).await;
+        let owner = "owner";
+        let account = created_account(&store, owner).await;
+        enable_browser(&store, owner, &account).await;
+        // Committed before dispatch: an open that never answered still
+        // leaves its placement for the revocation plan.
+        store
+            .admit_browser_placement(owner, &account, "ovh", "b-1", 10)
+            .await
+            .unwrap()
+            .unwrap();
+        let receipt = apply(
+            &store,
+            owner,
+            "revoke",
+            super::super::Change::BeginRevocation {
+                id: account.clone(),
+            },
+        )
+        .await;
+        assert_eq!(receipt.revocation.unwrap().browsers.len(), 1);
+        assert_eq!(
+            store
+                .admit_browser_placement(owner, &account, "hawk", "b-2", 30)
+                .await
+                .unwrap(),
+            Err(Refusal::AccountUnavailable)
+        );
+        assert_eq!(
+            store
+                .browser_placements(owner, &account)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        // A revision report never recreates a removed placement.
+        store
+            .remove_browser_placement(owner, &account, "ovh")
+            .await
+            .unwrap();
+        store
+            .record_browser_profile_revision(owner, &account, "ovh", 5)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .browser_placements(owner, &account)
                 .await
                 .unwrap()
                 .is_empty()

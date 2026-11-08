@@ -8,10 +8,11 @@ use parking_lot::RwLockWriteGuard;
 use super::{ConnectionToken, LiveState, MachineControl, Reply, ReplyKind, RequestBinding};
 use crate::machine_protocol::{MachineCommand, machine_browser};
 
-/// Consumer of Machine browser observations (`machine_id`, event). Invoked
-/// outside every correlation lock; the events name accounts and never enter
-/// the shared diagnostics history.
-pub type BrowserObserver = Arc<dyn Fn(&str, &machine_browser::Event) + Send + Sync>;
+/// Consumer of Machine browser observations, with the exact connection that
+/// reported them so the consumer can scope what it caches to that
+/// connection's lifetime. Invoked outside every correlation lock; the events
+/// name accounts and never enter the shared diagnostics history.
+pub type BrowserObserver = Arc<dyn Fn(&ConnectionToken, &machine_browser::Event) + Send + Sync>;
 
 impl MachineControl {
     /// Install the consumer of Machine browser observations.
@@ -92,7 +93,7 @@ impl MachineControl {
         drop(live);
         let observer = self.browser_observer.read().clone();
         if let Some(observer) = observer {
-            observer(&token.0.machine_id, browser);
+            observer(token, browser);
         }
     }
 }

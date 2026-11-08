@@ -832,7 +832,7 @@ pub(super) async fn handle_machine_ws(
         protocol,
         machine_command_tx,
     );
-    observe_hello_capabilities(&state, &hello);
+    observe_hello_capabilities(&state, &hello, &connection);
     let lanes = Arc::new(crate::machine_lanes::LaneSet::default());
     // Dropped when this connection ends, which refuses further lanes.
     let _lane_registration = lane_token.map(|token| {
@@ -873,7 +873,7 @@ pub(super) async fn handle_machine_ws(
         Err(error) => {
             tracing::error!(%error, machine = %hello.machine_id, "creating Machine runtime tunnel");
             socket_writer.abort();
-            state.machine_control.remove_if_current(&connection);
+            release_connection(&state, &connection);
             return;
         }
     };
@@ -1112,7 +1112,7 @@ pub(super) async fn handle_machine_ws(
             .runtime_router
             .remove_if_current(&hello.machine_id, runtime);
     }
-    state.machine_control.remove_if_current(&connection);
+    release_connection(&state, &connection);
     if let Err(error) = store
         .machine_disconnected(
             &hello.machine_id,
@@ -1126,15 +1126,26 @@ pub(super) async fn handle_machine_ws(
     state.machine_snapshots.publish().await;
 }
 
+/// Retire an ended connection; the browser observations it reported die
+/// with it.
+fn release_connection(state: &AppState, connection: &crate::machine_control::ConnectionToken) {
+    state.machine_control.remove_if_current(connection);
+    state.browsers.disconnected(connection);
+}
+
 /// Records what the connecting Machine offers: its session capacity for
-/// maintenance and its browser capability for owner-operated browsers.
-fn observe_hello_capabilities(state: &AppState, hello: &crate::machine_protocol::MachineHello) {
+/// maintenance and its browser capability for owner-operated browsers. The
+/// browser view restarts with this connection: a reconnected Machine may
+/// have rebooted, and it announces the browsers that survived.
+fn observe_hello_capabilities(
+    state: &AppState,
+    hello: &crate::machine_protocol::MachineHello,
+    connection: &crate::machine_control::ConnectionToken,
+) {
     state
         .session_maintenance
         .observe_capacity(&hello.machine_id, hello.capacity.clone());
-    state
-        .browsers
-        .observe_capability(&hello.machine_id, hello.browser.clone());
+    state.browsers.connected(connection, hello.browser.clone());
 }
 
 /// Converges a reconnected Machine's account grants, interrupted plugin
@@ -1144,6 +1155,12 @@ fn spawn_machine_reconnect_sync(
     hello: &crate::machine_protocol::MachineHello,
     connection: &crate::machine_control::ConnectionToken,
 ) {
+    // Re-learn the browsers this Machine still holds; nothing from an
+    // earlier connection is trusted.
+    tokio::spawn(provider_accounts::browser::refresh_placements(
+        Arc::clone(state),
+        connection.clone(),
+    ));
     let sync_state = Arc::clone(state);
     let machine_id = hello.machine_id.clone();
     tokio::spawn(async move {

@@ -476,10 +476,22 @@ instance's authority to run.
 ### Durable placement, reset and revocation
 
 The Controller keeps a durable browser placement
-`(owner, account, machine, profile_revision, last_open)` written when an open
-is admitted. The account revocation plan gains `browsers` beside `logins`,
-`grants` and `sessions`, captured from these placements, so a `Tab`-only
-placement is revoked like any other target.
+`(owner, account, machine, profile_revision, last_open)`. It is committed
+before the open is dispatched, in one transaction under the owner lock that
+also re-checks that the account exists, is available and has its browser
+enabled; a failed write fails the open. The account revocation plan gains
+`browsers` beside `logins`, `grants` and `sessions`, captured from these
+placements under the same lock, so a `Tab`-only placement is revoked like any
+other target: a revocation that begins after the commit captures the
+placement, and one that began before makes the commit refuse the open. The
+placement is kept whatever the open's outcome (an unanswered or timed-out
+open may still have started a browser); a new one carries profile revision 0
+until the Machine reports its revision. Only recorded revocation evidence for
+that Machine removes it. Within the Controller, an account's open dispatch
+and its revocation dispatch share one lifecycle lock, so a `revoke_browser`
+is never sent ahead of an open committed before the revocation. If the
+account's browser was disabled while the open was in flight, the Controller
+hibernates the instance the open reported and fails the open.
 
 On the Machine, lifecycle mutations and snapshots of one account are
 serialized by one per-account lifecycle lock. `revoke_browser` and
@@ -731,7 +743,17 @@ cookie session, re-validates on every inbound input or renewal batch, and
 closes both hops when the deadline passes or any check fails, even while
 frames keep flowing. Both hops also close when the account is revoked or its
 browser disabled, the Service gate closes, the Machine connection is lost or
-replaced, or the instance incarnation changes.
+replaced, or the instance incarnation changes. Account admission (Service
+gate, account availability, browser enablement), the attachment still being
+the account's registered viewer and the Machine connection are re-checked at
+pairing, on every lease renewal or resize and on the 25 s heartbeat; the
+Service gate is also checked on every relayed binary frame. Disabling or
+revoking the account cancels its viewer directly. Attachment admission is
+serialized per account on the Controller: the takeover decision, the
+viewer's registration and the Machine's attach happen under one per-account
+lock, so a second viewer sees the first (even one still attaching) and needs
+an explicit takeover. The viewer is registered before the final admission
+check, so a disable that check does not yet see still cancels it.
 
 Relay payloads are never logged, persisted, cached or inspected beyond
 framing. Counters record bytes and frames.
@@ -790,7 +812,11 @@ Reclaim ordering: the Controller's memory reclaim hibernates running browsers
 on a Machine before it selects any session. Browser reclaim has its own
 pending state: the admission fence stays raised, the stop is retried and
 escalated (`SIGTERM`, then `SIGKILL` through the unit), and the step settles
-only on verified unit exit followed by a fresh resource sample. A stop that
+only on verified unit exit followed by a fresh resource sample: the targeted
+incarnation reported `hibernated` (or the Machine's authoritative answer that
+no instance runs, or a newer incarnation), then a resource report taken after
+that exit was first seen. `stopping` is not an exit; the instance still holds
+its memory while it copies its snapshot. A stop that
 stalls does not time out into "released": it stays pending, is logged as
 stuck, and blocks session selection on that Machine until the unit is gone;
 the only exception is an explicit operator emergency action.
@@ -838,7 +864,16 @@ displays.
   holds the display is an explicit, confirmed takeover. A refused or
   unanswered attachment ends the viewer with the stream's close code
   (`browser_attach_refused`, `browser_attach_failed`) and a notice naming
-  the state; re-attaching is a user action, never automatic.
+  the state; re-attaching is a user action, never automatic. A sign-in
+  viewer never attaches directly, even to an already running browser: it
+  issues the sign-in open first, so the Machine validates and binds the
+  login, and attaches (or takes over) only after that open succeeds.
+- **Outcomes.** Snapshot and reset answer HTTP 200 with the Machine's state;
+  the viewer reports success only for a snapshot without a reason and a
+  reset hibernated with `owner_request`, and otherwise names the reason
+  (for example `storage_exceeded`, `busy`). A stopped browser and every
+  reset are reported without an instance (`instance_id: ""`,
+  `incarnation: 0`), which is valid only as `hibernated`.
 - **Mobile sheet.** Full-height sheet with the bottom workbench: Keyboard
   (focuses a hidden input with autocorrect, autocapitalize and smart
   punctuation off; composition events are sent as text), Paste (local
@@ -1101,6 +1136,20 @@ the text above:
   where `admission` is the refusal code (`machine_browser_not_enabled`,
   `browser_not_enabled`, `account_unavailable`) or null. Opens choose the
   account's placement Machine, else a Machine holding its native generation.
+  Authority is split: open, attach, navigate, resize and snapshot need launch
+  admission; the state read and hibernate need only ownership, and reset
+  needs ownership of an account that is not being revoked (`account_revoking`),
+  so closing either gate never strands a running instance or a retained
+  profile. Withdrawn admission on a live stream sends `{type:"error",code}`
+  with the refusal code before closing.
+  The Controller's browser cache is scoped to the Machine connection that
+  reported it: a new connection (a restarted Machine may have discarded its
+  instances) drops everything learned before and ends those viewers, the
+  connection's teardown does the same, and every durable placement on the
+  reconnected Machine is queried again. A state read without a live
+  instance on the current connection asks the Machine (`BrowserQuery`), whose
+  answer, including "no instance", replaces the cached state; a confirmed
+  reset or revocation does the same.
   The Machine-side revocation operation id is `revoke-<sha256(operation)[..32]>`,
   so a retried reconciliation replays the Machine's receipt.
 

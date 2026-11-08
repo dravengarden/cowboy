@@ -79,6 +79,12 @@ async fn revoke_one(
         "machine protocol predates browsers"
     );
     let machine_operation = machine_operation_id(operation);
+    // An open committed before the revocation may still be on its way to
+    // this Machine; the revocation follows it, never overtakes it.
+    let lifecycle = state.browsers.lifecycle_lock(account.as_str());
+    let _dispatch = tokio::time::timeout(REVOKE_TIMEOUT, lifecycle.lock())
+        .await
+        .context("an open of this account is still in flight")?;
     let event = state
         .machine_control
         .browser_command(
@@ -103,6 +109,7 @@ async fn revoke_one(
             ),
         "browser revocation unconfirmed"
     );
+    state.browsers.record_authoritative(&connection, &event);
     let evidence = Evidence {
         machine_id: machine_id.to_owned(),
         instance_id: instance_id.to_owned(),

@@ -1,9 +1,12 @@
 //! In-memory Controller view of Machine browsers: per-Machine capability,
 //! the latest state of each account's browser, pending stream pairings and
 //! live viewer attachments. Everything here is re-learned from Machine
-//! hellos and state events; the durable placement lives in the store.
+//! hellos and state events and is scoped to the connection that reported
+//! it: a reconnected (possibly rebooted) Machine starts from nothing. The
+//! durable placement lives in the store.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::WebSocket;
@@ -14,13 +17,26 @@ use crate::machine_protocol::machine_browser::{
     Capability, Event, InstanceRef, PAIRING_TIMEOUT_MS, STREAM_TOKEN_TTL_MS, State, StateEvent,
 };
 
-/// The latest observation of one account's browser.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The latest observation of one account's browser, on the connection that
+/// reported it.
+#[derive(Clone, Debug)]
 pub(in crate::server) struct Observed {
     pub machine_id: String,
+    pub connection: ConnectionToken,
     pub event: StateEvent,
     pub observed_at: Instant,
 }
+
+impl PartialEq for Observed {
+    fn eq(&self, other: &Self) -> bool {
+        self.machine_id == other.machine_id
+            && self.connection.same(&other.connection)
+            && self.event == other.event
+            && self.observed_at == other.observed_at
+    }
+}
+
+impl Eq for Observed {}
 
 impl Observed {
     pub(in crate::server) fn running(&self) -> bool {
@@ -28,6 +44,11 @@ impl Observed {
             self.event.state,
             State::Starting | State::Detached | State::Attached
         )
+    }
+
+    /// A process may exist: running or still stopping.
+    pub(in crate::server) fn live(&self) -> bool {
+        self.running() || self.event.state == State::Stopping
     }
 
     pub(in crate::server) fn instance(&self) -> InstanceRef {
@@ -45,18 +66,83 @@ pub(in crate::server) struct Pairing {
 struct Viewer {
     attachment_id: String,
     incarnation: u64,
+    connection: ConnectionToken,
+    /// Registered before the Machine confirmed the attachment: only an
+    /// incarnation change or the instance stopping ends it meanwhile.
+    pending: bool,
     cancel: watch::Sender<bool>,
 }
 
+type Locks = parking_lot::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>;
+
 #[derive(Default)]
 pub(in crate::server) struct Coordinator {
+    /// The current connection of each Machine, as of its hello.
+    connections: parking_lot::RwLock<HashMap<String, ConnectionToken>>,
     capabilities: parking_lot::RwLock<HashMap<String, Capability>>,
     states: parking_lot::RwLock<HashMap<String, Observed>>,
     pairings: parking_lot::Mutex<HashMap<String, Pairing>>,
     viewers: parking_lot::Mutex<HashMap<String, Viewer>>,
+    /// Per account: attachment admission and viewer registration.
+    attach_locks: Locks,
+    /// Per account: open dispatch against revocation dispatch.
+    lifecycle_locks: Locks,
+}
+
+fn lock_for(locks: &Locks, account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    Arc::clone(locks.lock().entry(account_id.to_owned()).or_default())
 }
 
 impl Coordinator {
+    /// A Machine connection was installed: everything learned on any
+    /// earlier connection of that Machine is gone, and its viewers end.
+    pub(in crate::server) fn connected(
+        &self,
+        connection: &ConnectionToken,
+        capability: Option<Capability>,
+    ) {
+        let machine_id = connection.machine_id().to_owned();
+        self.connections
+            .write()
+            .insert(machine_id.clone(), connection.clone());
+        self.observe_capability(&machine_id, capability);
+        self.states
+            .write()
+            .retain(|_, observed| observed.machine_id != machine_id);
+        self.cancel_viewers_where(|viewer| {
+            viewer.connection.machine_id() == machine_id && !viewer.connection.same(connection)
+        });
+    }
+
+    /// A Machine connection ended: drop what it reported and end its viewers.
+    pub(in crate::server) fn disconnected(&self, connection: &ConnectionToken) {
+        let machine_id = connection.machine_id();
+        let current = {
+            let mut connections = self.connections.write();
+            let current = connections
+                .get(machine_id)
+                .is_some_and(|known| known.same(connection));
+            if current {
+                connections.remove(machine_id);
+            }
+            current
+        };
+        if current {
+            self.observe_capability(machine_id, None);
+        }
+        self.states
+            .write()
+            .retain(|_, observed| !observed.connection.same(connection));
+        self.cancel_viewers_where(|viewer| viewer.connection.same(connection));
+    }
+
+    fn is_current(&self, connection: &ConnectionToken) -> bool {
+        self.connections
+            .read()
+            .get(connection.machine_id())
+            .is_some_and(|known| known.same(connection))
+    }
+
     pub(in crate::server) fn observe_capability(
         &self,
         machine_id: &str,
@@ -77,9 +163,16 @@ impl Coordinator {
         self.capabilities.read().get(machine_id).cloned()
     }
 
-    /// Consume one Machine browser event. A state that no longer matches a
-    /// live viewer's attachment or incarnation ends that viewer.
-    pub(in crate::server) fn observe(&self, machine_id: &str, event: &Event) {
+    /// Consume one Machine browser event from the current connection. A
+    /// state that no longer matches a live viewer's attachment or
+    /// incarnation ends that viewer. An answer naming no instance (a
+    /// refused reset, a stopped browser) never hides a live instance here;
+    /// only `record_authoritative` accepts it over one.
+    pub(in crate::server) fn observe(&self, connection: &ConnectionToken, event: &Event) {
+        if !self.is_current(connection) {
+            return;
+        }
+        let machine_id = connection.machine_id();
         match event {
             Event::State(state) => {
                 let account = state.instance.account_id.as_str().to_owned();
@@ -91,32 +184,25 @@ impl Coordinator {
                     let mut states = self.states.write();
                     let replaces = states.get(&account).is_none_or(|previous| {
                         // A hibernated answer for an older incarnation cannot
-                        // hide a newer running instance.
-                        running
+                        // hide a newer live instance.
+                        !previous.connection.same(connection)
+                            || running
                             || previous.event.instance.incarnation <= state.instance.incarnation
-                            || !previous.running()
+                            || !previous.live()
                     });
                     if replaces {
                         states.insert(
                             account.clone(),
                             Observed {
                                 machine_id: machine_id.to_owned(),
+                                connection: connection.clone(),
                                 event: state.clone(),
                                 observed_at: Instant::now(),
                             },
                         );
                     }
                 }
-                let mut viewers = self.viewers.lock();
-                if let Some(viewer) = viewers.get(&account) {
-                    let replaced = state.instance.incarnation != viewer.incarnation
-                        || !matches!(state.state, State::Attached)
-                        || state.attachment_id.as_deref() != Some(viewer.attachment_id.as_str());
-                    if replaced && state.instance.incarnation >= viewer.incarnation {
-                        let _ = viewer.cancel.send(true);
-                        viewers.remove(&account);
-                    }
-                }
+                self.end_mismatched_viewer(&account, state);
             }
             Event::Capability(capability) => {
                 self.observe_capability(machine_id, Some(capability.clone()));
@@ -134,6 +220,67 @@ impl Coordinator {
                     self.cancel_viewer(&account);
                 }
             }
+        }
+    }
+
+    fn end_mismatched_viewer(&self, account: &str, state: &StateEvent) {
+        let mut viewers = self.viewers.lock();
+        let Some(viewer) = viewers.get(account) else {
+            return;
+        };
+        if state.instance.instance_id.is_empty() || state.instance.incarnation < viewer.incarnation
+        {
+            return;
+        }
+        let stopped = !matches!(state.state, State::Detached | State::Attached);
+        let replaced = state.instance.incarnation != viewer.incarnation
+            || stopped
+            || (!viewer.pending
+                && (state.state != State::Attached
+                    || state.attachment_id.as_deref() != Some(viewer.attachment_id.as_str())));
+        if replaced {
+            let _ = viewer.cancel.send(true);
+            viewers.remove(account);
+        }
+    }
+
+    /// The Machine's direct answer about an account's browser (a query, a
+    /// confirmed reset or revocation): it replaces the cached state, even a
+    /// live one, unless a newer observation already arrived on the same
+    /// connection. An answer naming no instance means none runs: its viewer
+    /// ends.
+    pub(in crate::server) fn record_authoritative(
+        &self,
+        connection: &ConnectionToken,
+        event: &StateEvent,
+    ) {
+        if !self.is_current(connection) {
+            return;
+        }
+        let account = event.instance.account_id.as_str().to_owned();
+        {
+            let mut states = self.states.write();
+            let newer = states.get(&account).is_some_and(|previous| {
+                previous.connection.same(connection)
+                    && previous.event.observed_at_ms > event.observed_at_ms
+            });
+            if newer {
+                return;
+            }
+            states.insert(
+                account.clone(),
+                Observed {
+                    machine_id: connection.machine_id().to_owned(),
+                    connection: connection.clone(),
+                    event: event.clone(),
+                    observed_at: Instant::now(),
+                },
+            );
+        }
+        if event.instance.instance_id.is_empty() {
+            self.cancel_viewer(&account);
+        } else {
+            self.end_mismatched_viewer(&account, event);
         }
     }
 
@@ -181,12 +328,44 @@ impl Coordinator {
         self.pairings.lock().remove(token);
     }
 
-    /// Register the live viewer of an account, ending the previous one.
+    /// Serializes attachment admission and viewer registration of one
+    /// account, so two viewers can never both see it free.
+    pub(in crate::server) fn attach_lock(&self, account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        lock_for(&self.attach_locks, account_id)
+    }
+
+    /// Serializes an account's open dispatch with its revocation dispatch,
+    /// so a revocation is never sent ahead of an open it must follow.
+    pub(in crate::server) fn lifecycle_lock(
+        &self,
+        account_id: &str,
+    ) -> Arc<tokio::sync::Mutex<()>> {
+        lock_for(&self.lifecycle_locks, account_id)
+    }
+
+    /// Whether the Controller holds a viewer for the account, attached or
+    /// still attaching.
+    pub(in crate::server) fn has_viewer(&self, account_id: &str) -> bool {
+        self.viewers.lock().contains_key(account_id)
+    }
+
+    /// Whether this attachment is still the account's registered viewer.
+    pub(in crate::server) fn is_viewer(&self, account_id: &str, attachment_id: &str) -> bool {
+        self.viewers
+            .lock()
+            .get(account_id)
+            .is_some_and(|viewer| viewer.attachment_id == attachment_id)
+    }
+
+    /// Register the account's viewer before its attachment is requested,
+    /// ending the previous one. Account disablement and revocation cancel
+    /// it from this moment on.
     pub(in crate::server) fn register_viewer(
         &self,
         account_id: &str,
         attachment_id: &str,
         incarnation: u64,
+        connection: &ConnectionToken,
     ) -> watch::Receiver<bool> {
         let (cancel, cancelled) = watch::channel(false);
         let previous = self.viewers.lock().insert(
@@ -194,6 +373,8 @@ impl Coordinator {
             Viewer {
                 attachment_id: attachment_id.to_owned(),
                 incarnation,
+                connection: connection.clone(),
+                pending: true,
                 cancel,
             },
         );
@@ -201,6 +382,16 @@ impl Coordinator {
             let _ = previous.cancel.send(true);
         }
         cancelled
+    }
+
+    /// The Machine confirmed the attachment; from now on any other
+    /// attachment or state ends this viewer.
+    pub(in crate::server) fn confirm_viewer(&self, account_id: &str, attachment_id: &str) {
+        if let Some(viewer) = self.viewers.lock().get_mut(account_id)
+            && viewer.attachment_id == attachment_id
+        {
+            viewer.pending = false;
+        }
     }
 
     /// Forget a viewer when its own stream ended; a replacement stays.
@@ -220,6 +411,17 @@ impl Coordinator {
         }
     }
 
+    fn cancel_viewers_where(&self, ends: impl Fn(&Viewer) -> bool) {
+        self.viewers.lock().retain(|_, viewer| {
+            if ends(viewer) {
+                let _ = viewer.cancel.send(true);
+                false
+            } else {
+                true
+            }
+        });
+    }
+
     /// Pairing deadline for a viewer waiting on the Machine stream.
     pub(in crate::server) fn pairing_timeout() -> Duration {
         Duration::from_millis(u64::try_from(PAIRING_TIMEOUT_MS).unwrap_or(15_000))
@@ -229,18 +431,21 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine_protocol::machine_browser::Reason;
+    use crate::machine_control::MachineControl;
     use crate::provider_account::ProviderAccountId;
 
-    fn event(incarnation: u64, state: State, attachment: Option<&str>) -> Event {
-        Event::State(StateEvent {
+    const ACCOUNT: &str = "11111111-2222-4333-8444-555555555555";
+
+    fn state_event(incarnation: u64, state: State, attachment: Option<&str>) -> StateEvent {
+        StateEvent {
             request_id: None,
             instance: InstanceRef {
-                account_id: ProviderAccountId::try_from(
-                    "11111111-2222-4333-8444-555555555555".to_owned(),
-                )
-                .unwrap(),
-                instance_id: "b-1".into(),
+                account_id: ProviderAccountId::try_from(ACCOUNT.to_owned()).unwrap(),
+                instance_id: if incarnation == 0 {
+                    String::new()
+                } else {
+                    "b-1".into()
+                },
                 incarnation,
             },
             state,
@@ -253,30 +458,137 @@ mod tests {
             snapshot_at_ms: None,
             profile_revision: Some(1),
             unsaved_state_lost: false,
-            observed_at_ms: 1,
-        })
+            observed_at_ms: i64::try_from(incarnation).unwrap(),
+        }
+    }
+
+    fn event(incarnation: u64, state: State, attachment: Option<&str>) -> Event {
+        Event::State(state_event(incarnation, state, attachment))
+    }
+
+    fn connect(
+        control: &MachineControl,
+        coordinator: &Coordinator,
+        epoch: &str,
+    ) -> ConnectionToken {
+        let connection = control.install(
+            "ovh".into(),
+            epoch.into(),
+            false,
+            crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+            tokio::sync::mpsc::unbounded_channel().0,
+        );
+        coordinator.connected(&connection, None);
+        connection
     }
 
     #[test]
     fn viewers_end_when_their_attachment_incarnation_or_state_changes() {
+        let control = MachineControl::default();
         let coordinator = Coordinator::default();
-        let account = "11111111-2222-4333-8444-555555555555";
-        let mut cancelled = coordinator.register_viewer(account, "att-1", 7);
-        coordinator.observe("ovh", &event(7, State::Attached, Some("att-1")));
+        let connection = connect(&control, &coordinator, "one");
+        let mut cancelled = coordinator.register_viewer(ACCOUNT, "att-1", 7, &connection);
+        coordinator.confirm_viewer(ACCOUNT, "att-1");
+        coordinator.observe(&connection, &event(7, State::Attached, Some("att-1")));
         assert!(!*cancelled.borrow_and_update());
         // A stale observation for an older incarnation is ignored.
-        coordinator.observe("ovh", &event(6, State::Hibernated, None));
+        coordinator.observe(&connection, &event(6, State::Hibernated, None));
         assert!(!*cancelled.borrow_and_update());
-        assert!(coordinator.state(account).unwrap().running());
+        assert!(coordinator.state(ACCOUNT).unwrap().running());
         // A takeover by another attachment ends this viewer.
-        coordinator.observe("ovh", &event(7, State::Attached, Some("att-2")));
+        coordinator.observe(&connection, &event(7, State::Attached, Some("att-2")));
         assert!(*cancelled.borrow_and_update());
-        let mut cancelled = coordinator.register_viewer(account, "att-3", 7);
-        coordinator.observe("ovh", &event(7, State::Hibernated, None));
+        let mut cancelled = coordinator.register_viewer(ACCOUNT, "att-3", 7, &connection);
+        coordinator.observe(&connection, &event(7, State::Hibernated, None));
         assert!(*cancelled.borrow_and_update());
-        assert!(!coordinator.state(account).unwrap().running());
+        assert!(!coordinator.state(ACCOUNT).unwrap().running());
         assert!(coordinator.running_on("ovh").is_empty());
-        let _ = Reason::Grace;
+    }
+
+    #[test]
+    fn a_pending_viewer_survives_until_its_attachment_is_confirmed() {
+        let control = MachineControl::default();
+        let coordinator = Coordinator::default();
+        let connection = connect(&control, &coordinator, "one");
+        coordinator.observe(&connection, &event(7, State::Detached, None));
+        let mut cancelled = coordinator.register_viewer(ACCOUNT, "att-1", 7, &connection);
+        assert!(coordinator.has_viewer(ACCOUNT));
+        // The previous attachment's detach arrives while this one attaches.
+        coordinator.observe(&connection, &event(7, State::Detached, None));
+        assert!(!*cancelled.borrow_and_update());
+        coordinator.confirm_viewer(ACCOUNT, "att-1");
+        coordinator.observe(&connection, &event(7, State::Detached, None));
+        assert!(*cancelled.borrow_and_update());
+        assert!(!coordinator.has_viewer(ACCOUNT));
+    }
+
+    #[test]
+    fn a_second_registration_replaces_and_ends_the_first_viewer() {
+        let control = MachineControl::default();
+        let coordinator = Coordinator::default();
+        let connection = connect(&control, &coordinator, "one");
+        let mut first = coordinator.register_viewer(ACCOUNT, "att-1", 7, &connection);
+        let _second = coordinator.register_viewer(ACCOUNT, "att-2", 7, &connection);
+        assert!(*first.borrow_and_update());
+        assert!(coordinator.is_viewer(ACCOUNT, "att-2"));
+        coordinator.unregister_viewer(ACCOUNT, "att-1");
+        assert!(coordinator.is_viewer(ACCOUNT, "att-2"));
+    }
+
+    #[test]
+    fn observations_are_scoped_to_the_reporting_connection() {
+        let control = MachineControl::default();
+        let coordinator = Coordinator::default();
+        let first = connect(&control, &coordinator, "one");
+        coordinator.observe(&first, &event(7, State::Detached, None));
+        let mut cancelled = coordinator.register_viewer(ACCOUNT, "att-1", 7, &first);
+        // The Machine reconnects (it may have rebooted): nothing survives.
+        let second = connect(&control, &coordinator, "two");
+        assert!(coordinator.state(ACCOUNT).is_none());
+        assert!(*cancelled.borrow_and_update());
+        // A late event from the replaced connection is not believed.
+        coordinator.observe(&first, &event(8, State::Detached, None));
+        assert!(coordinator.state(ACCOUNT).is_none());
+        coordinator.observe(&second, &event(1, State::Detached, None));
+        assert_eq!(
+            coordinator
+                .state(ACCOUNT)
+                .unwrap()
+                .event
+                .instance
+                .incarnation,
+            1
+        );
+        // The old connection's teardown leaves the new one alone.
+        coordinator.disconnected(&first);
+        assert!(coordinator.state(ACCOUNT).is_some());
+        coordinator.disconnected(&second);
+        assert!(coordinator.state(ACCOUNT).is_none());
+    }
+
+    #[test]
+    fn only_an_authoritative_answer_clears_a_live_instance() {
+        let control = MachineControl::default();
+        let coordinator = Coordinator::default();
+        let connection = connect(&control, &coordinator, "one");
+        coordinator.observe(&connection, &event(7, State::Detached, None));
+        let mut cancelled = coordinator.register_viewer(ACCOUNT, "att-1", 7, &connection);
+        // A refused reset names no instance and must not hide the browser.
+        coordinator.observe(&connection, &event(0, State::Hibernated, None));
+        assert!(coordinator.state(ACCOUNT).unwrap().running());
+        assert!(!*cancelled.borrow_and_update());
+        // A query answering that nothing runs is believed, and newer.
+        let mut absent = state_event(0, State::Hibernated, None);
+        absent.observed_at_ms = 100;
+        coordinator.record_authoritative(&connection, &absent);
+        assert!(!coordinator.state(ACCOUNT).unwrap().live());
+        assert!(*cancelled.borrow_and_update());
+        // An older answer does not override a newer observation.
+        let mut running = state_event(9, State::Detached, None);
+        running.observed_at_ms = 200;
+        coordinator.observe(&connection, &Event::State(running));
+        coordinator.record_authoritative(&connection, &absent);
+        assert!(coordinator.state(ACCOUNT).unwrap().running());
     }
 
     #[test]

@@ -57,7 +57,6 @@ fn refuse(code: &'static str) -> Response {
     (status, Json(json!({"error":{"code":code}}))).into_response()
 }
 
-#[allow(clippy::too_many_lines)] // One admission sequence, in the order the design fixes.
 pub(in crate::server) async fn upgrade(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
@@ -86,10 +85,6 @@ pub(in crate::server) async fn upgrade(
     if !offers_protocol(&headers) {
         return StatusCode::UPGRADE_REQUIRED.into_response();
     }
-    let owner = principal.user_id.clone();
-    if let Err(code) = super::admit(&state, &owner, &account).await {
-        return refuse(code);
-    }
     let viewport = Viewport {
         width: query.width,
         height: query.height,
@@ -98,33 +93,102 @@ pub(in crate::server) async fn upgrade(
     if viewport.validate().is_err() {
         return refuse("invalid_viewport");
     }
-    let Some(observed) = state.browsers.state(account.as_str()) else {
-        return refuse("browser_not_running");
+    let attached = match attach(
+        &state,
+        &principal.user_id,
+        &account,
+        viewport,
+        query.takeover,
+    )
+    .await
+    {
+        Ok(attached) => attached,
+        Err(code) => return refuse(code),
     };
+    let via_cookie = state.product_auth_enabled
+        && crate::product_auth::user_cookie_token(&headers).is_some()
+        && crate::product_auth::bearer_token(&headers).is_none();
+    let session = ViewerSession {
+        account,
+        instance: attached.instance,
+        attachment_id: attached.attachment_id,
+        connection: attached.connection,
+        principal,
+        via_cookie,
+        cookie_token: crate::product_auth::user_cookie_token(&headers),
+        bearer: crate::product_auth::bearer_token(&headers),
+        device_identity: auth.device_identity,
+        initial: attached.event,
+    };
+    let (delivered, cancelled) = (attached.delivered, attached.cancelled);
+    ws.protocols([SUBPROTOCOL])
+        .on_upgrade(move |socket| serve(socket, state, session, delivered, cancelled))
+}
+
+/// A Machine-confirmed attachment, registered as the account's viewer.
+struct Attached {
+    instance: InstanceRef,
+    attachment_id: String,
+    connection: crate::machine_control::ConnectionToken,
+    event: StateEvent,
+    delivered: tokio::sync::oneshot::Receiver<WebSocket>,
+    cancelled: tokio::sync::watch::Receiver<bool>,
+}
+
+/// Whether the account's display is taken: by the Machine's view of the
+/// instance or by a viewer this Controller has registered (even one that is
+/// still attaching). Taking it needs an explicit takeover.
+fn occupied(observed: &super::coordinator::Observed, registered_viewer: bool) -> bool {
+    observed.event.state == BrowserState::Attached || registered_viewer
+}
+
+/// Admission, the takeover decision, viewer registration and the Machine's
+/// attach, serialized per account: a second viewer waits for the first and
+/// then sees it, so it can only replace it by an explicit takeover. The
+/// viewer is registered before the final admission check, so a disable or
+/// revocation that the check does not see yet cancels it afterwards.
+async fn attach(
+    state: &Arc<AppState>,
+    owner: &str,
+    account: &ProviderAccountId,
+    viewport: Viewport,
+    takeover: bool,
+) -> Result<Attached, &'static str> {
+    super::admit(state, owner, account).await?;
+    let serial = state.browsers.attach_lock(account.as_str());
+    let _serial = serial.lock().await;
+    let observed = super::current_observation(state, account).ok_or("browser_not_running")?;
     if !matches!(
         observed.event.state,
         BrowserState::Detached | BrowserState::Attached
     ) {
-        return refuse("browser_not_running");
+        return Err("browser_not_running");
     }
-    if observed.event.state == BrowserState::Attached && !query.takeover {
-        return refuse("browser_attached");
+    if occupied(&observed, state.browsers.has_viewer(account.as_str())) && !takeover {
+        return Err("browser_attached");
     }
-    let Some((connection, _)) = state
-        .machine_control
-        .connection_protocol(&observed.machine_id)
-    else {
-        return refuse("machine_unavailable");
-    };
-    let Ok(token) = super::super::super::machine_connection::random_machine_token() else {
-        return refuse("unavailable");
-    };
+    let token = super::super::super::machine_connection::random_machine_token()
+        .map_err(|_| "unavailable")?;
     let attachment_id = format!(
         "att-{}",
         super::super::super::machine_connection::random_machine_token()
             .map(|value| value[..22].to_owned())
             .unwrap_or_else(|_| super::now_ms().to_string())
     );
+    let instance = observed.instance();
+    let connection = observed.connection.clone();
+    let cancelled = state.browsers.register_viewer(
+        account.as_str(),
+        &attachment_id,
+        instance.incarnation,
+        &connection,
+    );
+    if let Err(code) = super::admit(state, owner, account).await {
+        state
+            .browsers
+            .unregister_viewer(account.as_str(), &attachment_id);
+        return Err(code);
+    }
     let (deliver, delivered) = tokio::sync::oneshot::channel();
     // The Machine opens its half as soon as it attaches, so the token must
     // be known before the command leaves.
@@ -136,7 +200,6 @@ pub(in crate::server) async fn upgrade(
             deliver,
         },
     );
-    let instance = observed.instance();
     let attached = state
         .machine_control
         .browser_command(
@@ -151,41 +214,37 @@ pub(in crate::server) async fn upgrade(
             ATTACH_TIMEOUT,
         )
         .await;
-    let attached = match attached {
+    let refused = match attached {
         Ok(event)
             if event.state == BrowserState::Attached
                 && event.attachment_id.as_deref() == Some(attachment_id.as_str()) =>
         {
-            event
+            state
+                .browsers
+                .confirm_viewer(account.as_str(), &attachment_id);
+            return Ok(Attached {
+                instance,
+                attachment_id,
+                connection,
+                event,
+                delivered,
+                cancelled,
+            });
         }
         Ok(event) => {
-            state.browsers.forget_pairing(&token);
             tracing::info!(state = ?event.state, reason = ?event.reason, "browser attach refused");
-            return refuse("browser_attach_refused");
+            "browser_attach_refused"
         }
         Err(error) => {
-            state.browsers.forget_pairing(&token);
             tracing::warn!(%error, "browser attach failed");
-            return refuse("browser_attach_failed");
+            "browser_attach_failed"
         }
     };
-    let via_cookie = state.product_auth_enabled
-        && crate::product_auth::user_cookie_token(&headers).is_some()
-        && crate::product_auth::bearer_token(&headers).is_none();
-    let session = ViewerSession {
-        account,
-        instance,
-        attachment_id,
-        connection,
-        principal,
-        via_cookie,
-        cookie_token: crate::product_auth::user_cookie_token(&headers),
-        bearer: crate::product_auth::bearer_token(&headers),
-        device_identity: auth.device_identity,
-        initial: attached,
-    };
-    ws.protocols([SUBPROTOCOL])
-        .on_upgrade(move |socket| serve(socket, state, session, delivered))
+    state.browsers.forget_pairing(&token);
+    state
+        .browsers
+        .unregister_viewer(account.as_str(), &attachment_id);
+    Err(refused)
 }
 
 struct ViewerSession {
@@ -206,12 +265,8 @@ async fn serve(
     state: Arc<AppState>,
     session: ViewerSession,
     delivered: tokio::sync::oneshot::Receiver<WebSocket>,
+    mut cancelled: tokio::sync::watch::Receiver<bool>,
 ) {
-    let mut cancelled = state.browsers.register_viewer(
-        session.account.as_str(),
-        &session.attachment_id,
-        session.instance.incarnation,
-    );
     let (mut viewer_sink, mut viewer_stream) = socket.split();
     let end = relay(
         &state,
@@ -269,6 +324,15 @@ where
         Err(_) => return "pairing_timeout",
     };
     let (mut machine_sink, mut machine_stream) = machine.split();
+    // Pairing is the first use of the attachment: everything is checked
+    // again, the principal included, before a frame is relayed.
+    if !principal_valid(state, session).await {
+        let _ = viewer_sink.send(ws_close_auth_required()).await;
+        return "auth_required";
+    }
+    if let Err(end) = still_admitted(state, session, viewer_sink).await {
+        return end;
+    }
     if send_json(
         viewer_sink,
         &json!({"type":"state","state":session.initial}),
@@ -325,6 +389,11 @@ where
                         if bytes.len() > MAX_FRAME_BYTES {
                             return "viewer_frame_too_large";
                         }
+                        // Input never reaches a browser behind a closed gate;
+                        // account changes cancel this stream directly.
+                        if let Err(end) = gate_still_open(state, viewer_sink).await {
+                            return end;
+                        }
                         if tokio::time::timeout(FRAME_TIMEOUT, machine_sink.send(Message::Binary(bytes))).await.is_err() {
                             return "machine_stalled";
                         }
@@ -344,6 +413,9 @@ where
                     Some(Ok(Message::Binary(bytes))) => {
                         if bytes.len() > MAX_FRAME_BYTES {
                             return "machine_frame_too_large";
+                        }
+                        if let Err(end) = gate_still_open(state, viewer_sink).await {
+                            return end;
                         }
                         if tokio::time::timeout(FRAME_TIMEOUT, viewer_sink.send(Message::Binary(bytes))).await.is_err() {
                             return "viewer_stalled";
@@ -368,21 +440,12 @@ where
                 }
             }
             _ = heartbeat.tick() => {
-                if !principal_still_valid(
-                    state,
-                    session.via_cookie,
-                    session.cookie_token.as_deref(),
-                    session.bearer.as_deref(),
-                    session.device_identity.as_ref(),
-                    &session.principal,
-                )
-                .await
-                {
+                if !principal_valid(state, session).await {
                     let _ = viewer_sink.send(ws_close_auth_required()).await;
                     return "auth_required";
                 }
-                if !state.machine_control.is_current(&session.connection) {
-                    return "machine_connection_changed";
+                if let Err(end) = still_admitted(state, session, viewer_sink).await {
+                    return end;
                 }
                 if tokio::time::timeout(FRAME_TIMEOUT, viewer_sink.send(Message::Ping(Vec::new().into()))).await.is_err() {
                     return "viewer_stalled";
@@ -403,22 +466,16 @@ async fn viewer_control<S>(
 where
     S: SinkExt<Message> + Unpin,
 {
-    if !principal_still_valid(
-        state,
-        session.via_cookie,
-        session.cookie_token.as_deref(),
-        session.bearer.as_deref(),
-        session.device_identity.as_ref(),
-        &session.principal,
-    )
-    .await
-    {
+    if !principal_valid(state, session).await {
         let _ = viewer_sink.send(ws_close_auth_required()).await;
         return Err("auth_required");
     }
     let Ok(control) = serde_json::from_str::<ViewerControl>(text) else {
         return Err("viewer_protocol_error");
     };
+    // Every renewal and resize re-checks the account's admission, the
+    // attachment and the Machine connection, not only the principal.
+    still_admitted(state, session, viewer_sink).await?;
     match control {
         ViewerControl::Lease => {
             let expires_at_ms = super::now_ms().saturating_add(LEASE_EXPIRY_MS);
@@ -465,6 +522,61 @@ where
     Ok(())
 }
 
+async fn principal_valid(state: &Arc<AppState>, session: &ViewerSession) -> bool {
+    principal_still_valid(
+        state,
+        session.via_cookie,
+        session.cookie_token.as_deref(),
+        session.bearer.as_deref(),
+        session.device_identity.as_ref(),
+        &session.principal,
+    )
+    .await
+}
+
+/// Ends the stream unless the account is still admitted (Service gate,
+/// availability, browser enablement), this attachment is still the
+/// account's viewer and its Machine connection is still current. The
+/// viewer is told the refusal code first.
+async fn still_admitted<S>(
+    state: &Arc<AppState>,
+    session: &ViewerSession,
+    viewer_sink: &mut S,
+) -> Result<(), &'static str>
+where
+    S: SinkExt<Message> + Unpin,
+{
+    if !state.machine_control.is_current(&session.connection) {
+        return Err("machine_connection_changed");
+    }
+    if !state
+        .browsers
+        .is_viewer(session.account.as_str(), &session.attachment_id)
+    {
+        return Err("replaced");
+    }
+    if let Err(code) = super::admit(state, &session.principal.user_id, &session.account).await {
+        let _ = send_json(viewer_sink, &json!({"type":"error","code":code})).await;
+        return Err("admission_withdrawn");
+    }
+    Ok(())
+}
+
+async fn gate_still_open<S>(state: &Arc<AppState>, viewer_sink: &mut S) -> Result<(), &'static str>
+where
+    S: SinkExt<Message> + Unpin,
+{
+    if super::gate_open(state) {
+        return Ok(());
+    }
+    let _ = send_json(
+        viewer_sink,
+        &json!({"type":"error","code":"machine_browser_not_enabled"}),
+    )
+    .await;
+    Err("admission_withdrawn")
+}
+
 /// Replays the product session snapshot to the viewer and closes the stream
 /// unless it still belongs to the attached principal; `Ok` carries when the
 /// next check is due.
@@ -489,4 +601,62 @@ where
         return Err("auth_required");
     }
     Ok(snapshot.next_due_at_ms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::coordinator::Observed;
+    use super::*;
+
+    #[test]
+    fn a_registered_viewer_occupies_the_display_before_the_machine_reports_it() {
+        let control = crate::machine_control::MachineControl::default();
+        let observed = |state| Observed {
+            machine_id: "ovh".into(),
+            connection: control.install(
+                "ovh".into(),
+                "epoch".into(),
+                false,
+                crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+                tokio::sync::mpsc::unbounded_channel().0,
+            ),
+            event: StateEvent {
+                request_id: None,
+                instance: InstanceRef {
+                    account_id: uuid::Uuid::new_v4().to_string().try_into().unwrap(),
+                    instance_id: "b-1".into(),
+                    incarnation: 7,
+                },
+                state,
+                reason: None,
+                geometry: None,
+                scale: None,
+                deadline_ms: None,
+                attachment_id: None,
+                snapshot_generation: None,
+                snapshot_at_ms: None,
+                profile_revision: Some(1),
+                unsaved_state_lost: false,
+                observed_at_ms: 1,
+            },
+            observed_at: std::time::Instant::now(),
+        };
+        assert!(!occupied(&observed(BrowserState::Detached), false));
+        // A first viewer is still attaching: the Machine says detached.
+        assert!(occupied(&observed(BrowserState::Detached), true));
+        assert!(occupied(&observed(BrowserState::Attached), false));
+    }
+
+    #[tokio::test]
+    async fn attachment_admission_is_serialized_per_account() {
+        let coordinator = super::super::coordinator::Coordinator::default();
+        let lock = coordinator.attach_lock("account");
+        let held = lock.lock().await;
+        let same = coordinator.attach_lock("account");
+        assert!(same.try_lock().is_err());
+        let other = coordinator.attach_lock("other");
+        assert!(other.try_lock().is_ok());
+        drop(held);
+        assert!(same.try_lock().is_ok());
+    }
 }

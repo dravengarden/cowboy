@@ -13,10 +13,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::provider_accounts::browser::coordinator::Observed;
 use super::{AppState, holds_worker_slot, session_reclaim};
 use crate::config::schema::{
     SESSIONS_MEMORY_RECLAIM_BELOW, SESSIONS_MEMORY_RECLAIM_MIN_IDLE, SESSIONS_MEMORY_RECLAIM_UNTIL,
 };
+use crate::machine_protocol::machine_browser::State as BrowserState;
 
 const TICK: Duration = Duration::from_secs(5);
 /// A report older than this no longer describes the Device; act on none.
@@ -31,7 +33,7 @@ const STUCK_LOG_INTERVAL: Duration = Duration::from_mins(10);
 struct DeviceState {
     reclaiming: bool,
     pending: Option<Pending>,
-    /// A browser told to hibernate; settles only on its hibernated state and
+    /// A browser told to hibernate; settles only on its confirmed exit and
     /// a report taken since. It never times out into "released".
     browser_pending: Option<BrowserPending>,
     stuck_logged: Option<Instant>,
@@ -40,9 +42,52 @@ struct DeviceState {
 struct BrowserPending {
     account: String,
     incarnation: u64,
+    /// The connection the targeted instance was observed on.
+    connection: crate::machine_control::ConnectionToken,
     at: Instant,
-    observed_at_ms: i64,
+    /// The newest report when the instance was first seen exited; the
+    /// memory it freed shows only in a report taken after that.
+    exited_at_report: Option<i64>,
     _decision: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+/// Whether the targeted browser instance has verifiably exited: hibernated
+/// for that incarnation, the Machine's authoritative "nothing runs", or a
+/// newer instance that replaced it. `stopping` is not an exit: the instance
+/// is still copying its snapshot and holding its memory.
+fn browser_exited(
+    incarnation: u64,
+    connection: &crate::machine_control::ConnectionToken,
+    current: Option<&Observed>,
+) -> bool {
+    let Some(observed) = current else {
+        return false;
+    };
+    let event = &observed.event;
+    if event.instance.incarnation > incarnation {
+        return true;
+    }
+    if !observed.connection.same(connection) {
+        // A later connection re-announces what survived it.
+        return !(observed.live() && event.instance.incarnation == incarnation);
+    }
+    event.state == BrowserState::Hibernated
+        && (event.instance.incarnation == incarnation || event.instance.instance_id.is_empty())
+}
+
+/// Whether the browser's exit is reflected in `observed_at_ms`: it exited
+/// and a report taken after the exit was seen has arrived.
+fn browser_settled(pending: &mut BrowserPending, exited: bool, observed_at_ms: i64) -> bool {
+    if !exited {
+        return false;
+    }
+    match pending.exited_at_report {
+        None => {
+            pending.exited_at_report = Some(observed_at_ms);
+            false
+        }
+        Some(report) => observed_at_ms > report,
+    }
 }
 
 struct Pending {
@@ -80,7 +125,7 @@ enum Step {
     Wait,
     Hibernate(String),
     /// Running browsers hibernate before any session is selected.
-    HibernateBrowser(Box<super::provider_accounts::browser::coordinator::Observed>),
+    HibernateBrowser(Box<Observed>),
     Stuck,
 }
 
@@ -161,8 +206,9 @@ fn tick(state: &Arc<AppState>, devices: &mut HashMap<String, DeviceState>) {
                 device.browser_pending = Some(BrowserPending {
                     account: account.as_str().to_owned(),
                     incarnation: observed.event.instance.incarnation,
+                    connection: observed.connection.clone(),
                     at: Instant::now(),
-                    observed_at_ms: observed_at_ms_of(&observed),
+                    exited_at_report: None,
                     _decision: Some(decision),
                 });
                 let state = Arc::clone(state);
@@ -231,17 +277,16 @@ fn decide(
         }
         device.pending = None;
     }
-    if let Some(pending) = device.browser_pending.as_ref() {
-        let running = state
-            .browsers
-            .state(&pending.account)
-            .is_some_and(|observed| {
-                observed.running() && observed.event.instance.incarnation == pending.incarnation
-            });
+    if let Some(pending) = device.browser_pending.as_mut() {
+        let exited = browser_exited(
+            pending.incarnation,
+            &pending.connection,
+            state.browsers.state(&pending.account).as_ref(),
+        );
         // A stalled browser stop stays pending and blocks session selection;
-        // only its verified hibernation and a fresh sample settle it.
-        if running || observed_at_ms <= pending.observed_at_ms {
-            if pending.at.elapsed() >= RELEASE_TIMEOUT {
+        // only its verified exit and a sample taken after it settle it.
+        if !browser_settled(pending, exited, observed_at_ms) {
+            if !exited && pending.at.elapsed() >= RELEASE_TIMEOUT {
                 return Step::Stuck;
             }
             return Step::Wait;
@@ -253,7 +298,12 @@ fn decide(
         device.stuck_logged = None;
         return Step::Idle;
     }
-    if let Some(browser) = state.browsers.running_on(machine_id).into_iter().next() {
+    if let Some(browser) = state
+        .browsers
+        .running_on(machine_id)
+        .into_iter()
+        .find(|observed| state.machine_control.is_current(&observed.connection))
+    {
         return Step::HibernateBrowser(Box::new(browser));
     }
     let woken = session_reclaim::recent_wakes(None);
@@ -267,15 +317,96 @@ fn decide(
     }
 }
 
-/// The report a browser decision was taken on: the newest sample at the time.
-fn observed_at_ms_of(observed: &super::provider_accounts::browser::coordinator::Observed) -> i64 {
-    observed.event.observed_at_ms
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Pending, Policy, pending_settled};
+    use super::{
+        BrowserPending, Observed, Pending, Policy, browser_exited, browser_settled, pending_settled,
+    };
+    use crate::machine_control::{ConnectionToken, MachineControl};
+    use crate::machine_protocol::machine_browser::{InstanceRef, State, StateEvent};
     use std::time::Instant;
+
+    fn connection(control: &MachineControl, epoch: &str) -> ConnectionToken {
+        control.install(
+            "ovh".into(),
+            epoch.into(),
+            false,
+            crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+            tokio::sync::mpsc::unbounded_channel().0,
+        )
+    }
+
+    fn observed(connection: &ConnectionToken, incarnation: u64, state: State) -> Observed {
+        Observed {
+            machine_id: "ovh".into(),
+            connection: connection.clone(),
+            event: StateEvent {
+                request_id: None,
+                instance: InstanceRef {
+                    account_id: "11111111-2222-4333-8444-555555555555"
+                        .to_owned()
+                        .try_into()
+                        .unwrap(),
+                    instance_id: if incarnation == 0 {
+                        String::new()
+                    } else {
+                        "b-1".into()
+                    },
+                    incarnation,
+                },
+                state,
+                reason: None,
+                geometry: None,
+                scale: None,
+                deadline_ms: None,
+                attachment_id: None,
+                snapshot_generation: None,
+                snapshot_at_ms: None,
+                profile_revision: Some(1),
+                unsaved_state_lost: false,
+                observed_at_ms: 1,
+            },
+            observed_at: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn a_browser_counts_as_exited_only_once_hibernated() {
+        let control = MachineControl::default();
+        let first = connection(&control, "one");
+        let exited = |current: Option<Observed>| browser_exited(7, &first, current.as_ref());
+        assert!(!exited(None));
+        assert!(!exited(Some(observed(&first, 7, State::Detached))));
+        // Stopping still copies the snapshot and holds the memory.
+        assert!(!exited(Some(observed(&first, 7, State::Stopping))));
+        assert!(exited(Some(observed(&first, 7, State::Hibernated))));
+        // The Machine's authoritative "nothing runs", or a replacement.
+        assert!(exited(Some(observed(&first, 0, State::Hibernated))));
+        assert!(exited(Some(observed(&first, 8, State::Starting))));
+        // A reconnected Machine re-announces a survivor as running.
+        let second = connection(&control, "two");
+        assert!(!exited(Some(observed(&second, 7, State::Detached))));
+        assert!(exited(Some(observed(&second, 0, State::Hibernated))));
+    }
+
+    #[test]
+    fn browser_reclaim_settles_on_a_report_taken_after_the_exit() {
+        let control = MachineControl::default();
+        let mut pending = BrowserPending {
+            account: "a".into(),
+            incarnation: 7,
+            connection: connection(&control, "one"),
+            at: Instant::now(),
+            exited_at_report: None,
+            _decision: None,
+        };
+        // Not exited yet: even a much newer report settles nothing.
+        assert!(!browser_settled(&mut pending, false, 500));
+        // Exited, but the newest report may predate the exit.
+        assert!(!browser_settled(&mut pending, true, 500));
+        assert!(!browser_settled(&mut pending, true, 500));
+        assert!(browser_settled(&mut pending, true, 505));
+    }
 
     #[test]
     fn the_next_decision_waits_for_a_report_taken_after_the_release() {
