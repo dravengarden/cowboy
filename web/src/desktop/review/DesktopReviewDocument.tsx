@@ -119,6 +119,23 @@ function ReviewFileTabs({
   );
 }
 
+/** Explain or review the open file in a fork of the source Session. */
+function DelegateButtons({ onDelegate }: { onDelegate: (kind: "explain" | "review") => void }): React.JSX.Element {
+  const sx = { textTransform: "none", fontSize: "0.72rem", flexShrink: 0, gap: 0.5 } as const;
+  return (
+    <>
+      <Button size="small" color="inherit" onClick={() => onDelegate("explain")} data-review-explain sx={sx}>
+        Explain
+        <LeaderKeycap leaderKey="VE" />
+      </Button>
+      <Button size="small" color="inherit" onClick={() => onDelegate("review")} data-review-delegate sx={sx}>
+        Review
+        <LeaderKeycap leaderKey="VR" />
+      </Button>
+    </>
+  );
+}
+
 export interface ReviewDocumentStatus {
   readonly line: number;
   readonly hunk: { index: number; total: number } | undefined;
@@ -146,6 +163,7 @@ export function DesktopReviewDocument({
   onView,
   onMark,
   onSend,
+  onDelegate,
   empty,
   split,
   diagnostics,
@@ -165,6 +183,8 @@ export function DesktopReviewDocument({
   onView: (view: EditorView | null) => void;
   onMark: () => void;
   onSend: () => void;
+  /** Ask a fork of the source Session to explain or review the open file. */
+  onDelegate: (kind: "explain" | "review") => void;
   empty: React.ReactNode;
   split?: SplitDiff | undefined;
   diagnostics?: readonly CodeDiagnostic[] | undefined;
@@ -247,6 +267,7 @@ export function DesktopReviewDocument({
               <LeaderKeycap leaderKey="VM" />
             </Button>
           )}
+          <DelegateButtons onDelegate={onDelegate} />
           <Button
             size="small"
             color="inherit"

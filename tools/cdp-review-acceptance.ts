@@ -245,6 +245,7 @@ try {
   await until(focusIn("review.document"), "focus returns to the Document");
   await keys("g", "d");
   await until(`${activeTab} === "src/app.ts"`, "gd opens the definition");
+  await until(`${focusIn("review.document")} && document.querySelector("[data-desktop-review-editor] .cm-content")?.textContent.includes("Project guide")`, "the definition's text is focused");
   await keys("g", "T");
   await until(`${activeTab} === "README.md"`, "gT returns to the file");
   results.push("Language: the diagnostic is underlined and listed, K shows the hover, Escape returns, gd opens the definition");
@@ -254,6 +255,31 @@ try {
   await until(`document.querySelector("[data-review-cursor-line='1']")`, "Enter on a symbol moves the cursor to it");
   await shot("8-inspector");
   results.push("Inspector: outline and problems beside the Document; ␣VK runs the check, ]d reaches its finding, gO focuses the outline and Enter jumps");
+
+  // ␣VR on a focused change asks a fork for a managed review; its findings
+  // come back as a Navigator badge and as Problems on their lines.
+  await keys(" ", "v", "c");
+  await until(focusIn("review.navigator"), "␣VC focuses the Navigator");
+  await page.evaluate(`document.querySelector("[data-review-change='src/app.ts']").focus()`);
+  await keys(" ", "v", "r");
+  await until(`globalThis.__reviewFixture.submits.some((data) => data.includes('"session_id":"explain-fork"') && data.includes("review.start") && data.includes('src/app.ts'))`, "␣VR sends the delegation contract to the fork");
+  await until(`document.querySelector("[data-review-change='src/app.ts'] [data-review-finding-badge='1']")`, "the review's finding badges its file");
+  await page.evaluate(`document.querySelector("[data-review-change='src/app.ts']").focus()`);
+  await key("l");
+  await until(`${activeTab} === "src/app.ts"`, "L opens the reviewed file");
+  await until(`document.querySelector("[data-review-inspector-section='problems']")?.textContent.includes("Fixture AI finding")`, "the finding joins Problems");
+  // An unverified (legacy) diff lists findings without placing them; the
+  // file itself places a current one on its line.
+  await keys(" ", "v", "f");
+  await until(`document.querySelector("[data-review-tree-path='src']")`, "the tree loads");
+  await page.evaluate(`document.querySelector("[data-review-tree-path='src']").focus()`);
+  await key("l");
+  await until(`document.querySelector("[data-review-tree-path='src/app.ts']")`, "L expands src");
+  await page.evaluate(`document.querySelector("[data-review-tree-path='src/app.ts']").focus()`);
+  await key("l");
+  await until(`[...document.querySelectorAll("[data-review-problem]")].some((row) => row.textContent.includes("Fixture AI finding") && !row.classList.contains("Mui-disabled"))`, "a current finding is placed on its line in the file");
+  await shot("11-ai-review");
+  results.push("␣VR delegates a managed review of the focused change to a fork; its finding badges the file, joins Problems and is placed on its line");
 
   await keys(" ", "v", "h");
   await until(`document.querySelector("[data-review-navigator-tab='history'][aria-selected='true']")`, "␣VH shows History");

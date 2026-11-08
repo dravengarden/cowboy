@@ -6,12 +6,14 @@ import {
   inspectorHunks,
   inspectorOutline,
   inspectorProblems,
+  withFindingProblems,
   withLanguageProblems,
   type InspectorHunk,
   type InspectorProblem,
   type InspectorSymbol,
 } from "./reviewInspectorModel";
 import type { ReviewWorkbench } from "./useReviewWorkbench";
+import type { ReviewFinding } from "./reviewFindingsModel";
 
 export interface InspectorData {
   readonly hunks: readonly InspectorHunk[];
@@ -28,7 +30,11 @@ export interface InspectorData {
  * projection the phone uses (useOwnedReviewDiff); commits, PRs, committed
  * comparisons and unverified diffs list problems without placing them.
  */
-export function useInspectorData(review: ReviewWorkbench, diagnostics: readonly CodeDiagnostic[] = []): InspectorData {
+export function useInspectorData(
+  review: ReviewWorkbench,
+  diagnostics: readonly CodeDiagnostic[] = [],
+  findings: readonly ReviewFinding[] = [],
+): InspectorData {
   const { document, load, target, changes } = review;
   const sessionId = target?.sessionId ?? "";
   const checks = useReviewChecks(sessionId);
@@ -78,7 +84,12 @@ export function useInspectorData(review: ReviewWorkbench, diagnostics: readonly 
     hunks: ready && document?.kind !== "source" ? inspectorHunks(ready.text) : [],
     outline: observed === "unavailable" ? "unavailable" : observed && inspectorOutline(observed, rowOf),
     problems: document
-      ? withLanguageProblems(inspectorProblems(checks, document.path, rowOf), document.kind === "source" ? diagnostics : [])
+      ? withFindingProblems(
+        withLanguageProblems(inspectorProblems(checks, document.path, rowOf), document.kind === "source" ? diagnostics : []),
+        findings,
+        document.path,
+        rowOf,
+      )
       : [],
     placement,
     checks,

@@ -7,6 +7,7 @@ import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
 import { sendCheckRequest } from "../../mobile/review/checkRequest";
 import type { CodeDiagnostic } from "../../mobile/review/codeApi";
+import type { ReviewFindings } from "./useReviewFindings";
 import { checkStatusSummary } from "../../mobile/review/checkAnnotations";
 import { refreshReviewChecks } from "../../mobile/review/reviewChecksStore";
 import { symbolKindLabel } from "../../mobile/review/outlineModel";
@@ -107,14 +108,28 @@ function InspectorDetails({ review, placement }: {
  * outline, hunks, problems and facts. `Enter` on a row moves the Document's
  * cursor there; `]d`/`[d` step the placed problems; `gO` arrives here.
  */
-export function ReviewInspector({ review, onShow, diagnostics }: {
+/** Delegated reviews still running, or ended without trustworthy findings. */
+function AiReviewStatus({ findings }: { findings: ReviewFindings }): React.JSX.Element | null {
+  const { pending, incomplete } = findings;
+  if (pending === 0 && incomplete === 0) return null;
+  return (
+    <Typography sx={{ px: 2, py: 0.25, fontSize: "0.68rem", color: "text.secondary" }} data-review-ai-status>
+      {pending > 0 ? `${String(pending)} AI review${pending === 1 ? "" : "s"} running. ` : ""}
+      {incomplete > 0 ? `${String(incomplete)} ended incomplete, failed or never started; none of their findings are shown.` : ""}
+    </Typography>
+  );
+}
+
+export function ReviewInspector({ review, onShow, diagnostics, findings }: {
   review: ReviewWorkbench;
+  /** Managed review findings anchored for this Review (useReviewFindings). */
+  findings: ReviewFindings;
   /** The language engine's diagnostics of the open source file. */
   diagnostics: readonly CodeDiagnostic[];
   /** Make the Inspector visible (a narrow Review keeps it folded). */
   onShow: () => void;
 }): React.JSX.Element {
-  const data = useInspectorData(review, diagnostics);
+  const data = useInspectorData(review, diagnostics, findings.findings);
   const list = useRef<HTMLUListElement>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -217,6 +232,7 @@ export function ReviewInspector({ review, onShow, diagnostics }: {
             This diff is not verified against the file, so findings are listed but not placed. Open the file to step through them.
           </Alert>
         )}
+        <AiReviewStatus findings={findings} />
         {data.problems.length === 0 && <Empty>{data.checks?.runs.length ? "No findings in this file." : "No check has run."}</Empty>}
         {data.problems.map((problem) => (
           <ListItemButton key={problem.key} data-desktop-item={problem.key} data-review-problem={problem.line} disabled={problem.row === undefined} onClick={() => jump(problem.row)} sx={{ ...rowSx, gap: 0.75, alignItems: "flex-start", py: 0.25 }}>

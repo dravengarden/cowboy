@@ -16,6 +16,7 @@ export interface ReviewWorkbenchActions {
   readonly toggleUnread: () => void;
   readonly mark: () => void;
   readonly sendAndStay: () => void;
+  readonly delegate: (kind: "explain" | "review") => void;
   readonly closeTab: () => void;
   readonly keepTab: () => void;
   readonly toggleNavigator: () => void;
@@ -83,6 +84,8 @@ export function useReviewWorkbenchCommands(actions: ReviewWorkbenchActions): voi
       leader("review.unread", "VU", "Review: Only unreviewed files", () => a().toggleUnread()),
       leader("review.mark", "VM", "Review: Mark reviewed", () => a().mark()),
       leader("review.send", "VS", "Review: Send to the Prompt and stay", () => a().sendAndStay()),
+      leader("review.explain", "VE", "Review: Explain in a fork", () => a().delegate("explain")),
+      leader("review.delegate", "VR", "Review: Ask a fork to review this file", () => a().delegate("review")),
       leader("review.closeTab", "VQ", "Review: Close file tab", () => a().closeTab(), withDocument),
       leader("review.keepTab", "VP", "Review: Keep file tab", () => a().keepTab(), withDocument),
       leader("review.toggleNavigator", "V[", "Review: Fold the Navigator", () => a().toggleNavigator()),

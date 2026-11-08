@@ -234,7 +234,8 @@ Session's default, its project checkout, linked, bound or same-project
 sessions; per device, and choosing never moves the Agent), `,` Review
 settings, `D` unified or split diff (per device; in a split the new side
 holds the Vim buffer and the old side follows its scroll), `O` the outline, `]` fold the Inspector, `K` run a project check, `A` compare against, `U` unread only, `M` mark
-reviewed (the focused row, else the open file), `S` send and stay, `Q` close
+reviewed (the focused row, else the open file), `S` send and stay, `E` explain in a fork, `R` ask a fork for a managed
+review (both take the focused Navigator row, else the open file), `Q` close
 the file tab, `P` keep it, `[` fold the Navigator, `L` the classic layout.
 From 1320 px of Review width the Inspector (`review.inspector`) sits on the
 right with the open file's Outline, Hunks, Problems and Details; narrower, it
@@ -243,7 +244,10 @@ folds and `␣VO`/`␣V]`/`gO` open it inset. Its rows are a Cowboy list and
 project-check findings: a source file places them on its lines, a
 working-tree diff only through the verified projection (owned buffers, the
 complete patch, never a `committed:` comparison); otherwise they are listed
-but not placed. `␣VK` runs the declared check, only for the Session's own
+but not placed. A review asked with `␣VR` adds its findings to Problems once
+the fork's call completes: placed while the file is unchanged since the ask,
+listed as stale after an edit, and counted on the file's Navigator row.
+`␣VK` runs the declared check, only for the Session's own
 worktree. In History `L` opens a commit's files and their diffs open as commit tabs;
 `H` returns to the commits. In Worktrees `L` reviews a worktree: one a
 session owns as that session, an unowned one on this Service's Machine as a
