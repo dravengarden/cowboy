@@ -5,7 +5,7 @@
 //! it: a reconnected (possibly rebooted) Machine starts from nothing. The
 //! durable placement lives in the store.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,7 @@ use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::machine_browser::{
     Capability, Event, InstanceRef, PAIRING_TIMEOUT_MS, STREAM_TOKEN_TTL_MS, State, StateEvent,
 };
+use crate::provider_account::ProviderAccountId;
 
 /// The latest observation of one account's browser, on the connection that
 /// reported it.
@@ -83,6 +84,17 @@ fn key(machine_id: &str, account_id: &str) -> Key {
 
 type Locks = parking_lot::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>;
 
+/// What a Machine's current connection has not yet answered for: a
+/// reconnected Machine's surviving browsers are unknown until each durable
+/// placement there is answered authoritatively on that connection.
+struct Inventory {
+    connection: ConnectionToken,
+    /// Placed accounts still unanswered; `None` until the placements load.
+    pending: Option<HashSet<ProviderAccountId>>,
+    /// Accounts answered before the placements loaded.
+    answered: HashSet<ProviderAccountId>,
+}
+
 #[derive(Default)]
 pub(in crate::server) struct Coordinator {
     /// The current connection of each Machine, as of its hello.
@@ -98,6 +110,8 @@ pub(in crate::server) struct Coordinator {
     attach_locks: Locks,
     /// Per account: open dispatch against revocation dispatch.
     lifecycle_locks: Locks,
+    /// Per Machine: placements its current connection has not answered for.
+    inventories: parking_lot::Mutex<HashMap<String, Inventory>>,
 }
 
 fn lock_for(locks: &Locks, account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -117,6 +131,14 @@ impl Coordinator {
             .write()
             .insert(machine_id.clone(), connection.clone());
         self.observe_capability(&machine_id, capability);
+        self.inventories.lock().insert(
+            machine_id.clone(),
+            Inventory {
+                connection: connection.clone(),
+                pending: None,
+                answered: HashSet::new(),
+            },
+        );
         self.states
             .write()
             .retain(|(machine, _), _| *machine != machine_id);
@@ -141,6 +163,14 @@ impl Coordinator {
         if current {
             self.observe_capability(machine_id, None);
         }
+        let mut inventories = self.inventories.lock();
+        if inventories
+            .get(machine_id)
+            .is_some_and(|inventory| inventory.connection.same(connection))
+        {
+            inventories.remove(machine_id);
+        }
+        drop(inventories);
         self.states
             .write()
             .retain(|_, observed| !observed.connection.same(connection));
@@ -264,6 +294,8 @@ impl Coordinator {
             return;
         }
         let key = key(connection.machine_id(), event.instance.account_id.as_str());
+        // Either way the connection has answered for the account.
+        self.answered(connection, &event.instance.account_id);
         {
             let mut states = self.states.write();
             let newer = states.get(&key).is_some_and(|previous| {
@@ -288,6 +320,70 @@ impl Coordinator {
         } else {
             self.end_mismatched_viewer(&key, event);
         }
+    }
+
+    /// The durable placements on the connection's Machine are known: each
+    /// stays unresolved until that connection answers for it.
+    pub(in crate::server) fn placements_loaded(
+        &self,
+        connection: &ConnectionToken,
+        accounts: impl IntoIterator<Item = ProviderAccountId>,
+    ) {
+        let machine_id = connection.machine_id();
+        let mut inventories = self.inventories.lock();
+        let Some(inventory) = inventories
+            .get_mut(machine_id)
+            .filter(|inventory| inventory.connection.same(connection))
+        else {
+            return;
+        };
+        let pending: HashSet<_> = accounts
+            .into_iter()
+            .filter(|account| !inventory.answered.contains(account))
+            .collect();
+        if pending.is_empty() {
+            inventories.remove(machine_id);
+        } else {
+            inventory.pending = Some(pending);
+            inventory.answered.clear();
+        }
+    }
+
+    fn answered(&self, connection: &ConnectionToken, account: &ProviderAccountId) {
+        let machine_id = connection.machine_id();
+        let mut inventories = self.inventories.lock();
+        let Some(inventory) = inventories
+            .get_mut(machine_id)
+            .filter(|inventory| inventory.connection.same(connection))
+        else {
+            return;
+        };
+        match inventory.pending.as_mut() {
+            None => {
+                inventory.answered.insert(account.clone());
+            }
+            Some(pending) => {
+                pending.remove(account);
+                if pending.is_empty() {
+                    inventories.remove(machine_id);
+                }
+            }
+        }
+    }
+
+    /// The placements on this Machine whose browser its current connection
+    /// has not answered for (empty while the placements are still loading),
+    /// or `None` once every one was answered. A browser that survived a
+    /// reconnect is invisible to `running_on`/`stopping_on` meanwhile.
+    pub(in crate::server) fn unresolved_on(
+        &self,
+        machine_id: &str,
+    ) -> Option<Vec<ProviderAccountId>> {
+        let inventories = self.inventories.lock();
+        let inventory = inventories.get(machine_id)?;
+        let mut accounts: Vec<_> = inventory.pending.iter().flatten().cloned().collect();
+        accounts.sort();
+        Some(accounts)
     }
 
     /// The latest observation of the account's browser on one Machine.
@@ -752,5 +848,45 @@ mod tests {
         );
         assert!(coordinator.take_pairing(&token).is_some());
         assert!(coordinator.take_pairing(&token).is_none());
+    }
+
+    #[test]
+    fn a_reconnected_machine_stays_unresolved_until_each_placement_is_answered() {
+        let control = MachineControl::default();
+        let coordinator = Coordinator::default();
+        let other: ProviderAccountId = "22222222-2222-4333-8444-555555555555"
+            .to_owned()
+            .try_into()
+            .unwrap();
+        let account: ProviderAccountId = ACCOUNT.to_owned().try_into().unwrap();
+        let first = connect(&control, &coordinator, "one");
+        // Unknown until the placements load.
+        assert_eq!(coordinator.unresolved_on("ovh"), Some(Vec::new()));
+        // An answer that arrives before the placements load still counts.
+        coordinator.record_authoritative(&first, &state_event(0, State::Hibernated, None));
+        coordinator.placements_loaded(&first, [account.clone(), other.clone()]);
+        assert_eq!(coordinator.unresolved_on("ovh"), Some(vec![other.clone()]));
+        // A later connection starts over; the earlier one resolves nothing.
+        let second = connect(&control, &coordinator, "two");
+        coordinator.placements_loaded(&first, []);
+        assert_eq!(coordinator.unresolved_on("ovh"), Some(Vec::new()));
+        coordinator.placements_loaded(&second, [account.clone(), other.clone()]);
+        let mut answer = state_event(0, State::Hibernated, None);
+        coordinator.record_authoritative(&first, &answer);
+        coordinator.observe(&second, &event(3, State::Detached, None));
+        // Only authoritative answers on the current connection resolve.
+        assert_eq!(coordinator.unresolved_on("ovh").map(|v| v.len()), Some(2));
+        coordinator.record_authoritative(&second, &answer);
+        answer.instance.account_id = other;
+        coordinator.record_authoritative(&second, &answer);
+        assert_eq!(coordinator.unresolved_on("ovh"), None);
+        // Nothing placed there: resolved at once; a disconnect forgets it.
+        let third = connect(&control, &coordinator, "three");
+        coordinator.placements_loaded(&third, []);
+        assert_eq!(coordinator.unresolved_on("ovh"), None);
+        let fourth = connect(&control, &coordinator, "four");
+        assert!(coordinator.unresolved_on("ovh").is_some());
+        coordinator.disconnected(&fourth);
+        assert_eq!(coordinator.unresolved_on("ovh"), None);
     }
 }

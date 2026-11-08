@@ -210,17 +210,33 @@ pub(in crate::server) fn named_instance(
 
 /// The Machine an account's browser runs on: its existing placement when it
 /// is connected and capable, else a Machine holding the account's native
-/// credential generation. Nothing else may host it.
+/// credential generation. Nothing else may host it. `pinned` names the only
+/// acceptable Machine (a restart reopens where it stopped): it needs the
+/// account's placement there and is never replaced by another Machine.
 async fn machine_for(
     state: &AppState,
     owner: &str,
     account_id: &ProviderAccountId,
+    pinned: Option<&str>,
 ) -> Result<(String, ConnectionToken), &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
-    let mut candidates: Vec<String> = store
+    let placements = store
         .browser_placements(owner, account_id)
         .await
-        .map_err(|_| "unavailable")?
+        .map_err(|_| "unavailable")?;
+    if let Some(machine) = pinned {
+        placed_on(&placements, machine)?;
+        let capable = state
+            .browsers
+            .capability(machine)
+            .is_some_and(|capability| capability.available);
+        let connection = connection_for(state, machine)
+            .ok()
+            .filter(|_| capable)
+            .ok_or("browser_machine_unavailable")?;
+        return Ok((machine.to_owned(), connection));
+    }
+    let mut candidates: Vec<String> = placements
         .into_iter()
         .map(|placement| placement.machine_id)
         .collect();
@@ -381,15 +397,21 @@ pub(in crate::server) async fn state_value(
 
 /// Re-learn the browsers a reconnected Machine holds: every durable
 /// placement on it is queried, so the cache reflects this connection only.
+/// Until each is answered on this connection the placement stays unresolved
+/// in the coordinator (memory reclaim selects no session meanwhile); a
+/// Machine that cannot run browsers has none to resolve. Placements that
+/// cannot be loaded leave the inventory unresolved (fail closed).
 pub(in crate::server) async fn refresh_placements(
     state: Arc<AppState>,
     connection: ConnectionToken,
 ) {
+    let machine_id = connection.machine_id().to_owned();
     let Some(store) = state.store.as_ref() else {
+        state.browsers.placements_loaded(&connection, []);
         return;
     };
-    let machine_id = connection.machine_id().to_owned();
     if connection_for(&state, &machine_id).is_err() {
+        state.browsers.placements_loaded(&connection, []);
         return;
     }
     let placements = match store.browser_placements_on_machine(&machine_id).await {
@@ -399,6 +421,10 @@ pub(in crate::server) async fn refresh_placements(
             return;
         }
     };
+    state.browsers.placements_loaded(
+        &connection,
+        placements.iter().map(|(_, account_id)| account_id.clone()),
+    );
     for (_, account_id) in placements {
         if !state.machine_control.is_current(&connection) {
             return;
@@ -484,16 +510,18 @@ async fn dispatch_open(
     Ok(event)
 }
 
-/// Open the account's browser as a tab on its Machine.
+/// Open the account's browser as a tab on its Machine, or only on `machine`
+/// when the caller names one.
 pub(in crate::server) async fn open_tab(
     state: &AppState,
     owner: &str,
     account_id: &ProviderAccountId,
     viewport: Viewport,
+    machine: Option<&str>,
 ) -> Result<Value, &'static str> {
     admit(state, owner, account_id).await?;
     viewport.validate().map_err(|_| "invalid_viewport")?;
-    let (machine_id, connection) = machine_for(state, owner, account_id).await?;
+    let (machine_id, connection) = machine_for(state, owner, account_id, machine).await?;
     let event = dispatch_open(
         state,
         owner,
@@ -507,14 +535,15 @@ pub(in crate::server) async fn open_tab(
 }
 
 /// Open the account's browser bound to one of the owner's native logins.
-/// The Machine is the login's Machine; the URL comes from the Machine's own
-/// login challenge, never from the Controller.
+/// The Machine is the login's Machine (a `pinned` other Machine is
+/// refused); the URL comes from the Machine's own login challenge, never
+/// from the Controller.
 pub(in crate::server) async fn open_sign_in(
     state: &Arc<AppState>,
     owner: &str,
-    account_id: &ProviderAccountId,
-    request: &str,
+    (account_id, request): (&ProviderAccountId, &str),
     viewport: Viewport,
+    pinned: Option<&str>,
 ) -> Result<Value, &'static str> {
     admit(state, owner, account_id).await?;
     viewport.validate().map_err(|_| "invalid_viewport")?;
@@ -527,6 +556,9 @@ pub(in crate::server) async fn open_sign_in(
         .map_err(|_| "unavailable")?
         .ok_or("login_operation_not_found")?;
     let machine_id = receipt.input.machine_id.clone();
+    if pinned.is_some_and(|pinned| pinned != machine_id) {
+        return Err("browser_machine_unavailable");
+    }
     let (connection, protocol) = state
         .machine_control
         .connection_protocol(&machine_id)
@@ -784,6 +816,9 @@ pub(in crate::server) struct OpenBody {
     width: u32,
     height: u32,
     scale: u8,
+    /// Open only on this Machine; a sign-in open whose login runs on
+    /// another Machine is refused.
+    machine_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -864,6 +899,7 @@ pub(in crate::server) async fn http_open(
                 height: body.height,
                 scale: body.scale,
             },
+            body.machine_id.as_deref(),
         )
         .await,
     )
@@ -882,13 +918,13 @@ pub(in crate::server) async fn http_open_sign_in(
         open_sign_in(
             &state,
             &auth.principal.user_id,
-            &account,
-            &request,
+            (&account, &request),
             Viewport {
                 width: body.width,
                 height: body.height,
                 scale: body.scale,
             },
+            body.machine_id.as_deref(),
         )
         .await,
     )

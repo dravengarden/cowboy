@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use super::provider_accounts::browser::coordinator::Observed;
@@ -34,6 +35,9 @@ const STUCK_LOG_INTERVAL: Duration = Duration::from_mins(10);
 /// Machine is asked directly at most this often per account. Longer than the
 /// query's own timeout, so at most one query per account is in flight.
 const QUERY_INTERVAL: Duration = Duration::from_secs(10);
+/// How often a reclaim hibernate lost to a reconnect is sent again to the
+/// captured instance, each at most once per `QUERY_INTERVAL`.
+const MAX_HIBERNATE_RESENDS: u32 = 3;
 
 #[derive(Default)]
 struct DeviceState {
@@ -50,6 +54,8 @@ struct DeviceState {
     queried: HashMap<String, Instant>,
     /// Accounts whose browser this tick wants queried.
     queries_due: Vec<ProviderAccountId>,
+    /// The captured browser to send Hibernate to again this tick.
+    hibernate_due: Option<Box<Observed>>,
     stuck_logged: Option<Instant>,
 }
 
@@ -121,14 +127,68 @@ fn stopping_step(
 struct BrowserPending {
     machine_id: String,
     account: ProviderAccountId,
+    instance_id: String,
     incarnation: u64,
-    /// The connection the targeted instance was observed on.
+    /// The connection the targeted instance was last observed on (and its
+    /// Hibernate last sent to).
     connection: crate::machine_control::ConnectionToken,
     at: Instant,
     /// The newest report when the instance was first seen exited; the
     /// memory it freed shows only in a report taken after that.
     exited_at_report: Option<i64>,
+    /// The last Hibernate sent; it may be lost when its connection ends.
+    dispatch: Dispatch,
+    resends: u32,
+    last_resend: Option<Instant>,
+    /// The latest authoritative query answer about the account on its
+    /// Machine's current connection, written by the query task.
+    answer: Arc<parking_lot::Mutex<Option<Observed>>>,
     _decision: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+/// One Hibernate sent for a browser reclaim: on which connection, and
+/// whether it has finished (answered, refused or failed).
+struct Dispatch {
+    connection: crate::machine_control::ConnectionToken,
+    done: Arc<AtomicBool>,
+}
+
+impl Dispatch {
+    fn new(connection: &crate::machine_control::ConnectionToken) -> Self {
+        Self {
+            connection: connection.clone(),
+            done: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+/// Whether Hibernate must be sent again to the captured instance: an
+/// authoritative answer on the Machine's verified current connection
+/// (`answer_current`) says exactly that instance (same Machine, account,
+/// instance id and incarnation) still runs, nothing newer replaced that
+/// answer since (`latest`), and the last Hibernate cannot still take effect
+/// (it went to an earlier connection, or it has finished). Bounded by
+/// `MAX_HIBERNATE_RESENDS`, at most one per `QUERY_INTERVAL`.
+fn resend_due(
+    pending: &BrowserPending,
+    answer: &Observed,
+    (latest, answer_current): (Option<&Observed>, bool),
+    now: Instant,
+) -> bool {
+    let instance = &answer.event.instance;
+    pending.resends < MAX_HIBERNATE_RESENDS
+        && pending
+            .last_resend
+            .is_none_or(|at| now.saturating_duration_since(at) >= QUERY_INTERVAL)
+        && answer_current
+        && answer.running()
+        && answer.machine_id == pending.machine_id
+        && instance.account_id == pending.account
+        && instance.instance_id == pending.instance_id
+        && instance.incarnation == pending.incarnation
+        && latest == Some(answer)
+        && (!answer.connection.same(&pending.dispatch.connection)
+            || pending.dispatch.done.load(Ordering::Acquire))
 }
 
 /// Whether the targeted browser instance has verifiably exited, judged
@@ -285,14 +345,19 @@ fn tick(state: &Arc<AppState>, devices: &mut HashMap<String, DeviceState>) {
             min_idle,
         );
         for account in std::mem::take(&mut device.queries_due) {
-            let state = Arc::clone(state);
-            let machine_id = machine_id.clone();
-            // Bounded by the query's own timeout; the answer replaces the
-            // cached observation, which the next tick settles on.
-            tokio::spawn(async move {
-                super::provider_accounts::browser::query_machine(&state, &machine_id, &account)
-                    .await;
-            });
+            let answer = device
+                .browser_pending
+                .as_ref()
+                .filter(|pending| pending.account == account)
+                .map(|pending| Arc::clone(&pending.answer));
+            spawn_query(state, &machine_id, account, answer);
+        }
+        if let Some(observed) = device.hibernate_due.take()
+            && let Some(pending) = device.browser_pending.as_ref()
+        {
+            tracing::info!(machine = %machine_id, resend = pending.resends,
+                "re-sending a reclaim hibernate lost during a Machine reconnect");
+            spawn_hibernate(state, *observed, &pending.dispatch);
         }
         match step {
             Step::Idle | Step::Wait => {}
@@ -303,23 +368,21 @@ fn tick(state: &Arc<AppState>, devices: &mut HashMap<String, DeviceState>) {
                 // Dispatched to the captured instance on its own Machine.
                 tracing::info!(machine = %machine_id, headroom_bytes = headroom,
                     "hibernating a Machine browser to relieve Device memory");
+                let dispatch = Dispatch::new(&observed.connection);
+                spawn_hibernate(state, (*observed).clone(), &dispatch);
                 device.browser_pending = Some(BrowserPending {
                     machine_id: machine_id.clone(),
                     account: observed.event.instance.account_id.clone(),
+                    instance_id: observed.event.instance.instance_id.clone(),
                     incarnation: observed.event.instance.incarnation,
                     connection: observed.connection.clone(),
                     at: Instant::now(),
                     exited_at_report: None,
+                    dispatch,
+                    resends: 0,
+                    last_resend: None,
+                    answer: Arc::default(),
                     _decision: Some(decision),
-                });
-                let state = Arc::clone(state);
-                tokio::spawn(async move {
-                    if let Err(error) =
-                        super::provider_accounts::browser::hibernate_instance(&state, &observed)
-                            .await
-                    {
-                        tracing::warn!(%error, "memory reclaim browser hibernate failed");
-                    }
                 });
             }
             Step::Stuck => {
@@ -356,6 +419,65 @@ fn tick(state: &Arc<AppState>, devices: &mut HashMap<String, DeviceState>) {
             }
         }
     }
+}
+
+/// The captured browser to hibernate again, per `resend_due`, recording
+/// the resend on `pending`.
+fn resend(state: &AppState, pending: &mut BrowserPending, now: Instant) -> Option<Box<Observed>> {
+    let answer = pending.answer.lock().take()?;
+    let latest = state
+        .browsers
+        .state_on(&pending.machine_id, pending.account.as_str());
+    let current = state.machine_control.is_current(&answer.connection);
+    if !resend_due(pending, &answer, (latest.as_ref(), current), now) {
+        return None;
+    }
+    pending.resends += 1;
+    pending.last_resend = Some(now);
+    pending.connection = answer.connection.clone();
+    pending.dispatch = Dispatch::new(&answer.connection);
+    Some(Box::new(answer))
+}
+
+/// Ask the Machine for the account's browser, bounded by the query's own
+/// timeout; the answer replaces the cached observation, which the next tick
+/// settles on. For a pending browser reclaim the answer is also handed to
+/// it (`answer`) once verified as the Machine's current-connection state.
+fn spawn_query(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    account: ProviderAccountId,
+    answer: Option<Arc<parking_lot::Mutex<Option<Observed>>>>,
+) {
+    let state = Arc::clone(state);
+    let machine_id = machine_id.to_owned();
+    tokio::spawn(async move {
+        let query = super::provider_accounts::browser::query_machine(&state, &machine_id, &account);
+        let Some(event) = query.await else {
+            return;
+        };
+        if let Some(answer) = answer
+            && let Some(observed) = state.browsers.state_on(&machine_id, account.as_str())
+            && observed.event == event
+            && state.machine_control.is_current(&observed.connection)
+        {
+            *answer.lock() = Some(observed);
+        }
+    });
+}
+
+/// Send Hibernate to exactly the captured instance; `dispatch` records when
+/// it finished.
+fn spawn_hibernate(state: &Arc<AppState>, observed: Observed, dispatch: &Dispatch) {
+    let state = Arc::clone(state);
+    let done = Arc::clone(&dispatch.done);
+    tokio::spawn(async move {
+        let result = super::provider_accounts::browser::hibernate_instance(&state, &observed).await;
+        done.store(true, Ordering::Release);
+        if let Err(error) = result {
+            tracing::warn!(%error, "memory reclaim browser hibernate failed");
+        }
+    });
 }
 
 fn decide(
@@ -396,6 +518,11 @@ fn decide(
         if !browser_settled(pending, exited, observed_at_ms) {
             let (account, at) = (pending.account.clone(), pending.at);
             if !exited {
+                // A Hibernate lost to a reconnect leaves the instance
+                // running on the new connection: send it again, to exactly
+                // that instance (the release timeout still runs from the
+                // first decision).
+                device.hibernate_due = resend(state, pending, Instant::now());
                 device.want_query(&account, Instant::now());
             }
             if !exited && at.elapsed() >= RELEASE_TIMEOUT {
@@ -423,14 +550,22 @@ fn decide(
     // A browser already stopping still holds its memory: wait for its
     // confirmed exit (asking the Machine, since an incarnation-less
     // `stopping` gets no terminal event) and a report taken after it.
+    // A reconnected Machine's placements are unresolved until its new
+    // connection answers for each: a surviving browser is neither running
+    // nor stopping in the cache meanwhile, yet holds memory.
     let stopping = state.browsers.stopping_on(machine_id);
+    let unresolved = state.browsers.unresolved_on(machine_id);
     let now = Instant::now();
-    for observed in &stopping {
-        device.want_query(&observed.event.instance.account_id, now);
+    for account in stopping
+        .iter()
+        .map(|observed| &observed.event.instance.account_id)
+        .chain(unresolved.iter().flatten())
+    {
+        device.want_query(account, now);
     }
     if let Some(step) = stopping_step(
         &mut device.stopping_wait,
-        !stopping.is_empty(),
+        !stopping.is_empty() || unresolved.is_some(),
         observed_at_ms,
     ) {
         return step;
@@ -449,8 +584,9 @@ fn decide(
 #[cfg(test)]
 mod tests {
     use super::{
-        BrowserPending, Observed, Pending, Policy, QUERY_INTERVAL, RELEASE_TIMEOUT, Step,
-        StoppingWait, browser_exited, browser_settled, pending_settled, query_due, stopping_step,
+        BrowserPending, Dispatch, MAX_HIBERNATE_RESENDS, Observed, Pending, Policy, QUERY_INTERVAL,
+        RELEASE_TIMEOUT, Step, StoppingWait, browser_exited, browser_settled, pending_settled,
+        query_due, resend_due, stopping_step,
     };
     use crate::machine_control::{ConnectionToken, MachineControl};
     use crate::machine_protocol::machine_browser::{InstanceRef, State, StateEvent};
@@ -645,21 +781,84 @@ mod tests {
         assert_eq!(stopping_step(&mut stalled, true, 900), Some(Step::Stuck));
     }
 
-    #[test]
-    fn browser_reclaim_settles_on_a_report_taken_after_the_exit() {
-        let control = MachineControl::default();
-        let mut pending = BrowserPending {
-            machine_id: "ovh".into(),
+    fn pending_for(connection: &ConnectionToken, incarnation: u64) -> BrowserPending {
+        BrowserPending {
+            machine_id: connection.machine_id().into(),
             account: "11111111-2222-4333-8444-555555555555"
                 .to_owned()
                 .try_into()
                 .unwrap(),
-            incarnation: 7,
-            connection: connection(&control, "one"),
+            instance_id: "b-1".into(),
+            incarnation,
+            connection: connection.clone(),
             at: Instant::now(),
             exited_at_report: None,
+            dispatch: Dispatch::new(connection),
+            resends: 0,
+            last_resend: None,
+            answer: std::sync::Arc::default(),
             _decision: None,
+        }
+    }
+
+    #[test]
+    fn a_hibernate_lost_to_a_reconnect_is_resent_to_exactly_the_captured_instance() {
+        use std::sync::atomic::Ordering;
+        let control = MachineControl::default();
+        let first = connection(&control, "one");
+        let mut pending = pending_for(&first, 7);
+        let start = Instant::now();
+        let due = |pending: &BrowserPending, answer: &Observed, current: bool| {
+            resend_due(pending, answer, (Some(answer), current), start)
         };
+        // The Machine reconnected before the Hibernate arrived; its new
+        // connection answers that the captured instance still runs.
+        let second = connection(&control, "two");
+        let running = observed(&second, 7, State::Detached);
+        assert!(due(&pending, &running, true));
+        // Never on an unverified connection, nor for anything but exactly
+        // the captured instance, nor once a newer observation replaced the
+        // answer.
+        assert!(!due(&pending, &running, false));
+        assert!(!due(&pending, &observed(&second, 8, State::Detached), true));
+        assert!(!due(&pending, &observed(&second, 7, State::Stopping), true));
+        let mut renamed = running.clone();
+        renamed.event.instance.instance_id = "b-2".into();
+        assert!(!due(&pending, &renamed, true));
+        let other = machine_connection(&control, "hawk", "one");
+        assert!(!due(&pending, &observed(&other, 7, State::Detached), true));
+        let newer = observed(&second, 7, State::Stopping);
+        assert!(!resend_due(&pending, &running, (Some(&newer), true), start));
+        assert!(!resend_due(&pending, &running, (None, true), start));
+        // On the connection the Hibernate went to, only once it finished.
+        let same = observed(&first, 7, State::Detached);
+        assert!(!due(&pending, &same, true));
+        pending.dispatch.done.store(true, Ordering::Release);
+        assert!(due(&pending, &same, true));
+        // Rate-limited and bounded.
+        pending.resends = 1;
+        pending.last_resend = Some(start);
+        assert!(!due(&pending, &running, true));
+        let later = start + QUERY_INTERVAL;
+        assert!(resend_due(
+            &pending,
+            &running,
+            (Some(&running), true),
+            later
+        ));
+        pending.resends = MAX_HIBERNATE_RESENDS;
+        assert!(!resend_due(
+            &pending,
+            &running,
+            (Some(&running), true),
+            later
+        ));
+    }
+
+    #[test]
+    fn browser_reclaim_settles_on_a_report_taken_after_the_exit() {
+        let control = MachineControl::default();
+        let mut pending = pending_for(&connection(&control, "one"), 7);
         // Not exited yet: even a much newer report settles nothing.
         assert!(!browser_settled(&mut pending, false, 500));
         // Exited, but the newest report may predate the exit.

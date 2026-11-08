@@ -890,7 +890,7 @@ framing. Counters record bytes and frames.
 | Route | Effect |
 |---|---|
 | `GET /api/provider-accounts/{account}/browser` | state, geometry, scale, deadline, snapshot generation and time, Machine, reasons; `machine_id=` keeps the read on that Machine |
-| `POST /api/provider-accounts/{account}/browser/open` | open as `Tab` (no URL body) |
+| `POST /api/provider-accounts/{account}/browser/open` | open as `Tab` (no URL body); an optional `machine_id` opens only on that Machine: `browser_not_placed` without the account's placement there, `browser_machine_unavailable` when it is not connected or cannot run browsers (never another Machine) |
 | `POST /api/provider-accounts/{account}/logins/{request}/browser` | open bound to that sign-in; no URL in the body; owner and account checked against the login receipt |
 | `POST .../browser/navigate` | `Tab` instances only, owner-supplied `https` URL, bounded; names `machine_id` and `instance` |
 | `POST .../browser/resize` | bounded geometry; carries the attachment, `machine_id` and `instance` |
@@ -959,6 +959,28 @@ reconnected mid-stop and answers `stopping` with no instance, for which no
 terminal event follows), the Controller asks that Machine directly
 (`BrowserQuery`, at most once per Machine and account every 10 s, each bounded
 by the query timeout) and settles on its authoritative answer.
+A Hibernate can be lost when the Machine reconnects after the step was
+captured but before the command arrives (it is refused for the old
+connection, or the connection ends under it). When an authoritative query
+answer on the Machine's verified current connection reports exactly the
+captured instance (same Machine, `instance_id` and incarnation) still
+running, and the last Hibernate went to an earlier connection or has
+finished, the Controller sends Hibernate again to exactly that instance on
+that connection: at most 3 times per step, at most once per query interval.
+The step's `RELEASE_TIMEOUT` still runs from the original decision, and the
+Device decision lock stays held throughout.
+A reconnect clears the Controller's browser observations for that Machine,
+and the placement refresh re-learns them asynchronously, so a surviving
+browser is briefly neither running nor stopping in the cache. Each
+connection therefore starts with its Machine's inventory unresolved: once
+the durable placements on that Machine load, each stays unresolved until an
+authoritative answer (a query, a confirmed reset) arrives for it on that
+same connection. While any is unresolved (or the placements have not
+loaded, including when loading them failed: fail closed) session selection
+on that Machine waits, querying each unresolved placement at the same
+bounded rate, and after the last one resolves it again needs a resource
+report taken after that. A Machine that cannot run browsers has nothing to
+resolve.
 A browser that is already stopping when reclaim reaches session selection
 (an owner request, recovery, an earlier Controller) also holds memory, so
 any current `stopping` observation on the Device's Machine, including one
@@ -1340,7 +1362,8 @@ the text above:
   `GET .../browser` returns `{machine_id, state, placements, admission}`,
   where `admission` is the refusal code (`machine_browser_not_enabled`,
   `browser_not_enabled`, `account_unavailable`) or null. Opens choose the
-  account's placement Machine, else a Machine holding its native generation.
+  account's placement Machine, else a Machine holding its native generation;
+  an open naming `machine_id` uses only that Machine.
   Authority is split: open, attach, navigate, resize and snapshot need launch
   admission; the state read and hibernate need only ownership, and reset
   needs ownership of an account that is not being revoked (`account_revoking`),
