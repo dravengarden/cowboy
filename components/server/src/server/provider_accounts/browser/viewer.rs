@@ -24,6 +24,11 @@ const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
 pub(in crate::server) struct ViewerQuery {
     #[serde(default)]
     takeover: bool,
+    /// The Machine and instance the viewer was shown (an open's answer or
+    /// the state read); the stream attaches to exactly that instance.
+    machine_id: String,
+    instance_id: String,
+    incarnation: u64,
     width: u32,
     height: u32,
     scale: u8,
@@ -93,10 +98,16 @@ pub(in crate::server) async fn upgrade(
     if viewport.validate().is_err() {
         return refuse("invalid_viewport");
     }
+    let target = InstanceRef {
+        account_id: account.clone(),
+        instance_id: query.instance_id,
+        incarnation: query.incarnation,
+    };
     let attached = match attach(
         &state,
         &principal.user_id,
         &account,
+        (&query.machine_id, &target),
         viewport,
         query.takeover,
     )
@@ -142,34 +153,42 @@ fn occupied(observed: &super::coordinator::Observed, registered_viewer: bool) ->
     observed.event.state == BrowserState::Attached || registered_viewer
 }
 
+/// The named instance, attachable only while running: another instance or
+/// incarnation on that Machine is `browser_instance_changed`, the same one
+/// starting or stopped is `browser_not_running`.
+fn attach_target(
+    named: Result<super::coordinator::Observed, &'static str>,
+) -> Result<super::coordinator::Observed, &'static str> {
+    let observed = named?;
+    if matches!(
+        observed.event.state,
+        BrowserState::Detached | BrowserState::Attached
+    ) {
+        Ok(observed)
+    } else {
+        Err("browser_not_running")
+    }
+}
+
 /// Admission, the takeover decision, viewer registration and the Machine's
 /// attach, serialized per account: a second viewer waits for the first and
 /// then sees it, so it can only replace it by an explicit takeover. The
 /// viewer is registered before the final admission check, so a disable or
-/// revocation that the check does not see yet cancels it afterwards.
+/// revocation that the check does not see yet cancels it afterwards. Only
+/// the named instance on the named Machine is ever attached; another
+/// browser of the account is never selected in its place.
 async fn attach(
     state: &Arc<AppState>,
     owner: &str,
     account: &ProviderAccountId,
+    (machine_id, target): (&str, &InstanceRef),
     viewport: Viewport,
     takeover: bool,
 ) -> Result<Attached, &'static str> {
     super::admit(state, owner, account).await?;
     let serial = state.browsers.attach_lock(account.as_str());
     let _serial = serial.lock().await;
-    // The display belongs to the instance on the Machine that runs it.
-    let observed = super::preferred(
-        super::current_observations(state, account)
-            .into_iter()
-            .filter(|observed| {
-                matches!(
-                    observed.event.state,
-                    BrowserState::Detached | BrowserState::Attached
-                )
-            })
-            .collect(),
-    )
-    .ok_or("browser_not_running")?;
+    let observed = attach_target(super::named_instance(state, account, machine_id, target))?;
     let machine_id = observed.machine_id.clone();
     if occupied(
         &observed,
@@ -659,6 +678,72 @@ mod tests {
         // A first viewer is still attaching: the Machine says detached.
         assert!(occupied(&observed(BrowserState::Detached), true));
         assert!(occupied(&observed(BrowserState::Attached), false));
+    }
+
+    #[test]
+    fn the_viewer_attaches_only_to_the_running_named_instance() {
+        let control = crate::machine_control::MachineControl::default();
+        let observed = |state, incarnation| Observed {
+            machine_id: "alpha".into(),
+            connection: control.install(
+                "alpha".into(),
+                "epoch".into(),
+                false,
+                crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+                tokio::sync::mpsc::unbounded_channel().0,
+            ),
+            event: StateEvent {
+                request_id: None,
+                instance: InstanceRef {
+                    account_id: "11111111-2222-4333-8444-555555555555"
+                        .to_owned()
+                        .try_into()
+                        .unwrap(),
+                    instance_id: "b-alpha".into(),
+                    incarnation,
+                },
+                state,
+                reason: None,
+                geometry: None,
+                scale: None,
+                deadline_ms: None,
+                attachment_id: None,
+                snapshot_generation: None,
+                snapshot_at_ms: None,
+                profile_revision: Some(1),
+                unsaved_state_lost: false,
+                observed_at_ms: 1,
+            },
+            observed_at: std::time::Instant::now(),
+        };
+        let shown = observed(BrowserState::Detached, 7).event.instance;
+        let target = |observed: Option<Observed>| {
+            attach_target(super::super::exact_instance(observed, &shown))
+                .map(|observed| observed.event.instance)
+        };
+        assert_eq!(
+            target(Some(observed(BrowserState::Detached, 7))),
+            Ok(shown.clone())
+        );
+        assert_eq!(
+            target(Some(observed(BrowserState::Attached, 7))),
+            Ok(shown.clone())
+        );
+        // The Machine restarted it, or it is starting or stopping: never
+        // another browser in its place.
+        assert_eq!(
+            target(Some(observed(BrowserState::Detached, 8))),
+            Err("browser_instance_changed")
+        );
+        assert_eq!(
+            target(Some(observed(BrowserState::Starting, 7))),
+            Err("browser_not_running")
+        );
+        assert_eq!(
+            target(Some(observed(BrowserState::Stopping, 7))),
+            Err("browser_not_running")
+        );
+        assert_eq!(target(None), Err("browser_not_running"));
     }
 
     #[tokio::test]

@@ -169,7 +169,7 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // cancellation_requested means enqueued, not process-exit confirmation or credential revocation.
 // Receipts preserve cancel_requested across restart even if live status is unknown.
 // Login challenges/code use the owner-checked HTTP/CLI flow; no secrets in receipts.
-// accounts.browser(account_id): Machine browser state; lifecycle via control.apply accounts.browser_*.
+// accounts.browser(account_id,machine_id?): Machine browser state (machine_id keeps the read on that Machine); lifecycle via control.apply accounts.browser_* naming that machine_id.
 // Write: cowboy_execute({action:"accounts.update",operation,arguments:{expected_revision,change:AccountChange}}).
 export type AccountChange =
  | {type:"create";provider_id:string;label:string}

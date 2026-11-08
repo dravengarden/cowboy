@@ -177,9 +177,9 @@ impl Coordinator {
     /// Consume one Machine browser event from the current connection. It
     /// describes that Machine's instance only. A state that no longer
     /// matches a live viewer's attachment or incarnation ends that viewer.
-    /// An answer naming no instance (a refused reset, a stopped browser)
-    /// never hides a live instance here; only `record_authoritative` accepts
-    /// it over one. A terminal `hibernated` for the cached incarnation (a
+    /// An answer naming no instance (a refused reset, a stopped browser, a
+    /// `stopping`/`busy` for a unit of unknown owner) never hides a live
+    /// observation here; only `record_authoritative` accepts it over one. A terminal `hibernated` for the cached incarnation (a
     /// confirmed exit after `stopping`) always replaces it.
     pub(in crate::server) fn observe(&self, connection: &ConnectionToken, event: &Event) {
         if !self.is_current(connection) {
@@ -200,7 +200,9 @@ impl Coordinator {
                         // hide a newer live instance.
                         !previous.connection.same(connection)
                             || running
-                            || previous.event.instance.incarnation <= state.instance.incarnation
+                            || (!state.instance.instance_id.is_empty()
+                                && previous.event.instance.incarnation
+                                    <= state.instance.incarnation)
                             || !previous.live()
                     });
                     if replaces {

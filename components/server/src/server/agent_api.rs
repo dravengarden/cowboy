@@ -550,13 +550,17 @@ impl SessionHost<'_> {
     }
 
     async fn account_browser(&self, args: &Value) -> Result<Value, String> {
-        only_keys(args, &["account_id"])?;
+        only_keys(args, &["account_id", "machine_id"])?;
         let owner = actions::account_owner(self.state, self.meta).await?;
         let account = crate::provider_account::ProviderAccountId::try_from(
             arg_str(args, "account_id")?.to_owned(),
         )
         .map_err(|_| "invalid_argument".to_owned())?;
-        super::provider_accounts::browser::state_value(self.state, &owner, &account)
+        let machine = match args.get("machine_id") {
+            None | Some(Value::Null) => None,
+            Some(_) => Some(arg_str(args, "machine_id")?),
+        };
+        super::provider_accounts::browser::state_value(self.state, &owner, &account, machine)
             .await
             .map_err(str::to_owned)
     }

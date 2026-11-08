@@ -78,8 +78,12 @@ fn browser_exited(
         return true;
     }
     if !observed.connection.same(connection) {
-        // A later connection re-announces what survived it.
-        return !(observed.live() && event.instance.incarnation == incarnation);
+        // A later connection re-announces what survived it; a `stopping`
+        // naming no instance (an unconfirmed unit of unknown owner, or the
+        // Machine's inventory still pending) may be it.
+        return !(observed.live()
+            && (event.instance.incarnation == incarnation
+                || event.instance.instance_id.is_empty()));
     }
     event.state == BrowserState::Hibernated
         && (event.instance.incarnation == incarnation || event.instance.instance_id.is_empty())
@@ -408,6 +412,10 @@ mod tests {
         let second = connection(&control, "two");
         assert!(!exited(Some(observed(&second, 7, State::Detached))));
         assert!(exited(Some(observed(&second, 0, State::Hibernated))));
+        // `stopping` naming no instance (an unconfirmed unit of unknown
+        // owner, or inventory pending) is never an exit, on either connection.
+        assert!(!exited(Some(observed(&first, 0, State::Stopping))));
+        assert!(!exited(Some(observed(&second, 0, State::Stopping))));
         // Another Machine's browser of the same account is never evidence.
         let other = machine_connection(&control, "hawk", "one");
         assert!(!exited(Some(observed(&other, 8, State::Starting))));
@@ -442,6 +450,13 @@ mod tests {
         coordinator.observe(&hawk, &state(&hawk, 9, State::Detached));
         coordinator.observe(&hawk, &state(&hawk, 9, State::Hibernated));
         assert!(!exited(&coordinator));
+        // A query answers `stopping` for a restart-retained unit whose exit
+        // is unconfirmed: still not an exit, and not a browser to reclaim.
+        let mut queried = observed(&ovh, 7, State::Stopping).event;
+        queried.observed_at_ms = 50;
+        coordinator.record_authoritative(&ovh, &queried);
+        assert!(!exited(&coordinator));
+        assert!(coordinator.running_on("ovh").is_empty());
         // The targeted Machine confirms the exit after a termination retry.
         coordinator.observe(&ovh, &state(&ovh, 7, State::Hibernated));
         assert!(exited(&coordinator));

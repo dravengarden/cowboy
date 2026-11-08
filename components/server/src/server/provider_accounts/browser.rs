@@ -173,26 +173,39 @@ fn preferred(observations: Vec<Observed>) -> Option<Observed> {
     })
 }
 
-/// The account's current observation (see `preferred`).
-pub(in crate::server) fn current_observation(
-    state: &AppState,
-    account_id: &ProviderAccountId,
-) -> Option<Observed> {
-    preferred(current_observations(state, account_id))
+/// Exactly the named instance in a Machine's observation: no observation
+/// is `browser_not_running`, another instance or incarnation there is
+/// `browser_instance_changed`. Never another Machine's browser.
+fn exact_instance(
+    observed: Option<Observed>,
+    instance: &InstanceRef,
+) -> Result<Observed, &'static str> {
+    let observed = observed.ok_or("browser_not_running")?;
+    if observed.event.instance != *instance {
+        return Err("browser_instance_changed");
+    }
+    Ok(observed)
 }
 
-/// The observation of the named instance, on the Machine that runs it.
-fn observation_of(
+/// The current observation of exactly the instance the owner is shown, on
+/// the Machine the owner is shown. A newer browser of the same account on
+/// another Machine is never substituted for it.
+pub(in crate::server) fn named_instance(
     state: &AppState,
     account_id: &ProviderAccountId,
+    machine_id: &str,
     instance: &InstanceRef,
-) -> Option<Observed> {
-    if instance.instance_id.is_empty() {
-        return None;
+) -> Result<Observed, &'static str> {
+    if instance.account_id != *account_id || instance.instance_id.is_empty() {
+        return Err("invalid_argument");
     }
-    current_observations(state, account_id)
-        .into_iter()
-        .find(|observed| observed.event.instance.instance_id == instance.instance_id)
+    exact_instance(
+        state
+            .browsers
+            .state_on(machine_id, account_id.as_str())
+            .filter(|observed| state.machine_control.is_current(&observed.connection)),
+        instance,
+    )
 }
 
 /// The Machine an account's browser runs on: its existing placement when it
@@ -289,14 +302,45 @@ async fn query_machine(
     Some(event)
 }
 
-/// Current browser state for the owner's account: a live instance observed
-/// on its Machine's current connection, else the Machine's own answer for
-/// the account's placement. Readable while the gates are closed, so the
-/// owner can still stop or reset what is there.
+/// The observation a state read reports: the named Machine's when it holds
+/// a placement or an observation of the account (the panel keeps showing
+/// the browser it displays), else the preferred one across Machines.
+fn read_target(
+    observations: Vec<Observed>,
+    placements: &[crate::store::provider_accounts::browser_placements::Placement],
+    machine: Option<&str>,
+) -> (Option<String>, Option<Observed>) {
+    let pinned = machine.filter(|machine| {
+        placements
+            .iter()
+            .any(|placement| placement.machine_id == *machine)
+            || observations
+                .iter()
+                .any(|observed| observed.machine_id == *machine)
+    });
+    match pinned {
+        Some(machine) => (
+            Some(machine.to_owned()),
+            observations
+                .into_iter()
+                .find(|observed| observed.machine_id == machine),
+        ),
+        None => (None, preferred(observations)),
+    }
+}
+
+/// Current browser state for the owner's account: a running instance
+/// observed on its Machine's current connection, else the Machine's own
+/// answer for the account's placement (a `stopping` is asked again, so an
+/// unconfirmed exit or a pending inventory is not cached past its end). `machine` keeps the read on the Machine the
+/// owner is shown while it still holds the account's browser. Readable
+/// while the gates are closed, so the owner can still stop or reset what is
+/// there.
 pub(in crate::server) async fn state_value(
     state: &AppState,
     owner: &str,
     account_id: &ProviderAccountId,
+    machine: Option<&str>,
 ) -> Result<Value, &'static str> {
     let account = owned_account(state, owner, account_id).await?;
     let gate = authorize_account(Authority::Launch, gate_open(state), &account).err();
@@ -305,20 +349,26 @@ pub(in crate::server) async fn state_value(
         .browser_placements(owner, account_id)
         .await
         .map_err(|_| "unavailable")?;
-    let observed = current_observation(state, account_id);
+    let (pinned, observed) = read_target(
+        current_observations(state, account_id),
+        &placements,
+        machine,
+    );
     let mut value = json!({"machine_id": Value::Null, "state": Value::Null, "placements": placements, "admission": gate});
     if let Some(observed) = &observed {
         value["machine_id"] = json!(observed.machine_id);
         value["state"] = json!(observed.event);
-        if observed.live() {
+        if observed.running() {
             return Ok(value);
         }
     }
-    let machine = observed.map(|observed| observed.machine_id).or_else(|| {
-        placements
-            .first()
-            .map(|placement| placement.machine_id.clone())
-    });
+    let machine = pinned
+        .or_else(|| observed.map(|observed| observed.machine_id))
+        .or_else(|| {
+            placements
+                .first()
+                .map(|placement| placement.machine_id.clone())
+        });
     if let Some(machine) = machine
         && let Some(event) = query_machine(state, &machine, account_id).await
     {
@@ -539,22 +589,20 @@ fn sign_in_refusal(event: &StateEvent) -> Option<&'static str> {
     }
 }
 
-/// Forward one instance-scoped command to the Machine the instance runs on.
+/// Forward one instance-scoped command to the named Machine, only while
+/// that Machine still reports exactly the named instance and incarnation:
+/// the command never reaches another Machine's browser of the same account
+/// nor a newer incarnation the owner has not seen.
 pub(in crate::server) async fn instance_command(
     state: &AppState,
     owner: &str,
     (account_id, authority): (&ProviderAccountId, Authority),
-    instance: &InstanceRef,
+    (machine_id, instance): (&str, &InstanceRef),
     command: Command,
     timeout: std::time::Duration,
 ) -> Result<Value, &'static str> {
     authorize(state, owner, account_id, authority).await?;
-    if instance.account_id != *account_id {
-        return Err("invalid_argument");
-    }
-    // The instance names its Machine: the command never reaches another
-    // Machine's browser of the same account.
-    let observed = observation_of(state, account_id, instance).ok_or("browser_not_running")?;
+    let observed = named_instance(state, account_id, machine_id, instance)?;
     let event = state
         .machine_control
         .browser_command(
@@ -571,29 +619,44 @@ pub(in crate::server) async fn instance_command(
     Ok(state_json(&observed.machine_id, &event))
 }
 
-/// Delete the account's retained profile on its Machine. The owner may do
-/// this while the gates are closed; only the Machine's confirmation
-/// (`owner_request`) is taken as "nothing runs and nothing is retained".
+/// Whether the account holds a browser placement on the named Machine.
+fn placed_on(
+    placements: &[crate::store::provider_accounts::browser_placements::Placement],
+    machine_id: &str,
+) -> Result<(), &'static str> {
+    if placements
+        .iter()
+        .any(|placement| placement.machine_id == machine_id)
+    {
+        Ok(())
+    } else {
+        Err("browser_not_placed")
+    }
+}
+
+/// Delete the account's retained profile on the named Machine, the one the
+/// owner is shown: profile revisions are per Machine, so the expected
+/// revision is only ever checked against that Machine's profile and never
+/// authorizes deleting another Machine's. The owner may do this while the
+/// gates are closed; only the Machine's confirmation (`owner_request`) is
+/// taken as "nothing runs and nothing is retained".
 pub(in crate::server) async fn reset(
     state: &AppState,
     owner: &str,
     account_id: &ProviderAccountId,
+    machine_id: &str,
     expected_profile_revision: u64,
 ) -> Result<Value, &'static str> {
     authorize(state, owner, account_id, Authority::Reset).await?;
     let store = state.store.as_ref().ok_or("unavailable")?;
-    let machine_id = match current_observation(state, account_id) {
-        Some(observed) => observed.machine_id,
-        None => store
+    placed_on(
+        &store
             .browser_placements(owner, account_id)
             .await
-            .map_err(|_| "unavailable")?
-            .into_iter()
-            .next()
-            .map(|placement| placement.machine_id)
-            .ok_or("browser_not_placed")?,
-    };
-    let connection = connection_for(state, &machine_id)?;
+            .map_err(|_| "unavailable")?,
+        machine_id,
+    )?;
+    let connection = connection_for(state, machine_id)?;
     let event = state
         .machine_control
         .browser_command(
@@ -615,12 +678,12 @@ pub(in crate::server) async fn reset(
     }
     if let Some(revision) = event.profile_revision
         && let Err(error) = store
-            .record_browser_profile_revision(owner, account_id, &machine_id, revision)
+            .record_browser_profile_revision(owner, account_id, machine_id, revision)
             .await
     {
         tracing::warn!(%error, "browser profile revision not recorded");
     }
-    Ok(state_json(&machine_id, &event))
+    Ok(state_json(machine_id, &event))
 }
 
 /// A reset the Machine carried out: hibernated for the owner's request.
@@ -726,6 +789,7 @@ pub(in crate::server) struct OpenBody {
 #[serde(deny_unknown_fields)]
 pub(in crate::server) struct InstanceBody {
     dataset: Option<String>,
+    machine_id: String,
     instance: InstanceRef,
 }
 
@@ -733,6 +797,7 @@ pub(in crate::server) struct InstanceBody {
 #[serde(deny_unknown_fields)]
 pub(in crate::server) struct NavigateBody {
     dataset: Option<String>,
+    machine_id: String,
     instance: InstanceRef,
     url: String,
 }
@@ -741,6 +806,7 @@ pub(in crate::server) struct NavigateBody {
 #[serde(deny_unknown_fields)]
 pub(in crate::server) struct ResizeBody {
     dataset: Option<String>,
+    machine_id: String,
     instance: InstanceRef,
     attachment_id: String,
     width: u32,
@@ -751,15 +817,31 @@ pub(in crate::server) struct ResizeBody {
 #[serde(deny_unknown_fields)]
 pub(in crate::server) struct ResetBody {
     dataset: Option<String>,
+    machine_id: String,
     expected_profile_revision: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::server) struct StateQuery {
+    machine_id: Option<String>,
 }
 
 pub(in crate::server) async fn http_state(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
     Path(account): Path<ProviderAccountId>,
+    Query(query): Query<StateQuery>,
 ) -> Response {
-    respond(state_value(&state, &auth.principal.user_id, &account).await)
+    respond(
+        state_value(
+            &state,
+            &auth.principal.user_id,
+            &account,
+            query.machine_id.as_deref(),
+        )
+        .await,
+    )
 }
 
 pub(in crate::server) async fn http_open(
@@ -828,7 +910,7 @@ pub(in crate::server) async fn http_navigate(
             &state,
             &auth.principal.user_id,
             (&account, Authority::Launch),
-            &body.instance,
+            (&body.machine_id, &body.instance),
             Command::Navigate {
                 instance: body.instance.clone(),
                 url: body.url,
@@ -853,7 +935,7 @@ pub(in crate::server) async fn http_resize(
             &state,
             &auth.principal.user_id,
             (&account, Authority::Launch),
-            &body.instance,
+            (&body.machine_id, &body.instance),
             Command::Resize {
                 instance: body.instance.clone(),
                 attachment_id: body.attachment_id,
@@ -880,7 +962,7 @@ pub(in crate::server) async fn http_snapshot(
             &state,
             &auth.principal.user_id,
             (&account, Authority::Launch),
-            &body.instance,
+            (&body.machine_id, &body.instance),
             Command::Snapshot {
                 instance: body.instance.clone(),
             },
@@ -904,7 +986,7 @@ pub(in crate::server) async fn http_hibernate(
             &state,
             &auth.principal.user_id,
             (&account, Authority::Stop),
-            &body.instance,
+            (&body.machine_id, &body.instance),
             Command::Hibernate {
                 instance: body.instance.clone(),
             },
@@ -928,6 +1010,7 @@ pub(in crate::server) async fn http_reset(
             &state,
             &auth.principal.user_id,
             &account,
+            &body.machine_id,
             body.expected_profile_revision,
         )
         .await,
@@ -1132,6 +1215,206 @@ mod tests {
         );
         assert_eq!(pick(vec![hibernated]), Some("gamma".to_owned()));
         assert_eq!(pick(Vec::new()), None);
+    }
+
+    fn two_machine_browsers(
+        control: &crate::machine_control::MachineControl,
+        coordinator: &coordinator::Coordinator,
+        account: &ProviderAccountId,
+    ) -> (InstanceRef, InstanceRef) {
+        let mut refs = Vec::new();
+        for (machine, observed_at_ms) in [("alpha", 1), ("beta", 2)] {
+            let connection = control.install(
+                machine.into(),
+                "epoch".into(),
+                false,
+                crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+                tokio::sync::mpsc::unbounded_channel().0,
+            );
+            coordinator.connected(&connection, None);
+            let instance = InstanceRef {
+                account_id: account.clone(),
+                instance_id: format!("b-{machine}"),
+                incarnation: 1,
+            };
+            coordinator.observe(
+                &connection,
+                &crate::machine_protocol::machine_browser::Event::State(StateEvent {
+                    request_id: None,
+                    instance: instance.clone(),
+                    state: BrowserState::Detached,
+                    reason: None,
+                    geometry: None,
+                    scale: None,
+                    deadline_ms: None,
+                    attachment_id: None,
+                    snapshot_generation: None,
+                    snapshot_at_ms: None,
+                    // Profile revisions are per Machine and often equal.
+                    profile_revision: Some(4),
+                    unsaved_state_lost: false,
+                    observed_at_ms,
+                }),
+            );
+            refs.push(instance);
+        }
+        let beta = refs.pop().unwrap();
+        (refs.pop().unwrap(), beta)
+    }
+
+    #[test]
+    fn instance_commands_bind_the_named_machine_and_instance() {
+        let control = crate::machine_control::MachineControl::default();
+        let coordinator = coordinator::Coordinator::default();
+        let account: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let (alpha, beta) = two_machine_browsers(&control, &coordinator, &account);
+        // Beta reported last and is what an unpinned read would show ...
+        assert_eq!(
+            preferred(coordinator.states_of(account.as_str())).map(|observed| observed.machine_id),
+            Some("beta".to_owned())
+        );
+        // ... yet a command naming alpha's instance reaches alpha only.
+        let named = exact_instance(coordinator.state_on("alpha", account.as_str()), &alpha);
+        assert_eq!(named.unwrap().machine_id, "alpha");
+        assert_eq!(
+            exact_instance(coordinator.state_on("alpha", account.as_str()), &beta).err(),
+            Some("browser_instance_changed")
+        );
+        let restarted = InstanceRef {
+            incarnation: 2,
+            ..alpha.clone()
+        };
+        assert_eq!(
+            exact_instance(coordinator.state_on("alpha", account.as_str()), &restarted).err(),
+            Some("browser_instance_changed")
+        );
+        assert_eq!(
+            exact_instance(coordinator.state_on("gamma", account.as_str()), &alpha).err(),
+            Some("browser_not_running")
+        );
+        assert_eq!(
+            error_status("browser_instance_changed"),
+            StatusCode::CONFLICT
+        );
+    }
+
+    #[test]
+    fn reads_and_resets_stay_on_the_named_machine() {
+        let control = crate::machine_control::MachineControl::default();
+        let coordinator = coordinator::Coordinator::default();
+        let account: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        two_machine_browsers(&control, &coordinator, &account);
+        let placement =
+            |machine: &str| crate::store::provider_accounts::browser_placements::Placement {
+                account_id: account.clone(),
+                machine_id: machine.into(),
+                instance_id: format!("b-{machine}"),
+                profile_revision: 4,
+                last_open_ms: 1,
+            };
+        let placements = vec![placement("alpha"), placement("beta"), placement("gamma")];
+        let read = |machine| {
+            let (pinned, observed) = read_target(
+                coordinator.states_of(account.as_str()),
+                &placements,
+                machine,
+            );
+            (pinned, observed.map(|observed| observed.machine_id))
+        };
+        assert_eq!(
+            read(Some("alpha")),
+            (Some("alpha".to_owned()), Some("alpha".to_owned()))
+        );
+        assert_eq!(read(None), (None, Some("beta".to_owned())));
+        // A placed Machine without an observation is queried, not replaced.
+        assert_eq!(read(Some("gamma")), (Some("gamma".to_owned()), None));
+        // A Machine holding nothing of the account falls back to the preferred one.
+        assert_eq!(read(Some("delta")), (None, Some("beta".to_owned())));
+        // A reset names its Machine; one without the account's profile is refused.
+        assert_eq!(placed_on(&placements, "alpha"), Ok(()));
+        assert_eq!(placed_on(&placements, "delta"), Err("browser_not_placed"));
+        assert_eq!(error_status("browser_not_placed"), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn a_queried_stopping_unit_is_never_absent() {
+        let control = crate::machine_control::MachineControl::default();
+        let coordinator = coordinator::Coordinator::default();
+        let account: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let (alpha, _) = two_machine_browsers(&control, &coordinator, &account);
+        let connection = coordinator
+            .state_on("alpha", account.as_str())
+            .unwrap()
+            .connection;
+        // The Machine answers a query for a restart-retained unit whose exit
+        // is unconfirmed with `stopping`, not an empty `hibernated`.
+        let mut stopping = coordinator
+            .state_on("alpha", account.as_str())
+            .unwrap()
+            .event;
+        stopping.state = BrowserState::Stopping;
+        stopping.observed_at_ms = 10;
+        coordinator.record_authoritative(&connection, &stopping);
+        let observed = coordinator.state_on("alpha", account.as_str()).unwrap();
+        assert!(observed.live() && !observed.running());
+        assert_eq!(observed.event.instance, alpha);
+        // Placements still find it, and nothing reports it as gone.
+        assert_eq!(
+            read_target(coordinator.states_of(account.as_str()), &[], Some("alpha"))
+                .1
+                .map(|observed| observed.event.state),
+            Some(BrowserState::Stopping)
+        );
+        // Memory reclaim neither hibernates it again nor counts it exited.
+        assert!(coordinator.running_on("alpha").is_empty());
+        // A stray empty answer cannot hide it either; only its own terminal
+        // hibernation (or an authoritative absence) does.
+        let mut empty = stopping.clone();
+        empty.state = BrowserState::Hibernated;
+        empty.instance.instance_id = String::new();
+        empty.instance.incarnation = 0;
+        coordinator.observe(
+            &connection,
+            &crate::machine_protocol::machine_browser::Event::State(empty),
+        );
+        assert!(
+            coordinator
+                .state_on("alpha", account.as_str())
+                .unwrap()
+                .live()
+        );
+        // An unconfirmed unit of unknown owner, or a pending inventory: the
+        // Machine answers `stopping`/`busy` naming no instance. It is not
+        // absent, a stray empty answer cannot hide it, and it is never a
+        // target for an instance command or an attachment.
+        let mut unknown = stopping;
+        unknown.instance.instance_id = String::new();
+        unknown.instance.incarnation = 0;
+        unknown.reason = Some(Reason::Busy);
+        unknown.observed_at_ms = 20;
+        coordinator.record_authoritative(&connection, &unknown);
+        let observed = coordinator.state_on("alpha", account.as_str()).unwrap();
+        assert!(observed.live() && !observed.running());
+        assert!(coordinator.running_on("alpha").is_empty());
+        let mut stray = unknown.clone();
+        stray.state = BrowserState::Hibernated;
+        stray.reason = None;
+        coordinator.observe(
+            &connection,
+            &crate::machine_protocol::machine_browser::Event::State(stray),
+        );
+        assert_eq!(
+            coordinator
+                .state_on("alpha", account.as_str())
+                .unwrap()
+                .event
+                .state,
+            BrowserState::Stopping
+        );
+        assert_eq!(
+            exact_instance(coordinator.state_on("alpha", account.as_str()), &alpha).err(),
+            Some("browser_instance_changed")
+        );
     }
 
     #[test]

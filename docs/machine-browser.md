@@ -878,13 +878,14 @@ framing. Counters record bytes and frames.
 
 | Route | Effect |
 |---|---|
-| `GET /api/provider-accounts/{account}/browser` | state, geometry, scale, deadline, snapshot generation and time, Machine, reasons |
+| `GET /api/provider-accounts/{account}/browser` | state, geometry, scale, deadline, snapshot generation and time, Machine, reasons; `machine_id=` keeps the read on that Machine |
 | `POST /api/provider-accounts/{account}/browser/open` | open as `Tab` (no URL body) |
 | `POST /api/provider-accounts/{account}/logins/{request}/browser` | open bound to that sign-in; no URL in the body; owner and account checked against the login receipt |
-| `POST .../browser/navigate` | `Tab` instances only, owner-supplied `https` URL, bounded |
-| `POST .../browser/resize` | bounded geometry; carries the attachment |
-| `POST .../browser/snapshot`, `POST .../browser/hibernate`, `POST .../browser/reset` | lifecycle, with expected incarnation or profile revision |
-| `GET .../browser/stream` | viewer WebSocket; `takeover=true` replaces a live attachment |
+| `POST .../browser/navigate` | `Tab` instances only, owner-supplied `https` URL, bounded; names `machine_id` and `instance` |
+| `POST .../browser/resize` | bounded geometry; carries the attachment, `machine_id` and `instance` |
+| `POST .../browser/snapshot`, `POST .../browser/hibernate` | lifecycle of the named `machine_id` and `instance` (incarnation included) |
+| `POST .../browser/reset` | deletes the profile on the named `machine_id`, with that Machine's expected profile revision |
+| `GET .../browser/stream` | viewer WebSocket for the named `machine_id`, `instance_id`, `incarnation`; `takeover=true` replaces a live attachment |
 | `GET /api/machine/browser-stream` | Machine upgrade with `x-cowboy-browser-stream-token` |
 
 Route classification is explicit, with tests: the viewer routes are product
@@ -997,6 +998,17 @@ displays.
   other reason), and the
   panel shows the failure and never mounts the viewer or takes over for an
   open whose live answer carries a reason.
+- **Target binding.** The viewer attaches to exactly the Machine and
+  instance (`instance_id` and `incarnation`) it was given: the open's answer
+  (an open answering `starting` attaches once that same instance on that
+  Machine runs) or the state the panel shows. Hibernate, snapshot and
+  restart name the same Machine and instance, and reset names the shown
+  Machine with that Machine's profile revision (from its state, else its
+  placement). While the panel shows a live browser, is attached or awaits a
+  starting open, its state reads carry that Machine, so a newer browser of
+  the same account on another Machine never replaces what it shows. A
+  `browser_instance_changed` refusal tells the owner to check the current
+  state; nothing is retried against another browser.
 - **Outcomes.** Snapshot and reset answer HTTP 200 with the Machine's state;
   the viewer reports success only for a snapshot without a reason and a
   reset hibernated with `owner_request`, and otherwise names the reason
@@ -1284,8 +1296,9 @@ the text above:
   Controller sends.
 - Controller (`components/server/src/server/provider_accounts/browser*`):
   the viewer WebSocket requires the `cowboy-browser-v1` subprotocol and the
-  `width`, `height`, `scale` query (plus `takeover=true` to replace a live
-  attachment); the server sends `{type:"state",state}` first and on every
+  `machine_id`, `instance_id`, `incarnation`, `width`, `height`, `scale`
+  query (plus `takeover=true` to replace a live attachment); the server
+  sends `{type:"state",state}` first and on every
   resize, the product authentication snapshot messages exactly as `/ws`, and
   `{type:"error",code}`; the viewer sends `{type:"lease"}` every 10 s and
   `{type:"resize",width,height}`; everything binary is RFB relayed verbatim.
@@ -1301,16 +1314,38 @@ the text above:
   with the refusal code before closing.
   The Controller's browser cache is keyed by Machine and account (one
   account may have browsers on several Machines) and scoped to the Machine
-  connection that reported it. One Machine's report never replaces another's;
-  instance commands go to the Machine whose observation names the requested
-  instance, the viewer attaches to the running instance, disablement and
-  revocation end viewers and hibernate running instances on every Machine,
-  and the state read prefers a running instance, then a stopping one, then
-  the newest answer. Per connection: a new connection (a restarted Machine may have discarded its
+  connection that reported it. One Machine's report never replaces another's.
+  Every instance-scoped request (navigate, resize, snapshot, hibernate) and
+  the viewer attach name the Machine and the `InstanceRef` the owner was
+  shown (the state read or the open's answer); the Controller forwards them
+  only while that Machine's current connection reports exactly that
+  instance and incarnation, and otherwise refuses with
+  `browser_instance_changed` (409), or `browser_not_running` when that
+  Machine reports nothing or the instance is not running for an attach. It
+  never substitutes another browser of the account. A reset names its
+  Machine; it needs the account's placement there (`browser_not_placed`)
+  and its expected profile revision is checked against that Machine's
+  profile only, since revisions are per Machine and often equal. Disablement
+  and revocation end viewers and hibernate running instances on every
+  Machine. The state read prefers a running instance, then a stopping one,
+  then the newest answer; with `machine_id` naming a Machine that holds the
+  account's placement or observation it reports that Machine instead, so
+  the panel keeps reading the browser it shows (and the one an open is
+  starting) while it is live. A Machine that answers a query with
+  `stopping` keeps the account's browser live: for a restart-retained unit
+  whose exit is unconfirmed it names that instance, and while a unit of
+  unknown owner is unconfirmed or its startup inventory is pending it names
+  no instance (`instance_id: ""`, `incarnation: 0`, reason `busy`). Neither
+  is read as absent: placements stay, memory reclaim neither counts it
+  exited (on the same or a later connection) nor hibernates it again, an
+  answer naming no instance never hides it outside a query, and no instance
+  command or attachment is ever sent for an empty instance.
+  Per connection: a new connection (a restarted Machine may have discarded its
   instances) drops everything learned before and ends those viewers, the
   connection's teardown does the same, and every durable placement on the
-  reconnected Machine is queried again. A state read without a live
-  instance on the current connection asks the Machine (`BrowserQuery`), whose
+  reconnected Machine is queried again. A state read without a running
+  instance on the current connection (a `stopping` one included) asks the
+  Machine (`BrowserQuery`), whose
   answer, including "no instance", replaces the cached state; a confirmed
   reset or revocation does the same.
   The Machine-side revocation operation id is `revoke-<sha256(operation)[..32]>`,
