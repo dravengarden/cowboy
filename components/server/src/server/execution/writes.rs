@@ -37,6 +37,104 @@ struct Log {
     writes: HashMap<(String, String), (Write, Instant)>,
     /// Admitted writes whose completion has not been observed yet.
     pending: HashMap<(String, String), (String, String, usize)>,
+    /// Running apply helpers by process ID: target path, expected digest and
+    /// the stdout read so far.
+    helpers: HashMap<(String, String), (String, String, String)>,
+}
+
+/// Bounded helper stdout; an outcome is one short JSON line.
+const MAX_HELPER_OUTPUT: usize = 8 * 1024;
+
+/// The target path and expected after-digest of an inline apply request.
+/// Large requests travel in a file and are not observed.
+fn helper_request(params: &serde_json::Value) -> Option<(String, String, String)> {
+    let argv: Vec<&str> = params["argv"]
+        .as_array()?
+        .iter()
+        .map(serde_json::Value::as_str)
+        .collect::<Option<_>>()?;
+    let index = argv
+        .windows(2)
+        .position(|pair| pair == ["apply", "--request"])?;
+    let encoded = argv.get(index + 2)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let request: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let path = target_path(request["path"].as_str()?)?;
+    let expect = request["expect"]
+        .as_str()
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))?;
+    Some((
+        params["processId"].as_str()?.to_owned(),
+        path,
+        expect.to_owned(),
+    ))
+}
+
+/// Whether a started process is a self-executed patch application.
+fn patch_process(params: &serde_json::Value) -> bool {
+    params["argv"].as_array().is_some_and(|argv| {
+        argv.iter()
+            .take(4)
+            .filter_map(serde_json::Value::as_str)
+            .any(|arg| arg.starts_with("--codex-run-as-apply-patch") || arg == "apply_patch")
+    })
+}
+
+/// The helper's applied outcome for exactly the expected digest.
+fn applied(output: &str, expect: &str) -> Option<usize> {
+    output.lines().find_map(|line| {
+        let outcome: serde_json::Value = serde_json::from_str(line).ok()?;
+        (outcome["schema"] == 1 && outcome["status"] == "applied" && outcome["sha256"] == expect)
+            .then(|| {
+                outcome["size"]
+                    .as_u64()
+                    .and_then(|size| usize::try_from(size).ok())
+            })
+            .flatten()
+    })
+}
+
+fn helper_output(
+    log: &mut Log,
+    session: &str,
+    params: &serde_json::Value,
+    reply: &serde_json::Value,
+) {
+    let Some(process) = params["processId"].as_str() else {
+        return;
+    };
+    let key = (session.to_owned(), process.to_owned());
+    let Some((path, expect, output)) = log.helpers.get_mut(&key) else {
+        return;
+    };
+    for chunk in reply["chunks"].as_array().into_iter().flatten() {
+        if chunk["stream"] != "stdout" {
+            continue;
+        }
+        let Some(bytes) = chunk["chunk"]
+            .as_str()
+            .and_then(|data| base64::engine::general_purpose::STANDARD.decode(data).ok())
+        else {
+            continue;
+        };
+        if output.len() + bytes.len() <= MAX_HELPER_OUTPUT {
+            output.push_str(&String::from_utf8_lossy(&bytes));
+        }
+    }
+    if let Some(size) = applied(output, expect) {
+        // The helper's digest is of the written bytes; LF files share it with
+        // the native mirror, CRLF files never match.
+        let identity = (path.clone(), expect.clone(), size);
+        log.helpers.remove(&key);
+        record(log, session, identity);
+    } else if reply["closed"] == true
+        || reply["exited"] == true
+        || output.len() >= MAX_HELPER_OUTPUT
+    {
+        log.helpers.remove(&key);
+    }
 }
 
 static LOG: LazyLock<Mutex<Log>> = LazyLock::new(Mutex::default);
@@ -128,6 +226,36 @@ pub(super) fn observe(session: &str, command: &Command, response: &Response) {
                     );
                 }
                 None => {}
+            }
+        }
+        Command::Invoke { invocation, .. } if invocation.method == "process/start" => {
+            if patch_process(&invocation.params) {
+                // Identifies the patch route only; the patch text is not logged.
+                tracing::info!(event_name = "cowboy.execution.patch_process", session);
+            }
+            let Some((process, path, expect)) = helper_request(&invocation.params) else {
+                return;
+            };
+            let mut log = LOG.lock();
+            if completed(response) == Some(false) || log.helpers.len() >= MAX_PENDING {
+                return;
+            }
+            log.helpers
+                .insert((session.to_owned(), process), (path, expect, String::new()));
+        }
+        Command::Invoke { invocation, .. } if invocation.method == "process/read" => {
+            let Response::Call {
+                response:
+                    KeeperResponse::Operation {
+                        outcome: Outcome::Completed { reply },
+                    },
+            } = response
+            else {
+                return;
+            };
+            let mut log = LOG.lock();
+            if !log.helpers.is_empty() {
+                helper_output(&mut log, session, &invocation.params, reply);
             }
         }
         Command::Observe { operation_id, .. } => {
