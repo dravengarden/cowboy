@@ -49,6 +49,7 @@ if (
   suite !== "session-context" &&
   suite !== "boot-snapshot" &&
   suite !== "elicitation" &&
+  suite !== "widgets" &&
   suite !== "subagents" &&
   suite !== "background-tasks"
 ) {
@@ -167,6 +168,7 @@ await build({
     suite === "subscriptions" ||
     suite === "session-context" ||
     suite === "elicitation" ||
+    suite === "widgets" ||
     suite === "subagents" ||
     suite === "background-tasks"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
@@ -177,6 +179,8 @@ await build({
           ? "../web/src/sessionContextBrowserConformance.tsx"
           : suite === "elicitation"
             ? "../web/src/elicitationBrowserConformance.tsx"
+            : suite === "widgets"
+              ? "../web/src/widgetsBrowserConformance.tsx"
             : suite === "subagents"
               ? "../web/src/subagentsBrowserConformance.tsx"
               : suite === "background-tasks"

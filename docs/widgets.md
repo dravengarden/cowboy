@@ -56,6 +56,20 @@ status to update; it **does not save tokens** and the design does not claim
 it does; it buys in-place updates, readable Mobile rendering and
 typing-free, auditable decisions within measured bounds.
 
+## 0. Implementation status
+
+- **Slice 1 (Web only): the read-only inline carrier.** A ```` ```cowboy-widget ````
+  fence in agent Markdown renders as a widget through `web/src/richFence.tsx`
+  and `web/src/widgets/` (validator, MUI renderer for the 18 Phase 1 types,
+  width-adaptive tables, fold within the height budget). It follows §6.4:
+  an open fence streams as code, an invalid document keeps its source with a
+  one-line notice, unknown types render their fallback, inputs render inert,
+  and images show their `alt` (event-source resolution is not wired yet).
+  Tested by `web/src/widgets/*.test.ts` and the `widgets` browser
+  conformance suite (320/375/768/1100 px, light and dark).
+- Not built yet: the `widgets.*` MCP domain, the Controller tables and
+  anchored rows, interactions, the inspector, table sort and image sources.
+
 ## 1. Review findings and resolutions
 
 ### 1.1 Revision 1 (Astra Max, `83195d3b4`)
