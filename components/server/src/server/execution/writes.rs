@@ -117,6 +117,15 @@ fn helper_output(log: &mut Log, session: &str, process: &str, reply: &serde_json
             output.push_str(&String::from_utf8_lossy(&bytes));
         }
     }
+    tracing::info!(
+        event_name = "cowboy.execution.apply_helper_output",
+        session,
+        chunks = reply["chunks"].as_array().map_or(0, Vec::len),
+        closed = reply["closed"] == true,
+        exited = reply["exited"] == true,
+        expect = %expect,
+        head = %output.chars().take(160).collect::<String>().escape_debug(),
+    );
     if let Some(size) = applied(output, expect) {
         // The helper's digest is of the written bytes; LF files share it with
         // the native mirror, CRLF files never match.
