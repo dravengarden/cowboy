@@ -257,7 +257,12 @@ pub(super) async fn post_edit(
     if !session::current(&state.hub, &state.machine_control, observed) {
         return Err("code_context_changed");
     }
-    Ok(post_edit::project(&value))
+    let mut projected = post_edit::project(&value);
+    post_edit::attach_writes(&mut projected, &value, |path| {
+        let target = format!("{}/{path}", observed.session().cwd().trim_end_matches('/'));
+        super::super::execution::writes::latest(&meta.id, &target).map(|write| write.sha256)
+    });
+    Ok(projected)
 }
 
 /// Explicitly run one declared check (`cowboy_execute` action `code.check`).

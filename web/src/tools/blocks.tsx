@@ -1,5 +1,6 @@
 import { desktopSize, glyphSize } from "../surface/desktopSize";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { useToolLineWrap } from "./lineWrapPreference";
 import { Box, ButtonBase, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
 import { CheckRounded, ContentCopyRounded, SwapHorizRounded, WrapTextRounded } from "@mui/icons-material";
 import { Markdown } from "../Markdown";
@@ -45,7 +46,7 @@ export function Labeled({
 }): React.JSX.Element {
   return (
     <Box sx={{ "& + &": { mt: 1 } }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ minHeight: action ? 36 : 0, mb: 0.25 }}>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ minHeight: action ? 36 : 0, mb: 0.25, flexWrap: "wrap", columnGap: 1 }}>
         <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 600 }}>
           {label}
         </Typography>
@@ -158,8 +159,8 @@ export function CodeView({
   wrap?: boolean;
 }): React.JSX.Element {
   const theme = useTheme();
-  const [localWrapped, setLocalWrapped] = useState(false);
-  const wrapped = wrap ?? localWrapped;
+  const [preferredWrap, setPreferredWrap] = useToolLineWrap();
+  const wrapped = wrap ?? preferredWrap;
   const lightweight = shouldUseLightweightCode(code);
   const lightweightWrap = wrapped;
   const lightweightSx = {
@@ -213,7 +214,7 @@ export function CodeView({
         forceOverflow={lightweight}
         toolbar={wrapControl || !hideCopy
           ? <>
-            {wrapControl && <LineLayoutControl wrapped={wrapped} onChange={setLocalWrapped} label="Code line layout" />}
+            {wrapControl && <LineLayoutControl wrapped={wrapped} onChange={setPreferredWrap} label="Code line layout" />}
             {!hideCopy && <CopyTextButton text={code} label="Code" />}
           </>
           : undefined}
@@ -256,7 +257,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
   const theme = useTheme();
   const [readable, setReadable] = useState<Awaited<ReturnType<typeof formatShellForDisplay>> | undefined>(undefined);
   const [mode, setMode] = useState<"readable" | "nested" | "source">("source");
-  const [wrapped, setWrapped] = useState(false);
+  const [wrapped, setWrapped] = useToolLineWrap();
 
   useEffect(() => {
     let active = true;
@@ -275,39 +276,34 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
   const enhanced = readable != null;
   const nested = !!readable && readable.frames.length > 1;
   const presentationControlHeight = touch ? 44 : 28;
+  const presentations: { value: typeof mode; content: ReactNode; minWidth: number }[] = [
+    { value: "readable", content: readable === undefined ? <CircularProgress size="0.8125rem" /> : "Readable", minWidth: 70 },
+    ...(nested ? [{ value: "nested" as const, content: "Nested", minWidth: 0 }] : []),
+    { value: "source", content: "Source", minWidth: 0 },
+  ];
+  const controls = (
+    <Stack direction="row" alignItems="center" spacing={0.5} sx={{ ml: "auto" }}>
+      {(readable === undefined || enhanced) && (
+        <Box role="group" aria-label="Shell command presentation" sx={{ display: "flex", height: presentationControlHeight, boxSizing: "border-box", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
+          {presentations.map(({ value, content, minWidth }) => (
+            <ButtonBase
+              key={value}
+              aria-pressed={mode === value}
+              disabled={value !== "source" && !enhanced}
+              onClick={(): void => setMode(value)}
+              sx={{ height: "100%", minHeight: 0, minWidth, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === value ? "text.primary" : "text.disabled", bgcolor: mode === value ? "background.paper" : "transparent", boxShadow: mode === value ? 1 : 0 }}
+            >
+              {content}
+            </ButtonBase>
+          ))}
+        </Box>
+      )}
+      <LineLayoutControl wrapped={wrapped} onChange={setWrapped} label="Command line layout" />
+      <CopyTextButton text={command} label="Command" />
+    </Stack>
+  );
   return (
-    <Box>
-      <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={0.5} sx={{ mb: 0.5 }}>
-        {(readable === undefined || enhanced) && (
-          <Box role="group" aria-label="Shell command presentation" sx={{ display: "flex", height: presentationControlHeight, boxSizing: "border-box", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
-            <ButtonBase
-              aria-pressed={mode === "readable"}
-              disabled={!enhanced}
-              onClick={(): void => setMode("readable")}
-              sx={{ height: "100%", minHeight: 0, minWidth: 70, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "readable" ? "text.primary" : "text.disabled", bgcolor: mode === "readable" ? "background.paper" : "transparent", boxShadow: mode === "readable" ? 1 : 0 }}
-            >
-              {readable === undefined ? <CircularProgress size="0.8125rem" /> : "Readable"}
-            </ButtonBase>
-            {nested && (
-              <ButtonBase
-                aria-pressed={mode === "nested"}
-                onClick={(): void => setMode("nested")}
-                sx={{ height: "100%", minHeight: 0, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "nested" ? "text.primary" : "text.disabled", bgcolor: mode === "nested" ? "background.paper" : "transparent", boxShadow: mode === "nested" ? 1 : 0 }}
-              >
-                Nested
-              </ButtonBase>
-            )}
-            <ButtonBase
-              aria-pressed={mode === "source"}
-              onClick={(): void => setMode("source")}
-              sx={{ height: "100%", minHeight: 0, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "source" ? "text.primary" : "text.disabled", bgcolor: mode === "source" ? "background.paper" : "transparent", boxShadow: mode === "source" ? 1 : 0 }}
-            >
-              Source
-            </ButtonBase>
-          </Box>
-        )}
-        <LineLayoutControl wrapped={wrapped} onChange={setWrapped} label="Command line layout" />
-      </Stack>
+    <Labeled label="Command" action={controls}>
       {mode === "nested" && readable
         ? (
           <Collapsible maxHeight={touch ? 360 : 320}>
@@ -481,7 +477,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             hideCopy
           />
         )}
-    </Box>
+    </Labeled>
   );
 }
 

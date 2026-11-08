@@ -76,3 +76,26 @@ fn listings_are_bounded_by_count_and_text() {
         .sum();
     assert!(total <= MAX_TOTAL_CHARS);
 }
+
+#[test]
+fn observed_writes_say_whether_the_analysis_saw_that_exact_text() {
+    let observation = json!({"files":[
+        {"path":"a.go","state":"document_current","bufferSnapshot":{"content":{"sha256":"aa"}}},
+        {"path":"b.go","state":"stale","bufferSnapshot":{"content":{"sha256":"bb"}}},
+        {"path":"c.go","state":"not_open"}]});
+    let mut projected = project(&observation);
+    attach_writes(&mut projected, &observation, |path| match path {
+        "a.go" => Some("aa".into()),
+        "b.go" => Some("new".into()),
+        _ => None,
+    });
+    assert_eq!(
+        projected["files"][0]["write"],
+        json!({"observed":true,"matches_analyzed":true})
+    );
+    assert_eq!(
+        projected["files"][1]["write"],
+        json!({"observed":true,"matches_analyzed":false})
+    );
+    assert!(projected["files"][2].get("write").is_none());
+}

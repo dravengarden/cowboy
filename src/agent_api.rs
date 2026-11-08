@@ -666,8 +666,9 @@ export interface Cowboy {
 // cowboy_execute({action:"code.check",operation,arguments:{check:"<id>"}}) -> {status:"accepted"|"existing",run}.
 // Then poll code.checks(). A result is evidence for the inputs the command saw, not proof of correctness.
 // cowboy_execute({action:"code.post_edit",arguments:{paths:[1..5 files]}}) is read-only (operation optional): the
-// code.diagnostics read reduced to {deliver,files:[{path,state,comparison?,diagnostics?}],truncated}; Provider adapters
-// deliver it after edits. deliver:false is not a clean result.
+// code.diagnostics read reduced to {deliver,files:[{path,state,comparison?,diagnostics?,write?}],truncated}; Provider adapters
+// deliver it after edits. deliver:false is not a clean result. write:{observed,matches_analyzed} compares the analyzed text
+// with the last executor fs/writeFile Cowboy saw for that file (a hint: no turn identity; shells and helpers are not seen).
 // symbols: case-insensitive name substring across the worktree, default50/max200.
 // Gitignore-aware; hidden files, binaries, >2MiB files and symlinks are skipped. Smart case unless case_sensitive.
 // limit default100/max200, <=20 per file; line/column are 1-based (UTF-16 column). partial: a bound stopped the scan.

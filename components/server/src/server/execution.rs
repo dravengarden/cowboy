@@ -8,6 +8,7 @@ use crate::machine_protocol::execution::{Action, Refusal, Request, Response};
 
 pub(super) mod recovery;
 pub(super) mod sessions;
+pub(super) mod writes;
 
 /// Serialize lifecycle maintenance separately from admission of native calls.
 /// Recovery fences through its durable non-runnable binding; observing an
@@ -26,6 +27,7 @@ pub(super) async fn forward(
 ) -> RuntimeReply {
     let started = std::time::Instant::now();
     let response = forward_checked(state, connection, runtime_machine, &request).await;
+    writes::observe(&request.session_id, &request.command, &response);
     if matches!(
         &response,
         Response::Refused {

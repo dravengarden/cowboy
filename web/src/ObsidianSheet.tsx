@@ -364,7 +364,7 @@ export function ObsidianSheet({
           }
         }}
         sx={{
-          position: "fixed", "--cowboy-reader-sticky-top": "0px",
+          position: "fixed",
           left: inset,
           right: inset,
           bottom,

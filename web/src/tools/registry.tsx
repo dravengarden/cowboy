@@ -1,5 +1,5 @@
 import { glyphSize } from "../surface/desktopSize";
-import { Component, type ReactNode, useMemo, useState } from "react";
+import { Component, type ReactNode, useMemo } from "react";
 import { Alert, Box, Skeleton, Stack, Typography } from "@mui/material";
 import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
 import RadioButtonUncheckedRounded from "@mui/icons-material/RadioButtonUncheckedRounded";
@@ -27,6 +27,7 @@ import { terminalDisplaySegments } from "./terminalHighlight";
 import { toolResult } from "./result";
 import { StructuredResult } from "./StructuredResult";
 import { Collapsible } from "./Collapsible";
+import { useToolLineWrap } from "./lineWrapPreference";
 
 // The dispatch layer: given a tool call, pick how to render its body. Two tiers,
 // both leaning on the provider-agnostic primitives in blocks.tsx:
@@ -86,7 +87,7 @@ function terminalText(content: unknown): string {
 function TerminalOutput(
   { text, running }: { text: string; running: boolean },
 ): React.JSX.Element {
-  const [wrapped, setWrapped] = useState(false);
+  const [wrapped, setWrapped] = useToolLineWrap();
   const segments = useMemo(() => terminalDisplaySegments(text), [text]);
   const control = text
     ? (
@@ -136,7 +137,7 @@ function FileReadContent({
   language: string;
 }): React.JSX.Element | null {
   const text = terminalText(content);
-  const [wrapped, setWrapped] = useState(false);
+  const [wrapped, setWrapped] = useToolLineWrap();
   if (!text) return null;
   if (language === "markdown") {
     return <OutputBlocks content={content} lang={language} />;
@@ -182,14 +183,7 @@ const executeTool: Renderer = ({ rawInput, content, running }) => {
           {cwd}
         </Typography>
       )}
-      {cmd && (
-        <Labeled
-          label="Command"
-          action={<CopyTextButton text={cmd} label="Command" />}
-        >
-          <ShellCommandView command={cmd} />
-        </Labeled>
-      )}
+      {cmd && <ShellCommandView command={cmd} />}
       <TerminalOutput text={out} running={running} />
     </>
   );
