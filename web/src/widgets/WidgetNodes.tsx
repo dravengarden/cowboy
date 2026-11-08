@@ -27,6 +27,8 @@ import { cellParts, toneColor } from "./widgetFormat";
 import type { ParsedNode } from "./widgetDocument";
 import { WidgetLinkText } from "./WidgetLinkText";
 import { WidgetTable } from "./WidgetTable";
+import { moreLabel, previewSlice, useWidgetMode } from "./widgetMode";
+import { WIDGET_LIMITS } from "../../../contracts/widget-v1.ts";
 
 const GAP = { xs: 0.5, sm: 1, md: 1.5, lg: 2.5 } as const;
 
@@ -228,9 +230,31 @@ function TextNode({ node }: { node: Of<"text"> }): React.JSX.Element {
   );
 }
 
+/** Says how many entries the transcript preview left for the inspector. */
+function MoreCaption({ hidden, noun }: { hidden: number; noun: string }): React.JSX.Element | null {
+  if (hidden === 0) return null;
+  return (
+    <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+      {moreLabel(hidden, noun)}
+    </Typography>
+  );
+}
+
+function ListNode({ node }: { node: Of<"list"> }): React.JSX.Element {
+  const { shown, hidden } = previewSlice(node.items, WIDGET_LIMITS.previewItems, useWidgetMode());
+  return (
+    <Typography component="div" variant="body2">
+      <ListItems items={[...shown]} ordered={node.ordered ?? false} />
+      <MoreCaption hidden={hidden} noun="item" />
+    </Typography>
+  );
+}
+
 function KvNode({ node }: { node: Of<"kv"> }): React.JSX.Element {
   const theme = useTheme();
+  const { shown, hidden } = previewSlice(node.items, WIDGET_LIMITS.previewItems, useWidgetMode());
   return (
+    <Box>
     <Box
       component="dl"
       data-widget-kv=""
@@ -241,7 +265,7 @@ function KvNode({ node }: { node: Of<"kv"> }): React.JSX.Element {
         gap: 1,
       }}
     >
-      {node.items.map((item, index) => {
+      {shown.map((item, index) => {
         const parts = cellParts(
           { v: item.v, ...(item.tone ? { tone: item.tone } : {}) },
           undefined,
@@ -271,6 +295,8 @@ function KvNode({ node }: { node: Of<"kv"> }): React.JSX.Element {
           </Box>
         );
       })}
+    </Box>
+    <MoreCaption hidden={hidden} noun="item" />
     </Box>
   );
 }
@@ -510,11 +536,7 @@ export function WidgetNode({ node }: { node: ParsedNode }): React.JSX.Element | 
     case "kv":
       return <KvNode node={node} />;
     case "list":
-      return (
-        <Typography component="div" variant="body2">
-          <ListItems items={node.items} ordered={node.ordered ?? false} />
-        </Typography>
-      );
+      return <ListNode node={node} />;
     case "table":
       return <WidgetTable node={node} />;
     case "link":

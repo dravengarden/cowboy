@@ -709,8 +709,9 @@ type Node = {id?:Id;fallback?:string} & (
   | {type:"text";text:string /* inline Markdown */;variant?:"title"|"subtitle"|"body"|"caption";tone?:Tone}
   | {type:"kv";items:{k:string;v:string|number|boolean|null;tone?:Tone}[]}
   | {type:"list";items:{text:string;tone?:Tone;children?:unknown[]}[];ordered?:boolean}
-  | {type:"table";columns:(string|{label:string;align?:"start"|"center"|"end";
-      format?:"text"|"number"|"percent"|"bytes"|"duration"|"date"|"code"|"status"})[];rows:Cell[][];caption?:string}
+  | {type:"table";columns:(string|{label:string;align?:"start"|"center"|"end";width?:"auto"|"min"|"max";
+      format?:"text"|"number"|"percent"|"bytes"|"duration"|"date"|"code"|"status"})[];rows:Cell[][];caption?:string;
+      sort?:boolean /* header sort */} /* the row shows 20 rows and 50 list/kv items; Open shows all */
   | {type:"link";label:string;to:Ref} | {type:"file";path:string;line?:number;summary?:string}
   | {type:"status";label:string;tone:Tone} | {type:"progress";value?:number /* 0..1 */;label?:string;tone?:Tone}
   | {type:"steps";steps:{label:string;state:"pending"|"active"|"done"|"failed"|"skipped";detail?:string}[]}

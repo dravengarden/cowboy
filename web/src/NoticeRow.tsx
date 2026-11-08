@@ -49,7 +49,12 @@ export function NoticeRow({ item }: { item: Notice }): React.JSX.Element {
   return (
     <Box data-widget-row={widget.handle} data-widget-state={widget.stateVersion}>
       <Suspense fallback={<PlainNotice item={item} />}>
-        <WidgetView document={parsed.document} handle={widget.handle} closed={widget.closed} />
+        <WidgetView
+          document={parsed.document}
+          handle={widget.handle}
+          closed={widget.closed}
+          updatedAtMs={widget.updatedAtMs}
+        />
       </Suspense>
     </Box>
   );

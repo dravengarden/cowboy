@@ -10,6 +10,8 @@ export type WidgetRowData = {
   revision: number;
   stateVersion: number;
   closed: boolean;
+  /** When the widget last changed; absent from snapshots that predate it. */
+  updatedAtMs?: number | undefined;
   document: unknown;
 };
 
@@ -27,6 +29,7 @@ export function widgetOfNotice(update: Record<string, unknown>): WidgetRowData |
     revision: typeof w["revision"] === "number" ? w["revision"] : 0,
     stateVersion: w["stateVersion"],
     closed: w["closed"] === true,
+    ...(typeof w["updatedAtMs"] === "number" ? { updatedAtMs: w["updatedAtMs"] } : {}),
     document: w["document"],
   };
 }

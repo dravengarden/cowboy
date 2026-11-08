@@ -38,7 +38,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "session-maintenance": ["runSessionMaintenanceBrowserConformance", 8],
   "dormant-session": ["runDormantSessionBrowserConformance", 29],
   elicitation: ["runElicitationBrowserConformance", 6],
-  widgets: ["runWidgetsBrowserConformance", 7],
+  widgets: ["runWidgetsBrowserConformance", 12],
   subagents: ["runSubagentsBrowserConformance", 7],
   "background-tasks": ["runBackgroundTasksBrowserConformance", 12],
 };

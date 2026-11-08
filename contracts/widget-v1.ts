@@ -49,6 +49,10 @@ export const WIDGET_LIMITS = {
   imagesPerDocument: 24,
   /** Rows of a table drawn in the transcript preview; the rest open in the inspector. */
   previewRows: 20,
+  /** Top-level list or kv items drawn in the transcript preview. */
+  previewItems: 50,
+  /** Table rows per inspector page. */
+  inspectorPageRows: 50,
   listItems: 200,
   kvItems: 100,
   steps: 50,
