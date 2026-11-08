@@ -977,7 +977,7 @@ export function SessionList({
                 // managed child conversations have no next agent to choose.
                 if (
                     session && !session.system && !isManagedChild(session) &&
-                    !sessions.some((entry) => entry.continued_from === session.id)
+                    !handedOff.has(session.id)
                 ) {
                     requestPickSession(session.id, session);
                     requestNewFrom(session.id);
