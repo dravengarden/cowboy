@@ -7,6 +7,8 @@ import { approval, comparison, statusTable } from "../../contracts/widget-v1.exa
 import { BrowserProductTheme } from "./browserProductTheme";
 import { Markdown } from "./Markdown";
 import { SurfaceContext, type SurfaceProfile } from "./surface/SurfaceProfile";
+import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
+import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
 
 function check(value: unknown, label: string): asserts value {
   if (!value) throw new Error(label);
@@ -101,10 +103,90 @@ export async function runWidgetsBrowserConformance(): Promise<string[]> {
   passed.push("invalid fence falls back to source");
 
   passed.push(...(await inspectorChecks(render, container)));
-
   root.unmount();
+  passed.push(await desktopKeyChecks(container));
+
   container.remove();
   return passed;
+}
+
+const DESKTOP: SurfaceProfile = {
+  kind: "desktop",
+  input: "keyboard-pointer",
+  touchCapable: false,
+  finePointer: true,
+  hover: true,
+};
+
+function press(key: string): void {
+  (document.activeElement ?? document.body).dispatchEvent(
+    new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+  );
+}
+
+/** The real Desktop dispatcher: Tab selects the widget row, `l` opens the
+ *  inspector, Esc closes it and returns focus to the row. */
+async function desktopKeyChecks(container: HTMLElement): Promise<string> {
+  const root = createRoot(container);
+  flushSync(() =>
+    root.render(
+      <SurfaceContext.Provider value={DESKTOP}>
+        <BrowserProductTheme>
+          <CssBaseline />
+          <DesktopWorkspaceProvider>
+            <DesktopCommandProvider>
+              <Box data-desktop-pane="conversation" sx={{ width: 900, height: 700 }}>
+                <Box
+                  data-desktop-region="conversation.transcript"
+                  data-desktop-navigation="scroll"
+                  data-desktop-focus-default
+                  tabIndex={-1}
+                  sx={{ height: 1, overflow: "auto", p: 1 }}
+                >
+                  <Markdown text={fence(longWidget)} />
+                </Box>
+              </Box>
+            </DesktopCommandProvider>
+          </DesktopWorkspaceProvider>
+        </BrowserProductTheme>
+      </SurfaceContext.Provider>,
+    ),
+  );
+  try {
+    const toggle = await waitFor(
+      () => container.querySelector<HTMLElement>('[data-desktop-widget-toggle="widget"]'),
+      "widget row toggle",
+    );
+    container.querySelector<HTMLElement>("[data-desktop-region]")?.focus();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    press("Tab");
+    check(document.activeElement === toggle, "Tab selects the widget row");
+    press("l");
+    await waitFor(() => document.querySelector("[data-widget-inspector]"), "l opens the inspector");
+    check(toggle.getAttribute("aria-expanded") === "true", "the row reports its open inspector");
+    const dialog = document.querySelector<HTMLElement>("[data-widget-inspector]")!;
+    const visited: string[] = [];
+    for (let step = 0; step < 6 && !document.activeElement?.closest(".MuiTableSortLabel-root"); step += 1) {
+      press("j");
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      visited.push(document.activeElement?.textContent?.slice(0, 20) ?? "");
+    }
+    const header = document.activeElement?.closest("th");
+    check(
+      header && dialog.contains(header),
+      `j reaches a sort header inside the inspector (${visited.join(" | ")})`,
+    );
+    press("Enter");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    check(header.getAttribute("aria-sort") === "ascending", "Enter sorts by the focused header");
+    press("Escape");
+    await waitFor(() => !document.querySelector("[data-widget-inspector]"), "Esc closes");
+    await waitFor(() => document.activeElement === toggle, "focus returns to the row");
+    check(toggle.getAttribute("aria-expanded") === "false", "the row reports a closed inspector");
+    return "Desktop keys select, open and leave a widget";
+  } finally {
+    root.unmount();
+  }
 }
 
 const longWidget = {

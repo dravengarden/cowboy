@@ -2,13 +2,15 @@
 // the inline height budget (docs/widgets.md §7.1). **Open** shows the whole
 // widget in the inspector. Lazy-loaded by the fence and notice dispatchers.
 
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useContext, useState } from "react";
 import { Box, IconButton, Paper, Tooltip, Typography } from "@mui/material";
 import { StatusChip } from "../StatusChip";
 import OpenInFullRounded from "@mui/icons-material/OpenInFullRounded";
 import WidgetsOutlined from "@mui/icons-material/WidgetsOutlined";
 import { Collapsible } from "../tools/Collapsible";
 import { relativeAge } from "../syncStatus";
+import { shortcutKey } from "../desktop/commands/imeShortcut";
+import { SurfaceContext } from "../surface/SurfaceProfile";
 import type { ParsedDocument } from "./widgetDocument";
 import { WidgetNode } from "./WidgetNodes";
 import { useWidgetSorts, WidgetSortContext } from "./widgetMode";
@@ -31,14 +33,53 @@ function Header({
   handle,
   closed,
   updatedAtMs,
+  open,
   onOpen,
-}: WidgetViewProps & { onOpen: () => void }): React.JSX.Element {
+}: WidgetViewProps & { open: boolean; onOpen: () => void }): React.JSX.Element {
   const age = relativeAge(updatedAtMs, Date.now());
+  // Desktop: the title is the row's conversation toggle, like tool and task
+  // rows. Tab selects it; Enter or `l` opens the inspector, whose modal
+  // grammar operates the controls; Esc returns focus here.
+  const desktop = useContext(SurfaceContext)?.kind === "desktop";
+  const toggle = desktop
+    ? {
+      role: "button",
+      tabIndex: -1,
+      "data-desktop-widget-toggle": "widget",
+      "aria-expanded": open,
+      "aria-haspopup": "dialog" as const,
+      "aria-label": `${document.title}. Open widget`,
+      onClick: onOpen,
+      onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
+        const key = shortcutKey(event.nativeEvent);
+        if (key === "Enter" || key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      },
+    }
+    : {};
   const mono = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" } as const;
   return (
     <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start", minWidth: 0 }}>
       <WidgetsOutlined fontSize="small" sx={{ color: "text.secondary", mt: "0.1em" }} aria-hidden />
-      <Box sx={{ minWidth: 0, flex: "1 1 auto" }}>
+      <Box
+        {...toggle}
+        sx={{
+          minWidth: 0,
+          flex: "1 1 auto",
+          ...(desktop
+            ? {
+              cursor: "pointer",
+              borderRadius: 1,
+              mx: -0.5,
+              px: 0.5,
+              outline: "none",
+              "&:focus-visible": { bgcolor: "action.focus" },
+            }
+            : {}),
+        }}
+      >
         <Typography variant="subtitle2" sx={{ fontWeight: 600, overflowWrap: "anywhere" }}>
           {document.title}
         </Typography>
@@ -121,7 +162,7 @@ export default function WidgetView(props: WidgetViewProps): React.JSX.Element {
         contain: "layout paint",
       }}
     >
-      <Header {...props} onOpen={(): void => setOpen(true)} />
+      <Header {...props} open={open} onOpen={(): void => setOpen(true)} />
       {document.presentation?.inline === false ? (
         body
       ) : (
