@@ -150,6 +150,10 @@ pub struct Control {
     writer: OwnedWriteHalf,
     next_id: u64,
     events: VecDeque<LauncherEvent>,
+    /// Bytes of a control line not yet terminated. `read_until` appends what
+    /// it consumed before a timeout cancels it, so the prefix survives here
+    /// and the next read completes the same line.
+    partial: Vec<u8>,
 }
 
 impl Control {
@@ -170,6 +174,7 @@ impl Control {
                         writer,
                         next_id: 1,
                         events: VecDeque::new(),
+                        partial: Vec::new(),
                     });
                 }
                 Err(error) if tokio::time::Instant::now() >= deadline => {
@@ -380,19 +385,29 @@ impl Control {
         parse(&line)
     }
 
+    /// One complete control line. Cancel-safe: bytes read before a timeout
+    /// stay in `partial`, and the bound applies to the whole line.
     async fn read_line(&mut self) -> Result<Vec<u8>> {
-        let mut line = Vec::new();
-        let read = (&mut self.reader)
-            .take(MAX_LINE_BYTES as u64 + 1)
-            .read_until(b'\n', &mut line)
-            .await
-            .context("reading launcher control socket")?;
-        ensure!(read > 0, "launcher control socket closed");
-        ensure!(
-            line.len() <= MAX_LINE_BYTES,
-            "launcher control line exceeds the bound"
-        );
-        Ok(line)
+        loop {
+            if self.partial.last() == Some(&b'\n') {
+                return Ok(std::mem::take(&mut self.partial));
+            }
+            ensure!(
+                self.partial.len() <= MAX_LINE_BYTES,
+                "launcher control line exceeds the bound"
+            );
+            let budget = (MAX_LINE_BYTES + 1 - self.partial.len()) as u64;
+            let read = (&mut self.reader)
+                .take(budget)
+                .read_until(b'\n', &mut self.partial)
+                .await
+                .context("reading launcher control socket")?;
+            ensure!(read > 0, "launcher control socket closed");
+            ensure!(
+                self.partial.len() <= MAX_LINE_BYTES,
+                "launcher control line exceeds the bound"
+            );
+        }
     }
 }
 
@@ -489,6 +504,46 @@ mod tests {
                 bytes: 0,
                 entries: 0
             }]
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_line_split_across_a_read_timeout_is_not_lost() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(CONTROL_SOCKET);
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (_reader, mut writer) = stream.into_split();
+            writer
+                .write_all(b"{\"event\":\"snapshot_done\",\"gen")
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            released.await.unwrap();
+            writer.write_all(b"eration\":7}\n").await.unwrap();
+            writer.flush().await.unwrap();
+            // Keep the socket open until the client has read the line.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+        let mut control = Control::connect(temp.path(), Duration::from_secs(2))
+            .await
+            .unwrap();
+        // The prefix arrives, then the read times out mid-line.
+        assert_eq!(
+            control.next_event(Duration::from_millis(50)).await.unwrap(),
+            None
+        );
+        release.send(()).unwrap();
+        assert_eq!(
+            control.next_event(Duration::from_secs(2)).await.unwrap(),
+            Some(LauncherEvent::SnapshotDone {
+                generation: 7,
+                bytes: 0,
+                entries: 0
+            })
         );
         server.await.unwrap();
     }

@@ -400,7 +400,13 @@ pub(in crate::server) async fn state_value(
 /// Until each is answered on this connection the placement stays unresolved
 /// in the coordinator (memory reclaim selects no session meanwhile); a
 /// Machine that cannot run browsers has none to resolve. Placements that
-/// cannot be loaded leave the inventory unresolved (fail closed).
+/// cannot be loaded leave the inventory unresolved (fail closed) and are
+/// retried with backoff while this connection stays current.
+/// Backoff for reloading a reconnected Machine's placements after a store
+/// failure; the inventory stays unresolved until a load succeeds.
+const PLACEMENT_RETRY_INITIAL: std::time::Duration = std::time::Duration::from_secs(1);
+const PLACEMENT_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub(in crate::server) async fn refresh_placements(
     state: Arc<AppState>,
     connection: ConnectionToken,
@@ -414,11 +420,18 @@ pub(in crate::server) async fn refresh_placements(
         state.browsers.placements_loaded(&connection, []);
         return;
     }
-    let placements = match store.browser_placements_on_machine(&machine_id).await {
-        Ok(placements) => placements,
-        Err(error) => {
-            tracing::warn!(%error, machine = %machine_id, "browser placements not refreshed");
-            return;
+    let mut backoff = PLACEMENT_RETRY_INITIAL;
+    let placements = loop {
+        match store.browser_placements_on_machine(&machine_id).await {
+            Ok(placements) => break placements,
+            Err(error) => {
+                tracing::warn!(%error, machine = %machine_id, "browser placements not refreshed; retrying");
+                tokio::time::sleep(backoff).await;
+                if !state.machine_control.is_current(&connection) {
+                    return;
+                }
+                backoff = (backoff * 2).min(PLACEMENT_RETRY_MAX);
+            }
         }
     };
     state.browsers.placements_loaded(
