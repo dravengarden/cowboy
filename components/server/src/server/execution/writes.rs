@@ -123,10 +123,8 @@ fn helper_output(log: &mut Log, session: &str, process: &str, reply: &serde_json
         let identity = (path.clone(), expect.clone(), size);
         log.helpers.remove(&key);
         record(log, session, identity);
-    } else if reply["closed"] == true
-        || reply["exited"] == true
-        || output.len() >= MAX_HELPER_OUTPUT
-    {
+    } else if reply["closed"] == true || output.len() >= MAX_HELPER_OUTPUT {
+        // Exit can precede the last output; only a closed pipe is final.
         log.helpers.remove(&key);
     }
 }
