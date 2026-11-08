@@ -489,6 +489,12 @@ async fn execute(
     if action == "receipts.get" {
         return receipt(state, meta, ledger, args, operation).await;
     }
+    // Read-only: an operation, when supplied, is not a receipt identity.
+    if action == "code.post_edit" {
+        return Ok(success(
+            super::code_reads::post_edit(state, meta, &args).await?,
+        ));
+    }
     let operation = operation
         .filter(|id| crate::managed_calls::valid_id(id))
         .ok_or("invalid_operation")?;

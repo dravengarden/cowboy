@@ -822,6 +822,28 @@ uniquely resolvable, otherwise candidates or `stale/ambiguous`.
   (≤1 s) exchanges, delivered as its own row through the existing async-note
   path (`plugins/claude-code/runtime/context-mod.js`, `deliverAsync`), never by
   rewriting a tool result.
+
+  Implemented (Claude Plugin 3.20.30, component release 3.99.0): after the
+  main agent's successful Edit, Write or NotebookEdit of a file inside the
+  target workspace, the Mod returns the write result unchanged and schedules
+  one observation. It runs the session's own `cowboy mcp` on the target
+  through the existing hook route (the keeper injects the gateway context; no
+  credential reaches the Provider runtime) with one `cowboy_execute` call of
+  the read-only action `code.post_edit`. That action is the explicit
+  `code.diagnostics` read (acquisition, agent-owned refresh, read baselines)
+  reduced to at most 10 errors, 5 warnings and 2,000 message characters,
+  with `deliver` true only for new or escalated diagnostics against a
+  content-matched baseline, or current errors without one. The Mod appends
+  the result as its own `system-reminder` row, with `<`, `>`, `&` and line
+  separators escaped inside the JSON so repository text cannot close the
+  fixed presentation. Observations run one at a time in batches of up to five
+  files; a file edited again meanwhile is dropped from the earlier result.
+  Subagent edits, shell-made changes and Code-pane-shared files (which stay
+  `stale`) produce no row. Project language servers being on is the per-session
+  opt-in: otherwise the read is `restricted` and nothing is delivered. Each
+  bridge exchange holds at most one second; the write itself never waits.
+  Delivery identity states, `context_cleared` dropping and watcher-triggered
+  coverage remain open.
 - **Codex.** Existing research proves app-server-owned command hooks only, not
   project-hook exclusion (`docs/experiments/codex-native-hooks-research-2026-10-05.json`).
   A hook is accepted only if conformance proves exact Cowboy-owned hook hashes
