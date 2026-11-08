@@ -9,6 +9,7 @@ import {
   hostileTapMessage,
   progressMarkdown,
   progressPatch,
+  progressResendMarkdown,
   statusTable,
   statusTableMarkdown,
   twoQuestions,
@@ -16,14 +17,17 @@ import {
 import {
   type ChoiceNode,
   composeInteractionMessage,
+  effectiveMaxSelected,
   type InputNode,
   interactionSignature,
+  LABEL_PATTERN,
   type ListItem,
   type Node,
   WIDGET_HANDLE_PATTERN,
   WIDGET_ID_PATTERN,
   WIDGET_LIMITS,
   type WidgetDocument,
+  worstCaseMessageBytes,
 } from "./widget-v1.ts";
 
 const encoder = new TextEncoder();
@@ -50,21 +54,11 @@ function countListItems(items: ListItem[]): number {
   return total;
 }
 
-/** The largest message a choice can produce: its question plus the
- *  `max_selected` longest option labels (docs/widgets.md §5.3). */
-function worstCaseChoiceMessage(node: ChoiceNode): string {
-  const limit = node.max_selected ?? (node.multiple ? WIDGET_LIMITS.maxSelected : 1);
-  const longest = node.options
-    .map((option) => option.label)
-    .sort((a, b) => bytes(b) - bytes(a))
-    .slice(0, limit);
-  return composeInteractionMessage("w9999999", 999_999_999, node.label, longest);
-}
-
 /** Walks a document the way both validators must: bounded nodes, depth,
- *  unique ids, unique interactive labels, identifier-shaped option values,
- *  ids on every actionable node, the per-type collection limits, the
- *  worst-case message bound and the aggregate rendering budgets. */
+ *  unique ids, one-line printable labels, unique interactive labels,
+ *  identifier-shaped unique option values, valid initial values, ids on
+ *  every actionable node, the per-type collection limits, the worst-case
+ *  message bound and the aggregate rendering budgets. */
 function check(document: WidgetDocument): { nodes: number; depth: number; inputs: InputNode[] } {
   const ids = new Set<string>();
   const labels = new Set<string>();
@@ -75,9 +69,14 @@ function check(document: WidgetDocument): { nodes: number; depth: number; inputs
   let cells = 0;
   let items = 0;
   let images = 0;
-  const label = (text: string): void => {
-    if (text.trim().length === 0) throw new Error("empty interactive label");
+  const line = (text: string): void => {
+    if (!LABEL_PATTERN.test(text) || text.trim().length === 0) {
+      throw new Error("label is not one printable line");
+    }
     if (chars(text) > WIDGET_LIMITS.labelChars) throw new Error("label too long");
+  };
+  const label = (text: string): void => {
+    line(text);
     if (labels.has(text)) throw new Error(`duplicate interactive label ${text}`);
     labels.add(text);
   };
@@ -121,22 +120,33 @@ function check(document: WidgetDocument): { nodes: number; depth: number; inputs
       case "choice": {
         inputs.push(node);
         if (node.options.length > WIDGET_LIMITS.options) throw new Error("too many options");
-        const limit = node.max_selected ?? (node.multiple ? WIDGET_LIMITS.maxSelected : 1);
-        if (!Number.isInteger(limit) || limit < 1 || limit > WIDGET_LIMITS.maxSelected) {
+        if (
+          node.max_selected !== undefined &&
+          (!Number.isInteger(node.max_selected) || node.max_selected < 1)
+        ) {
           throw new Error("max_selected out of range");
         }
+        const limit = effectiveMaxSelected(node);
+        if (limit > WIDGET_LIMITS.maxSelected) throw new Error("max_selected too large");
         items += node.options.length;
         const optionLabels = new Set<string>();
+        const optionValues = new Set<string>();
         for (const option of node.options) {
-          if (!WIDGET_ID_PATTERN.test(option.value))
-            throw new Error(`prose option value ${option.value}`);
-          if (chars(option.label) > WIDGET_LIMITS.labelChars)
-            throw new Error("option label too long");
+          if (!WIDGET_ID_PATTERN.test(option.value) || optionValues.has(option.value)) {
+            throw new Error(`bad option value ${option.value}`);
+          }
+          optionValues.add(option.value);
+          line(option.label);
           if (optionLabels.has(option.label)) throw new Error("duplicate option label");
           optionLabels.add(option.label);
         }
+        const initial =
+          node.value === undefined ? [] : Array.isArray(node.value) ? node.value : [node.value];
+        if (initial.length > limit || initial.some((value) => !optionValues.has(value))) {
+          throw new Error("invalid initial value");
+        }
         label(node.label);
-        if (bytes(worstCaseChoiceMessage(node)) > WIDGET_LIMITS.messageBytes) {
+        if (worstCaseMessageBytes(node) > WIDGET_LIMITS.messageBytes) {
           throw new Error("choice message too large");
         }
         if (node.group !== undefined) groups.add(node.group);
@@ -147,8 +157,7 @@ function check(document: WidgetDocument): { nodes: number; depth: number; inputs
         label(node.label);
         if (
           node.action.kind === "prompt" &&
-          bytes(composeInteractionMessage("w9999999", 999_999_999, node.label)) >
-            WIDGET_LIMITS.messageBytes
+          worstCaseMessageBytes(node) > WIDGET_LIMITS.messageBytes
         ) {
           throw new Error("button message too large");
         }
@@ -162,8 +171,9 @@ function check(document: WidgetDocument): { nodes: number; depth: number; inputs
         images += node.images.length;
         break;
       case "card":
-        if ((node.actions?.length ?? 0) > WIDGET_LIMITS.cardActions)
+        if ((node.actions?.length ?? 0) > WIDGET_LIMITS.cardActions) {
           throw new Error("too many card actions");
+        }
         if (node.actions?.length && node.id === undefined)
           throw new Error("card with actions needs an id");
         if (node.actions?.length && node.id !== undefined) groups.add(node.id);
@@ -180,11 +190,22 @@ function check(document: WidgetDocument): { nodes: number; depth: number; inputs
   if (items > WIDGET_LIMITS.itemsPerDocument) throw new Error("too many items");
   if (images > WIDGET_LIMITS.imagesPerDocument) throw new Error("too many images");
   if (groups.size > WIDGET_LIMITS.groups) throw new Error("too many groups");
+  line(document.title);
   if (chars(document.title) > WIDGET_LIMITS.titleChars) throw new Error("title too long");
+  if (document.summary !== undefined) line(document.summary);
   if (chars(document.summary ?? "") > WIDGET_LIMITS.summaryChars)
     throw new Error("summary too long");
   if (bytes(document) > WIDGET_LIMITS.documentBytes) throw new Error("document too large");
   return { nodes, depth: deepest, inputs };
+}
+
+function refuses(document: WidgetDocument): boolean {
+  try {
+    check(document);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 const examples: [string, WidgetDocument, string][] = [
@@ -249,7 +270,7 @@ test("two questions with identical option labels compose different messages", ()
     throw new Error("question missing");
 });
 
-test("the interaction signature changes with selection mode and cardinality", () => {
+test("the interaction signature changes with selection mode and effective cardinality", () => {
   const { inputs } = check(twoQuestions);
   const [cache] = inputs as [ChoiceNode, ChoiceNode];
   const base = interactionSignature([cache]);
@@ -263,11 +284,110 @@ test("the interaction signature changes with selection mode and cardinality", ()
   }
   if (interactionSignature([{ ...cache, label: "Delete the cache now?" }]) === base)
     throw new Error("label ignored");
-  if (interactionSignature([{ ...cache, fallback: "x" }]) !== base)
+  if (interactionSignature([{ ...cache, fallback: "x" }]) !== base) {
     throw new Error("display-only change reset the group");
+  }
+  // A single choice has cardinality one whatever `max_selected` says.
+  if (interactionSignature([{ ...cache, max_selected: 2 }]) !== base) {
+    throw new Error("single-choice cardinality is not one");
+  }
 });
 
-test("an update envelope is bounded overhead against a one-line status and below a full re-send", () => {
+test("the worst-case message ranks options by serialized contribution", () => {
+  // Two emoji labels are heavier raw (240 B each); two labels made of quote
+  // marks are lighter raw (200 B) but heavier once JSON-escaped (600 B of
+  // contribution). The rule must pick the pair that produces the larger
+  // message, or admission could refuse a valid choice.
+  const emoji = "😀".repeat(60);
+  const quotes = `${'"'.repeat(199)}a`;
+  const node: ChoiceNode = {
+    type: "choice",
+    id: "c",
+    label: "Pick two",
+    multiple: true,
+    max_selected: 2,
+    options: [
+      { value: "e1", label: emoji },
+      { value: "e2", label: `${emoji}!` },
+      { value: "q1", label: quotes },
+      { value: "q2", label: `${quotes}!` },
+    ],
+  };
+  const handle = "w".padEnd(WIDGET_LIMITS.handleChars, "9");
+  const revision = 2 ** 31 - 1;
+  const worst = worstCaseMessageBytes(node);
+  const quotesMessage = bytes(
+    composeInteractionMessage(handle, revision, node.label, [quotes, `${quotes}!`]),
+  );
+  const emojiMessage = bytes(
+    composeInteractionMessage(handle, revision, node.label, [emoji, `${emoji}!`]),
+  );
+  if (worst < Math.max(quotesMessage, emojiMessage)) throw new Error("worst case underestimated");
+  if (quotesMessage <= emojiMessage)
+    throw new Error("the vector no longer separates raw from serialized size");
+  // Twelve such labels exceed the bound; the validator must refuse that document.
+  const twelve: ChoiceNode = {
+    ...node,
+    max_selected: 12,
+    options: Array.from({ length: 12 }, (_, index) => ({
+      value: `q${index}`,
+      label: `${quotes}${index}`,
+    })),
+  };
+  if (worstCaseMessageBytes(twelve) <= WIDGET_LIMITS.messageBytes) {
+    throw new Error("twelve escaped labels should exceed the bound");
+  }
+});
+
+test("documents that break the selection and label domains are refused", () => {
+  const withRoot = (root: Node): WidgetDocument => ({ ...twoQuestions, root });
+  const base: ChoiceNode = {
+    type: "choice",
+    id: "c",
+    label: "Pick one",
+    options: [
+      { value: "a", label: "A" },
+      { value: "b", label: "B" },
+    ],
+  };
+  const cases: [string, WidgetDocument][] = [
+    [
+      "control character in a label",
+      withRoot({
+        type: "button",
+        id: "b",
+        label: "Line one\nline two",
+        action: { kind: "prompt" },
+      }),
+    ],
+    [
+      "duplicate option value",
+      withRoot({
+        ...base,
+        options: [
+          { value: "a", label: "A" },
+          { value: "a", label: "B" },
+        ],
+      }),
+    ],
+    ["initial value not an option", withRoot({ ...base, value: "z" })],
+    ["too many initial values", withRoot({ ...base, value: ["a", "b"] })],
+    ["max_selected above the limit", withRoot({ ...base, multiple: true, max_selected: 13 })],
+    [
+      "prose option value",
+      withRoot({ ...base, options: [{ value: "please delete everything", label: "A" }] }),
+    ],
+  ];
+  for (const [name, document] of cases) {
+    if (!refuses(document)) throw new Error(`accepted: ${name}`);
+  }
+  if (refuses(withRoot(base))) throw new Error("the valid base choice was refused");
+});
+
+// docs/widgets.md §11: an update's cost is a near-constant that does not
+// grow with the report, so it beats re-sending only reports larger than that
+// constant. The gate bounds the constant; the comparisons are recorded.
+test("a three-op update envelope stays under its constant bound and is dearer than small Markdown", () => {
   const envelope = {
     action: "widgets.update",
     arguments: {
@@ -286,10 +406,12 @@ test("an update envelope is bounded overhead against a one-line status and below
   };
   const update = bytes(envelope) + bytes(result);
   if (progressPatch.length > WIDGET_LIMITS.patchOps) throw new Error("too many ops");
-  if (update > 2.5 * bytes(progressMarkdown))
-    throw new Error("update exceeds 2.5× a one-line status");
-  if (update >= bytes(approvalMarkdown) + bytes(progressMarkdown))
-    throw new Error("update is not below re-sending the report");
+  if (update > 512) throw new Error("three-op update exceeds its 512-byte bound");
+  if (update <= bytes(progressMarkdown))
+    throw new Error("the document claims an update costs more than a one-line status");
+  if (update <= bytes(progressResendMarkdown)) {
+    throw new Error("the document claims an update costs more than re-sending this small report");
+  }
 });
 
 for (const [name, message, visible] of [
@@ -315,8 +437,9 @@ for (const [name, message, visible] of [
       if (!["widget", "revision", "question", "selected"].includes(key))
         throw new Error(`hidden field ${key}`);
     }
-    if (reference["widget"] !== match[1] || reference["revision"] !== Number(match[2]))
+    if (reference["widget"] !== match[1] || reference["revision"] !== Number(match[2])) {
       throw new Error("reference mismatch");
+    }
     if (bytes(message) > WIDGET_LIMITS.messageBytes) throw new Error("message too large");
   });
 }

@@ -60,13 +60,24 @@ export const WIDGET_LIMITS = {
   groups: 32,
   galleryImages: 24,
   patchOps: 64,
-  /** Worst-case composed message of any prompt node (its label, or the
-   *  choice label plus the `max_selected` longest option labels), measured
-   *  as UTF-8 bytes of the message string; validated at publish. */
+  /** Worst-case composed message of any prompt node, computed by
+   *  `worstCaseMessageBytes` (the options that contribute the most serialized
+   *  bytes, raw and JSON-escaped), measured as UTF-8 bytes; validated at
+   *  publish so admission can never refuse a valid document's choice. */
   messageBytes: 2 * 1024,
-  /** Serialized `InteractionRecord`; follows from `messageBytes` and the
-   *  other bounded fields and is re-checked at admission. */
+  /** Serialized `InteractionRecord`; follows from `messageBytes`, `reasonChars`,
+   *  `handleChars` and the other bounded fields and is re-checked at admission. */
   interactionRecordBytes: 6 * 1024,
+  reasonChars: 200,
+  handleChars: 16,
+  /** A retry may not itself be retried. */
+  retryChain: 1,
+  /** Dispatch attempts recorded per interaction before it becomes `uncertain`. */
+  attemptsPerInteraction: 5,
+  /** Target size of one `widgets.read` or lookup page measured on the
+   *  complete encoded response, including metadata and escaping; a page
+   *  always carries at least one item. */
+  readPageBytes: 12 * 1024,
   /** Interaction summaries carried inside a snapshot; full records are paged. */
   snapshotInteractions: 5,
   /** Serialized `WidgetSnapshot` (document plus bounded metadata). */
@@ -90,6 +101,11 @@ export const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 /** The Controller-assigned public handle of a widget (`w17`), shown in the
  *  row header and used in composed messages instead of the agent's id. */
 export const WIDGET_HANDLE_PATTERN = /^w[1-9][0-9]*$/;
+
+/** Visible labels (titles, summaries, interactive labels, option labels)
+ *  are one line of printable text: no control characters, so the composed
+ *  message is exactly two lines and JSON escaping is bounded. */
+export const LABEL_PATTERN = /^[^\p{Cc}]+$/u;
 
 export type Tone = "neutral" | "info" | "success" | "warning" | "error" | "running";
 export type Size = "xs" | "sm" | "md" | "lg";
@@ -348,8 +364,10 @@ export type ChoiceNode = NodeBase & {
   group?: string;
 };
 
-/** `value` follows `WIDGET_ID_PATTERN` and is addressing only; `label` is
- *  what the person reads and what the composed message carries. */
+/** `value` follows `WIDGET_ID_PATTERN`, is unique within the choice and is
+ *  addressing only; `label` is what the person reads and what the composed
+ *  message carries, and is unique within the choice. A choice's initial
+ *  `value` must name existing options. */
 export type Option = { value: string; label: string; detail?: string; tone?: Tone };
 
 export type Action =
@@ -418,12 +436,38 @@ export function interactionSignature(nodes: readonly InputNode[]): string {
           type: node.type,
           label: node.label,
           multiple: node.multiple ?? false,
-          max_selected: node.max_selected ?? (node.multiple ? WIDGET_LIMITS.maxSelected : 1),
+          max_selected: effectiveMaxSelected(node),
           options: node.options.map((option) => [option.value, option.label]),
         },
   );
   entries.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return JSON.stringify(entries);
+}
+
+/** Effective cardinality of a choice: one unless `multiple`, then
+ *  `max_selected` or the limit. */
+export function effectiveMaxSelected(node: ChoiceNode): number {
+  return node.multiple ? (node.max_selected ?? WIDGET_LIMITS.maxSelected) : 1;
+}
+
+const utf8 = (text: string): number => new TextEncoder().encode(text).length;
+
+/** The largest message a prompt node can produce, in UTF-8 bytes. For a
+ *  choice, options are ranked by their complete serialized contribution
+ *  (the raw label on line one plus its JSON-escaped copy on line two), and
+ *  the `effectiveMaxSelected` largest are selected. Both validators use
+ *  this rule, so a document that passes publication can never produce a
+ *  message admission refuses for size. */
+export function worstCaseMessageBytes(node: InputNode): number {
+  const handle = "w".padEnd(WIDGET_LIMITS.handleChars, "9");
+  const revision = 2 ** 31 - 1;
+  if (node.type === "button") return utf8(composeInteractionMessage(handle, revision, node.label));
+  const contribution = (label: string): number => utf8(label) + utf8(JSON.stringify(label));
+  const selected = [...node.options]
+    .map((option) => option.label)
+    .sort((a, b) => contribution(b) - contribution(a))
+    .slice(0, effectiveMaxSelected(node));
+  return utf8(composeInteractionMessage(handle, revision, node.label, selected));
 }
 
 // Transport (docs/widgets.md §6). The agent-facing API is discovered with
@@ -474,6 +518,9 @@ export type PublishResult =
     }
   | { status: "exists"; widget_id: string; handle: string; revision: number }
   | { status: "invalid"; errors: ValidationError[] }
+  /** The session's transcript generation moved while publishing (a Clear
+   *  raced the write); nothing was stored. Re-read and publish again. */
+  | { status: "cleared" }
   | { status: "refused"; code: "widget_limit" | "rate_limited" | "session_unavailable" };
 
 export type UpdateResult =
@@ -511,8 +558,9 @@ export type WidgetMeta = {
   published_at_ms: number;
   updated_at_ms: number;
   interactions: number;
-  /** Revisions kept readable because a decision was made on them. */
-  pinned_revisions: number[];
+  /** Revisions kept readable because a decision was made on them; the list
+   *  is read with `select: "revisions"`. */
+  pinned_count: number;
 };
 
 export type ListArguments = {
@@ -535,7 +583,7 @@ export type ListResult = {
  *  pages are bound to `document.sha256`, so interaction settlement or later
  *  revisions never interrupt it. Interaction records are paged by cursor
  *  with at least one record per page. */
-export type ReadSelection = "meta" | "document" | "interactions";
+export type ReadSelection = "meta" | "document" | "interactions" | "revisions";
 export type ReadArguments = {
   session_id?: string;
   widget_id: string;
@@ -559,6 +607,7 @@ export type ReadResult =
         range: { offset: number; next: number | null; total: number };
       };
       interactions?: { records: InteractionRecord[]; next: string | null };
+      revisions?: { pinned: number[]; next: string | null };
     }
   | { status: "unknown_widget" }
   | { status: "cleared" }
@@ -587,15 +636,29 @@ export type InteractionRecord = {
   message_sha256: string;
   at_ms: number;
   /** admitted: recorded durably; the relay keeps it in the session queue.
-   *  dispatched: the durable `admitted → dispatched` CAS succeeded and the
-   *  prompt was then handed to the worker. delivered: the turn that the
-   *  dispatched prompt started ended with a non-cancel stop reason (the
-   *  transcript echo is not evidence). uncertain: dispatched, and the
-   *  turn's end cannot be attributed; never replayed blindly. cancelled:
+   *  dispatched: the durable `admitted → dispatched` CAS recorded an
+   *  attempt `(command_id, turn_id)` and the prompt was then handed to the
+   *  worker; a prompt the runtime returns (rejected ack, undelivered,
+   *  withdrawn before any send) closes the attempt as `returned` and the
+   *  record goes back to `admitted`. delivered: a `TurnEnd` carrying the
+   *  attempt's `(turn_id, worker_epoch)` ended with `EndTurn`, `MaxTokens`,
+   *  `MaxTurnRequests` or `Refusal` (the transcript echo, `TurnStarted`,
+   *  command acks and agent output are never evidence). uncertain: the
+   *  attempt ended `Cancelled` or in error, its worker exited without that
+   *  `TurnEnd`, the reference is missing, a reset or Clear fenced it, or
+   *  the attempt budget is exhausted; never replayed blindly. cancelled:
    *  deleted from the queue or fenced by a Clear before dispatch. failed:
    *  refused by the session before the handoff. */
   state: "admitted" | "dispatched" | "delivered" | "uncertain" | "cancelled" | "failed";
+  /** ≤ `reasonChars`. */
   reason?: string;
+  /** A durable cancellation intent recorded before the queue entry is
+   *  touched; the dispatch CAS requires it to be false. */
+  cancel_requested: boolean;
+  /** One entry per handoff, written by the dispatch CAS before the prompt
+   *  is handed to the worker. `worker_epoch` is bound by the first
+   *  `TurnStarted` carrying this `turn_id`. */
+  attempts: DispatchAttempt[];
   /** Set on a record created by `widget_action_retry`. */
   retry_of?: string;
   /** Set on an `uncertain` record once a retry exists; a late proof of the
@@ -604,9 +667,33 @@ export type InteractionRecord = {
   duplicate_of?: string;
 };
 
+/** One handoff of an interaction's prompt to a worker (docs/widgets.md
+ *  §8.3 step 5). The runtime already mints `command_id` and `turn_id` for
+ *  every dispatch; the Controller records them before the handoff. */
+export type DispatchAttempt = {
+  command_id: string;
+  turn_id: string;
+  /** Bound by the first `TurnStarted` for `turn_id`; null until then and
+   *  for a Controller-synthesized cancel. */
+  worker_epoch: string | null;
+  dispatched_at_ms: number;
+  /** open: handed off, no attributed end yet; delivered / uncertain: as the
+   *  record state; returned: the runtime gave the prompt back before any
+   *  provider request (requeued under its cmid). */
+  outcome: "open" | "delivered" | "uncertain" | "returned";
+  stop_reason?: string;
+};
+
 export type InteractionSummary = Pick<
   InteractionRecord,
-  "interaction_id" | "node_id" | "group" | "revision" | "state" | "at_ms"
+  | "interaction_id"
+  | "node_id"
+  | "group"
+  | "revision"
+  | "state"
+  | "at_ms"
+  | "retry_of"
+  | "duplicate_of"
 >;
 
 /** Body of the anchored transcript row. The row itself is carried as a
@@ -712,10 +799,15 @@ export type WidgetActionCommand = {
 
 /** Client → Controller: send an `uncertain` (or `failed`) interaction again
  *  under a new id. The retry copies the original's pinned intent (label,
- *  selection, revision, message) regardless of the widget's current revision
- *  or closure, records `retry_of`, and is refused only when the widget is
- *  cleared, the original is not `uncertain`/`failed`, or a retry already
- *  exists. A late proof of the original marks the retry a duplicate. */
+ *  selection, revision, message) regardless of the widget's current
+ *  revision, closure or group state, records `retry_of`/`retried_by`, and
+ *  is admitted idempotently on `retry_interaction_id` (a replay returns the
+ *  retry's current state). Refusals: `cleared`, `not_retryable` (the
+ *  original is not `uncertain`/`failed`), `already_retried`, `retry_chain`
+ *  (the original is itself a retry), `in_flight`, `interaction_limit`,
+ *  `rate_limited`, `session_unavailable`, `conflict`. A late proof of the
+ *  original marks the retry `duplicate_of` it. The session's ordinary turn
+ *  Retry routes widget-originated prompts here. */
 export type WidgetActionRetryCommand = {
   type: "widget_action_retry";
   session_id: string;
@@ -741,6 +833,7 @@ export type WidgetActionRefusal =
   | "interaction_limit"
   | "not_retryable"
   | "already_retried"
+  | "retry_chain"
   | "rate_limited"
   | "session_unavailable"
   | "conflict";

@@ -187,12 +187,14 @@ export const progressPatch: PatchOp[] = [
   { op: "set", path: "/summary", value: "Activated; verifying" },
 ];
 
-/** What an agent writes today to report the same transition. */
-export const progressMarkdown = `Activated /run/cowboy-web (1b9f121eb); now verifying /version, the SPA cache headers and the service worker.
+/** What an agent writes today to report the same transition as one line. */
+export const progressMarkdown =
+  "Activated /run/cowboy-web (1b9f121eb); now verifying /version, the SPA cache headers and the service worker.";
 
-- [x] Build
-- [x] Activate /run/cowboy-web
-- [ ] Verify /version and the service worker`;
+/** The same transition reported by re-sending the card with that line. */
+export const progressResendMarkdown = `${approvalMarkdown}
+
+${progressMarkdown}`;
 
 /** The user message the Controller composes when the person taps "Activate…"
  *  on revision 1 of widget `w17` (docs/widgets.md §8.2): the visible label,
