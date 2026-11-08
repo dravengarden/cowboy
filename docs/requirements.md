@@ -247,7 +247,10 @@ code, which then travels the existing owner-submitted native login input path.
 The OAuth bundle prohibition above is unchanged: no native credential enters
 the Controller, and the browser profile (cookies included) is Machine-local,
 account-owned state that is visible only inside that browser's own isolated
-view and is deleted with the account. The owner accepts this as their
+view and is deleted with the account. Browsers of different accounts share no
+state: no profile, cache, display, temporary files, shared memory, sockets or
+clipboard, so one account's browser can never carry another account's
+identity. The owner accepts this as their
 remote-display path to their own browser on their own Machine rather than
 third-party collection or intermediation of credentials; Anthropic's rule does
 not explicitly address the arrangement, so this is an accepted interpretation,

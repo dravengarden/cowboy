@@ -164,7 +164,8 @@ it builds the instance's isolation before anything else starts:
    instance directory read-write at `$XDG_RUNTIME_DIR/cowboy-browser/instance`,
    the Plugin's managed policy file read-only at
    `/etc/opt/chrome/policies/managed/cowboy.json`, a private tmpfs over
-   `/tmp` (so the X socket is never shared), and an empty tmpfs over `/home`
+   `/tmp` (so the X socket is never shared), a private size-bounded tmpfs
+   over `/dev/shm`, and an empty tmpfs over `/home`
    and over the Machine state root after the binds, so no other account's
    directory, no native credential and no Machine state is reachable by any
    path. The selected account is the only account that exists in this view.
@@ -587,6 +588,31 @@ validated first on the disposable Ubuntu 26.04 KVM guest already used for OVH
 SSH tests (`machines/ovh/tests/openssh_kvm.py` pattern), with synthetic
 account directories and canary files, before it is installed on OVH.
 
+## Account isolation (core requirement)
+
+The browsers of different account cards share no state. This is what makes
+several accounts on one Machine safe to operate, and it is a requirement of
+the design, not a side effect:
+
+| State | Isolation |
+|---|---|
+| Cookies, local storage, IndexedDB, service workers, HTTP cache, GPU and shader caches, Chromium singleton lock, `Local State` | per-account profile directory; visible only inside that instance's mount namespace at the fixed profile mount point; no other account's directory exists in that view |
+| `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `TMPDIR`, NSS database | inside the per-run instance directory (tmpfs), destroyed with the unit |
+| `/tmp` and the X display socket | private tmpfs per instance; each instance has its own `Xtigervnc`, so X selections, window state and input never cross |
+| `/dev/shm` | private, size-bounded tmpfs per instance |
+| Control and RFB sockets | per instance, inside the 0700 instance directory |
+| Process tree, memory, CPU accounting | one systemd unit and cgroup per instance; `max_instances` may allow several at once, each in its own namespaces |
+| Remote clipboard | held per attachment in the viewer, never shared between accounts, dropped on attachment, incarnation or login-request change; the owner's device clipboard is only ever pasted by an explicit action |
+| Runtime files (browser, fonts, policy) | shared read-only artifact; they carry no state |
+| Sign-in binding | a sign-in opens only in the browser of the same account as the login, checked under the login lock; the viewer always names the account whose browser it shows |
+
+What stays shared is what is shared for the native CLIs already: the
+Machine's egress address, timezone and locale, and the runtime version. The
+design does not manufacture per-account device differences; separate,
+persistent, honestly distinct profiles are the isolation, and the account
+label in the viewer is the guard against the owner signing one account into
+another account's browser.
+
 ## Security and privacy
 
 - While the owner is attached, Cowboy forwards their keystrokes, pointer
@@ -632,6 +658,7 @@ closes.
 | Listener proof throughout a run: cgroup-subtree socket scan at ready, navigate, resize, reconnect and every 10 s; X auth enforced; private `/tmp`; policy `RemoteDebuggingAllowed=false` | R1-1, R2-17 |
 | Policy text accepted and accurate about transit; Controller stream path has no persistence or logging of payloads (code review + test) | R1-2, R2-7 |
 | Synthetic account homes with canaries: from inside the browser, `file://` and dialogs cannot reach another account's cookies or any native credential; mount table shows only the bound profile; AppArmor audit shows the denial | R1-3, R2-1 |
+| Two synthetic accounts running at once (`browser.max_instances=2`): no shared path, X display, `/tmp`, `/dev/shm`, socket or clipboard between them; a cookie set in one is absent from the other across hibernate and reopen; a sign-in open against the other account's login is refused | core isolation requirement |
 | Stream binding tests: token single-use, wrong `ConnectionToken`, wrong incarnation, wrong attachment, revoked owner, expired session, revoked device, disabled account, gate closed, Origin mismatch all refuse; takeover detaches only the old attachment | R1-4, R2-4, R2-6, R2-9 |
 | Race and fencing tests: login completes between reservation and unit registration; Machine restart with a live unit (same and different boot); delayed hibernate/resize/reset/detach for a superseded incarnation, attachment or profile revision; browser OOM during login leaves the native login and generation untouched; cross-account open against another account's login refused | R1-5, R2-3, R2-4, R2-5 |
 | Mixed-load measurement on the target Machine with simultaneous worker launches: memory peak, pressure stall, OOM events, session continuity; reclaim hibernates the browser before any session; defaults adjusted from the data | R1-6, R2-11 |
