@@ -200,6 +200,11 @@ fn record(log: &mut Log, session: &str, (path, sha256, utf8_bytes): (String, Str
         log.writes.remove(&oldest);
     }
     log.sequence += 1;
+    tracing::info!(
+        event_name = "cowboy.execution.write_observed",
+        session,
+        sequence = log.sequence
+    );
     let write = Write {
         sequence: log.sequence,
         sha256,
@@ -240,6 +245,10 @@ pub(super) fn observe(session: &str, command: &Command, response: &Response) {
             if completed(response) == Some(false) || log.helpers.len() >= MAX_PENDING {
                 return;
             }
+            tracing::info!(
+                event_name = "cowboy.execution.apply_helper_started",
+                session
+            );
             log.helpers
                 .insert((session.to_owned(), process), (path, expect, String::new()));
         }
