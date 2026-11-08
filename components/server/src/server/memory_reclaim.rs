@@ -39,7 +39,11 @@ struct DeviceState {
     stuck_logged: Option<Instant>,
 }
 
+/// The targeted instance, captured on the Machine whose memory is low. Only
+/// that Machine's own report about that account settles it: the same
+/// account's browser on another Machine is a different instance.
 struct BrowserPending {
+    machine_id: String,
     account: String,
     incarnation: u64,
     /// The connection the targeted instance was observed on.
@@ -51,18 +55,24 @@ struct BrowserPending {
     _decision: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
-/// Whether the targeted browser instance has verifiably exited: hibernated
-/// for that incarnation, the Machine's authoritative "nothing runs", or a
-/// newer instance that replaced it. `stopping` is not an exit: the instance
-/// is still copying its snapshot and holding its memory.
+/// Whether the targeted browser instance has verifiably exited, judged
+/// only from its own Machine's observation of the account (`current`):
+/// hibernated for that incarnation (including the terminal `hibernated` the
+/// Machine reports once a background termination retry confirms the exit),
+/// the Machine's authoritative "nothing runs", or a newer instance that
+/// replaced it there. `stopping` is not an exit: the instance is still
+/// copying its snapshot and holding its memory.
 fn browser_exited(
-    incarnation: u64,
+    (machine_id, incarnation): (&str, u64),
     connection: &crate::machine_control::ConnectionToken,
     current: Option<&Observed>,
 ) -> bool {
     let Some(observed) = current else {
         return false;
     };
+    if observed.machine_id != machine_id {
+        return false;
+    }
     let event = &observed.event;
     if event.instance.incarnation > incarnation {
         return true;
@@ -201,9 +211,11 @@ fn tick(state: &Arc<AppState>, devices: &mut HashMap<String, DeviceState>) {
                     continue;
                 };
                 let account = observed.event.instance.account_id.clone();
+                // Dispatched to the captured instance on its own Machine.
                 tracing::info!(machine = %machine_id, headroom_bytes = headroom,
                     "hibernating a Machine browser to relieve Device memory");
                 device.browser_pending = Some(BrowserPending {
+                    machine_id: machine_id.clone(),
                     account: account.as_str().to_owned(),
                     incarnation: observed.event.instance.incarnation,
                     connection: observed.connection.clone(),
@@ -214,7 +226,8 @@ fn tick(state: &Arc<AppState>, devices: &mut HashMap<String, DeviceState>) {
                 let state = Arc::clone(state);
                 tokio::spawn(async move {
                     if let Err(error) =
-                        super::provider_accounts::browser::hibernate_running(&state, &account).await
+                        super::provider_accounts::browser::hibernate_instance(&state, &observed)
+                            .await
                     {
                         tracing::warn!(%error, "memory reclaim browser hibernate failed");
                     }
@@ -279,9 +292,12 @@ fn decide(
     }
     if let Some(pending) = device.browser_pending.as_mut() {
         let exited = browser_exited(
-            pending.incarnation,
+            (&pending.machine_id, pending.incarnation),
             &pending.connection,
-            state.browsers.state(&pending.account).as_ref(),
+            state
+                .browsers
+                .state_on(&pending.machine_id, &pending.account)
+                .as_ref(),
         );
         // A stalled browser stop stays pending and blocks session selection;
         // only its verified exit and a sample taken after it settle it.
@@ -327,8 +343,12 @@ mod tests {
     use std::time::Instant;
 
     fn connection(control: &MachineControl, epoch: &str) -> ConnectionToken {
+        machine_connection(control, "ovh", epoch)
+    }
+
+    fn machine_connection(control: &MachineControl, machine: &str, epoch: &str) -> ConnectionToken {
         control.install(
-            "ovh".into(),
+            machine.into(),
             epoch.into(),
             false,
             crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
@@ -338,7 +358,7 @@ mod tests {
 
     fn observed(connection: &ConnectionToken, incarnation: u64, state: State) -> Observed {
         Observed {
-            machine_id: "ovh".into(),
+            machine_id: connection.machine_id().into(),
             connection: connection.clone(),
             event: StateEvent {
                 request_id: None,
@@ -374,7 +394,8 @@ mod tests {
     fn a_browser_counts_as_exited_only_once_hibernated() {
         let control = MachineControl::default();
         let first = connection(&control, "one");
-        let exited = |current: Option<Observed>| browser_exited(7, &first, current.as_ref());
+        let exited =
+            |current: Option<Observed>| browser_exited(("ovh", 7), &first, current.as_ref());
         assert!(!exited(None));
         assert!(!exited(Some(observed(&first, 7, State::Detached))));
         // Stopping still copies the snapshot and holds the memory.
@@ -387,12 +408,50 @@ mod tests {
         let second = connection(&control, "two");
         assert!(!exited(Some(observed(&second, 7, State::Detached))));
         assert!(exited(Some(observed(&second, 0, State::Hibernated))));
+        // Another Machine's browser of the same account is never evidence.
+        let other = machine_connection(&control, "hawk", "one");
+        assert!(!exited(Some(observed(&other, 8, State::Starting))));
+        assert!(!exited(Some(observed(&other, 7, State::Hibernated))));
+        assert!(!exited(Some(observed(&other, 0, State::Hibernated))));
+    }
+
+    #[test]
+    fn a_stopping_browser_settles_on_its_terminal_hibernation() {
+        use crate::machine_protocol::machine_browser::Event;
+        use crate::server::provider_accounts::browser::coordinator::Coordinator;
+        let control = MachineControl::default();
+        let coordinator = Coordinator::default();
+        let ovh = machine_connection(&control, "ovh", "one");
+        let hawk = machine_connection(&control, "hawk", "one");
+        coordinator.connected(&ovh, None);
+        coordinator.connected(&hawk, None);
+        let state = |connection: &ConnectionToken, incarnation, state| {
+            Event::State(observed(connection, incarnation, state).event)
+        };
+        let exited = |coordinator: &Coordinator| {
+            browser_exited(
+                ("ovh", 7),
+                &ovh,
+                coordinator
+                    .state_on("ovh", "11111111-2222-4333-8444-555555555555")
+                    .as_ref(),
+            )
+        };
+        coordinator.observe(&ovh, &state(&ovh, 7, State::Stopping));
+        // The other Machine starts and stops its own instance meanwhile.
+        coordinator.observe(&hawk, &state(&hawk, 9, State::Detached));
+        coordinator.observe(&hawk, &state(&hawk, 9, State::Hibernated));
+        assert!(!exited(&coordinator));
+        // The targeted Machine confirms the exit after a termination retry.
+        coordinator.observe(&ovh, &state(&ovh, 7, State::Hibernated));
+        assert!(exited(&coordinator));
     }
 
     #[test]
     fn browser_reclaim_settles_on_a_report_taken_after_the_exit() {
         let control = MachineControl::default();
         let mut pending = BrowserPending {
+            machine_id: "ovh".into(),
             account: "a".into(),
             incarnation: 7,
             connection: connection(&control, "one"),

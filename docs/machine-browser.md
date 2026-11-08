@@ -862,7 +862,13 @@ only on verified unit exit followed by a fresh resource sample: the targeted
 incarnation reported `hibernated` (or the Machine's authoritative answer that
 no instance runs, or a newer incarnation), then a resource report taken after
 that exit was first seen. `stopping` is not an exit; the instance still holds
-its memory while it copies its snapshot. A stop that
+its memory while it copies its snapshot. When a background termination retry
+confirms the exit, the Machine reports a terminal `hibernated` for that same
+instance and incarnation, which replaces the cached `stopping` and settles the
+step. The step is captured as one instance on one Machine: the hibernate is
+sent only to that instance on that Machine's connection, and only that
+Machine's own observation of the account counts as exit evidence; the same
+account's browser on another Machine neither settles nor retargets it. A stop that
 stalls does not time out into "released": it stays pending, is logged as
 stuck, and blocks session selection on that Machine until the unit is gone;
 the only exception is an explicit operator emergency action.
@@ -913,7 +919,14 @@ displays.
   the state; re-attaching is a user action, never automatic. A sign-in
   viewer never attaches directly, even to an already running browser: it
   issues the sign-in open first, so the Machine validates and binds the
-  login, and attaches (or takes over) only after that open succeeds.
+  login, and attaches (or takes over) only after that open succeeds. When
+  the Machine refuses to bind the login to its running browser it answers
+  with that browser's own state plus a reason; the Controller turns that into
+  HTTP 409 with code `login_mismatch` (reason `login_mismatch`),
+  `login_inactive` (reason `login_ended`) or `browser_sign_in_refused` (any
+  other reason), and the
+  panel shows the failure and never mounts the viewer or takes over for an
+  open whose live answer carries a reason.
 - **Outcomes.** Snapshot and reset answer HTTP 200 with the Machine's state;
   the viewer reports success only for a snapshot without a reason and a
   reset hibernated with `owner_request`, and otherwise names the reason
@@ -1205,8 +1218,14 @@ the text above:
   so closing either gate never strands a running instance or a retained
   profile. Withdrawn admission on a live stream sends `{type:"error",code}`
   with the refusal code before closing.
-  The Controller's browser cache is scoped to the Machine connection that
-  reported it: a new connection (a restarted Machine may have discarded its
+  The Controller's browser cache is keyed by Machine and account (one
+  account may have browsers on several Machines) and scoped to the Machine
+  connection that reported it. One Machine's report never replaces another's;
+  instance commands go to the Machine whose observation names the requested
+  instance, the viewer attaches to the running instance, disablement and
+  revocation end viewers and hibernate running instances on every Machine,
+  and the state read prefers a running instance, then a stopping one, then
+  the newest answer. Per connection: a new connection (a restarted Machine may have discarded its
   instances) drops everything learned before and ends those viewers, the
   connection's teardown does the same, and every durable placement on the
   reconnected Machine is queried again. A state read without a live

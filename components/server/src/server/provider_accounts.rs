@@ -134,14 +134,14 @@ pub(super) async fn update_value(
             // Revocation ends the viewer at once; its own reconciliation
             // revokes every captured placement.
             if let Change::BeginRevocation { id } = &input.change {
-                state.browsers.cancel_viewer(id.as_str());
+                state.browsers.cancel_account_viewers(id.as_str());
             }
             // Disabling the account or its browser ends the owner's viewer at
             // once and hibernates the instance; the snapshot is kept.
             if let Change::SetBrowserEnabled { id, enabled: false }
             | Change::SetEnabled { id, enabled: false } = &input.change
             {
-                state.browsers.cancel_viewer(id.as_str());
+                state.browsers.cancel_account_viewers(id.as_str());
                 let state = Arc::clone(state);
                 let account = id.clone();
                 tokio::spawn(async move {

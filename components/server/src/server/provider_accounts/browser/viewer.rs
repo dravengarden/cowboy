@@ -157,14 +157,25 @@ async fn attach(
     super::admit(state, owner, account).await?;
     let serial = state.browsers.attach_lock(account.as_str());
     let _serial = serial.lock().await;
-    let observed = super::current_observation(state, account).ok_or("browser_not_running")?;
-    if !matches!(
-        observed.event.state,
-        BrowserState::Detached | BrowserState::Attached
-    ) {
-        return Err("browser_not_running");
-    }
-    if occupied(&observed, state.browsers.has_viewer(account.as_str())) && !takeover {
+    // The display belongs to the instance on the Machine that runs it.
+    let observed = super::preferred(
+        super::current_observations(state, account)
+            .into_iter()
+            .filter(|observed| {
+                matches!(
+                    observed.event.state,
+                    BrowserState::Detached | BrowserState::Attached
+                )
+            })
+            .collect(),
+    )
+    .ok_or("browser_not_running")?;
+    let machine_id = observed.machine_id.clone();
+    if occupied(
+        &observed,
+        state.browsers.has_viewer(&machine_id, account.as_str()),
+    ) && !takeover
+    {
         return Err("browser_attached");
     }
     let token = super::super::super::machine_connection::random_machine_token()
@@ -186,7 +197,7 @@ async fn attach(
     if let Err(code) = super::admit(state, owner, account).await {
         state
             .browsers
-            .unregister_viewer(account.as_str(), &attachment_id);
+            .unregister_viewer(&machine_id, account.as_str(), &attachment_id);
         return Err(code);
     }
     let (deliver, delivered) = tokio::sync::oneshot::channel();
@@ -221,7 +232,7 @@ async fn attach(
         {
             state
                 .browsers
-                .confirm_viewer(account.as_str(), &attachment_id);
+                .confirm_viewer(&machine_id, account.as_str(), &attachment_id);
             return Ok(Attached {
                 instance,
                 attachment_id,
@@ -243,7 +254,7 @@ async fn attach(
     state.browsers.forget_pairing(&token);
     state
         .browsers
-        .unregister_viewer(account.as_str(), &attachment_id);
+        .unregister_viewer(&machine_id, account.as_str(), &attachment_id);
     Err(refused)
 }
 
@@ -283,9 +294,11 @@ async fn serve(
         viewer_sink.send(Message::Close(None)),
     )
     .await;
-    state
-        .browsers
-        .unregister_viewer(session.account.as_str(), &session.attachment_id);
+    state.browsers.unregister_viewer(
+        session.connection.machine_id(),
+        session.account.as_str(),
+        &session.attachment_id,
+    );
     // Tell the Machine this attachment is gone; a takeover's replacement
     // carries another attachment id and is untouched.
     let _ = state
@@ -549,10 +562,11 @@ where
     if !state.machine_control.is_current(&session.connection) {
         return Err("machine_connection_changed");
     }
-    if !state
-        .browsers
-        .is_viewer(session.account.as_str(), &session.attachment_id)
-    {
+    if !state.browsers.is_viewer(
+        session.connection.machine_id(),
+        session.account.as_str(),
+        &session.attachment_id,
+    ) {
         return Err("replaced");
     }
     if let Err(code) = super::admit(state, &session.principal.user_id, &session.account).await {

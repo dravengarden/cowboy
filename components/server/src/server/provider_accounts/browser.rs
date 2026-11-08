@@ -147,16 +147,52 @@ pub(in crate::server) async fn admit(
     authorize(state, owner, account_id, Authority::Launch).await
 }
 
-/// The account's latest observation, only while the connection that
-/// reported it is still the Machine's current one.
+/// The account's latest observation on each Machine, only while the
+/// connection that reported it is still that Machine's current one.
+pub(in crate::server) fn current_observations(
+    state: &AppState,
+    account_id: &ProviderAccountId,
+) -> Vec<Observed> {
+    state
+        .browsers
+        .states_of(account_id.as_str())
+        .into_iter()
+        .filter(|observed| state.machine_control.is_current(&observed.connection))
+        .collect()
+}
+
+/// The observation that best describes the account's browser across its
+/// Machines: a running instance, else one still stopping, else the newest
+/// answer.
+fn preferred(observations: Vec<Observed>) -> Option<Observed> {
+    let rank = |observed: &Observed| (observed.running(), observed.live());
+    observations.into_iter().max_by(|left, right| {
+        rank(left)
+            .cmp(&rank(right))
+            .then(left.observed_at.cmp(&right.observed_at))
+    })
+}
+
+/// The account's current observation (see `preferred`).
 pub(in crate::server) fn current_observation(
     state: &AppState,
     account_id: &ProviderAccountId,
 ) -> Option<Observed> {
-    state
-        .browsers
-        .state(account_id.as_str())
-        .filter(|observed| state.machine_control.is_current(&observed.connection))
+    preferred(current_observations(state, account_id))
+}
+
+/// The observation of the named instance, on the Machine that runs it.
+fn observation_of(
+    state: &AppState,
+    account_id: &ProviderAccountId,
+    instance: &InstanceRef,
+) -> Option<Observed> {
+    if instance.instance_id.is_empty() {
+        return None;
+    }
+    current_observations(state, account_id)
+        .into_iter()
+        .find(|observed| observed.event.instance.instance_id == instance.instance_id)
 }
 
 /// The Machine an account's browser runs on: its existing placement when it
@@ -377,7 +413,9 @@ async fn dispatch_open(
             event.state,
             BrowserState::Starting | BrowserState::Detached | BrowserState::Attached
         ) {
-            state.browsers.cancel_viewer(account_id.as_str());
+            state
+                .browsers
+                .cancel_viewer(machine_id, account_id.as_str());
             let _ = state
                 .machine_control
                 .browser_command(
@@ -478,7 +516,27 @@ pub(in crate::server) async fn open_sign_in(
         viewport,
     )
     .await?;
+    if let Some(code) = sign_in_refusal(&event) {
+        tracing::info!(state = ?event.state, reason = ?event.reason, "browser sign-in open refused");
+        return Err(code);
+    }
     Ok(state_json(&machine_id, &event))
+}
+
+/// A sign-in open the Machine refused to bind. Reusing a running browser
+/// for a sign-in answers with that browser's own state; a reason on it
+/// (`login_mismatch`, `busy`, `failed`, ...) means the login was not bound
+/// and the browser must not be shown as the sign-in. A hibernated answer
+/// already says nothing runs and stays an ordinary result.
+fn sign_in_refusal(event: &StateEvent) -> Option<&'static str> {
+    if event.state == BrowserState::Hibernated {
+        return None;
+    }
+    match event.reason? {
+        Reason::LoginMismatch => Some("login_mismatch"),
+        Reason::LoginEnded => Some("login_inactive"),
+        _ => Some("browser_sign_in_refused"),
+    }
 }
 
 /// Forward one instance-scoped command to the Machine the instance runs on.
@@ -494,7 +552,9 @@ pub(in crate::server) async fn instance_command(
     if instance.account_id != *account_id {
         return Err("invalid_argument");
     }
-    let observed = current_observation(state, account_id).ok_or("browser_not_running")?;
+    // The instance names its Machine: the command never reaches another
+    // Machine's browser of the same account.
+    let observed = observation_of(state, account_id, instance).ok_or("browser_not_running")?;
     let event = state
         .machine_control
         .browser_command(
@@ -569,19 +629,52 @@ fn reset_confirmed(event: &StateEvent) -> bool {
     event.state == BrowserState::Hibernated && event.reason == Some(Reason::OwnerRequest)
 }
 
-/// Hibernate whatever runs for the account, without the admission checks:
-/// used when the owner disables the browser or revokes the account, and by
-/// memory reclaim.
+/// Hibernate whatever runs for the account on any Machine, without the
+/// admission checks: used when the owner disables the browser or revokes
+/// the account.
 pub(in crate::server) async fn hibernate_running(
     state: &AppState,
     account_id: &ProviderAccountId,
+) -> Result<Vec<StateEvent>, String> {
+    let mut events = Vec::new();
+    let mut failure = None;
+    for observed in current_observations(state, account_id) {
+        if !observed.running() {
+            continue;
+        }
+        match send_hibernate(state, &observed).await {
+            Ok(event) => events.push(event),
+            Err(error) => failure = Some(error),
+        }
+    }
+    failure.map_or(Ok(events), Err)
+}
+
+/// Hibernate exactly the captured instance on the captured Machine, as
+/// memory reclaim chose it: nothing is sent once that Machine reports the
+/// instance gone, replaced or on another connection, and another Machine's
+/// browser of the same account is never touched.
+pub(in crate::server) async fn hibernate_instance(
+    state: &AppState,
+    captured: &Observed,
 ) -> Result<Option<StateEvent>, String> {
-    let Some(observed) = current_observation(state, account_id) else {
-        return Ok(None);
-    };
-    if !observed.running() {
+    let account = captured.event.instance.account_id.as_str();
+    let still = state
+        .browsers
+        .state_on(&captured.machine_id, account)
+        .is_some_and(|current| {
+            current.running()
+                && current.connection.same(&captured.connection)
+                && current.event.instance == captured.event.instance
+                && state.machine_control.is_current(&current.connection)
+        });
+    if !still {
         return Ok(None);
     }
+    send_hibernate(state, captured).await.map(Some)
+}
+
+async fn send_hibernate(state: &AppState, observed: &Observed) -> Result<StateEvent, String> {
     state
         .machine_control
         .browser_command(
@@ -593,7 +686,6 @@ pub(in crate::server) async fn hibernate_running(
             HIBERNATE_TIMEOUT,
         )
         .await
-        .map(Some)
 }
 
 fn error_status(code: &str) -> StatusCode {
@@ -934,6 +1026,112 @@ mod tests {
         ] {
             assert!(!reset_confirmed(&event(reason)));
         }
+    }
+
+    #[test]
+    fn a_sign_in_open_with_a_refusal_reason_is_an_error() {
+        let event = |state, reason| StateEvent {
+            request_id: Some("r".into()),
+            instance: InstanceRef {
+                account_id: uuid::Uuid::new_v4().to_string().try_into().unwrap(),
+                instance_id: "b-1".into(),
+                incarnation: 7,
+            },
+            state,
+            reason,
+            geometry: None,
+            scale: None,
+            deadline_ms: None,
+            attachment_id: None,
+            snapshot_generation: None,
+            snapshot_at_ms: None,
+            profile_revision: Some(3),
+            unsaved_state_lost: false,
+            observed_at_ms: 1,
+        };
+        // A bound running browser and a fresh start are successes.
+        for state in [
+            BrowserState::Starting,
+            BrowserState::Detached,
+            BrowserState::Attached,
+        ] {
+            assert_eq!(sign_in_refusal(&event(state, None)), None);
+        }
+        // The running browser was answered as-is: the login was not bound.
+        assert_eq!(
+            sign_in_refusal(&event(BrowserState::Detached, Some(Reason::LoginMismatch))),
+            Some("login_mismatch")
+        );
+        assert_eq!(
+            sign_in_refusal(&event(BrowserState::Attached, Some(Reason::LoginEnded))),
+            Some("login_inactive")
+        );
+        for reason in [Reason::Failed, Reason::Busy] {
+            assert_eq!(
+                sign_in_refusal(&event(BrowserState::Attached, Some(reason))),
+                Some("browser_sign_in_refused")
+            );
+        }
+        // A hibernated answer reports its own reason as an ordinary result.
+        assert_eq!(
+            sign_in_refusal(&event(BrowserState::Hibernated, Some(Reason::Busy))),
+            None
+        );
+        assert_eq!(error_status("login_mismatch"), StatusCode::CONFLICT);
+        assert_eq!(
+            error_status("browser_sign_in_refused"),
+            StatusCode::CONFLICT
+        );
+    }
+
+    #[test]
+    fn the_preferred_observation_is_the_running_instance() {
+        let control = crate::machine_control::MachineControl::default();
+        let account: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let observed = |machine: &str, state| Observed {
+            machine_id: machine.into(),
+            connection: control.install(
+                machine.into(),
+                "epoch".into(),
+                false,
+                crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+                tokio::sync::mpsc::unbounded_channel().0,
+            ),
+            event: StateEvent {
+                request_id: None,
+                instance: InstanceRef {
+                    account_id: account.clone(),
+                    instance_id: format!("b-{machine}"),
+                    incarnation: 1,
+                },
+                state,
+                reason: None,
+                geometry: None,
+                scale: None,
+                deadline_ms: None,
+                attachment_id: None,
+                snapshot_generation: None,
+                snapshot_at_ms: None,
+                profile_revision: Some(1),
+                unsaved_state_lost: false,
+                observed_at_ms: 1,
+            },
+            observed_at: std::time::Instant::now(),
+        };
+        let running = observed("alpha", BrowserState::Detached);
+        let stopping = observed("beta", BrowserState::Stopping);
+        let hibernated = observed("gamma", BrowserState::Hibernated);
+        let pick = |list: Vec<Observed>| preferred(list).map(|observed| observed.machine_id);
+        assert_eq!(
+            pick(vec![hibernated.clone(), running.clone(), stopping.clone()]),
+            Some("alpha".to_owned())
+        );
+        assert_eq!(
+            pick(vec![hibernated.clone(), stopping]),
+            Some("beta".to_owned())
+        );
+        assert_eq!(pick(vec![hibernated]), Some("gamma".to_owned()));
+        assert_eq!(pick(Vec::new()), None);
     }
 
     #[test]
