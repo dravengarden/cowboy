@@ -55,13 +55,23 @@ mod workspace_identity;
 #[cfg(test)]
 mod preflight_tests;
 
-struct LoginSession {
+pub(crate) struct LoginSession {
     cancel: tokio::sync::watch::Sender<bool>,
     input: tokio::sync::mpsc::Sender<String>,
     candidate: Option<crate::machine_plugins::AuthCandidateCleanup>,
+    /// The named account of a native login; `None` for Service-owned logins,
+    /// which no Machine browser may bind to.
+    pub(crate) account: Option<crate::provider_account::ProviderAccountId>,
+    pub(crate) provider: String,
+    pub(crate) expires_at_ms: i64,
+    /// The verification URL this Machine emitted for the login, once known.
+    pub(crate) verification_url: Option<String>,
+    /// The Machine browser instance and incarnation bound to this login.
+    pub(crate) browser: Option<(String, u64)>,
 }
 
-type LoginSessions = Arc<parking_lot::Mutex<std::collections::HashMap<String, LoginSession>>>;
+pub(crate) type LoginSessions =
+    Arc<parking_lot::Mutex<std::collections::HashMap<String, LoginSession>>>;
 
 /// Accept cancellation intent, never report process exit. Keep an active
 /// task's reservation until its own cleanup so the request cannot be reused
@@ -145,6 +155,7 @@ struct ControllerConfig {
     workspaces: Arc<WorkspaceConfig>,
     components: Arc<ComponentStore>,
     providers: Arc<MachinePluginStore>,
+    browsers: Arc<crate::machine_browser::BrowserManager>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
     worktree_roots: crate::session_workspace::WorktreeRoots,
@@ -551,6 +562,14 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         std::env::consts::ARCH.to_owned(),
     )?);
     let _code_maintenance = providers.configure_code_maintenance(device_config.clone());
+    let browsers = crate::machine_browser::BrowserManager::new(
+        &args.state_dir,
+        Arc::clone(&providers),
+        Some(device_config.clone()),
+    )?;
+    // Units of a previous Machine process are adopted or stopped before any
+    // Controller can address them.
+    browsers.reconcile_at_start().await;
     // Reader floor 6a420ff5 is accepted for both components and Hawk's cold
     // bootstrap. Unadmitted Machines still open read-only without adoption.
     const INSTALLATION_TRACKING_ENABLED: bool = true;
@@ -729,6 +748,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         workspaces: Arc::clone(&workspaces),
         components: Arc::clone(&components),
         providers,
+        browsers,
         zed_adapter_socket: zed_adapter_socket.clone(),
         code_adapter_socket: code_adapter_socket.clone(),
         worktree_roots: worktree_roots.clone(),
@@ -1318,7 +1338,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         workspace_revision: workspace_snapshot.revision,
         workspace_owner: Some(workspace_snapshot.owner),
         capacity: config.capacity.clone(),
-        browser: None,
+        browser: config.browsers.capability(),
     };
     let proof = if proof_version >= 3 {
         crate::machine_protocol::challenge_proof_v3(&challenge_id, &nonce, expires_at_ms, &hello)
@@ -1400,6 +1420,12 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
     let (runtime_write_tx, runtime_write_rx) = tokio::sync::mpsc::unbounded_channel();
     let login_sessions: LoginSessions = Arc::default();
     let login_connection = LoginConnection(Arc::clone(&login_sessions));
+    // Browser state events and display streams follow this connection; a
+    // replaced connection re-announces every running instance.
+    let _browser_uplink =
+        config
+            .browsers
+            .attach(event_tx.clone(), lane_endpoint.clone(), &login_sessions);
     let (socket_sink, mut socket_stream) = socket.split();
     // Runtime streams can produce more than a small frame-count bound while the
     // WebSocket sink is flushing one large message. Keep the read/heartbeat loop
@@ -1611,6 +1637,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
                                         events: event_tx.clone(),
                                         components: Arc::clone(&config.components),
                                         providers: Arc::clone(&config.providers),
+                                        browsers: Arc::clone(&config.browsers),
                                         zed_adapter_socket: config.zed_adapter_socket.clone(),
                                         code_adapter_socket: config.code_adapter_socket.clone(),
                                         worktree_roots: config.worktree_roots.clone(),
@@ -2538,6 +2565,7 @@ struct MachineCommandContext {
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
     providers: Arc<MachinePluginStore>,
+    browsers: Arc<crate::machine_browser::BrowserManager>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
     worktree_roots: crate::session_workspace::WorktreeRoots,

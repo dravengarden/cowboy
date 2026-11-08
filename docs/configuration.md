@@ -188,9 +188,24 @@ as a deprecated override for one release.
 | Device | `file_buffers.cache_max_bytes` | `"64MiB"` | live |
 | Device | `file_buffers.cache_max_age` | `"1d"` | live |
 | Device | `file_buffers.target_temp_max_age` | `"1h"` | live |
+| Device | `browser.max_instances` | `1` | live |
+| Device | `browser.memory_max` | `"2GiB"` | live |
+| Device | `browser.memory_high` | `"1.5GiB"` | live |
+| Device | `browser.cpu_quota_percent` | `200` | live |
+| Device | `browser.tasks_max` | `512` | live |
+| Device | `browser.hibernate_after` | `"2m"` | live |
+| Device | `browser.max_runtime` | `"30m"` | live |
+| Device | `browser.profile_max_bytes` | `"256MiB"` | live |
+| Device | `browser.instance_max_bytes` | `"128MiB"` | live |
+| Device | `browser.snapshot_interval` | `"10m"` | live |
+| Device | `browser.staging_max_bytes` | `"1GiB"` | live |
+| Device | `browser.max_width` | `2560` | live |
+| Device | `browser.max_height` | `1600` | live |
 
 `cowboy config explain --scope <scope>` is authoritative; this table is a
-convenience.
+convenience. The `browser.*` keys govern Machine browser instances
+([`machine-browser.md`](machine-browser.md)); a changed value applies to the
+next open, and running units keep the properties they were started with.
 
 ## Dormant session re-pinning
 

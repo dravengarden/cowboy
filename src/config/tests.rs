@@ -71,6 +71,19 @@ fn every_typed_key_matches_a_declared_field_of_its_kind() {
     assert_key(&schema::DEVICE_FILE_BUFFERS_CACHE_MAX_BYTES);
     assert_key(&schema::DEVICE_FILE_BUFFERS_CACHE_MAX_AGE);
     assert_key(&schema::DEVICE_FILE_BUFFERS_TARGET_TEMP_MAX_AGE);
+    assert_key(&schema::DEVICE_BROWSER_MAX_INSTANCES);
+    assert_key(&schema::DEVICE_BROWSER_MEMORY_MAX);
+    assert_key(&schema::DEVICE_BROWSER_MEMORY_HIGH);
+    assert_key(&schema::DEVICE_BROWSER_CPU_QUOTA);
+    assert_key(&schema::DEVICE_BROWSER_TASKS_MAX);
+    assert_key(&schema::DEVICE_BROWSER_HIBERNATE_AFTER);
+    assert_key(&schema::DEVICE_BROWSER_MAX_RUNTIME);
+    assert_key(&schema::DEVICE_BROWSER_PROFILE_MAX_BYTES);
+    assert_key(&schema::DEVICE_BROWSER_INSTANCE_MAX_BYTES);
+    assert_key(&schema::DEVICE_BROWSER_SNAPSHOT_INTERVAL);
+    assert_key(&schema::DEVICE_BROWSER_STAGING_MAX_BYTES);
+    assert_key(&schema::DEVICE_BROWSER_MAX_WIDTH);
+    assert_key(&schema::DEVICE_BROWSER_MAX_HEIGHT);
 }
 
 #[test]

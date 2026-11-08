@@ -131,6 +131,16 @@ pub enum Command {
         account_id: ProviderAccountId,
         expected_profile_revision: u64,
     },
+    /// Account revocation: unconditional, idempotent by `operation_id`;
+    /// deletes the profile like `Reset` while the control record survives.
+    Revoke {
+        account_id: ProviderAccountId,
+        operation_id: String,
+    },
+    /// Current state of the account's browser, running or hibernated.
+    Query {
+        account_id: ProviderAccountId,
+    },
 }
 
 impl Command {
@@ -209,9 +219,16 @@ impl Command {
             Self::Snapshot { instance } | Self::Hibernate { instance } => {
                 validate_instance(instance)
             }
-            Self::Reset { account_id, .. } => {
+            Self::Reset { account_id, .. } | Self::Query { account_id } => {
                 ensure!(!account_id.is_default(), "browser requires a named account");
                 Ok(())
+            }
+            Self::Revoke {
+                account_id,
+                operation_id,
+            } => {
+                ensure!(!account_id.is_default(), "browser requires a named account");
+                validate_id(operation_id, "browser revocation operation id")
             }
         }
     }
@@ -243,12 +260,20 @@ pub enum Reason {
     ProfileNewerThanRuntime,
     Superseded,
     LoginEnded,
+    /// The named login is not this account's active native login.
+    LoginMismatch,
     Deadline,
     Grace,
     Reclaim,
     Revoked,
     Disabled,
     OwnerRequest,
+    /// `browser.max_instances` running instances already.
+    Capacity,
+    /// No memory headroom for the browser's reservation.
+    Memory,
+    /// A lifecycle operation on this account is still in progress.
+    Busy,
     Failed,
     #[serde(other)]
     Unknown,
@@ -285,6 +310,9 @@ pub struct StateEvent {
     pub snapshot_generation: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot_at_ms: Option<i64>,
+    /// The account's profile revision; `Reset` names the one it expects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_revision: Option<u64>,
     #[serde(default)]
     pub unsaved_state_lost: bool,
     pub observed_at_ms: i64,
@@ -405,6 +433,19 @@ mod tests {
             expected_profile_revision: 1,
         };
         assert!(default_account.validate().is_err());
+        assert!(
+            Command::Revoke {
+                account_id: account(),
+                operation_id: "op/1".to_owned(),
+            }
+            .validate()
+            .is_err()
+        );
+        Command::Query {
+            account_id: account(),
+        }
+        .validate()
+        .unwrap();
         assert!(
             Command::Navigate {
                 instance: instance(),

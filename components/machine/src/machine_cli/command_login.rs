@@ -10,6 +10,7 @@ pub(super) fn handle(command: MachineCommand, context: MachineCommandContext) {
         providers,
         zed_adapter_socket,
         login_sessions,
+        browsers,
         ..
     } = context;
     match command {
@@ -95,6 +96,7 @@ pub(super) fn handle(command: MachineCommand, context: MachineCommandContext) {
                     providers,
                     events,
                     login_sessions,
+                    browsers,
                 ),
                 Err(error) => {
                     let _ = events.send(MachineEvent::CommandResult {
@@ -140,6 +142,12 @@ pub(super) fn handle(command: MachineCommand, context: MachineCommandContext) {
                     cancel: cancel_tx,
                     input: input_tx,
                     candidate: None,
+                    account: None,
+                    provider: provider.clone(),
+                    expires_at_ms: unix_ms()
+                        .saturating_add(login_process::TIMEOUT.as_millis() as i64),
+                    verification_url: None,
+                    browser: None,
                 });
             }
             tokio::spawn(run_login(

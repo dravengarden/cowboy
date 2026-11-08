@@ -36,7 +36,11 @@ pub mod code_observer;
 #[cfg(feature = "machine-host")]
 pub mod execution_host;
 #[cfg(feature = "machine-host")]
+pub mod launch_ledger;
+#[cfg(feature = "machine-host")]
 pub mod machine_broker;
+#[cfg(feature = "machine-host")]
+pub mod machine_browser;
 #[cfg(feature = "machine-host")]
 pub mod machine_cli;
 #[cfg(feature = "machine-host")]

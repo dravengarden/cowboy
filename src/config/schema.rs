@@ -283,6 +283,26 @@ pub const DEVICE_ARTIFACT_CACHE_UNREFERENCED_AFTER: Key<Duration> =
 pub const DEVICE_CONTROLLER_PROBE_TIMEOUT: Key<Duration> =
     Key::new(Scope::Device, "connection.controller_probe_timeout");
 
+pub const DEVICE_BROWSER_MAX_INSTANCES: Key<i64> = Key::new(Scope::Device, "browser.max_instances");
+pub const DEVICE_BROWSER_MEMORY_MAX: Key<u64> = Key::new(Scope::Device, "browser.memory_max");
+pub const DEVICE_BROWSER_MEMORY_HIGH: Key<u64> = Key::new(Scope::Device, "browser.memory_high");
+pub const DEVICE_BROWSER_CPU_QUOTA: Key<i64> = Key::new(Scope::Device, "browser.cpu_quota_percent");
+pub const DEVICE_BROWSER_TASKS_MAX: Key<i64> = Key::new(Scope::Device, "browser.tasks_max");
+pub const DEVICE_BROWSER_HIBERNATE_AFTER: Key<Duration> =
+    Key::new(Scope::Device, "browser.hibernate_after");
+pub const DEVICE_BROWSER_MAX_RUNTIME: Key<Duration> =
+    Key::new(Scope::Device, "browser.max_runtime");
+pub const DEVICE_BROWSER_PROFILE_MAX_BYTES: Key<u64> =
+    Key::new(Scope::Device, "browser.profile_max_bytes");
+pub const DEVICE_BROWSER_INSTANCE_MAX_BYTES: Key<u64> =
+    Key::new(Scope::Device, "browser.instance_max_bytes");
+pub const DEVICE_BROWSER_SNAPSHOT_INTERVAL: Key<Duration> =
+    Key::new(Scope::Device, "browser.snapshot_interval");
+pub const DEVICE_BROWSER_STAGING_MAX_BYTES: Key<u64> =
+    Key::new(Scope::Device, "browser.staging_max_bytes");
+pub const DEVICE_BROWSER_MAX_WIDTH: Key<i64> = Key::new(Scope::Device, "browser.max_width");
+pub const DEVICE_BROWSER_MAX_HEIGHT: Key<i64> = Key::new(Scope::Device, "browser.max_height");
+
 pub const DEVICE_FILE_BUFFERS_ENABLED: Key<bool> = Key::new(Scope::Device, "file_buffers.enabled");
 pub const DEVICE_FILE_BUFFERS_MAX_FILE_SIZE: Key<u64> =
     Key::new(Scope::Device, "file_buffers.max_file_size");
@@ -446,5 +466,132 @@ pub static DEVICE_FIELDS: &[Field] = &[
         default: Value::Duration(Duration::from_hours(1)),
         reload: Reload::Live,
         doc: "On the target, a temporary or request file an interrupted write left\nbehind is deleted by the next write in its directory once it is this old.",
+    },
+    // Machine browser instances (docs/machine-browser.md). A changed value
+    // applies to the next open; running units keep the properties they were
+    // started with.
+    Field {
+        key: "browser.max_instances",
+        kind: Kind::Integer { min: 0, max: 4 },
+        default: Value::Integer(1),
+        reload: Reload::Live,
+        doc: "Machine browser instances that may run at once on this Device. Zero\nrefuses every open while leaving installed snapshots in place.",
+    },
+    Field {
+        key: "browser.memory_max",
+        kind: Kind::Bytes {
+            min: 1 << 30,
+            max: 6 << 30,
+        },
+        default: Value::Bytes(2 << 30),
+        reload: Reload::Live,
+        doc: "MemoryMax of one browser unit, including every page of its profile,\ninstance, /tmp and /dev/shm tmpfs. Also the bytes a browser start reserves\nin the Device launch ledger beside worker starts.",
+    },
+    Field {
+        key: "browser.memory_high",
+        kind: Kind::Bytes {
+            min: 1 << 30,
+            max: 6 << 30,
+        },
+        default: Value::Bytes(1536 << 20),
+        reload: Reload::Live,
+        doc: "MemoryHigh of one browser unit; the kernel throttles the unit above it.",
+    },
+    Field {
+        key: "browser.cpu_quota_percent",
+        kind: Kind::Integer { min: 50, max: 400 },
+        default: Value::Integer(200),
+        reload: Reload::Live,
+        doc: "CPUQuota of one browser unit in percent of one CPU.",
+    },
+    Field {
+        key: "browser.tasks_max",
+        kind: Kind::Integer {
+            min: 128,
+            max: 2048,
+        },
+        default: Value::Integer(512),
+        reload: Reload::Live,
+        doc: "TasksMax of one browser unit.",
+    },
+    Field {
+        key: "browser.hibernate_after",
+        kind: Kind::Duration {
+            min: Duration::from_secs(30),
+            max: Duration::from_mins(30),
+        },
+        default: Value::Duration(Duration::from_secs(120)),
+        reload: Reload::Live,
+        doc: "A running browser without a live attachment hibernates after this grace:\nits profile is snapshotted and the unit stops.",
+    },
+    Field {
+        key: "browser.max_runtime",
+        kind: Kind::Duration {
+            min: Duration::from_mins(5),
+            max: Duration::from_hours(4),
+        },
+        default: Value::Duration(Duration::from_mins(30)),
+        reload: Reload::Live,
+        doc: "Hard cap on one browser run (RuntimeMaxSec of the unit and the Machine's\nown deadline). A sign-in browser ends with its login if that is sooner.",
+    },
+    Field {
+        key: "browser.profile_max_bytes",
+        kind: Kind::Bytes {
+            min: 64 << 20,
+            max: 1 << 30,
+        },
+        default: Value::Bytes(256 << 20),
+        reload: Reload::Live,
+        doc: "Size of the profile tmpfs and of /dev/shm inside one browser instance, and\nthe logical bound of a published profile snapshot.",
+    },
+    Field {
+        key: "browser.instance_max_bytes",
+        kind: Kind::Bytes {
+            min: 32 << 20,
+            max: 512 << 20,
+        },
+        default: Value::Bytes(128 << 20),
+        reload: Reload::Live,
+        doc: "Size of the instance tmpfs (HOME, XDG directories, TMPDIR) of one browser.",
+    },
+    Field {
+        key: "browser.snapshot_interval",
+        kind: Kind::Duration {
+            min: Duration::from_mins(1),
+            max: Duration::from_hours(1),
+        },
+        default: Value::Duration(Duration::from_mins(10)),
+        reload: Reload::Live,
+        doc: "While a viewer is attached, the browser's profile is snapshotted (frozen,\ncrash-consistent) this often in addition to every graceful stop.",
+    },
+    Field {
+        key: "browser.staging_max_bytes",
+        kind: Kind::Bytes {
+            min: 256 << 20,
+            max: 8 << 30,
+        },
+        default: Value::Bytes(1 << 30),
+        reload: Reload::Live,
+        doc: "Device-wide budget for browser snapshot staging in flight. A snapshot that\ndoes not fit under it, or under disk.low_watermark, is refused, never queued.",
+    },
+    Field {
+        key: "browser.max_width",
+        kind: Kind::Integer {
+            min: 320,
+            max: 4096,
+        },
+        default: Value::Integer(2560),
+        reload: Reload::Live,
+        doc: "Largest framebuffer width a viewer may request for a browser.",
+    },
+    Field {
+        key: "browser.max_height",
+        kind: Kind::Integer {
+            min: 480,
+            max: 4096,
+        },
+        default: Value::Integer(1600),
+        reload: Reload::Live,
+        doc: "Largest framebuffer height a viewer may request for a browser.",
     },
 ];

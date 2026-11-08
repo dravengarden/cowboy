@@ -9,6 +9,7 @@ pub(super) fn start(
     providers: Arc<MachinePluginStore>,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     sessions: LoginSessions,
+    browsers: Arc<crate::machine_browser::BrowserManager>,
 ) {
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
     let (input_tx, input_rx) = tokio::sync::mpsc::channel(1);
@@ -27,6 +28,11 @@ pub(super) fn start(
             cancel: cancel_tx,
             input: input_tx,
             candidate: None,
+            account: Some(providers.account_id().clone()),
+            provider: provider.clone(),
+            expires_at_ms: unix_ms().saturating_add(login_process::TIMEOUT.as_millis() as i64),
+            verification_url: None,
+            browser: None,
         });
     }
     tokio::spawn(async move {
@@ -35,8 +41,13 @@ pub(super) fn start(
             input: input_rx,
             sessions,
         };
-        let result = run(&request, &provider, &spec, &providers, &events, &mut login).await;
+        let result = run(
+            &request, &provider, &spec, &providers, &events, &mut login, &browsers,
+        )
+        .await;
         login.sessions.lock().remove(&request);
+        // The bound browser follows the login's authority, never the reverse.
+        browsers.login_ended(&request);
         let _ = events.send(MachineEvent::LoginState {
             request_id: request,
             provider,
@@ -60,6 +71,7 @@ async fn run(
     providers: &MachinePluginStore,
     events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     login: &mut LoginIo,
+    browsers: &Arc<crate::machine_browser::BrowserManager>,
 ) -> Result<(), String> {
     let deadline = tokio::time::Instant::now() + login_process::TIMEOUT;
     login_process::check(&login.cancel, deadline).map_err(|error| error.detail().to_owned())?;
@@ -121,6 +133,7 @@ async fn run(
     let mut code = None;
     let mut sent = false;
     let expires_at_ms = unix_ms().saturating_add(login_process::TIMEOUT.as_millis() as i64);
+    let sessions = Arc::clone(&login.sessions);
     let status = login_process::run_contained(
         child,
         &mut login.cancel,
@@ -139,6 +152,12 @@ async fn run(
                 && (!device || code.is_some())
                 && let Some(url) = url.clone()
             {
+                // The Machine's own URL for this login is what a bound
+                // sign-in browser navigates to; the Controller never sends one.
+                if let Some(session) = sessions.lock().get_mut(request) {
+                    session.verification_url = Some(url.clone());
+                }
+                browsers.login_challenge(request, &url);
                 let _ = events.send(MachineEvent::LoginChallenge {
                     request_id: request.into(),
                     provider: provider.into(),
@@ -243,6 +262,9 @@ mod tests {
             input,
             sessions: Default::default(),
         };
+        let browsers =
+            crate::machine_browser::BrowserManager::new(temp.path(), Arc::new(root.clone()), None)
+                .unwrap();
         assert_eq!(
             run(
                 "request",
@@ -250,7 +272,8 @@ mod tests {
                 &spec(),
                 &store,
                 &events,
-                &mut login
+                &mut login,
+                &browsers,
             )
             .await
             .unwrap_err(),

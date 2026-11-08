@@ -1,7 +1,8 @@
 # Machine browser: owner-operated browser on a Machine
 
-Status: design, revision 5, 2026-11-08. Nothing below is implemented. Five
-Astra Max design-review rounds (2026-11-08: 12, 17, 14, 13 and 9 findings)
+Status: design, revision 6, 2026-11-08. Implementation is in progress; the
+"Implementation notes" section records where the code refines this text.
+Five Astra Max design-review rounds (2026-11-08: 12, 17, 14, 13 and 9 findings)
 are folded in and cross-referenced in
 [Acceptance](#acceptance-before-any-real-account); the fifth round judged
 the remaining medium items resolvable during implementation review behind
@@ -330,10 +331,14 @@ nothing is configurable from outside beyond the argument vector.
    against the running profile; the singleton socket in the profile hands the
    URL to the existing instance; no debugging port), `resize {width, height}`
    (through `xrandr`, bounded by the launcher and by the Machine to
-   320×480…`browser.max_geometry`; `scale` is fixed for the life of the
-   incarnation), `attach {attachment_id}` and `detach {attachment_id}`
-   (informational), `snapshot {generation}` (described below) and
-   `stop {graceful_ms}`.
+   320×480…`browser.max_width`×`browser.max_height`; `scale` is fixed for
+   the life of the incarnation), `attach {attachment_id}` and
+   `detach {attachment_id}` (informational), `snapshot {generation}`
+   (described below), `status` (the readiness facts again, for adoption
+   after a Machine restart) and `stop {graceful_ms, snapshot_generation?}`:
+   the optional generation asks for the stop-time copy of the profile into
+   that staging generation after the browser processes have exited, so the
+   primary snapshot path needs no second round trip.
 9. **Supervisor and PID 1.** The process systemd starts is a thin outer
    supervisor: it stays the unit's `MainPID`, forwards `SIGTERM` to the
    namespace init, waits for it and exits with its status. The namespace init
@@ -557,11 +562,13 @@ start time and reads from outside the namespace:
   all in enforce mode;
 - `/proc/<pid>/status` of the display server, window manager and browser
   main process: `NoNewPrivs` set and every capability set empty. Chromium's
-  sandboxed descendants are identified by namespace ancestry (their
-  `ns/user` differs and its parent is the instance namespace); they are
-  checked for `NoNewPrivs` and for the sealed label, not for empty
-  capability bitmaps, because a nested user namespace legitimately grants
-  capabilities that apply only inside it;
+  sandboxed descendants are identified by namespace ancestry: their `NSpid`
+  carries a pid in the instance's PID namespace (they live inside it or in a
+  namespace nested in it) and they sit in the unit's `browser/` sub-cgroup,
+  which the sealed profile cannot leave; they are checked for `NoNewPrivs`
+  and for the sealed label, not for empty capability bitmaps, because a
+  nested user namespace legitimately grants capabilities that apply only
+  inside it;
 - `/proc/<pid>/mountinfo` of the browser: `/usr` and `/opt` backed by the
   installed generation, read-only, `nosuid`, `nodev`; `/mnt/profile` and
   `/mnt/instance` tmpfs of the expected sizes; `/mnt/sockets` backed by the
@@ -675,7 +682,16 @@ Commands and events are a closed addition to `MachineCommand` /
 - `BrowserSnapshot{request_id, instance_id, expected_incarnation}`
 - `BrowserHibernate{request_id, instance_id, expected_incarnation}`
 - `BrowserReset{request_id, account_id, expected_profile_revision}`
-- `BrowserState{instance_id, incarnation, account_id, state, reason, geometry, scale, deadline_ms, attachment_id, snapshot_generation, snapshot_at_ms, unsaved_state_lost}`
+- `BrowserRevoke{request_id, account_id, operation_id}` (account revocation;
+  unconditional, idempotent by operation id, same deletion path as reset)
+- `BrowserQuery{request_id, account_id}` (current running or hibernated state,
+  for the Controller's state read)
+- `BrowserState{instance_id, incarnation, account_id, state, reason, geometry, scale, deadline_ms, attachment_id, snapshot_generation, snapshot_at_ms, profile_revision, unsaved_state_lost}`
+
+Reasons beyond the lifecycle ones: `capacity` (`browser.max_instances`
+reached), `memory` (no headroom for the reservation), `busy` (a lifecycle
+operation of that account is in progress) and `login_mismatch` (the named
+login is not that account's active native login).
 
 The display stream is not an RPC and does not use bulk lanes: lanes carry
 idempotent execution requests, resend after loss and close on idle
@@ -757,7 +773,7 @@ properties they were started with; bounds enforced by the schema):
 |---|---|---|---|
 | `browser.max_instances` | 1 | 0–4 | running instances per Machine |
 | `browser.memory_max` / `browser.memory_high` | 2048 MiB / 1536 MiB | 1–6 GiB | unit limits, including every tmpfs page; also the admission weight |
-| `browser.cpu_quota` | 200% | 50–400% | unit CPU quota |
+| `browser.cpu_quota_percent` | 200 | 50–400 | unit CPU quota in percent of one CPU |
 | `browser.tasks_max` | 512 | 128–2048 | unit task limit |
 | `browser.hibernate_after` | 120 s | 30 s–30 min | detached grace |
 | `browser.max_runtime` | 30 min | 5 min–4 h | hard cap per run |
@@ -765,7 +781,7 @@ properties they were started with; bounds enforced by the schema):
 | `browser.instance_max_bytes` | 128 MiB | 32–512 MiB | instance tmpfs size |
 | `browser.snapshot_interval` | 10 min | 1 min–1 h, or off | periodic frozen snapshot while attached |
 | `browser.staging_max_bytes` | 1 GiB | 256 MiB–8 GiB | Machine-wide snapshot staging budget |
-| `browser.max_geometry` | 2560×1600 | ≤ 4096×4096 | resize bound |
+| `browser.max_width` / `browser.max_height` | 2560 / 1600 | 320–4096 / 480–4096 | resize bound |
 
 Reclaim ordering: the Controller's memory reclaim hibernates running browsers
 on a Machine before it selects any session. Browser reclaim has its own
@@ -845,6 +861,9 @@ without AppArmor policy that grants `userns`. That policy is host
 configuration, kept and receipted in Columbus `machines/ovh`. It is two
 profiles, and it confines rather than exempts. The sysctl and the ordinary
 denial for every other process stay exactly as they are.
+
+The profiles are named `cowboy-browser-bootstrap` and `cowboy-browser-sealed`;
+the Machine checks for exactly these names in enforce mode.
 
 **`bootstrap`** attaches to the Plugin's launcher executable through a glob
 over the Machine state root and runtime digest directory (derived from
@@ -1024,6 +1043,35 @@ through the Machine browser on OVH.
 5. Install the Plugin on OVH; enable `accounts.machine_browser`; enable the
    browser for `Claude · Test` only; run the acceptance matrix; sign in.
 6. Decide per existing account whether and when to enable the browser.
+
+## Implementation notes
+
+Where the Machine code (`components/machine/src/machine_browser/`) refines
+the text above:
+
+- The launch ledger is `components/machine/src/launch_ledger.rs`: one
+  byte-weighted compare-and-swap reservation shared by cold worker launches
+  (512 MiB each) and browser opens (`browser.memory_max`), with a 512 MiB
+  floor and exact refunds on drop.
+- Host pids are never taken from the launcher. The Machine enumerates the
+  unit's cgroup tree and matches the launcher's namespace-local pids through
+  `/proc/<pid>/status` `NSpid`; the supervisor must be the unit's `MainPID`
+  and the init the only other process in the unit's root cgroup.
+- Nested-sandbox ancestry is established through `NSpid` and `browser/`
+  membership (above) rather than `NS_GET_PARENT`, which needs raw `ioctl`
+  and the crate forbids `unsafe`.
+- The stop-time copy travels on `stop {snapshot_generation}`; the launcher
+  replies `graceful` (flushed) or not (crash-consistent), and the Machine
+  publishes either while marking `unsaved_state_lost` for the latter.
+- Restart adoption of a `Tab` instance reconnects to the control socket,
+  asks `status`, waits for an in-progress copy, thaws `browser/`, re-takes
+  the memory reservation and re-runs confinement verification against the
+  recorded unit; sign-in instances are stopped. A fenced account is never
+  adopted; the fence is completed first.
+- `BrowserAttach` replaces any live attachment (takeover) and the old
+  stream's close cannot touch the replacement because the attachment id
+  differs; lease renewals are bounded to 30 s from now whatever the
+  Controller sends.
 
 ## Alternatives considered
 
