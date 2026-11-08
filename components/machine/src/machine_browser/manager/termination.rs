@@ -28,6 +28,9 @@ pub(super) struct Unconfirmed {
     pub(super) record: Option<String>,
     /// Why it is being stopped.
     pub(super) reason: Reason,
+    /// The runtime generation it was launched from; `None` when unknown,
+    /// which keeps every browser generation from retiring.
+    pub(super) generation: Option<String>,
 }
 
 #[cfg(test)]
@@ -41,6 +44,7 @@ impl Unconfirmed {
             incarnation: None,
             record: None,
             reason: Reason::Failed,
+            generation: None,
         }
     }
 }
@@ -74,6 +78,9 @@ pub(super) struct Retained {
     /// The stop the confirmed exit completes, reported then as the
     /// incarnation's terminal `hibernated` observation.
     pub(super) outcome: StopOutcome,
+    /// The runtime generation the unit was launched from, pinned until its
+    /// exit is confirmed; `None` when unknown (an unrecorded unit).
+    pub(super) generation: Option<String>,
 }
 
 /// Why a retained incarnation was stopped, and whose observation its
@@ -144,6 +151,7 @@ impl BrowserManager {
                 }),
                 record: retained.record.clone(),
                 reason: retained.outcome.reason,
+                generation: retained.generation.clone(),
             },
         );
         let Some(manager) = self.this.upgrade() else {

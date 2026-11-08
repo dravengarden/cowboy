@@ -8,7 +8,7 @@
 use std::any::Any;
 
 use super::*;
-use crate::machine_plugins::{BrowserDrain, DrainFuture};
+use crate::machine_plugins::{BrowserDrain, DrainFuture, GenerationRetirement};
 
 /// The uninstall's authority, re-checked before every stop.
 type DrainAuthority<'a> = dyn Fn() -> Result<()> + Send + Sync + 'a;
@@ -134,5 +134,9 @@ impl BrowserManager {
 impl BrowserDrain for BrowserManager {
     fn drain<'a>(&'a self, authority: &'a DrainAuthority<'a>) -> DrainFuture<'a> {
         Box::pin(self.drain_instances(authority))
+    }
+
+    fn with_generation_pins(&self, retire: &mut GenerationRetirement<'_>) -> Result<()> {
+        self.retire_unpinned(retire)
     }
 }

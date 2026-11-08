@@ -7,7 +7,9 @@ use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 
 mod confirmation;
 mod fake_units;
+mod idle_and_navigation;
 mod inventory;
+mod retention;
 
 use fake_units::{FakeUnit, FakeUnits};
 

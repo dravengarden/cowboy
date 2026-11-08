@@ -11,7 +11,7 @@
     "components/app-shell/detent-sheet.tsx": 1095,
     "components/machine/src/machine_broker.rs": 4949,
     "components/machine/src/machine_cli.rs": 3923,
-    "components/machine/src/machine_plugins.rs": 5404,
+    "components/machine/src/machine_plugins.rs": 5281,
     "components/plugin-sdk/src/host.rs": 1602,
     "components/provider-sdk/src/lib.rs": 4074,
     "components/provider-ui/src/index.ts": 3134,

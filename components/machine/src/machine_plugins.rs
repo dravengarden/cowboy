@@ -25,7 +25,9 @@ mod code_sync_conformance;
 mod extensions;
 mod installation;
 mod machine_browser;
-pub use machine_browser::{BrowserDrain, DrainFuture, MachineBrowserRuntimePlan};
+pub use machine_browser::{
+    BrowserDrain, DrainFuture, GenerationRetirement, MachineBrowserRuntimePlan,
+};
 mod mcp_servers;
 #[cfg(all(test, target_os = "linux", feature = "full"))]
 pub(crate) use mcp_servers::tests::conformance as mcp_conformance;
@@ -38,6 +40,7 @@ pub use mcp_servers::{PreparedMcpBinding, PreparedMcpServer};
 pub use native_profile::LogoutPreparation;
 mod operations;
 mod remove_projection;
+mod retirement;
 mod session_extensions;
 mod telemetry;
 mod uninstall;
@@ -896,9 +899,16 @@ impl MachinePluginStore {
         let installed = self
             .inventory_one(plugin_id)?
             .context("Plugin is not installed")?;
+        if installed.plugin_kind == cowboy_plugin_sdk::PluginKind::MachineBrowser {
+            // Browser instances, not sessions, pin these generations.
+            return self
+                .retire_browser_generations_locked(Some(plugin_id), &BTreeSet::new())?
+                .pop()
+                .context("no Machine browser manager reports its generation pins");
+        }
         ensure!(
             installed.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider,
-            "only Agent Provider generations are retired; Code runtimes own their leases"
+            "only Agent Provider and Machine browser generations are retired; Code runtimes own their leases"
         );
         let root = self.plugin_root(plugin_id);
         let mut keep: BTreeSet<String> = referenced
@@ -932,53 +942,6 @@ impl MachinePluginStore {
         retention.retained.sort();
         retention.retired.sort();
         Ok(retention)
-    }
-
-    /// Tombstone and remove every generation under `generations` not in
-    /// `keep`, finishing tombstones an interrupted pass left behind.
-    fn retire_unkept(
-        &self,
-        generations: &Path,
-        keep: &BTreeSet<String>,
-        retention: &mut crate::generation_retention::Outcome,
-    ) -> Result<()> {
-        for entry in fs::read_dir(generations)
-            .with_context(|| format!("reading {}", generations.display()))?
-        {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let tombstone = if let Some(interrupted) = name.strip_prefix(RETIRED_GENERATION_PREFIX)
-            {
-                ensure!(
-                    is_generation_name(interrupted),
-                    "invalid retired generation"
-                );
-                entry.path()
-            } else if !is_generation_name(&name) || !entry.file_type()?.is_dir() {
-                continue;
-            } else if keep.contains(&name) {
-                retention.retained.push(format!("sha256:{name}"));
-                continue;
-            } else {
-                let tombstone = generations.join(format!("{RETIRED_GENERATION_PREFIX}{name}"));
-                fs::rename(entry.path(), &tombstone)
-                    .with_context(|| format!("retiring generation {name}"))?;
-                retention.retired.push(format!("sha256:{name}"));
-                tombstone
-            };
-            retention.freed_bytes = retention.freed_bytes.saturating_add(tree_bytes(&tombstone));
-            remove_projection::remove(&tombstone)
-                .with_context(|| format!("removing {}", tombstone.display()))?;
-        }
-        if !retention.retired.is_empty() {
-            fs::File::open(generations)?.sync_all()?;
-            // Proof keys are "<content root>\n<artifact set>".
-            self.runtime_proofs.lock().retain(|key, _| {
-                key.split_once('\n')
-                    .is_none_or(|(content, _)| Path::new(content).exists())
-            });
-        }
-        Ok(())
     }
 
     /// Retire the default account's credential generations of one Provider
@@ -1109,68 +1072,6 @@ impl MachinePluginStore {
             }
         }
         Ok(outcome)
-    }
-
-    /// Retire generations of Agent Provider Plugins that are no longer
-    /// installed: their active link is gone, so only sessions still pinning a
-    /// generation (`referenced`, including soft-deleted sessions until purge)
-    /// keep it. `skip` names Plugins whose uninstall saga may still compensate
-    /// by reactivating the removed generation; they are left untouched.
-    pub async fn retire_uninstalled_generations(
-        &self,
-        referenced: &BTreeMap<String, BTreeSet<String>>,
-        skip: &BTreeSet<String>,
-    ) -> Result<Vec<crate::generation_retention::Outcome>> {
-        let _lifecycle = self.lifecycle.lock().await;
-        let mut outcomes = Vec::new();
-        if !self.root.exists() {
-            return Ok(outcomes);
-        }
-        for entry in fs::read_dir(&self.root).context("reading Provider store")? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                continue;
-            }
-            let plugin_id = entry.file_name().to_string_lossy().into_owned();
-            let root = entry.path();
-            let generations = root.join("generations");
-            if skip.contains(&plugin_id)
-                || validate_plugin_id(&plugin_id).is_err()
-                || root.join("active").symlink_metadata().is_ok()
-                || !generations.is_dir()
-                // Code runtimes own leases independent of sessions.
-                || root.join(".code-runtime-owned-v2").exists()
-                || !uninstalled_agent_generations(&generations)
-                || self.operations.ensure_unfenced(&plugin_id).is_err()
-            {
-                continue;
-            }
-            let mut keep: BTreeSet<String> = referenced
-                .get(&plugin_id)
-                .into_iter()
-                .flatten()
-                .map(|digest| digest.trim_start_matches("sha256:").to_owned())
-                .collect();
-            let _profiles = self.auth_candidates.lock();
-            keep.extend(self.retained_native_generations(&plugin_id)?);
-            let mut retention = crate::generation_retention::Outcome {
-                plugin_id: plugin_id.clone(),
-                ..crate::generation_retention::Outcome::default()
-            };
-            self.retire_unkept(&generations, &keep, &mut retention)?;
-            // A rollback link has nothing to roll back to once uninstalled.
-            if read_link_name(&root.join("rollback"))
-                .is_some_and(|name| !generations.join(&name).exists())
-            {
-                fs::remove_file(root.join("rollback"))?;
-            }
-            if !retention.retired.is_empty() {
-                retention.retained.sort();
-                retention.retired.sort();
-                outcomes.push(retention);
-            }
-        }
-        Ok(outcomes)
     }
 
     pub fn inventory(&self) -> Result<Vec<PluginInventory>> {
@@ -5247,30 +5148,6 @@ fn live_auth_homes(runtime_generations: &Path) -> BTreeSet<u64> {
         }
     }
     live
-}
-
-/// Whether an uninstalled Plugin's generations are recorded Agent Provider
-/// installations. Unknown or other kinds are never retired by inference.
-fn uninstalled_agent_generations(generations: &Path) -> bool {
-    let Ok(entries) = fs::read_dir(generations) else {
-        return false;
-    };
-    let mut recorded = false;
-    for entry in entries.flatten() {
-        let path = entry.path().join("content/plugin-inventory.json");
-        let Ok(bytes) = fs::read(&path) else {
-            continue;
-        };
-        match serde_json::from_slice::<PluginInventory>(&bytes) {
-            Ok(inventory)
-                if inventory.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider =>
-            {
-                recorded = true;
-            }
-            _ => return false,
-        }
-    }
-    recorded
 }
 
 /// Generations are named by their lowercase SHA-256 digest.

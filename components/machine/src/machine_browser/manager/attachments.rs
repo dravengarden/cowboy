@@ -308,18 +308,25 @@ impl BrowserManager {
         if instance.purpose() != Purpose::Tab {
             return Err("only tab browsers accept owner navigation".into());
         }
-        if let Err(reason) = self.navigate_checked(&instance, url).await {
-            return Ok(self
+        match self.navigate_checked(&instance, url).await {
+            Ok(()) => Ok(instance.state(Some(request_id.to_owned()))),
+            Err(Navigation::Violation(reason)) => Ok(self
                 .stop_instance(&instance, reason, false, Some(request_id))
-                .await);
+                .await),
+            Err(Navigation::Rejected) => Ok(instance
+                .state(Some(request_id.to_owned()))
+                .with_reason(Reason::Failed)),
         }
-        Ok(instance.state(Some(request_id.to_owned())))
     }
 
     /// Full confinement verification, then navigation. A violation is
     /// returned, never acted on here, so a caller holding the account
     /// lifecycle lock stops through `stop_locked` and every other caller
-    /// through `stop_instance`.
+    /// through `stop_instance`. A navigation the launcher rejects or does
+    /// not answer in time is [`Navigation::Rejected`]: the browser keeps
+    /// running (still verified) but shows a blank or earlier page, so a
+    /// caller answering a command reports `failed`; the URL is remembered
+    /// until a later navigation succeeds.
     ///
     /// A snapshot copy binds `/mnt/publish` in the instance's mount
     /// namespace, which verification rightly rejects. So no copy runs while
@@ -331,31 +338,53 @@ impl BrowserManager {
         &self,
         instance: &Arc<Instance>,
         url: &str,
-    ) -> Result<(), Reason> {
+    ) -> Result<(), Navigation> {
         let _copies = self.quiesce_copies(instance).await;
-        let bootstrap = host::enforce_label(BOOTSTRAP_PROFILE);
-        let sealed = host::enforce_label(SEALED_PROFILE);
-        let supervisor = instance.live.lock().verified.supervisor.pid;
-        let verified = verify::verify(
-            &self.expectations(instance, supervisor, &bootstrap, &sealed),
-            &instance.report,
-        )
-        .map_err(|violation| {
-            tracing::warn!(detail = %violation, "browser confinement failed before navigation");
-            Reason::ConfinementUnverified
-        })?;
-        instance.live.lock().verified = verified;
+        #[cfg(test)]
+        let trusted = self
+            .trust_confinement
+            .load(std::sync::atomic::Ordering::SeqCst);
+        #[cfg(not(test))]
+        let trusted = false;
+        if !trusted {
+            let bootstrap = host::enforce_label(BOOTSTRAP_PROFILE);
+            let sealed = host::enforce_label(SEALED_PROFILE);
+            let supervisor = instance.live.lock().verified.supervisor.pid;
+            let verified = verify::verify(
+                &self.expectations(instance, supervisor, &bootstrap, &sealed),
+                &instance.report,
+            )
+            .map_err(|violation| {
+                tracing::warn!(detail = %violation, "browser confinement failed before navigation");
+                Navigation::Violation(Reason::ConfinementUnverified)
+            })?;
+            instance.live.lock().verified = verified;
+        }
         let navigated = instance
             .control
             .lock()
             .await
             .navigate(url, COMMAND_TIMEOUT)
             .await;
+        let mut live = instance.live.lock();
         if let Err(error) = navigated {
-            tracing::warn!(%error, "browser navigation failed");
+            tracing::warn!(%error, instance = %instance.instance_id, "browser navigation failed");
+            live.failed_navigation = Some(url.to_owned());
+            return Err(Navigation::Rejected);
         }
+        live.failed_navigation = None;
         Ok(())
     }
+}
+
+/// Why [`BrowserManager::navigate_checked`] did not navigate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Navigation {
+    /// Confinement failed before the navigation: the instance must stop.
+    Violation(Reason),
+    /// The launcher rejected the navigation or did not answer in time; the
+    /// instance is intact and a later navigation may succeed.
+    Rejected,
 }
 
 impl Live {

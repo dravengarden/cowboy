@@ -36,6 +36,7 @@ use crate::provider_account::ProviderAccountId;
 mod attachments;
 mod capacity;
 mod drain;
+mod generations;
 mod launch;
 mod lifecycle;
 mod login_binding;
@@ -47,8 +48,10 @@ mod termination;
 mod tests;
 mod units;
 
+use attachments::Navigation;
 use capacity::{CapacityGuard, CapacityLedger};
 use drain::StartGate;
+use generations::GenerationPins;
 use launch::{VersionOrder, compare_versions, launch_arguments};
 use lifecycle::complete_fenced;
 use snapshots::CopyJob;
@@ -133,6 +136,10 @@ struct Live {
     last_periodic: Instant,
     last_scan: Instant,
     pending_navigation: Option<String>,
+    /// The URL whose navigation the launcher last rejected or did not
+    /// answer in time; cleared by the next successful navigation. A repeated
+    /// sign-in open for the bound login retries while it is set.
+    failed_navigation: Option<String>,
 }
 
 /// What an instance runs for and until when. A `Tab` instance reused for a
@@ -236,6 +243,7 @@ impl Instance {
                 last_periodic: Instant::now(),
                 last_scan: Instant::now(),
                 pending_navigation: None,
+                failed_navigation: None,
             }),
             copy: parking_lot::Mutex::new(None),
             copy_holds: std::sync::atomic::AtomicUsize::new(0),
@@ -358,11 +366,18 @@ pub struct BrowserManager {
     /// Unit starts against Plugin-uninstall drains: opens are refused while
     /// a drain holds it, and a drain waits for admitted starts to settle.
     starts: Arc<StartGate>,
+    /// Runtime generations pinned by opens that have not registered their
+    /// instance yet; generation retirement runs under its lock.
+    pins: Arc<GenerationPins>,
     /// Host paths every instance must hide behind a read-only mask.
     masks: Vec<PathBuf>,
     receipts: parking_lot::Mutex<VecDeque<(String, StateEvent)>>,
     headroom: fn() -> Option<u64>,
     this: Weak<BrowserManager>,
+    /// Tests drive navigation against a fake launcher whose processes no
+    /// confinement verification could pass.
+    #[cfg(test)]
+    trust_confinement: std::sync::atomic::AtomicBool,
 }
 
 impl BrowserManager {
@@ -415,10 +430,13 @@ impl BrowserManager {
             inventory_pending: std::sync::atomic::AtomicBool::new(false),
             units,
             starts: Arc::new(StartGate::default()),
+            pins: Arc::default(),
             masks: sensitive_paths(state_dir, uid),
             receipts: parking_lot::Mutex::new(VecDeque::new()),
             headroom,
             this: this.clone(),
+            #[cfg(test)]
+            trust_confinement: std::sync::atomic::AtomicBool::new(false),
         });
         manager.register_drain();
         Ok(manager)
@@ -712,7 +730,11 @@ impl BrowserManager {
             let manager = Arc::clone(self);
             let url = url.to_owned();
             tokio::spawn(async move {
-                if let Err(reason) = manager.navigate_checked(&instance, &url).await {
+                // A rejected navigation is recorded on the instance; the
+                // owner's repeated sign-in open retries it.
+                if let Err(Navigation::Violation(reason)) =
+                    manager.navigate_checked(&instance, &url).await
+                {
                     let event = manager.stop_instance(&instance, reason, false, None).await;
                     manager.send_state(event);
                 }

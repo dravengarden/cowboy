@@ -215,6 +215,7 @@ async fn a_confirmed_retry_reports_the_terminal_state_and_the_fence_completion()
                 instance: Some(Arc::clone(&fixture.instance)),
                 record: None,
                 capacity: None,
+                generation: Some(fixture.instance.plan.generation_digest.clone()),
                 outcome: StopOutcome {
                     reason: Reason::Revoked,
                     unsaved: true,

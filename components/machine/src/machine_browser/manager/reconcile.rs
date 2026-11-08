@@ -24,6 +24,7 @@ impl BrowserManager {
             Ok(()) => {
                 self.inventory_pending
                     .store(false, std::sync::atomic::Ordering::SeqCst);
+                self.pins.inventoried();
                 Ok(())
             }
             Err(error) => {
@@ -55,6 +56,7 @@ impl BrowserManager {
             manager
                 .inventory_pending
                 .store(false, std::sync::atomic::Ordering::SeqCst);
+            manager.pins.inventoried();
             tracing::info!("browser unit inventory completed after retry");
             if let Err(error) = manager.reconcile_accounts().await {
                 tracing::warn!(%error, "browser fence resumption incomplete");
@@ -182,6 +184,7 @@ impl BrowserManager {
             record: None,
             capacity: Some(self.capacity.force_reserve()),
             outcome: StopOutcome::unreported(Reason::Failed),
+            generation: None,
         });
     }
 
@@ -282,6 +285,7 @@ impl BrowserManager {
             instance: None,
             record: Some(record.instance_id.clone()),
             capacity: Some(self.capacity.force_reserve()),
+            generation: Some(record.generation_digest.clone()),
             outcome: StopOutcome {
                 reason,
                 unsaved: true,

@@ -34,7 +34,7 @@ impl BrowserManager {
                     .filter(|attachment| attachment.lease_expires <= now)
                     .map(|attachment| attachment.id.clone()),
                 live.detached_since
-                    .is_some_and(|since| since + instance.settings.hibernate_after <= now),
+                    .filter(|since| *since + instance.settings.hibernate_after <= now),
                 live.last_scan + SOCKET_SCAN_INTERVAL <= now,
                 live.phase == Phase::Attached
                     && live.last_periodic + instance.settings.snapshot_interval <= now,
@@ -63,12 +63,39 @@ impl BrowserManager {
         {
             self.send_state(instance.state(None));
         }
-        if grace_expired && instance.live.lock().phase == Phase::Detached {
-            let event = self
-                .stop_instance(instance, Reason::Grace, true, None)
+        if let Some(since) = grace_expired
+            && instance.live.lock().phase == Phase::Detached
+        {
+            // The graceful stop waits for a running copy and the lifecycle
+            // lock; a viewer attaching meanwhile renews the instance, so the
+            // detached interval that expired is re-checked atomically with
+            // the transition to `Stopping`. The deadline and an ended login
+            // are not idleness and stop unconditionally above.
+            let stopped = self
+                .stop_instance_when(
+                    instance,
+                    Reason::Grace,
+                    true,
+                    None,
+                    || Ok(()),
+                    |live| {
+                        if still_idle(live, instance.settings.hibernate_after, since) {
+                            Ok(())
+                        } else {
+                            Err(IdleRenewed)
+                        }
+                    },
+                )
                 .await;
-            self.send_state(event);
-            return true;
+            match stopped {
+                Ok(event) => {
+                    self.send_state(event);
+                    return true;
+                }
+                Err(IdleRenewed) => {
+                    tracing::debug!(instance = %instance.instance_id, "browser grace stop abandoned: the instance was attached meanwhile");
+                }
+            }
         }
         if scan_due {
             instance.live.lock().last_scan = now;
@@ -111,7 +138,7 @@ impl BrowserManager {
         }
         let pending = instance.live.lock().pending_navigation.take();
         if let Some(url) = pending
-            && let Err(reason) = self.navigate_checked(instance, &url).await
+            && let Err(Navigation::Violation(reason)) = self.navigate_checked(instance, &url).await
         {
             let event = self.stop_instance(instance, reason, false, None).await;
             self.send_state(event);
@@ -135,6 +162,22 @@ impl BrowserManager {
         }
         Ok(())
     }
+}
+
+/// An idle stop abandoned because the instance was used while it waited.
+#[derive(Debug)]
+pub(super) struct IdleRenewed;
+
+/// Whether the instance is still in the detached interval that began at
+/// `since` and that interval still exceeds the hibernation grace: an attach
+/// (and any later detach) replaces `detached_since`, and `Stopping` or
+/// `Attached` are not idle. Evaluated under the lifecycle lock and the live
+/// lock the grace stop changes the phase under.
+pub(super) fn still_idle(live: &Live, hibernate_after: Duration, since: Instant) -> bool {
+    live.phase == Phase::Detached
+        && live.attachment.is_none()
+        && live.detached_since == Some(since)
+        && since + hibernate_after <= Instant::now()
 }
 
 /// Detach the attachment whose lease was seen expired, re-checked under the

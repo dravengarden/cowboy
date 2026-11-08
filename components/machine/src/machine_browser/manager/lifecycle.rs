@@ -51,6 +51,12 @@ impl BrowserManager {
                 return hibernated(Reason::NotAvailable);
             }
         };
+        // Held until this open returns: the generation stays pinned until
+        // the started instance (or its retained unit) pins it itself.
+        let Some(_generation) = self.pins.pin(&plan) else {
+            tracing::warn!(generation = %plan.generation_digest, "browser runtime generation retired before its start");
+            return hibernated(Reason::NotAvailable);
+        };
         if let Err(unmet) = host::check(&plan.contract.host_requirements) {
             tracing::warn!(detail = %unmet.0, "browser open refused: host requirements");
             return hibernated(Reason::HostRequirements);
@@ -127,25 +133,47 @@ impl BrowserManager {
             }
         };
         *slot.instance.lock() = Some(Arc::clone(&instance));
+        self.finish_open(&instance, pending_navigation, request_id)
+            .await
+    }
+
+    /// Supervise a newly registered instance and, for a sign-in, show the
+    /// login. The caller holds the account lifecycle lock: a violation stops
+    /// through `stop_locked`, never through a path that takes the lock again.
+    async fn finish_open(
+        self: &Arc<Self>,
+        instance: &Arc<Instance>,
+        pending_navigation: Option<String>,
+        request_id: &str,
+    ) -> StateEvent {
         if let Some(request) = instance.login_request() {
             // The login may have ended while the unit started.
-            if let Some(reason) = self.login_binding_broken(&instance) {
+            if let Some(reason) = self.login_binding_broken(instance) {
                 return self
-                    .stop_locked(&instance, reason, false, Some(request_id))
+                    .stop_locked(instance, reason, false, Some(request_id))
                     .await;
             }
             let url = pending_navigation.or_else(|| self.login_url(&request));
-            // The lifecycle lock is held: a violation stops through
-            // `stop_locked`, never through a path that takes the lock again.
-            if let Some(url) = url
-                && let Err(reason) = self.navigate_checked(&instance, &url).await
-            {
-                return self
-                    .stop_locked(&instance, reason, false, Some(request_id))
-                    .await;
+            if let Some(url) = url {
+                match self.navigate_checked(instance, &url).await {
+                    Ok(()) => {}
+                    Err(Navigation::Violation(reason)) => {
+                        return self
+                            .stop_locked(instance, reason, false, Some(request_id))
+                            .await;
+                    }
+                    // The browser runs, bound to the login, but does not show
+                    // it: the open fails and a repeated open retries.
+                    Err(Navigation::Rejected) => {
+                        self.spawn_supervisor(instance);
+                        return instance
+                            .state(Some(request_id.to_owned()))
+                            .with_reason(Reason::Failed);
+                    }
+                }
             }
         }
-        self.spawn_supervisor(&instance);
+        self.spawn_supervisor(instance);
         instance.state(Some(request_id.to_owned()))
     }
 
@@ -153,7 +181,10 @@ impl BrowserManager {
     /// belong to this account, it is bound to the running instance (whose
     /// deadline becomes the earlier of its own and the login's expiry, and
     /// which from now on follows the login), and the browser navigates to
-    /// the login's verification URL once it is known.
+    /// the login's verification URL once it is known. A repeated open for
+    /// the login already bound retries a navigation the launcher rejected;
+    /// a rejected navigation answers `failed`, so the open is refused rather
+    /// than showing a blank or earlier page as the sign-in.
     async fn reuse_for_sign_in(
         &self,
         request_id: &str,
@@ -186,7 +217,10 @@ impl BrowserManager {
                 .with_reason(Reason::Busy);
         }
         let previous = existing.binding.lock().clone();
-        if existing.login_request().as_deref() != Some(login_request_id) {
+        let url = if existing.login_request().as_deref() == Some(login_request_id) {
+            let failed = existing.live.lock().failed_navigation.clone();
+            failed.map(|failed| self.login_url(login_request_id).unwrap_or(failed))
+        } else {
             let (url, expires_at_ms) = match self.bind_login(
                 login_request_id,
                 &existing.account_id,
@@ -217,12 +251,21 @@ impl BrowserManager {
                     .with_reason(Reason::Failed);
             }
             self.unbind_login(&previous.purpose, &existing.instance_id);
-            if let Some(url) = url
-                && let Err(reason) = self.navigate_checked(existing, &url).await
-            {
-                return self
-                    .stop_locked(existing, reason, false, Some(request_id))
-                    .await;
+            url
+        };
+        if let Some(url) = url {
+            match self.navigate_checked(existing, &url).await {
+                Ok(()) => {}
+                Err(Navigation::Violation(reason)) => {
+                    return self
+                        .stop_locked(existing, reason, false, Some(request_id))
+                        .await;
+                }
+                Err(Navigation::Rejected) => {
+                    return existing
+                        .state(Some(request_id.to_owned()))
+                        .with_reason(Reason::Failed);
+                }
             }
         }
         existing.state(Some(request_id.to_owned()))
@@ -396,6 +439,7 @@ impl BrowserManager {
                         instance: None,
                         record: None,
                         capacity: Some(capacity),
+                        generation: Some(plan.generation_digest.clone()),
                         // The open answered the failure; the confirmed exit
                         // reports the incarnation's terminal state, which
                         // `Query` reports as stopping until then.
@@ -477,6 +521,25 @@ impl BrowserManager {
         request_id: Option<&str>,
         authorized: impl FnOnce() -> Result<(), E>,
     ) -> Result<StateEvent, E> {
+        self.stop_instance_when(instance, reason, graceful, request_id, authorized, |_| {
+            Ok(())
+        })
+        .await
+    }
+
+    /// [`Self::stop_instance_if`] that additionally evaluates `still` on the
+    /// instance's live state under the same live lock that changes its phase
+    /// to `Stopping`, so nothing (an attach, a detach) can change it between
+    /// the check and the transition; a refusal stops nothing and is returned.
+    pub(super) async fn stop_instance_when<E>(
+        &self,
+        instance: &Arc<Instance>,
+        reason: Reason,
+        graceful: bool,
+        request_id: Option<&str>,
+        authorized: impl FnOnce() -> Result<(), E>,
+        still: impl FnOnce(&Live) -> Result<(), E>,
+    ) -> Result<StateEvent, E> {
         let (reason, graceful) = if graceful {
             match self.await_copy_idle(instance).await {
                 Ok(()) => (reason, true),
@@ -489,9 +552,8 @@ impl BrowserManager {
         let _lifecycle = slot.lifecycle.lock().await;
         // Nothing below awaits before the phase changes.
         authorized()?;
-        Ok(self
-            .stop_locked(instance, reason, graceful, request_id)
-            .await)
+        self.stop_locked_when(instance, reason, graceful, request_id, still)
+            .await
     }
 
     /// Stop while the caller holds the account lifecycle lock. Any running
@@ -507,8 +569,27 @@ impl BrowserManager {
         graceful: bool,
         request_id: Option<&str>,
     ) -> StateEvent {
+        let Ok(event) = self
+            .stop_locked_when(instance, reason, graceful, request_id, |_| {
+                Ok::<(), std::convert::Infallible>(())
+            })
+            .await;
+        event
+    }
+
+    /// [`Self::stop_locked`] that first evaluates `still` under the live
+    /// lock it changes the phase under; a refusal changes nothing.
+    pub(super) async fn stop_locked_when<E>(
+        &self,
+        instance: &Arc<Instance>,
+        reason: Reason,
+        graceful: bool,
+        request_id: Option<&str>,
+        still: impl FnOnce(&Live) -> Result<(), E>,
+    ) -> Result<StateEvent, E> {
         let already_stopping = {
             let mut live = instance.live.lock();
+            still(&live)?;
             let was = live.phase == Phase::Stopping;
             live.phase = Phase::Stopping;
             if let Some(attachment) = live.attachment.take()
@@ -527,13 +608,13 @@ impl BrowserManager {
                 .is_some_and(|current| Arc::ptr_eq(current, instance));
             if !registered {
                 // Another path stopped it while this one waited for the lock.
-                return self.hibernated_after(instance, reason, request_id, false);
+                return Ok(self.hibernated_after(instance, reason, request_id, false));
             }
             // Only an instance whose exit is unconfirmed stays registered
             // while stopping; its retry owns the stop.
-            return instance
+            return Ok(instance
                 .state(request_id.map(ToOwned::to_owned))
-                .with_reason(reason);
+                .with_reason(reason));
         }
         instance.cancel_copy();
         if let Err(error) = unit::set_frozen(&instance.cgroup_dir.join("browser"), false) {
@@ -580,6 +661,7 @@ impl BrowserManager {
                 instance: Some(Arc::clone(instance)),
                 record: None,
                 capacity: None,
+                generation: Some(instance.plan.generation_digest.clone()),
                 // The confirmed exit reports the stop's own reason.
                 outcome: StopOutcome {
                     reason,
@@ -587,12 +669,12 @@ impl BrowserManager {
                     reference: None,
                 },
             });
-            return instance
+            return Ok(instance
                 .state(request_id.map(ToOwned::to_owned))
-                .with_reason(Reason::Failed);
+                .with_reason(Reason::Failed));
         }
         self.finish_stopped(instance);
-        self.hibernated_after(instance, reason, request_id, unsaved)
+        Ok(self.hibernated_after(instance, reason, request_id, unsaved))
     }
 
     pub(super) fn hibernated_after(

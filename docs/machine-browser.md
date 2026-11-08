@@ -199,7 +199,23 @@ hibernated browser reopens. Starts and drains share one gate: a drain refuses
 new starts at once and waits until every start already admitted (including
 one still waiting for memory, which gives up) has settled into a registered
 instance, so no open can launch a unit after the drain completed. Generation retirement treats browser leases like Code leases: a
-generation retires only after its last browser lease releases. After the
+generation retires only after its last browser lease releases. The lease is
+the `generation_digest` the instance launched from (recorded in its instance
+record): registered instances (starting, running, stopping, adopted
+survivors), opens that resolved the runtime but have not registered yet, and
+units retained until their exit is confirmed all pin their generation. An
+installed browser Plugin also keeps its active and rollback (retained
+previous) generations; an uninstalled one keeps only pinned generations, and
+its dangling rollback link is removed. Retirement asks the registered browser
+manager for its pins and runs under the manager's pin lock; an open pins its
+generation under that lock only while the launcher still exists, so a start
+never launches from a retired generation (it answers `not_available`). Pins
+are unknown, and nothing is retired, until the restart inventory completed
+and while a unit of unknown generation may still run. The Controller holds no
+references for browser generations: the Machine retires them during the
+periodic uninstalled-generation sweep (and on a per-Plugin retention request
+naming the browser Plugin), skipping a Plugin whose uninstall may still
+compensate. After the
 Plugin is uninstalled, profile snapshots remain account data; reset and
 revocation still delete them.
 
@@ -606,7 +622,13 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
 - `ready` is accepted only after [confinement verification](#confinement-verification).
 - `attached` requires a live attachment lease. `detached` starts the
   `browser.hibernate_after` grace (default 120 s); expiry hibernates
-  (graceful stop with snapshot). Lease expiry detaches only after
+  (graceful stop with snapshot). The grace stop waits for a running copy and
+  the account lifecycle lock, so it re-checks, under the instance's state
+  lock and atomically with the change to `stopping`, that the instance is
+  still `detached` in the same detached interval and that interval still
+  exceeds the grace; an attach meanwhile abandons the idle stop. The
+  deadline and an ended login are not idleness and stop unconditionally.
+  Lease expiry detaches only after
   re-checking, under the instance's state lock, that the instance is still
   `attached` with the same attachment still expired: a stop, renewal or
   takeover that happened meanwhile wins, and `stopping` never returns to
@@ -797,7 +819,12 @@ names a native login request, the Machine:
    matches, the instance is hibernated at once;
 3. navigates to the `verification_url` the Machine itself emitted for that
    login (kept in `LoginSession`; the Controller never sends a URL to the
-   Machine), after the pre-navigation verification;
+   Machine), after the pre-navigation verification. A navigation the
+   launcher rejects or does not answer in time fails the open: the answer is
+   the running instance's state with reason `failed` (the Controller refuses
+   the sign-in with `browser_sign_in_refused`), the instance stays bound and
+   running, and a repeated open for the same login retries the navigation.
+   A failed pre-navigation verification still stops the instance;
 4. hibernates the instance when the login completes, is cancelled, fails or
    expires, from the exit path that records the native login's outcome.
 
@@ -1342,6 +1369,10 @@ the text above:
   instance, which from then on follows that login (its durable record says
   sign-in and its deadline becomes the earlier of its own and the login's
   expiry), and navigates to the verification URL once the Machine knows it.
+  A repeated open for the login already bound navigates again only while
+  its last navigation failed; a rejected navigation answers `failed`. An
+  owner `navigate` the launcher rejects likewise answers `failed` without
+  stopping the instance.
 - Browser commands are dispatched in arrival order; an account's `Open`,
   `Hibernate`, `Reset`, `Revoke` and `Query` run strictly one after another
   in that order (leases, attachments, resizes and navigation do not wait
