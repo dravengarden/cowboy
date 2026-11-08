@@ -99,7 +99,9 @@ pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &
         .map_err(|_| "unavailable")?;
     Ok(
         json!({"registry":registry,"display_preferences":display,"revoked_accounts":revoked,"session_admission":if enabled {"enabled"} else {"not_enabled"},
-        "session_providers":if enabled {vec!["claude-code"]} else {vec![]}}),
+        "session_providers":if enabled {vec!["claude-code"]} else {vec![]},
+        // The Service gate of the optional Machine browser (`accounts.machine_browser`).
+        "machine_browser":if browser::gate_open(state) {"enabled"} else {"not_enabled"}}),
     )
 }
 

@@ -204,6 +204,20 @@ impl Coordinator {
         self.capabilities.read().get(machine_id).cloned()
     }
 
+    /// The Machines whose current connection reported an available browser
+    /// capability, sorted. A disconnect removes its Machine.
+    pub(in crate::server) fn available_machines(&self) -> Vec<String> {
+        let mut machines: Vec<String> = self
+            .capabilities
+            .read()
+            .iter()
+            .filter(|(_, capability)| capability.available)
+            .map(|(machine, _)| machine.clone())
+            .collect();
+        machines.sort();
+        machines
+    }
+
     /// Consume one Machine browser event from the current connection. It
     /// describes that Machine's instance only. A state that no longer
     /// matches a live viewer's attachment or incarnation ends that viewer.

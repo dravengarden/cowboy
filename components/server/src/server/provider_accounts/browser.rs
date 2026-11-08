@@ -300,7 +300,34 @@ fn first_machine_allowed(
     native: &[String],
     machine: &str,
 ) -> bool {
-    native.iter().any(|native| native == machine) || (placements.is_empty() && native.is_empty())
+    native.iter().any(|native| native == machine) || owner_chooses_machine(placements, native)
+}
+
+/// Whether the owner chooses the account's first browser Machine: it has no
+/// placement and no native credentials anywhere (never signed in).
+fn owner_chooses_machine(
+    placements: &[crate::store::provider_accounts::browser_placements::Placement],
+    native: &[String],
+) -> bool {
+    placements.is_empty() && native.is_empty()
+}
+
+/// The Machines a first open may choose from: connected on the browser
+/// protocol with an available browser capability on that connection.
+fn capable_machines(
+    browsers: &coordinator::Coordinator,
+    control: &crate::machine_control::MachineControl,
+) -> Vec<Value> {
+    browsers
+        .available_machines()
+        .into_iter()
+        .filter(|machine| {
+            control
+                .connection_protocol(machine)
+                .is_some_and(|(_, protocol)| protocol >= MACHINE_BROWSER_PROTOCOL_VERSION)
+        })
+        .map(|machine_id| json!({ "machine_id": machine_id }))
+        .collect()
 }
 
 /// Stable per-account instance id: one browser per account and Machine.
@@ -392,7 +419,13 @@ pub(in crate::server) async fn state_value(
         &placements,
         machine,
     );
-    let mut value = json!({"machine_id": Value::Null, "state": Value::Null, "placements": placements, "admission": gate});
+    let native = store
+        .native_generation_machines(owner, account_id)
+        .await
+        .map_err(|_| "unavailable")?;
+    let mut value = json!({"machine_id": Value::Null, "state": Value::Null, "placements": placements, "admission": gate,
+        "choose_machine": owner_chooses_machine(&placements, &native),
+        "capable_machines": capable_machines(&state.browsers, &state.machine_control)});
     if let Some(observed) = &observed {
         value["machine_id"] = json!(observed.machine_id);
         value["state"] = json!(observed.event);
@@ -1415,6 +1448,59 @@ mod tests {
         assert!(first_machine_allowed(&[], &[], "delta"));
         assert!(!first_machine_allowed(&[], &["gamma".to_owned()], "delta"));
         assert_eq!(error_status("browser_not_placed"), StatusCode::NOT_FOUND);
+        // The state read offers the choice exactly then.
+        assert!(owner_chooses_machine(&[], &[]));
+        assert!(!owner_chooses_machine(&placements, &[]));
+        assert!(!owner_chooses_machine(&[], &["gamma".to_owned()]));
+    }
+
+    #[test]
+    fn only_connected_capable_machines_are_offered_for_a_first_open() {
+        let control = crate::machine_control::MachineControl::default();
+        let coordinator = coordinator::Coordinator::default();
+        let capability = |available| crate::machine_protocol::machine_browser::Capability {
+            plugin_id: "machine-browser".into(),
+            plugin_version: "1.0.1".into(),
+            generation_digest: "digest".into(),
+            available,
+            reason: None,
+            max_instances: 2,
+        };
+        let mut connections = Vec::new();
+        for (machine, protocol, available) in [
+            ("zulu", MACHINE_BROWSER_PROTOCOL_VERSION, Some(true)),
+            ("alpha", MACHINE_BROWSER_PROTOCOL_VERSION, Some(true)),
+            (
+                "host-requirements",
+                MACHINE_BROWSER_PROTOCOL_VERSION,
+                Some(false),
+            ),
+            ("no-plugin", MACHINE_BROWSER_PROTOCOL_VERSION, None),
+            ("old", MACHINE_BROWSER_PROTOCOL_VERSION - 1, Some(true)),
+        ] {
+            let connection = control.install(
+                machine.into(),
+                "epoch".into(),
+                false,
+                protocol,
+                tokio::sync::mpsc::unbounded_channel().0,
+            );
+            coordinator.connected(&connection, available.map(capability));
+            connections.push(connection);
+        }
+        assert_eq!(
+            capable_machines(&coordinator, &control),
+            vec![
+                json!({"machine_id": "alpha"}),
+                json!({"machine_id": "zulu"})
+            ]
+        );
+        // A disconnected Machine is no longer offered.
+        coordinator.disconnected(&connections[0]);
+        assert_eq!(
+            capable_machines(&coordinator, &control),
+            vec![json!({"machine_id": "alpha"})]
+        );
     }
 
     #[test]
