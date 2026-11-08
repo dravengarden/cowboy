@@ -173,6 +173,19 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   either. The hint therefore covers only direct `fs/writeFile` callers until
   the helper's `process/start` result and Codex's patch method are observed.
 
+  Follow-up: that check was invalidated by a Controller bug. Native callers
+  send `file://` URLs and the first filter accepted only plain absolute paths;
+  URLs are now parsed. After the fix a Claude Write still showed no `write`,
+  because file buffering routes Write/Edit through the apply helper. The
+  Controller now also follows an inline helper request (`process/start` argv
+  `apply --request`, path and expected after-digest) by process ID through
+  that process's `process/read` stdout and records the write only for an
+  `applied` outcome with exactly the expected digest. The helper digest is of
+  the written bytes, so CRLF files never match the LF-normalized mirror.
+  Requests large enough to travel in a file are not observed. A process that
+  looks like Codex's self-executed patch application is logged as
+  `cowboy.execution.patch_process` (no patch text) to settle its route.
+
 On 2026-11-07 the Controller activated
 `1ad869c5fed6f033583b75a5c2db09869b60b678` through transaction
 `1794056365894580054-1ad869c5fed6` (`succeeded` / `committed`). The full pinned
