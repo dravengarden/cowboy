@@ -8,9 +8,9 @@
 // remote image addresses, and no instruction a person cannot see. A node
 // type the client does not know renders its `fallback`.
 //
-// This file is the source of truth for the document shape. The Rust
-// validator mirrors it; `WIDGET_LIMITS` are the bounds both enforce. The
-// catalog below is the Phase 1 catalog; later types are additive.
+// This file is the source of truth for the document shape and the wire
+// types. The Rust validator mirrors it; `WIDGET_LIMITS` are the bounds both
+// enforce. The catalog below is the Phase 1 catalog; later types are additive.
 
 export const WIDGET_SCHEMA = "cowboy.widget/1" as const;
 export type WidgetSchema = typeof WIDGET_SCHEMA;
@@ -18,11 +18,13 @@ export type WidgetSchema = typeof WIDGET_SCHEMA;
 /** Fence language of the read-only inline carrier (docs/widgets.md §6.4). */
 export const WIDGET_FENCE = "cowboy-widget" as const;
 
-/** Bounds enforced on every document, before and after a patch. Bytes are
- *  UTF-8 of the stored compact JSON; chars are Unicode scalar values; node
- *  depth counts nested nodes, JSON depth counts nested values. The 24 KiB
- *  document leaves room for the action envelope inside the 32 KiB
- *  `cowboy_execute` argument cap. */
+/** Bounds enforced on every document, before and after a patch. Units:
+ *  `*Bytes` are UTF-8 bytes of the stored compact JSON; `*Chars` are Unicode
+ *  scalar values (not UTF-16 units); `nodeDepth` counts nested nodes and
+ *  `jsonDepth` nested JSON values; numbers are finite doubles whose
+ *  magnitude is at most 2^53. The 24 KiB document leaves room for the action
+ *  envelope inside the 32 KiB re-serialized `cowboy_execute` argument cap
+ *  (the raw MCP frame cap is 1 MiB and is not the relevant bound). */
 export const WIDGET_LIMITS = {
   documentBytes: 24 * 1024,
   jsonDepth: 32,
@@ -34,11 +36,14 @@ export const WIDGET_LIMITS = {
   labelChars: 200,
   textChars: 8 * 1024,
   fallbackChars: 2 * 1024,
+  /** Inline `data` images: encoded bytes and intrinsic width/height, both
+   *  verified by the Controller before the document is stored. */
   inlineImageBytes: 8 * 1024,
-  inlineImagePixels: 128,
+  inlineImagePixels: 256,
   tableRows: 200,
   tableColumns: 12,
-  /** Aggregate budgets bound rendering work, not just the tree. */
+  /** Aggregate budgets bound rendering work, not just the tree. List items
+   *  count recursively. */
   tableCellsPerDocument: 2000,
   itemsPerDocument: 1000,
   imagesPerDocument: 24,
@@ -48,18 +53,32 @@ export const WIDGET_LIMITS = {
   kvItems: 100,
   steps: 50,
   options: 50,
+  /** Values a multiple choice may submit at once. */
+  maxSelected: 12,
   cardActions: 6,
+  /** Distinct decision groups per document (explicit plus implicit card groups). */
+  groups: 32,
   galleryImages: 24,
   patchOps: 64,
-  interactionsRetained: 20,
+  /** Serialized `InteractionRecord`, by construction of its bounded fields. */
+  interactionRecordBytes: 4 * 1024,
+  /** Interaction summaries carried inside a snapshot; full records are paged. */
+  snapshotInteractions: 5,
+  interactionsPerWidget: 200,
   widgetsPerSession: 500,
   openWidgetsPerSession: 200,
+  lookupIds: 200,
+  lookupBytes: 256 * 1024,
 } as const;
 
-/** Ids name nodes, option values and widgets: `[A-Za-z0-9_-]{1,64}`. An
- *  option value is an identifier, never prose, so it cannot carry an
- *  instruction the person did not see. */
+/** Ids name nodes, groups, option values and agent-chosen widget ids:
+ *  `[A-Za-z0-9_-]{1,64}`. They are addressing only: no identifier chosen by
+ *  an agent is ever copied into a message attributed to the person. */
 export const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** The Controller-assigned public handle of a widget (`w17`), shown in the
+ *  row header and used in composed messages instead of the agent's id. */
+export const WIDGET_HANDLE_PATTERN = /^w[1-9][0-9]*$/;
 
 export type Tone = "neutral" | "info" | "success" | "warning" | "error" | "running";
 export type Size = "xs" | "sm" | "md" | "lg";
@@ -106,27 +125,26 @@ export type Ref =
   | { kind: "file"; path: string; line?: number }
   | { kind: "document"; document_id: string }
   | { kind: "call"; call_id: string }
-  /** `/api/artifacts/<64 hex>.<png|jpg|webp|gif|avif>`: the exact string form
-   *  the artifact garbage collector extracts from stored JSON. */
+  /** `/api/artifacts/<64 hex>.<png|jpg|webp|gif|avif>`. */
   | { kind: "artifact"; url: string };
 
 export type ImageSource =
-  /** An artifact this owner can already fetch (a tool image, a Call result). */
+  /** An artifact this owner can already fetch (a tool image, a Call result).
+   *  Allowed in published documents, where the Controller verifies and pins
+   *  it; not allowed in the inline carrier. */
   | { kind: "artifact"; url: string }
   /** The `index`-th image block of the tool result stored at `seq` in this
-   *  session. `widgets.publish` resolves it to an `artifact` source before
-   *  storing the document; the inline carrier resolves it at render time. */
+   *  session. Every `publish`/`replace`/`patch` resolves it to an `artifact`
+   *  source before storing; the inline carrier resolves it at render time. */
   | { kind: "event"; seq: number; index?: number }
-  /** A small inline image (icon, glyph): ≤ `inlineImageBytes`, drawn in an
-   *  `<img>` box of at most `inlineImagePixels`; SVG stays an opaque image. */
-  | {
-      kind: "data";
-      mime: "image/png" | "image/jpeg" | "image/webp" | "image/svg+xml";
-      base64: string;
-    };
+  /** A small still image (icon, glyph): ≤ `inlineImageBytes`, intrinsic size
+   *  ≤ `inlineImagePixels` square, no animation; verified by the Controller,
+   *  so not allowed in the inline carrier. SVG is deferred. */
+  | { kind: "data"; mime: "image/png" | "image/jpeg" | "image/webp"; base64: string };
 
 interface NodeBase {
-  /** Required on nodes a patch, an action, a group or a value refers to. */
+  /** Required on nodes a patch, a group or a value refers to, and on a card
+   *  with `actions` (its implicit group id). */
   id?: string;
   /** Markdown shown when this node type is unknown to the client and in
    *  text-only surfaces (notifications, search, older clients). */
@@ -155,7 +173,8 @@ export type LayoutNode =
       title?: string;
       subtitle?: string;
       status?: { label: string; tone?: Tone };
-      /** Footer buttons; one implicit decision group (docs/widgets.md §8.4). */
+      /** Footer buttons; one implicit decision group named by the card's
+       *  `id` (docs/widgets.md §8.4). */
       actions?: ButtonNode[];
       children: Node[];
     })
@@ -265,7 +284,10 @@ export type MediaNode =
 
 // Input. A tap resolves to an `Action`. The only path back to the agent is
 // `prompt`, and it carries no hidden text: the Controller composes the user
-// message from what the person saw (docs/widgets.md §8.2).
+// message from the visible label, the selected option labels, the widget's
+// public handle and its revision (docs/widgets.md §8.2). Interactive labels
+// are unique within a widget and option labels within a choice, so a label
+// identifies the node without exposing any agent-chosen identifier.
 
 export type InputNode = ButtonNode | ChoiceNode;
 
@@ -283,32 +305,35 @@ export type ButtonNode = NodeBase & {
   confirm?: string;
   /** Interactive nodes sharing a group are mutually exclusive: after one
    *  decision is admitted the others are inert until a later revision
-   *  changes them. `card.actions` share the card's implicit group. */
+   *  changes the group's interaction signature. */
   group?: string;
 };
 
 /** One or several options. Selection never sends by itself: the Send control
  *  (Mobile button, Desktop `Mod+Enter`) submits a `prompt` with the selected
- *  option values and labels. */
+ *  option labels, after the exact message has been shown. */
 export type ChoiceNode = NodeBase & {
   type: "choice";
   label?: string;
   options: Option[];
   multiple?: boolean;
+  /** ≤ `maxSelected`; defaults to `maxSelected` when `multiple`. */
+  max_selected?: number;
   value?: string | string[];
   submit?: { label?: string; confirm?: string };
   group?: string;
 };
 
-/** `value` follows `WIDGET_ID_PATTERN`. */
+/** `value` follows `WIDGET_ID_PATTERN` and is addressing only; `label` is
+ *  what the person reads and what the composed message carries. */
 export type Option = { value: string; label: string; detail?: string; tone?: Tone };
 
 export type Action =
-  /** Send what the person saw: the node label (or selected option labels)
-   *  plus the widget id, revision and node id. */
+  /** Send what the person saw: the node label (or the selected option
+   *  labels) plus the widget handle and revision. */
   | { kind: "prompt" }
   | { kind: "open"; to: Ref }
-  /** Copies `text`; the toast shows what was copied. */
+  /** Copies `text`; the toast shows what was copied. Local, never admitted. */
   | { kind: "copy"; text: string };
 // Reserved for a later revision, behind a product confirm and an allowlist:
 // { kind: "control"; name: string; input: JsonObject } (docs/widgets.md §12).
@@ -331,6 +356,29 @@ export interface WidgetDocument {
   };
 }
 
+/** The user message the Controller composes for a `prompt` interaction
+ *  (docs/widgets.md §8.2). Line one is the visible label (for a choice,
+ *  "Decision: " and the selected labels); line two names only the public
+ *  handle, the revision and, for a choice, the selected labels. The Rust
+ *  composer mirrors this function and the shared fixtures hold both to it. */
+export function composeInteractionMessage(
+  handle: string,
+  revision: number,
+  label: string,
+  selected?: readonly string[],
+): string {
+  const reference: { widget: string; revision: number; selected?: string[] } = {
+    widget: handle,
+    revision,
+  };
+  let first = label;
+  if (selected !== undefined) {
+    first = `Decision: ${selected.join(", ")}`;
+    reference.selected = [...selected];
+  }
+  return `[widget ${handle} r${revision}] ${first}\n${JSON.stringify(reference)}`;
+}
+
 // Transport (docs/widgets.md §6). The agent-facing API is discovered with
 // cowboy_read({help:"widgets"}); these are its wire types.
 
@@ -338,14 +386,16 @@ export type WidgetChange =
   | { type: "replace"; document: WidgetDocument }
   /** All ops apply or none; the result must satisfy every bound. */
   | { type: "patch"; ops: PatchOp[] }
-  /** Terminal: interactions become inert; no later change is accepted. */
+  /** Terminal for the document and for new interactions; already admitted
+   *  interactions still settle (docs/widgets.md §6.6 W5). */
   | { type: "close"; summary?: string };
 
 /** `path` is an RFC 6901 JSON Pointer into the document (`~0`, `~1`
  *  escaping), or `#<node id>` optionally followed by a pointer inside that
  *  node (`#plan/steps/1/state`). `set` replaces an existing value or array
- *  index; `append` adds to an array (`-` is not needed); `remove` deletes a
- *  property or an array index. A missing path is `invalid`. */
+ *  index; `append` adds to an array; `remove` deletes a property or an array
+ *  index. Ops apply in order against the running result; a missing path is
+ *  `invalid`. */
 export type PatchOp =
   | { op: "set"; path: string; value: JsonValue }
   | { op: "remove"; path: string }
@@ -370,11 +420,12 @@ export type PublishResult =
   | {
       status: "committed";
       widget_id: string;
+      handle: string;
       revision: 1;
       state_version: number;
       warnings: string[];
     }
-  | { status: "exists"; widget_id: string; revision: number }
+  | { status: "exists"; widget_id: string; handle: string; revision: number }
   | { status: "invalid"; errors: ValidationError[] }
   | { status: "refused"; code: "widget_limit" | "rate_limited" | "session_unavailable" };
 
@@ -390,61 +441,112 @@ export type UpdateResult =
   | { status: "invalid"; errors: ValidationError[] }
   | { status: "unknown_widget" }
   | { status: "closed" }
+  | { status: "cleared" }
   | { status: "refused"; code: "rate_limited" | "session_unavailable" };
 
 export type WidgetMeta = {
   widget_id: string;
+  handle: string;
   session_id: string;
   title: string;
   summary: string | null;
   /** Document revision: advanced by `publish`/`update` only (CAS key). */
   revision: number;
-  /** Advanced by every mutation including interactions and close; orders
-   *  snapshots, lookups and client merges. */
+  /** Advanced by every mutation including interaction settlement and close;
+   *  orders snapshots, lookups and client merges. */
   state_version: number;
+  /** The session's transcript generation the widget belongs to; Clear
+   *  advances it and tombstones every earlier widget. */
+  transcript_generation: number;
   closed: boolean;
-  seq: number;
+  /** Anchor seq of the transcript row; null until first published. */
+  seq: number | null;
   published_at_ms: number;
   updated_at_ms: number;
   interactions: number;
+  /** Revisions kept readable because a decision was made on them. */
+  pinned_revisions: number[];
 };
 
-/** `widgets.read(widget_id, {select, offset?, chars?})`. A whole document can
- *  exceed the 16 KiB read budget, so the document is read as a text window
- *  of its compact JSON; restart when `state_version` changes between pages. */
-export type ReadSelection = "meta" | "document" | "interactions";
-export type ReadResult = {
-  meta: WidgetMeta;
-  document?: { text: string; range: { offset: number; next: number | null; total: number } };
-  interactions?: InteractionRecord[];
+export type ListArguments = {
+  /** Another same-owner session; defaults to the calling session. */
+  session_id?: string;
+  after?: string;
+  limit?: number;
+  include_closed?: boolean;
 };
+export type ListResult = {
+  widgets: WidgetMeta[];
+  next: string | null;
+  transcript_generation: number;
+};
+
+/** `widgets.read`. A whole document can exceed the 16 KiB read budget, so
+ *  `document` is a text window over the compact JSON (default 1,000 chars,
+ *  max 4,000); restart when `state_version` changes between pages.
+ *  `revision` reads a pinned earlier revision. Interaction records are paged
+ *  by cursor with at least one record per page. */
+export type ReadSelection = "meta" | "document" | "interactions";
+export type ReadArguments = {
+  session_id?: string;
+  widget_id: string;
+  select: ReadSelection;
+  revision?: number;
+  offset?: number;
+  chars?: number;
+  after?: string;
+  limit?: number;
+};
+export type ReadResult =
+  | {
+      status: "ok";
+      meta: WidgetMeta;
+      document?: {
+        revision: number;
+        text: string;
+        range: { offset: number; next: number | null; total: number };
+      };
+      interactions?: { records: InteractionRecord[]; next: string | null };
+    }
+  | { status: "unknown_widget" }
+  | { status: "cleared" }
+  | { status: "unknown_revision" };
 
 /** The person's use of an interactive node, as the agent and the Web see it.
  *  Everything the person saw and chose is recorded immutably with the
- *  revision it was made on. */
+ *  revision it was made on; the revision stays readable (`pinned_revisions`). */
 export type InteractionRecord = {
   interaction_id: string;
+  handle: string;
   node_id: string;
   group: string | null;
-  /** Document revision and state version the person was looking at. */
+  /** Document revision, state version and transcript generation the person
+   *  was looking at. */
   revision: number;
   state_version: number;
+  transcript_generation: number;
   /** Visible intent: the button label or the choice label. */
   label: string;
-  /** Selected option values and their visible labels, for a choice. */
-  selection?: {
-    values: Record<string, string | string[]>;
-    labels: Record<string, string | string[]>;
-  };
+  /** Visible labels of the selected options, for a choice. */
+  selected?: string[];
   /** The exact user message the Controller composed. */
   message: string;
   at_ms: number;
-  /** admitted: recorded durably; queued: in the session queue; delivered:
-   *  consumed by a turn; cancelled: removed from the queue or fenced by a
-   *  transcript clear; failed: refused by the session. */
-  state: "admitted" | "queued" | "delivered" | "cancelled" | "failed";
+  /** admitted: recorded durably, waiting to enter or sitting in the session
+   *  queue; dispatched: handed to the agent after a durable write-ahead
+   *  mark; delivered: the message's echo is in the durable transcript;
+   *  uncertain: dispatched but no echo after the worker was replaced, so
+   *  delivery cannot be proven and is never replayed blindly; cancelled:
+   *  removed from the queue or fenced by a transcript Clear; failed: refused
+   *  by the session. */
+  state: "admitted" | "dispatched" | "delivered" | "uncertain" | "cancelled" | "failed";
   reason?: string;
 };
+
+export type InteractionSummary = Pick<
+  InteractionRecord,
+  "interaction_id" | "node_id" | "group" | "revision" | "state" | "at_ms"
+>;
 
 /** Body of the anchored transcript row. The row itself is carried as a
  *  `notice` update (`title` = widget title, `description` = text projection)
@@ -453,17 +555,21 @@ export type InteractionRecord = {
  *  row per `widgetId`; every later snapshot replaces it in place. */
 export type WidgetSnapshot = {
   widgetId: string;
+  handle: string;
   revision: number;
   stateVersion: number;
+  transcriptGeneration: number;
+  /** Anchor seq once known; null in the first snapshot. */
+  seq: number | null;
   publishedAtMs: number;
   updatedAtMs: number;
   origin: { kind: "mcp"; operation: string } | { kind: "repaired" };
   closed: boolean;
   document: WidgetDocument;
-  /** Newest last; bounded by `interactionsRetained`. */
-  interactions: InteractionRecord[];
-  /** Group → interaction that decided it. */
-  decided: Record<string, string>;
+  /** Newest last; bounded by `snapshotInteractions`. Full records: `widgets.read`. */
+  recentInteractions: InteractionSummary[];
+  /** Group id → the interaction that decided it and the revision it was decided on. */
+  decided: Record<string, { interaction_id: string; revision: number }>;
 };
 
 export type WidgetRow = {
@@ -474,26 +580,53 @@ export type WidgetRow = {
   _cowboy: { widget: WidgetSnapshot };
 };
 
-/** Bootstrap and `POST /api/sessions/:id/widgets/lookup` entries. */
-export type WidgetStateEntry = { widget_id: string; state_version: number; closed: boolean };
+/** Bootstrap entries for a session's widgets (open and closed, ≤
+ *  `widgetsPerSession`). A client discards cached widgets absent from a
+ *  complete list and reconciles those whose `state_version` is older. */
+export type WidgetStateEntry = {
+  widget_id: string;
+  handle: string;
+  state_version: number;
+  closed: boolean;
+  seq: number | null;
+};
 export type WidgetState = {
   /** Controller boot epoch; a new epoch replaces, never merges, cached entries. */
   epoch: string;
+  transcript_generation: number;
   entries: WidgetStateEntry[];
   /** False when the session has more widgets than the entry budget. */
   complete: boolean;
 };
-export type WidgetLookupRequest = { widget_ids: string[] };
+
+/** `POST /api/sessions/:id/widgets/lookup`. A response from another epoch or
+ *  transcript generation than the request is discarded and reconciliation
+ *  restarts from bootstrap. At least one `current` snapshot is returned when
+ *  any requested id is current; `next` resumes the rest. */
+export type WidgetLookupRequest = {
+  widget_ids: string[];
+  epoch: string;
+  transcript_generation: number;
+  after?: string;
+};
+export type WidgetLookupOutcome =
+  | { widget_id: string; outcome: "current"; snapshot: WidgetSnapshot }
+  /** Tombstoned by a Clear: the client removes its cached row. */
+  | { widget_id: string; outcome: "cleared" }
+  /** Never existed in this generation: the client removes its cached row. */
+  | { widget_id: string; outcome: "unknown" };
 export type WidgetLookupResult = {
-  entries: WidgetStateEntry[];
-  snapshots: WidgetSnapshot[];
-  complete: boolean;
+  epoch: string;
+  transcript_generation: number;
+  results: WidgetLookupOutcome[];
+  next: string | null;
 };
 
-/** Client → Controller: a person used an interactive node. The Controller
- *  admits it durably (idempotent on `interaction_id`), composes the user
- *  message, relays it to the session queue and reports through
- *  `widget_action_result` and the next snapshot. */
+/** Client → Controller: a person used a `prompt` node (`open` and `copy`
+ *  never reach the Controller). The Controller admits it durably
+ *  (idempotent on `interaction_id`), composes the message, relays it to the
+ *  session queue and reports through `widget_action_result` and later
+ *  snapshots. */
 export type WidgetActionCommand = {
   type: "widget_action";
   session_id: string;
@@ -501,33 +634,54 @@ export type WidgetActionCommand = {
   /** What the person saw; a stale tap is refused, never re-targeted. */
   revision: number;
   state_version: number;
+  transcript_generation: number;
   node_id: string;
   /** Client-generated; a retry reuses it and receives the original outcome. */
   interaction_id: string;
-  /** Choice selections keyed by choice node id. */
-  values?: Record<string, string | string[]>;
+  /** Selected option values (addressing) per choice node id; the Controller
+   *  maps them to labels. A single choice carries one value, a multiple
+   *  choice 1..`max_selected`. */
+  selected?: Record<string, string[]>;
 };
 
 export type WidgetActionRefusal =
   | "stale_revision"
   | "stale_state"
+  | "stale_generation"
   | "closed"
   | "cleared"
   | "unknown_widget"
   | "unknown_node"
   | "not_interactive"
+  | "disabled"
   | "group_decided"
   | "in_flight"
-  | "invalid_values"
+  | "invalid_selection"
+  | "interaction_limit"
   | "rate_limited"
   | "session_unavailable"
   | "conflict";
 
-export type WidgetActionResult = {
-  type: "widget_action_result";
-  interaction_id: string;
-  outcome: "admitted" | "replayed" | "refused";
-  refusal?: WidgetActionRefusal;
-  /** Present when refused for staleness: the snapshot the client should show. */
-  current?: WidgetSnapshot;
-};
+/** Refusals are stateless: nothing is recorded and a retry with the same id
+ *  is evaluated afresh. `replayed` is returned only for an admitted id. */
+export type WidgetActionResult =
+  | {
+      type: "widget_action_result";
+      interaction_id: string;
+      outcome: "admitted";
+      state_version: number;
+    }
+  | {
+      type: "widget_action_result";
+      interaction_id: string;
+      outcome: "replayed";
+      state: InteractionRecord["state"];
+    }
+  | {
+      type: "widget_action_result";
+      interaction_id: string;
+      outcome: "refused";
+      refusal: WidgetActionRefusal;
+      /** Present for `stale_*`: the snapshot the client should show. */
+      current?: WidgetSnapshot;
+    };
