@@ -14,6 +14,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
 
+mod agent_refresh;
 mod analysis;
 mod buffer_leases;
 mod buffer_navigation;
@@ -33,7 +34,7 @@ mod legacy_buffers;
 mod legacy_release;
 #[cfg(test)]
 use extensions::extension_manifest;
-use language_observation::{LanguageObservation, buffer_language};
+use language_observation::LanguageObservation;
 use legacy_buffers::{close_buffer, open_buffer};
 use native_open::open_buffer_at;
 mod native_close;
@@ -174,6 +175,8 @@ enum Request {
     BufferLanguage {
         worktree: PathBuf,
         path: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh: Option<agent_refresh::Refresh>,
     },
     BufferHover {
         worktree: PathBuf,
@@ -292,6 +295,8 @@ enum Response {
         semantic_tokens: Vec<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         analysis: Option<Vec<analysis::ServerAnalysis>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        refresh: Option<agent_refresh::Outcome>,
     },
     BufferHover {
         api_version: u8,
@@ -1351,9 +1356,8 @@ async fn respond(
         | Request::ReadBufferLease { .. }) => {
             buffer_leases::respond(request, worktrees, buffers, zed).await?
         }
-        Request::BufferLanguage { worktree, path } => {
-            trust::ensure_language(&worktree, worktrees).await?;
-            buffer_language(worktree, path, buffers, zed).await?
+        request @ Request::BufferLanguage { .. } => {
+            language_observation::respond(request, worktrees, buffers, zed).await?
         }
         Request::BufferHover {
             worktree,
@@ -1946,6 +1950,7 @@ mod tests {
             diagnostics: Vec::new(),
             inlay_hints: Vec::new(),
             semantic_tokens: Vec::new(),
+            refresh: None,
             analysis: Some(vec![analysis::ServerAnalysis {
                 server_id: 3,
                 name: "rust-analyzer".into(),

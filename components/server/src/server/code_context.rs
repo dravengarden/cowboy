@@ -280,6 +280,9 @@ pub(super) enum ZedAdapterResponse {
         /// Per-server analysis evidence; absent from engines without it.
         #[serde(default)]
         analysis: Option<Vec<ServerAnalysis>>,
+        /// Outcome of a requested agent-owned reload; absent otherwise.
+        #[serde(default)]
+        refresh: Option<String>,
     },
     BufferHover {
         api_version: u8,

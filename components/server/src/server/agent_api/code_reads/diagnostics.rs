@@ -10,7 +10,7 @@
 
 use serde_json::{Value, json};
 
-use super::super::super::code_reads::language::observe_open_buffer;
+use super::super::super::code_reads::language::{self, observe_open_buffer};
 use super::super::super::{
     AnalysisState, AppState, ServerAnalysis, SourceState, ZedAdapterResponse,
 };
@@ -40,7 +40,10 @@ async fn observe(
             // Track an open file under the agent's own owner too, within its
             // share: a holding left by an earlier Controller is then released
             // when idle instead of pinning its code runtime indefinitely.
-            let _ = super::acquire::acquire(state, session, path, trust).await;
+            let held = super::acquire::acquire(state, session, path, trust).await;
+            if held.is_ok() && changed(&first) {
+                return (refresh(state, observed, path, trust, first).await, false);
+            }
         }
         return (first, false);
     }
@@ -59,6 +62,53 @@ async fn observe(
             return (reply, true);
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+fn changed(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
+    matches!(
+        reply,
+        Ok(ZedAdapterResponse::BufferLanguage {
+            source_state: SourceState::Changed,
+            ..
+        })
+    )
+}
+
+/// Ask the engine to reload a mirror only this Session's agent acquisitions
+/// own, because its source changed, then wait briefly for analysis of the new
+/// text. The engine refuses when any other owner shares the buffer. An older
+/// engine rejects the request; its original observation is kept.
+async fn refresh(
+    state: &AppState,
+    observed: &SessionReadScope,
+    path: &str,
+    trust: &crate::core::LanguageServerTrust,
+    original: anyhow::Result<ZedAdapterResponse>,
+) -> anyhow::Result<ZedAdapterResponse> {
+    let query = language::Query::RefreshedLanguage {
+        refresh: language::AgentOwned::AgentOwned,
+    };
+    let reply = language::query_open_buffer(state, observed, path, query).await;
+    let reloaded = matches!(&reply, Ok(ZedAdapterResponse::BufferLanguage { refresh: Some(outcome), .. })
+        if outcome == "reloaded");
+    if !reloaded || !trust.current(&state.hub) {
+        return if reply.is_ok() { reply } else { original };
+    }
+    let deadline = tokio::time::Instant::now() + ANALYSIS_WAIT;
+    let mut latest = reply;
+    loop {
+        if !trust.current(&state.hub) || tokio::time::Instant::now() >= deadline {
+            return latest;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        latest = observe_open_buffer(state, observed, path).await;
+        let settled = matches!(&latest, Ok(ZedAdapterResponse::BufferLanguage {
+            source_state: SourceState::Matching, analysis: Some(servers), .. })
+            if !servers.is_empty() && servers.iter().all(|server| server.state != AnalysisState::Unknown));
+        if settled || latest.is_err() {
+            return latest;
+        }
     }
 }
 

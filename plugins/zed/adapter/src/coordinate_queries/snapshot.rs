@@ -56,9 +56,16 @@ async fn language_snapshot_uses_current_mirror_not_open_version_or_disk() {
             let zed = zed.clone();
             let root = root.clone();
             let buffers = buffers.clone();
-            tokio::spawn(
-                async move { buffer_language(root, path.into(), &buffers, Some(&zed)).await },
-            )
+            tokio::spawn(async move {
+                crate::language_observation::buffer_language(
+                    root,
+                    path.into(),
+                    None,
+                    &buffers,
+                    Some(&zed),
+                )
+                .await
+            })
         };
         for _ in 0..3 {
             let request = outbound.recv().await.unwrap();

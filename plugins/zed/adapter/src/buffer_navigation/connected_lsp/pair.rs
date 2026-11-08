@@ -337,6 +337,7 @@ async fn diagnostic_identity(client: &Client, workspace: &Path, lease: &LeaseRef
                 .request(Request::BufferLanguage {
                     worktree: workspace.to_path_buf(),
                     path: "navigation.rs".into(),
+                    refresh: None,
                 })
                 .await;
             if reply["diagnostics"]
