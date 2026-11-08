@@ -180,6 +180,7 @@ const zhMessages = {
   "plugins.kind.extension": "工作区扩展",
   "plugins.kind.memory": "记忆",
   "plugins.kind.calls": "Agent 调用",
+  "plugins.kind.browser": "Machine 浏览器",
   "plugins.summary.github":
     "使用工作区所在 Machine 已有的 GitHub CLI 登录态，查看仓库的拉取请求、Issues 和 Actions。",
   "plugins.component": "组件",
@@ -191,6 +192,8 @@ const zhMessages = {
     "运行于隔离 DeepSeek runtime、提供百万 token 通道的 Claude Code",
   "plugins.summary.deepseek-harness": "运行于隔离 DeepSeek runtime 的 DeepSeek 官方 Agent Harness",
   "plugins.summary.zed": "为每个已连接 worktree 提供进程隔离的符号、悬停、定义与引用。",
+  "plugins.summary.machine-browser":
+    "运行在 Machine 上、由所有者操作的 Chromium，用于账户登录，每个账户相互隔离。",
   "plugins.summary.matrix": "在 Codex 与 Claude 会话之间共享、有证据支撑的长期记忆。",
   "plugins.summary.review":
     "通过 Cowboy 托管调用，由另一类 Agent 进行只读的代码审查、设计审查和分析。",
