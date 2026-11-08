@@ -24,9 +24,9 @@ import { requestPickSession } from "./sessionPickRequest";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { accountIdentity, sessionAccountIdentity } from "./accountIdentity";
 import { contextCue } from "./contextCue";
-import { restoreItems, trashItems, useStoreSelector } from "./store";
+import { trashItems, useStoreSelector } from "./store";
 import { SESSION_LINK_LABEL, sessionLinks, type SessionLinkRow } from "./sessionLinks";
-import { requestSessionReveal } from "./sessionReveal";
+import { openSessionLink, SessionHandoffSource, useRestoreSession } from "./SessionHandoffSource";
 import type { SessionMeta } from "./protocol";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
 import { duplicateMode, duplicateSession, forkAvailability, forkSession } from "./sessionFork";
@@ -312,11 +312,6 @@ export function SessionNextMessageBadge(
   );
 }
 
-function openSessionLink(link: SessionLinkRow, session: SessionMeta | undefined): void {
-  if (link.before === undefined) requestPickSession(link.id, session);
-  else requestSessionReveal(link.id, session, link.before);
-}
-
 /** Announcements are per tab; after a reload the synced marks say to read. */
 function useSessionLinks(sessionId: string): SessionLinkRow[] {
   const session = useStoreSelector((state) =>
@@ -338,7 +333,7 @@ export function SessionContinuedFrom(
   if (!source) return null;
   return (
     <Box data-session-handoff="start" sx={{ alignSelf: "center", maxWidth: "100%", minWidth: 0 }}>
-      <SessionLink link={source} handoff />
+      <SessionHandoffSource link={source} />
     </Box>
   );
 }
@@ -451,16 +446,15 @@ export function SessionHandedOffDock(
 
 /** One session this conversation came from or read. Open while it exists;
  *  a source in Trash can come back, a deleted one stays as a named record. */
-function SessionLink({ link, handoff = false }: { link: SessionLinkRow; handoff?: boolean }): React.JSX.Element {
+function SessionLink({ link }: { link: SessionLinkRow }): React.JSX.Element {
   const session = useStoreSelector((state) =>
     state.sessions.find((entry) => entry.id === link.id)
   );
   const { data: accounts } = useSubscriptionAccounts();
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState("");
+  const { busy, failure, restore } = useRestoreSession(link.id);
   const note = link.state === "trash" ? "In Trash" : link.state === "deleted" ? "Deleted" : "";
   const detail = [
-    !handoff && SESSION_LINK_LABEL[link.kind],
+    SESSION_LINK_LABEL[link.kind],
     session && sessionAccountIdentity(accounts, session).short,
     note,
   ].filter(Boolean).join(" · ");
@@ -473,13 +467,12 @@ function SessionLink({ link, handoff = false }: { link: SessionLinkRow; handoff?
   return (
     <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0, maxWidth: "100%" }}>
       <ButtonBase
-        data-session-link={handoff ? undefined : link.state}
-        data-session-handoff-link={handoff ? link.state : undefined}
+        data-session-link={link.state}
         disabled={!open}
         title={open ? "Open at the point it was linked" : link.title}
         onClick={(): void => openSessionLink(link, session)}
         sx={{
-          flex: handoff ? "0 1 auto" : 1,
+          flex: 1,
           minWidth: 0,
           minHeight: 44,
           gap: 1,
@@ -489,20 +482,16 @@ function SessionLink({ link, handoff = false }: { link: SessionLinkRow; handoff?
           textAlign: "left",
         }}
       >
-        {!handoff && <Icon
+        <Icon
           sx={{
             fontSize: glyphSize(18),
             flexShrink: 0,
             color: open ? "primary.main" : "text.disabled",
           }}
-        />}
+        />
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography
-            variant={handoff ? "caption" : "body2"}
-            noWrap
-            color={open ? "text.primary" : "text.secondary"}
-          >
-            {handoff && "From "}{link.title}
+          <Typography variant="body2" noWrap color={open ? "text.primary" : "text.secondary"}>
+            {link.title}
           </Typography>
           {(failure || detail) && <Typography
             variant="caption"
@@ -523,16 +512,8 @@ function SessionLink({ link, handoff = false }: { link: SessionLinkRow; handoff?
         <Button
           size="small"
           disabled={busy}
-          onClick={(): void => {
-            setBusy(true);
-            setFailure("");
-            void restoreItems({ sessions: [link.id] })
-              .catch((error: unknown) =>
-                setFailure(error instanceof Error ? error.message : "Could not restore")
-              )
-              .finally(() => setBusy(false));
-          }}
-          sx={{ flexShrink: 0, minWidth: 0, minHeight: 44, textTransform: "none", ...(handoff ? { fontSize: "0.75rem", px: 1 } : {}) }}
+          onClick={restore}
+          sx={{ flexShrink: 0, minWidth: 0, minHeight: 44, textTransform: "none" }}
         >
           Restore
         </Button>
