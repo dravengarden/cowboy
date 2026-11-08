@@ -1,7 +1,8 @@
 // Worked examples for docs/widgets.md: the three report shapes history shows
 // most (status table, comparison, approval) and one in-place update. Each
-// example carries the Markdown an agent writes today for the same content,
-// so widget-v1.test.ts can hold the documented size claims to the data.
+// example carries the Markdown an agent writes today for the same content in
+// the same language, so widget-v1.test.ts can hold the documented size
+// claims to the data.
 
 import { type PatchOp, WIDGET_SCHEMA, type WidgetDocument } from "./widget-v1.ts";
 
@@ -33,11 +34,11 @@ export const statusTable: WidgetDocument = {
       {
         type: "button",
         id: "restart",
-        label: "Restart chrome-debug",
+        label: "Restart chrome-debug.service and report the new RSS",
         variant: "secondary",
         icon: "refresh",
-        confirm: { title: "Restart chrome-debug.service?", text: "Open Chrome tabs are lost." },
-        action: { kind: "prompt", text: "Restart chrome-debug.service and report the new RSS." },
+        confirm: "Open Chrome tabs are lost.",
+        action: { kind: "prompt" },
       },
     ],
   },
@@ -53,7 +54,7 @@ export const statusTableMarkdown = `**Hawk services** — 5 units checked, 1 deg
 | stormbird-device.service | ✅ active | 88 MB | 2d 4h |
 | janus.service | ⚪ inactive | 0 | — |
 
-要不要我重启 chrome-debug.service？会丢失已打开的 Chrome 标签页。`;
+Shall I restart chrome-debug.service and report the new RSS? Open Chrome tabs would be lost.`;
 
 export const comparison: WidgetDocument = {
   schema: WIDGET_SCHEMA,
@@ -89,27 +90,27 @@ export const comparison: WidgetDocument = {
         options: [
           { value: "a", label: "Go with A" },
           { value: "b", label: "Go with B" },
-          { value: "more", label: "Need more detail" },
+          { value: "more", label: "I need more detail" },
         ],
-        submit: { kind: "prompt", text: "Decision on the signup token handoff" },
+        submit: { label: "Send decision" },
       },
     ],
   },
 };
 
-export const comparisonMarkdown = `## 对比
+export const comparisonMarkdown = `## Comparison
 
-| | 方案一：query | 方案二：redirect + cookie |
+| | A: query | B: redirect + cookie |
 |---|---|---|
-| 跳转次数 | 1 | 2 |
-| 卖家脚本能否读到 token | 被 SDK 擦掉之前读得到 | **完全读不到**（HttpOnly） |
-| 刷新 | 依赖 sessionStorage | cookie 自带 |
-| host 设计 | 一个 host 加 path | **每个卖家一个一级子域** |
-| Worker | 只从 R2 读页面 | 还要处理 redirect、cookie、代理提交 |
+| Redirects | 1 | 2 |
+| Token visible to seller script | until the SDK strips it | **never** (HttpOnly) |
+| Refresh | sessionStorage | cookie |
+| Host design | one host + path | **one subdomain per seller** |
+| Worker | reads R2 | redirect, cookie, proxy |
 
-**我的建议还是方案一**：token 价值很低，方案二多出来的隔离收益抵不上子域名、DNS、Worker 代理的复杂度。
+**I still recommend A**: the token is low-value, and B's isolation does not pay for its DNS, wildcard and proxy complexity.
 
-选方案一、方案二，还是需要更多细节？`;
+Go with A, go with B, or do you need more detail?`;
 
 export const approval: WidgetDocument = {
   schema: WIDGET_SCHEMA,
@@ -143,17 +144,17 @@ export const approval: WidgetDocument = {
       {
         type: "button",
         id: "go",
-        label: "Activate",
+        label: "Activate the built cowboy-web release and verify it",
         variant: "primary",
-        confirm: { title: "Activate on hawk?", text: "Moves /run/cowboy-web; restarts nothing." },
-        action: { kind: "prompt", text: "Activate the built cowboy-web release and verify it." },
+        confirm: "Moves /run/cowboy-web; restarts nothing.",
+        action: { kind: "prompt" },
       },
       {
         type: "button",
         id: "hold",
-        label: "Not now",
+        label: "Not now, keep the build result",
         variant: "text",
-        action: { kind: "prompt", text: "Do not activate; keep the build result." },
+        action: { kind: "prompt" },
       },
     ],
   },
@@ -165,12 +166,12 @@ export const approvalMarkdown = `**Release candidate: built**
 - **Output**: .#cowboy-web-release
 - **Tests**: web 412 passed
 
-计划：
-- [x] 构建
-- [ ] 激活 /run/cowboy-web
-- [ ] 验证 /version 和 service worker
+Plan:
+- [x] Build
+- [ ] Activate /run/cowboy-web
+- [ ] Verify /version and the service worker
 
-要不要我现在激活？只移动 /run/cowboy-web，不重启任何进程。`;
+Shall I activate it now? This moves /run/cowboy-web and restarts nothing.`;
 
 /** The update after activation: three fields change, nothing is re-sent. */
 export const progressPatch: PatchOp[] = [
@@ -180,8 +181,13 @@ export const progressPatch: PatchOp[] = [
 ];
 
 /** What an agent writes today to report the same transition. */
-export const progressMarkdown = `已激活 /run/cowboy-web（1b9f121eb），正在验证 /version、SPA 缓存头和 service worker。
+export const progressMarkdown = `Activated /run/cowboy-web (1b9f121eb); now verifying /version, the SPA cache headers and the service worker.
 
-- [x] 构建
-- [x] 激活 /run/cowboy-web
-- [ ] 验证 /version 和 service worker`;
+- [x] Build
+- [x] Activate /run/cowboy-web
+- [ ] Verify /version and the service worker`;
+
+/** The user message the Controller composes when the person taps "Activate…"
+ *  on revision 1 (docs/widgets.md §7.2). */
+export const approvalTapMessage = `[widget deploy-1b9f121 r1] Activate the built cowboy-web release and verify it
+{"widget":"deploy-1b9f121","revision":1,"node":"go"}`;

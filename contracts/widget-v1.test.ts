@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import {
   approval,
   approvalMarkdown,
+  approvalTapMessage,
   comparison,
   comparisonMarkdown,
   progressMarkdown,
@@ -11,29 +12,32 @@ import {
 } from "./widget-v1.examples.ts";
 import { type Node, WIDGET_ID_PATTERN, WIDGET_LIMITS, type WidgetDocument } from "./widget-v1.ts";
 
-const bytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
+const encoder = new TextEncoder();
+const bytes = (value: unknown): number =>
+  encoder.encode(typeof value === "string" ? value : JSON.stringify(value)).length;
 
 function children(node: Node): Node[] {
   switch (node.type) {
     case "stack":
-    case "grid":
     case "section":
       return node.children;
     case "card":
       return [...node.children, ...(node.actions ?? [])];
-    case "tabs":
-      return node.tabs.flatMap((tab) => tab.children);
     default:
       return [];
   }
 }
 
 /** Walks a document the way both validators must: bounded nodes, depth,
- *  unique ids, and the per-type collection limits. */
+ *  unique ids, identifier-shaped option values, the per-type collection
+ *  limits and the aggregate rendering budgets. */
 function check(document: WidgetDocument): { nodes: number; depth: number } {
   const ids = new Set<string>();
   let nodes = 0;
   let deepest = 0;
+  let cells = 0;
+  let items = 0;
+  let images = 0;
   const visit = (node: Node, depth: number): void => {
     nodes += 1;
     deepest = Math.max(deepest, depth);
@@ -42,21 +46,52 @@ function check(document: WidgetDocument): { nodes: number; depth: number } {
         throw new Error(`bad id ${node.id}`);
       ids.add(node.id);
     }
-    if (node.type === "table") {
-      if (node.columns.length > WIDGET_LIMITS.tableColumns) throw new Error("too many columns");
-      if (node.rows.length > WIDGET_LIMITS.tableRows) throw new Error("too many rows");
-      for (const row of node.rows) {
-        if (row.length !== node.columns.length) throw new Error("ragged row");
-      }
-    }
-    if (node.type === "card" && (node.actions?.length ?? 0) > WIDGET_LIMITS.cardActions) {
-      throw new Error("too many card actions");
+    switch (node.type) {
+      case "table":
+        if (node.columns.length > WIDGET_LIMITS.tableColumns) throw new Error("too many columns");
+        if (node.rows.length > WIDGET_LIMITS.tableRows) throw new Error("too many rows");
+        for (const row of node.rows) {
+          if (row.length !== node.columns.length) throw new Error("ragged row");
+        }
+        cells += node.rows.length * node.columns.length;
+        break;
+      case "kv":
+        items += node.items.length;
+        break;
+      case "list":
+        items += node.items.length;
+        break;
+      case "steps":
+        items += node.steps.length;
+        break;
+      case "choice":
+        items += node.options.length;
+        for (const option of node.options) {
+          if (!WIDGET_ID_PATTERN.test(option.value))
+            throw new Error(`prose option value ${option.value}`);
+        }
+        break;
+      case "image":
+        images += 1;
+        break;
+      case "gallery":
+        images += node.images.length;
+        break;
+      case "card":
+        if ((node.actions?.length ?? 0) > WIDGET_LIMITS.cardActions)
+          throw new Error("too many card actions");
+        break;
+      default:
+        break;
     }
     for (const child of children(node)) visit(child, depth + 1);
   };
   visit(document.root, 1);
   if (nodes > WIDGET_LIMITS.nodes) throw new Error("too many nodes");
-  if (deepest > WIDGET_LIMITS.depth) throw new Error("too deep");
+  if (deepest > WIDGET_LIMITS.nodeDepth) throw new Error("too deep");
+  if (cells > WIDGET_LIMITS.tableCellsPerDocument) throw new Error("too many cells");
+  if (items > WIDGET_LIMITS.itemsPerDocument) throw new Error("too many items");
+  if (images > WIDGET_LIMITS.imagesPerDocument) throw new Error("too many images");
   if (document.title.length > WIDGET_LIMITS.titleChars) throw new Error("title too long");
   if ((document.summary?.length ?? 0) > WIDGET_LIMITS.summaryChars)
     throw new Error("summary too long");
@@ -77,11 +112,11 @@ for (const [name, document, markdown] of examples) {
   });
 
   // docs/widgets.md §10 records how each example compares with the Markdown
-  // an agent writes today. Bytes are a poor proxy across scripts, so this
-  // only guards against the contract drifting into a shape that dwarfs the
-  // prose it replaces; the measured ratios live in the design document.
+  // an agent writes today in the same language. This only guards against the
+  // contract drifting into a shape that dwarfs the prose it replaces; the
+  // measured ratios live in the design document.
   test(`widget example does not dwarf its Markdown: ${name}`, () => {
-    const ratio = bytes(document) / new TextEncoder().encode(markdown).length;
+    const ratio = bytes(document) / bytes(markdown);
     if (ratio > 4) throw new Error(`${name}: widget is ${ratio.toFixed(2)}× the Markdown`);
   });
 }
@@ -90,8 +125,22 @@ test("a patch costs what it changes, not what it repeats", () => {
   const patch = bytes(progressPatch);
   if (patch > WIDGET_LIMITS.documentBytes / 8) throw new Error("patch example too large");
   if (progressPatch.length > WIDGET_LIMITS.patchOps) throw new Error("too many ops");
-  // The equivalent re-sent status message is a floor, not a ceiling: the
-  // patch must stay below re-sending the approval card it updates.
+  // The equivalent re-sent status line is a floor, not a ceiling: the patch
+  // must stay below re-sending the approval card it updates.
   if (patch >= bytes(approval)) throw new Error("patch is not cheaper than a re-send");
-  if (new TextEncoder().encode(progressMarkdown).length === 0) throw new Error("missing baseline");
+  if (bytes(progressMarkdown) === 0) throw new Error("missing baseline");
+});
+
+test("the composed tap message carries only what the person saw", () => {
+  const [first, second, ...rest] = approvalTapMessage.split("\n");
+  if (rest.length !== 0 || first === undefined || second === undefined)
+    throw new Error("two lines");
+  const label = first.replace(/^\[widget [A-Za-z0-9_-]+ r\d+\] /, "");
+  const visible = approval.root.type === "card" ? approval.root.actions?.map((b) => b.label) : [];
+  if (!visible?.includes(label)) throw new Error("first line is not a visible label");
+  const payload = JSON.parse(second) as Record<string, unknown>;
+  for (const key of Object.keys(payload)) {
+    if (!["widget", "revision", "node", "values", "labels"].includes(key))
+      throw new Error(`hidden field ${key}`);
+  }
 });
