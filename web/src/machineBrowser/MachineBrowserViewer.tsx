@@ -5,13 +5,15 @@
 import { ContentPasteOutlined, KeyboardHideOutlined, KeyboardOutlined } from "@mui/icons-material";
 import { Box, Button, Typography } from "@mui/material";
 import { type RefObject, useRef } from "react";
-import type { BrowserScale } from "./api";
+import type { BrowserScale, BrowserTarget } from "./api";
 import { KEYBOARD_SENTINEL, useTouchKeyboard } from "./touchKeyboardBridge";
 import { type ViewerCallbacks, useViewerSession } from "./useViewerSession";
 import type { ViewerSession } from "./viewerSession";
 
 export interface MachineBrowserViewerProps extends ViewerCallbacks {
   account: string;
+  /** The Machine and instance this viewer attaches to. */
+  target: BrowserTarget;
   accountLabel: string;
   machineLabel: string;
   scale: BrowserScale;
@@ -82,7 +84,7 @@ function ViewerControls({
 }
 
 export default function MachineBrowserViewer(props: MachineBrowserViewerProps): React.JSX.Element {
-  const { account, accountLabel, machineLabel, scale, takeover, touch } = props;
+  const { account, target, accountLabel, machineLabel, scale, takeover, touch } = props;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const screenRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -90,6 +92,7 @@ export default function MachineBrowserViewer(props: MachineBrowserViewerProps): 
     containerRef,
     screenRef,
     account,
+    target,
     scale,
     takeover,
     callbacks: props,

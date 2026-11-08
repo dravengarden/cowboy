@@ -7,6 +7,7 @@ import { announceProductAuthSession } from "../productAuthEvents";
 import {
   type BrowserScale,
   type BrowserStateEvent,
+  type BrowserTarget,
   browserErrorText,
   browserReasonText,
   browserStreamUrl,
@@ -57,6 +58,7 @@ export function useViewerSession({
   containerRef,
   screenRef,
   account,
+  target,
   scale,
   takeover,
   callbacks,
@@ -64,6 +66,9 @@ export function useViewerSession({
   containerRef: RefObject<HTMLDivElement | null>;
   screenRef: RefObject<HTMLDivElement | null>;
   account: string;
+  /** The exact Machine and instance to attach to (an open's answer or the
+   * state shown); the Controller never substitutes another browser. */
+  target: BrowserTarget;
   scale: BrowserScale;
   takeover: boolean;
   callbacks: ViewerCallbacks;
@@ -72,6 +77,8 @@ export function useViewerSession({
   const latest = useRef(callbacks);
   latest.current = callbacks;
   const [connected, setConnected] = useState(false);
+  const machineId = target.machine_id;
+  const { instance_id, incarnation } = target.instance;
   useEffect(() => {
     const container = containerRef.current;
     const target = screenRef.current;
@@ -80,7 +87,12 @@ export function useViewerSession({
     let sent = { width: rect.width, height: rect.height };
     const session = startViewerSession({
       target,
-      url: browserStreamUrl(account, browserViewport(rect.width, rect.height, scale), takeover),
+      url: browserStreamUrl(
+        account,
+        { machine_id: machineId, instance: { account_id: account, instance_id, incarnation } },
+        browserViewport(rect.width, rect.height, scale),
+        takeover,
+      ),
       onState: (state) => {
         latest.current.onState(state);
         if (viewerEnds(state)) latest.current.onEnded(stateEndMessage(state));
@@ -111,6 +123,6 @@ export function useViewerSession({
       sessionRef.current = undefined;
       latest.current.onRemoteClipboard(undefined);
     };
-  }, [account, containerRef, scale, screenRef, takeover]);
+  }, [account, containerRef, incarnation, instance_id, machineId, scale, screenRef, takeover]);
   return { sessionRef, connected };
 }

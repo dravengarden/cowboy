@@ -172,6 +172,7 @@ function BrowserDisplay({
           <MachineBrowserViewer
             key={model.viewer.generation}
             account={account.id}
+            target={model.viewer.target}
             accountLabel={account.label}
             machineLabel={machineLabel}
             scale={scale}

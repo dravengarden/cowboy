@@ -6,7 +6,9 @@ import {
   type BrowserResult,
   type BrowserState,
   type BrowserStateEvent,
+  type BrowserTarget,
   browserReasonText,
+  namesInstance,
 } from "./api";
 
 export type BrowserAction = "open" | "hibernate" | "snapshot" | "reset";
@@ -18,14 +20,16 @@ export interface BrowserModel {
   error: string;
   notice: string;
   busy?: BrowserAction | undefined;
-  /** The viewer mounts while this is set; `generation` remounts it. */
-  viewer?: { takeover: boolean; generation: number } | undefined;
+  /** The viewer mounts while this is set; `generation` remounts it. It
+   * attaches to exactly `target`, never to another browser of the account. */
+  viewer?: { takeover: boolean; generation: number; target: BrowserTarget } | undefined;
   /** Text the remote browser copied, held for the open attachment only. */
   remoteClipboard?: string | undefined;
   /** When the instance was first seen `starting`, bounding the fast poll. */
   startingSince?: number | undefined;
-  /** An open answered `starting`; attach once the instance is running. */
-  awaitingOpen?: boolean | undefined;
+  /** An open answered `starting` for this instance; attach to it once it
+   * runs. */
+  awaitingOpen?: BrowserTarget | undefined;
 }
 
 export type BrowserEvent =
@@ -50,6 +54,52 @@ export type BrowserEvent =
   | { type: "dismiss" };
 
 export const INITIAL_BROWSER_MODEL: BrowserModel = { loaded: false, error: "", notice: "" };
+
+/** The Machine and instance a read or result shows, when it names one. */
+export function targetOf(
+  read: { machine_id: string | null; state: BrowserStateEvent | null } | undefined,
+): BrowserTarget | undefined {
+  const state = read?.state;
+  if (!read?.machine_id || !state || !namesInstance(state)) return undefined;
+  const { account_id, instance_id, incarnation } = state.instance;
+  return { machine_id: read.machine_id, instance: { account_id, instance_id, incarnation } };
+}
+
+function sameTarget(left: BrowserTarget, right: BrowserTarget | undefined): boolean {
+  return (
+    right !== undefined &&
+    left.machine_id === right.machine_id &&
+    left.instance.instance_id === right.instance.instance_id &&
+    left.instance.incarnation === right.instance.incarnation
+  );
+}
+
+/** The Machine the panel's reads stay on: the browser it is attached to or
+ * waiting for, else the one it shows while that is still live. Once that
+ * browser is gone, reads report the account's preferred browser again. */
+export function pinnedMachine(model: BrowserModel): string | undefined {
+  if (model.viewer) return model.viewer.target.machine_id;
+  if (model.awaitingOpen) return model.awaitingOpen.machine_id;
+  const state = model.read?.state?.state;
+  return state && state !== "hibernated" ? (model.read?.machine_id ?? undefined) : undefined;
+}
+
+/** The Machine and profile revision a reset applies to, taken together from
+ * the state shown (or, without one, the placement shown): revisions are per
+ * Machine and must never be checked against another Machine's profile. */
+export function resetTarget(
+  read: BrowserRead | undefined,
+): { machine_id: string; revision: number } | undefined {
+  if (read?.machine_id && read.state?.profile_revision !== undefined) {
+    return { machine_id: read.machine_id, revision: read.state.profile_revision };
+  }
+  const placement = read?.machine_id
+    ? read.placements.find((candidate) => candidate.machine_id === read.machine_id)
+    : read?.placements[0];
+  return placement
+    ? { machine_id: placement.machine_id, revision: placement.profile_revision }
+    : undefined;
+}
 
 export const POLL_IDLE_MS = 5_000;
 export const POLL_STARTING_MS = 2_000;
@@ -150,12 +200,22 @@ function withRead(model: BrowserModel, read: BrowserRead, now: number): BrowserM
       notice: endNotice(state),
     };
   }
-  if (model.awaitingOpen && state && !starting) {
+  // Reads stay on the awaited Machine (`pinnedMachine`); another Machine's
+  // answer means the awaited browser is gone, never a browser to attach.
+  const awaiting = model.awaitingOpen;
+  if (awaiting && state && (!starting || read.machine_id !== awaiting.machine_id)) {
+    if (!sameTarget(awaiting, targetOf(read))) {
+      return {
+        ...next,
+        awaitingOpen: undefined,
+        error: "The browser on this Machine changed before it finished starting.",
+      };
+    }
     if (state.state === "detached") {
       return {
         ...next,
         awaitingOpen: undefined,
-        viewer: { takeover: false, generation: nextGeneration(model) },
+        viewer: { takeover: false, generation: nextGeneration(model), target: awaiting },
       };
     }
     return {
@@ -186,6 +246,8 @@ export function reduceBrowser(model: BrowserModel, event: BrowserEvent): Browser
       };
       const next = withRead({ ...model, busy: undefined }, read, event.now);
       const state = event.result.state;
+      // The viewer attaches to exactly the instance this answer names.
+      const target = targetOf(read);
       if (event.action === "open") {
         if (openRefused(state)) {
           return {
@@ -194,13 +256,16 @@ export function reduceBrowser(model: BrowserModel, event: BrowserEvent): Browser
             error: `The browser was not opened. ${browserReasonText(state.reason) ?? ""}`.trim(),
           };
         }
-        if (state.state === "detached") {
-          return { ...next, viewer: { takeover: false, generation: nextGeneration(model) } };
+        if (state.state === "detached" && target) {
+          return {
+            ...next,
+            viewer: { takeover: false, generation: nextGeneration(model), target },
+          };
         }
-        if (state.state === "attached" && event.takeover) {
-          return { ...next, viewer: { takeover: true, generation: nextGeneration(model) } };
+        if (state.state === "attached" && event.takeover && target) {
+          return { ...next, viewer: { takeover: true, generation: nextGeneration(model), target } };
         }
-        if (state.state === "starting") return { ...next, awaitingOpen: true };
+        if (state.state === "starting" && target) return { ...next, awaitingOpen: target };
         if (state.state === "hibernated") {
           return {
             ...next,
@@ -215,18 +280,27 @@ export function reduceBrowser(model: BrowserModel, event: BrowserEvent): Browser
     }
     case "failed":
       return { ...model, busy: undefined, awaitingOpen: undefined, error: event.message };
-    case "attach":
+    case "attach": {
+      // Attach to the browser the panel shows, by Machine and instance.
+      const target = targetOf(model.read);
+      if (!target) return model;
       return {
         ...model,
-        viewer: { takeover: event.takeover, generation: nextGeneration(model) },
+        viewer: { takeover: event.takeover, generation: nextGeneration(model), target },
         remoteClipboard: undefined,
         error: "",
         notice: "",
       };
+    }
     case "detach":
       return { ...model, viewer: undefined, remoteClipboard: undefined };
     case "stream_state": {
-      const read: BrowserRead = { ...(model.read ?? EMPTY_READ), state: event.state };
+      // The stream reports the instance it is attached to, on its Machine.
+      const read: BrowserRead = {
+        ...(model.read ?? EMPTY_READ),
+        machine_id: model.viewer?.target.machine_id ?? model.read?.machine_id ?? null,
+        state: event.state,
+      };
       return withRead(model, read, event.state.observed_at_ms);
     }
     case "viewer_ended":

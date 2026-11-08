@@ -6,22 +6,23 @@ import { lowPriorityInterval } from "../network/bandwidth";
 import { productSessionSignal } from "../productSessionEnd";
 import { productSyncPrincipal } from "../productSyncIdentity";
 import {
-  type BrowserInstance,
   type BrowserResult,
   type BrowserViewport,
   MachineBrowserError,
   type MachineBrowserApi,
   browserErrorText,
   machineBrowserApi,
-  namesInstance,
 } from "./api";
 import {
   type BrowserAction,
   type BrowserEvent,
   type BrowserModel,
   INITIAL_BROWSER_MODEL,
+  pinnedMachine,
   pollPeriod,
   reduceBrowser,
+  resetTarget,
+  targetOf,
 } from "./browserModel";
 
 export interface MachineBrowserInput {
@@ -63,17 +64,6 @@ function errorText(cause: unknown): string {
   return browserErrorText(undefined);
 }
 
-function instanceOf(model: BrowserModel): BrowserInstance | undefined {
-  const state = model.read?.state;
-  return state && namesInstance(state)
-    ? {
-        account_id: state.instance.account_id,
-        instance_id: state.instance.instance_id,
-        incarnation: state.instance.incarnation,
-      }
-    : undefined;
-}
-
 export function useMachineBrowser({
   account,
   dataset,
@@ -95,7 +85,7 @@ export function useMachineBrowser({
     AbortSignal.any([productSessionSignal(), AbortSignal.timeout(timeoutMs)]);
 
   const refresh = useCallback(() => {
-    api.read(account, signal(READ_TIMEOUT_MS)).then(
+    api.read(account, signal(READ_TIMEOUT_MS), pinnedMachine(modelRef.current)).then(
       (read) => {
         if (live()) dispatch({ type: "read", read, now: Date.now() });
       },
@@ -154,34 +144,34 @@ export function useMachineBrowser({
       run("open", (abort) => openCall(viewport, abort), OPEN_TIMEOUT_MS, takeover),
     [openCall, run],
   );
+  // Every command names the Machine and instance the panel shows.
   const hibernate = useCallback(() => {
-    const instance = instanceOf(modelRef.current);
-    if (!instance) return;
+    const target = targetOf(modelRef.current.read);
+    if (!target) return;
+    run("hibernate", (abort) => api.hibernate(account, dataset, target, abort), COMMAND_TIMEOUT_MS);
+  }, [account, api, dataset, run]);
+  const snapshot = useCallback(() => {
+    const target = targetOf(modelRef.current.read);
+    if (!target) return;
+    run("snapshot", (abort) => api.snapshot(account, dataset, target, abort), COMMAND_TIMEOUT_MS);
+  }, [account, api, dataset, run]);
+  const reset = useCallback(() => {
+    const target = resetTarget(modelRef.current.read);
+    if (!target) return;
     run(
-      "hibernate",
-      (abort) => api.hibernate(account, dataset, instance, abort),
+      "reset",
+      (abort) => api.reset(account, dataset, target.machine_id, target.revision, abort),
       COMMAND_TIMEOUT_MS,
     );
   }, [account, api, dataset, run]);
-  const snapshot = useCallback(() => {
-    const instance = instanceOf(modelRef.current);
-    if (!instance) return;
-    run("snapshot", (abort) => api.snapshot(account, dataset, instance, abort), COMMAND_TIMEOUT_MS);
-  }, [account, api, dataset, run]);
-  const reset = useCallback(() => {
-    const read = modelRef.current.read;
-    const revision = read?.state?.profile_revision ?? read?.placements[0]?.profile_revision;
-    if (revision === undefined) return;
-    run("reset", (abort) => api.reset(account, dataset, revision, abort), COMMAND_TIMEOUT_MS);
-  }, [account, api, dataset, run]);
   const restart = useCallback(
     (viewport: BrowserViewport) => {
-      const instance = instanceOf(modelRef.current);
-      if (!instance) return;
+      const target = targetOf(modelRef.current.read);
+      if (!target) return;
       run(
         "open",
         async (abort) => {
-          await api.hibernate(account, dataset, instance, abort);
+          await api.hibernate(account, dataset, target, abort);
           return openCall(viewport, abort);
         },
         OPEN_TIMEOUT_MS + COMMAND_TIMEOUT_MS,

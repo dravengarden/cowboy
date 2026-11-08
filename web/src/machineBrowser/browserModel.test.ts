@@ -10,8 +10,11 @@ import {
   autoEntry,
   looksLikeAuthorizationCode,
   openRefused,
+  pinnedMachine,
   pollPeriod,
   reduceBrowser,
+  resetTarget,
+  targetOf,
 } from "./browserModel";
 
 const account = "11111111-2222-4333-8444-555555555555";
@@ -26,11 +29,15 @@ function event(
     ...extra,
   };
 }
-const read = (state: BrowserStateEvent | null): BrowserRead => ({
-  machine_id: "ovh",
+const read = (state: BrowserStateEvent | null, machine = "ovh"): BrowserRead => ({
+  machine_id: machine,
   state,
   placements: [],
   admission: null,
+});
+const shown = (machine = "ovh", incarnation = 1) => ({
+  machine_id: machine,
+  instance: { account_id: account, instance_id: "b-0123456789abcdef01234567", incarnation },
 });
 
 test("an open that answers detached mounts the viewer; a refused open explains itself", () => {
@@ -43,7 +50,7 @@ test("an open that answers detached mounts the viewer; a refused open explains i
     now: 10,
   });
   assertEquals(model.busy, undefined);
-  assertEquals(model.viewer, { takeover: false, generation: 1 });
+  assertEquals(model.viewer, { takeover: false, generation: 1, target: shown() });
   assertEquals(model.read?.state?.state, "detached");
   const refused = reduceBrowser(INITIAL_BROWSER_MODEL, {
     type: "result",
@@ -89,7 +96,7 @@ test("a refused sign-in open never mounts the viewer or takes the display over",
     now: 10,
     takeover: true,
   });
-  assertEquals(bound.viewer, { takeover: true, generation: 1 });
+  assertEquals(bound.viewer, { takeover: true, generation: 1, target: shown() });
 });
 
 test("a starting open polls fast and attaches once the instance runs", () => {
@@ -99,7 +106,8 @@ test("a starting open polls fast and attaches once the instance runs", () => {
     result: { machine_id: "ovh", state: event("starting") },
     now: 1_000,
   });
-  assertEquals(model.awaitingOpen, true);
+  assertEquals(model.awaitingOpen, shown());
+  assertEquals(pinnedMachine(model), "ovh");
   assertEquals(pollPeriod(model, 2_000), POLL_STARTING_MS);
   assertEquals(pollPeriod(model, 1_000 + STARTING_FAST_POLL_MS), POLL_IDLE_MS);
   model = reduceBrowser(model, { type: "read", read: read(event("detached")), now: 5_000 });
@@ -113,7 +121,7 @@ test("hibernated, stopping and superseded states end the viewer and keep the las
     reduceBrowser(INITIAL_BROWSER_MODEL, { type: "read", read: read(event("detached")), now: 1 }),
     { type: "attach", takeover: true },
   );
-  assertEquals(attached.viewer, { takeover: true, generation: 1 });
+  assertEquals(attached.viewer, { takeover: true, generation: 1, target: shown() });
   const held = reduceBrowser(attached, { type: "remote_clipboard", text: "code-1" });
   assertEquals(held.remoteClipboard, "code-1");
   const hibernated = reduceBrowser(held, {
@@ -140,7 +148,15 @@ test("hibernated, stopping and superseded states end the viewer and keep the las
 });
 
 test("a closed stream clears the viewer and its clipboard with a visible message", () => {
-  const attached = reduceBrowser(INITIAL_BROWSER_MODEL, { type: "attach", takeover: false });
+  // Nothing shown names an instance: there is nothing to attach to.
+  assertEquals(
+    reduceBrowser(INITIAL_BROWSER_MODEL, { type: "attach", takeover: false }).viewer,
+    undefined,
+  );
+  const attached = reduceBrowser(
+    reduceBrowser(INITIAL_BROWSER_MODEL, { type: "read", read: read(event("detached")), now: 1 }),
+    { type: "attach", takeover: false },
+  );
   const ended = reduceBrowser(reduceBrowser(attached, { type: "remote_clipboard", text: "x" }), {
     type: "viewer_ended",
     message: "Sign in again to continue.",
@@ -237,6 +253,99 @@ test("a sign-in panel enters every browser through the sign-in open", () => {
       now: 1,
       takeover,
     });
-  assertEquals(open(true).viewer, { takeover: true, generation: 1 });
+  assertEquals(open(true).viewer, { takeover: true, generation: 1, target: shown() });
   assertEquals(open(false).viewer, undefined);
+});
+
+test("a starting open attaches only to the instance it opened, on its Machine", () => {
+  const starting = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "result",
+    action: "open",
+    result: { machine_id: "alpha", state: event("starting") },
+    now: 1,
+  });
+  // Another Machine's newer browser of the account is never attached.
+  const elsewhere = reduceBrowser(starting, {
+    type: "read",
+    read: read(event("detached"), "beta"),
+    now: 2,
+  });
+  assertEquals(elsewhere.viewer, undefined);
+  assertEquals(elsewhere.awaitingOpen, undefined);
+  assertEquals(elsewhere.error.length > 0, true);
+  // A restarted instance on the same Machine is not the one opened either.
+  const restarted = reduceBrowser(starting, {
+    type: "read",
+    read: read(event("detached", { instance: shown("alpha", 2).instance }), "alpha"),
+    now: 2,
+  });
+  assertEquals(restarted.viewer, undefined);
+  const ready = reduceBrowser(starting, {
+    type: "read",
+    read: read(event("detached"), "alpha"),
+    now: 2,
+  });
+  assertEquals(ready.viewer?.target, shown("alpha"));
+});
+
+test("the viewer target follows the displayed Machine and stream states keep it", () => {
+  const shownAlpha = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "read",
+    read: read(event("detached"), "alpha"),
+    now: 1,
+  });
+  assertEquals(pinnedMachine(shownAlpha), "alpha");
+  const attached = reduceBrowser(shownAlpha, { type: "attach", takeover: false });
+  assertEquals(attached.viewer?.target, shown("alpha"));
+  const streamed = reduceBrowser(attached, { type: "stream_state", state: event("attached") });
+  assertEquals(streamed.read?.machine_id, "alpha");
+  assertEquals(pinnedMachine(streamed), "alpha");
+  // Once the shown browser is hibernated, reads report the preferred one.
+  const stopped = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "read",
+    read: read(event("hibernated"), "alpha"),
+    now: 1,
+  });
+  assertEquals(pinnedMachine(stopped), undefined);
+});
+
+test("a reset pairs the shown Machine with that Machine's own profile revision", () => {
+  const placement = (machine: string, revision: number) => ({
+    account_id: account,
+    machine_id: machine,
+    instance_id: `b-${machine}`,
+    profile_revision: revision,
+    last_open_ms: 1,
+  });
+  const placements = [placement("alpha", 3), placement("beta", 7)];
+  assertEquals(
+    resetTarget({ ...read(event("detached", { profile_revision: 4 }), "beta"), placements }),
+    { machine_id: "beta", revision: 4 },
+  );
+  // Without a state revision, the shown Machine's placement, not the first.
+  assertEquals(resetTarget({ ...read(event("detached"), "beta"), placements }), {
+    machine_id: "beta",
+    revision: 7,
+  });
+  assertEquals(resetTarget({ ...read(null), machine_id: null, placements }), {
+    machine_id: "alpha",
+    revision: 3,
+  });
+  assertEquals(resetTarget({ ...read(null), machine_id: null }), undefined);
+});
+
+test("a stopping answer naming no instance offers nothing to command or attach", () => {
+  const unknown = event("stopping", {
+    instance: { account_id: account, instance_id: "", incarnation: 0 },
+    reason: "busy",
+  });
+  const model = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "read",
+    read: read(unknown, "alpha"),
+    now: 1,
+  });
+  assertEquals(targetOf(model.read), undefined);
+  assertEquals(reduceBrowser(model, { type: "attach", takeover: false }).viewer, undefined);
+  // The panel keeps reading that Machine until its answer settles.
+  assertEquals(pinnedMachine(model), "alpha");
 });

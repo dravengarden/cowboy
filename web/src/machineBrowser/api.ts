@@ -22,6 +22,15 @@ export interface BrowserInstance {
   incarnation: number;
 }
 
+/** The exact browser the owner is shown: one account may have browsers on
+ * several Machines, and every instance-scoped request and the viewer name
+ * the Machine and instance (incarnation included) taken from the displayed
+ * state, never "whatever runs now". */
+export interface BrowserTarget {
+  machine_id: string;
+  instance: BrowserInstance;
+}
+
 /** One Machine observation (`machine_browser::StateEvent`). */
 export interface BrowserStateEvent {
   request_id?: string;
@@ -98,15 +107,19 @@ function optional<T>(
 
 /** Whether an observation names a running or retained instance. The
  * Machine answers a query for a stopped browser and every reset with
- * `instance_id: ""` and `incarnation: 0`; such an answer is always
- * `hibernated` and carries no instance to command. */
+ * `instance_id: ""` and `incarnation: 0` (`hibernated`), and a query while an
+ * unconfirmed unit of unknown owner exists or its inventory is pending the
+ * same way as `stopping` (reason `busy`); neither carries an instance to
+ * command. */
 export function namesInstance(state: BrowserStateEvent): boolean {
   return state.instance.instance_id !== "";
 }
 
 function validInstance(instance: Record<string, unknown>, state: unknown): boolean {
   if (!id(instance.account_id) || !count(instance.incarnation)) return false;
-  if (instance.instance_id === "") return state === "hibernated" && instance.incarnation === 0;
+  if (instance.instance_id === "") {
+    return (state === "hibernated" || state === "stopping") && instance.incarnation === 0;
+  }
   return id(instance.instance_id);
 }
 
@@ -192,14 +205,20 @@ function accountPath(account: string): string {
   return `/api/provider-accounts/${encodeURIComponent(account)}`;
 }
 
-/** The viewer WebSocket. The device proof must sign this exact URL. */
+/** The viewer WebSocket for exactly `target`; the Controller refuses it
+ * (`browser_instance_changed`) once that Machine runs another instance or
+ * incarnation. The device proof must sign this exact URL. */
 export function browserStreamUrl(
   account: string,
+  target: BrowserTarget,
   viewport: BrowserViewport,
   takeover: boolean,
   origin: { protocol: string; host: string } = globalThis.location,
 ): string {
   const params = new URLSearchParams({
+    machine_id: target.machine_id,
+    instance_id: target.instance.instance_id,
+    incarnation: String(target.instance.incarnation),
     width: String(viewport.width),
     height: String(viewport.height),
     scale: String(viewport.scale),
@@ -223,7 +242,9 @@ export class MachineBrowserError extends Error {
 export type BrowserFetch = (input: string, init: RequestInit) => Promise<Response>;
 
 export interface MachineBrowserApi {
-  read(account: string, signal: AbortSignal): Promise<BrowserRead>;
+  /** `machine` keeps the read on the Machine the panel shows while that
+   * Machine still holds the account's browser. */
+  read(account: string, signal: AbortSignal, machine?: string): Promise<BrowserRead>;
   open(
     account: string,
     dataset: string,
@@ -240,29 +261,36 @@ export interface MachineBrowserApi {
   hibernate(
     account: string,
     dataset: string,
-    instance: BrowserInstance,
+    target: BrowserTarget,
     signal: AbortSignal,
   ): Promise<BrowserResult>;
   snapshot(
     account: string,
     dataset: string,
-    instance: BrowserInstance,
+    target: BrowserTarget,
     signal: AbortSignal,
   ): Promise<BrowserResult>;
+  /** Profile revisions are per Machine: the revision is checked only on
+   * `machine`, the Machine whose profile the panel shows. */
   reset(
     account: string,
     dataset: string,
+    machine: string,
     expectedProfileRevision: number,
     signal: AbortSignal,
   ): Promise<BrowserResult>;
 }
 
 /** Only the wire fields: `InstanceRef` rejects unknown keys. */
-function instanceBody(instance: BrowserInstance): BrowserInstance {
+function targetBody(target: BrowserTarget): { machine_id: string; instance: BrowserInstance } {
+  const { instance } = target;
   return {
-    account_id: instance.account_id,
-    instance_id: instance.instance_id,
-    incarnation: instance.incarnation,
+    machine_id: target.machine_id,
+    instance: {
+      account_id: instance.account_id,
+      instance_id: instance.instance_id,
+      incarnation: instance.incarnation,
+    },
   };
 }
 
@@ -308,8 +336,15 @@ export function createMachineBrowserApi(
       validBrowserResult,
     );
   return {
-    read: (account, signal) =>
-      call(`${accountPath(account)}/browser`, { method: "GET" }, signal, validBrowserRead),
+    read: (account, signal, machine) =>
+      call(
+        `${accountPath(account)}/browser${
+          machine ? `?${new URLSearchParams({ machine_id: machine }).toString()}` : ""
+        }`,
+        { method: "GET" },
+        signal,
+        validBrowserRead,
+      ),
     open: (account, dataset, viewport, signal) =>
       post(`${accountPath(account)}/browser/open`, { dataset, ...viewport }, signal),
     openSignIn: (account, request, dataset, viewport, signal) =>
@@ -318,22 +353,14 @@ export function createMachineBrowserApi(
         { dataset, ...viewport },
         signal,
       ),
-    hibernate: (account, dataset, instance, signal) =>
-      post(
-        `${accountPath(account)}/browser/hibernate`,
-        { dataset, instance: instanceBody(instance) },
-        signal,
-      ),
-    snapshot: (account, dataset, instance, signal) =>
-      post(
-        `${accountPath(account)}/browser/snapshot`,
-        { dataset, instance: instanceBody(instance) },
-        signal,
-      ),
-    reset: (account, dataset, expectedProfileRevision, signal) =>
+    hibernate: (account, dataset, target, signal) =>
+      post(`${accountPath(account)}/browser/hibernate`, { dataset, ...targetBody(target) }, signal),
+    snapshot: (account, dataset, target, signal) =>
+      post(`${accountPath(account)}/browser/snapshot`, { dataset, ...targetBody(target) }, signal),
+    reset: (account, dataset, machine, expectedProfileRevision, signal) =>
       post(
         `${accountPath(account)}/browser/reset`,
-        { dataset, expected_profile_revision: expectedProfileRevision },
+        { dataset, machine_id: machine, expected_profile_revision: expectedProfileRevision },
         signal,
       ),
   };
@@ -352,6 +379,8 @@ const ERROR_TEXT: Record<string, string> = {
   browser_not_running: "The browser is not running. Open it first.",
   browser_not_placed: "This account has no browser profile on any Machine yet.",
   browser_attached: "Another viewer is attached to this browser.",
+  browser_instance_changed:
+    "The browser on this Machine changed since it was shown. Check its current state and retry.",
   browser_attach_refused: "The Machine refused the attachment. Check the browser state and retry.",
   browser_attach_failed: "The Machine did not answer the attachment request.",
   browser_open_failed: "The browser could not be opened on the Machine.",

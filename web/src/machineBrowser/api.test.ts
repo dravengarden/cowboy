@@ -113,11 +113,15 @@ test("viewports scale the CSS size and stay within the wire bounds", () => {
   assertEquals(sizeChanged({ width: 800, height: 600 }, { width: 800, height: 584 }, 16), true);
 });
 
-test("the stream URL carries the viewport and only an explicit takeover", () => {
+test("the stream URL names the shown instance, the viewport and only an explicit takeover", () => {
   const origin = { protocol: "https:", host: "cowboy.test" };
+  const target = { machine_id: "ovh", instance: state.instance };
   const url = new URL(
-    browserStreamUrl(account, { width: 780, height: 1400, scale: 2 }, false, origin),
+    browserStreamUrl(account, target, { width: 780, height: 1400, scale: 2 }, false, origin),
   );
+  assertEquals(url.searchParams.get("machine_id"), "ovh");
+  assertEquals(url.searchParams.get("instance_id"), state.instance.instance_id);
+  assertEquals(url.searchParams.get("incarnation"), String(state.instance.incarnation));
   assertEquals(url.protocol, "wss:");
   assertEquals(url.host, "cowboy.test");
   assertEquals(url.pathname, `/api/provider-accounts/${account}/browser/stream`);
@@ -126,7 +130,7 @@ test("the stream URL carries the viewport and only an explicit takeover", () => 
   assertEquals(url.searchParams.get("scale"), "2");
   assertEquals(url.searchParams.has("takeover"), false);
   const takeover = new URL(
-    browserStreamUrl(account, { width: 1280, height: 800, scale: 1 }, true, {
+    browserStreamUrl(account, target, { width: 1280, height: 800, scale: 1 }, true, {
       protocol: "http:",
       host: "localhost:5173",
     }),
@@ -182,10 +186,16 @@ test("the Machine's no-instance answer is accepted only as hibernated", () => {
   assertEquals(namesInstance(state as Parameters<typeof namesInstance>[0]), true);
   // Every reset answers this shape, with or without a reason.
   assertEquals(validBrowserState({ ...stopped, reason: "owner_request" }), true);
+  // A query while an unconfirmed unit of unknown owner exists (or the
+  // Machine's inventory is pending) answers `stopping`/`busy` the same way.
+  const unknown = { ...stopped, state: "stopping", reason: "busy" };
+  assertEquals(validBrowserState(unknown), true);
+  assertEquals(namesInstance(unknown as Parameters<typeof namesInstance>[0]), false);
   // Instance-scoped states keep strict identities.
-  for (const running of ["starting", "detached", "attached", "stopping"]) {
+  for (const running of ["starting", "detached", "attached"]) {
     assertEquals(validBrowserState({ ...stopped, state: running }), false, running);
   }
+  assertEquals(validBrowserState({ ...unknown, instance: { ...none, incarnation: 2 } }), false);
   assertEquals(validBrowserState({ ...stopped, instance: { ...none, incarnation: 2 } }), false);
   assertEquals(
     validBrowserState({ ...state, instance: { ...state.instance, incarnation: 0 } }),
@@ -209,7 +219,10 @@ test("a reset answered without an instance is a valid result", async () => {
     },
   };
   const api = createMachineBrowserApi(fakeFetch(() => ({ status: 200, body: reply })).fetch);
-  assertEquals(await api.reset(account, "dataset-1", 3, new AbortController().signal), reply);
+  assertEquals(
+    await api.reset(account, "dataset-1", "ovh", 3, new AbortController().signal),
+    reply,
+  );
 });
 
 interface Call {
@@ -244,14 +257,17 @@ test("lifecycle calls hit their routes with the dataset and exact wire bodies", 
     await api.openSignIn(account, "provider-login-1", "dataset-1", viewport, signal),
     machine,
   );
-  const instance = { ...state.instance, extra: "dropped" };
-  await api.hibernate(account, "dataset-1", instance, signal);
-  await api.snapshot(account, "dataset-1", instance, signal);
-  await api.reset(account, "dataset-1", 3, signal);
+  const target = { machine_id: "hawk", instance: { ...state.instance, extra: "dropped" } };
+  await api.hibernate(account, "dataset-1", target, signal);
+  await api.snapshot(account, "dataset-1", target, signal);
+  await api.reset(account, "dataset-1", "hawk", 3, signal);
   const read = { machine_id: "ovh", state, placements: [], admission: null };
   const reads = fakeFetch(() => ({ status: 200, body: read }));
-  assertEquals(await createMachineBrowserApi(reads.fetch).read(account, signal), read);
+  const reader = createMachineBrowserApi(reads.fetch);
+  assertEquals(await reader.read(account, signal), read);
+  await reader.read(account, signal, "hawk");
   assertEquals(reads.calls[0]?.path, `/api/provider-accounts/${account}/browser`);
+  assertEquals(reads.calls[1]?.path, `/api/provider-accounts/${account}/browser?machine_id=hawk`);
   assertEquals(reads.calls[0]?.init.method, "GET");
   assertEquals(reads.calls[0]?.init.cache, "no-store");
   const paths = calls.map((call) => call.path);
@@ -266,9 +282,14 @@ test("lifecycle calls hit their routes with the dataset and exact wire bodies", 
   const bodies = calls.map((call) => JSON.parse(String(call.init.body)) as unknown);
   assertEquals(bodies[0], { dataset: "dataset-1", width: 1280, height: 800, scale: 1 });
   assertEquals(bodies[1], { dataset: "dataset-1", width: 1280, height: 800, scale: 1 });
-  assertEquals(bodies[2], { dataset: "dataset-1", instance: state.instance });
-  assertEquals(bodies[3], { dataset: "dataset-1", instance: state.instance });
-  assertEquals(bodies[4], { dataset: "dataset-1", expected_profile_revision: 3 });
+  // Every instance-scoped request names the Machine shown with the instance.
+  assertEquals(bodies[2], { dataset: "dataset-1", machine_id: "hawk", instance: state.instance });
+  assertEquals(bodies[3], { dataset: "dataset-1", machine_id: "hawk", instance: state.instance });
+  assertEquals(bodies[4], {
+    dataset: "dataset-1",
+    machine_id: "hawk",
+    expected_profile_revision: 3,
+  });
 });
 
 test("refusals surface their code and HTTP-only failures their status", async () => {
