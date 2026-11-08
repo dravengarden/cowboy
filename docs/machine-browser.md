@@ -581,16 +581,19 @@ start time and reads from outside the namespace:
   `Delegate=yes` lets children create sub-cgroups): no process owns a
   listening TCP socket or **any** UDP socket, matched by socket inode
   against `/proc/<pid>/net/{tcp,tcp6,udp,udp6}` of each distinct network
-  namespace found among those processes, and no process owns an abstract
-  Unix socket (`/proc/<pid>/net/unix` entries with an `@` path);
+  namespace found among those processes, and no process owns a reachable
+  abstract Unix socket (`/proc/<pid>/net/unix` entries with an `@` path in
+  any state but connected: Chromium's `SO_PASSCRED` socketpairs are
+  autobound to abstract names by the kernel and stay connected, refusing
+  every third party);
 - `/proc/<pid>/mountinfo` also shows `/mnt/sockets` read-only, and the
   `RuntimeDirectory` on the host contains exactly the two sockets.
 
 The socket scan repeats every 10 s while the instance runs and at every
 attach, navigate and resize; a violation stops the instance with reason
 `listener_detected`. The scan is detection evidence; prevention is the
-sealed profile (below: no UDP at all, no TCP bind/listen/accept, no abstract
-addresses) plus the browser policy (no QUIC, no non-proxied WebRTC UDP, no
+sealed profile (below: no UDP at all, no TCP bind/listen/accept, no bind,
+listen or connect on abstract addresses) plus the browser policy (no QUIC, no non-proxied WebRTC UDP, no
 built-in resolver, no remote debugging), and admission refuses when
 prevention is unavailable.
 
@@ -911,9 +914,13 @@ uses, and `network inet stream (connect send receive)` and
 `network inet6 stream (connect send receive)`. It denies every `dgram`
 socket (`deny network inet dgram`, `deny network inet6 dgram`: the browser
 resolves names over TCP and has no other UDP use, so no UDP channel,
-auto-bound or otherwise, can exist), denies `bind`, `listen` and `accept`
-on every `inet`/`inet6` stream socket, denies every abstract Unix address
-(`deny unix addr=@**`), denies `/mnt/snapshot/**`, `/mnt/publish/**`,
+auto-bound or otherwise, can exist), grants `bind`, `listen` and `accept`
+on no `inet`/`inet6` stream socket, grants no bind, listen or connect on an
+abstract Unix address (only send and receive between sealed peers on the
+five-hex-digit names the kernel autobinds to connected socketpairs; these
+refusals are implicit because, on Ubuntu 26.04's parser, the equivalent
+explicit `deny` rules refuse far more than written, see the Columbus
+`machines/ovh/docs/machine-browser-policy.md`), denies `/mnt/snapshot/**`, `/mnt/publish/**`,
 `/home/**`, the Machine state root and any write to the cgroup tree with
 audit logging, and denies `ptrace` and `signal` toward anything outside its
 own instance.

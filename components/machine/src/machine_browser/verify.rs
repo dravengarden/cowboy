@@ -146,7 +146,7 @@ pub fn verify(expect: &Expectations<'_>, report: &ReadyReport) -> Result<Verifie
 }
 
 /// No process of the cgroup subtree owns a listening TCP socket, any UDP
-/// socket or an abstract Unix socket, in any network namespace found there.
+/// socket or a reachable (not connected) abstract Unix socket, in any network namespace found there.
 ///
 /// # Errors
 /// Returns the violation, or an unreadable observation as a violation.
@@ -224,17 +224,24 @@ pub fn scan_sockets(cgroup_dir: &Path) -> Result<(), Violation> {
         if let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/net/unix")) {
             for line in text.lines().skip(1) {
                 let fields: Vec<&str> = line.split_whitespace().collect();
-                let (Some(inode), Some(path)) = (fields.get(6), fields.get(7)) else {
+                let (Some(state), Some(inode), Some(path)) =
+                    (fields.get(5), fields.get(6), fields.get(7))
+                else {
                     continue;
                 };
                 let Ok(inode) = inode.parse::<u64>() else {
                     continue;
                 };
+                // Chromium's SO_PASSCRED socketpairs are autobound to an
+                // abstract name on first send; they are connected (state 03)
+                // and refuse every third party. Only an unconnected or
+                // listening abstract socket is reachable from outside.
                 if path.starts_with('@')
+                    && *state != "03"
                     && let Some(owner) = owned.get(&inode)
                 {
                     return Err(Violation(format!(
-                        "process {owner} owns an abstract Unix socket"
+                        "process {owner} owns a reachable abstract Unix socket"
                     )));
                 }
             }
