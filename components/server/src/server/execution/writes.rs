@@ -41,11 +41,23 @@ struct Log {
 
 static LOG: LazyLock<Mutex<Log>> = LazyLock::new(Mutex::default);
 
+/// An absolute target path: native callers send `file://` URLs; a plain
+/// absolute path is accepted too. Relative or non-file locations are not.
+fn target_path(value: &str) -> Option<String> {
+    if value.starts_with('/') {
+        return Some(value.to_owned());
+    }
+    let url = url::Url::parse(value).ok()?;
+    (url.scheme() == "file" && url.host().is_none())
+        .then(|| url.to_file_path().ok())
+        .flatten()?
+        .to_str()
+        .map(str::to_owned)
+}
+
 /// The written path and identity of an `fs/writeFile` call, if hashable.
 fn identity(params: &serde_json::Value) -> Option<(String, String, usize)> {
-    let path = params["path"]
-        .as_str()
-        .filter(|path| path.starts_with('/'))?;
+    let path = target_path(params["path"].as_str()?)?;
     let data = params["dataBase64"].as_str()?;
     if data.len() > MAX_BYTES / 3 * 4 + 4 {
         return None;
@@ -55,7 +67,7 @@ fn identity(params: &serde_json::Value) -> Option<(String, String, usize)> {
         .ok()?;
     let text = std::str::from_utf8(&bytes).ok()?.replace("\r\n", "\n");
     Some((
-        path.to_owned(),
+        path,
         format!("{:x}", Sha256::digest(text.as_bytes())),
         text.len(),
     ))

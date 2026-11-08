@@ -102,3 +102,26 @@ fn other_methods_relative_paths_and_binary_bytes_are_not_writes() {
         assert_eq!(latest(session, path), None, "{path}");
     }
 }
+
+#[test]
+fn native_file_urls_name_the_same_target_path() {
+    let session = "writes-urls";
+    let done = reply(json!({"state":"completed","reply":{}}));
+    observe(
+        session,
+        &invoke("url", "file:///w/my%20dir/a.go", "x\n"),
+        &done,
+    );
+    assert_eq!(
+        latest(session, "/w/my dir/a.go").unwrap().sha256,
+        sha("x\n")
+    );
+    for (operation, location) in [
+        ("remote", "file://host/w/b.go"),
+        ("http", "https://x/w/c.go"),
+    ] {
+        observe(session, &invoke(operation, location, "x"), &done);
+    }
+    assert_eq!(latest(session, "/w/b.go"), None);
+    assert_eq!(latest(session, "/w/c.go"), None);
+}
