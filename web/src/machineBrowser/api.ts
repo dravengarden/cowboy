@@ -385,7 +385,7 @@ const ERROR_TEXT: Record<string, string> = {
   browser_host_requirements:
     "The Machine holding this account does not meet the browser host requirements.",
   browser_not_running: "The browser is not running. Open it first.",
-  browser_not_placed: "This account has no browser profile on any Machine yet.",
+  browser_not_placed: "This account's browser lives on the Machine that holds its sign-in, not on this one.",
   browser_attached: "Another viewer is attached to this browser.",
   browser_instance_changed:
     "The browser on this Machine changed since it was shown. Check its current state and retry.",
