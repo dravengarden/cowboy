@@ -244,16 +244,13 @@ impl BrowserManager {
             Ok(instance) => instance,
             Err(event) => return (*event).with_request(request_id),
         };
-        let attached = instance
-            .live
-            .lock()
-            .attachment
-            .as_ref()
-            .is_some_and(|attachment| attachment.id == attachment_id);
-        if !attached {
-            return instance
+        let superseded = |instance: &Instance| {
+            instance
                 .state(Some(request_id.to_owned()))
-                .with_reason(Reason::Superseded);
+                .with_reason(Reason::Superseded)
+        };
+        if !instance.live.lock().holds(attachment_id, Instant::now()) {
+            return superseded(&instance);
         }
         if !instance.settings.geometry_allowed(width, height) {
             self.send_result(
@@ -270,12 +267,20 @@ impl BrowserManager {
                 .stop_instance(&instance, violation, false, Some(request_id))
                 .await;
         }
-        let resized = instance
-            .control
-            .lock()
-            .await
-            .resize(width, height, COMMAND_TIMEOUT)
-            .await;
+        let resized = {
+            let mut control = instance.control.lock().await;
+            // The control connection may have been held by a snapshot or a
+            // navigation meanwhile: a takeover, a detach, a stop or the
+            // lease's expiry ends this attachment's authority over the
+            // geometry. Rechecked under the live lock, released before the
+            // command is awaited; the control lock held from here on orders
+            // this resize before any later one.
+            if !instance.live.lock().holds(attachment_id, Instant::now()) {
+                drop(control);
+                return superseded(&instance);
+            }
+            control.resize(width, height, COMMAND_TIMEOUT).await
+        };
         match resized {
             Ok(()) => {
                 instance.live.lock().geometry = Geometry { width, height };
@@ -350,5 +355,17 @@ impl BrowserManager {
             tracing::warn!(%error, "browser navigation failed");
         }
         Ok(())
+    }
+}
+
+impl Live {
+    /// Whether `attachment_id` is the instance's current, unexpired
+    /// attachment of an attached instance: the authority a viewer command
+    /// such as resize acts under.
+    pub(super) fn holds(&self, attachment_id: &str, now: Instant) -> bool {
+        self.phase == Phase::Attached
+            && self.attachment.as_ref().is_some_and(|attachment| {
+                attachment.id == attachment_id && attachment.lease_expires > now
+            })
     }
 }

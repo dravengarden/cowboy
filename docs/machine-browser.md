@@ -620,7 +620,11 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
   receipt. An attach re-checks the instance's phase where it installs the
   attachment, after its asynchronous resize: a stop (hibernate, reset,
   revocation) that began meanwhile wins, the new stream is torn down and the
-  attach answers `busy` with the stopping state.
+  attach answers `busy` with the stopping state. A resize re-checks its
+  attachment once it holds the control connection (it may have waited behind
+  a snapshot or navigation): unless that attachment is still the current,
+  unexpired one of an attached instance, it answers `superseded` and leaves
+  the geometry to the viewer that took over.
 - Failure never retries with weaker isolation. A namespace or sandbox failure
   reports `sandbox_unavailable` with the host policy pointer; a confinement
   verification failure reports `confinement_unverified`; a missing host
@@ -763,7 +767,14 @@ and namespace identities. At Machine start:
   inventory fence stays raised and the whole pass is retried: records that
   became readable meanwhile are reconciled like any other, never exempted,
   and only invocations the manager has registered or retained are skipped;
-- abandoned staging directories are reconciled against the staging ledger;
+- abandoned staging directories are reconciled against the staging ledger,
+  but only for an account no unresolved unit may write: while the inventory
+  fence is raised, or a unit of that account (or of unknown ownership) is
+  retained with an unconfirmed exit, its staging is left in place (orphan
+  published generations are still removed), because a surviving launcher may
+  still be copying into a generation the restarted ledger does not know. The
+  reconciliation that follows the inventory's completion or the confirmed
+  exit removes it;
 - a sign-in-bound record is stopped at reconciliation, because the Machine's
   native logins do not survive a restart: a lost Controller connection
   cancels registered logins (`LoginConnection` drop) and native recovery

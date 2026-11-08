@@ -400,3 +400,48 @@ async fn a_publication_failed_after_its_rename_is_reconciled_before_release() {
     assert!(fixture.manager.leftover_staging.lock().is_empty());
     assert!(fixture.instance.live.lock().last_snapshot.is_none());
 }
+
+#[tokio::test]
+async fn a_resize_queued_behind_the_control_connection_rechecks_its_attachment() {
+    let fixture = fixture().await;
+    let _rfb = recheck_passes(&fixture);
+    let viewer = |id: &str| Attachment {
+        id: id.to_owned(),
+        lease_expires: Instant::now() + Duration::from_secs(60),
+        stream: None,
+    };
+    for takeover in [true, false] {
+        {
+            let mut live = fixture.instance.live.lock();
+            live.phase = Phase::Attached;
+            live.attachment = Some(viewer("a1"));
+        }
+        // A snapshot or navigation holds the control connection.
+        let held = fixture.instance.control.lock().await;
+        let resize = {
+            let manager = Arc::clone(&fixture.manager);
+            let reference = fixture.instance.reference();
+            tokio::spawn(async move { manager.resize("r1", &reference, "a1", 1024, 768).await })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!resize.is_finished(), "the resize did not queue");
+        {
+            let mut live = fixture.instance.live.lock();
+            if takeover {
+                // Another viewer took over meanwhile.
+                live.attachment = Some(viewer("a2"));
+            } else if let Some(attachment) = live.attachment.as_mut() {
+                // The lease expired meanwhile.
+                attachment.lease_expires = Instant::now();
+            }
+        }
+        drop(held);
+        let answer = tokio::time::timeout(Duration::from_secs(5), resize)
+            .await
+            .expect("a superseded resize must not reach the launcher")
+            .unwrap();
+        assert_eq!(answer.reason, Some(Reason::Superseded));
+        let geometry = fixture.instance.live.lock().geometry;
+        assert_eq!((geometry.width, geometry.height), (1280, 800));
+    }
+}

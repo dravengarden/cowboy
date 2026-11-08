@@ -266,18 +266,13 @@ impl BrowserManager {
             }
         }
         // Staging still reserved (a copier that may write, or a failed
-        // removal awaiting retry) is never removed here.
-        let live: BTreeSet<u64> = self
-            .staging
-            .live()
-            .get(account_id.as_str())
-            .copied()
-            .into_iter()
-            .collect();
-        snapshot::reconcile(&account_dir, &record, &live).map_err(|error| {
-            tracing::warn!(%error, "browser snapshot reconciliation failed");
-            Reason::Failed
-        })?;
+        // removal awaiting retry), or that an unresolved unit may write, is
+        // never removed here.
+        self.reconcile_storage(account_id.as_str(), &account_dir, &record)
+            .map_err(|error| {
+                tracing::warn!(%error, "browser snapshot reconciliation failed");
+                Reason::Failed
+            })?;
         Ok((account_dir, record))
     }
 

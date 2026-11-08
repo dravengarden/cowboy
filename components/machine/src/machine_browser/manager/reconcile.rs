@@ -429,14 +429,9 @@ impl BrowserManager {
                     self.report_fence_completed(&account_id, completed);
                 }
             }
-            let live: BTreeSet<u64> = self
-                .staging
-                .live()
-                .get(account_id.as_str())
-                .copied()
-                .into_iter()
-                .collect();
-            let removed = snapshot::reconcile(&account_dir, &record, &live)?;
+            // Staging cleanup is deferred, for every account, while a unit
+            // that may write this account's staging is unresolved.
+            let removed = self.reconcile_storage(account_id.as_str(), &account_dir, &record)?;
             if !removed.is_empty() {
                 tracing::info!(account = %account_id.as_str(), ?removed, "reconciled browser snapshot storage");
             }

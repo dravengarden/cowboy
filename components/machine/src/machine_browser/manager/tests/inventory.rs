@@ -1,7 +1,8 @@
 //! Restart inventory against a synthetic systemd: the inventory-wide fence,
 //! replacement invocations, recovered records, `Query` while a browser may
-//! still run, attachment expiry against a stop, and the uninstall drain's
-//! authority after its waits.
+//! still run, staging cleanup deferred while a unit is unresolved,
+//! attachment expiry against a stop, and the uninstall drain's authority
+//! after its waits.
 
 use super::*;
 
@@ -394,4 +395,88 @@ async fn a_drain_whose_authority_ends_while_it_waits_stops_nothing() {
             .lock()
             .is_some()
     );
+}
+
+/// Create `account`'s abandoned `staging/gen-<generation>` (with a file a
+/// copier is writing), an orphan published generation and its control
+/// record; returns the staging path.
+fn abandoned_staging(
+    manager: &BrowserManager,
+    account: &ProviderAccountId,
+    generation: u64,
+) -> PathBuf {
+    let account_dir = manager.account_dir(account).unwrap();
+    // Reconciliation visits the accounts that have a control record.
+    let control = state_file::read_control(&account_dir).unwrap();
+    state_file::write_control(&account_dir, &control).unwrap();
+    let staging =
+        state_file::staging_root(&account_dir).join(state_file::generation_name(generation));
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(staging.join("Local State"), b"{}").unwrap();
+    let orphan =
+        state_file::snapshots_root(&account_dir).join(state_file::generation_name(generation + 1));
+    std::fs::create_dir_all(&orphan).unwrap();
+    staging
+}
+
+fn orphan_pruned(manager: &BrowserManager, account: &ProviderAccountId, generation: u64) -> bool {
+    let account_dir = manager.account_dir(account).unwrap();
+    !state_file::snapshots_root(&account_dir)
+        .join(state_file::generation_name(generation + 1))
+        .exists()
+}
+
+#[tokio::test]
+async fn staging_cleanup_waits_for_an_incomplete_inventory() {
+    let fixture = fixture().await;
+    unregistered(&fixture);
+    let staging = abandoned_staging(&fixture.manager, &fixture.account, 5);
+    // No reset or revocation is pending; the unit listing fails.
+    fixture.units.list(None);
+    fixture.manager.reconcile_at_start().await;
+    assert!(fixture.manager.inventory_unresolved());
+    // A launcher the inventory has not reached may still be copying into
+    // the staging the restarted ledger does not know: only orphans go.
+    assert!(staging.join("Local State").is_file());
+    assert!(orphan_pruned(&fixture.manager, &fixture.account, 5));
+    // An open's admission reconciliation is held too.
+    fixture.manager.reconcile_accounts().await.unwrap();
+    assert!(staging.is_dir());
+    // The inventory completes: the deferred cleanup resumes.
+    fixture.units.list(Some(&[]));
+    eventually("the deferred staging is removed", || !staging.exists()).await;
+    assert!(!fixture.manager.inventory_unresolved());
+}
+
+#[tokio::test]
+async fn staging_cleanup_waits_for_an_unconfirmed_unit_of_its_account() {
+    let fixture = fixture().await;
+    unregistered(&fixture);
+    let other = other_account();
+    let mine = abandoned_staging(&fixture.manager, &fixture.account, 5);
+    let theirs = abandoned_staging(&fixture.manager, &other, 5);
+    // A retained survivor of this account, without any pending fence.
+    fixture
+        .manager
+        .unconfirmed
+        .lock()
+        .insert(1, Unconfirmed::unit(UNIT, Some(&fixture.account)));
+    fixture.manager.reconcile_accounts().await.unwrap();
+    assert!(mine.join("Local State").is_file());
+    assert!(orphan_pruned(&fixture.manager, &fixture.account, 5));
+    assert!(!theirs.exists());
+    // One of unknown ownership may have written any account's staging.
+    let theirs = abandoned_staging(&fixture.manager, &other, 5);
+    fixture
+        .manager
+        .unconfirmed
+        .lock()
+        .insert(2, Unconfirmed::unit("cowboy-browser-x", None));
+    fixture.manager.reconcile_accounts().await.unwrap();
+    assert!(theirs.is_dir());
+    // Confirmed exits resume it.
+    fixture.manager.unconfirmed.lock().clear();
+    fixture.manager.reconcile_accounts().await.unwrap();
+    assert!(!mine.exists());
+    assert!(!theirs.exists());
 }

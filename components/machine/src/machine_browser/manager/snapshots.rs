@@ -415,14 +415,7 @@ impl BrowserManager {
             if record.current_generation == Some(generation) {
                 return Ok(true);
             }
-            let live: BTreeSet<u64> = self
-                .staging
-                .live()
-                .get(&account)
-                .copied()
-                .into_iter()
-                .collect();
-            snapshot::reconcile(account_dir, &record, &live)?;
+            self.reconcile_storage(&account, account_dir, &record)?;
             Ok(false)
         });
         match settled {
@@ -441,6 +434,39 @@ impl BrowserManager {
                 false
             }
         }
+    }
+
+    /// Remove `account`'s orphan generations and abandoned staging against
+    /// its control record. Staging is removed only when nothing outside the
+    /// staging ledger may still write it: while the restart inventory is
+    /// incomplete, or a unit that may have run for this account (its own, or
+    /// one of unknown ownership) has an unconfirmed exit, a surviving
+    /// launcher may still be copying into a generation the (restarted)
+    /// ledger does not know. That staging is left for the reconciliation
+    /// that follows the inventory's completion or the confirmed exit.
+    pub(super) fn reconcile_storage(
+        &self,
+        account: &str,
+        account_dir: &Path,
+        record: &ControlRecord,
+    ) -> Result<Vec<String>> {
+        let unresolved = ProviderAccountId::try_from(account.to_owned())
+            .map_or(true, |account_id| self.fence_blocked(&account_id));
+        if unresolved {
+            tracing::info!(
+                account,
+                "browser staging cleanup deferred until every unit is resolved"
+            );
+            return snapshot::reconcile_published(account_dir, record);
+        }
+        let live: BTreeSet<u64> = self
+            .staging
+            .live()
+            .get(account)
+            .copied()
+            .into_iter()
+            .collect();
+        snapshot::reconcile(account_dir, record, &live)
     }
 
     /// Reserve one staging generation, after retrying the removal of the

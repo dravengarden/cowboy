@@ -322,10 +322,7 @@ pub fn reconcile(
     record: &ControlRecord,
     live_staging: &BTreeSet<u64>,
 ) -> Result<Vec<String>> {
-    let mut removed = Vec::new();
-    if let Some(snapshots) = open_optional(&snapshots_root(account_dir))? {
-        removed.extend(prune(&snapshots, record.current_generation)?);
-    }
+    let mut removed = reconcile_published(account_dir, record)?;
     if let Some(staging) = open_optional(&staging_root(account_dir))? {
         for name in child_names(&staging)? {
             let keep = parse_generation_name(&name)
@@ -337,6 +334,19 @@ pub fn reconcile(
         }
     }
     Ok(removed)
+}
+
+/// Remove every `snapshots/` entry except the record's current generation,
+/// leaving `staging/` untouched: the reconciliation that stays safe while a
+/// copier the Machine does not account for may still write staging.
+///
+/// # Errors
+/// Returns when a removal fails part-way.
+pub fn reconcile_published(account_dir: &Path, record: &ControlRecord) -> Result<Vec<String>> {
+    match open_optional(&snapshots_root(account_dir))? {
+        Some(snapshots) => prune(&snapshots, record.current_generation),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// Delete the account's whole `browser/` tree (snapshots and staging) while
