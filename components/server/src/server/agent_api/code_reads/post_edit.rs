@@ -135,5 +135,36 @@ pub(super) fn project(observation: &Value) -> Value {
     json!({"deliver":deliver,"files":files,"truncated":budget.truncated})
 }
 
+/// Whether the analyzed text is exactly the last executor write the
+/// Controller observed for that file. An observation is a hint: no turn or
+/// tool identity, and other writers are not seen.
+pub(super) fn attach_writes(
+    projected: &mut Value,
+    observation: &Value,
+    latest: impl Fn(&str) -> Option<String>,
+) {
+    let analyzed: Vec<(Option<&str>, Option<&str>)> = observation["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|file| {
+            (
+                file["path"].as_str(),
+                file["bufferSnapshot"]["content"]["sha256"].as_str(),
+            )
+        })
+        .collect();
+    let Some(files) = projected["files"].as_array_mut() else {
+        return;
+    };
+    for (item, (path, sha256)) in files.iter_mut().zip(analyzed) {
+        let Some(written) = path.and_then(&latest) else {
+            continue;
+        };
+        item["write"] =
+            json!({"observed":true,"matches_analyzed":sha256 == Some(written.as_str())});
+    }
+}
+
 #[cfg(test)]
 mod tests;

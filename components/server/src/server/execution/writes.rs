@@ -1,0 +1,148 @@
+//! Observed executor writes: a hint, not a durable receipt.
+//!
+//! Every native `fs/writeFile` passes through `forward`. Its target path and
+//! the SHA-256 of its LF-normalized bytes (the native mirror's text identity)
+//! are kept in bounded Controller memory once the executor reports
+//! completion, including a completion observed later by its operation ID.
+//! There is no turn or tool identity, nothing survives a Controller restart,
+//! and other writers (shells, helpers, other processes) are not seen. A later
+//! write of the same path replaces the earlier observation.
+
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::time::Instant;
+
+use base64::Engine as _;
+use parking_lot::Mutex;
+use sha2::{Digest as _, Sha256};
+
+use crate::execution_protocol::{Command, Outcome, Response as KeeperResponse};
+use crate::machine_protocol::execution::Response;
+
+const MAX_WRITES: usize = 4096;
+const MAX_PENDING: usize = 256;
+/// Larger writes are not hashed; the native mirror refuses them anyway.
+const MAX_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::server) struct Write {
+    pub sequence: u64,
+    pub sha256: String,
+    pub utf8_bytes: usize,
+}
+
+#[derive(Default)]
+struct Log {
+    sequence: u64,
+    writes: HashMap<(String, String), (Write, Instant)>,
+    /// Admitted writes whose completion has not been observed yet.
+    pending: HashMap<(String, String), (String, String, usize)>,
+}
+
+static LOG: LazyLock<Mutex<Log>> = LazyLock::new(Mutex::default);
+
+/// The written path and identity of an `fs/writeFile` call, if hashable.
+fn identity(params: &serde_json::Value) -> Option<(String, String, usize)> {
+    let path = params["path"]
+        .as_str()
+        .filter(|path| path.starts_with('/'))?;
+    let data = params["dataBase64"].as_str()?;
+    if data.len() > MAX_BYTES / 3 * 4 + 4 {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .ok()?;
+    let text = std::str::from_utf8(&bytes).ok()?.replace("\r\n", "\n");
+    Some((
+        path.to_owned(),
+        format!("{:x}", Sha256::digest(text.as_bytes())),
+        text.len(),
+    ))
+}
+
+fn completed(response: &Response) -> Option<bool> {
+    match response {
+        Response::Call {
+            response:
+                KeeperResponse::Operation {
+                    outcome: Outcome::Completed { reply },
+                },
+        } => Some(reply.get("error").is_none()),
+        Response::Call {
+            response:
+                KeeperResponse::Operation {
+                    outcome: Outcome::Pending,
+                },
+        } => None,
+        _ => Some(false),
+    }
+}
+
+fn record(log: &mut Log, session: &str, (path, sha256, utf8_bytes): (String, String, usize)) {
+    if log.writes.len() >= MAX_WRITES
+        && let Some(oldest) = log
+            .writes
+            .iter()
+            .min_by_key(|(_, (_, at))| *at)
+            .map(|(key, _)| key.clone())
+    {
+        log.writes.remove(&oldest);
+    }
+    log.sequence += 1;
+    let write = Write {
+        sequence: log.sequence,
+        sha256,
+        utf8_bytes,
+    };
+    log.writes
+        .insert((session.to_owned(), path), (write, Instant::now()));
+}
+
+pub(super) fn observe(session: &str, command: &Command, response: &Response) {
+    match command {
+        Command::Invoke { invocation, .. } if invocation.method == "fs/writeFile" => {
+            let Some(identity) = identity(&invocation.params) else {
+                return;
+            };
+            let mut log = LOG.lock();
+            match completed(response) {
+                Some(true) => record(&mut log, session, identity),
+                Some(false) => {}
+                None if log.pending.len() < MAX_PENDING => {
+                    log.pending.insert(
+                        (session.to_owned(), invocation.operation_id.clone()),
+                        identity,
+                    );
+                }
+                None => {}
+            }
+        }
+        Command::Observe { operation_id, .. } => {
+            let mut log = LOG.lock();
+            let key = (session.to_owned(), operation_id.clone());
+            match completed(response) {
+                None => {}
+                Some(done) => {
+                    if let Some(identity) = log.pending.remove(&key)
+                        && done
+                    {
+                        record(&mut log, session, identity);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The latest observed write of an absolute target path in this session.
+pub(in crate::server) fn latest(session: &str, path: &str) -> Option<Write> {
+    LOG.lock()
+        .writes
+        .get(&(session.to_owned(), path.to_owned()))
+        .map(|(write, _)| write.clone())
+}
+
+#[cfg(test)]
+mod tests;

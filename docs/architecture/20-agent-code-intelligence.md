@@ -149,6 +149,21 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   hints only. Intermediate versions are superseded; delete/recreate is a new
   identity.
 
+  A Controller-side hint is implemented first; the durable keeper receipt is
+  deferred to a Machine maintenance release. Every native call already passes
+  through the Controller's execution `forward`, which now records each
+  completed `fs/writeFile` (including a completion later observed by its
+  operation ID): the absolute target path and the SHA-256/byte count of its
+  LF-normalized UTF-8 text, the native mirror's identity. Records are bounded
+  Controller memory (4,096 writes, 256 pending, 4 MiB inputs) with a
+  monotonic sequence; a restart discards them. `code.post_edit` reports
+  `write: {observed, matches_analyzed}` per file, true when the analyzed
+  snapshot is exactly the last observed write. There is no turn or tool
+  identity, failed/unknown outcomes are not recorded, and shell commands,
+  Claude's buffered apply helper (`process/start`) and other writers are not
+  seen, so absence proves nothing. Which executor method Codex `apply_patch`
+  uses is not yet verified against the pinned executor.
+
 On 2026-11-07 the Controller activated
 `1ad869c5fed6f033583b75a5c2db09869b60b678` through transaction
 `1794056365894580054-1ad869c5fed6` (`succeeded` / `committed`). The full pinned
