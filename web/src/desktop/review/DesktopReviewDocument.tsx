@@ -71,7 +71,11 @@ function ReviewFileTabs({
                   </Box>
                   {tab.document.kind !== "source" && (
                     <Box component="span" sx={{ fontSize: "0.65rem", color: "text.secondary" }}>
-                      {tab.document.kind === "commit" ? `@${tab.document.oid.slice(0, 7)}` : "Δ"}
+                      {tab.document.kind === "commit"
+                        ? `@${tab.document.oid.slice(0, 7)}`
+                        : tab.document.kind === "pr"
+                        ? `#${tab.document.number}`
+                        : "Δ"}
                     </Box>
                   )}
                   <IconButton

@@ -31,6 +31,25 @@ import { useDesktopReviewChanges } from "./useDesktopReviewChanges";
 import { useDesktopReviewContext } from "./useDesktopReviewContext";
 import { useReviewDocumentText } from "./useReviewDocumentText";
 import { useReviewTabsState } from "./useReviewTabsState";
+import { type PullFileRef, pullFile } from "./pullPatches";
+import {
+  remoteFileKey,
+  remoteFileMark,
+  type RemoteReviewBinding,
+  type RemoteReviewFile,
+} from "../../mobile/review/remoteReviewModel";
+import { adjacentIndex } from "./reviewDocumentKeys";
+
+/** The file `offset` from this one on its PR page that `accept` takes. */
+function adjacentPullPath(pull: PullFileRef, offset: 1 | -1, accept: (path: string) => boolean): string | undefined {
+  const at = adjacentIndex(
+    pull.siblings.length,
+    pull.siblings.indexOf(pull.file.path),
+    offset,
+    (index) => accept(pull.siblings[index]!),
+  );
+  return at === undefined ? undefined : pull.siblings[at];
+}
 
 export const REVIEW_DOCUMENT_REGION = "review.document";
 
@@ -52,9 +71,12 @@ export function useReviewWorkbench(active: boolean) {
     context.synced.progress,
     changes.queue.map((entry) => ({ key: entryKey(entry), fingerprint: entry.change.fingerprint })),
   ), [changes.queue, context.synced.progress]);
-  const openKey = documentEntryKey(document);
+  const pull = document?.kind === "pr"
+    ? pullFile(document.repositoryId, document.number, document.revision, document.path)
+    : undefined;
+  const openKey = pull ? remoteFileKey(pull.binding, pull.file.path) : documentEntryKey(document);
   const openEntry = changes.queue.find((entry) => entryKey(entry) === openKey);
-  const openMark = openEntry?.change.fingerprint ?? ready?.revision;
+  const openMark = pull ? remoteFileMark(pull.file) : openEntry?.change.fingerprint ?? ready?.revision;
   const root = target && !target.own ? target.cwd : undefined;
 
   const focusDocument = useCallback((): void => {
@@ -70,6 +92,16 @@ export function useReviewWorkbench(active: boolean) {
   }, [focusDocument, updateTabs]);
   const openCommit = useCallback((oid: string, path: string): void => {
     updateTabs((state) => openReviewDocument(state, { kind: "commit", oid, path }));
+    focusDocument();
+  }, [focusDocument, updateTabs]);
+  const openPull = useCallback((binding: RemoteReviewBinding, revision: string, file: RemoteReviewFile): void => {
+    updateTabs((state) => openReviewDocument(state, {
+      kind: "pr",
+      repositoryId: binding.repositoryId,
+      number: binding.number,
+      revision,
+      path: file.path,
+    }));
     focusDocument();
   }, [focusDocument, updateTabs]);
   const markEntry = useCallback((key: string, mark: string | undefined): void => {
@@ -101,6 +133,17 @@ export function useReviewWorkbench(active: boolean) {
       }
       case "file":
       case "unreviewed": {
+        if (pull && document?.kind === "pr") {
+          const path = adjacentPullPath(pull, action.offset, (sibling) => {
+            const ref = pullFile(document.repositoryId, document.number, document.revision, sibling);
+            const key = ref && remoteFileKey(ref.binding, sibling);
+            return action.kind === "file" || !key || context.synced.progress[key] !== remoteFileMark(ref.file);
+          });
+          const ref = path ? pullFile(document.repositoryId, document.number, document.revision, path) : undefined;
+          if (ref) openPull(ref.binding, ref.revision, ref.file);
+          else notify("No more files on this page of the pull request", "info");
+          return;
+        }
         const next = adjacentEntry(changes.queue, openKey, action.offset, (entry) =>
           action.kind === "file" || !reviewed.has(entryKey(entry)));
         if (next) open(next);
@@ -116,7 +159,7 @@ export function useReviewWorkbench(active: boolean) {
       case "send":
         send(false);
     }
-  }, [changes.queue, cursorLine, open, openKey, reviewed, send, updateTabs]);
+  }, [changes.queue, context.synced.progress, cursorLine, document, open, openKey, openPull, pull, reviewed, send, updateTabs]);
 
   const onCursorLine = useCallback((line: number): void => {
     setCursorLine(line);
@@ -143,6 +186,7 @@ export function useReviewWorkbench(active: boolean) {
     open,
     openSource,
     openCommit,
+    openPull,
     markOpen: () => openKey && markEntry(openKey, openMark),
     markEntry,
     send,

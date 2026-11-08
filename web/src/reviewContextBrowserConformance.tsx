@@ -31,6 +31,41 @@ async function until(predicate: () => boolean, message: string) {
   throw new Error(`${message}: ${document.body.textContent?.slice(0, 1500)}`);
 }
 
+const FIXTURE_PULL_REVISION = "c".repeat(64);
+function fixturePullResponse(url: URL): unknown {
+  if (!url.pathname.endsWith("/resources")) {
+    return {
+      type: "inventory",
+      extensions: [{
+        identity: { pluginId: "github", pluginVersion: "0.2.0", generationDigest: `sha256:${"d".repeat(64)}` },
+        label: "GitHub", description: "Pull requests", available: true,
+        views: [{ id: "pulls", label: "Pull requests", filters: [], review: "pull_request", discovery: true }],
+      }],
+      remotes: [{ name: "origin", host: "github.com", owner: "dravengarden", repository: "cowboy" }],
+    };
+  }
+  if (url.searchParams.get("discovery") === "true") {
+    return {
+      type: "pulls", account: "fixture", total: 1, incomplete: false, nextPage: null,
+      items: [{ number: "42", repository: "dravengarden/cowboy", title: "Review the workbench", url: "https://github.com/dravengarden/cowboy/pull/42",
+        author: "fixture", state: "open", draft: false, updatedAt: "2026-11-08T00:00:00Z" }],
+    };
+  }
+  const file = (path: string, patch: string) => ({ path, oldPath: null, status: "modified", additions: 1, deletions: 1, patch, limited: false });
+  return {
+    type: "review",
+    review: {
+      repositoryId: "R_fixture", number: url.searchParams.get("item") ?? "42", title: "Review the workbench",
+      url: `https://github.com/dravengarden/cowboy/pull/${url.searchParams.get("item") ?? "42"}`, state: "open",
+      head: "a".repeat(40), base: "b".repeat(40), revision: FIXTURE_PULL_REVISION, totalFiles: 2, nextPage: null, limited: false,
+      files: [
+        file("web/src/pr-one.ts", "@@ -1 +1 @@\n-one\n+pull one\n"),
+        file("web/src/pr-two.ts", "@@ -1 +1 @@\n-two\n+pull two\n"),
+      ],
+    },
+  };
+}
+
 export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false, checksEnabled = false, content?: () => React.ReactNode) {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
@@ -223,6 +258,12 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
     if (url.pathname.endsWith("/review-fetch")) {
       fetched = true;
       return json({ reference: "refs/remotes/origin/main", oid: "abc" });
+    }
+    // An opt-in GitHub extension for the Desktop workbench acceptance
+    // (desktopReviewBrowserFixture.tsx); other suites see none.
+    if ((globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests &&
+      url.pathname.includes("/extensions")) {
+      return json(fixturePullResponse(url));
     }
     if (url.pathname.startsWith("/api/code/sessions/")) {
       const context = decodeURIComponent(url.pathname.split("/")[4]!);

@@ -5,6 +5,7 @@ import { reviewSelectionMessage } from "../../mobile/review/reviewLineSelection"
 import { editorSelection } from "./reviewEditorSelection";
 import type { DesktopReviewDocument } from "./desktopReviewTabs";
 import { adjacentIndex, adjacentLine } from "./reviewDocumentKeys";
+import { pullFile } from "./pullPatches";
 
 /** The change-list key of an open diff, as reviewed marks use it. */
 export function documentEntryKey(document: DesktopReviewDocument | undefined): string | undefined {
@@ -66,8 +67,17 @@ export function documentRemark(
     selection: editorSelection(view),
     comparison: document.kind === "diff" ? document.comparison : undefined,
   });
-  const commit = document.kind === "commit" ? `In commit ${document.oid.slice(0, 10)}:\n` : "";
+  const commit = document.kind === "commit"
+    ? `In commit ${document.oid.slice(0, 10)}:\n`
+    : document.kind === "pr"
+    ? `In pull request ${pullRepository(document)}#${document.number}:\n`
+    : "";
   return `${root ? `In \`${root}\`:\n` : ""}${commit}${message}`;
+}
+
+function pullRepository(document: Extract<DesktopReviewDocument, { kind: "pr" }>): string {
+  const binding = pullFile(document.repositoryId, document.number, document.revision, document.path)?.binding;
+  return binding ? `${binding.owner}/${binding.repository}` : document.repositoryId;
 }
 
 export function pathRemark(path: string, root: string | undefined): string {

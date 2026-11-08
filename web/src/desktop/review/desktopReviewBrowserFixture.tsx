@@ -32,7 +32,9 @@ function Probe(): null {
 }
 
 export function mountDesktopReviewWorkbench(): void {
+  (globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests = true;
   localStorage.removeItem("cowboy.desktop.workView.v1");
+  localStorage.removeItem("cowboy.desktop.reviewContext.v1");
   localStorage.removeItem("cowboy.desktop.reviewLayout.v1");
   for (const key of Object.keys(localStorage)) {
     if (key.startsWith("cowboy.desktop.reviewTabs.v1:")) localStorage.removeItem(key);

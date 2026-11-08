@@ -47,7 +47,9 @@ import {
 
 const CodeViewer = lazy(() => import("./CodeViewer"));
 type Inventory = Extract<ExtensionResponse, { type: "inventory" }>;
-async function read(
+/** One page of a pull request, checked against the requested identity,
+ *  revision and repository (shared by Mobile and Desktop Review). */
+export async function readRemoteReview(
   context: string,
   choice: Choice,
   number: string,
@@ -102,7 +104,7 @@ export async function bindPullRequest(
   number: string,
   signal: AbortSignal,
 ): Promise<RemoteReviewBinding> {
-  const review = await read(
+  const review = await readRemoteReview(
     context,
     choice,
     number,
@@ -164,7 +166,7 @@ function PullRequest(
     setLoading(true);
     setError(undefined);
     try {
-      const value = await read(
+      const value = await readRemoteReview(
         context,
         choice,
         binding.number,
@@ -488,7 +490,7 @@ export function RemoteReviewApp(
     number: string,
     signal: AbortSignal,
   ) {
-    const review = await read(
+    const review = await readRemoteReview(
       context,
       choice,
       number,

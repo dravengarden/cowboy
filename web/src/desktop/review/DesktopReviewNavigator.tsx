@@ -9,9 +9,11 @@ import { ReviewContextMenu } from "./ReviewContextMenu";
 import { ReviewHistoryList } from "./ReviewHistoryList";
 import { ReviewWorktreesList } from "./ReviewWorktreesList";
 import type { DesktopReviewContext } from "./useDesktopReviewContext";
+import { ReviewPullList } from "./ReviewPullList";
+import type { RemoteReviewBinding, RemoteReviewFile } from "../../mobile/review/remoteReviewModel";
 import type { DesktopReviewChanges } from "./useDesktopReviewChanges";
 
-export type ReviewNavigatorTab = "changes" | "files" | "history" | "worktrees";
+export type ReviewNavigatorTab = "changes" | "files" | "history" | "worktrees" | "pulls";
 export const REVIEW_NAVIGATOR_TABS: readonly {
   value: ReviewNavigatorTab;
   label: string;
@@ -21,6 +23,7 @@ export const REVIEW_NAVIGATOR_TABS: readonly {
   { value: "files", label: "Files", leaderKey: "VF" },
   { value: "history", label: "History", leaderKey: "VH" },
   { value: "worktrees", label: "Worktrees", leaderKey: "VW" },
+  { value: "pulls", label: "Pull request", leaderKey: "VG" },
 ];
 export const REVIEW_NAVIGATOR_REGION = "review.navigator";
 export const REVIEW_FILTER_FOCUS_EVENT = "cowboy:review-filter-focus";
@@ -36,6 +39,8 @@ export function DesktopReviewNavigator({
   onReviewContext,
   openCommitPath,
   onOpenCommit,
+  openPullPath,
+  onOpenPull,
   sessionId,
   tab,
   onTab,
@@ -57,6 +62,8 @@ export function DesktopReviewNavigator({
   onReviewContext: (value: string) => void;
   openCommitPath: { oid: string; path: string } | undefined;
   onOpenCommit: (oid: string, path: string) => void;
+  openPullPath: string | undefined;
+  onOpenPull: (binding: RemoteReviewBinding, revision: string, file: RemoteReviewFile) => void;
   sessionId: string;
   tab: ReviewNavigatorTab;
   onTab: (tab: ReviewNavigatorTab) => void;
@@ -143,6 +150,9 @@ export function DesktopReviewNavigator({
           openCommitPath={openCommitPath}
           onOpen={onOpenCommit}
         />
+      )}
+      {tab === "pulls" && context.target && (
+        <ReviewPullList context={context} openPath={openPullPath} onOpen={onOpenPull} />
       )}
       {tab === "worktrees" && context.target && (
         <ReviewWorktreesList target={context.target} onReview={onReviewContext} />

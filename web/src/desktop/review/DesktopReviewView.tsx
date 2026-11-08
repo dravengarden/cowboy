@@ -195,7 +195,7 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
   const [folded, setFolded] = useState(false);
   const [overlay, setOverlay] = useState(false);
   const [tab, setTab] = useState<ReviewNavigatorTab>("changes");
-  const [filters, setFilters] = useState<Record<ReviewNavigatorTab, string>>({ changes: "", files: "", history: "", worktrees: "" });
+  const [filters, setFilters] = useState<Record<ReviewNavigatorTab, string>>({ changes: "", files: "", history: "", worktrees: "", pulls: "" });
   const [contextRequest, setContextRequest] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -255,6 +255,11 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
       onOpenCommit={(oid, path) => {
         leaveOverlay();
         review.openCommit(oid, path);
+      }}
+      openPullPath={review.document?.kind === "pr" ? review.document.path : undefined}
+      onOpenPull={(binding, revision, file) => {
+        leaveOverlay();
+        review.openPull(binding, revision, file);
       }}
       sessionId={review.target.sessionId}
       tab={tab}

@@ -225,7 +225,7 @@ change queue (the Unread filter does not change it), `]u`/`[u` unreviewed
 file, `gt`/`gT`/`{n}gt` file tab, and `Enter` (Normal or Visual), which
 appends the lines with their location to the Prompt and focuses it, unfolding
 a folded Prompt. The Review group (`␣V`, while Review is shown): `V` focus,
-`C`/`F`/`H`/`W` Changes/Files/History/Worktrees, `X` what to review (the
+`C`/`F`/`H`/`W`/`G` Changes/Files/History/Worktrees/Pull request, `X` what to review (the
 Session's default, its project checkout, linked, bound or same-project
 sessions; per device, and choosing never moves the Agent), `,` Review
 settings, `A` compare against, `U` unread only, `M` mark
@@ -234,7 +234,11 @@ the file tab, `P` keep it, `[` fold the Navigator, `L` the classic layout.
 In History `L` opens a commit's files and their diffs open as commit tabs;
 `H` returns to the commits. In Worktrees `L` reviews a worktree: one a
 session owns as that session, an unowned one on this Service's Machine as a
-worktree context. The Navigator's edge drags, and Resize mode (`␣WR`, `Tab`)
+worktree context. In Pull request the Session's bound PR lists its files (20 a page; `]f`
+walks the page, `␣VM` marks a file viewed in the synced progress), or a
+picker lists the account's PRs by relationship and state and takes a
+number or URL; choosing one binds it as the phone does. PR patches stay in
+memory, so PR tabs are not restored after a reload. The Navigator's edge drags, and Resize mode (`␣WR`, `Tab`)
 reaches it as `review-navigator`. Below 900 px of Review width the Navigator folds to a rail and `␣VC`/`␣VF`
 open it inset; `Esc` or `H` at its root closes it.
 
