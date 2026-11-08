@@ -1,7 +1,7 @@
 # `cowboy-browser-control-v1` and the launcher contract as implemented
 
 This is the wire contract between the Machine (`components/machine/src/machine_browser/launcher.rs`)
-and `cowboy-browser-launcher` 1.0.0, the static supervisor shipped in the
+and `cowboy-browser-launcher` 1.0.1, the static supervisor shipped in the
 runtime artifact at `usr/libexec/cowboy-browser-launcher`. It records what the
 launcher does, in the order it does it, so the Machine, the host `AppArmor`
 policy and the conformance run can be checked against one text. The design
@@ -14,7 +14,7 @@ cowboy-browser-launcher --probe
 cowboy-browser-launcher run <flags>
 ```
 
-`--probe` prints one line, `{"protocol":"cowboy-browser-control-v1","version":"1.0.0"}`,
+`--probe` prints one line, `{"protocol":"cowboy-browser-control-v1","version":"1.0.1"}`,
 and exits 0. It is the artifact probe (`{"args":["--probe"],"timeout_ms":5000}`).
 
 `run` takes a fixed flag vector; every value is validated before anything

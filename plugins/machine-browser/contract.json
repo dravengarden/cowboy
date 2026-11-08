@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "machine-browser",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "display_name": "Machine browser",
   "description": "Owner-operated Chromium on the Machine for account sign-in, isolated per account.",
   "supported_platforms": [
@@ -19,7 +19,7 @@
     ],
     "apparmor_features": [
       "network_v9",
-      "unix",
+      "network_v9/af_unix",
       "mount",
       "namespaces/userns_create"
     ],

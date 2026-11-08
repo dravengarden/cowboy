@@ -92,7 +92,7 @@ graph; it has no UI, URLs, credentials or network targets.
 {
   "schema_version": 1,
   "id": "machine-browser",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "display_name": "Machine browser",
   "description": "Owner-operated Chromium on the Machine for account sign-in.",
   "supported_platforms": [{"os": "linux", "architecture": "x86_64"}],
@@ -100,7 +100,7 @@ graph; it has no UI, URLs, credentials or network targets.
     "kernel_min": "5.15",
     "merged_usr": true,
     "mount_points": ["/opt", "/mnt"],
-    "apparmor_features": ["network_v9", "unix", "mount", "namespaces/userns_create"],
+    "apparmor_features": ["network_v9", "network_v9/af_unix", "mount", "namespaces/userns_create"],
     "built_from": {"id": "ubuntu", "version_id": "26.04"}
   },
   "runtime": {
