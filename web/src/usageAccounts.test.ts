@@ -122,9 +122,9 @@ test("named quota requires exact account, owner, Provider and signed generation"
   }
   assertEquals(registeredUsageAccounts(snapshot, registry, [session])[0].usage, snapshot.providers[0]);
 });
-test("disabled, revoked and unsupported accounts remain visible without borrowed quota", () => {
+test("disabled and unsupported accounts remain visible without borrowed quota", () => {
   setup();
-  for (const change of [{ enabled: false }, { revoking: true }, { provider_id: "unknown" }]) {
+  for (const change of [{ enabled: false }, { provider_id: "unknown" }]) {
     const accounts = { ...registry, registry: { ...registry.registry, accounts: [{ ...registry.registry.accounts[0], ...change }] } };
     const card = registeredUsageAccounts(snapshot, accounts, [session]).find((c) => c.id === "otter")!;
     assertEquals(card.usage.rate_limits, undefined);
@@ -133,6 +133,12 @@ test("disabled, revoked and unsupported accounts remain visible without borrowed
   }
   const removed = { ...registry, registry: { ...registry.registry, accounts: [] } };
   assertEquals(registeredUsageAccounts(snapshot, removed, [session]).some((c) => c.id === "otter"), false);
+});
+test("revoked accounts leave the usage cards", () => {
+  setup();
+  const revoked = { ...registry, registry: { ...registry.registry,
+    accounts: [{ ...registry.registry.accounts[0], enabled: false, revoking: true }] } };
+  assertEquals(registeredUsageAccounts(snapshot, revoked, [session]).some((c) => c.id === "otter"), false);
 });
 test("newest valid quota wins; context-only reports do not erase or fabricate quota", () => {
   setup();
