@@ -55,6 +55,9 @@ pub struct LaunchContract {
     pub session_id: String,
     pub binding: BindingV1,
     pub executor: Executor,
+    /// Exact default CLI admitted with this incarnation; absent on legacy keepers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_cli: Option<Executor>,
     pub capability: String,
     /// Closed target-owned environment; no Agent credentials are inherited.
     pub environment: BTreeMap<String, String>,
@@ -76,6 +79,9 @@ pub struct ManagedExecution {
     /// Machine-written round marker; a Provider reads its turn constraint.
     pub round_path: String,
 }
+
+/// Target-verified CLI identity, not an MCP capability or permission.
+pub const AGENT_CLI_INITIALIZATION_KEY: &str = "cowboyAgentCli";
 
 /// Key a managed keeper adds to its native initialization so the Provider
 /// learns its constraint from the target, not from its own arguments.
@@ -114,6 +120,54 @@ pub struct Executor {
     pub command: String,
     pub sha256: String,
     pub version: String,
+}
+
+/// Validate the recorded CLI identity without inferring MCP compatibility.
+///
+/// # Errors
+/// Rejects malformed identities and paths that cannot be a PATH entry.
+pub fn agent_cli_directory(cli: &Executor) -> Result<&str, &'static str> {
+    let path = std::path::Path::new(&cli.command);
+    let directory = path.parent().and_then(std::path::Path::to_str);
+    if !path.is_absolute()
+        || path.file_name().and_then(std::ffi::OsStr::to_str) != Some("cowboy")
+        || cli.command.len() > 4096
+        || cli.command.contains(['\0', ':'])
+        || path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        || cli.sha256.len() != 64
+        || !cli
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || cli.version.is_empty()
+        || cli.version.len() > 64
+        || cli.version.contains('\0')
+    {
+        return Err("invalid agent CLI identity");
+    }
+    directory.ok_or("invalid agent CLI directory")
+}
+
+/// Preserve the target search path behind the admitted default CLI.
+///
+/// # Errors
+/// Rejects an invalid CLI identity or an oversized or invalid resulting PATH.
+pub fn prepend_agent_cli(
+    cli: &Executor,
+    environment: &mut BTreeMap<String, String>,
+) -> Result<(), &'static str> {
+    let directory = agent_cli_directory(cli)?;
+    let path = match environment.get("PATH").filter(|value| !value.is_empty()) {
+        Some(path) => format!("{directory}:{path}"),
+        None => directory.to_owned(),
+    };
+    if path.len() > 8192 || path.contains('\0') {
+        return Err("invalid agent CLI search path");
+    }
+    environment.insert("PATH".to_owned(), path);
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

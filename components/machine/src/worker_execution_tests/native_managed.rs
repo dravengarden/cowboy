@@ -109,6 +109,7 @@ async fn native_managed_execution(images: bool) {
             &state,
             Some(Configuration {
                 schema: 1,
+                agent_cli: None,
                 retention: None,
                 host_command: input_path("keeper"),
                 executor: wire::Executor {

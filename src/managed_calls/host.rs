@@ -267,6 +267,9 @@ impl CallHost {
         if matches!(action, Action::AgentInvoke { .. }) && !grant.agent_actions {
             return refusal("unsupported_capability", "not_submitted");
         }
+        if matches!(action, Action::Mcp { .. }) && !grant.mcp {
+            return refusal("unsupported_capability", "not_submitted");
+        }
         let submits = action.submits();
         let unknown = if submits {
             refusal("outcome_unknown", "unknown")
@@ -347,6 +350,7 @@ mod tests {
             parent_session_id: "parent-1".into(),
             agent_api: false,
             agent_actions: false,
+            mcp: false,
         };
         host.install(&grant).unwrap();
         host.install(&grant).unwrap();
@@ -403,6 +407,7 @@ mod tests {
             parent_session_id: "parent-1".into(),
             agent_api: false,
             agent_actions: false,
+            mcp: false,
         };
         host.install(&replacement).unwrap();
         assert_ne!(std::fs::read(&context).unwrap(), old_wiring);
@@ -413,5 +418,32 @@ mod tests {
         assert_eq!(host.installed_grant("parent-1"), None);
         drop(host);
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod mcp_tests {
+    use super::*;
+    #[tokio::test]
+    async fn mcp_requires_its_own_negotiated_grant_bit() {
+        let root = tempfile::tempdir().unwrap();
+        let host = CallHost::new(root.path()).unwrap();
+        let grant = Grant {
+            grant_id: "grant-one".into(),
+            parent_session_id: "parent".into(),
+            agent_api: true,
+            agent_actions: true,
+            mcp: false,
+        };
+        assert!(serde_json::to_value(&grant).unwrap().get("mcp").is_none());
+        let action = Action::Mcp {
+            request: Box::new(crate::mcp_binding::RelayRequest {
+                binding: "suger".into(),
+                epoch: "a".repeat(32),
+                action: crate::mcp_binding::RelayAction::Open,
+            }),
+        };
+        let result = host.forward(grant, action).await;
+        assert_eq!(result["error"]["code"], "unsupported_capability");
     }
 }

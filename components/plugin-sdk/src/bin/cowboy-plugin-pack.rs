@@ -78,6 +78,9 @@ fn read_payload(root: &std::path::Path, manifest: &PluginManifest) -> Result<Plu
         PluginKind::MemoryBackend => {
             PluginPayload::MemoryBackend(read_json(&root.join(&manifest.entrypoint))?)
         }
+        PluginKind::McpServer => {
+            PluginPayload::McpServer(read_json(&root.join(&manifest.entrypoint))?)
+        }
         PluginKind::CallProfile => {
             PluginPayload::CallProfile(read_json(&root.join(&manifest.entrypoint))?)
         }
@@ -105,6 +108,7 @@ fn supported_platforms(package: &PluginPackage) -> Vec<PlatformTarget> {
         PluginPayload::WorkspaceExtension(contract) => contract.supported_platforms.clone(),
         PluginPayload::MemoryBackend(contract) => contract.supported_platforms.clone(),
         PluginPayload::CallProfile(contract) => contract.supported_platforms.clone(),
+        PluginPayload::McpServer(contract) => contract.supported_platforms.clone(),
         PluginPayload::MachineBrowser(contract) => contract.supported_platforms.clone(),
     }
 }

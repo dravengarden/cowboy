@@ -94,6 +94,7 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "calls.cancel",
     "review.start",
     "code.check",
+    "code.post_edit",
     "documents.mutate",
     "preferences.update",
     "superagent.follow_up",
@@ -545,11 +546,11 @@ CONFIGURATION_SDK: r#"
 export interface Cowboy {
   configuration: {
     schema(scope:"service"|"device", q?:Selection): Promise<Selected>; // typed TOML registry, defaults/constraints/reload classes
-    read(scope:"service"|"session"|"tools", q?:Selection & {session_id?:string}): Promise<Selected & {revision:string}>;
+    read(scope:"service"|"session"|"tools"|"mcp", q?:Selection & {session_id?:string}): Promise<Selected & {revision:string}>;
   };
 }
 // service: effective config-file fields + sources/reload classes. session: exact Provider options and DB preferences.
-// tools: built-in/agent defaults, session overrides and effective Tools policy. Other sessions must share your owner.
+// tools: effective Tools policy. mcp: bindings and policy/launch/worker/runtime readiness. Same-owner sessions only.
 // This read does not wake a worker. Discover preferences for existing scoped writes; never edit raw settings keys.
 "#,
 DOCUMENTS_SDK: r#"
@@ -667,6 +668,10 @@ export interface Cowboy {
 // Run one explicitly (runs project code in your execution environment; needs Project language servers on):
 // cowboy_execute({action:"code.check",operation,arguments:{check:"<id>"}}) -> {status:"accepted"|"existing",run}.
 // Then poll code.checks(). A result is evidence for the inputs the command saw, not proof of correctness.
+// cowboy_execute({action:"code.post_edit",arguments:{paths:[1..5 files]}}) is read-only (operation optional): the
+// code.diagnostics read reduced to {deliver,files:[{path,state,comparison?,diagnostics?,write?}],truncated}; Provider adapters
+// deliver it after edits. deliver:false is not a clean result. write:{observed,matches_analyzed} compares the analyzed text
+// with the last executor fs/writeFile Cowboy saw for that file (a hint: no turn identity; shells and helpers are not seen).
 // symbols: case-insensitive name substring across the worktree, default50/max200.
 // Gitignore-aware; hidden files, binaries, >2MiB files and symlinks are skipped. Smart case unless case_sensitive.
 // limit default100/max200, <=20 per file; line/column are 1-based (UTF-16 column). partial: a bound stopped the scan.

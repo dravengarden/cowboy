@@ -214,6 +214,10 @@ fn validate_artifact(artifact: &ReleasedPluginComponent) -> Result<()> {
         is_code_kind(artifact.kind),
         "invalid code runtime artifact kind"
     );
+    validate_runtime_artifact(artifact)
+}
+
+pub(crate) fn validate_runtime_artifact(artifact: &ReleasedPluginComponent) -> Result<()> {
     for (value, label) in [
         (&artifact.slot, "code runtime artifact slot"),
         (&artifact.dependency, "code runtime artifact dependency"),

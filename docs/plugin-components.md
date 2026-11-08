@@ -83,22 +83,37 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
-Component release 3.98.0 adds the `machine_browser` Plugin kind (Plugin SDK
-1.13.0, plugin-contract 1.12.0 with `machine-browser.schema.json`, release
-schema 6, component kind `machine_browser_runtime`): a signed Linux browser
+Component release 3.101.0 adds the `machine_browser` Plugin kind (Plugin SDK
+1.14.0, plugin-contract 1.13.0 with `machine-browser.schema.json`, release
+schema 7, component kind `machine_browser_runtime`): a signed Linux browser
 runtime whose contract names artifact-relative executables, the browser policy
 binding and host requirements, while admission, isolation, streaming and the
-viewer stay core (`machine-browser.md`). provider-ui 3.1.24 recognises the kind
-and its release schema. It also records app-shell 1.1.40 for the
-already-committed dock change `270f49cd9`. First-party `machine-browser`
-1.0.0 is declared through `plugin_additions`; every existing Plugin advances
-one patch version for the new SDK pin. Native pins are unchanged.
+viewer stay core (`machine-browser.md`). provider-ui 3.3.0 recognises the kind
+and its release schema; provider-authoring 1.0.13 follows its exact peer pin.
+First-party `machine-browser` 1.0.0 is declared through `plugin_additions`;
+every existing Plugin advances one patch version for the new SDK pin, and the
+Zed adapter moves with its Plugin. It also records app-shell 1.1.41 for the
+already-committed reader change `278c013ba`, which 3.100.0 did not cover; no
+Plugin depends on that component. Native pins are unchanged.
+
+Component release 3.100.0 records the signed MCP server Plugin kind: plugin-contract
+1.12.0 (`mcp_server`), plugin-sdk 1.13.0 (MCP contract, discovery and granted
+source names), provider-sdk 3.2.0 (`provider.mcp-bindings.v1`), provider-ui 3.2.0
+and provider-runtime 1.2.0 (execution CLI probe and MCP binding preparation);
+provider-authoring 1.0.12 follows provider-ui. Every Plugin advances one patch
+version for the changed contract and SDK; the Zed adapter moves with its Plugin.
+Native pins are unchanged.
 
 Scoped release 3.82.0 replaces the packaged plugin-api, app-shell and state-store
 tests' external assertion imports with Node built-ins. It versions those packages,
 state-store's dependent packages and the plugin-api consumers without changing
 native pins. It removes the temporary root `@std/assert` dependency; package
 closure validation remains strict and historical release records stay unchanged.
+
+Release 3.98.0 records Zed Plugin 1.39.0 (agent-owned mirror reload) and
+app-shell 1.1.40 for the already-committed floating-island changes in
+`270f49cd9`, which 3.97.0 did not cover. The worker registry input follows the
+new release; native pins are unchanged.
 
 Scoped release 3.85.0 records app-shell 1.1.39 for the already-committed
 floating dock, footer edge and test-assertion changes after 3.84.0

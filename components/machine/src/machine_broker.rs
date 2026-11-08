@@ -30,6 +30,7 @@ mod account_worker;
 mod cleanups;
 pub mod deletions;
 mod incarnations;
+mod mcp_launch;
 mod namespace;
 mod systemd_exit;
 mod worker_environment;
@@ -1056,10 +1057,10 @@ impl Broker {
                 .is_some_and(|launch| launch.session_id != session_id)
             || sessions.get(&session_id).is_some_and(|declared| {
                 declared.execution_binding.as_ref() != incoming
-                    || (launch.is_none() && !declared.provider_account_id.is_default())
+                    || (launch.is_none() && mcp_launch::requires_launch(declared))
                     || launch.as_ref().is_some_and(|launch| {
                         launch.provider != declared.provider
-                            || !account_worker::binding_matches(declared, launch)
+                            || !mcp_launch::binding_matches(declared, launch)
                             || launch.cwd != declared.cwd
                             || launch.system != declared.system
                     })
@@ -1072,8 +1073,8 @@ impl Broker {
                 .is_some_and(|previous| {
                     launch
                         .as_ref()
-                        .map_or(!previous.provider_account_id.is_default(), |incoming| {
-                            !account_worker::binding_matches(previous, incoming)
+                        .map_or(mcp_launch::requires_launch(previous), |incoming| {
+                            !mcp_launch::binding_matches(previous, incoming)
                         })
                 })
         {
@@ -1920,22 +1921,7 @@ impl Broker {
             );
             return;
         }
-        if session
-            .execution_binding
-            .as_ref()
-            .is_some_and(|binding| binding.decode().is_err() && binding.managed_child().is_none())
-            || self
-                .sessions
-                .lock()
-                .get(&session.session_id)
-                .is_some_and(|previous| previous.execution_binding != session.execution_binding)
-            || self
-                .workers
-                .lock()
-                .get(&session.session_id)
-                .and_then(|worker| worker.snapshot.launch.as_ref())
-                .is_some_and(|launch| launch.execution_binding != session.execution_binding)
-        {
+        if self.mcp_launch_adoption_changed(&session) {
             self.command_rejected(
                 &session.session_id,
                 format!("ensure:{}", session.session_id),
@@ -3427,19 +3413,7 @@ impl Broker {
             .arg(&session.cwd)
             .arg("--generation")
             .arg(&session.generation);
-        if let Some(auth_generation) = session.provider_auth_generation {
-            command
-                .arg("--provider-auth-generation")
-                .arg(auth_generation.to_string());
-        }
-        if !session.provider_account_id.is_default() {
-            command
-                .arg("--provider-account-id")
-                .arg(session.provider_account_id.as_str());
-            if self.args.spawn_mode == SpawnMode::SystemdUser {
-                command.arg("--launch-gate");
-            }
-        }
+        self.push_launch_identity_args(&mut command, session)?;
         if let Some(binding) = &session.execution_binding {
             command
                 .arg("--execution-binding")
@@ -4464,7 +4438,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             // only matters for a running worker. A dormant session's retained
             // declaration may predate later Provider and auth generations.
             let placed = |old: &StartSession| {
-                old.cwd == session.cwd
+                mcp_launch::same_placement(old, &session)
                     && old
                         .execution_binding
                         .as_ref()
@@ -5163,6 +5137,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            mcp_plan: None,
             native_fork: None,
         };
         let mut configuration = cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1;
@@ -5304,6 +5279,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -5385,6 +5361,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -5606,6 +5583,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            mcp_plan: None,
             native_fork: None,
         };
 
@@ -5758,6 +5736,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -5862,6 +5841,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -6030,6 +6010,7 @@ mod tests {
                     adopt_only: false,
                     execution_binding: None,
                     extensions: None,
+                    mcp_plan: None,
                     native_fork: None,
                 },
             );
@@ -6123,6 +6104,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            mcp_plan: None,
             native_fork: None,
         };
         broker.update_snapshot(
@@ -6189,6 +6171,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            mcp_plan: None,
             native_fork: None,
         };
         broker
@@ -7768,7 +7751,7 @@ mod tests {
 
     #[test]
     fn worker_snapshot_cannot_rewrite_declared_session_placement() {
-        for field in ["session_id", "provider", "account", "cwd", "system"] {
+        for field in ["session_id", "provider", "account", "cwd", "system", "mcp"] {
             let (broker, launch, mut rx) = reconnecting_worker_fixture();
             let original = broker.workers.lock()["sess-1"].snapshot.clone();
             let mut changed = original.clone();
@@ -7783,6 +7766,7 @@ mod tests {
                 }
                 "cwd" => metadata.cwd = "/other-worktree".into(),
                 "system" => metadata.system = true,
+                "mcp" => metadata.mcp_plan = Some(serde_json::from_value(serde_json::json!({"schema":1,"command":"/bin/cowboy","bindings":[{"name":"suger","descriptor":"/private/suger.json"}]})).unwrap()),
                 _ => unreachable!(),
             }
             broker.update_snapshot(changed, 1);
@@ -7797,6 +7781,45 @@ mod tests {
                 "{field}"
             );
             assert!(matches!(rx.try_recv(), Ok(Frame::Reject { .. })), "{field}");
+        }
+    }
+
+    #[test]
+    fn mcp_worker_snapshot_cannot_erase_plan_or_replace_provider() {
+        for keep_declaration in [false, true] {
+            for field in ["missing", "plan", "generation"] {
+                let (broker, mut launch, mut rx) = reconnecting_worker_fixture();
+                launch.mcp_plan = Some(serde_json::from_value(serde_json::json!({"schema":1,"command":"/bin/cowboy","bindings":[{"name":"suger","descriptor":"/private/suger.json"}]})).unwrap());
+                broker
+                    .workers
+                    .lock()
+                    .get_mut("sess-1")
+                    .unwrap()
+                    .snapshot
+                    .launch = Some(launch.clone());
+                if keep_declaration {
+                    broker
+                        .sessions
+                        .lock()
+                        .insert("sess-1".into(), launch.clone());
+                } else {
+                    broker.sessions.lock().clear();
+                }
+                let original = broker.workers.lock()["sess-1"].snapshot.clone();
+                let mut changed = original.clone();
+                match field {
+                    "missing" => changed.launch = None,
+                    "plan" => changed.launch.as_mut().unwrap().mcp_plan = None,
+                    "generation" => {
+                        changed.launch.as_mut().unwrap().provider_generation_digest =
+                            "replacement".into()
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(!broker.update_snapshot(changed, 1), "{field}");
+                assert_eq!(broker.workers.lock()["sess-1"].snapshot, original);
+                assert!(matches!(rx.try_recv(), Ok(Frame::Reject { .. })));
+            }
         }
     }
 
@@ -8422,6 +8445,7 @@ mod tests {
                     adopt_only: false,
                     execution_binding: None,
                     extensions: None,
+                    mcp_plan: None,
                     native_fork: None,
                 },
             );
@@ -8489,6 +8513,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -8575,6 +8600,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -8599,6 +8625,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -8708,6 +8735,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            mcp_plan: None,
             native_fork: None,
         };
         broker
@@ -8770,6 +8798,7 @@ mod tests {
                 adopt_only: true,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             })
             .await;
@@ -8843,6 +8872,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             })
             .await;
@@ -8933,6 +8963,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             })
             .await;
@@ -9005,6 +9036,7 @@ mod tests {
                 adopt_only: true,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             })
             .await;
@@ -9068,6 +9100,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -9137,6 +9170,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -9609,6 +9643,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            mcp_plan: None,
             native_fork: None,
         };
 
@@ -9779,6 +9814,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -9865,6 +9901,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -10014,6 +10051,7 @@ mod tests {
                 adopt_only: false,
                 execution_binding: None,
                 extensions: None,
+                mcp_plan: None,
                 native_fork: None,
             },
         );
@@ -10322,6 +10360,7 @@ mod tests {
                     adopt_only: false,
                     execution_binding: None,
                     extensions: None,
+                    mcp_plan: None,
                     native_fork: None,
                 },
                 Some("gen-1".to_owned()),
@@ -10377,6 +10416,7 @@ mod tests {
             adopt_only: false,
             execution_binding: None,
             extensions: None,
+            mcp_plan: None,
             native_fork: None,
         };
 

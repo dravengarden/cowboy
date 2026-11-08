@@ -82,8 +82,8 @@ unit or a profile.
 
 ## `machine_browser` Plugin kind
 
-Release schema 6, payload schema 1, Plugin SDK 1.13+. Catalog readers before
-this kind accept release schemas up to 5 and skip these envelopes. The kind is
+Release schema 7, payload schema 1, Plugin SDK 1.14+. Catalog readers before
+this kind accept release schemas up to 6 and skip these envelopes. The kind is
 Machine-installable, Linux-only, and carries exactly one runtime artifact per
 declared platform. Like `code_intelligence`, the contract is a closed launch
 graph; it has no UI, URLs, credentials or network targets.
@@ -668,7 +668,7 @@ cancel, restart, clean up or otherwise touch the native login process or the
 account's credential generation. Machine restart and Controller disconnection
 end native logins by existing design, independent of the browser.
 
-## Stream channel (Machine protocol 43)
+## Stream channel (Machine protocol 45)
 
 Commands and events are a closed addition to `MachineCommand` /
 `MachineEvent` gated by a new minimum protocol:
@@ -1045,7 +1045,7 @@ through the Machine browser on OVH.
 
 ## Rollout
 
-1. Core: Plugin kind, Machine instance manager, protocol 43 stream, routes,
+1. Core: Plugin kind, Machine instance manager, protocol 45 stream, routes,
    viewer, sign-in hook, settings; gate off. Controller and web release.
 2. Plugin: runtime tree built on the builder, conformance on the KVM guest
    with the AppArmor policy, signed and published to the Catalog.

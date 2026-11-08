@@ -139,7 +139,7 @@ async fn relay(
         .ok_or("the memory home Machine is not connected")?;
     let request_id = format!(
         "memory-{}",
-        state.memory_relay.next.fetch_add(1, Ordering::Relaxed)
+        state.extensions.memory.next.fetch_add(1, Ordering::Relaxed)
     );
     let deadline = if request.path == "/mcp" {
         TOOL_DEADLINE
@@ -148,7 +148,8 @@ async fn relay(
     };
     let (sender, receiver) = oneshot::channel();
     state
-        .memory_relay
+        .extensions
+        .memory
         .pending
         .lock()
         .insert(request_id.clone(), Waiter { home, sender });
@@ -168,6 +169,6 @@ async fn relay(
     } else {
         None
     };
-    state.memory_relay.pending.lock().remove(&request_id);
+    state.extensions.memory.pending.lock().remove(&request_id);
     response.ok_or("the memory home Machine did not answer")
 }

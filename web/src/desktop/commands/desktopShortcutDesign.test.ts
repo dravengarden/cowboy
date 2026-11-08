@@ -6,8 +6,11 @@ import { readComposerSource } from "../../appSource.test.ts";
 const provider = await readFile(
   new URL("./DesktopCommandProvider.tsx", import.meta.url), "utf8",
 );
+// The host registers `␣C` through the Conversation/Review view command.
 const host = await readFile(
   new URL("./DesktopCommandHost.tsx", import.meta.url), "utf8",
+) + await readFile(
+  new URL("../review/conversationViewCommands.ts", import.meta.url), "utf8",
 );
 const composerBindings = await readFile(
   new URL("./DesktopComposerShortcuts.tsx", import.meta.url), "utf8",

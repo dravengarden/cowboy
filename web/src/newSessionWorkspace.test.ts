@@ -139,6 +139,12 @@ test("a replaced session reopens its continuation, not the first session", () =>
   const loopA: SessionMeta = { ...base, id: "a", continued_from: "b" };
   const loopB: SessionMeta = { ...base, id: "b", continued_from: "a" };
   assertEquals(continuationOf([loopA, loopB], "a")?.id, "b");
+  // A source kept open and handed off again follows its latest handoff,
+  // which wire order lists after the earlier one.
+  const earlier: SessionMeta = { ...base, id: "earlier", continued_from: "source" };
+  const later: SessionMeta = { ...base, id: "later", continued_from: "source" };
+  assertEquals(continuationOf([earlier, later], "source")?.id, "later");
+  assertEquals(continuationOf([earlier], "source", [later])?.id, "earlier");
 });
 
 test("new sessions respect Machine workspace ordering", () => {

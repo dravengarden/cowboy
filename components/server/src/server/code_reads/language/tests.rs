@@ -41,6 +41,31 @@ fn path_queries_encode_only_the_closed_original_contract() {
     }
 }
 
+#[test]
+fn agent_refresh_is_the_language_observation_with_one_closed_field() {
+    assert_eq!(
+        serde_json::to_value(Request {
+            worktree: "/worktree",
+            path: "a.rs",
+            query: Query::RefreshedLanguage {
+                refresh: AgentOwned::AgentOwned,
+            },
+        })
+        .unwrap(),
+        json!({"type":"bufferLanguage","worktree":"/worktree","path":"a.rs","refresh":"agent_owned"})
+    );
+    // HTTP language reads never project an agent refresh.
+    let reply = json!({"type":"bufferLanguage","api_version":1,"path":"a.rs","version":[],
+        "diagnostics":[],"inlay_hints":[],"semantic_tokens":[],"refresh":"reloaded"});
+    let query = Query::RefreshedLanguage {
+        refresh: AgentOwned::AgentOwned,
+    };
+    assert_eq!(
+        project(query, serde_json::from_value(reply).unwrap()).status(),
+        StatusCode::BAD_GATEWAY
+    );
+}
+
 #[tokio::test]
 async fn response_projection_cannot_accept_a_different_query_or_resource_result() {
     let replies = [

@@ -27,6 +27,7 @@ type MachinePluginKind =
   | "workspace_extension"
   | "memory_backend"
   | "call_profile"
+  | "mcp_server"
   | "machine_browser";
 const machinePhases = ["prepared", "staging", "activating", "projecting_authentication"] as const;
 type MachineInstallPhase = (typeof machinePhases)[number];
@@ -217,6 +218,7 @@ export function decodeInstallEvidence(value: unknown, legacy = false): InstallEv
         "workspace_extension",
         "memory_backend",
         "call_profile",
+        "mcp_server",
         "machine_browser",
       ] as const,
       row.plugin_kind,

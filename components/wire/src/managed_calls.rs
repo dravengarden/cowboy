@@ -41,13 +41,7 @@ pub fn review_instruction(design: bool, focus: &str, base: Option<&str>) -> Stri
     }
 }
 
-pub fn valid_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-}
+pub use crate::opaque_id::valid_id;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

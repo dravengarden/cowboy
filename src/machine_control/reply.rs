@@ -8,6 +8,7 @@ use crate::machine_protocol::telemetry_binding::{BindingCommitResult, BindingObs
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ReplyKind {
+    Mcp,
     NativeBinding,
     NativeLogout,
     LoginStop,
@@ -31,6 +32,7 @@ pub enum ReplyKind {
 }
 
 pub enum Reply {
+    Mcp(serde_json::Value),
     NativeBinding(Option<Box<crate::provider_account::PreparedBinding>>),
     NativeLogout(Option<crate::provider_account::NativeLogoutObservation>),
     LoginStop(Option<crate::provider_account::LoginStopObservation>),
@@ -65,6 +67,7 @@ pub enum Reply {
 impl Reply {
     pub(super) const fn kind(&self) -> ReplyKind {
         match self {
+            Self::Mcp(_) => ReplyKind::Mcp,
             Self::NativeProfile(_) => ReplyKind::NativeProfile,
             Self::NativeLogout(_) => ReplyKind::NativeLogout,
             Self::LoginStop(_) => ReplyKind::LoginStop,

@@ -47,6 +47,9 @@ export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
   u: "Interface",
   // The tab strip, on LazyVim's buffer keys.
   b: "Tabs",
+  // Code Review's own actions; only while Review is shown, so `␣V` on its
+  // own opens Review (docs/desktop-code-review.md).
+  v: "Review",
 };
 
 /** The Tabs group (FOCUS.md "Tabs"): LazyVim's `<leader>b` buffer keys. */
@@ -124,8 +127,12 @@ export const DESKTOP_WORKSPACE_KEYS = {
   insertPrompt: "I",
   focusTopbar: "T",
   focusConversation: "C",
-  // `V` for View: `R` renames.
+  // `V` for View: `R` renames. Root `␣V` opens Review; once it is shown
+  // `␣V` is the Review group and `␣VV` focuses it, as `␣SS`/`␣TT` do.
   review: "V",
+  focusReview: "VV",
+  // Review's classic (phone) layout, until the workbench covers it.
+  reviewLayout: "VL",
   focusPlan: "L",
   // Managed calls delegated to other Agents: `G` for aGents.
   focusCalls: "G",
@@ -229,6 +236,10 @@ export const DESKTOP_SHORTCUTS = {
     DESKTOP_WORKSPACE_KEYS.focusConversation,
   ),
   review: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.review),
+  focusReview: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusReview),
+  reviewChanges: desktopWorkspaceSequence("VC"),
+  reviewMark: desktopWorkspaceSequence("VM"),
+  reviewContext: desktopWorkspaceSequence("VX"),
   focusPlan: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPlan),
   focusCalls: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusCalls),
   focusQueue: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusQueue),
@@ -279,7 +290,7 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   // A group, not a command: `␣T` opens the Top bar layer (`␣TT` focuses it).
   t: "group:t",
   c: "workspace.focusConversation",
-  v: "conversation.toggleReview",
+  v: "review.open",
   l: "prompt.focusPlan",
   g: "prompt.focusCalls",
   q: "prompt.focusQueue",

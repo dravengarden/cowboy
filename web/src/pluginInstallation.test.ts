@@ -273,3 +273,11 @@ test("failed, malformed and oversized history responses are unavailable, never e
     globalThis.fetch = original;
   }
 });
+
+test("MCP installation receipts remain distinct from session admission", () => {
+  const value = fixture();
+  value.operations[0].plugin_kind = "mcp_server";
+  const history = decodeInstallHistory(value);
+  assertEquals(history.operations[0].plugin_kind, "mcp_server");
+  assertEquals(history.execution_authorized, false);
+});

@@ -70,20 +70,29 @@ conversation, so there are two live lines. An accepted handoff moves the
 original to Trash, with Undo on the device that sent it, also when that device
 recovers a lost reply. In Trash it stays
 readable, by the continuation through Cowboy MCP as well, until retention ends;
-its worktree is intact for **Restore** until then. If Trash refuses, the
-original stays as read-only history: the session list marks it **History** and
-its Composer gives way to a dock. **Open** goes to the continuation, **Fork**
-starts a separate session from this agent's conversation (natively where the
-Machine supports it, otherwise a linked copy), and **Move to Trash** clears the
-original away and opens the continuation. Restoring leads to the same state.
-Writing in the original would silently
-split one piece of work in two, so the web offers no way to do it;
-Select sessions, **Replace or fork** and the session menu item are
-hidden for the same reason. While its agent is still busy the
-Composer stays, so the turn can be observed and stopped. Deleting or trashing
-the continuation returns the original to an ordinary session. The state is
-derived from the synced `continued_from` mark; the session API still accepts
-messages from agents and scripts.
+its worktree is intact for **Restore** until then. If Trash refuses, or the
+original still has background work, the original stays as read-only history:
+the session list marks it **History** and its Composer gives way to a dock
+that says why it stayed (`delivery.source_kept` on the original's context).
+**Open** goes to the continuation. **Fork…** opens Session Settings at a
+fork-only form with the same choices as **Replace or fork** (agent,
+subscription, preset, inherited settings, model and reasoning), so the copy is
+configured before it starts. **Continue here** keeps writing in the original
+as a deliberate second line of work: it records the persisted
+`session_handoff_resumed:<id>` mark (projected as `handoff_resumed`, set by
+`POST /api/sessions/SESSION/continue-here`), the History badge and dock go
+away on every device, and the Composer returns. A later handoff from the
+original clears the mark. **Move to Trash** clears the original away and opens
+the continuation. Restoring leads to the same state.
+Writing in the original without that choice would silently split one piece of
+work in two, so the web does not offer it; Select sessions, Replace and the
+session menu item stay hidden while the original is history. While its agent
+is still busy the Composer stays, so the turn can be observed and stopped.
+Deleting or trashing the continuation returns the original to an ordinary
+session. The state is derived from the synced `continued_from` and
+`handoff_resumed` marks; the session API still accepts messages from agents
+and scripts, which is why Continue here has no Cowboy MCP action: the
+history state only ever restricts the Web.
 
 While choices are pending, a row directly above the Composer, in the same frame
 as the Plan panel, says what the next message does ("Next message · Starts

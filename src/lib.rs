@@ -115,6 +115,8 @@ pub mod machine_lanes;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::machine_protocol;
 #[cfg(any(feature = "full", feature = "machine-host"))]
+pub use cowboy_wire::mcp_binding;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_transport;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod managed_calls;

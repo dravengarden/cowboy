@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 import { CssBaseline } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { ToolCard, ToolDetailsBrowser } from "./Transcript";
+import { scrollableAncestor } from "./ToolDetailsBrowser";
 import { derive, type RenderItem } from "./derive";
 import { toolRuns } from "./tools/runs";
 import { ToolBody } from "./tools/registry";
@@ -173,6 +174,22 @@ export async function runToolInspectorBrowserConformance(
       },
     },
   }));
+  items.push({ key: "before-long-shell", kind: "message", role: "assistant", chunks: [{ type: "text", text: "Context before a long command" }] });
+  const longShellDescription = "Run a long generated script";
+  items.push({
+    key: "long-shell",
+    kind: "tool",
+    id: "long-shell",
+    toolKind: "execute",
+    toolName: "Bash",
+    status: "completed",
+    title: "long script",
+    rawInput: {
+      description: longShellDescription,
+      command: Array.from({ length: 160 }, (_, line) => `echo "generated line ${line}"`).join("\n"),
+    },
+    content: [{ type: "content", content: { type: "text", text: "ok" } }],
+  });
   const runs = toolRuns(items);
   const container = document.createElement("div");
   document.body.append(container);
@@ -331,6 +348,53 @@ export async function runToolInspectorBrowserConformance(
       );
     }
 
+    // A bleeding Mobile reader pads its scroller for the status area. Both the
+    // selected tool and an expanded block's sticky controls clear it once.
+    document.documentElement.style.setProperty("--cowboy-system-top-clearance", "59px");
+    try {
+      await show("t35", false);
+      await show("long-shell", false);
+      const title = [...document.querySelectorAll<HTMLElement>("p")]
+        .find((node) => node.textContent === longShellDescription);
+      check(title, "missing long shell title");
+      const reader = scrollableAncestor(title);
+      check(reader, "missing Mobile tool reader");
+      const inset = (): number => parseFloat(getComputedStyle(reader).paddingTop);
+      check(Math.abs(inset() - 79) < 1, `reader inset fixture is ${inset()}`);
+      const titleTop = title.getBoundingClientRect().top - reader.getBoundingClientRect().top;
+      check(titleTop >= inset() - 1, `opened tool hides under the status area at ${titleTop}`);
+      const expand = [...reader.querySelectorAll<HTMLButtonElement>("button[aria-expanded='false']")]
+        .find((button) => button.textContent?.includes("Expand"));
+      check(expand, "long command has no expand action");
+      expand.click();
+      await wait(150);
+      const collapse = reader.querySelector<HTMLButtonElement>("[aria-label='Collapse content']");
+      check(collapse, "expanded command lost collapse");
+      reader.scrollTop += 900;
+      await wait(150);
+      const stuck = collapse.getBoundingClientRect().top - reader.getBoundingClientRect().top;
+      check(stuck >= inset() - 1 && stuck <= inset() + 6, `sticky fold control landed at ${stuck}, expected ${inset()}`);
+      const row = collapse.closest<HTMLElement>("[data-fold-toolbar]")!.getBoundingClientRect();
+      const under = document.elementFromPoint(row.left + 24, row.top + row.height / 2);
+      check(!under?.closest("[data-fold-toolbar]"), "sticky controls paint a slab over the code");
+      check(collapse.contains(document.elementFromPoint(
+        collapse.getBoundingClientRect().left + 22,
+        collapse.getBoundingClientRect().top + 22,
+      )), "sticky fold control is not tappable");
+      // Touch shows one toggle; a fine pointer shows both states.
+      const wrapControl = (label: string): HTMLButtonElement | undefined =>
+        document.querySelector<HTMLButtonElement>(`button[aria-label^='${label} line layout:']`) ??
+        [...document.querySelectorAll<HTMLButtonElement>(`[aria-label='${label} line layout'] button`)]
+          .find((button) => button.textContent === "Wrap");
+      const wrap = wrapControl("Command");
+      check(wrap, "missing command line layout");
+      wrap.click();
+      await show("t35", false);
+      check(wrapControl("Output")?.getAttribute("aria-pressed") === "true", "line layout reset when moving to another tool");
+    } finally {
+      document.documentElement.style.removeProperty("--cowboy-system-top-clearance");
+    }
+
     // Exercise the shared result/argument frame at phone, tablet and desktop
     // pane widths, including long operation IDs and structured values. The
     // actual product theme owns typography, touch targets and code wrapping.
@@ -410,10 +474,6 @@ export async function runToolInspectorBrowserConformance(
               </BrowserProductTheme>,
             ));
             await wait(250);
-            fixture.style.setProperty("--cowboy-reader-sticky-top", "67px");
-            const collapsedToolbar = fixture.querySelector<HTMLElement>("[data-fold-toolbar]");
-            if (collapsedToolbar) check(getComputedStyle(collapsedToolbar).top === "0px", "Safe-area inset must not shift a non-sticky toolbar");
-            fixture.style.removeProperty("--cowboy-reader-sticky-top");
             const expand = fixture.querySelector<HTMLButtonElement>("button[aria-expanded='false']");
             check(expand, "long code has no expand action");
             expand.focus();
@@ -447,11 +507,12 @@ export async function runToolInspectorBrowserConformance(
             separated();
             check(Math.abs(toolbar.getBoundingClientRect().top - fixture.getBoundingClientRect().top) < 2,
               "expanded code toolbar did not stay reachable while scrolling");
-            fixture.style.setProperty("--cowboy-reader-sticky-top", "67px");
+            fixture.style.paddingTop = "67px";
+            await wait(50);
             check(Math.abs(toolbar.getBoundingClientRect().top - fixture.getBoundingClientRect().top - 67) < 2,
-              "Sticky code actions must clear the safe-area gradient");
+              "Sticky code actions must clear the reader's inset exactly once");
             separated();
-            fixture.style.removeProperty("--cowboy-reader-sticky-top");
+            fixture.style.removeProperty("padding-top");
             copy.click();
             await wait(50);
             check(copied === code, "copy lost exact highlighted or lightweight source");

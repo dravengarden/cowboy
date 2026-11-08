@@ -217,6 +217,7 @@
         "src/machine_transport",
         "src/machine_lanes",
         "components/wire/src/machine_protocol",
+        "components/wire/src/machine_command_protocol.rs",
         "Cargo.toml",
         "Cargo.lock",
         "flake.nix",
@@ -283,7 +284,10 @@
         "src/acp_bridge.rs",
         "src/acp.rs",
         "components/machine/src/bin/cowboy-execution-host.rs",
-        "components/memory-client/"
+        "components/memory-client/",
+        "components/provider-runtime/execution-connection.mjs",
+        "components/provider-runtime/execution-probe.mjs",
+        "components/provider-runtime/mcp-bindings.mjs"
       ],
       "native": [
         "claude",
@@ -452,6 +456,7 @@
         "src/machine_transport",
         "src/machine_lanes",
         "components/wire/src/machine_protocol",
+        "components/wire/src/machine_command_protocol.rs",
         "Cargo.toml",
         "Cargo.lock",
         "flake.nix",
@@ -472,7 +477,11 @@
         "src/acp_bridge.rs",
         "src/acp.rs",
         "components/machine/src/bin/cowboy-execution-host.rs",
-        "components/memory-client/"
+        "components/memory-client/",
+        "components/provider-runtime/execution-connection.mjs",
+        "components/provider-runtime/execution-probe.mjs",
+        "components/provider-runtime/mcp-bindings.mjs",
+        "plugins/codex/runtime/bindings.mjs"
       ],
       "native": [
         "codex",
@@ -500,6 +509,7 @@
         "src/machine_transport",
         "src/machine_lanes",
         "components/wire/src/machine_protocol",
+        "components/wire/src/machine_command_protocol.rs",
         "Cargo.toml",
         "Cargo.lock",
         "flake.nix",

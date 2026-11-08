@@ -23,7 +23,16 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const MAX_IN_FLIGHT: usize = 16;
 
 #[derive(clap::Args)]
-pub struct McpArgs {}
+pub struct McpArgs {
+    /// Private Machine-prepared descriptor for an explicitly admitted MCP binding.
+    #[arg(long, conflicts_with = "binding_capabilities")]
+    pub binding: Option<std::path::PathBuf>,
+    /// Report this exact CLI's native binding protocol without opening a gateway.
+    #[arg(long)]
+    pub binding_capabilities: bool,
+}
+
+mod binding;
 
 fn tools(actions: bool) -> Value {
     let mut tools = json!([
@@ -371,7 +380,17 @@ async fn discover(topic: &str) -> Value {
     exchange(context, action, timeout).await
 }
 
-pub async fn serve(_args: McpArgs) -> anyhow::Result<()> {
+pub async fn serve(args: McpArgs) -> anyhow::Result<()> {
+    if args.binding_capabilities {
+        println!(
+            "{}",
+            serde_json::to_string(&crate::mcp_binding::NativeBridgeCapabilities::current())?
+        );
+        return Ok(());
+    }
+    if let Some(path) = args.binding {
+        return binding::serve(&path).await;
+    }
     serve_io(tokio::io::stdin(), tokio::io::stdout(), available().await).await
 }
 
@@ -490,6 +509,30 @@ async fn serve_io(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn binding_capability_probe_is_explicit_and_excludes_serving() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            args: super::McpArgs,
+        }
+        let probe = Cli::try_parse_from(["mcp", "--binding-capabilities"]).unwrap();
+        assert!(probe.args.binding_capabilities);
+        assert!(probe.args.binding.is_none());
+        assert!(
+            Cli::try_parse_from([
+                "mcp",
+                "--binding-capabilities",
+                "--binding",
+                "/private/descriptor"
+            ])
+            .is_err()
+        );
+        let normal = Cli::try_parse_from(["mcp"]).unwrap();
+        assert!(!normal.args.binding_capabilities);
+    }
+
     use super::*;
 
     #[test]

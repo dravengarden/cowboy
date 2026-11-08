@@ -1,4 +1,4 @@
-//! Machine browser lifecycle and display-stream binding (Machine protocol 43).
+//! Machine browser lifecycle and display-stream binding (Machine protocol 45).
 //!
 //! A browser instance belongs to one Provider account on one Machine. The
 //! Controller drives it with the closed command set below and learns about it

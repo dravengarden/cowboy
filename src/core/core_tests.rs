@@ -3600,6 +3600,7 @@ fn provider_reload_reconciles_interrupted_reset_without_migrating_native_identit
         adopt_only: false,
         execution_binding: None,
         extensions: None,
+        mcp_plan: None,
         native_fork: None,
     });
     let history = serde_json::to_value(hub.snapshot(&before.id).unwrap().0).unwrap();

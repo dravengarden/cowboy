@@ -27,6 +27,7 @@ import {
 import type { DraftFlush } from "../documents/DraftEditor";
 import { draftRepository } from "../documents/store";
 import { bindProductSyncPrincipal } from "../productSyncIdentity";
+import { PLACEMENT_SESSION, placementMachines, placementResponse, PRESET_MODELS as presetModels, runConfigFixtureOptions } from "./runConfigFixtureData";
 import {
   type DraftDocument,
   draftMetadata,
@@ -527,11 +528,6 @@ export async function mountRunConfigKeyboardAcceptance(): Promise<void> {
   entry.publisher = entry.manifest.publisher;
   entry.manifest.authentication.required = false;
   entry.manifest.authentication.methods = [];
-  const presetModels = [
-    ["sonnet", "Sonnet"],
-    ["opus", "Opus"],
-    ["fable", "Fable"],
-  ] as const;
   entry.manifest.configuration.presets = presetModels.flatMap((
     [model, name],
   ) =>
@@ -550,6 +546,7 @@ export async function mountRunConfigKeyboardAcceptance(): Promise<void> {
     cwd: "/fixture",
     status: "running" as const,
     provider_version: entry.provider_version,
+    ...PLACEMENT_SESSION,
     provider_generation_digest: entry.artifact_digest!,
   };
   const others = ["Mink", "Lynx", "Otter"].map((name, index) => ({
@@ -558,40 +555,7 @@ export async function mountRunConfigKeyboardAcceptance(): Promise<void> {
     title: `cowboy improve · ${name}`,
     status: "exited" as const,
   }));
-  let options = [{
-    id: "mode",
-    name: "Mode",
-    currentValue: "bypass",
-    options: [
-      ["manual", "Manual"],
-      ["accept", "Accept edits"],
-      ["plan", "Plan"],
-      ["auto", "Auto"],
-      ["bypass", "Bypass permissions"],
-    ].map(([value, name]) => ({ value: value!, name: name! })),
-  }, {
-    id: "model",
-    name: "Model",
-    category: "model",
-    currentValue: "opus",
-    options: presetModels.map(([value, name]) => ({
-      value,
-      name: `${name} 5.5`,
-    })),
-  }, {
-    id: "reasoning_effort",
-    name: "Reasoning effort",
-    currentValue: "high",
-    options: ["low", "medium", "high", "max"].map((value) => ({
-      value,
-      name: value[0]!.toUpperCase() + value.slice(1),
-    })),
-  }, {
-    id: "fast",
-    name: "Fast mode",
-    currentValue: "off",
-    options: [{ value: "on", name: "On" }, { value: "off", name: "Off" }],
-  }];
+  let options = runConfigFixtureOptions();
   const sent: string[] = [];
   const requests: string[] = [];
   let sources = ["other-0"];
@@ -610,6 +574,8 @@ export async function mountRunConfigKeyboardAcceptance(): Promise<void> {
       setTimeout(() => {
         this.onopen?.();
         this.publish({ type: "sessions", sessions: [session, ...others] });
+        // Several installations, so the Replace or fork picker has a list.
+        this.publish({ type: "machines", machines: placementMachines(entry) });
         this.publish({ type: "bootstrap_complete" });
         this.publish({
           type: "config_options",
@@ -748,6 +714,8 @@ export async function mountRunConfigKeyboardAcceptance(): Promise<void> {
     if (path === "/api/usage") {
       return Response.json({ providers: [], observed_at_ms: Date.now() });
     }
+    const placement = placementResponse(path, entry);
+    if (placement) return placement;
     return new Response("Unavailable in isolated fixture", { status: 404 });
   }) as typeof fetch;
   resetProviderCatalog();

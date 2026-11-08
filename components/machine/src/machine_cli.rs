@@ -1,5 +1,7 @@
 //! CLI for the stable Machine host.
 
+mod connection_extensions;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1377,8 +1379,11 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
     let mut heartbeat =
         tokio::time::interval(Duration::from_millis(heartbeat_interval_ms.max(1_000)));
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let plugin_execution =
-        PluginExecutionScope::new(config.service_id.as_deref(), &config.machine_id);
+    let plugin_execution = Arc::new(PluginExecutionScope::new(
+        config.service_id.as_deref(),
+        &config.machine_id,
+    ));
+    let mcp_link = connection_extensions::McpLink::new(&plugin_execution);
     // Gateway actions travel only over a connection that negotiated them; a
     // replaced or dropped connection fails the actions still waiting on it.
     let _call_uplink = (protocol >= crate::machine_protocol::MANAGED_CALL_PROTOCOL_VERSION)
@@ -1576,29 +1581,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
                                 MachineFrame::Command { command } => {
                                     anyhow::ensure!(command.minimum_protocol() <= protocol,
                                         "Machine command exceeds negotiated protocol");
-                                    if let MachineCommand::ManagedCallReply { request_id, response } = command {
-                                        // Completing a waiter never awaits this connection.
-                                        if let Some(calls) = config.execution.calls() {
-                                            calls.reply(&request_id, response);
-                                        }
-                                        continue;
-                                    }
-                                    if let MachineCommand::MemoryRelayReply { request_id, response } = command {
-                                        if let Some(relay) = config.memory_relay.as_ref() {
-                                            relay.reply(&request_id, response);
-                                        }
-                                        continue;
-                                    }
-                                    if let MachineCommand::MemoryRelay { request_id, identity, request } = command {
-                                        // A slow backend never holds this loop.
-                                        crate::memory_relay::serve_home(
-                                            request_id,
-                                            identity,
-                                            request,
-                                            event_tx.clone(),
-                                        );
-                                        continue;
-                                    }
+                                    let Some(command) = connection_extensions::consume(command, config, &event_tx, &mcp_link) else { continue; };
                                     if let MachineCommand::ProviderUsageAck { producer_id, sequence } = &command {
                                         config.provider_usage.acknowledge(producer_id, *sequence)?;
                                         continue;
@@ -2626,10 +2609,9 @@ fn handle_machine_command(
         MachineCommand::ProviderUsageAck { .. }
         | MachineCommand::ManagedCallReply { .. }
         | MachineCommand::MemoryRelay { .. }
-        | MachineCommand::MemoryRelayReply { .. } => {
-            // Consumed synchronously by the controller connection so the
-            // durable spool advances before another batch is selected, and
-            // so a call reply never waits behind another command.
+        | MachineCommand::MemoryRelayReply { .. }
+        | MachineCommand::McpTransport { .. } => {
+            // Connection-local dispatch already consumed these commands.
         }
     }
 }
@@ -4665,6 +4647,7 @@ mod tests {
                     adopt_only: false,
                     execution_binding: None,
                     extensions: None,
+                    mcp_plan: None,
                     native_fork: None,
                 },
             },

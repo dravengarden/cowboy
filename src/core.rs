@@ -28,6 +28,7 @@ use crate::persistence::EventReducer;
 use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 
 mod code_scope;
+mod mcp_launch;
 mod review_defaults;
 pub use review_defaults::LanguageServerTrust;
 mod session_continuation;
@@ -1655,6 +1656,7 @@ impl Drop for ContextEditGuard {
 type InFlightConfig = HashMap<String, (serde_json::Value, std::time::Instant)>;
 
 struct HubInner {
+    mcp_launch: Mutex<Option<std::sync::Arc<mcp_launch::Resolver>>>,
     sessions: Mutex<HashMap<String, Session>>,
     context_edits: Mutex<HashSet<String>>,
     /// Internal auth/admin state restored from the durable settings table.
@@ -1924,6 +1926,7 @@ impl Hub {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         Self {
             inner: std::sync::Arc::new(HubInner {
+                mcp_launch: Mutex::new(None),
                 sessions: Mutex::new(HashMap::new()),
                 settings: Mutex::new(HashMap::new()),
                 context_edits: Mutex::new(HashSet::new()),
@@ -3259,6 +3262,7 @@ impl Hub {
         } = registration;
         SessionMeta {
             continued_from: None,
+            handoff_resumed: false,
             forked_from: None,
             id: id.clone(),
             provider,
@@ -3414,17 +3418,7 @@ impl Hub {
             if persist && let Some(tx) = self.inner.store_tx.as_ref() {
                 let _ = tx.send(StoreWrite::DeleteSession(session_id.to_owned()));
             }
-            for prefix in [
-                settings_keys::SESSION_RESOURCE_WAIT_PREFIX,
-                settings_keys::SESSION_QUEUE_PAUSED_PREFIX,
-                settings_keys::SESSION_DELIVERY_POLICY_PREFIX,
-                settings_keys::SESSION_DELIVERY_HOLD_PREFIX,
-                settings_keys::SESSION_CONTEXT_PREFIX,
-                settings_keys::SESSION_CONTEXT_CARRIER_PREFIX,
-                settings_keys::SESSION_CONTINUED_FROM_PREFIX,
-                settings_keys::SESSION_FORK_PREFIX,
-                settings_keys::SESSION_CONFIG_REVERT_PREFIX,
-            ] {
+            for prefix in settings_keys::SESSION_STATE_PREFIXES {
                 let key = format!("{prefix}{session_id}");
                 if self.setting(&key).is_some() {
                     self.set_setting(key, serde_json::Value::Null);
@@ -3451,45 +3445,6 @@ impl Hub {
             s.meta.continued_from = source;
         }
         self.broadcast_sessions();
-    }
-
-    /// Project persisted continuation marks after settings and sessions load.
-    pub fn restore_continuations(&self) {
-        let sessions = self.session_list();
-        let key = |id: &str| format!("{}{id}", settings_keys::SESSION_CONTINUED_FROM_PREFIX);
-        // Continuations created before the mark existed are named by their
-        // source's accepted send receipt. Record them once, so a later send
-        // from that source cannot erase the relationship.
-        for source in &sessions {
-            let Some(delivery) = crate::session_context::read(self, &source.id)
-                .ok()
-                .and_then(|context| context.delivery)
-                .filter(|delivery| {
-                    delivery.state == "accepted" && delivery.session_id != source.id
-                })
-            else {
-                continue;
-            };
-            // A handoff taken back is recorded on its destination first.
-            let cancelled = crate::session_context::read(self, &delivery.session_id)
-                .ok()
-                .and_then(|context| context.delivery)
-                .is_some_and(|receipt| receipt.state == "cancelled");
-            if !cancelled
-                && sessions.iter().any(|meta| meta.id == delivery.session_id)
-                && self.setting(&key(&delivery.session_id)).is_none()
-            {
-                self.set_setting(key(&delivery.session_id), serde_json::json!(source.id));
-            }
-        }
-        for meta in &sessions {
-            if let Some(source) = self
-                .setting(&key(&meta.id))
-                .and_then(|value| value.as_str().map(str::to_owned))
-            {
-                self.set_continued_from(&meta.id, Some(source));
-            }
-        }
     }
 
     pub fn rename_session(&self, session_id: &str, title: String) {

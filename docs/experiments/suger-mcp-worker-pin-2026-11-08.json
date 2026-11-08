@@ -1,0 +1,780 @@
+{
+  "schema": 1,
+  "source_revision": "bad05ba7cec7f92526c9f7bee294676fb269cb12",
+  "machine_release": "/nix/store/qp7nb6cp2bg2yfxy0wasvpl7wxfl6y2b-cowboy-machine-release",
+  "controller_release": "/nix/store/b296iqw9ibr5vdx9i3kh77wihghvh8wc-cowboy-controller-release",
+  "worker_generation": "worker-b105e064b10fd6ab191f",
+  "production_activation": false,
+  "tests": [
+    {
+      "name": "worker-codex",
+      "receipt_sha256": "4e9f8e49bb2a82f95f04a9eede8c106dbd5f23511879c755d1932d72b63ec7b1",
+      "schema": "cowboy.execution-worker-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "machine_owned_worktree",
+        "long_state_path_uses_private_short_socket",
+        "machine_restart_reattaches_same_keeper_and_binding",
+        "provider_refuses_environment_override",
+        "native_fresh_and_forked_children_inherit_target_guidance_and_execute_once",
+        "target_image_read_reaches_native_model_input",
+        "background_job_survives_lost_reply_and_35_second_transport_gap",
+        "cancel_reaches_original_target_job_without_replay",
+        "output_backpressure_survives_35_second_transport_gap",
+        "native_apply_patch_and_command_use_target",
+        "runtime_files_unchanged",
+        "native_target_instructions",
+        "cold_native_resume_makes_zero_model_requests",
+        "cold_native_resume_automatically_rebinds_each_turn",
+        "cold_resume_retains_history_without_effect_replay",
+        "cold_native_resumed_command_returns_target_bytes",
+        "global_environment_config_unchanged",
+        "native_codeact_patch_parallel_shell_and_failure_use_target",
+        "native_codeact_target_image_reaches_model",
+        "native_codeact_yield_and_wait_keep_target_and_single_effect",
+        "native_codeact_cold_resume_preserves_binding_and_single_effect",
+        "packaged_acp_child_completion_does_not_finish_parent_prompt",
+        "packaged_acp_wake_makes_zero_model_requests",
+        "packaged_acp_native_spawn_routes_target_tools",
+        "packaged_acp_cold_load_preserves_binding_history_and_effects",
+        "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+        "concurrent_large_input_and_output_do_not_deadlock",
+        "post_flood_commands_and_cancellation_keep_original_executor",
+        "target_image_bytes_cross_machine_transport",
+        "idempotent_close_stops_environment_and_preserves_worktree",
+        "closed_environment_cannot_be_recreated",
+        "native_codeact_shell_and_image_cross_target_transport",
+        "native_fresh_and_forked_children_cross_target_transport",
+        "packaged_acp_child_crosses_target_transport"
+      ],
+      "native_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "provider_cli_sha256": "c06a67fd8ac76508dc78bd99ce20c9f317b8d568beda59485f3f4134df9962d5",
+      "sandbox_helper_sha256": "77360cb751ccedc5971391444ac86a8a33c15b04d6b4a6fe45f5d25496e62c4c",
+      "code_mode_host_sha256": "fe64bd08c7844ca1fca91d8cb825e62012a03a05ae8040c635bbb61e5be0b4c5",
+      "launcher_sha256": "e6fba3cec5157aa70ae7292267446769b2d580c8cd983afeed999525ffb874b1",
+      "packaged_bridge_sha256": "e3433993c1d8667380b5dd0eed3ebeb58f3eadf7ee1395829651ccc7c42ebc92",
+      "packaged_adapter_sha256": "8675767e4770e6e58988470c9befbe6e8393e2c76f41a7992455de67f5d8c403",
+      "scripted_api_requests": 31,
+      "real_model_requests": 0,
+      "packaged_parent_continuation_polls": 1,
+      "production_credentials": false,
+      "production_activation": false,
+      "not_checked": [
+        "authenticated_enrolled_transport",
+        "cross_host_network",
+        "signed_provider_release",
+        "subscription_inference",
+        "inline_user_attachments",
+        "native_grandchildren_background_agents_and_child_crash_recovery"
+      ],
+      "cursor_expirations": 0
+    },
+    {
+      "name": "worker-claude",
+      "receipt_sha256": "d693bc05535c721168d6e6afa77f439ce022ec7933a5e9bf235cea702def7fac",
+      "schema": "cowboy.claude-execution-worker-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "machine_owned_worktree",
+        "machine_restart_reattaches_same_keeper_and_binding",
+        "native_control_cannot_replace_bound_execution",
+        "native_default_tool_set_without_runtime_only_search_tools",
+        "target_tools_carry_native_descriptions",
+        "module_readiness_uses_no_model_request",
+        "native_tools_use_target_files_and_processes_without_mcp",
+        "runtime_context_and_guidance_are_replaced",
+        "unicode_quotes_crlf_bytes_preserved",
+        "stale_edit_is_refused",
+        "target_image_enters_model_context",
+        "background_cancel_settles",
+        "bounded_large_read_stays_in_target_tool_result",
+        "native_notebook_edit_preserves_metadata",
+        "native_read_observes_retained_task_output",
+        "lost_start_receipt_and_transport_outage_do_not_replay",
+        "native_task_list_runs_and_target_loopback_fetch_is_refused",
+        "cold_native_resume_preserves_context_reads_and_effects",
+        "background_process_handle_survives_native_resume",
+        "lost_file_write_completion_preserves_later_external_change",
+        "closed_execution_endpoint_recovers_in_same_native_session_without_replay",
+        "real_compaction_and_next_turn_preserve_target_context",
+        "cold_resume_after_compaction_has_no_runtime_file_locators",
+        "native_bash_merges_streams_in_write_order",
+        "native_binary_image_write_refuses_without_mutation",
+        "target_symlink_write_preserves_link_and_mode",
+        "tilde_read_uses_target_home_and_shares_absolute_path_stamp",
+        "invalid_utf8_read_decodes_as_native",
+        "native_symlink_alias_edit_rejects_stale_read",
+        "native_hardlink_edit_replaces_only_its_name",
+        "independent_native_searches_execute_concurrently",
+        "native_interrupt_stops_foreground_target_process",
+        "native_agent_child_tools_route_to_target",
+        "native_agent_launch_and_notification_use_handle",
+        "native_agent_handle_reads_recorded_final_answer",
+        "native_agent_client_frames_use_handle",
+        "native_agent_send_message_continues_on_target",
+        "native_agent_taskstop_cancels_child_target_command",
+        "native_agent_stop_preserves_peer_job",
+        "parent_turns_and_taskstop_progress_during_child_command",
+        "native_interrupt_stops_idle_background_agent_target_command",
+        "native_agent_outcomes_survive_cold_resume",
+        "native_permission_ask_denial_has_no_target_effect",
+        "native_permission_approval_runs_amended_input",
+        "native_permission_allow_runs_without_prompt",
+        "accept_edits_maps_target_workspace_paths",
+        "accept_edits_asks_for_runtime_path_collisions_and_escaping_symlinks",
+        "dont_ask_denies_without_prompt_or_effect",
+        "write_onto_symlink_is_refused_in_every_mode",
+        "bypass_permissions_runs_without_prompt",
+        "bash_results_match_native_local",
+        "background_completion_starts_a_native_notification_turn",
+        "background_completion_is_delivered_into_a_running_turn",
+        "stopped_background_command_sends_no_notification",
+        "timed_out_command_moves_to_background_and_notifies",
+        "background_deadline_stops_the_target_command_as_natively",
+        "notification_task_needs_no_second_approval",
+        "bash_process_lifetimes_match_native_local",
+        "target_instruction_files_render_as_native",
+        "target_environment_and_git_blocks_render_as_native",
+        "read_attaches_nested_instructions_once_as_native",
+        "file_tools_match_native_local",
+        "pdf_and_file_type_reads_match_native_local",
+        "target_skill_results_match_native_local",
+        "target_skill_listing_matches_native_local_with_stated_bundled_skills",
+        "typed_target_command_and_runtime_mentions_as_native",
+        "target_mcp_servers_run_on_target_in_native_scopes_and_precedence",
+        "target_mcp_instructions_reach_the_model",
+        "agent_background_command_notifies_the_agent_as_natively",
+        "incremental_hook_snapshots_preserve_large_native_history",
+        "project_lifecycle_hooks_run_on_target",
+        "native_tool_hooks_run_on_target",
+        "session_start_env_file_reaches_target_bash",
+        "facade_tool_failure_hooks_run_on_target",
+        "nonzero_bash_exit_is_native_tool_error",
+        "permission_request_hook_answers_pending_prompt",
+        "subagent_tool_hooks_name_the_agent",
+        "facade_pre_tool_hook_blocks_before_target_effect",
+        "facade_post_tool_hook_context_reaches_model",
+        "packaged_checkpoint_foreground_settles_original_acp_prompt",
+        "packaged_checkpoint_generation_settles_original_acp_prompt",
+        "packaged_checkpoint_cancel_settles_original_acp_prompt",
+        "packaged_steer_joins_exactly_the_named_self_started_cycle",
+        "packaged_acp_native_spawn_routes_target_tools",
+        "packaged_acp_cold_load_preserves_binding_history_and_effects",
+        "hot_effort_configuration_preserves_bound_execution",
+        "broken_module_refused_before_model_request",
+        "bare_mode_refused_without_changing_authentication",
+        "malformed_result_denies_without_native_fallback",
+        "bridge_error_denies_without_native_fallback",
+        "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+        "concurrent_large_input_and_output_do_not_deadlock",
+        "post_flood_commands_and_cancellation_keep_original_executor",
+        "target_image_bytes_cross_machine_transport",
+        "idempotent_close_stops_environment_and_preserves_worktree",
+        "closed_environment_cannot_be_recreated"
+      ],
+      "scope": "full",
+      "phases": [
+        "agent_background",
+        "agents",
+        "context",
+        "files",
+        "hooks",
+        "lifecycle",
+        "mcp",
+        "notifications",
+        "pdf",
+        "permissions",
+        "shell",
+        "skills"
+      ],
+      "claude_version": "2.1.314",
+      "claude_sha256": "4487042b4c4f5d88d4568f68ae98aae0b1ffae58864cf57fb868641bc5f84594",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "executor_version": "0.159.3",
+      "packaged_launcher_sha256": "7d70e7c41396866ed3793ca84f2ab51bdfd41c08ab9c00f5ae527dc423db0d32",
+      "scripted_api_requests": 353,
+      "native_title_requests": 1,
+      "agent_observations": {
+        "parent_turn_during_child_command_seconds": 0.1,
+        "taskstop_turn_seconds": 1.53,
+        "taskstop_target_quiescent_after_turn_seconds": 0.0,
+        "interrupt_target_quiescent_seconds": 0.01
+      },
+      "shell_results": {
+        "echo": {
+          "is_error": false,
+          "content": "hi"
+        },
+        "no_output": {
+          "is_error": false,
+          "content": "(Bash completed with no output)"
+        },
+        "no_newline": {
+          "is_error": false,
+          "content": "no newline"
+        },
+        "streams": {
+          "is_error": false,
+          "content": "out1\nerr1\nout2"
+        },
+        "stderr_only": {
+          "is_error": false,
+          "content": "only-err"
+        },
+        "fail_streams": {
+          "is_error": true,
+          "content": "<tool_use_error>Exit code 7\nout1\nerr1</tool_use_error>"
+        },
+        "fail_silent": {
+          "is_error": true,
+          "content": "<tool_use_error>Exit code 4</tool_use_error>"
+        },
+        "trailing_blank_lines": {
+          "is_error": false,
+          "content": "a"
+        },
+        "leading_blank_lines": {
+          "is_error": false,
+          "content": "b"
+        },
+        "inner_blank_lines": {
+          "is_error": false,
+          "content": "a\n\n  b"
+        },
+        "cd_sub": {
+          "is_error": false,
+          "content": "<project>/sub"
+        },
+        "pwd_after_cd": {
+          "is_error": false,
+          "content": "<project>/sub"
+        },
+        "cd_outside": {
+          "is_error": false,
+          "content": "/\nShell cwd was reset to <project>"
+        },
+        "pwd_after_outside": {
+          "is_error": false,
+          "content": "<project>"
+        },
+        "export": {
+          "is_error": false,
+          "content": "set-in-shell"
+        },
+        "env_after_export": {
+          "is_error": false,
+          "content": "var=unset"
+        },
+        "function_after": {
+          "is_error": false,
+          "content": "fn\nchild-unset"
+        },
+        "stdin": {
+          "is_error": false,
+          "content": "after-cat"
+        },
+        "tty": {
+          "is_error": false,
+          "content": "stdin-not-tty\nstdout-not-tty"
+        },
+        "pipefail": {
+          "is_error": false,
+          "content": "pipe=0"
+        },
+        "set_e": {
+          "is_error": false,
+          "content": "not-reached"
+        },
+        "nul": {
+          "is_error": false,
+          "content": "a\u0000b"
+        },
+        "ansi": {
+          "is_error": false,
+          "content": "\u001b[31mred\u001b[0m"
+        },
+        "cr": {
+          "is_error": false,
+          "content": "one\rtwo"
+        },
+        "invalid_utf8": {
+          "is_error": false,
+          "content": "x�y"
+        },
+        "long_lines": {
+          "is_error": false,
+          "content": "<persisted-output>\nOutput too large (106.3KB). Full output saved to: <file>\n\nPreview (first 2KB):\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n201\n202\n203\n204\n205\n206\n207\n208\n209\n210\n211\n212\n213\n214\n215\n216\n217\n218\n219\n220\n221\n222\n223\n224\n225\n226\n227\n228\n229\n230\n231\n232\n233\n234\n235\n236\n237\n238\n239\n240\n241\n242\n243\n244\n245\n246\n247\n248\n249\n250\n251\n252\n253\n254\n255\n256\n257\n258\n259\n260\n261\n262\n263\n264\n265\n266\n267\n268\n269\n270\n271\n272\n273\n274\n275\n276\n277\n278\n279\n280\n281\n282\n283\n284\n285\n286\n287\n288\n289\n290\n291\n292\n293\n294\n295\n296\n297\n298\n299\n300\n301\n302\n303\n304\n305\n306\n307\n308\n309\n310\n311\n312\n313\n314\n315\n316\n317\n318\n319\n320\n321\n322\n323\n324\n325\n326\n327\n328\n329\n330\n331\n332\n333\n334\n335\n336\n337\n338\n339\n340\n341\n342\n343\n344\n345\n346\n347\n348\n349\n350\n351\n352\n353\n354\n355\n356\n357\n358\n359\n360\n361\n362\n363\n364\n365\n366\n367\n368\n369\n370\n371\n372\n373\n374\n375\n376\n377\n378\n379\n380\n381\n382\n383\n384\n385\n386\n387\n388\n389\n390\n391\n392\n393\n394\n395\n396\n397\n398\n399\n400\n401\n402\n403\n404\n405\n406\n407\n408\n409\n410\n411\n412\n413\n414\n415\n416\n417\n418\n419\n420\n421\n422\n423\n424\n425\n426\n427\n428\n429\n430\n431\n432\n433\n434\n435\n436\n437\n438\n439\n440\n441\n442\n443\n444\n445\n446\n447\n448\n449\n450\n451\n452\n453\n454\n455\n456\n457\n458\n459\n460\n461\n462\n463\n464\n465\n466\n467\n468\n469\n470\n471\n472\n473\n474\n475\n476\n477\n478\n479\n480\n481\n482\n483\n484\n485\n486\n487\n488\n489\n490\n491\n492\n493\n494\n495\n496\n497\n498\n499\n500\n501\n502\n503\n504\n505\n506\n507\n508\n509\n510\n511\n512\n513\n514\n515\n516\n517\n518\n519\n520\n521\n522\n523\n524\n525\n526\n527\n...\n</persisted-output>"
+        },
+        "long_line": {
+          "is_error": false,
+          "content": "<persisted-output>\nOutput too large (39.1KB). Full output saved to: <file>\n\nPreview (first 2KB):\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n...\n</persisted-output>"
+        },
+        "env_vars": {
+          "is_error": false,
+          "content": "CLAUDECODE\nCLAUDE_CODE_CHILD_SESSION\nCLAUDE_CODE_ENTRYPOINT\nCLAUDE_CODE_SESSION_ATTENDED\nCOREPACK_ENABLE_AUTO_PIN\nGIT_EDITOR"
+        },
+        "env_values": {
+          "is_error": false,
+          "content": "1 1 0 0 true sdk-cli session effort agent"
+        },
+        "cd_then_fail": {
+          "is_error": true,
+          "content": "<tool_use_error>Exit code 1</tool_use_error>"
+        },
+        "pwd_after_failed_cd": {
+          "is_error": false,
+          "content": "<project>"
+        },
+        "fail_large": {
+          "is_error": true,
+          "content": "<tool_use_error>Exit code 2\nzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\n\n... [20012 characters truncated] ...\n\nzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz</tool_use_error>"
+        },
+        "reset_large": {
+          "is_error": false,
+          "content": "<persisted-output>\nOutput too large (106.3KB). Full output saved to: <file>\n\nPreview (first 2KB):\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n201\n202\n203\n204\n205\n206\n207\n208\n209\n210\n211\n212\n213\n214\n215\n216\n217\n218\n219\n220\n221\n222\n223\n224\n225\n226\n227\n228\n229\n230\n231\n232\n233\n234\n235\n236\n237\n238\n239\n240\n241\n242\n243\n244\n245\n246\n247\n248\n249\n250\n251\n252\n253\n254\n255\n256\n257\n258\n259\n260\n261\n262\n263\n264\n265\n266\n267\n268\n269\n270\n271\n272\n273\n274\n275\n276\n277\n278\n279\n280\n281\n282\n283\n284\n285\n286\n287\n288\n289\n290\n291\n292\n293\n294\n295\n296\n297\n298\n299\n300\n301\n302\n303\n304\n305\n306\n307\n308\n309\n310\n311\n312\n313\n314\n315\n316\n317\n318\n319\n320\n321\n322\n323\n324\n325\n326\n327\n328\n329\n330\n331\n332\n333\n334\n335\n336\n337\n338\n339\n340\n341\n342\n343\n344\n345\n346\n347\n348\n349\n350\n351\n352\n353\n354\n355\n356\n357\n358\n359\n360\n361\n362\n363\n364\n365\n366\n367\n368\n369\n370\n371\n372\n373\n374\n375\n376\n377\n378\n379\n380\n381\n382\n383\n384\n385\n386\n387\n388\n389\n390\n391\n392\n393\n394\n395\n396\n397\n398\n399\n400\n401\n402\n403\n404\n405\n406\n407\n408\n409\n410\n411\n412\n413\n414\n415\n416\n417\n418\n419\n420\n421\n422\n423\n424\n425\n426\n427\n428\n429\n430\n431\n432\n433\n434\n435\n436\n437\n438\n439\n440\n441\n442\n443\n444\n445\n446\n447\n448\n449\n450\n451\n452\n453\n454\n455\n456\n457\n458\n459\n460\n461\n462\n463\n464\n465\n466\n467\n468\n469\n470\n471\n472\n473\n474\n475\n476\n477\n478\n479\n480\n481\n482\n483\n484\n485\n486\n487\n488\n489\n490\n491\n492\n493\n494\n495\n496\n497\n498\n499\n500\n501\n502\n503\n504\n505\n506\n507\n508\n509\n510\n511\n512\n513\n514\n515\n516\n517\n518\n519\n520\n521\n522\n523\n524\n525\n526\n527\n...\n</persisted-output>\nShell cwd was reset to <project>"
+        },
+        "size_30001": {
+          "is_error": false,
+          "content": "<persisted-output>\nOutput too large (29.3KB). Full output saved to: <file>\n\nPreview (first 2KB):\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n...\n</persisted-output>"
+        },
+        "description_only": {
+          "is_error": false,
+          "content": "described"
+        },
+        "umask": {
+          "is_error": false,
+          "content": "0022"
+        }
+      },
+      "production_credentials": false,
+      "production_activation": false,
+      "not_checked": [
+        "real_subscription_inference",
+        "cross_host_latency",
+        "project_hook_settings_reload",
+        "agent_permission_modes",
+        "grandchild_agents",
+        "teammates_and_agent_worktrees",
+        "agent_partial_output_stream",
+        "native_runtime_crash_with_live_agent"
+      ],
+      "cursor_expirations": 0
+    },
+    {
+      "name": "managed-claude",
+      "receipt_sha256": "ea7e6f5323845a5c54442e443fd4bdd319cb3ff0d17cc0b3808276c71f938f66",
+      "schema": "cowboy.claude-managed-execution-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "permission_mode_change_refused",
+        "native_structured_output_validated",
+        "structured_output_is_final_message",
+        "read_only_tool_surface",
+        "keeper_sandbox_refuses_workspace_and_tmp_writes",
+        "snapshot_includes_working_tree",
+        "no_files_written"
+      ],
+      "claude_sha256": "4487042b4c4f5d88d4568f68ae98aae0b1ffae58864cf57fb868641bc5f84594",
+      "packaged_launcher_sha256": "7d70e7c41396866ed3793ca84f2ab51bdfd41c08ab9c00f5ae527dc423db0d32",
+      "scripted_api_requests": 3,
+      "production_credentials": false,
+      "production_activation": false
+    },
+    {
+      "name": "session",
+      "receipt_sha256": "df3b998ce0f662cf12f881675c5d85f0fa1430dc2db35af4cbc011204c68e0b9",
+      "schema": "cowboy.execution-session-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "current_browser_device_login_and_bound_api_credentials",
+        "real_product_setup_login_and_two_signed_machine_handshakes",
+        "signed_fixture_installed_through_public_operator_lifecycle",
+        "runtime_without_projects_is_schedulable_in_browser_machine_inventory",
+        "native_project_registry_cas_and_operator_authorization",
+        "remote_only_policy_enforced_by_legacy_and_native_creation",
+        "placement_needs_no_runtime_project_or_directory_mapping",
+        "large_execution_frames_use_bulk_lanes",
+        "public_creation_persists_exact_binding_and_isolated_target_worktree",
+        "worker_tools_cross_both_enrolled_machine_connections",
+        "runtime_and_stable_source_remain_unchanged",
+        "more_session_records_than_worker_limit_without_native_start",
+        "signed_prelaunch_settings_and_clear_preserve_workerless_state",
+        "workerless_delivery_policy_auth_cas_and_restart",
+        "prelaunch_preferences_survive_restart_without_an_agent_snapshot",
+        "saved_model_applies_before_first_prompt",
+        "partial_maintenance_policy_is_authorized_and_durable",
+        "waiting_prompt_survives_controller_restart_without_starting",
+        "released_slot_dispatches_original_message_exactly_once",
+        "project_removal_retires_new_admission_and_preserves_bound_session_and_files",
+        "controller_restart_retains_binding_and_resumes_original_environment_without_replay",
+        "native_project_registry_and_policy_survive_machine_and_controller_restart",
+        "target_machine_restart_reattaches_original_keeper_without_replay",
+        "lost_controller_reply_and_older_cold_readers_preserve_recovery_fence",
+        "private_host_recovery_preserves_native_history_and_worktree",
+        "same_recovery_receipt_never_replaces_twice_or_replays_commands",
+        "observing_recovery_receipt_does_not_fence_healthy_native_tools",
+        "recovered_environment_executes_native_target_tools",
+        "lost_host_keeper_is_recovered_before_cold_prompt_delivery",
+        "postboot_recovery_retains_native_identity_and_workspace",
+        "postboot_recovery_executes_only_new_prompt_without_command_replay",
+        "surviving_idle_agent_recovers_lost_target_before_new_turn",
+        "postboot_recovery_retains_native_identity_and_workspace",
+        "postboot_recovery_executes_only_new_prompt_without_command_replay",
+        "committed_recovery_resumes_worker_replacement_after_controller_loss",
+        "committed_recovery_observes_original_receipt_without_replacing_target_twice",
+        "controller_shutdown_retains_preflight_owned_prompt_before_persistence_drain",
+        "retained_shutdown_prompt_resumes_once_with_original_conversation",
+        "public_deletion_waits_for_target_stop_and_preserves_work"
+      ],
+      "inputs": {
+        "controller": {
+          "path": "/nix/store/g9q8102pq8ivbld8jqp2c3igvvyn0ri1-cowboy-0.1.0/bin/cowboy",
+          "sha256": "1056027ea9c15bebda5fad29bb89f358b7184931104137697fc9d417aa4009b9"
+        },
+        "machine": {
+          "path": "/nix/store/1iiz724ni67b5cv46lnrlnxhswr4gsr8-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+          "sha256": "fc8a2b005281a2556906f4892b8ba63ebd3084684643dc112c6c80f3eae5e5da"
+        },
+        "worker": {
+          "path": "/nix/store/g9q8102pq8ivbld8jqp2c3igvvyn0ri1-cowboy-0.1.0/bin/cowboy-acp-worker",
+          "sha256": "c64c65041f73795646cf44127503e26043b0ff4343f5b75231e244c92fb16353"
+        },
+        "keeper": {
+          "path": "/nix/store/qp7nb6cp2bg2yfxy0wasvpl7wxfl6y2b-cowboy-machine-release/bin/cowboy-execution-host",
+          "sha256": "ba37687be523c28a95d5dd008b278f8f5dbe03ac9299b21ed8cd7c5ea06a4a7e"
+        },
+        "pack": {
+          "path": "/nix/store/a3zfz9xy8mkkni5m41j3gg13kv5cx5my-cowboy-plugin-pack-1.13.0/bin/cowboy-plugin-pack",
+          "sha256": "14a1d8e776b32b345005559b604fc98f43c459448fb2c333b288b4ccefb92ac0"
+        },
+        "native_cli": {
+          "path": "/nix/store/4a9fvhlhk3gwiajjrisrnrf8nsz5vlnf-cowboy-execution-runtime-0.159.3/bin/codex",
+          "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+        }
+      },
+      "fixture_release": {
+        "release_schema": 4,
+        "plugin_id": "execution-fixture",
+        "plugin_version": "1.0.0",
+        "artifact_digest": "sha256:34736c60686cf07c31d6a187a6db7f66b6a2a4f39b7c703cd228daa84343cfb3"
+      },
+      "harness_sha256": "241bde97b9feee80bbe36267c018beff07e07a0971cdd0c126e5b671fb386750",
+      "real_model_requests": 0,
+      "production_credentials": false,
+      "production_activation": false,
+      "not_checked": [
+        "native_codex_turns_covered_by_separate_gate",
+        "cross_host_latency",
+        "production_subscription_inference",
+        "external_tls_termination_fixture_uses_trusted_loopback_proxy_boundary"
+      ],
+      "device_fixture_sha256": "187ef0605032f68e6cfc3c72e3c9d6104b47e8526cf9c054a4e7f9dd08bfad47"
+    },
+    {
+      "name": "logs",
+      "receipt_sha256": "2eb5784180921ecd04763db4afe02f1e9e354d2cd79ac431df0b47a8963abbf8",
+      "schema": "cowboy.logs-conformance/v1",
+      "accepted": true,
+      "binary_sha256": "d8b70f38a3d893c5e98cdc55c513b59f094d31f08fb649027d38570fd70b0462",
+      "ssh_alias": null,
+      "checks": [
+        "schema derives actual command arguments",
+        "RUST_LOG=off still records correlated redacted failure",
+        "analysis evidence identity is queryable",
+        "source aggregation is independent of page size",
+        "deterministic analysis returns evidence with coverage limits",
+        "tail drains pages and suppresses repeated evidence IDs",
+        "periodic analysis is bounded and emits JSONL",
+        "OTLP protobuf export refuses truncated evidence",
+        "RPC is read-only and refuses recursive remote execution",
+        "partial-source failure is explicit with nonzero default exit",
+        "short retention config resolves rotation and supports idle maintenance"
+      ],
+      "limits": "Isolated CLI fixture; not a production rollout or external Collector receipt."
+    },
+    {
+      "name": "code",
+      "receipt_sha256": "35b485c6e5dfb2bf755c61a821768c07dd22d2cea84cffa9008369bb297f6ce7",
+      "schema": "dravengarden.cowboy.code-buffer-connected-conformance/v17",
+      "source_revision": "bad05ba7cec7f92526c9f7bee294676fb269cb12",
+      "artifacts": [
+        {
+          "lane": "controller",
+          "role": "supplied",
+          "release": "/nix/store/b296iqw9ibr5vdx9i3kh77wihghvh8wc-cowboy-controller-release",
+          "executable": "/nix/store/g9q8102pq8ivbld8jqp2c3igvvyn0ri1-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "bad05ba7cec7f92526c9f7bee294676fb269cb12",
+            "schema": 1
+          },
+          "source_sha256": "658ad9fd76430e02b09ffedc6690c29aed240aff40af2eff5bbc4cac80ac549a",
+          "executable_sha256": "1056027ea9c15bebda5fad29bb89f358b7184931104137697fc9d417aa4009b9",
+          "executable_chain": [
+            {
+              "path": "/nix/store/g9q8102pq8ivbld8jqp2c3igvvyn0ri1-cowboy-0.1.0/bin/cowboy",
+              "sha256": "1056027ea9c15bebda5fad29bb89f358b7184931104137697fc9d417aa4009b9"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "supplied",
+          "release": "/nix/store/qp7nb6cp2bg2yfxy0wasvpl7wxfl6y2b-cowboy-machine-release",
+          "executable": "/nix/store/qp7nb6cp2bg2yfxy0wasvpl7wxfl6y2b-cowboy-machine-release/bin/cowboy-machine",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "bad05ba7cec7f92526c9f7bee294676fb269cb12",
+            "schema": 1,
+            "sessionDeletionJournal": {
+              "readerSchema": 1,
+              "writerSchema": 0
+            },
+            "sessionIncarnations": {
+              "readerSchema": 1,
+              "writerSchema": 0
+            },
+            "workerGeneration": "worker-b105e064b10fd6ab191f"
+          },
+          "source_sha256": "d8b7690379bec1ebc68cc2a6caae0540105f7ea0a5a9362b50124d7bf4da9a1b",
+          "executable_sha256": "0560f9f9894948a67a93690583cceb085a6ce53b0c3418b53faab75a2cf49068",
+          "executable_chain": [
+            {
+              "path": "/nix/store/qp7nb6cp2bg2yfxy0wasvpl7wxfl6y2b-cowboy-machine-release/bin/cowboy-machine",
+              "sha256": "0560f9f9894948a67a93690583cceb085a6ce53b0c3418b53faab75a2cf49068"
+            },
+            {
+              "path": "/nix/store/1iiz724ni67b5cv46lnrlnxhswr4gsr8-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "2c66fcc1c65223e4b9989a72973d33c6614ab043e42ff86765cb4de974873f75"
+            },
+            {
+              "path": "/nix/store/1iiz724ni67b5cv46lnrlnxhswr4gsr8-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "fc8a2b005281a2556906f4892b8ba63ebd3084684643dc112c6c80f3eae5e5da"
+            }
+          ]
+        }
+      ],
+      "native": [
+        {
+          "path": "/nix/store/v7bmyckdhd8x85dla9dghzpmgi02b8hd-cowboy-zed-adapter-x86_64-unknown-linux-musl-1.38.0/bin/cowboy-zed-adapter",
+          "sha256": "5d5383a31f7f62be2663f5e63fc942ec3b51507506b9a7d838ac0c7493f5977b"
+        },
+        {
+          "path": "/nix/store/m5z2h4nqk0gfk6ma0hriq5d8fh279j2i-cowboy-zed-server-x86_64-unknown-linux-musl-1.15.0/bin/cowboy-zed-server",
+          "sha256": "b2171b6e86031cb240de0829f95cb007a9914395a964bae7e13b619140a5edb8"
+        }
+      ],
+      "core_adapter": {
+        "path": "/nix/store/0kpcwzhq9zg9jxyb4mazv2mnk6axszms-cowboy-code-adapter-0.1.0/bin/cowboy-code-adapter",
+        "sha256": "8fb94bafbaae48df71a9c0b454741e2c1ccd53d3d4b7d2bb4d979ae3c3a16e36"
+      },
+      "ssh_keygen": {
+        "path": "/nix/store/k1ac1aqh0cb2xxph82l9c19yv32a7lyn-openssh-10.4p1/bin/ssh-keygen",
+        "sha256": "85ba27c28c6bbb4e57395bcd7f7e56774f0d939d235de3603893ccae056d9257"
+      },
+      "git": {
+        "path": "/nix/store/bcnisk3ydfgv26v2gw3zlky24g00yww2-git-2.54.0/bin/git",
+        "sha256": "bb109beeee3d9dc486e3b0749028e18a58572670b283a1092d9fe2034440437e"
+      },
+      "test_lsp": {
+        "path": "/srv/storage/fast0/agent/worktrees/cowboy/suger-codeact-runtime/plugins/zed/adapter/target/debug/examples/navigation_lsp",
+        "sha256": "91ba7c2c20d7a75b9e70b035b694a3409269c7de294ddfe0a5b8474e5ef6c979"
+      },
+      "package_sha256": "8b9e40d3e602648ce8438f674d4916f8c1e0f8c2d213084588be7feef778326b",
+      "release_sha256": "8c7cb8ada5038a6dee349870ab0b2bc26f1f9401b34acdf09a2f20c1cc6d052d",
+      "stage": "complete",
+      "checks": [
+        "authenticated_code_installation",
+        "real_login_enrollment_and_effect_free_unready_refusal",
+        "held_real_core_file_reply_is_discarded_after_original_cookie_logout",
+        "machine_owned_root_identity_refuses_a_replaced_advertised_root",
+        "machine_owned_root_aliases_are_readable_before_and_after_replacement",
+        "machine_owned_session_root_discards_real_conditional_reply_after_replacement",
+        "machine_owned_session_root_expires_old_page_without_io_and_allows_fresh_read",
+        "cancelled_http_open_drains_without_replay",
+        "legacy_language_original_login_revocation",
+        "legacy_hover_original_login_revocation",
+        "legacy_navigation_original_login_revocation",
+        "legacy_outline_original_login_revocation",
+        "independent_owners_unicode_content_equality_and_disk_mismatch",
+        "cancelled_read_drains_before_explicit_release_without_closing_peer",
+        "owned_open_original_login_revocation",
+        "owned_query_original_login_revocation",
+        "owned_release_original_login_revocation",
+        "owned_read_failed_reply_original_login_revocation",
+        "navigation_failed_query_original_login_revocation",
+        "lost_real_navigation_execute_reply_original_query_without_replay",
+        "enrolled_protocol21_all_five_navigation_kinds_unicode_original_owner",
+        "explicit_synchronization_authentication_shared_owner_refusal_and_local_fence",
+        "synchronization_failed_query_original_login_revocation",
+        "lost_real_sync_reply_original_id_query_and_no_apply_replay_after_uninstall",
+        "synchronization_retirement_drains_after_cancelled_http_without_replay",
+        "cancelled_destination_observer_handoff_to_ordinary_owner_after_uninstall",
+        "lost_real_parent_release_reply_original_query_without_replay",
+        "native_budget_refusal_lost_reply_original_query_unchanged_text_and_explicit_retirement",
+        "http_uninstall_and_missing_paths_preserve_original_native_reads",
+        "complete_native_destination_text_pages_after_parent_and_path_removal",
+        "destination_content_read_after_parent_release_and_path_removal",
+        "cancelled_release_observed_once_and_independent_owner_retained",
+        "navigation_replacement_connection_and_restart_refuse_adoption",
+        "replacement_connection_fenced_and_restart_does_not_adopt_or_release_old_id",
+        "authenticated_core_file_pages_refuse_replacement_route_and_restart_without_dispatch",
+        "bound_session_reads_target_without_runtime_connection_and_fences_unknown_and_replaced_routes",
+        "colocated_reads_execute_here_only_by_permission_and_fence_a_replaced_root",
+        "withdrawing_colocation_permission_routes_the_same_root_to_the_retained_machine"
+      ],
+      "wire": {
+        "connections": 5,
+        "configurations": 5,
+        "protocols": [
+          44,
+          44,
+          44,
+          44,
+          44
+        ],
+        "commands": {
+          "bufferHover": 3,
+          "bufferLanguage": 3,
+          "bufferLeaseContentSupport": 43,
+          "bufferLeaseSupport": 9,
+          "bufferLeaseTextSupport": 2,
+          "bufferNavigate": 3,
+          "bufferSymbols": 3,
+          "codeNavigationDestination": 1,
+          "codeNavigationExecute": 6,
+          "codeNavigationPrepare": 6,
+          "codeNavigationQuery": 9,
+          "codeNavigationRelease": 5,
+          "codeSyncApply": 2,
+          "codeSyncPrepare": 4,
+          "codeSyncQuery": 3,
+          "codeSyncRetire": 2,
+          "coreColocatedFile": 2,
+          "coreFile": 5,
+          "coreManifest": 1,
+          "coreSessionFile": 4,
+          "coreSwapFile": 5,
+          "ensureWorktree": 1,
+          "installationObservation": 1,
+          "installationStep": 1,
+          "openBufferLease": 9,
+          "prepareBuffer": 9,
+          "queryBufferLease": 4,
+          "readBufferLease": 45,
+          "refreshInventory": 2,
+          "releaseBufferLease": 7,
+          "uninstallObservation": 1,
+          "uninstallStep": 1
+        },
+        "session_root_observations": 15,
+        "session_root_verifications": 22,
+        "replies": 239,
+        "held_replies": 22,
+        "discarded_replies": 7,
+        "cuts": 1
+      },
+      "last_http": {
+        "status": 200,
+        "elapsed_ms": 8,
+        "result": "json"
+      },
+      "failure": null,
+      "cleanup": true,
+      "accepted": true,
+      "not_checked": [
+        "production_roles_policies_accounts_installation_and_activation",
+        "review_integration_browser_storage_and_supported_devices",
+        "real_language_implementation_or_atomic_diagnostics_freshness",
+        "dirty_buffer_override_independent_restoration_and_full_destination_view",
+        "abandoned_browser_restart_restoration_and_post_effect_recovery",
+        "agent_authentication_sessions_and_native_worker_generation_upgrade",
+        "physical_power_loss_general_graph_state_leases_and_refactor_completion"
+      ]
+    },
+    {
+      "name": "agent-codex",
+      "receipt_sha256": "2d83575fd3cd68bd1852ff612d96cab99dbdb2228199263d8446711ad8b388c1",
+      "schema_version": 1,
+      "plugin_id": "codex",
+      "plugin_version": "3.5.23",
+      "artifact_digest": "sha256:2879e9b275997710023566dfcb11de890848c298d6a7522f1050e2b946c534d3",
+      "platform": {
+        "os": "linux",
+        "architecture": "x86_64"
+      },
+      "probes": [
+        {
+          "command": "codex",
+          "version": "0.165.0",
+          "artifact_digest": "sha256:f997cd6ef5987126e19cd3c82e847a4a6461270f32f97340c5e99a65fb6f9b8a",
+          "status": "passed"
+        },
+        {
+          "command": "codex-acp",
+          "version": "2.5.0",
+          "artifact_digest": "sha256:3b9de419c9d7bc41bccca6295a721a5f87e8988135a81fc6a2f7e3822f2dbe10",
+          "status": "passed"
+        }
+      ],
+      "uses_service_credentials": false,
+      "sends_prompt": false,
+      "previous": {
+        "plugin_version": "3.5.21",
+        "artifact_digest": "sha256:dfd8f1003ec1e07605b794fbe84e928736f42dd3af9dc1a25056e498aeab6f22"
+      },
+      "worker": {
+        "executable_digest": "sha256:c64c65041f73795646cf44127503e26043b0ff4343f5b75231e244c92fb16353",
+        "initialize_and_session_new": "passed",
+        "stop_and_descendant_drain": "passed",
+        "sidecar_count": 0,
+        "distinct_generation_coexistence": "passed"
+      }
+    },
+    {
+      "name": "agent-claude-code",
+      "receipt_sha256": "332ba8c7033f066f115533011d35d00729f33187e878ea3bdea52ece09a8aed8",
+      "schema_version": 1,
+      "plugin_id": "claude-code",
+      "plugin_version": "3.20.30",
+      "artifact_digest": "sha256:4b388ab6f31acacdbc8df80ff10e9a0db350cc7bb0947eb9bbf592c136137e5d",
+      "platform": {
+        "os": "linux",
+        "architecture": "x86_64"
+      },
+      "probes": [
+        {
+          "command": "claude",
+          "version": "2.1.314",
+          "artifact_digest": "sha256:c6b690e52ba2d038c4c8d2566b2ec35acef4995c4321f7d57fa464a7088c2b78",
+          "status": "passed"
+        },
+        {
+          "command": "claude-agent-acp",
+          "version": "0.99.1",
+          "artifact_digest": "sha256:b46272e5f416dcd126fb75adf8a3e42c8b19a6213f2ba4ad95c47fdd07a26159",
+          "status": "passed"
+        }
+      ],
+      "uses_service_credentials": false,
+      "sends_prompt": false,
+      "previous": {
+        "plugin_version": "3.20.29",
+        "artifact_digest": "sha256:a71fba131a48baa8cd2e779b45fce9d65d177f2414f55b29a939a5bc48c243af"
+      },
+      "worker": {
+        "executable_digest": "sha256:c64c65041f73795646cf44127503e26043b0ff4343f5b75231e244c92fb16353",
+        "initialize_and_session_new": "passed",
+        "stop_and_descendant_drain": "passed",
+        "sidecar_count": 0,
+        "distinct_generation_coexistence": "passed"
+      }
+    }
+  ]
+}

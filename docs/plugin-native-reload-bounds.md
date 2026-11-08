@@ -43,6 +43,11 @@ In this pinned headless server, file-watch changes emit `ReloadNeeded` but do
 not automatically invoke reload. The fix protects the existing reload route,
 including other callers, without introducing a watcher-to-mutation bridge.
 Owned reads still cannot call legacy reload to repair a content mismatch.
+Zed Plugin `1.39.0` adds one narrow caller, the agent-owned refresh of
+[agent code intelligence](architecture/20-agent-code-intelligence.md): only a
+buffer whose every owner is an automatic agent acquisition, with no
+synchronization reservation or unresolved close, after the bounded source
+reader observed a change.
 
 ## Verification
 

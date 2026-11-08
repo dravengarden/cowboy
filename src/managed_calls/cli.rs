@@ -657,6 +657,7 @@ pub async fn call(args: CallArgs) -> anyhow::Result<()> {
     let id = match &action {
         Action::Capabilities {}
         | Action::Start { .. }
+        | Action::Mcp { .. }
         | Action::AgentStatus {}
         | Action::AgentInvoke { .. }
         | Action::AgentRead { .. } => None,

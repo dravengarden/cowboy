@@ -11,6 +11,9 @@ pub const MAX_FRAME_BYTES: usize = super::MAX_REQUEST_BYTES + 4096;
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
+    Mcp {
+        request: Box<crate::mcp_binding::RelayRequest>,
+    },
     Capabilities {},
     Start {
         provider: String,
@@ -69,6 +72,7 @@ impl std::fmt::Debug for Action {
 impl Action {
     pub fn validate(&self) -> Result<(), InputError> {
         match self {
+            Self::Mcp { request } => request.validate().map_err(|_| InputError::InvalidContract),
             Self::Capabilities {} => Ok(()),
             Self::Start {
                 provider,
@@ -167,6 +171,7 @@ impl Action {
 
     pub fn wait_ms(&self) -> u64 {
         match self {
+            Self::Mcp { .. } => 30_000,
             Self::Start { wait_ms, .. } => *wait_ms,
             Self::Wait { timeout_ms, .. } => *timeout_ms,
             Self::AgentRead { timeout_ms, .. } => {
@@ -182,7 +187,10 @@ impl Action {
     pub fn agent_api(&self) -> bool {
         matches!(
             self,
-            Self::AgentStatus {} | Self::AgentRead { .. } | Self::AgentInvoke { .. }
+            Self::Mcp { .. }
+                | Self::AgentStatus {}
+                | Self::AgentRead { .. }
+                | Self::AgentInvoke { .. }
         )
     }
 }
@@ -193,7 +201,8 @@ impl Action {
     pub fn submits(&self) -> bool {
         matches!(
             self,
-            Self::Start { .. }
+            Self::Mcp { .. }
+                | Self::Start { .. }
                 | Self::AgentInvoke {
                     operation: Some(_),
                     ..
@@ -218,6 +227,8 @@ pub struct Grant {
     pub agent_api: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_actions: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mcp: bool,
 }
 
 impl Grant {

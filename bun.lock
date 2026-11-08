@@ -13,7 +13,7 @@
     },
     "components/app-shell": {
       "name": "@cowboy/app-shell",
-      "version": "1.1.40",
+      "version": "1.1.41",
       "peerDependencies": {
         "@emotion/react": "^11.13.0",
         "@emotion/styled": "^11.13.0",
@@ -25,14 +25,14 @@
     },
     "components/provider-authoring": {
       "name": "@cowboy/provider-authoring",
-      "version": "1.0.12",
+      "version": "1.0.13",
       "peerDependencies": {
-        "@cowboy/provider-ui": "3.1.24",
+        "@cowboy/provider-ui": "3.3.0",
       },
     },
     "components/provider-ui": {
       "name": "@cowboy/provider-ui",
-      "version": "3.1.24",
+      "version": "3.3.0",
     },
     "components/state-store": {
       "name": "@cowboy/state-store",

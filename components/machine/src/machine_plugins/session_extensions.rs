@@ -121,6 +121,7 @@ impl MachinePluginStore {
         session_id: &str,
         switches: SessionExtensions,
         relay: Option<Value>,
+        mcp: Option<&crate::mcp_binding::NativeLaunchPlan>,
     ) -> Result<PathBuf> {
         let path = descriptor_path(state_dir, session_id).context("invalid session id")?;
         let mut descriptor = self.session_extensions(switches)?;
@@ -129,6 +130,10 @@ impl MachinePluginStore {
             relay,
         ) {
             memory.insert("relay".to_owned(), relay);
+        }
+        if let Some(plan) = mcp {
+            plan.validate()?;
+            descriptor["mcp"] = serde_json::to_value(plan)?;
         }
         let bytes = serde_json::to_vec(&descriptor)?;
         ensure!(
@@ -147,6 +152,36 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
     use super::*;
+
+    #[test]
+    fn mandatory_mcp_descriptor_rejects_invalid_plan_without_replacing_file() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(
+            &root.path().join("machine"),
+            crate::machine_protocol::Platform::Linux,
+            "x86_64".into(),
+        )
+        .unwrap();
+        let switches = SessionExtensions {
+            schema: SESSION_EXTENSIONS_SCHEMA,
+            memory_tools: false,
+            memory_recall: false,
+        };
+        let mut plan: crate::mcp_binding::NativeLaunchPlan = serde_json::from_value(json!({"schema":1,"command":"/bin/cowboy","bindings":[{"name":"suger","descriptor":"/private/suger.json"}]})).unwrap();
+        let path = store
+            .write_session_extensions(root.path(), "session", switches, None, Some(&plan))
+            .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["mcp"], serde_json::to_value(&plan).unwrap());
+        plan.command = "relative".into();
+        assert!(
+            store
+                .write_session_extensions(root.path(), "session", switches, None, Some(&plan))
+                .is_err()
+        );
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
 
     #[tokio::test]
     async fn descriptor_carries_active_extensions_and_session_switches() {
@@ -185,7 +220,7 @@ mod tests {
         let installed = store.install(&matrix).await.unwrap();
         store.install(&review).await.unwrap();
         let path = store
-            .write_session_extensions(&root.join("state"), "sess-1", switches, None)
+            .write_session_extensions(&root.join("state"), "sess-1", switches, None, None)
             .unwrap();
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,

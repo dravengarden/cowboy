@@ -7,6 +7,7 @@ impl SessionRow {
     ) -> SessionMeta {
         SessionMeta {
             continued_from: None,
+            handoff_resumed: false,
             forked_from: None,
             id: self.id,
             provider: self.provider,

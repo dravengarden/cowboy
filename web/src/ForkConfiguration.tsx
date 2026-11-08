@@ -1,8 +1,9 @@
-import { Alert, Checkbox, FormControlLabel, Stack, TextField } from "@mui/material";
+import { Alert, Checkbox, FormControlLabel, MenuItem, Stack, TextField } from "@mui/material";
 import type { ReactNode } from "react";
 import type { ConfigOption } from "./protocol";
 import { SessionPresetPicker } from "./SessionPresetPicker";
 import type { SessionPreset } from "./newSessionPreset";
+import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
 export type ForkConfig = Record<string, string | boolean>;
 
@@ -39,6 +40,10 @@ export function ForkConfiguration({
   disclosure: ReactNode;
 }): React.JSX.Element {
   const selectedPreset = presets.find((item) => `${provider}/${item.id}` === preset);
+  // Touch keeps the platform picker; Desktop needs a list the Vim menu keys
+  // reach, which a native popup never delivers to the page.
+  const native = useSurfaceProfile().kind !== "desktop";
+  const Choice = native ? "option" : MenuItem;
   const optionRow = (option: ConfigOption) => {
     const inherited = inherit ? String(option.currentValue) : "Agent default";
     const base = selectedPreset?.values[option.id] ?? inherited;
@@ -50,7 +55,7 @@ export function ForkConfiguration({
         label={option.name}
         value={overrides[option.id] === undefined ? "" : String(overrides[option.id])}
         disabled={locked}
-        slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}
+        slotProps={{ select: { native, displayEmpty: true }, inputLabel: { shrink: true } }}
         helperText={option.description}
         onChange={(event) => {
           const next = { ...overrides };
@@ -64,13 +69,13 @@ export function ForkConfiguration({
         }}
         inputProps={{ "data-fork-option": option.id }}
       >
-        <option value="">
+        <Choice value="">
           {inherit && !selectedPreset ? "Inherit" : "Default"}: {current}
-        </option>
+        </Choice>
         {option.options.map((item) => (
-          <option key={String(item.value)} value={String(item.value)}>
+          <Choice key={String(item.value)} value={String(item.value)}>
             {item.name}
-          </option>
+          </Choice>
         ))}
       </TextField>
     );

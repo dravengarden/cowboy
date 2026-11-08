@@ -220,26 +220,12 @@ impl Manager {
                 attempt += 1;
                 continue;
             }
-            if let Some(retention) = &config.retention {
-                let status = tokio::time::timeout(
-                    Duration::from_secs(20),
-                    tokio::process::Command::new(&retention.command)
-                        .arg("--add-root")
-                        .arg(active.join("executor-root"))
-                        .arg("--indirect")
-                        .arg("--realise")
-                        .arg(&retention.closure)
-                        .stdin(Stdio::null())
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .kill_on_drop(true)
-                        .status(),
-                )
-                .await;
-                if !matches!(status, Ok(Ok(status)) if status.success()) {
-                    return Err(Refusal::PreparationFailed);
-                }
-            }
+            retention::retain(
+                config.retention.as_ref(),
+                &active,
+                current.agent_cli.as_ref(),
+            )
+            .await?;
             write(
                 &active.join("launch-requested.json"),
                 &Scope::from_binding(&current.binding),
@@ -313,6 +299,7 @@ mod tests {
                 schema: 1,
                 host_command: "/nonexistent-keeper".into(),
                 executor: executor.clone(),
+                agent_cli: None,
                 retention: None,
             }),
             false,
@@ -337,6 +324,7 @@ mod tests {
                 session_id: "worktree-one".into(),
                 binding,
                 executor,
+                agent_cli: None,
                 capability: "private-test".into(),
                 environment: BTreeMap::new(),
                 call_context: None,
@@ -453,6 +441,13 @@ mod tests {
         let mut next = successor(&record);
         assert!(validate_successor(&record, &next).is_ok());
         next.next.executor.command = "/another-executor".into();
+        assert!(validate_successor(&record, &next).is_err());
+        let mut next = successor(&record);
+        next.next.agent_cli = Some(keeper::Executor {
+            command: "/nix/store/new-cli/bin/cowboy".into(),
+            sha256: "a".repeat(64),
+            version: "1.0.0".into(),
+        });
         assert!(validate_successor(&record, &next).is_err());
         let mut next = successor(&record);
         next.next.binding.workspace.cwd = "/another-worktree".into();

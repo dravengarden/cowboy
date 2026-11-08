@@ -20,10 +20,11 @@ pub use cowboy::{
     cgroup, claude_shell, code_buffer_read, config, deepseek_cache, deepseek_context,
     durable_state, execution_environment, execution_protocol, execution_target_environment,
     generation_retention, legacy_provider_release, machine_auth, machine_install, machine_lanes,
-    machine_protocol, machine_transport, managed_calls, operation_budget, otlp, owned_json,
-    plugin_auth_probe, plugin_host, plugin_host_bundle, plugin_process, plugin_runtime_args,
-    provider_account, provider_behavior, runtime_trace, runtime_wire, service_identity,
-    session_deletion_admission, telemetry_plugin, workspace_extensions, workspace_roots,
+    machine_protocol, machine_transport, managed_calls, mcp_binding, operation_budget, otlp,
+    owned_json, plugin_auth_probe, plugin_host, plugin_host_bundle, plugin_process,
+    plugin_runtime_args, provider_account, provider_behavior, runtime_trace, runtime_wire,
+    service_identity, session_deletion_admission, telemetry_plugin, workspace_extensions,
+    workspace_roots,
 };
 #[cfg(feature = "machine-host")]
 pub use cowboy::{machine_components, provider_usage_spool, session_workspace};

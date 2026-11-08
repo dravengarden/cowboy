@@ -8,6 +8,31 @@ use crate::machine_plugins::ProviderLaunchContext;
 use cowboy_provider_sdk::ProviderBehaviorContract;
 
 impl Broker {
+    /// Optional worker arguments that pin the authenticated account and MCP plan.
+    pub(super) fn push_launch_identity_args(
+        &self,
+        command: &mut Command,
+        session: &StartSession,
+    ) -> Result<()> {
+        if let Some(auth_generation) = session.provider_auth_generation {
+            command
+                .arg("--provider-auth-generation")
+                .arg(auth_generation.to_string());
+        }
+        if !session.provider_account_id.is_default() {
+            command
+                .arg("--provider-account-id")
+                .arg(session.provider_account_id.as_str());
+            if self.args.spawn_mode == SpawnMode::SystemdUser {
+                command.arg("--launch-gate");
+            }
+        }
+        if let Some(plan) = &session.mcp_plan {
+            command.arg("--mcp-plan").arg(serde_json::to_string(plan)?);
+        }
+        Ok(())
+    }
+
     /// Verify and resolve the exact Provider generation this launch runs.
     pub(super) async fn resolve_launch_provider(
         &self,
@@ -101,40 +126,7 @@ impl Broker {
                 path.display().to_string(),
             ));
         }
-        // Session extensions are resolved from this Machine's own active
-        // Plugins. A failure disables them explicitly: the session starts
-        // without memory rather than failing to start, and never falls back
-        // to a host enrollment that could override the session's switches.
-        if let Some(switches) = session.extensions {
-            let written = self
-                .args
-                .call_context_root
-                .as_deref()
-                .context("Machine has no state root for session extensions")
-                .and_then(|root| {
-                    self.args.provider_store.write_session_extensions(
-                        root,
-                        &session.session_id,
-                        switches,
-                        // A managed child never receives memory.
-                        self.args
-                            .memory_relay
-                            .as_ref()
-                            .filter(|_| !session.system)
-                            .map(|relay| relay.session_access(&session.session_id)),
-                    )
-                });
-            let value = match written {
-                Ok(path) => path.display().to_string(),
-                Err(error) => {
-                    tracing::warn!(
-                        session = %session.session_id,
-                        error = %format!("{error:#}"),
-                        "session extensions disabled for this launch"
-                    );
-                    crate::machine_plugins::SESSION_EXTENSIONS_DISABLED.to_owned()
-                }
-            };
+        if let Some(value) = self.launch_extensions_environment(session)? {
             session_environment.push((crate::machine_plugins::SESSION_EXTENSIONS_ENV, value));
         }
         if let Some(provider) = &provider {
@@ -200,6 +192,7 @@ pub(super) fn validate_launch_placement(
             "session Provider behavior does not match the installed generation"
         );
     }
+    super::mcp_launch::validate(session, provider.as_ref())?;
     if let Some(installed) = &provider {
         ensure!(
             session.provider_version == installed.version,

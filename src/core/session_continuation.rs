@@ -1,5 +1,5 @@
 //! A continuation remains beside its source in both sidebar orderings.
-use super::Hub;
+use super::{Hub, settings_keys};
 use crate::session_folders::FolderActor;
 use serde_json::json;
 
@@ -228,6 +228,87 @@ pub(super) fn sidebar_project(meta: &super::SessionMeta) -> Option<&str> {
         })
 }
 
+impl Hub {
+    /// Project persisted continuation marks after settings and sessions load.
+    pub fn restore_continuations(&self) {
+        let sessions = self.session_list();
+        let key = |id: &str| format!("{}{id}", settings_keys::SESSION_CONTINUED_FROM_PREFIX);
+        // Continuations created before the mark existed are named by their
+        // source's accepted send receipt. Record them once, so a later send
+        // from that source cannot erase the relationship.
+        for source in &sessions {
+            let Some(delivery) = crate::session_context::read(self, &source.id)
+                .ok()
+                .and_then(|context| context.delivery)
+                .filter(|delivery| {
+                    delivery.state == "accepted" && delivery.session_id != source.id
+                })
+            else {
+                continue;
+            };
+            // A handoff taken back is recorded on its destination first.
+            let cancelled = crate::session_context::read(self, &delivery.session_id)
+                .ok()
+                .and_then(|context| context.delivery)
+                .is_some_and(|receipt| receipt.state == "cancelled");
+            if !cancelled
+                && sessions.iter().any(|meta| meta.id == delivery.session_id)
+                && self.setting(&key(&delivery.session_id)).is_none()
+            {
+                self.set_setting(key(&delivery.session_id), json!(source.id));
+            }
+        }
+        for meta in &sessions {
+            if let Some(source) = self
+                .setting(&key(&meta.id))
+                .and_then(|value| value.as_str().map(str::to_owned))
+            {
+                self.set_continued_from(&meta.id, Some(source));
+            }
+            if self.setting(&resumed_key(&meta.id)) == Some(json!(true)) {
+                self.project_handoff_resumed(&meta.id, true);
+            }
+        }
+    }
+
+    /// Keep working in a handed-off source beside its continuation, or (on a
+    /// new handoff from it) return it to history. Only the Web reads this:
+    /// the session API never refused writes to a source.
+    pub fn set_handoff_resumed(&self, session_id: &str, resumed: bool) {
+        if self.session_info(session_id).is_none() {
+            return;
+        }
+        let key = resumed_key(session_id);
+        if resumed {
+            self.set_setting(key, json!(true));
+        } else if self.setting(&key).is_some() {
+            self.set_setting(key, serde_json::Value::Null);
+        }
+        self.project_handoff_resumed(session_id, resumed);
+    }
+
+    fn project_handoff_resumed(&self, session_id: &str, resumed: bool) {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(session) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if session.meta.handoff_resumed == resumed {
+                return;
+            }
+            session.meta.handoff_resumed = resumed;
+        }
+        self.broadcast_sessions();
+    }
+}
+
+fn resumed_key(session_id: &str) -> String {
+    format!(
+        "{}{session_id}",
+        settings_keys::SESSION_HANDOFF_RESUMED_PREFIX
+    )
+}
+
 fn insert_after(order: &mut Vec<String>, source: &str, destination: &str) {
     order.retain(|id| id != destination);
     let at = order
@@ -454,6 +535,43 @@ mod tests {
         )]);
         hub.restore_continuations();
         assert_eq!(mark("target").as_deref(), Some("source"));
+    }
+
+    #[test]
+    fn a_kept_source_is_restored_and_a_new_handoff_returns_it_to_history() {
+        let hub = Hub::new();
+        session(&hub, "source", "me");
+        let resumed = |hub: &Hub| hub.session_info("source").unwrap().meta.handoff_resumed;
+        hub.set_handoff_resumed("source", true);
+        assert!(resumed(&hub));
+        let key = format!("{}source", settings_keys::SESSION_HANDOFF_RESUMED_PREFIX);
+        assert_eq!(hub.setting(&key), Some(json!(true)));
+
+        // A restart projects the persisted choice again.
+        let restarted = Hub::new();
+        session(&restarted, "source", "me");
+        restarted.load_settings(vec![(key.clone(), json!(true))]);
+        restarted.restore_continuations();
+        assert!(resumed(&restarted));
+
+        // Deleting the session purges the choice with it.
+        restarted.set_handoff_resumed("source", true);
+        restarted.delete_session("source");
+        assert_eq!(restarted.setting(&key), None);
+        session(&restarted, "source", "me");
+
+        restarted.set_handoff_resumed("source", false);
+        assert!(!resumed(&restarted));
+        assert_eq!(restarted.setting(&key), None);
+        // Unknown sessions leave no record behind.
+        restarted.set_handoff_resumed("missing", true);
+        assert_eq!(
+            restarted.setting(&format!(
+                "{}missing",
+                settings_keys::SESSION_HANDOFF_RESUMED_PREFIX
+            )),
+            None
+        );
     }
 
     #[test]

@@ -81,6 +81,7 @@ fn claimed_site(command: &MachineCommand) -> Option<ClaimedSite<'_>> {
         | MachineCommand::MemoryRelayReply { .. }
         // The Controller selects the home Machine from its own configuration.
         | MachineCommand::MemoryRelay { .. }
+        | MachineCommand::McpTransport { .. }
         // Browser routes check owner, account and instance before dispatch.
         | MachineCommand::Browser { .. } => return None,
     };

@@ -55,8 +55,10 @@ primary phone/desktop product path.
 - [`call-capabilities.md`](call-capabilities.md) — Call capabilities: per-capability session policy, versioned identity and discovery state over the existing Calls lifecycle (background tasks Phase 4, first slice)
 - [`subagents.md`](subagents.md) — ACP subagents: child-session routing, one bounded live row per subagent, attributed permission requests, stopping one subagent (Machine protocol 40), not-reporting rows, per-model usage, ACP bridge forwarding and adapter behavior
 - [`tool-results.md`](tool-results.md) — Provider-independent MCP result retention, Cowboy/Matrix tool presentation and Desktop/Mobile inspection
+- [`widgets.md`](widgets.md) — Cowboy Widgets design (for review): agent-authored structured UI documents over Cowboy MCP, anchored transcript rows, a MUI renderer with Mobile/Desktop behaviour per component, actions that become user messages, measured token budget and phases
 - [`session-extension-plugins.md`](session-extension-plugins.md) — `memory_backend` (Matrix) and `call_profile` (Review) Plugin kinds, Machine-private memory bindings and staged delivery to sessions
 - [`machine-browser.md`](machine-browser.md) — Design: optional `machine_browser` Plugin, owner-operated Chromium on a Machine for account sign-in, core instance manager, stream channel, viewer and acceptance matrix
+- [`mcp-bindings.md`](mcp-bindings.md) — Signed MCP installation, explicit session policy, epoch/CAS revocation and remaining relay integration
 - [`managed-agent-calls.md`](managed-agent-calls.md) — Parent-scoped cross-Provider Calls implementation, CLI and desktop/mobile lifecycle UI, with production acceptance boundaries
 - [`managed-native-capabilities.md`](managed-native-capabilities.md) — General Calls extension contract, on-demand image generation/editing, isolated native profiles, verified cross-machine artifacts and token costs
 - [`releases/native-calls-images-2026-10-18.md`](releases/native-calls-images-2026-10-18.md) — Native image Calls source, signed Plugin closure, exact-artifact validation, worker maintenance and recovery boundaries
@@ -244,6 +246,7 @@ primary phone/desktop product path.
 - [`releases/plugin-session-cleanup-root-2026-10-05.md`](releases/plugin-session-cleanup-root-2026-10-05.md) — Hawk cleanup-root activation, integrated Rust checks, 32 native writer groups and 18 retained worker/keeper processes
 - [`releases/plugin-session-worktree-containment-2026-10-04.md`](releases/plugin-session-worktree-containment-2026-10-04.md) — Hawk writer-host activation, 535 Machine tests, 32 native writer groups and 18 retained worker/keeper processes
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop information density and interaction contract
+- [`desktop-code-review.md`](desktop-code-review.md) — Proposal: Desktop Code Review as a keyboard-first work-pane view (`␣V` group, read-only Vim buffer, CodeMirror split diff, MUI composition, device-local view state)
 - [`ux-principles.md`](ux-principles.md) — Core efficiency contract: bottom controls on Mobile, visible keyboard commands on Desktop, state continuity and rendered acceptance
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore's read-only transcript projection
 - [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Jank-free drawers, pager, transcript, CodeMirror, iPhone PWA status material, iPad standalone chrome, and iOS compositor contract

@@ -15,6 +15,8 @@ const MAX_EXECUTION_TIME: Duration = Duration::from_mins(1);
 
 mod telemetry_recovery;
 pub use telemetry_recovery::BindingRecoveryLease;
+mod mcp;
+pub use mcp::{McpInvocation, McpOwner};
 mod installation;
 pub use installation::InstallationLease;
 mod code_buffer_sync;

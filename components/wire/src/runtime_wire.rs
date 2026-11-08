@@ -27,9 +27,11 @@ pub struct DeliveryTarget {
 
 /// Current runtime protocol. Version 1 is additive-only: new optional fields
 /// must use serde defaults and existing meanings must not change in place.
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 /// Named subscriptions must never be sent to peers that ignore their identity.
 pub const PROVIDER_ACCOUNT_PROTOCOL_VERSION: u16 = 5;
+/// Mandatory MCP launch plans cannot be ignored by retained workers.
+pub const MCP_LAUNCH_PROTOCOL_VERSION: u16 = 6;
 /// Private per-launch token; never a Provider credential or inherited setting.
 pub const WORKER_LAUNCH_ENV: &str = "COWBOY_ACCOUNT_WORKER_LAUNCH";
 /// Oldest runtime protocol this build accepts during a mixed-generation roll.
@@ -359,6 +361,8 @@ pub struct StartSession {
     /// enrollment; current ones write the session's private descriptor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extensions: Option<SessionExtensions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_plan: Option<Box<crate::mcp_binding::NativeLaunchPlan>>,
     /// Create this session's first native thread with ACP `session/fork` of
     /// another session's thread instead of `session/new`. Mutually exclusive
     /// with `agent_session_id`; only Machines at
@@ -384,7 +388,9 @@ pub const SESSION_EXTENSIONS_SCHEMA: u16 = 1;
 impl StartSession {
     #[must_use]
     pub fn minimum_protocol(&self) -> u16 {
-        if !self.provider_account_id.is_default() {
+        if self.mcp_plan.is_some() {
+            MCP_LAUNCH_PROTOCOL_VERSION
+        } else if !self.provider_account_id.is_default() {
             PROVIDER_ACCOUNT_PROTOCOL_VERSION
         } else if self.execution_binding.is_some() {
             2

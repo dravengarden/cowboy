@@ -362,3 +362,21 @@ impl MachinePluginStore {
 
 #[cfg(test)]
 pub(super) mod tests;
+
+pub(super) fn ensure_machine_installable_kind(package: &PluginPackage) -> Result<()> {
+    ensure!(
+        matches!(
+            package.manifest.kind,
+            cowboy_plugin_sdk::PluginKind::AgentProvider
+                | cowboy_plugin_sdk::PluginKind::CodeIntelligence
+                | cowboy_plugin_sdk::PluginKind::TelemetryBackend
+                | cowboy_plugin_sdk::PluginKind::WorkspaceExtension
+                | cowboy_plugin_sdk::PluginKind::MemoryBackend
+                | cowboy_plugin_sdk::PluginKind::CallProfile
+                | cowboy_plugin_sdk::PluginKind::McpServer
+                | cowboy_plugin_sdk::PluginKind::MachineBrowser
+        ),
+        "Machine installer received a Controller-only Plugin kind"
+    );
+    Ok(())
+}

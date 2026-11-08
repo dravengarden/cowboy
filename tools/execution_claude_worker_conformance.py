@@ -1738,7 +1738,9 @@ def main():
         require(not (args.runtime / "lost-write-receipt.txt").exists(), "write escaped to runtime")
         checks.append("lost_file_write_completion_preserves_later_external_change")
         (args.target / "claude-reconnect-request").write_text("close the endpoint")
-        deadline = time.monotonic() + 15
+        # The fixture closes on the next event poll's reply. With no target
+        # output, an idle poll answers only at its 20 s wait bound.
+        deadline = time.monotonic() + 25
         while not (args.target / "claude-reconnect-closed").exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         require((args.target / "claude-reconnect-closed").exists(), "endpoint close fixture did not run")

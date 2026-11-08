@@ -36,7 +36,8 @@ import { sessionAccountIdentity } from "./accountIdentity";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { requestPickSession } from "./sessionPickRequest";
 import { openSessionSettings, requestNewFrom } from "./sessionSettingsOpen";
-import { SessionNextMessageBadge, useContinuation } from "./SessionContextCue";
+import { SessionNextMessageBadge } from "./SessionContextCue";
+import { useHistorySession, useHistorySessionIds } from "./sessionHistory";
 import { isManagedChild } from "./managedCalls";
 import { SessionRowTitle } from "./SessionRowTitle";
 import { SessionActionBadge, SessionAttentionMenu } from "./SessionAttention";
@@ -337,7 +338,7 @@ export function SessionsSpotlight({ anchor }: { anchor: React.RefObject<HTMLElem
 
 export type SessionRowCommand =
     | "open" | "left" | "settings" | "move" | "newFolder" | "rename" | "newSession"
-    | "trash" | "preferences";
+    | "trash" | "preferences" | "replaceOrFork";
 
 /** Primary-tint opacity of the open session's row on Desktop. */
 export const CURRENT_ROW_FILL = 0.12;
@@ -360,6 +361,8 @@ export const SESSION_ROW_KEY_COMMANDS: Readonly<Record<string, SessionRowCommand
     ",": "preferences",
     // nvim-tree's `a`dd: a new Session in the cursor row's directory.
     a: "newSession",
+    // The actions modal's `F`: Replace or fork from the cursor row.
+    f: "replaceOrFork",
 };
 
 export const SESSION_ROW_EVENTS: Readonly<Record<string, SessionRowCommand>> = {
@@ -451,13 +454,9 @@ export function SessionList({
         row: SessionMeta;
         el: HTMLElement;
     } | null>(null);
-    // Sources of a continuation, as a stable value so a `sessions` frame for
-    // another reason re-renders no row.
-    const handedOffIds = useStoreSelector((snapshot) =>
-        snapshot.sessions.flatMap((entry) => entry.continued_from ? [entry.continued_from] : []).sort().join("\n"));
-    const handedOff = useMemo(() => new Set(handedOffIds.split("\n")), [handedOffIds]);
+    const handedOff = useHistorySessionIds();
     // A handed-off session is history; continuing it again would split the work.
-    const menuHandedOff = useContinuation(menuAnchor?.row.id ?? "") !== undefined;
+    const menuHandedOff = useHistorySession(menuAnchor?.row.id ?? "");
     useSystemNotificationPreferences();
     const menuSessionMuted = menuAnchor
         ? sessionNotificationsMuted(menuAnchor.row.id)
@@ -907,6 +906,7 @@ export function SessionList({
             else if (command === "newFolder") setNamePrompt({ mode: "create", parent: draft.parent_id });
             else if (command === "newSession") onNewInFolder?.(draft.parent_id ?? null);
             else if (command === "move" && desktop) startMovePick(rowKey);
+            else if (command === "replaceOrFork") return;
             else onDraftAction({ draft, action: command === "settings" || command === "preferences" ? "menu" : command });
             return;
         }
@@ -972,6 +972,17 @@ export function SessionList({
                 }
                 return;
             }
+            case "replaceOrFork":
+                // Same eligibility as the actions modal: history, system and
+                // managed child conversations have no next agent to choose.
+                if (
+                    session && !session.system && !isManagedChild(session) &&
+                    !handedOff.has(session.id)
+                ) {
+                    requestPickSession(session.id, session);
+                    requestNewFrom(session.id);
+                }
+                return;
             case "preferences":
                 if (folder) setDefaultsFolder(folder.id);
                 else if (session) {
@@ -2278,6 +2289,7 @@ export function SessionList({
                         ["X", "Trash"],
                         [",", "Settings"],
                         ["A", "New here"],
+                        ["F", "Replace or fork"],
                         ["S", "More"],
                     ] as const).map(([key, label]) => (
                         <span key={key}><Kbd keys={key} />{label}</span>

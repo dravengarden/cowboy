@@ -22,6 +22,7 @@ async fn duplicate_start_close_and_root_replacement_preserve_original_lifetimes(
         parent_session_id: "parent".into(),
         agent_api: true,
         agent_actions: false,
+        mcp: false,
     };
     host.install(&grant).unwrap();
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();

@@ -42,6 +42,8 @@ struct Args {
     fallback_for: Option<String>,
     #[arg(long)]
     execution_binding: Option<String>,
+    #[arg(long)]
+    mcp_plan: Option<String>,
 }
 
 #[tokio::main]
@@ -67,6 +69,10 @@ async fn main() -> anyhow::Result<()> {
         cowboy::worker::until_terminated(
             args.session_id.clone(),
             cowboy::worker::run(WorkerArgs {
+                mcp_plan: args
+                    .mcp_plan
+                    .map(|value| serde_json::from_str(&value))
+                    .transpose()?,
                 socket: args.socket,
                 session_id: args.session_id,
                 provider: args.provider,

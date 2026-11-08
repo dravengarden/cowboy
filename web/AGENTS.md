@@ -142,6 +142,8 @@ Other native vertical readers use app-shell `ScrollEdges` as their last child:
 settings, tool details, task panels, pickers, logs, approvals and preview panes.
 Only overflowing edges fade; the first/last item is unobscured at its boundary.
 Keep sticky command headers outside the masked reader (or disable its top edge).
+Sticky `top` is measured from the scroller's content box: a reader whose padding
+clears the status area uses `top: 0`, or the inset is applied twice.
 Editing focus suspends the fade; do not decorate textarea/CodeMirror internals or
 image-pan canvases. Those retain their cursor and image-safe-area contracts.
 Full-screen headerless sheets put safe-area clearance inside their scrolling

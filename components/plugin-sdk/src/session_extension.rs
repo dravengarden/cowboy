@@ -222,6 +222,38 @@ pub(crate) fn validate_data_only_release(
     Ok(())
 }
 
+pub(crate) fn validate_manifest(
+    manifest: &crate::PluginManifest,
+    payload: &crate::PluginPayload,
+) -> Result<()> {
+    let (id, version) = match (manifest.kind, payload) {
+        (crate::PluginKind::MemoryBackend, crate::PluginPayload::MemoryBackend(contract)) => {
+            contract.validate()?;
+            (&contract.id, &contract.version)
+        }
+        (crate::PluginKind::CallProfile, crate::PluginPayload::CallProfile(contract)) => {
+            contract.validate()?;
+            (&contract.id, &contract.version)
+        }
+        _ => anyhow::bail!("plugin kind does not match its payload"),
+    };
+    ensure!(
+        *id == manifest.id && *version == manifest.version,
+        "session extension payload identity mismatch"
+    );
+    let (major, minor, patch) = SESSION_EXTENSION_SDK;
+    ensure!(
+        manifest
+            .components
+            .iter()
+            .any(|component| component.id == "cowboy.plugin-sdk"
+                && semver::Version::parse(&component.version)
+                    .is_ok_and(|version| version >= semver::Version::new(major, minor, patch))),
+        "session extensions require Plugin SDK 1.12 or newer"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

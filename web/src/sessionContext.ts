@@ -21,9 +21,13 @@ export interface ContextDelivery {
   error?: string | null;
   session?: SessionMeta;
   source_trashed?: boolean;
+  /** Why the handoff left its source out of Trash. */
+  source_kept?: string;
 }
 export interface SessionContext {
   revision: number;
+  /** The user kept working here after this session's handoff. */
+  handoff_resumed?: boolean;
   applied_revision: number;
   sources: string[];
   next_agent: NextAgent | null;
@@ -215,6 +219,13 @@ export async function saveSessionContext(
   return saved;
 }
 
+/** Keep working in a handed-off session beside its continuation. */
+export async function continueHere(id: string): Promise<void> {
+  await json<unknown>(`/api/sessions/${encodeURIComponent(id)}/continue-here`, {
+    method: "POST",
+  });
+}
+
 export function useSessionContext(id: string, active = true) {
   const [loaded, setLoaded] = useState<{ id: string; data: SessionContext }>();
   const data = loaded?.id === id ? loaded.data : undefined;
@@ -349,7 +360,7 @@ export async function sendWithContext(
   if (
     !request && context.revision === context.applied_revision &&
     context.delivery?.state === "accepted" &&
-    context.delivery.session_id !== id &&
+    context.delivery.session_id !== id && !context.handoff_resumed &&
     !observedHandoffs.has(context.delivery.operation)
   ) {
     openContextDestination(context.delivery);

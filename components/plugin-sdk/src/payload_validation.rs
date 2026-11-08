@@ -11,38 +11,9 @@ use crate::{
     AUTHENTICATION_PROVIDER_SCHEMA_MIN_VERSION, AUTHENTICATION_PROVIDER_SCHEMA_VERSION,
     AuthenticationProtocol, AuthenticationProviderContract, CODE_INTELLIGENCE_SCHEMA_MIN_VERSION,
     CODE_INTELLIGENCE_SCHEMA_VERSION, MACHINE_BROWSER_SDK, MachineBrowserContract,
-    OpenIdConnectContract, PluginKind, PluginManifest, PluginPayload, SESSION_EXTENSION_SDK,
-    TelemetryBackendContract, code_intelligence, machine_browser,
+    OpenIdConnectContract, PluginKind, PluginManifest, PluginPayload, TelemetryBackendContract,
+    code_intelligence, machine_browser, mcp_server, session_extension, workspace_extension,
 };
-
-fn validate_session_extension(manifest: &PluginManifest, payload: &PluginPayload) -> Result<()> {
-    let (id, version) = match (manifest.kind, payload) {
-        (PluginKind::MemoryBackend, PluginPayload::MemoryBackend(contract)) => {
-            contract.validate()?;
-            (&contract.id, &contract.version)
-        }
-        (PluginKind::CallProfile, PluginPayload::CallProfile(contract)) => {
-            contract.validate()?;
-            (&contract.id, &contract.version)
-        }
-        _ => bail!("plugin kind does not match its payload"),
-    };
-    ensure!(
-        *id == manifest.id && *version == manifest.version,
-        "session extension payload identity mismatch"
-    );
-    let (major, minor, patch) = SESSION_EXTENSION_SDK;
-    ensure!(
-        manifest
-            .components
-            .iter()
-            .any(|component| component.id == "cowboy.plugin-sdk"
-                && Version::parse(&component.version)
-                    .is_ok_and(|version| version >= Version::new(major, minor, patch))),
-        "session extensions require Plugin SDK 1.12 or newer"
-    );
-    Ok(())
-}
 
 fn validate_telemetry_payload(
     manifest: &PluginManifest,
@@ -81,39 +52,25 @@ fn validate_machine_browser(
             .any(|component| component.id == "cowboy.plugin-sdk"
                 && Version::parse(&component.version)
                     .is_ok_and(|version| version >= Version::new(major, minor, patch))),
-        "machine browsers require Plugin SDK 1.13 or newer"
+        "machine browsers require Plugin SDK 1.14 or newer"
     );
     machine_browser::validate_contract(contract)
 }
 
 pub(crate) fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Result<()> {
     match (manifest.kind, payload) {
+        (PluginKind::McpServer, PluginPayload::McpServer(contract)) => {
+            mcp_server::validate_manifest(manifest, contract)?;
+        }
         (
             PluginKind::MemoryBackend | PluginKind::CallProfile,
             PluginPayload::MemoryBackend(_) | PluginPayload::CallProfile(_),
-        ) => validate_session_extension(manifest, payload)?,
+        ) => session_extension::validate_manifest(manifest, payload)?,
         (PluginKind::MachineBrowser, PluginPayload::MachineBrowser(contract)) => {
             validate_machine_browser(manifest, contract)?;
         }
         (PluginKind::WorkspaceExtension, PluginPayload::WorkspaceExtension(contract)) => {
-            ensure!(
-                contract.id == manifest.id && contract.version == manifest.version,
-                "extension payload identity mismatch"
-            );
-            ensure!(
-                manifest
-                    .components
-                    .iter()
-                    .any(|c| c.id == "cowboy.plugin-sdk"
-                        && Version::parse(&c.version).is_ok_and(|v| v
-                            >= Version::new(
-                                1,
-                                if contract.schema_version >= 2 { 10 } else { 9 },
-                                0
-                            ))),
-                "workspace extension schema requires a compatible Plugin SDK"
-            );
-            contract.validate()?;
+            workspace_extension::validate_manifest(manifest, contract)?;
         }
         (PluginKind::TelemetryBackend, PluginPayload::TelemetryBackend(contract)) => {
             validate_telemetry_payload(manifest, contract)?;

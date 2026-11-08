@@ -13,7 +13,7 @@
 
   # Machine host fixes retain the separately accepted detached-worker bundle.
   # Advance this exact source only with worker/adapter maintenance acceptance.
-  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=a9b8d77b04dc5ba840b6c127e48f72217b0d3521";
+  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=bad05ba7cec7f92526c9f7bee294676fb269cb12";
 
   outputs = { self, nixpkgs, rust-overlay, cowboy-workers }:
     let
@@ -60,18 +60,21 @@
         ./components/machine/src/bin/cowboy-machine-install.rs
         ./components/machine/src/bin/cowboy-execution-host.rs
       ];
+      codeact-runtime-files = [
+        ./components/codeact-runtime
+      ];
       server-files = [
         ./components/server/Cargo.toml
         ./components/server/src
         ./components/server/tests
-      ];
+      ] ++ codeact-runtime-files;
       # Cargo loads every workspace member manifest and checks its targets, so
       # slices that never build the Controller server carry only its entry files.
       server-stub-files = [
         ./components/server/Cargo.toml
         ./components/server/src/lib.rs
         ./components/server/src/main.rs
-      ];
+      ] ++ codeact-runtime-files;
       plugin-sdk-files = [
         ./components/plugin-sdk/Cargo.toml
         ./components/plugin-sdk/src
@@ -409,7 +412,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-fgCDaQouL61uerU8eJDpwN9NwXgc0lClsa9nFBcgEyE=";
+        hash = "sha256-+i3Pw0LaehX1fnI3c0a3y76kHkeKgkhN+ZJM5jfkTnw=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
@@ -724,7 +727,17 @@
         };
       });
 
-      execution-configuration = execution-configuration-for execution-runtime;
+      # Pin the exact wrapper and its transitive Nix closure only for new full
+      # releases. Resident-only releases do not retrofit retained environments.
+      execution-configuration = pkgs.runCommand "cowboy-execution.json" {
+        nativeBuildInputs = [ pkgs.jq ];
+      } ''
+        digest="$(${pkgs.coreutils}/bin/sha256sum ${cowboy-machine}/bin/cowboy)"
+        jq --arg command "${cowboy-machine}/bin/cowboy" \
+          --arg sha256 "''${digest%% *}" --arg version "${cowboy-machine.version}" \
+          '. + {agent_cli: {command: $command, sha256: $sha256, version: $version}}' \
+          ${execution-configuration-for execution-runtime} > "$out"
+      '';
       retained-execution-configuration = execution-configuration-for retained-execution-runtime;
 
       retained-worker-bundle = cowboy-workers.packages.${system}.cowboy-machine-release;

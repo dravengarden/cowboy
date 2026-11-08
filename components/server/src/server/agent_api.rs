@@ -9,23 +9,21 @@
 //! every reply. There is no unsandboxed fallback.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::sync::Semaphore;
-use tokio::time::Instant;
 
 use super::AppState;
-use crate::agent_api::{
-    API_VERSION, MAX_BROKER_BYTES, MAX_CALLS, MAX_LOG_BYTES, MAX_REPLY_BYTES, MAX_RESULT_BYTES,
-};
+use crate::agent_api::{API_VERSION, MAX_LOG_BYTES, MAX_RESULT_BYTES};
 use crate::core::{Envelope, Event, QueuedMessage, SessionInfo, SessionMeta};
 use crate::managed_calls::protocol::{Action, Grant};
 use crate::managed_calls::service::Ledger;
+
+#[cfg(test)]
+use crate::agent_api::MAX_REPLY_BYTES;
 
 const RUNNER: &str = include_str!("agent_api/runner.js");
 mod actions;
@@ -1073,16 +1071,6 @@ impl Sandbox {
     }
 
     async fn execute(&self, program: &Program, host: &impl Host) -> Value {
-        let Ok(directory) = private_directory() else {
-            return error("runtime_unavailable");
-        };
-        let result = self.run(&directory, program, host).await;
-        let _ = std::fs::remove_dir_all(&directory);
-        result
-    }
-
-    async fn run(&self, directory: &Path, program: &Program, host: &impl Host) -> Value {
-        let extension = if program.typescript { "ts" } else { "js" };
         let source = if program.module {
             program.code.clone()
         } else {
@@ -1091,167 +1079,33 @@ impl Sandbox {
                 program.code
             )
         };
-        let entry = format!("/sandbox/program.{extension}");
-        if std::fs::write(directory.join("runner.js"), RUNNER).is_err()
-            || std::fs::write(directory.join(format!("program.{extension}")), source).is_err()
-        {
-            return error("runtime_unavailable");
+        cowboy_codeact_runtime::Sandbox {
+            runtime_directory: None,
+            bun_loader: None,
+            prlimit: self.prlimit.clone(),
+            bwrap: self.bwrap.clone(),
+            bun: self.bun.clone(),
         }
-        let mut command = tokio::process::Command::new(&self.prlimit);
-        command
-            .args([
-                "--cpu=4",
-                "--data=536870912",
-                "--nofile=64",
-                "--fsize=1048576",
-                "--core=0",
-                "--",
-            ])
-            .arg(&self.bwrap)
-            .args([
-                "--unshare-all",
-                "--die-with-parent",
-                "--new-session",
-                "--cap-drop",
-                "ALL",
-                "--clearenv",
-                "--setenv",
-                "HOME",
-                "/tmp",
-                "--setenv",
-                "BUN_RUNTIME_TRANSPILER_CACHE_PATH",
-                "0",
-                "--ro-bind-try",
-                "/nix/store",
-                "/nix/store",
-                "--ro-bind-try",
-                "/usr",
-                "/usr",
-                "--ro-bind-try",
-                "/lib",
-                "/lib",
-                "--ro-bind-try",
-                "/lib64",
-                "/lib64",
-                "--ro-bind",
-            ])
-            .arg(directory)
-            .args([
-                "/sandbox",
-                "--proc",
-                "/proc",
-                "--dev",
-                "/dev",
-                // tmpfs pages are host memory outside every process limit:
-                // /dev stays read-only and /tmp holds at most 1 MiB.
-                "--remount-ro",
-                "/dev",
-                "--size",
-                "1048576",
-                "--tmpfs",
-                "/tmp",
-                "--chdir",
-                "/sandbox",
-                "--",
-            ])
-            .arg(&self.bun)
-            .args(["--no-install", "--smol", "run", "/sandbox/runner.js"])
-            .arg(&entry)
-            .env_clear()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let Ok(mut child) = command.spawn() else {
-            return error("runtime_unavailable");
-        };
-        let (Some(mut stdin), Some(stdout), Some(mut stderr)) =
-            (child.stdin.take(), child.stdout.take(), child.stderr.take())
-        else {
-            return error("runtime_unavailable");
-        };
-        let diagnostics = tokio::spawn(async move {
-            let mut bytes = Vec::new();
-            let _ = (&mut stderr).take(8192).read_to_end(&mut bytes).await;
-            // Keep draining so the runtime never blocks on a full pipe.
-            let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
-            bytes
-        });
-        let deadline = Instant::now() + Duration::from_millis(program.timeout_ms);
-        let broker = async {
-            let mut reader = BufReader::new(stdout);
-            let mut calls = 0usize;
-            let mut traffic = 0usize;
-            loop {
-                let mut line = Vec::new();
-                let read = (&mut reader)
-                    .take(MAX_REPLY_BYTES as u64 + 1)
-                    .read_until(b'\n', &mut line)
-                    .await;
-                match read {
-                    Ok(0) | Err(_) => return None,
-                    Ok(count) if count > MAX_REPLY_BYTES => return Some(error("budget_exceeded")),
-                    // A truncated final line: the runtime died mid-frame.
-                    Ok(_) if !line.ends_with(b"\n") => return None,
-                    Ok(count) => traffic += count,
-                }
-                let Ok(frame) = serde_json::from_slice::<Value>(&line) else {
-                    return Some(error("runtime_protocol"));
-                };
-                if let Some(done) = frame.get("done").and_then(Value::as_bool) {
-                    return Some(finish(done, frame));
-                }
-                let (Some(id), Some(op)) = (
-                    frame.get("id").and_then(Value::as_u64),
-                    frame.get("op").and_then(Value::as_str),
-                ) else {
-                    return Some(error("runtime_protocol"));
-                };
-                calls += 1;
-                let reply = if calls > MAX_CALLS {
-                    json!({"id": id, "error": {"code": "call_limit"}})
-                } else {
-                    let args = frame.get("args").cloned().unwrap_or_else(|| json!({}));
-                    let echo = args.to_string();
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    match host.call(op, args, remaining).await {
-                        Ok(value) => json!({"id": id, "ok": value}),
-                        Err(code) => json!({"id": id, "error": call_error(op, &echo, code)}),
-                    }
-                };
-                let mut bytes = serde_json::to_vec(&reply).unwrap_or_default();
-                if bytes.len() > MAX_REPLY_BYTES {
-                    bytes = serde_json::to_vec(
-                        &json!({"id": id, "error": {"code": "reply_too_large"}}),
-                    )
-                    .unwrap_or_default();
-                }
-                bytes.push(b'\n');
-                traffic += bytes.len();
-                if traffic > MAX_BROKER_BYTES {
-                    return Some(error("budget_exceeded"));
-                }
-                if stdin.write_all(&bytes).await.is_err() {
-                    return None;
-                }
-            }
-        };
-        let outcome = tokio::time::timeout_at(deadline, broker).await;
-        let _ = child.start_kill();
-        let _ = child.wait().await;
-        match outcome {
-            Err(_) => error("timeout"),
-            Ok(Some(value)) => value,
-            Ok(None) => {
-                let stderr = diagnostics.await.unwrap_or_default();
-                let mut value = error("runtime_failed");
-                let text = String::from_utf8_lossy(&stderr);
-                if !text.trim().is_empty() {
-                    value["error"]["message"] = json!(text.chars().take(1000).collect::<String>());
-                }
-                value
-            }
-        }
+        .execute(
+            &source,
+            program.typescript,
+            program.timeout_ms,
+            RUNNER,
+            &RuntimeHost(host),
+        )
+        .await
+    }
+}
+struct RuntimeHost<'a, H>(&'a H);
+impl<H: Host> cowboy_codeact_runtime::Host for RuntimeHost<'_, H> {
+    async fn call(&self, op: &str, args: Value, remaining: Duration) -> Result<Value, String> {
+        self.0.call(op, args, remaining).await
+    }
+    fn finish(&self, done: bool, frame: Value) -> Value {
+        finish(done, frame)
+    }
+    fn call_error(&self, op: &str, echo: &str, code: String) -> Value {
+        call_error(op, echo, code)
     }
 }
 
@@ -1370,16 +1224,6 @@ fn finish(done: bool, mut frame: Value) -> Value {
         value["logs"] = json!(logs);
     }
     value
-}
-
-fn private_directory() -> std::io::Result<PathBuf> {
-    use std::os::unix::fs::DirBuilderExt as _;
-    let mut entropy = [0u8; 12];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut entropy);
-    let name: String = entropy.iter().map(|b| format!("{b:02x}")).collect();
-    let directory = std::env::temp_dir().join(format!("cowboy-agent-{name}"));
-    std::fs::DirBuilder::new().mode(0o700).create(&directory)?;
-    Ok(directory)
 }
 
 #[cfg(test)]

@@ -86,6 +86,8 @@ desktop-keyboard-acceptance ENDPOINT OUT:
     bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" tabs
     bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" run-config
     bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" surfaces
+    bun tools/cdp-review-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" light
+    bun tools/cdp-review-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" dark
     bun tools/cdp-shortcut-audit.ts "{{ENDPOINT}}" "{{OUT}}"
 
 # Desktop performance profile under a production-sized synthetic workload
@@ -605,6 +607,10 @@ claude-remote-check:
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
 provider-check: claude-remote-check plugin-check
+    bun test ./tools/mcp-bindings_test.ts
+    node --import ./tools/register-memory-client.mjs --test tools/execution-probe_test.mjs
+    bun x --no-install biome format components/provider-runtime/execution-connection.mjs components/provider-runtime/execution-probe.mjs tools/execution-probe_test.mjs plugins/codex/runtime/bindings.mjs
+    bun x --no-install biome format components/provider-runtime/mcp-bindings.mjs tools/mcp-bindings_test.ts
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
     node --test components/provider-runtime/packages/deepseek-harness/launch_test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
@@ -642,7 +648,7 @@ composition-check:
     bun run typecheck
     bun test ./tools/generate-composition-contract_test.ts
     bun tools/generate-composition-contract.ts
-    bun test ./contracts/composition.test.ts ./contracts/composition-check.test.ts
+    bun test ./contracts/composition.test.ts ./contracts/composition-check.test.ts ./contracts/widget-v1.test.ts
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --lib composition::
     cargo build --locked --bin cowboy
     bun tools/composition-link-conformance.ts "$(realpath target/debug/cowboy)"

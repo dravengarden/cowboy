@@ -149,6 +149,30 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   hints only. Intermediate versions are superseded; delete/recreate is a new
   identity.
 
+  A Controller-side hint is implemented first; the durable keeper receipt is
+  deferred to a Machine maintenance release. Every native call already passes
+  through the Controller's execution `forward`, which now records each
+  completed `fs/writeFile` (including a completion later observed by its
+  operation ID): the absolute target path and the SHA-256/byte count of its
+  LF-normalized UTF-8 text, the native mirror's identity. Records are bounded
+  Controller memory (4,096 writes, 256 pending, 4 MiB inputs) with a
+  monotonic sequence; a restart discards them. `code.post_edit` reports
+  `write: {observed, matches_analyzed}` per file, true when the analyzed
+  snapshot is exactly the last observed write. There is no turn or tool
+  identity, failed/unknown outcomes are not recorded, and shell commands,
+  Claude's buffered apply helper (`process/start`) and other writers are not
+  seen, so absence proves nothing. Which executor method Codex `apply_patch`
+  uses is not yet verified against the pinned executor.
+
+  Production check on 2026-11-08 (Controller `b9dc4ff51`, transaction
+  `1794144305234690764-b9dc4ff51a24`): neither agent's actual edit path is
+  seen yet. A Claude 3.20.27 Write of a new Go file returned diagnostics
+  without `write`, consistent with the buffered apply helper. A Codex 3.5.21
+  create-and-edit received its steered row (`injected`, `introduced: 1`) also
+  without `write`, so its patch application does not use `fs/writeFile`
+  either. The hint therefore covers only direct `fs/writeFile` callers until
+  the helper's `process/start` result and Codex's patch method are observed.
+
 On 2026-11-07 the Controller activated
 `1ad869c5fed6f033583b75a5c2db09869b60b678` through transaction
 `1794056365894580054-1ad869c5fed6` (`succeeded` / `committed`). The full pinned
@@ -721,6 +745,54 @@ source mismatch detection, not watcher frontiers or automatic baselines.
   Controller memory, bounded to 64 files per scope and 512 overall (least
   recently observed first); a restart discards them. Pre-write capture waits
   for executor receipts, so a read boundary may precede several edits.
+
+  The read boundary shipped in `02d1da0c3`; Hawk's Controller runs it through
+  the concurrent activation of descendant `270f49cd9`, transaction
+  `1794123221502657538-270f49cd9f4c` (`succeeded` / `committed`), whose running
+  executable matched the active release. A real MCP read of a temporary Go
+  file returned gopls `document_current`, its exact 62-byte SHA-256, the
+  `UndeclaredName` finding and `comparison: unknown/no_baseline`. After a disk
+  edit, repeated reads stayed `stale` with `sourceState: changed` and the old
+  snapshot, so the comparison stayed `unknown/not_current`. The fixture was
+  removed after verifying its hash. In production a comparison therefore needs
+  the native mirror to observe new text: until an agent-owned reload on source
+  change (or a write receipt) exists, disk edits by tools do not produce one.
+  Reopening a buffer is reported as `buffer_replaced`.
+
+  Zed 1.39.0 closes that gap for agent-only buffers. `bufferLanguage` accepts
+  `refresh: "agent_owned"`; the adapter reloads the mirror through the
+  existing bounded native reload route only when every owner of the buffer is
+  an automatic agent acquisition (owner IDs are never reused), no
+  synchronization reservation or unresolved close exists, and its bounded
+  source reader reports `changed`. The active-buffer read lock is held through
+  the reload, so no owner joins or leaves meanwhile. Outcomes are
+  `not_needed`, `reloaded`, `refused` (another owner, fence or native
+  size/binary/symlink refusal, mirror unchanged) or `unknown` (unobserved
+  within 5 s; never retried). Nothing is saved, opened or synchronized. When an
+  explicit `code.diagnostics` read of a file the agent already holds sees
+  `changed`, the Controller sends one refresh and, after `reloaded`, waits up
+  to 4 s for analysis of the new text before answering. The Machine already
+  classifies `bufferLanguage` as passive, so no Machine release is needed; an
+  older adapter rejects the unknown field and the original observation is
+  kept. A file a Code pane also holds stays `stale`.
+
+  Source `680d83d46` passed the complete pinned gate. The exact static 1.39.0
+  adapter (`5c1e8c71…`) / unchanged 1.15.0 server (`b2171b6e…`) passed native
+  sync/navigation conformance, including a real exclusive-owner reload,
+  shared-owner refusal and unchanged source through the distributable
+  adapter's socket, and signed install/drain. Controller transaction
+  `1794127149954701623-680d83d46f3f` succeeded and committed with the running
+  executable matching the release. The signed package (composite
+  `sha256:ccfe12562186857759f130aef1aa667d47f40149c3ffa50c7b37f833a05d641d`)
+  was published with all three URLs matching their digests; operation
+  `hawk-zed-1-39-0-agent-refresh` completed with Machine receipt `applied`
+  (installation `installation-310bda29…`), 1.38.0 remaining the rollback
+  generation. A real MCP read of a temporary Go file returned
+  `document_current`/`no_baseline`; after a disk edit, one read (273 ms)
+  reloaded the agent-only mirror and returned the new SHA-256 with gopls
+  `document_current` and `comparison: complete` (introduced 1, persisting 1,
+  two ambiguous `UndeclaredName` candidates). The serving adapter's executable
+  hash matched 1.39.0. The fixture was removed after verifying its hash.
 - **Hunk overlap** orders diagnostics within the budget (`in_edit` before
   `elsewhere`); it never asserts that an edit caused a diagnostic and never
   replaces the baseline comparison.
@@ -774,6 +846,46 @@ uniquely resolvable, otherwise candidates or `stale/ambiguous`.
   (≤1 s) exchanges, delivered as its own row through the existing async-note
   path (`plugins/claude-code/runtime/context-mod.js`, `deliverAsync`), never by
   rewriting a tool result.
+
+  Implemented (Claude Plugin 3.20.30, component release 3.99.0): after the
+  main agent's successful Edit, Write or NotebookEdit of a file inside the
+  target workspace, the Mod returns the write result unchanged and schedules
+  one observation. It runs the session's own `cowboy mcp` on the target
+  through the existing hook route (the keeper injects the gateway context; no
+  credential reaches the Provider runtime) with one `cowboy_execute` call of
+  the read-only action `code.post_edit`. That action is the explicit
+  `code.diagnostics` read (acquisition, agent-owned refresh, read baselines)
+  reduced to at most 10 errors, 5 warnings and 2,000 message characters,
+  with `deliver` true only for new or escalated diagnostics against a
+  content-matched baseline, or current errors without one. The Mod appends
+  the result as its own `system-reminder` row, with `<`, `>`, `&` and line
+  separators escaped inside the JSON so repository text cannot close the
+  fixed presentation. Observations run one at a time in batches of up to five
+  files; a file edited again meanwhile is dropped from the earlier result.
+  Subagent edits, shell-made changes and Code-pane-shared files (which stay
+  `stale`) produce no row. Project language servers being on is the per-session
+  opt-in: otherwise the read is `restricted` and nothing is delivered. Each
+  bridge exchange holds at most one second; the write itself never waits.
+  Delivery identity states, `context_cleared` dropping and watcher-triggered
+  coverage remain open.
+
+  Source `e64747ba8` passed the full gate, `claude-remote-check`, and the
+  packaged `execution-worker-conformance` (accepted, 97 checks, unchanged set)
+  and `execution-managed-conformance` (accepted, 7 checks) with the exact
+  rebuilt artifacts. The endpoint-close fixture's 15 s deadline was shorter
+  than an idle event poll's 20 s bound; the post-edit observation exposed it
+  and the deadline is now 25 s. Controller transaction
+  `1794134057192471504-e64747ba8734` succeeded and committed. A direct
+  production `code.post_edit` returned `deliver: false` for a clean file and
+  `deliver: true` (`introduced: 1`, `undefined: missingName`) after the edit.
+  Claude Plugin 3.20.30 (composite
+  `sha256:4b388ab6f31acacdbc8df80ff10e9a0db350cc7bb0947eb9bbf592c136137e5d`)
+  was published with all five URLs matching and installed on OVH by
+  `ovh-claude-code-3-20-30-post-edit` (`applied`; 3.20.27 is the rollback
+  generation). A new 3.20.30 session wrote and then edited a Go file; its
+  model had the row with `comparison: complete`, `introduced: 1` and the
+  `UndeclaredName` message. It answered its own turn before noticing the row,
+  so delivery is next-request, not synchronous. The session was trashed.
 - **Codex.** Existing research proves app-server-owned command hooks only, not
   project-hook exclusion (`docs/experiments/codex-native-hooks-research-2026-10-05.json`).
   A hook is accepted only if conformance proves exact Cowboy-owned hook hashes
@@ -781,6 +893,35 @@ uniquely resolvable, otherwise candidates or `stale/ambiguous`.
   `trust_level: "trusted"`, and that it reaches the original execution binding
   without credentials in the runtime. Otherwise Codex push is delivered from the
   Cowboy side at the next safe point.
+
+  Implemented from the Cowboy side; no Codex hook is used. A Controller task
+  watches Codex-family sessions with Project language servers on that are not
+  managed children. When an ACP `edit` tool call completes, its diff and
+  location paths (unverified hints) inside the execution worktree choose the
+  files, and the same `code.post_edit` read runs after a 300 ms settle. The
+  turn is captured when the edit is observed; a `deliver: true` result is
+  steered into that turn at its next checkpoint, so an ended or later turn
+  refuses it and no turn is reopened. One observation runs per session; edits
+  meanwhile join the next one. The row is a Cowboy-origin prompt
+  (`code_intelligence`, captioned "Code intelligence after an edit") carrying
+  the same escaped JSON as the Claude row. Shell-made changes, subagents and
+  delivery identity states are not covered. Workers without next-checkpoint
+  controls refuse that mode before any effect; delivery then uses ordinary
+  current-turn steering with the same turn target.
+
+  Hawk's Controller runs this from `1b9114700` (transaction
+  `1794139112893649931-1b911470086f`, `succeeded` / `committed`; Web
+  `bc59fbd81`). In a new Codex 3.5.21 session, the first run showed the
+  pipeline reaching steering but `sleep 8` ended the turn first; the second
+  was refused as "next checkpoint is unavailable in this running worker",
+  which led to the fallback. The third created a Go file, introduced an
+  undefined name and ran `sleep 25`: the Controller logged
+  `cowboy.code.post_edit_push` `nothing_to_deliver` for the clean file and
+  `injected` after the edit. The row (`introduced: 1`,
+  `undefined: thirdMissing`) entered the same turn before the shell call, and
+  the model quoted it. Delivery is therefore bounded by the edit's turn:
+  a turn that ends within the observation (a few seconds, longer for a cold
+  file) receives nothing. The session was trashed.
 - **Coverage.** Push triggers on any tool completion with a watcher-observed
   change set since the tool started (shell, formatters), not on
   `apply_patch`/Edit only.

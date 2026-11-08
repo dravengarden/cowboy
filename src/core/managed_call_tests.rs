@@ -70,6 +70,7 @@ fn a_bound_session_settles_on_its_surviving_workers_release_before_acceptance() 
         adopt_only: false,
         execution_binding: None,
         extensions: None,
+        mcp_plan: None,
         native_fork: None,
     });
     // An owner on another placement is neither adopted nor reconciled.
@@ -142,6 +143,7 @@ fn an_exited_worker_never_undoes_a_dormant_re_pin() {
         adopt_only: false,
         execution_binding: binding,
         extensions: None,
+        mcp_plan: None,
         native_fork: None,
     });
 

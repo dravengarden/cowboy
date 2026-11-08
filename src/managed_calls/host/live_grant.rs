@@ -97,6 +97,7 @@ mod tests {
             parent_session_id: "parent".into(),
             agent_api: true,
             agent_actions: false,
+            mcp: false,
         };
         host.install(&grant).unwrap();
         assert!(host.live_grant("parent", &grant.grant_id).is_none());
@@ -149,6 +150,7 @@ mod tests {
             parent_session_id: "parent".into(),
             agent_api: true,
             agent_actions: false,
+            mcp: false,
         };
         host.install(&grant).unwrap();
         let (tx, _rx) = mpsc::unbounded_channel();

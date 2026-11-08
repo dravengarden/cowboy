@@ -401,6 +401,7 @@ impl Host for FakeHost {
             "sessions.info" => Err("not_found".into()),
             "machines.list" => Ok(json!({"machines":[{"id":"a"},{"id":"b"}],"next":null})),
             "sessions.list" => Ok(json!({"sessions":[{"id":"s1"},{"id":"s2"}],"next":"s2"})),
+            "configuration.read" => Ok(json!({"op":op,"args":args})),
             "machines.read" => {
                 arg_str(&args, "id")?;
                 Ok(json!({"op":op,"args":args}))
@@ -862,4 +863,29 @@ fn oversized_results_name_their_largest_fields() {
     assert_eq!(largest.as_array().unwrap().len(), 3);
     assert_eq!(largest_fields(&json!([1, "zz"]))[0]["field"], "[1]");
     assert_eq!(largest_fields(&json!("text")), json!([]));
+}
+
+#[tokio::test]
+async fn configuration_mcp_discovery_and_projection_keep_the_explicit_scope() {
+    let Some(value) = run(
+        r#"
+        const help = await cowboy.api.help("configuration.read");
+        const selected = await cowboy.configuration.read("mcp", {
+            scope:"service",session_id:"same-owner",path:"/runtime_ready"
+        });
+        return {documented:help.types.includes('"mcp"'),selected};
+    "#,
+        false,
+        10_000,
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(value["state"], "ok", "{value}");
+    assert_eq!(
+        value["value"],
+        json!({"documented":true,"selected":{
+        "op":"configuration.read","args":{"scope":"mcp","session_id":"same-owner","path":"/runtime_ready"}}})
+    );
 }

@@ -40,6 +40,8 @@ pub const SESSION_CONTEXT_PREFIX: &str = "session_context:";
 pub const SESSION_CONTEXT_CARRIER_PREFIX: &str = "session_context_carrier:";
 /// The session a continuation was created from; the destination id follows.
 pub const SESSION_CONTINUED_FROM_PREFIX: &str = "session_continued_from:";
+/// A handed-off source the user chose to keep working in; the source id follows.
+pub const SESSION_HANDOFF_RESUMED_PREFIX: &str = "session_handoff_resumed:";
 /// A fork's source and pending native fork; the destination id follows.
 pub const SESSION_FORK_PREFIX: &str = "session_fork:";
 /// Per-session opt-in for idle Provider updates; the session id follows.
@@ -48,12 +50,29 @@ pub const SESSION_PROVIDER_AUTO_UPDATE_PREFIX: &str = "session_provider_auto_upd
 pub const AGENT_TOOLS_PREFIX: &str = "agent_tools:";
 /// A session's agent tools override; the session id follows.
 pub const SESSION_TOOLS_PREFIX: &str = "session_tools:";
+/// Explicit MCP selections are session-owned; cloning a session grants none.
+pub const SESSION_MCP_BINDINGS_PREFIX: &str = "session_mcp_bindings:";
 /// Values an in-place agent change replaced, restorable until the next send;
 /// the session id follows.
 pub const SESSION_CONFIG_REVERT_PREFIX: &str = "session_config_revert:";
 /// One-shot request to adopt the installed Provider release once the session
 /// is idle; the session id follows.
 pub const SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX: &str = "session_provider_update_when_idle:";
+
+/// Settings tombstoned when their session is removed.
+pub const SESSION_STATE_PREFIXES: &[&str] = &[
+    SESSION_RESOURCE_WAIT_PREFIX,
+    SESSION_QUEUE_PAUSED_PREFIX,
+    SESSION_DELIVERY_POLICY_PREFIX,
+    SESSION_DELIVERY_HOLD_PREFIX,
+    SESSION_CONTEXT_PREFIX,
+    SESSION_CONTEXT_CARRIER_PREFIX,
+    SESSION_CONTINUED_FROM_PREFIX,
+    SESSION_HANDOFF_RESUMED_PREFIX,
+    SESSION_FORK_PREFIX,
+    SESSION_CONFIG_REVERT_PREFIX,
+    SESSION_MCP_BINDINGS_PREFIX,
+];
 
 #[must_use]
 pub fn is_persisted_setting_key(key: &str) -> bool {
@@ -69,10 +88,12 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_CONTEXT_PREFIX,
             SESSION_CONTEXT_CARRIER_PREFIX,
             SESSION_CONTINUED_FROM_PREFIX,
+            SESSION_HANDOFF_RESUMED_PREFIX,
             SESSION_FORK_PREFIX,
             SESSION_PROVIDER_AUTO_UPDATE_PREFIX,
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
+            SESSION_MCP_BINDINGS_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
             SESSION_CONFIG_REVERT_PREFIX,
         ]
@@ -101,10 +122,12 @@ pub fn examples() -> Vec<String> {
         format!("{SESSION_CONTEXT_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_CARRIER_PREFIX}sess-1"),
         format!("{SESSION_CONTINUED_FROM_PREFIX}sess-1"),
+        format!("{SESSION_HANDOFF_RESUMED_PREFIX}sess-1"),
         format!("{SESSION_FORK_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_AUTO_UPDATE_PREFIX}sess-1"),
         format!("{AGENT_TOOLS_PREFIX}codex"),
         format!("{SESSION_TOOLS_PREFIX}sess-1"),
+        format!("{SESSION_MCP_BINDINGS_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX}sess-1"),
         format!("{SESSION_CONFIG_REVERT_PREFIX}sess-1"),
     ]
@@ -125,6 +148,7 @@ mod tests {
             SESSION_PROVIDER_AUTO_UPDATE_PREFIX,
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
+            SESSION_MCP_BINDINGS_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
             SESSION_CONFIG_REVERT_PREFIX,
         ] {

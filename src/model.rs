@@ -217,6 +217,10 @@ pub struct SessionMeta {
     /// `session_continued_from:` setting and restored onto the projection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continued_from: Option<String>,
+    /// This session was handed off, and the user chose to keep working in it
+    /// too. Persisted as the `session_handoff_resumed:` setting.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub handoff_resumed: bool,
     /// The session this one forks natively. Persisted in the `session_fork:`
     /// setting and restored onto the projection.
     #[serde(default, skip_serializing_if = "Option::is_none")]

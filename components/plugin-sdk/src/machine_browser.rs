@@ -18,7 +18,7 @@ use crate::{
 
 pub const MACHINE_BROWSER_SCHEMA_VERSION: u16 = 1;
 /// Plugin SDK release that introduced the Machine browser kind.
-pub const MACHINE_BROWSER_SDK: (u64, u64, u64) = (1, 13, 0);
+pub const MACHINE_BROWSER_SDK: (u64, u64, u64) = (1, 14, 0);
 /// The only launcher control protocol core speaks.
 pub const MACHINE_BROWSER_CONTROL_PROTOCOL: &str = "cowboy-browser-control-v1";
 const MAX_HELPERS: usize = 16;
@@ -442,7 +442,7 @@ mod tests {
             "kind": "machine_browser", "entrypoint": "contract.json",
             "components": [
                 {"id": "cowboy.plugin-contract", "version": "1.12.0"},
-                {"id": "cowboy.plugin-sdk", "version": "1.13.0"}
+                {"id": "cowboy.plugin-sdk", "version": "1.14.0"}
             ]
         }))
         .unwrap()

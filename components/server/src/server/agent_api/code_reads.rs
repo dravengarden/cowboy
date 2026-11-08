@@ -20,11 +20,15 @@ use crate::core::SessionMeta;
 
 mod acquire;
 mod baselines;
+mod codex_push;
 mod diagnostics;
 mod hover;
+mod post_edit;
 mod summary;
 
 pub(in crate::server) async fn maintain_holdings(state: std::sync::Arc<AppState>) {
+    // Codex post-edit delivery shares this Controller-lifetime task.
+    let push = tokio::spawn(codex_push::run(std::sync::Arc::clone(&state)));
     let mut shutdown = state.shutdown.clone();
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -34,6 +38,7 @@ pub(in crate::server) async fn maintain_holdings(state: std::sync::Arc<AppState>
             _ = tick.tick() => acquire::release_stale(&state).await,
         }
     }
+    push.abort();
 }
 
 /// Smaller than Review's bound: replies pass the 256 KiB broker limit.
@@ -223,6 +228,41 @@ async fn checks(state: &AppState, meta: &SessionMeta) -> Result<Value, String> {
         "declaration_error": declared.err(),
         "runs": check_runs(&meta.id),
     }))
+}
+
+/// The bounded post-edit summary a Provider adapter delivers to its model
+/// (`cowboy_execute` action `code.post_edit`, read-only, no operation needed).
+pub(super) async fn post_edit(
+    state: &AppState,
+    meta: &SessionMeta,
+    args: &Value,
+) -> Result<Value, &'static str> {
+    only_keys(args, &["paths"]).map_err(|_| "invalid_argument")?;
+    let paths = paths(args).map_err(|_| "invalid_argument")?;
+    if paths.len() > post_edit::MAX_PATHS {
+        return Err("invalid_argument");
+    }
+    let scope = session::resolve(
+        &state.hub,
+        &state.machine_control,
+        &state.service_id,
+        &meta.id,
+    )
+    .ok_or("unavailable")?;
+    let CodeReadScope::Session(observed) = &scope else {
+        return Err("unavailable");
+    };
+    super::super::managed_calls::touch_code_observation(state, observed).await;
+    let value = diagnostics::read(state, observed, paths).await;
+    if !session::current(&state.hub, &state.machine_control, observed) {
+        return Err("code_context_changed");
+    }
+    let mut projected = post_edit::project(&value);
+    post_edit::attach_writes(&mut projected, &value, |path| {
+        let target = format!("{}/{path}", observed.session().cwd().trim_end_matches('/'));
+        super::super::execution::writes::latest(&meta.id, &target).map(|write| write.sha256)
+    });
+    Ok(projected)
 }
 
 /// Explicitly run one declared check (`cowboy_execute` action `code.check`).

@@ -26,6 +26,7 @@ impl Fixture {
             parent_session_id: "parent".into(),
             agent_api: true,
             agent_actions: false,
+            mcp: false,
         };
         host.install(&grant).unwrap();
         let (tx, receiver) = tokio::sync::mpsc::unbounded_channel();

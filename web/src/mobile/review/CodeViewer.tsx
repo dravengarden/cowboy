@@ -27,10 +27,10 @@ import {
   syntaxTree,
   syntaxHighlighting,
 } from "@codemirror/language";
-import { highlightTree, tags } from "@lezer/highlight";
+import { highlightTree } from "@lezer/highlight";
 import { cmTheme } from "../../cmTheme";
 import { loadCodeLanguage } from "./codeLanguage";
-import { codeSyntaxPalette } from "./codeSyntaxTheme";
+import { codeSyntaxPalette, reviewHighlightStyle } from "./codeSyntaxTheme";
 import { changedWordRange } from "./diffWordModel";
 import { diffContextFolds } from "./diffContextModel";
 import {
@@ -505,52 +505,7 @@ export default function CodeViewer({
 
   const extensions = useMemo(() => {
     const syntax = codeSyntaxPalette(theme.palette.mode);
-    const highlightStyle = HighlightStyle.define([
-      { tag: tags.keyword, color: syntax.keyword, fontWeight: "600" },
-      {
-        tag: [tags.string, tags.special(tags.string), tags.regexp, tags.escape],
-        color: syntax.string,
-      },
-      {
-        tag: [tags.number, tags.bool, tags.null],
-        color: syntax.number,
-      },
-      {
-        tag: [tags.typeName, tags.className, tags.namespace],
-        color: syntax.type,
-      },
-      {
-        tag: [tags.function(tags.variableName), tags.function(tags.propertyName)],
-        color: syntax.function,
-      },
-      {
-        tag: [tags.propertyName, tags.attributeName, tags.labelName],
-        color: syntax.property,
-      },
-      {
-        tag: [tags.constant(tags.name), tags.standard(tags.name), tags.local(tags.name)],
-        color: syntax.constant,
-      },
-      {
-        tag: [tags.operator, tags.punctuation, tags.bracket],
-        color: syntax.operator,
-      },
-      {
-        tag: [tags.comment, tags.docComment, tags.meta],
-        color: syntax.muted,
-        fontStyle: "italic",
-      },
-      { tag: [tags.tagName, tags.heading], color: syntax.tag },
-      {
-        tag: [tags.variableName, tags.name],
-        color: syntax.foreground,
-      },
-      {
-        tag: tags.invalid,
-        color: syntax.invalid,
-        textDecoration: "underline wavy",
-      },
-    ]);
+    const highlightStyle = reviewHighlightStyle(theme.palette.mode);
     const values: Extension[] = [
       EditorState.readOnly.of(true),
       EditorView.editable.of(false),

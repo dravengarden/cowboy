@@ -12,6 +12,9 @@ mod code_intelligence;
 mod execution_tests;
 pub mod host;
 mod machine_browser;
+mod mcp_discovery;
+mod mcp_server;
+pub use mcp_discovery::{McpToolDefinition, validate_mcp_discovery};
 mod payload_validation;
 mod session_extension;
 mod telemetry;
@@ -23,6 +26,7 @@ pub use cli_auth::{
 pub use code_intelligence::*;
 pub use host::*;
 pub use machine_browser::*;
+pub use mcp_server::*;
 use payload_validation::validate_payload;
 pub use session_extension::*;
 pub use telemetry::*;
@@ -46,7 +50,7 @@ pub const PLUGIN_SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
 pub const PACKAGE_SCHEMA_VERSION: u16 = 1;
 pub const RELEASE_SCHEMA_MIN_VERSION: u16 = 1;
-pub const RELEASE_SCHEMA_VERSION: u16 = 6;
+pub const RELEASE_SCHEMA_VERSION: u16 = 7;
 pub const HOST_RELEASE_SCHEMA_VERSION: u16 = 2;
 pub const WORKSPACE_RELEASE_SCHEMA_VERSION: u16 = 3;
 /// Old Catalog readers must skip execution-capable Agent payloads before
@@ -56,7 +60,7 @@ pub const EXECUTION_RELEASE_SCHEMA_VERSION: u16 = 4;
 pub const SESSION_EXTENSION_RELEASE_SCHEMA_VERSION: u16 = 5;
 /// Old Catalog readers must skip the Machine browser kind, whose runtime
 /// artifact and host requirements they cannot decode.
-pub const MACHINE_BROWSER_RELEASE_SCHEMA_VERSION: u16 = 6;
+pub const MACHINE_BROWSER_RELEASE_SCHEMA_VERSION: u16 = 7;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_MIN_VERSION: u16 = 1;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_VERSION: u16 = 2;
 pub const CODE_INTELLIGENCE_SCHEMA_MIN_VERSION: u16 = 1;
@@ -88,6 +92,7 @@ pub enum PluginKind {
     WorkspaceExtension,
     MemoryBackend,
     CallProfile,
+    McpServer,
     MachineBrowser,
 }
 
@@ -144,6 +149,7 @@ pub enum PluginPayload {
     WorkspaceExtension(WorkspaceExtensionContract),
     MemoryBackend(MemoryBackendContract),
     CallProfile(CallProfileContract),
+    McpServer(McpServerContract),
     MachineBrowser(MachineBrowserContract),
 }
 
@@ -386,6 +392,7 @@ pub enum PluginComponentKind {
     AcpRuntime,
     CodeIntelligenceAdapter,
     CodeIntelligenceServer,
+    McpServer,
     /// The single browser runtime tree of a `machine_browser` Plugin.
     MachineBrowserRuntime,
 }
@@ -433,6 +440,7 @@ impl PluginCompatibilityRequirements {
             PluginPayload::WorkspaceExtension(contract) => contract.schema_version,
             PluginPayload::MemoryBackend(contract) => contract.schema_version,
             PluginPayload::CallProfile(contract) => contract.schema_version,
+            PluginPayload::McpServer(contract) => contract.schema_version,
             PluginPayload::MachineBrowser(contract) => contract.schema_version,
         };
         let requirements = Self {
@@ -497,6 +505,10 @@ impl PluginCompatibilityRequirements {
                 self.plugin_kind == PluginKind::AgentProvider,
                 "Plugin release schema 4 is reserved for execution-capable Agents"
             ),
+            MCP_SERVER_RELEASE_SCHEMA => ensure!(
+                self.plugin_kind == PluginKind::McpServer && self.host_bundle_schema.is_none(),
+                "release schema 6 is reserved for MCP servers"
+            ),
             SESSION_EXTENSION_RELEASE_SCHEMA_VERSION => ensure!(
                 matches!(
                     self.plugin_kind,
@@ -506,7 +518,7 @@ impl PluginCompatibilityRequirements {
             ),
             MACHINE_BROWSER_RELEASE_SCHEMA_VERSION => ensure!(
                 self.plugin_kind == PluginKind::MachineBrowser && self.host_bundle_schema.is_none(),
-                "Plugin release schema 6 is reserved for Machine browsers"
+                "Plugin release schema 7 is reserved for Machine browsers"
             ),
             _ => {}
         }
@@ -687,6 +699,14 @@ impl PluginContractInventory {
                 }),
                 "telemetry payload schema (Plugin SDK 1.7/1.8)",
             ),
+            PluginKind::McpServer => (
+                1,
+                u16::from(
+                    Version::parse(&self.plugin_sdk_version)
+                        .is_ok_and(|v| v >= Version::new(1, 13, 0)),
+                ),
+                "MCP server schema (Plugin SDK 1.13)",
+            ),
             // Derived from the attested SDK version like the other data-only kinds.
             PluginKind::MemoryBackend | PluginKind::CallProfile => (
                 1,
@@ -706,7 +726,7 @@ impl PluginContractInventory {
                         version >= Version::new(major, minor, patch)
                     }),
                 ),
-                "machine browser payload schema (Plugin SDK 1.13)",
+                "machine browser payload schema (Plugin SDK 1.14)",
             ),
         }
     }
@@ -933,6 +953,7 @@ impl PluginPackage {
             | PluginPayload::WorkspaceExtension(_)
             | PluginPayload::MemoryBackend(_)
             | PluginPayload::CallProfile(_)
+            | PluginPayload::McpServer(_)
             | PluginPayload::MachineBrowser(_) => None,
         }
     }
@@ -955,6 +976,7 @@ impl PluginPackage {
             | PluginPayload::WorkspaceExtension(_)
             | PluginPayload::MemoryBackend(_)
             | PluginPayload::CallProfile(_)
+            | PluginPayload::McpServer(_)
             | PluginPayload::MachineBrowser(_) => None,
         }
     }
@@ -971,11 +993,12 @@ impl PluginPackage {
                 | PluginPayload::WorkspaceExtension(_)
                 | PluginPayload::MemoryBackend(_)
                 | PluginPayload::CallProfile(_)
+                | PluginPayload::McpServer(_)
                 | PluginPayload::MachineBrowser(_)
         ) {
             ensure!(
                 files.is_none(),
-                "this Plugin kind cannot declare executable host bundles"
+                "this Plugin kind cannot declare executable Controller host bundles"
             );
         }
         let host = files
@@ -1001,6 +1024,8 @@ impl PluginPackage {
             .is_some_and(|provider| provider.manifest.runtime.behavior.execution.is_some())
         {
             EXECUTION_RELEASE_SCHEMA_VERSION
+        } else if self.manifest.kind == PluginKind::McpServer {
+            MCP_SERVER_RELEASE_SCHEMA
         } else if self.manifest.kind == PluginKind::WorkspaceExtension {
             WORKSPACE_RELEASE_SCHEMA_VERSION
         } else if matches!(
@@ -1041,6 +1066,9 @@ impl PluginPackage {
                 contract.supported_platforms.iter().cloned().collect()
             }
             PluginPayload::CallProfile(contract) => {
+                contract.supported_platforms.iter().cloned().collect()
+            }
+            PluginPayload::McpServer(contract) => {
                 contract.supported_platforms.iter().cloned().collect()
             }
             PluginPayload::MachineBrowser(contract) => {
@@ -1161,6 +1189,7 @@ impl PluginRelease {
             PluginPayload::CodeIntelligence(contract) => {
                 code_intelligence::validate_release(contract, self)?;
             }
+            PluginPayload::McpServer(contract) => mcp_server::validate_release(contract, self)?,
             PluginPayload::AuthenticationProvider(_) => ensure!(
                 self.runtime_artifacts.is_empty(),
                 "Authentication Plugin cannot declare Machine runtime artifacts"
@@ -1218,6 +1247,11 @@ impl PluginRelease {
                     && self.host_bundle_digest.is_none(),
                 "release schema 3 is reserved for data-only workspace extensions"
             ),
+            MCP_SERVER_RELEASE_SCHEMA => ensure!(
+                matches!(package.payload, PluginPayload::McpServer(_))
+                    && self.host_bundle_digest.is_none(),
+                "release schema 6 is reserved for MCP servers"
+            ),
             SESSION_EXTENSION_RELEASE_SCHEMA_VERSION => ensure!(
                 matches!(
                     package.payload,
@@ -1228,7 +1262,7 @@ impl PluginRelease {
             MACHINE_BROWSER_RELEASE_SCHEMA_VERSION => ensure!(
                 matches!(package.payload, PluginPayload::MachineBrowser(_))
                     && self.host_bundle_digest.is_none(),
-                "release schema 6 is reserved for Machine browsers"
+                "release schema 7 is reserved for Machine browsers"
             ),
             EXECUTION_RELEASE_SCHEMA_VERSION => {
                 ensure!(
@@ -1355,6 +1389,7 @@ impl ReleasedPluginComponent {
             PluginComponentKind::AcpRuntime => PrivateComponentKind::AcpRuntime,
             PluginComponentKind::CodeIntelligenceAdapter
             | PluginComponentKind::CodeIntelligenceServer
+            | PluginComponentKind::McpServer
             | PluginComponentKind::MachineBrowserRuntime => {
                 bail!("non-agent runtime component cannot satisfy an agent Provider payload")
             }

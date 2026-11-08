@@ -31,7 +31,42 @@ async function until(predicate: () => boolean, message: string) {
   throw new Error(`${message}: ${document.body.textContent?.slice(0, 1500)}`);
 }
 
-export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false, checksEnabled = false) {
+const FIXTURE_PULL_REVISION = "c".repeat(64);
+function fixturePullResponse(url: URL): unknown {
+  if (!url.pathname.endsWith("/resources")) {
+    return {
+      type: "inventory",
+      extensions: [{
+        identity: { pluginId: "github", pluginVersion: "0.2.0", generationDigest: `sha256:${"d".repeat(64)}` },
+        label: "GitHub", description: "Pull requests", available: true,
+        views: [{ id: "pulls", label: "Pull requests", filters: [], review: "pull_request", discovery: true }],
+      }],
+      remotes: [{ name: "origin", host: "github.com", owner: "dravengarden", repository: "cowboy" }],
+    };
+  }
+  if (url.searchParams.get("discovery") === "true") {
+    return {
+      type: "pulls", account: "fixture", total: 1, incomplete: false, nextPage: null,
+      items: [{ number: "42", repository: "dravengarden/cowboy", title: "Review the workbench", url: "https://github.com/dravengarden/cowboy/pull/42",
+        author: "fixture", state: "open", draft: false, updatedAt: "2026-11-08T00:00:00Z" }],
+    };
+  }
+  const file = (path: string, patch: string) => ({ path, oldPath: null, status: "modified", additions: 1, deletions: 1, patch, limited: false });
+  return {
+    type: "review",
+    review: {
+      repositoryId: "R_fixture", number: url.searchParams.get("item") ?? "42", title: "Review the workbench",
+      url: `https://github.com/dravengarden/cowboy/pull/${url.searchParams.get("item") ?? "42"}`, state: "open",
+      head: "a".repeat(40), base: "b".repeat(40), revision: FIXTURE_PULL_REVISION, totalFiles: 2, nextPage: null, limited: false,
+      files: [
+        file("web/src/pr-one.ts", "@@ -1 +1 @@\n-one\n+pull one\n"),
+        file("web/src/pr-two.ts", "@@ -1 +1 @@\n-two\n+pull two\n"),
+      ],
+    },
+  };
+}
+
+export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false, checksEnabled = false, content?: () => React.ReactNode) {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
   const sessions: SessionMeta[] = [
@@ -191,7 +226,10 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
     );
     const json = (value: unknown) => Response.json(value);
     if (checksEnabled && url.pathname.endsWith("/checks")) {
-      const run = { runId: "fixture-check", check: "lint", state: "passed", startedAtMs: Date.now(), diagnostics: [], truncated: false, outputTruncated: false };
+      const desktopFixture = (globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests === true;
+      const run = { runId: "fixture-check", check: "lint", state: desktopFixture ? "failed" : "passed", startedAtMs: Date.now(),
+        diagnostics: desktopFixture ? [{ path: "README.md", line: 3, column: 1, severity: "warning", message: "Fixture finding" }] : [],
+        truncated: false, outputTruncated: false };
       if (init?.method === "POST") {
         checkStarted = true;
         return json({ status: "accepted", run });
@@ -224,11 +262,24 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       fetched = true;
       return json({ reference: "refs/remotes/origin/main", oid: "abc" });
     }
+    // An opt-in GitHub extension for the Desktop workbench acceptance
+    // (desktopReviewBrowserFixture.tsx); other suites see none.
+    if ((globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests &&
+      url.pathname.includes("/extensions")) {
+      return json(fixturePullResponse(url));
+    }
     if (url.pathname.startsWith("/api/code/sessions/")) {
       const context = decodeURIComponent(url.pathname.split("/")[4]!);
       const clean = context === "project" || context === "copy";
       const branch = context === "worktree" ? "feature/review" : "main";
       const path = url.searchParams.get("path") ?? "";
+      if (url.pathname.endsWith("/intelligence/outline")) {
+        if (!(globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests) return new Response("unavailable", { status: 404 });
+        const at = (row: number) => ({ row, column: 0 });
+        return json({ apiVersion: 1, path, symbols: [
+          { name: "Project guide", kind: 2, start: at(0), end: at(2), selectionStart: at(0), selectionEnd: at(0), children: [] },
+        ] });
+      }
       if (url.pathname.endsWith("/manifest")) {
         return json({
           apiVersion: 1,
@@ -316,7 +367,12 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       }
       if (url.pathname.endsWith("/commit")) {
         return json({ apiVersion: 1, oid: "abcdef01", parents: [], author: "Fixture", authorEmail: "fixture@example.test",
-          authoredAt: "2026-10-17T00:00:00Z", message: "Improve review", files: [], filesTruncated: false });
+          authoredAt: "2026-10-17T00:00:00Z", message: "Improve review",
+          files: [{ path: "src/app.ts", status: "modified" }], filesTruncated: false });
+      }
+      if (url.pathname.endsWith("/commit-diff")) {
+        return json({ apiVersion: 1, path, revision: "abcdef01", added: 1, removed: 1, truncated: false,
+          text: "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-before\n+committed\n" });
       }
       if (url.pathname.endsWith("/tree")) {
         return json({
@@ -385,7 +441,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       <BrowserProductTheme>
         <CssBaseline />
         <SurfaceProvider>
-          {desktop ? <SurfaceContext.Provider value={{ kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true }}>
+          {content ? content() : desktop ? <SurfaceContext.Provider value={{ kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true }}>
             <DesktopWorkspaceProvider><DesktopCommandProvider><ReviewApp active onDrawerOpenChange={() => {}} /></DesktopCommandProvider></DesktopWorkspaceProvider>
           </SurfaceContext.Provider> : <ReviewApp active onDrawerOpenChange={() => {}} />}
         </SurfaceProvider>
@@ -1014,6 +1070,8 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
 }
 
 async function checkDesktopReviewPane(fixture: ReturnType<typeof renderReviewContextPreview>): Promise<string> {
+  // The work view is remembered per device; start from the Conversation.
+  localStorage.removeItem("cowboy.desktop.workView.v1");
   const host = document.createElement("div");
   host.style.cssText = "height:600px;display:flex";
   document.body.append(host);
@@ -1041,33 +1099,40 @@ async function checkDesktopReviewPane(fixture: ReturnType<typeof renderReviewCon
         </SurfaceProvider>,
       )
     );
-    const toggle = () => host.querySelector<HTMLElement>("[data-desktop-review-toggle]");
-    await until(() => !!toggle(), "Desktop should offer Review");
+    const tab = (view: string) => host.querySelector<HTMLElement>(`[data-desktop-work-view="${view}"]`);
+    const shown = () => host.querySelector("[data-desktop-review]:not([hidden])");
+    await until(() => !!tab("review"), "Desktop should offer Review");
     const transcript = host.querySelector("[data-fixture-transcript]");
-    flushSync(() => toggle()!.click());
+    flushSync(() => tab("review")!.click());
     await until(
-      () => host.querySelector("[data-desktop-review]")?.textContent?.includes("Compare") === true ||
+      () => shown()?.textContent?.includes("Compare") === true ||
         !!host.querySelector("[data-desktop-review] [data-review-compare]"),
       "Review should open in the Conversation pane",
     );
     check(transcript?.isConnected, "Opening Review unmounted the transcript");
+    check(tab("review")?.getAttribute("aria-selected") === "true", "The Review tab is not selected");
+    // Send and Agent land in the Prompt beside the code; Review stays.
     openMobileProduct("agent");
-    await until(() => !host.querySelector("[data-desktop-review]"), "Agent should return to the Conversation");
+    await wait();
+    check(!!shown(), "Review's Agent action left Review");
+    flushSync(() => tab("conversation")!.click());
+    await until(() => !shown(), "The Conversation tab should return to the Conversation");
     check(host.querySelector("[data-fixture-transcript]") === transcript, "Returning replaced the transcript");
+    check(!!host.querySelector("[data-desktop-review][hidden]"), "Review was unmounted instead of kept behind the tabs");
     const request = {mode:"files",tabs:[{path:"README.md",pinned:false}],active:"README.md",progress:{},positions:{},open_revision:1,reveal_revision:1};
     fixture.sync("mobile-review:project", request, 1000);
     await wait();
-    check(!host.querySelector("[data-desktop-review]"), "Another session's open request stole focus");
+    check(!shown(), "Another session's open request stole focus");
     fixture.sync("mobile-review:worktree", request, 1000);
-    await until(() => !!host.querySelector("[data-desktop-review]"), "Live MCP navigation did not open Review");
-    openMobileProduct("agent");
-    await until(() => !host.querySelector("[data-desktop-review]"), "Could not leave requested Review");
+    await until(() => !!shown(), "Live MCP navigation did not open Review");
+    flushSync(() => tab("conversation")!.click());
+    await until(() => !shown(), "Could not leave requested Review");
     fixture.sync("mobile-review:worktree", request, 1001);
     await wait();
-    check(!host.querySelector("[data-desktop-review]"), "Repeated observation replayed navigation");
+    check(!shown(), "Repeated observation replayed navigation");
     fixture.sync("mobile-review:worktree", {...request,open_revision:2,reveal_revision:2}, 1002);
-    await until(() => !!host.querySelector("[data-desktop-review]"), "A fresh same-file request was ignored");
-    return "Desktop shows Review in the Conversation pane and returns to the same transcript";
+    await until(() => !!shown(), "A fresh same-file request was ignored");
+    return "Desktop shows Review as a work-pane view, keeps it on Send, and returns to the same transcript";
   } finally {
     root.unmount();
     host.remove();

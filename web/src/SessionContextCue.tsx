@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Box, Button, ButtonBase, Chip, keyframes, Stack, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { HintTooltip } from "./HintTooltip";
@@ -14,6 +14,7 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import {
   CONTEXT_CHANGED,
   contextConfigured,
+  continueHere,
   openContextDestination,
   saveSessionContext,
   withoutAgentSwitch,
@@ -21,15 +22,15 @@ import {
   useSessionContext,
 } from "./sessionContext";
 import { requestPickSession } from "./sessionPickRequest";
+import { requestNewFrom } from "./sessionSettingsOpen";
+import { useContinuation } from "./sessionHistory";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { accountIdentity, sessionAccountIdentity } from "./accountIdentity";
 import { contextCue } from "./contextCue";
 import { trashItems, useStoreSelector } from "./store";
 import { SESSION_LINK_LABEL, sessionLinks, type SessionLinkRow } from "./sessionLinks";
 import { openSessionLink, SessionHandoffSource, useRestoreSession } from "./SessionHandoffSource";
-import type { SessionMeta } from "./protocol";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
-import { duplicateMode, duplicateSession, forkAvailability, forkSession } from "./sessionFork";
 
 /** Context for one session, read only after the Service announced it. */
 export function useAnnouncedSessionContext(
@@ -48,25 +49,6 @@ export function useAnnouncedSessionContext(
     };
   }, [sessionId]);
   return useSessionContext(sessionId, known || linked).data;
-}
-
-/** The session that took over from this one, if any. Synced with the session
- *  list, so it holds after a reload and on every device; deleting the
- *  continuation returns its source to an ordinary session. */
-export function useContinuation(sessionId: string): SessionMeta | undefined {
-  return useStoreSelector((state) =>
-    state.sessions.find((entry) => entry.continued_from === sessionId)
-  );
-}
-
-/** A handed-off session is history: its Composer gives way to the dock unless
- *  its agent is still working, which must stay stoppable and observable. */
-export function useHandedOff(sessionId: string): boolean {
-  const continuation = useContinuation(sessionId);
-  const status = useStoreSelector((state) =>
-    state.sessions.find((entry) => entry.id === sessionId)?.status
-  );
-  return continuation !== undefined && status !== "busy" && status !== "starting";
 }
 
 /** Where a context cue renders. A pending choice changes the next send, so
@@ -340,24 +322,24 @@ export function SessionContinuedFrom(
 
 /** Replaces the Composer of a handed-off session. Writing here would silently
  *  split one piece of work in two, so the dock offers what can still happen:
- *  go to the session that took over, deliberately branch this agent, or clear
- *  this history away. */
+ *  go to the session that took over, branch this agent with chosen options,
+ *  deliberately keep working here as a second line, or clear this history. */
 export function SessionHandedOffDock(
   { sessionId, desktop = false }: { sessionId: string; desktop?: boolean },
 ): React.JSX.Element | null {
   const session = useStoreSelector((state) =>
     state.sessions.find((entry) => entry.id === sessionId)
   );
-  const machines = useStoreSelector((state) => state.machines);
-  const continuation = useContinuation(sessionId);
+  const latest = useContinuation(sessionId);
+  const context = useAnnouncedSessionContext(sessionId, latest !== undefined);
+  // A source kept open and handed off again names its current continuation.
+  const continuation = useContinuation(sessionId, context?.delivery?.session_id);
   const { data: accounts } = useSubscriptionAccounts();
-  const [busy, setBusy] = useState<"fork" | "trash" | null>(null);
+  const [busy, setBusy] = useState<"resume" | "trash" | null>(null);
   const [error, setError] = useState("");
-  // A retry after an unknown outcome returns the same fork.
-  const operation = useRef(`fork-${crypto.randomUUID()}`);
-  if (!session || !continuation) return null;
+  if (!session || !continuation || session.handoff_resumed) return null;
   const openContinuation = (): void => requestPickSession(continuation.id, continuation);
-  const run = (kind: "fork" | "trash", action: () => Promise<void>): void => {
+  const run = (kind: "resume" | "trash", action: () => Promise<void>): void => {
     setBusy(kind);
     setError("");
     void action()
@@ -366,23 +348,11 @@ export function SessionHandedOffDock(
       )
       .finally(() => setBusy(null));
   };
-  const fork = async (): Promise<void> => {
-    const account = session.provider_account_id || "default";
-    const receipt = duplicateMode({
-        sourceProvider: session.provider,
-        sourceAccount: account,
-        provider: session.provider,
-        account,
-        forkAvailable: forkAvailability(session, machines) === "ready",
-      }) === "fork"
-      ? await forkSession(sessionId, { operation: operation.current })
-      : await duplicateSession(sessionId, {
-        provider: session.provider,
-        provider_account_id: account,
-      }, operation.current);
-    requestPickSession(receipt.session_id, receipt.session ?? undefined);
-  };
   const account = sessionAccountIdentity(accounts, continuation).short;
+  // Only this session's own handoff explains why it stayed out of Trash.
+  const kept = context?.delivery?.session_id === continuation.id
+    ? context.delivery.source_kept
+    : undefined;
   return (
     <Box
       data-session-handed-off
@@ -404,27 +374,37 @@ export function SessionHandedOffDock(
           Continued in {continuation.title || "a new agent"} · {account}
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-          This session is read-only history.
+          {kept ? `Kept as read-only history. ${kept}` : "This session is read-only history."}
         </Typography>
       </Box>
       {error && <Alert severity="error">{error}</Alert>}
-      <Stack direction="row" spacing={0.5} alignItems="center">
+      <Stack direction="row" spacing={0.5} useFlexGap flexWrap="wrap" alignItems="center">
         <Button
           variant="contained"
           disableElevation
           disabled={busy !== null}
           onClick={openContinuation}
-          sx={{ flex: 1, minWidth: 0, textTransform: "none" }}
+          sx={{ flex: "1 1 6rem", minWidth: 0, textTransform: "none" }}
         >
           Open
         </Button>
         <Button
           disabled={busy !== null}
-          title="Start a separate session from this agent's conversation"
-          onClick={() => run("fork", fork)}
+          data-session-handed-off-fork
+          title="Choose the agent, subscription and options for a separate session from this conversation"
+          onClick={() => requestNewFrom(sessionId)}
           sx={{ flexShrink: 0, textTransform: "none" }}
         >
-          {busy === "fork" ? "Forking…" : "Fork"}
+          Fork…
+        </Button>
+        <Button
+          disabled={busy !== null}
+          data-session-handed-off-resume
+          title="Keep writing here as well. This session and its continuation become two separate lines of work."
+          onClick={() => run("resume", () => continueHere(sessionId))}
+          sx={{ flexShrink: 0, textTransform: "none" }}
+        >
+          {busy === "resume" ? "Reopening…" : "Continue here"}
         </Button>
         <Button
           color="inherit"

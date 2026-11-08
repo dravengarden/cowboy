@@ -267,7 +267,7 @@ fn reader_ignores_uncommitted_and_future_packages_without_decoding_them() {
     let catalog = PluginCatalog::open(&fixture.0, Some(catalog_root.clone())).unwrap();
     assert!(catalog.load_external().unwrap().is_empty());
     fs::write(catalog_root.join("future.release.json"),
-        br#"{"release_schema":7,"plugin_id":"codex","plugin_version":"999.0.0","future_field":{"opaque":true}}"#).unwrap();
+        br#"{"release_schema":8,"plugin_id":"codex","plugin_version":"999.0.0","future_field":{"opaque":true}}"#).unwrap();
     assert!(catalog.load_external().unwrap().is_empty());
     assert!(catalog.resolve("codex", Some("999.0.0"), None).is_err());
     assert!(
@@ -612,7 +612,7 @@ async fn assert_signed_authentication_reader(release_schema: u16) {
     assert_eq!(catalog.refresh_with_runtime(&storage).await.unwrap(), 1);
     fs::write(
         future.with_extension("release.json"),
-        br#"{"release_schema":7,"plugin_id":"google","plugin_version":"1.0.0"}"#,
+        br#"{"release_schema":8,"plugin_id":"google","plugin_version":"1.0.0"}"#,
     )
     .unwrap();
     assert_eq!(catalog.refresh_with_runtime(&storage).await.unwrap(), 1);

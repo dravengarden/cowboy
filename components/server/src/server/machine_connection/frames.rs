@@ -250,7 +250,7 @@ impl MachineLink<'_> {
                     },
             } => {
                 state
-                    .memory_relay
+                    .memory_relay()
                     .complete(&hello.machine_id, &request_id, response);
                 return ControlFlow::Continue(());
             }
@@ -400,6 +400,21 @@ impl MachineLink<'_> {
         grant: crate::managed_calls::protocol::Grant,
         action: crate::managed_calls::protocol::Action,
     ) {
+        if let crate::managed_calls::protocol::Action::Mcp { request } = &action
+            && matches!(
+                request.action,
+                crate::mcp_binding::RelayAction::Close { .. }
+            )
+        {
+            let response = super::super::mcp_bindings::relay::close(
+                self.state,
+                self.connection,
+                &grant,
+                request,
+            );
+            self.reply_managed_call(request_id, response);
+            return;
+        }
         let call_state = Arc::clone(self.state);
         let call_connection = self.connection.clone();
         let outgoing = self.machine_write_tx.clone();
@@ -425,6 +440,20 @@ impl MachineLink<'_> {
         });
     }
 
+    fn reply_managed_call(&self, request_id: String, response: serde_json::Value) {
+        if self.state.machine_control.is_current(self.connection) {
+            let _ = queue_machine_json(
+                self.machine_write_tx,
+                &MachineFrame::Command {
+                    command: crate::machine_protocol::MachineCommand::ManagedCallReply {
+                        request_id,
+                        response,
+                    },
+                },
+            );
+        }
+    }
+
     /// Off the read loop, like a managed call: a slow home Machine must not
     /// hold this connection. An exhausted budget is an ordinary unavailable
     /// answer.
@@ -438,7 +467,7 @@ impl MachineLink<'_> {
         let relay_connection = self.connection.clone();
         let relay_machine = self.hello.machine_id.clone();
         let outgoing = self.machine_write_tx.clone();
-        let permit = self.state.memory_relay.try_admit();
+        let permit = self.state.extensions.memory.try_admit();
         tokio::spawn(async move {
             let response = if let Some(_permit) = permit {
                 memory_relay::handle(&relay_state, &relay_machine, &session_id, request).await

@@ -30,3 +30,10 @@ test("Cowboy notes keep the existing resume and schedule captions", () => {
     "Scheduled wakeup",
   );
 });
+
+test("post-edit diagnostics read as a Cowboy code intelligence note", () => {
+  assertEquals(
+    cowboyOriginCaption({ actor: "cowboy", source: "code_intelligence" }),
+    "Code intelligence after an edit",
+  );
+});

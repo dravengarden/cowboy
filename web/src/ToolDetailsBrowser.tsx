@@ -17,6 +17,9 @@ import { ToolStatusChip, toolStatusLabel } from "./tools/ToolStatusChip";
 import { ScrollEdges, FloatingActionIsland } from "@cowboy/app-shell";
 import { Sheet } from "./Sheet";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
+import { scrollableAncestor, useToolDetailReveal } from "./useToolDetailReveal";
+
+export { scrollableAncestor };
 export function toolIcon(kind: string): React.ReactElement {
   // The tool-card leading icon tracks the theme accent (`color="primary"`,
   // was the default text colour) and the reading-size setting
@@ -37,16 +40,6 @@ export function toolIcon(kind: string): React.ReactElement {
     default:
       return <Construction {...props} />;
   }
-}
-
-export function scrollableAncestor(node: HTMLElement | null): HTMLElement | null {
-  let current = node?.parentElement ?? null;
-  while (current) {
-    const overflow = globalThis.getComputedStyle(current).overflowY;
-    if (overflow === "auto" || overflow === "scroll") return current;
-    current = current.parentElement;
-  }
-  return null;
 }
 
 export type ToolContextBlock = {
@@ -272,7 +265,6 @@ export function ToolDetailsBrowser({
     -1;
   const item = itemIndex >= 0 ? run?.tools[itemIndex] : undefined;
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
-  const [detailReadyKey, setDetailReadyKey] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLDivElement>(null);
   const anchorSpacerRef = useRef<HTMLDivElement>(null);
@@ -289,48 +281,13 @@ export function ToolDetailsBrowser({
     })
     : false;
 
-  useEffect(() => {
-    if (!item) {
-      return undefined;
-    }
-    const id = globalThis.setTimeout(() => setDetailReadyKey(item.key), 320);
-    return () => globalThis.clearTimeout(id);
-  }, [item?.key]);
-
-  useLayoutEffect(() => {
-    if (!item) return;
-    const scroller = scrollableAncestor(bodyRef.current);
-    const current = currentRef.current;
-    const spacer = anchorSpacerRef.current;
-    if (!scroller || !current || !spacer) return;
-    const saved = scrollByKey.current.get(item.key);
-    const align = (): void => {
-      // Keep BOTH context directions in normal scroll flow, but add only the
-      // trailing room needed for the selected tool to reach the top on a short
-      // page. This is layout compensation, not visible content: opening focuses
-      // the tool; scrolling upward reveals its preceding prose, downward reveals
-      // its following prose. Re-run after the sheet computes its cover height.
-      spacer.style.height = "0px";
-      const currentTop = scroller.scrollTop +
-        current.getBoundingClientRect().top -
-        scroller.getBoundingClientRect().top;
-      const maxWithoutSpacer = Math.max(
-        0,
-        scroller.scrollHeight - scroller.clientHeight,
-      );
-      spacer.style.height = `${
-        Math.max(0, currentTop - maxWithoutSpacer + 8)
-      }px`;
-      scroller.scrollTop = saved ?? currentTop;
-    };
-    align();
-    const frame = globalThis.requestAnimationFrame(align);
-    const settled = globalThis.setTimeout(align, 340);
-    return () => {
-      globalThis.cancelAnimationFrame(frame);
-      globalThis.clearTimeout(settled);
-    };
-  }, [item?.key]);
+  const { detailReadyKey, markDetailReady } = useToolDetailReveal({
+    itemKey: item?.key,
+    bodyRef,
+    currentRef,
+    anchorSpacerRef,
+    scrollByKey,
+  });
 
   useLayoutEffect(() => {
     if (!desktop || runIndex < 0) return;
@@ -350,7 +307,7 @@ export function ToolDetailsBrowser({
         // and skip the delayed-detail skeleton. Only cross-run navigation gets
         // the normal focus/anchor alignment performed by the layout effect.
         scrollByKey.current.set(next.key, scroller.scrollTop);
-        setDetailReadyKey(next.key);
+        markDetailReady(next.key);
       }
     }
     onSelect(next.key);

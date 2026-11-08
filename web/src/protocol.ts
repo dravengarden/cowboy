@@ -159,6 +159,8 @@ export interface SessionMeta {
   provider_account_id?: string;
   /** The session this one continues as a new agent (title is inherited). */
   continued_from?: string;
+  /** Handed off, and kept as a second line of work rather than history. */
+  handoff_resumed?: boolean;
   /** The session this one forks with its native conversation. */
   forked_from?: string;
   /** Stable machine placement. Missing on older daemons means local. */

@@ -292,7 +292,7 @@ mod tests {
                     "ovh".into(),
                     "challenge".into(),
                     false,
-                    43,
+                    crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
                     tokio::sync::mpsc::unbounded_channel().0,
                 ),
                 deliver,

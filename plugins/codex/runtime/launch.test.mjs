@@ -237,3 +237,12 @@ test("the adapter awaits exactly the MCP servers the bridge injects", () => {
   applyAwaitedMcpServers(["cowboy", "matrix"], environment);
   assert.deepEqual(JSON.parse(environment[AWAIT_MCP_SERVERS_ENV]), ["cowboy", "matrix"]);
 });
+
+test("Cowboy core MCP uses the verified CLI alongside binding servers", () => {
+  const args = agentApiConfiguration({
+    environmentId: "target",
+    cwd: "/project",
+    command: "/nix/store/cli/bin/cowboy",
+  });
+  assert.match(args[1], /command="\/nix\/store\/cli\/bin\/cowboy"/);
+});

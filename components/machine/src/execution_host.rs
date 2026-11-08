@@ -3,6 +3,7 @@
 //! under the same incarnation, and admitted effects cannot be retried as new.
 
 pub mod file_helper;
+mod identity;
 mod ledger;
 mod read_only;
 
@@ -142,6 +143,7 @@ fn validate_contract(contract: &LaunchContract) -> Result<()> {
             }),
         "invalid target environment"
     );
+    identity::validate_agent_cli(contract)?;
     ensure!(
         contract.call_context.as_ref().is_none_or(|path| {
             Path::new(path).is_absolute() && path.len() <= 4096 && !path.contains('\0')
@@ -394,17 +396,10 @@ pub async fn run(args: Args) -> Result<()> {
             && metadata.uid() == contract_metadata.uid(),
         "execution state directory must be private"
     );
-    let executor = std::fs::File::open(&contract.executor.command)?;
-    let digest = tokio::task::spawn_blocking(move || {
-        let mut file = executor;
-        let mut hash = Sha256::new();
-        std::io::copy(&mut file, &mut hash).map(|_| format!("{:x}", hash.finalize()))
-    })
-    .await??;
-    ensure!(
-        digest == contract.executor.sha256,
-        "executor digest differs"
-    );
+    identity::verify(&contract.executor).await?;
+    if let Some(cli) = &contract.agent_cli {
+        identity::verify(cli).await?;
+    }
     let cwd = PathBuf::from(&contract.binding.workspace.cwd);
     let physical_cwd = std::fs::canonicalize(&cwd).context("resolving execution workspace")?;
     let metadata = std::fs::metadata(&physical_cwd)?;
@@ -502,6 +497,7 @@ pub async fn run(args: Args) -> Result<()> {
         Ok::<_, anyhow::Error>(result)
     }).await??;
     let mut initialization = initialization;
+    identity::annotate(&mut initialization, &contract)?;
     if let Some(managed) = &contract.managed {
         // The Provider learns its constraint from the target it executes on.
         initialization

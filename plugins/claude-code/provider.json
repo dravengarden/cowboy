@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.20.30",
+  "version": "3.20.32",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.17",
+  "sdk_version": "3.2.0",
   "display": {
     "name": "Claude Code",
     "vendor": "Anthropic",

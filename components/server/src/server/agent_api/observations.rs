@@ -116,6 +116,7 @@ pub(super) async fn read(
                         "options":state.hub.config_options(id),"preferences":state.hub.config_preferences(id)})
                     }
                     "tools" => super::super::agent_tools::session_view(state, &info.meta),
+                    "mcp" => super::super::mcp_bindings::observation(state, &info.meta),
                     _ => return Err("invalid_argument".into()),
                 };
                 state
