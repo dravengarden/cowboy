@@ -21,6 +21,7 @@ pub struct PreparedMcpBinding {
     pub name: String,
     pub server: PreparedMcpServer,
     pub tools: Vec<String>,
+    pub sources: Vec<String>,
 }
 
 impl PreparedMcpBinding {
@@ -32,6 +33,7 @@ impl PreparedMcpBinding {
                 name: self.name.clone(),
                 server: self.server.selection.clone(),
                 tools: self.tools.clone(),
+                sources: self.sources.clone(),
             },
             server_version: self.server.contract.version.clone(),
             tools: self.server.contract.discovery_for(&self.tools)?,
@@ -60,10 +62,18 @@ impl MachinePluginStore {
                 .all(|tool| server.contract.tools.contains(tool)),
             "MCP binding requests an unsigned tool"
         );
+        ensure!(
+            binding
+                .sources
+                .iter()
+                .all(|source| server.contract.sources.contains(source)),
+            "MCP binding requests an unsigned source"
+        );
         Ok(PreparedMcpBinding {
             name: binding.name.clone(),
             server,
             tools: binding.tools.clone(),
+            sources: binding.sources.clone(),
         })
     }
 

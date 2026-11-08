@@ -21,6 +21,14 @@ verification, private artifact staging, activation and uninstall own this lifecy
 verifies its installed bytes, and checks that requested tools are a subset of the
 signed contract. A prepared executable is not execution authority.
 
+The contract may also declare up to eight `sources`: names of external systems the
+server can read (for example `github`). They are names only. A binding grants a
+subset through the same owner policy, Machine preparation rejects an unsigned
+source, and the immutable process profile carries the granted names. The server
+refuses an ungranted source before reaching it; a granted source uses credentials
+already provisioned for the execution Machine user, never credentials in the
+contract, policy or profile.
+
 ## Signed startup discovery
 
 Native MCP clients may request initialize/tools/list before their parent gateway
@@ -214,7 +222,8 @@ session visibility and owner mutation checks. PUT accepts:
       "plugin_id": "suger",
       "generation_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
-    "tools": ["suger_status", "suger_read"]
+    "tools": ["suger_status", "suger_read"],
+    "sources": ["github"]
   }]
 }
 ```

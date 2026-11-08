@@ -14,6 +14,9 @@ pub struct Binding {
     pub name: String,
     pub server: McpServerSelection,
     pub tools: Vec<String>,
+    /// Signed source names this session may read; empty grants none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
 }
 
 impl Binding {
@@ -25,6 +28,12 @@ impl Binding {
                 && self.tools.iter().collect::<BTreeSet<_>>().len() == self.tools.len()
                 && self.tools.iter().all(|name| valid_name(name)),
             "invalid MCP binding tools"
+        );
+        ensure!(
+            self.sources.len() <= 8
+                && self.sources.iter().collect::<BTreeSet<_>>().len() == self.sources.len()
+                && self.sources.iter().all(|name| valid_name(name)),
+            "invalid MCP binding sources"
         );
         Ok(())
     }
@@ -110,6 +119,16 @@ mod tests {
             assert!(
                 Binding {
                     tools,
+                    ..binding.clone()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        for sources in [vec!["x".into(), "x".into()], vec!["bad name".into()]] {
+            assert!(
+                Binding {
+                    sources,
                     ..binding.clone()
                 }
                 .validate()

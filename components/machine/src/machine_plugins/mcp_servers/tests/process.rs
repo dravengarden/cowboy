@@ -68,6 +68,7 @@ done
                 generation_digest: installed.generation_digest,
             },
             tools: vec!["fixture_read".into()],
+            sources: Vec::new(),
         },
     };
     (store, profile, root)

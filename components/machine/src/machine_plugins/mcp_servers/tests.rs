@@ -21,7 +21,7 @@ fn desired(
         "display_name":"Fixture MCP","description":"Signed test server",
         "supported_platforms":[{"os":"linux","architecture":"x86_64"}],
         "protocol":"stdio_session_v1","command":"fixture-mcp","arguments":["serve"],
-        "tools":["fixture_read"],
+        "tools":["fixture_read"],"sources":["fixture_source"],
         "discovery":[{"name":"fixture_read","description":"Read fixture","inputSchema":{"type":"object","properties":{}}}]
     }))
     .unwrap();
@@ -142,6 +142,7 @@ async fn signed_mcp_installation_resolves_only_the_exact_verified_generation() {
         name: "fixture".into(),
         server: selection.clone(),
         tools: vec!["fixture_read".into()],
+        sources: vec!["fixture_source".into()],
     };
     let bound = store.prepare_mcp_binding(&binding).unwrap();
     assert_eq!(bound.tools, ["fixture_read"]);
@@ -149,6 +150,7 @@ async fn signed_mcp_installation_resolves_only_the_exact_verified_generation() {
     let native = bound.native_descriptor(&"a".repeat(32)).unwrap();
     native.validate().unwrap();
     assert_eq!(native.binding.server, selection);
+    assert_eq!(native.binding.sources, ["fixture_source"]);
     assert!(bound.native_descriptor("latest").is_err());
     let discovery = bound.discovery().unwrap();
     assert_eq!(discovery["serverInfo"]["name"], "fixture-mcp");
@@ -156,6 +158,9 @@ async fn signed_mcp_installation_resolves_only_the_exact_verified_generation() {
         discovery["tools"],
         json!([{"name":"fixture_read","description":"Read fixture","inputSchema":{"type":"object","properties":{}}}])
     );
+    let mut unsigned_source = binding.clone();
+    unsigned_source.sources.push("unsigned_source".into());
+    assert!(store.prepare_mcp_binding(&unsigned_source).is_err());
     binding.tools.push("unsigned_execute".into());
     assert!(store.prepare_mcp_binding(&binding).is_err());
     std::fs::write(&prepared.executable, b"tampered").unwrap();

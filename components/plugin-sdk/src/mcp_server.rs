@@ -48,6 +48,10 @@ pub struct McpServerContract {
     pub command: String,
     pub arguments: Vec<String>,
     pub tools: Vec<String>,
+    /// Named external sources the server may read when a binding grants them.
+    /// Names only; credentials stay with the execution Machine.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
     /// Optional for transport-only servers; native startup requires this metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discovery: Option<Vec<crate::McpToolDefinition>>,
@@ -109,12 +113,17 @@ impl McpServerContract {
         if let Some(discovery) = &self.discovery {
             crate::mcp_discovery::validate_mcp_discovery(discovery, &self.tools)?;
         }
-        for name in &self.tools {
+        ensure!(
+            self.sources.len() <= 8
+                && self.sources.iter().collect::<BTreeSet<_>>().len() == self.sources.len(),
+            "invalid MCP sources"
+        );
+        for name in self.tools.iter().chain(&self.sources) {
             ensure!(
                 !name.is_empty()
                     && name.len() <= 64
                     && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
-                "invalid MCP tool name"
+                "invalid MCP tool or source name"
             );
         }
         Ok(())

@@ -33,24 +33,7 @@ done
         archive.append_data(&mut header, name, bytes).unwrap();
     }
     let bytes = archive.into_inner().unwrap().finish().unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/server.tar.gz", listener.local_addr().unwrap());
-    let download = bytes.clone();
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        read_fixture_http_request(&mut stream).await;
-        stream
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    download.len()
-                )
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
-        stream.write_all(&download).await.unwrap();
-    });
+    let (url, server) = super::conformance::serve_archive(bytes.clone()).await;
     let root = tempfile::tempdir().unwrap();
     let publisher =
         crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("publisher"))
@@ -86,6 +69,7 @@ done
                 generation_digest: installed.generation_digest,
             },
             tools: vec!["fixture_read".into()],
+            sources: Vec::new(),
         },
     };
     let scope = PluginExecutionScope::new(Some(&profile.service_id), "hawk");

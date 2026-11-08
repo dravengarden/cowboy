@@ -76,6 +76,8 @@ pub(crate) async fn install() -> Installed {
                 generation_digest: installed.generation_digest,
             },
             tools: vec![tool.into()],
+            // A case may grant signed sources to exercise them end to end.
+            sources: serde_json::from_value(case["sources"].clone()).unwrap_or_default(),
         },
     };
     Installed {
@@ -128,7 +130,7 @@ async fn external_signed_codeact_archive() {
     assert!(process.request(call).await.is_err());
 }
 
-async fn serve_archive(archive: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
+pub(super) async fn serve_archive(archive: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/runtime.tar.gz", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
