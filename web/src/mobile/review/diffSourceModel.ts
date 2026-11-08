@@ -57,3 +57,37 @@ export function diffPointToNewFile(
   }
   return null;
 }
+
+/** Gutter labels for a unified diff, one per display row. */
+export interface DiffLineLabels {
+  /** Working-tree line for context/added rows; empty for headers and removals. */
+  readonly labels: readonly string[];
+  /** The longest label, used to size the gutter before rows render. */
+  readonly widest: string;
+}
+
+/**
+ * Number each display row with its line in the new file, as the selection
+ * reference sent to an Agent does, instead of its row in the patch text.
+ */
+export function diffNewLineLabels(text: string): DiffLineLabels {
+  let newRow: number | undefined;
+  let widest = "";
+  const labels = text.split("\n").map((line) => {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/u.exec(line);
+    if (hunk) {
+      newRow = Number(hunk[1]);
+      return "";
+    }
+    if (line.startsWith("diff ")) newRow = undefined;
+    if (
+      newRow === undefined ||
+      !(line.startsWith("+") || line.startsWith(" "))
+    ) return "";
+    const label = String(newRow);
+    newRow += 1;
+    if (label.length > widest.length) widest = label;
+    return label;
+  });
+  return { labels, widest };
+}

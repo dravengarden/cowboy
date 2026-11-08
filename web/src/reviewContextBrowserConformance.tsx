@@ -546,15 +546,20 @@ async function checkReviewCompareAndSelection(
     await until(() => !!row("app.ts"), "Comparison should list its files");
     check(row("app.ts")?.textContent?.includes("+12 −3"), "A changed file should show its line counts");
     await press(row("app.ts"), "changed file");
+    // One gutter cell per patch row; the spacer cell has no height.
     const lines = () => [
       ...body.querySelectorAll<HTMLElement>(".cm-lineNumbers .cm-gutterElement"),
-    ].filter((element) => element.textContent?.trim());
+    ].filter((element) => element.getBoundingClientRect().height > 0);
     const bar = () => body.querySelector("[data-review-selection-bar]");
     await until(() => lines().length >= 6, "Diff should render line numbers");
     await wait(300);
-    await press(lines().find((line) => line.textContent?.trim() === "5"), "line 5");
+    check(
+      lines().map((line) => line.textContent?.trim()).join(",") === ",,,,,1,",
+      `Diff gutter should number new-file lines, got: ${lines().map((line) => line.textContent).join(",")}`,
+    );
+    await press(lines()[4], "line 5");
     await until(() => bar()?.textContent?.includes("1 line") === true, "A tap should select its line");
-    await press(lines().find((line) => line.textContent?.trim() === "6"), "line 6");
+    await press(lines()[5], "line 6");
     await until(() => bar()?.textContent?.includes("2 lines") === true, "Two taps should select a range");
     check(body.querySelectorAll(".cm-review-selected-line").length === 2, "Selected lines are not highlighted");
 
@@ -570,8 +575,8 @@ async function checkReviewCompareAndSelection(
     const asked = fixture.submits.find((command) => command.includes('"session_id":"explain-fork"'));
     check(asked?.includes("Do not change any files") && asked.includes("src/app.ts:1"), `Explain should ask its fork, got: ${asked}`);
     opened.length = 0;
-    await press(lines().find((line) => line.textContent?.trim() === "5"), "line 5 again");
-    await press(lines().find((line) => line.textContent?.trim() === "6"), "line 6 again");
+    await press(lines()[4], "line 5 again");
+    await press(lines()[5], "line 6 again");
     await until(() => bar()?.textContent?.includes("2 lines") === true, "Selection should work again");
     await press(body.querySelector('[aria-label="Send to Agent"]'), "Send to Agent");
     await until(() => opened.includes("agent"), "Sending should return to the Agent");
