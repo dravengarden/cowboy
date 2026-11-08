@@ -131,6 +131,8 @@ export async function cancelHandoff(
       body: JSON.stringify({ operation }),
     },
   );
+  // A send whose reply was lost is resolved now: it was taken back.
+  sends.delete(cancelled.source_session_id);
   announceContext(id);
   announceContext(cancelled.source_session_id);
   return cancelled;
@@ -335,6 +337,15 @@ export async function sendWithContext(
   if (!configured.has(id) && !sends.has(id)) return false;
   const context = await loadSessionContext(id);
   let request = sends.get(id);
+  // Taken back on any device: the message returned to a Composer, so the
+  // unresolved send is over and the next one is ordinary.
+  if (
+    request && context.delivery?.state === "cancelled" &&
+    context.delivery.operation === request.operation
+  ) {
+    sends.delete(id);
+    request = undefined;
+  }
   if (
     !request && context.revision === context.applied_revision &&
     context.delivery?.state === "accepted" &&

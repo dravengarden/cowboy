@@ -3470,7 +3470,13 @@ impl Hub {
             else {
                 continue;
             };
-            if sessions.iter().any(|meta| meta.id == delivery.session_id)
+            // A handoff taken back is recorded on its destination first.
+            let cancelled = crate::session_context::read(self, &delivery.session_id)
+                .ok()
+                .and_then(|context| context.delivery)
+                .is_some_and(|receipt| receipt.state == "cancelled");
+            if !cancelled
+                && sessions.iter().any(|meta| meta.id == delivery.session_id)
                 && self.setting(&key(&delivery.session_id)).is_none()
             {
                 self.set_setting(key(&delivery.session_id), serde_json::json!(source.id));

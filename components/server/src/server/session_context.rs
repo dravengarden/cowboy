@@ -145,6 +145,7 @@ pub(super) async fn initialize(
             state: "preparing".into(),
             error: None,
             source_trashed: false,
+            returned: None,
         }),
         injection: initial_cmid.map(|cmid| Injection {
             cmid,
@@ -708,8 +709,7 @@ async fn deliver(
         fingerprint: fingerprint(&request),
         session_id: target_id.clone(),
         state: "preparing".into(),
-        error: None,
-        source_trashed: false,
+        ..Delivery::default()
     };
     context.delivery = Some(delivery.clone());
     save(&state, &id, &context).await?;
@@ -942,6 +942,7 @@ mod tests {
                 state: "preparing".into(),
                 error: None,
                 source_trashed: false,
+                returned: None,
             }),
             ..Context::default()
         };

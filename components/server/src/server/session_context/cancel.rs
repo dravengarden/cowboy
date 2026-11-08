@@ -21,6 +21,19 @@ struct Cancelled {
 
 const CANCELLED: &str = "cancelled";
 
+fn replayed(state: &AppState, returned: &crate::session_context::Returned) -> Cancelled {
+    Cancelled {
+        session: state
+            .hub
+            .session_info(&returned.source_session_id)
+            .map(|info| info.meta),
+        source_session_id: returned.source_session_id.clone(),
+        text: returned.text.clone(),
+        content: returned.content.clone(),
+        note: None,
+    }
+}
+
 async fn take_back(
     state: Arc<AppState>,
     auth: AuthenticatedProductRequest,
@@ -29,6 +42,21 @@ async fn take_back(
 ) -> Result<Cancelled, String> {
     current_authority(&state, &auth)?;
     let destination = owned(&state, &auth.principal, &id)?.meta;
+    // A lost reply is replayed from the destination's receipt, which keeps
+    // the message once it left the queue.
+    let replay = |target: &crate::session_context::Context| {
+        target
+            .delivery
+            .as_ref()
+            .filter(|delivery| {
+                delivery.operation == request.operation && delivery.state == CANCELLED
+            })
+            .and_then(|delivery| delivery.returned.as_ref())
+            .map(|returned| replayed(&state, returned))
+    };
+    if let Some(cancelled) = replay(&crate::session_context::read(&state.hub, &id)?) {
+        return Ok(cancelled);
+    }
     let source = destination
         .continued_from
         .ok_or("This session did not continue another one")?;
@@ -39,6 +67,9 @@ async fn take_back(
     let _guard = lock.lock().await;
     owned(&state, &auth.principal, &source)?;
     let mut target = crate::session_context::read(&state.hub, &id)?;
+    if let Some(cancelled) = replay(&target) {
+        return Ok(cancelled);
+    }
     let cmid = target
         .delivery
         .as_ref()
@@ -58,22 +89,48 @@ async fn take_back(
     {
         return Err("The original session has moved on since this handoff".into());
     }
-    let (text, content) = state.hub.take_sole_queued(&id, &cmid).ok_or(
-        "The new agent already has this message; stop it instead, or remove other queued messages first",
-    )?;
-    if state.hub.session_is_trashed(&source)
-        && let Err(error) = super::super::session_trash::restore(
+    let refused = "The new agent already has this message; stop it instead, or remove other queued messages first";
+    if state
+        .hub
+        .session_info(&id)
+        .is_none_or(|info| info.queue_count != 1)
+        || !state.hub.has_queued_cmid(&id, &cmid)
+    {
+        return Err(refused.into());
+    }
+    // Restore first: if the message leaves for the agent meanwhile, the
+    // original is merely back beside its continuation, as when Trash refuses.
+    if state.hub.session_is_trashed(&source) {
+        super::super::session_trash::restore(
             &state,
             &auth.principal,
             &[],
             std::slice::from_ref(&source),
-        )
-    {
+        )?;
+    }
+    let (text, content) = state.hub.take_sole_queued(&id, &cmid).ok_or(refused)?;
+    // The receipt holds the message before anything else changes; without it
+    // the message goes back to the queue rather than exist only in a reply.
+    if let Some(delivery) = target.delivery.as_mut() {
+        delivery.state = CANCELLED.into();
+        delivery.returned = Some(crate::session_context::Returned {
+            source_session_id: source.clone(),
+            text: text.clone(),
+            content: content.clone(),
+        });
+    }
+    target.injection = None;
+    if let Err(error) = advance_applied(&mut target) {
+        state.hub.requeue_prompt(&id, text, content, Some(cmid));
+        return Err(error);
+    }
+    if let Err(error) = save(&state, &id, &target).await {
         state.hub.requeue_prompt(&id, text, content, Some(cmid));
         return Err(error);
     }
     // The work did not move: the destination stops naming the original, so
-    // restoring it later cannot turn the original into history again.
+    // restoring it later cannot turn the original into history again. Its
+    // cancelled receipt keeps startup from recording the mark once more.
     state.hub.set_setting(
         format!(
             "{}{id}",
@@ -96,23 +153,17 @@ async fn take_back(
     if note.is_none() {
         release_launching_worker(&state, &id);
     }
-    // The message is already back in the caller's hands, so a failed receipt
-    // update must not lose it. The receipt only stops naming the destination.
-    for (session, context) in [(&id, &mut target), (&source, &mut context)] {
-        if let Some(delivery) = context.delivery.as_mut() {
-            delivery.state = CANCELLED.into();
-            delivery.source_trashed = false;
-        }
-        if session == &id {
-            context.injection = None;
-        }
-        let saved = match advance_applied(context) {
-            Ok(()) => save(&state, session, context).await,
-            Err(error) => Err(error),
-        };
-        if let Err(reason) = saved {
-            tracing::warn!(%session, %reason, "cancelled handoff receipt not recorded");
-        }
+    // Best effort: the destination's receipt already records the outcome.
+    if let Some(delivery) = context.delivery.as_mut() {
+        delivery.state = CANCELLED.into();
+        delivery.source_trashed = false;
+    }
+    let saved = match advance_applied(&mut context) {
+        Ok(()) => save(&state, &source, &context).await,
+        Err(error) => Err(error),
+    };
+    if let Err(reason) = saved {
+        tracing::warn!(session = %source, %reason, "cancelled handoff source receipt not recorded");
     }
     Ok(Cancelled {
         session: state.hub.session_info(&source).map(|info| info.meta),

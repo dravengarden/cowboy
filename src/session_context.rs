@@ -136,7 +136,7 @@ pub fn without_preamble(
     content
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Delivery {
     pub operation: String,
     pub fingerprint: String,
@@ -148,6 +148,18 @@ pub struct Delivery {
     /// The handoff moved its source to Trash, reported once to undo it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub source_trashed: bool,
+    /// A cancelled handoff keeps the message it took back, so a lost Cancel
+    /// reply can be replayed instead of losing what was written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returned: Option<Returned>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Returned {
+    pub source_session_id: String,
+    pub text: String,
+    #[serde(default)]
+    pub content: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -349,7 +361,7 @@ pub fn read(hub: &crate::core::Hub, id: &str) -> Result<Context, String> {
         || context.delivery.as_ref().is_some_and(|delivery| {
             !matches!(
                 delivery.state.as_str(),
-                "preparing" | "accepted" | "failed" | "unknown"
+                "preparing" | "accepted" | "failed" | "unknown" | "cancelled"
             )
         })
     {
@@ -706,6 +718,7 @@ mod tests {
                 state: "preparing".into(),
                 error: None,
                 source_trashed: false,
+                returned: None,
             }),
             injection: Some(Injection {
                 cmid: "admitted".into(),
@@ -737,6 +750,7 @@ mod tests {
                     state: "accepted".into(),
                     error: None,
                     source_trashed: false,
+                    returned: None,
                 }),
                 injection: Some(Injection {
                     cmid: cmid.into(),
