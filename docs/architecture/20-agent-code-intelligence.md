@@ -844,6 +844,24 @@ uniquely resolvable, otherwise candidates or `stale/ambiguous`.
   bridge exchange holds at most one second; the write itself never waits.
   Delivery identity states, `context_cleared` dropping and watcher-triggered
   coverage remain open.
+
+  Source `e64747ba8` passed the full gate, `claude-remote-check`, and the
+  packaged `execution-worker-conformance` (accepted, 97 checks, unchanged set)
+  and `execution-managed-conformance` (accepted, 7 checks) with the exact
+  rebuilt artifacts. The endpoint-close fixture's 15 s deadline was shorter
+  than an idle event poll's 20 s bound; the post-edit observation exposed it
+  and the deadline is now 25 s. Controller transaction
+  `1794134057192471504-e64747ba8734` succeeded and committed. A direct
+  production `code.post_edit` returned `deliver: false` for a clean file and
+  `deliver: true` (`introduced: 1`, `undefined: missingName`) after the edit.
+  Claude Plugin 3.20.30 (composite
+  `sha256:4b388ab6f31acacdbc8df80ff10e9a0db350cc7bb0947eb9bbf592c136137e5d`)
+  was published with all five URLs matching and installed on OVH by
+  `ovh-claude-code-3-20-30-post-edit` (`applied`; 3.20.27 is the rollback
+  generation). A new 3.20.30 session wrote and then edited a Go file; its
+  model had the row with `comparison: complete`, `introduced: 1` and the
+  `UndeclaredName` message. It answered its own turn before noticing the row,
+  so delivery is next-request, not synchronous. The session was trashed.
 - **Codex.** Existing research proves app-server-owned command hooks only, not
   project-hook exclusion (`docs/experiments/codex-native-hooks-research-2026-10-05.json`).
   A hook is accepted only if conformance proves exact Cowboy-owned hook hashes
