@@ -17,7 +17,7 @@ import {
   browserStateLabel,
   browserViewport,
 } from "./api";
-import { type BrowserModel, browserRunning } from "./browserModel";
+import { type BrowserModel, autoEntry, browserRunning } from "./browserModel";
 import { BrowserActionBar, type BrowserCommands } from "./MachineBrowserActions";
 import { type MachineBrowserController, useMachineBrowser } from "./useMachineBrowser";
 
@@ -256,6 +256,7 @@ function browserCommands(
   browser: MachineBrowserController,
   areaRef: RefObject<HTMLDivElement | null>,
   scale: BrowserScale,
+  signIn: boolean,
 ): BrowserCommands {
   const viewportNow = (): BrowserViewport => {
     const rect = areaRef.current?.getBoundingClientRect();
@@ -268,7 +269,10 @@ function browserCommands(
   const { dispatch } = browser;
   return {
     open: () => browser.open(viewportNow()),
-    attach: (takeover) => dispatch({ type: "attach", takeover }),
+    // A sign-in panel never attaches directly: the sign-in open lets the
+    // Machine validate and bind this login first, then the viewer mounts.
+    attach: (takeover) =>
+      signIn ? browser.open(viewportNow(), takeover) : dispatch({ type: "attach", takeover }),
     detach: () => dispatch({ type: "detach" }),
     hibernate: browser.hibernate,
     snapshot: browser.snapshot,
@@ -312,16 +316,17 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   const machineLabel = machineId
     ? machines.find((machine) => machine.id === machineId)?.display_name || machineId
     : "no Machine yet";
-  const commands = browserCommands(browser, areaRef, scale);
+  const commands = browserCommands(browser, areaRef, scale, Boolean(signInRequest));
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
   const readyToAutoOpen = autoOpen && open && model.loaded && !model.busy && !model.read?.admission;
   useEffect(() => {
     if (!readyToAutoOpen || autoOpened.current) return;
     autoOpened.current = true;
-    if (state?.state === "detached") commandsRef.current.attach(false);
-    else if (!state || state.state === "hibernated") commandsRef.current.open();
-  }, [readyToAutoOpen, state]);
+    const entry = autoEntry(Boolean(signInRequest), state?.state);
+    if (entry === "attach") commandsRef.current.attach(false);
+    else if (entry === "open") commandsRef.current.open();
+  }, [readyToAutoOpen, signInRequest, state]);
 
   const signIn = Boolean(signInRequest);
   const title = signIn ? `Sign-in browser of ${account.label}` : `Browser of ${account.label}`;

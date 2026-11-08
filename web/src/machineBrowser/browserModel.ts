@@ -32,7 +32,14 @@ export type BrowserEvent =
   | { type: "read"; read: BrowserRead; now: number }
   | { type: "read_failed"; message: string }
   | { type: "busy"; action: BrowserAction }
-  | { type: "result"; action: BrowserAction; result: BrowserResult; now: number }
+  | {
+      type: "result";
+      action: BrowserAction;
+      result: BrowserResult;
+      now: number;
+      /** An open asked to take over an attached display (sign-in entry). */
+      takeover?: boolean;
+    }
   | { type: "failed"; action: BrowserAction; message: string }
   | { type: "attach"; takeover: boolean }
   | { type: "detach" }
@@ -56,6 +63,43 @@ export function browserRunning(state: BrowserState | null | undefined): boolean 
 /** A display exists only for a running instance that was not replaced. */
 export function viewerEnds(state: BrowserStateEvent): boolean {
   return !browserRunning(state.state) || state.reason === "superseded";
+}
+
+/** How the panel enters a browser it was asked to show at once. A sign-in
+ * panel always goes through the sign-in open, even for a running browser,
+ * so the Machine validates and binds the login before anything attaches; a
+ * tab panel attaches to a detached browser directly. An attached display is
+ * never entered without the owner's takeover. */
+export function autoEntry(
+  signIn: boolean,
+  state: BrowserState | null | undefined,
+): "open" | "attach" | undefined {
+  if (!state || state === "hibernated") return "open";
+  if (state === "detached") return signIn ? "open" : "attach";
+  return undefined;
+}
+
+/** What a finished snapshot or reset means for the owner: the success text,
+ * or the failure the Machine reported (HTTP 200 carries both). */
+export function operationOutcome(
+  action: "snapshot" | "reset",
+  state: BrowserStateEvent,
+): { notice: string } | { error: string } {
+  if (action === "snapshot") {
+    if (!state.reason) return { notice: "Snapshot published." };
+    return {
+      error: `The snapshot was not published. ${browserReasonText(state.reason) ?? ""}`.trim(),
+    };
+  }
+  if (state.state === "hibernated" && state.reason === "owner_request") {
+    return { notice: "The profile was reset." };
+  }
+  if (state.reason === "superseded") {
+    return { notice: "The profile changed elsewhere; nothing was reset." };
+  }
+  return {
+    error: `The profile was not reset. ${browserReasonText(state.reason) ?? "The Machine did not confirm the reset."}`,
+  };
 }
 
 /** The remote clipboard text the sign-in dialog may offer as an authorization
@@ -137,6 +181,9 @@ export function reduceBrowser(model: BrowserModel, event: BrowserEvent): Browser
         if (state.state === "detached") {
           return { ...next, viewer: { takeover: false, generation: nextGeneration(model) } };
         }
+        if (state.state === "attached" && event.takeover) {
+          return { ...next, viewer: { takeover: true, generation: nextGeneration(model) } };
+        }
         if (state.state === "starting") return { ...next, awaitingOpen: true };
         if (state.state === "hibernated") {
           return {
@@ -145,15 +192,8 @@ export function reduceBrowser(model: BrowserModel, event: BrowserEvent): Browser
           };
         }
       }
-      if (event.action === "snapshot") return { ...next, notice: "Snapshot published." };
-      if (event.action === "reset") {
-        return {
-          ...next,
-          notice:
-            state.reason === "superseded"
-              ? "The profile changed elsewhere; nothing was reset."
-              : "The profile was reset.",
-        };
+      if (event.action === "snapshot" || event.action === "reset") {
+        return { ...next, ...operationOutcome(event.action, state) };
       }
       return next;
     }

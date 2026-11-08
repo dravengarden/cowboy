@@ -13,6 +13,7 @@ import {
   type MachineBrowserApi,
   browserErrorText,
   machineBrowserApi,
+  namesInstance,
 } from "./api";
 import {
   type BrowserAction,
@@ -39,7 +40,9 @@ export interface MachineBrowserController {
   model: BrowserModel;
   dispatch: (event: BrowserEvent) => void;
   refresh(): void;
-  open(viewport: BrowserViewport): void;
+  /** Open (or, for a sign-in, re-validate) the browser; `takeover` mounts
+   * the viewer over another attachment when the open answers attached. */
+  open(viewport: BrowserViewport, takeover?: boolean): void;
   hibernate(): void;
   snapshot(): void;
   reset(): void;
@@ -62,7 +65,7 @@ function errorText(cause: unknown): string {
 
 function instanceOf(model: BrowserModel): BrowserInstance | undefined {
   const state = model.read?.state;
-  return state
+  return state && namesInstance(state)
     ? {
         account_id: state.instance.account_id,
         instance_id: state.instance.instance_id,
@@ -124,12 +127,13 @@ export function useMachineBrowser({
       action: BrowserAction,
       call: (signal: AbortSignal) => Promise<BrowserResult>,
       timeoutMs: number,
+      takeover = false,
     ): void => {
       if (modelRef.current.busy) return;
       dispatch({ type: "busy", action });
       call(signal(timeoutMs)).then(
         (result) => {
-          if (live()) dispatch({ type: "result", action, result, now: Date.now() });
+          if (live()) dispatch({ type: "result", action, result, now: Date.now(), takeover });
         },
         (cause: unknown) => {
           if (live()) dispatch({ type: "failed", action, message: errorText(cause) });
@@ -146,8 +150,8 @@ export function useMachineBrowser({
     [account, api, dataset, signInRequest],
   );
   const open = useCallback(
-    (viewport: BrowserViewport) =>
-      run("open", (abort) => openCall(viewport, abort), OPEN_TIMEOUT_MS),
+    (viewport: BrowserViewport, takeover = false) =>
+      run("open", (abort) => openCall(viewport, abort), OPEN_TIMEOUT_MS, takeover),
     [openCall, run],
   );
   const hibernate = useCallback(() => {

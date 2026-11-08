@@ -96,13 +96,25 @@ function optional<T>(
   return value === undefined || valid(value);
 }
 
+/** Whether an observation names a running or retained instance. The
+ * Machine answers a query for a stopped browser and every reset with
+ * `instance_id: ""` and `incarnation: 0`; such an answer is always
+ * `hibernated` and carries no instance to command. */
+export function namesInstance(state: BrowserStateEvent): boolean {
+  return state.instance.instance_id !== "";
+}
+
+function validInstance(instance: Record<string, unknown>, state: unknown): boolean {
+  if (!id(instance.account_id) || !count(instance.incarnation)) return false;
+  if (instance.instance_id === "") return state === "hibernated" && instance.incarnation === 0;
+  return id(instance.instance_id);
+}
+
 export function validBrowserState(value: unknown): value is BrowserStateEvent {
   if (!record(value) || !record(value.instance)) return false;
   const { instance, geometry } = value;
   return (
-    id(instance.account_id) &&
-    id(instance.instance_id) &&
-    count(instance.incarnation) &&
+    validInstance(instance, value.state) &&
     typeof value.state === "string" &&
     (BROWSER_STATES as readonly string[]).includes(value.state) &&
     optional(value.request_id, text) &&
@@ -352,6 +364,7 @@ const ERROR_TEXT: Record<string, string> = {
   invalid_login_reference: "This sign-in reference is not valid.",
   unavailable: "The Service is temporarily unavailable.",
   resize_failed: "The Machine did not apply the new screen size.",
+  account_revoking: "This account is being revoked; its browser profile is deleted with it.",
   invalid_response: "The Service answered in an unexpected shape.",
 };
 

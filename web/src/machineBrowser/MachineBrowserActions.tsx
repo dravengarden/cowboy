@@ -130,9 +130,10 @@ export function BrowserActionBar({
   const [confirm, setConfirm] = useState<Confirm | undefined>(undefined);
   const busy = Boolean(model.busy);
   const running = browserRunning(state?.state);
-  const admitted = model.loaded && !model.read?.admission;
+  // Deleting a retained profile stays the owner's while either gate is
+  // closed; the Service refuses it only during revocation.
   const resettable =
-    admitted &&
+    model.loaded &&
     !running &&
     state?.state !== "starting" &&
     (state !== null || (model.read?.placements.length ?? 0) > 0);

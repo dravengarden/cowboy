@@ -7,6 +7,7 @@ import {
   POLL_IDLE_MS,
   POLL_STARTING_MS,
   STARTING_FAST_POLL_MS,
+  autoEntry,
   looksLikeAuthorizationCode,
   pollPeriod,
   reduceBrowser,
@@ -128,4 +129,77 @@ test("only one whitespace-free token within the server bound reads as an authori
   assertEquals(looksLikeAuthorizationCode("a\nb"), false);
   assertEquals(looksLikeAuthorizationCode("x".repeat(4096)), true);
   assertEquals(looksLikeAuthorizationCode("x".repeat(4097)), false);
+});
+
+const noInstance = (extra: Partial<BrowserStateEvent> = {}): BrowserStateEvent => ({
+  instance: { account_id: account, instance_id: "", incarnation: 0 },
+  state: "hibernated",
+  profile_revision: 4,
+  observed_at_ms: 2,
+  ...extra,
+});
+
+function finish(
+  action: "snapshot" | "reset",
+  state: BrowserStateEvent,
+  from: BrowserModel = INITIAL_BROWSER_MODEL,
+): BrowserModel {
+  return reduceBrowser(reduceBrowser(from, { type: "busy", action }), {
+    type: "result",
+    action,
+    result: { machine_id: "ovh", state },
+    now: 3,
+  });
+}
+
+test("a snapshot reports success only when the Machine reports no failure", () => {
+  const running = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "read",
+    read: read(event("detached")),
+    now: 1,
+  });
+  const published = finish("snapshot", event("detached"), running);
+  assertEquals(published.notice, "Snapshot published.");
+  assertEquals(published.error, "");
+  const refused = finish("snapshot", event("detached", { reason: "storage_exceeded" }), running);
+  assertEquals(refused.notice, "");
+  assertEquals(refused.error.includes("not published"), true);
+  assertEquals(refused.error.includes("storage budget"), true);
+});
+
+test("a reset reports success only when the Machine carried it out", () => {
+  const done = finish("reset", noInstance({ reason: "owner_request" }));
+  assertEquals(done.notice, "The profile was reset.");
+  assertEquals(done.error, "");
+  assertEquals(done.read?.state?.profile_revision, 4);
+  assertEquals(
+    finish("reset", noInstance({ reason: "superseded" })).notice.includes("nothing"),
+    true,
+  );
+  for (const reason of ["busy", "failed", undefined]) {
+    const failed = finish("reset", noInstance(reason ? { reason } : {}));
+    assertEquals(failed.notice, "", String(reason));
+    assertEquals(failed.error.startsWith("The profile was not reset."), true, String(reason));
+  }
+});
+
+test("a sign-in panel enters every browser through the sign-in open", () => {
+  assertEquals(autoEntry(true, "detached"), "open");
+  assertEquals(autoEntry(true, "hibernated"), "open");
+  assertEquals(autoEntry(true, null), "open");
+  assertEquals(autoEntry(true, "attached"), undefined);
+  assertEquals(autoEntry(false, "detached"), "attach");
+  assertEquals(autoEntry(false, undefined), "open");
+  assertEquals(autoEntry(false, "starting"), undefined);
+  // The sign-in open answers attached: only an explicit takeover mounts it.
+  const open = (takeover: boolean): BrowserModel =>
+    reduceBrowser(INITIAL_BROWSER_MODEL, {
+      type: "result",
+      action: "open",
+      result: { machine_id: "ovh", state: event("attached", { attachment_id: "att-1" }) },
+      now: 1,
+      takeover,
+    });
+  assertEquals(open(true).viewer, { takeover: true, generation: 1 });
+  assertEquals(open(false).viewer, undefined);
 });

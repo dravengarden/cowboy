@@ -13,6 +13,7 @@ import {
   browserStreamUrl,
   browserViewport,
   createMachineBrowserApi,
+  namesInstance,
   sizeChanged,
   validBrowserRead,
   validBrowserState,
@@ -163,6 +164,50 @@ test("state reads are validated field by field", () => {
   assertEquals(validBrowserRead({ ...read, placements: [{ machine_id: "ovh" }] }), false);
   assertEquals(validBrowserRead({ ...read, admission: 7 }), false);
   assertEquals(validBrowserRead(null), false);
+});
+
+test("the Machine's no-instance answer is accepted only as hibernated", () => {
+  const none = { account_id: account, instance_id: "", incarnation: 0 };
+  const stopped = {
+    instance: none,
+    state: "hibernated",
+    snapshot_generation: 4,
+    profile_revision: 3,
+    observed_at_ms: 1,
+  };
+  assertEquals(validBrowserState(stopped), true);
+  assertEquals(namesInstance(stopped as Parameters<typeof namesInstance>[0]), false);
+  assertEquals(namesInstance(state as Parameters<typeof namesInstance>[0]), true);
+  // Every reset answers this shape, with or without a reason.
+  assertEquals(validBrowserState({ ...stopped, reason: "owner_request" }), true);
+  // Instance-scoped states keep strict identities.
+  for (const running of ["starting", "detached", "attached", "stopping"]) {
+    assertEquals(validBrowserState({ ...stopped, state: running }), false, running);
+  }
+  assertEquals(validBrowserState({ ...stopped, instance: { ...none, incarnation: 2 } }), false);
+  assertEquals(
+    validBrowserState({ ...state, instance: { ...state.instance, incarnation: 0 } }),
+    true,
+  );
+  assertEquals(
+    validBrowserRead({ machine_id: "ovh", state: stopped, placements: [], admission: null }),
+    true,
+  );
+});
+
+test("a reset answered without an instance is a valid result", async () => {
+  const reply = {
+    machine_id: "ovh",
+    state: {
+      instance: { account_id: account, instance_id: "", incarnation: 0 },
+      state: "hibernated",
+      reason: "owner_request",
+      profile_revision: 4,
+      observed_at_ms: 1,
+    },
+  };
+  const api = createMachineBrowserApi(fakeFetch(() => ({ status: 200, body: reply })).fetch);
+  assertEquals(await api.reset(account, "dataset-1", 3, new AbortController().signal), reply);
 });
 
 interface Call {
