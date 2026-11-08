@@ -26,6 +26,7 @@ use crate::machine_protocol::{
 };
 
 mod auth_watch;
+mod command_browser;
 mod command_login;
 mod command_plugins;
 mod command_provider_auth;
@@ -1317,6 +1318,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         workspace_revision: workspace_snapshot.revision,
         workspace_owner: Some(workspace_snapshot.owner),
         capacity: config.capacity.clone(),
+        browser: None,
     };
     let proof = if proof_version >= 3 {
         crate::machine_protocol::challenge_proof_v3(&challenge_id, &nonce, expires_at_ms, &hello)
@@ -2631,6 +2633,7 @@ fn handle_machine_command(
         | MachineCommand::CancelLogin { .. }
         | MachineCommand::CancelLoginRequest { .. }
         | MachineCommand::SubmitLoginCode { .. }) => command_login::handle(command, context),
+        command @ MachineCommand::Browser { .. } => command_browser::handle(command, context),
         MachineCommand::ProviderUsageAck { .. }
         | MachineCommand::ManagedCallReply { .. }
         | MachineCommand::MemoryRelay { .. }

@@ -1408,6 +1408,48 @@ fn validate_session_extension(manifest: &PluginManifest, payload: &PluginPayload
     Ok(())
 }
 
+fn validate_telemetry_payload(
+    manifest: &PluginManifest,
+    contract: &TelemetryBackendContract,
+) -> Result<()> {
+    ensure!(
+        contract.id == manifest.id && contract.version == manifest.version,
+        "telemetry payload identity mismatch"
+    );
+    contract.validate()?;
+    ensure!(
+        manifest
+            .components
+            .iter()
+            .any(|component| component.id == "cowboy.plugin-sdk"
+                && Version::parse(&component.version).is_ok_and(|version| version
+                    >= Version::new(1, if contract.schema_version == 2 { 8 } else { 7 }, 0))),
+        "telemetry backends require Plugin SDK 1.7 (schema 1) or 1.8 (schema 2)"
+    );
+    Ok(())
+}
+
+fn validate_machine_browser(
+    manifest: &PluginManifest,
+    contract: &MachineBrowserContract,
+) -> Result<()> {
+    ensure!(
+        contract.id == manifest.id && contract.version == manifest.version,
+        "machine browser payload identity mismatch"
+    );
+    let (major, minor, patch) = MACHINE_BROWSER_SDK;
+    ensure!(
+        manifest
+            .components
+            .iter()
+            .any(|component| component.id == "cowboy.plugin-sdk"
+                && Version::parse(&component.version)
+                    .is_ok_and(|version| version >= Version::new(major, minor, patch))),
+        "machine browsers require Plugin SDK 1.13 or newer"
+    );
+    machine_browser::validate_contract(contract)
+}
+
 fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Result<()> {
     match (manifest.kind, payload) {
         (
@@ -1415,21 +1457,7 @@ fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Resul
             PluginPayload::MemoryBackend(_) | PluginPayload::CallProfile(_),
         ) => validate_session_extension(manifest, payload)?,
         (PluginKind::MachineBrowser, PluginPayload::MachineBrowser(contract)) => {
-            ensure!(
-                contract.id == manifest.id && contract.version == manifest.version,
-                "machine browser payload identity mismatch"
-            );
-            let (major, minor, patch) = MACHINE_BROWSER_SDK;
-            ensure!(
-                manifest
-                    .components
-                    .iter()
-                    .any(|component| component.id == "cowboy.plugin-sdk"
-                        && Version::parse(&component.version)
-                            .is_ok_and(|version| version >= Version::new(major, minor, patch))),
-                "machine browsers require Plugin SDK 1.13 or newer"
-            );
-            machine_browser::validate_contract(contract)?;
+            validate_machine_browser(manifest, contract)?;
         }
         (PluginKind::WorkspaceExtension, PluginPayload::WorkspaceExtension(contract)) => {
             ensure!(
@@ -1452,24 +1480,7 @@ fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Resul
             contract.validate()?;
         }
         (PluginKind::TelemetryBackend, PluginPayload::TelemetryBackend(contract)) => {
-            ensure!(
-                contract.id == manifest.id && contract.version == manifest.version,
-                "telemetry payload identity mismatch"
-            );
-            contract.validate()?;
-            ensure!(
-                manifest
-                    .components
-                    .iter()
-                    .any(|component| component.id == "cowboy.plugin-sdk"
-                        && Version::parse(&component.version).is_ok_and(|version| version
-                            >= Version::new(
-                                1,
-                                if contract.schema_version == 2 { 8 } else { 7 },
-                                0
-                            ))),
-                "telemetry backends require Plugin SDK 1.7 (schema 1) or 1.8 (schema 2)"
-            );
+            validate_telemetry_payload(manifest, contract)?;
         }
         (PluginKind::AgentProvider, PluginPayload::AgentProvider(provider)) => {
             ensure!(

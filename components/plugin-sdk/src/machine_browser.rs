@@ -46,7 +46,7 @@ pub struct MachineBrowserContract {
 
 /// What the host must still provide once the artifact is the instance's
 /// whole userland: a kernel, merged-usr links, two mount points and an
-/// AppArmor with the mediation the sealed policy relies on. The Machine
+/// `AppArmor` with the mediation the sealed policy relies on. The Machine
 /// advertises the browser capability only when every requirement holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -18,6 +18,7 @@ pub mod code_buffer_sync;
 pub mod code_observer;
 pub mod execution;
 pub mod installation_revision;
+pub mod machine_browser;
 pub mod memory_relay;
 pub mod plugin_install;
 pub mod plugin_recovery;
@@ -29,7 +30,10 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 42;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 43;
+/// Machine browser instances (`machine_browser::Command`/`Event`) and the
+/// dedicated display stream they attach to.
+pub const MACHINE_BROWSER_PROTOCOL_VERSION: u16 = 43;
 /// A Machine relays its sessions' memory requests over this channel, and a
 /// home Machine answers them from its local memory backend.
 pub const MEMORY_RELAY_PROTOCOL_VERSION: u16 = 41;
@@ -269,6 +273,10 @@ pub struct MachineHello {
     /// session leases.
     #[serde(default)]
     pub capacity: MachineCapacity,
+    /// Whether this Machine can run owner-operated browsers and with which
+    /// installed Plugin generation. Absent on Machines without the Plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<machine_browser::Capability>,
 }
 
 fn deserialize_provider_contracts<'de, D>(
@@ -1248,6 +1256,12 @@ pub enum MachineCommand {
         request_id: String,
         response: memory_relay::Response,
     },
+    /// One Machine browser lifecycle command; the display itself never
+    /// travels here (`machine_browser::STREAM_PATH`).
+    Browser {
+        request_id: String,
+        browser: machine_browser::Command,
+    },
 }
 
 impl MachineCommand {
@@ -1259,6 +1273,7 @@ impl MachineCommand {
     #[allow(clippy::too_many_lines)] // One exhaustive table keeps mixed-generation admission auditable.
     pub fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::Browser { .. } => MACHINE_BROWSER_PROTOCOL_VERSION,
             Self::CollectNativeUsage { .. } => NATIVE_USAGE_PROTOCOL_VERSION,
             Self::BeginNativeLogin { .. }
             | Self::QueryNativeProfile { .. }
@@ -1751,6 +1766,9 @@ pub enum MachineEvent {
         last_sequence: u64,
         events: Vec<ProviderUsageEvent>,
     },
+    /// Machine browser observation: instance state or capability. Never pixels,
+    /// input or page content.
+    Browser { browser: machine_browser::Event },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2159,6 +2177,7 @@ mod tests {
             workspace_revision: None,
             workspace_owner: None,
             capacity: MachineCapacity::default(),
+            browser: None,
         };
         let proof = challenge_proof_v1("id", "nonce", 42, &hello);
         let mut renamed = hello.clone();
@@ -2313,6 +2332,7 @@ mod tests {
                 workspace_revision: None,
                 workspace_owner: None,
                 capacity: MachineCapacity::default(),
+                browser: None,
             },
         };
         let value = serde_json::to_value(frame).expect("serialize machine hello");
