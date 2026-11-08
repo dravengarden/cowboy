@@ -1,9 +1,11 @@
 # Machine browser: owner-operated browser on a Machine
 
-Status: design, revision 4, 2026-11-08. Nothing below is implemented. Four
-Astra Max design-review rounds (2026-11-08: 12, 17, 14 and 13 findings) are
-folded in and cross-referenced in
-[Acceptance](#acceptance-before-any-real-account). The owner decided the
+Status: design, revision 5, 2026-11-08. Nothing below is implemented. Five
+Astra Max design-review rounds (2026-11-08: 12, 17, 14, 13 and 9 findings)
+are folded in and cross-referenced in
+[Acceptance](#acceptance-before-any-real-account); the fifth round judged
+the remaining medium items resolvable during implementation review behind
+the disabled gates, and they are addressed below. The owner decided the
 policy boundary the same day; see the
 [credential rule](requirements.md#named-provider-accounts-isolation-acceptance)
 amendment. The owner also stated strict isolation between the browsers of
@@ -212,41 +214,56 @@ nothing is configurable from outside beyond the argument vector.
    userland is the artifact. Mount a tmpfs of `--profile-bytes` at
    `/mnt/profile` and a tmpfs of `--instance-bytes` at `/mnt/instance`
    (`HOME`, `XDG_*`, `TMPDIR`, logs); bind the unit's `RuntimeDirectory`,
-   which holds only the control and RFB sockets, at `/mnt/sockets`. If
-   `--snapshot-dir` is given, bind it read-only at `/mnt/snapshot`, restore it
-   into `/mnt/profile` with the no-follow copier described under
+   which holds only the control and RFB sockets, at `/mnt/sockets`. Before
+   anything is masked, open `O_PATH | O_DIRECTORY` descriptors on the
+   account's `browser/staging` directory and, if `--snapshot-dir` is given,
+   on that snapshot generation; later binds use these descriptors as their
+   source (`open_tree` on the descriptor, then `move_mount` onto the alias),
+   so the source stays reachable after its pathname is masked, and AppArmor
+   mediates the resolved source path against the bootstrap profile's exact
+   patterns. If a snapshot was given, bind it read-only at `/mnt/snapshot`,
+   restore it into `/mnt/profile` with the no-follow copier described under
    [snapshots](#profile-storage-tmpfs-and-published-snapshots) (the pages are
    allocated by the launcher inside the unit's cgroup, so they are charged to
-   the unit), then unmount `/mnt/snapshot`. Mount a private tmpfs over `/tmp`
-   (256 MiB) and over `/dev/shm` (`--profile-bytes`); mount a fresh `proc`
-   for the new PID namespace. Build `/etc` as a private tmpfs scaffold
-   containing bind mounts of exactly `resolv.conf`, `hosts`, `nsswitch.conf`,
-   `localtime`, `passwd`, `group`, `machine-id` and `ssl/` from the host plus
-   the policy file at `runtime.policy.directory`, so nothing has to exist on
-   a pristine host and nothing else from the host's `/etc` is visible. Then
-   mask `/home`, the Machine user's `/run/user/<uid>` and, if it lies
-   elsewhere, the Machine state root with empty tmpfs. Every source was
-   bound before its ancestor was masked, so the bind mounts keep their
+   the unit), then unmount `/mnt/snapshot` and close its descriptor. Mount a
+   private tmpfs over `/tmp` (256 MiB) and over `/dev/shm` (`--profile-bytes`);
+   mount a fresh `proc` for the new PID namespace. Build `/etc` as a private
+   tmpfs scaffold containing: bind mounts of exactly `hosts`, `localtime`,
+   `passwd`, `group`, `machine-id` and `ssl/` from the host; a generated
+   `resolv.conf` with the host's nameservers plus `options use-vc` (every DNS
+   query goes over TCP, see the sealed profile); the artifact's own
+   `nsswitch.conf` (`hosts: files dns`, matching the shipped NSS modules
+   exactly); and the policy file at `runtime.policy.directory`. Nothing has
+   to exist on a pristine host and nothing else from the host's `/etc` is
+   visible. Then mask `/home`, the Machine user's `/run/user/<uid>` and, if
+   it lies elsewhere, the Machine state root with empty tmpfs. Every source
+   was bound before its ancestor was masked, so the bind mounts keep their
    objects; afterwards no unselected account directory, no other instance's
    `RuntimeDirectory`, no native credential and no Machine state is reachable
    by any path, in this namespace or in any namespace a descendant could
    create.
 3. **Seal the children, not the mounts.** For each child the launcher
    forks, closes every descriptor except the ones the child needs, `chdir`s
-   into `/mnt/instance`, clears the bounding set while it still holds
-   `CAP_SETPCAP`, clears the ambient, inheritable, permitted and effective
-   sets, sets `no_new_privs`, transitions to the `sealed` AppArmor profile,
-   and execs. The sealed profile has no mount, pivot, umount or remount
-   permission, so a descendant that creates its own user and mount namespace
-   gains nothing it can bind: the kernel still asks the profile. Chromium's
-   zygote keeps working: creating a user namespace needs no capability, the
-   sealed profile grants `userns`, and the capabilities it gains apply only
-   inside the nested namespace.
-   The launcher itself keeps its capabilities in the instance's user
-   namespace under the `bootstrap` profile; it needs them to mount and unmount
-   the snapshot and staging aliases. It talks to the children only through
-   the X protocol and the fixed control protocol, never executes anything
-   they write, and is itself validated by the Machine (see
+   into `/mnt/instance`, writes itself into the child's sub-cgroup
+   (`display/` or `browser/`), performs the authorized **immediate**
+   AppArmor transition to the `sealed` profile (`aa_change_profile`, which
+   the bootstrap profile permits; this is not an on-exec transition), clears
+   the bounding set while it still holds `CAP_SETPCAP`, clears the ambient,
+   inheritable, permitted and effective sets, and only then sets
+   `no_new_privs` and execs, so the sealed label is already in place when
+   `no_new_privs` starts restricting transitions. The sealed profile has no
+   mount, pivot, umount or remount permission, so a descendant that creates
+   its own user and mount namespace gains nothing it can bind: the kernel
+   still asks the profile. Chromium's zygote keeps working: creating a user
+   namespace needs no capability, the sealed profile grants `userns` and the
+   namespaced `chroot` and `/proc` reads its sandbox uses, and the
+   capabilities it gains apply only inside the nested namespace.
+   The launcher's namespace init keeps its capabilities in the instance's
+   user namespace under the `bootstrap` profile; it needs them to mount and
+   unmount the snapshot and staging aliases and to make the socket export
+   read-only. It talks to the children only through the X protocol and the
+   fixed control protocol, never executes anything they write, and is itself
+   validated by the Machine (see
    [confinement verification](#confinement-verification)).
 4. **Display.** Write an X authorization cookie into `/mnt/instance` and
    start `Xtigervnc` on a fixed display number with `-auth <cookie>
@@ -257,7 +274,11 @@ nothing is configurable from outside beyond the argument vector.
    endpoint is the pathname socket in the private `/tmp`; collisions are
    impossible because `/tmp` and the abstract address space are both
    unavailable to other instances (private `/tmp`, abstract addresses denied
-   by the sealed profile). The RFB socket is reachable from outside the
+   by the sealed profile). As soon as the RFB socket exists, the launcher
+   remounts `/mnt/sockets` read-only (bind remount in the instance's mount
+   namespace): the listening socket keeps accepting connections, but no
+   sealed process can unlink it, recreate it or place a regular file on the
+   host's `/run/user` storage. The RFB socket is reachable from outside the
    namespace only through the unit's `RuntimeDirectory`, which is 0700.
 5. **Window manager** keeps the single browser window fullscreen and
    following the screen size.
@@ -286,9 +307,13 @@ nothing is configurable from outside beyond the argument vector.
    `BackgroundModeEnabled=false`, `MetricsReportingEnabled=false`,
    `DefaultBrowserSettingEnabled=false`, `PromotionalTabsEnabled=false`,
    `QuicAllowed=false`, `WebRtcIPHandling=disable_non_proxied_udp`,
+   `BuiltInDnsClientEnabled=false`, `DnsOverHttpsMode=off`,
    `DefaultGeolocationSetting=2`, `DefaultNotificationsSetting=2`,
    `AudioCaptureAllowed=false`, `VideoCaptureAllowed=false`,
-   `RestoreOnStartup=5`. Session restoration is off on purpose: a reopened
+   `RestoreOnStartup=5`. With the built-in resolver off, Chromium resolves
+   names through the artifact's glibc, which the scaffolded `resolv.conf`
+   forces onto TCP, so the browser needs no UDP socket at all and the sealed
+   profile denies them. Session restoration is off on purpose: a reopened
    profile starts on the new-tab page and never resumes old authenticated
    tabs or challenge URLs before the Machine's own verification and
    navigation; cookies persist through the profile snapshot, not through
@@ -309,9 +334,18 @@ nothing is configurable from outside beyond the argument vector.
    incarnation), `attach {attachment_id}` and `detach {attachment_id}`
    (informational), `snapshot {generation}` (described below) and
    `stop {graceful_ms}`.
-9. It exits when the browser exits (after a graceful `stop` it waits for the
-   browser to flush and exit, then stops the display); `KillMode=control-group`
-   ends anything left.
+9. **Supervisor and PID 1.** The process systemd starts is a thin outer
+   supervisor: it stays the unit's `MainPID`, forwards `SIGTERM` to the
+   namespace init, waits for it and exits with its status. The namespace init
+   (PID 1 inside) owns the mounts, the control socket, the children and the
+   snapshot copies, and it stays alive through every copy and publication
+   until `stop` completes or the unit's deadline kills it;
+   `KillMode=control-group` ends anything left. A graceful `stop` sends
+   `SIGTERM` to the **browser main process only**, waits (bounded by the
+   unit's stop timeout) for every process in `browser/` to exit so that
+   Chromium's storage services have flushed, copies the profile, stops the
+   display, then exits. An interrupted shutdown is classified as
+   crash-consistent or unsaved, never as flushed.
 
 ## Instance manager (core Machine)
 
@@ -350,34 +384,56 @@ Persistence is a **published snapshot** under
 `provider-auth/accounts/<uuid>/browser/`:
 
 ```text
-browser/
-  state.json            fsynced first: profile_revision, writer browser_version,
-                        generation digest, current snapshot generation, fences
-  snapshots/gen-<n>/    immutable, complete snapshot generations
-  staging/gen-<n>/      being written; never read as a snapshot
+accounts/<uuid>/
+  browser-state.json    control record, outside the deleted tree: profile_revision,
+                        writer browser_version, generation digest, current snapshot
+                        generation, pending reset/revocation fence and operation id
+  browser/
+    snapshots/gen-<n>/  immutable, complete snapshot generations
+    staging/gen-<n>/    being written; never read as a snapshot
 ```
+
+`browser-state.json` is always replaced atomically: write
+`browser-state.json.tmp`, fsync it, rename over the old file, fsync the
+account directory. Reset and revocation delete only `browser/`; the control
+record survives them, like the native wipe keeps its fences and tombstones.
 
 A snapshot is taken only at a **coherent barrier**:
 
 - at every graceful stop (hibernate, deadline, reclaim, uninstall drain):
-  the launcher asks Chromium to exit (`SIGTERM` to the browser sub-cgroup,
-  bounded by the unit's `TimeoutStopSec`), Chromium flushes and closes its
-  databases, and only then is the tmpfs copied; this is the primary path and
-  the only one that captures in-memory browser state;
+  the launcher sends `SIGTERM` to the browser main process, waits for every
+  process in the `browser/` sub-cgroup to exit (bounded by the unit's stop
+  timeout) so that Chromium's storage services have flushed and closed their
+  databases, and only then copies the tmpfs; this is the primary path and the
+  only one that captures in-memory browser state. If the wait expires, the
+  remaining processes are killed and the copy is classified as
+  crash-consistent, not flushed;
 - optionally while attached, every `browser.snapshot_interval`
   (default 10 min) and on an explicit `BrowserSnapshot`: the Machine freezes
-  the `browser/` sub-cgroup (`cgroup.freeze`), so every Chromium writer is
-  stopped for the whole copy, then thaws it. A frozen copy is
+  the `browser/` sub-cgroup (`cgroup.freeze`), waits for `cgroup.events` to
+  report `frozen 1`, and only then asks the launcher to copy; it thaws on
+  every normal, error and cancellation path. A frozen copy is
   crash-consistent (SQLite WAL and journal files and LevelDB manifests and
   logs are copied together and recover exactly as after a crash); it does
   not include state Chromium has not yet written, and the loss window is
   since the last **published** generation, not a fixed interval, because
   periodic snapshots run only while attached and may be refused or fail.
+  Every Chromium process, including navigation helpers, is placed in
+  `browser/` before it executes and cannot leave it (the sealed profile has
+  no write access to the cgroup tree), so freezing the sub-cgroup stops every
+  profile writer.
+
+Freezer recovery: if the Machine restarts while `browser/` is frozen, the
+instance is adopted only after the Machine resolves the interrupted
+snapshot (the launcher reports whether a copy is in progress; an in-progress
+copy is allowed to finish or is cancelled) and thaws the sub-cgroup; a
+staging directory a live launcher may still be writing is never deleted.
 
 The copy itself is done by the launcher, inside the unit: the Machine
 reserves the staging budget (below), creates `staging/gen-<n>` and the
-launcher binds it at `/mnt/publish` for the duration of the copy only, then
-unmounts it. The copier opens every entry descriptor-relative with
+launcher binds it at `/mnt/publish` through the staging descriptor it
+retained before masking, for the duration of the copy only, then unmounts
+it. The copier opens every entry descriptor-relative with
 `O_NOFOLLOW`, copies only regular files and directories (sockets, FIFOs,
 symlinks, the singleton link and lock files, and the cache directories are
 skipped by name), preserves holes with `SEEK_HOLE`, and stops at the
@@ -387,10 +443,14 @@ regular files and directories only, bounded bytes, entries and depth, no
 links. It treats the tree as untrusted input and never follows anything
 into the host filesystem. Publication is: fsync every copied file and
 directory, fsync `staging/`, rename `staging/gen-<n>` to
-`snapshots/gen-<n>`, fsync `snapshots/`, write `state.json` with the new
-current generation and fsync it, then remove older generations beyond the
-retained one. Restoration reads a snapshot generation only through the
-read-only alias and with the same no-follow copier.
+`snapshots/gen-<n>`, fsync `snapshots/`, publish `browser-state.json`
+atomically with the new current generation, then remove older generations
+beyond the retained one. A generation that exists under `snapshots/` but is
+not named by `browser-state.json` is an orphan from a crash between the
+rename and the pointer update; reconciliation at Machine start and before
+every admission removes orphans and abandoned staging, using the state file
+as the only authority. Restoration reads a snapshot generation only through
+the read-only alias and with the same no-follow copier.
 
 Staging budget: the Machine keeps one byte and inode reservation ledger for
 all browser staging on the Machine, admits a snapshot only when the
@@ -418,15 +478,16 @@ placement is revoked like any other target.
 
 On the Machine, lifecycle mutations and snapshots of one account are
 serialized by one per-account lifecycle lock. `revoke_browser` and
-`reset_browser` share one path, in this order: take the lock; write the
-operation fence and the next `profile_revision` into `state.json` and fsync
-(an admission fence that survives a crash); cancel any in-flight snapshot
-(the launcher's copy is interrupted and its staging directory abandoned, or
-the unit is killed, which has the same effect); stop the running unit and
-wait for its cgroup to be empty, escalating `SIGTERM` to `SIGKILL` on the
-unit's own timeout; delete `browser/snapshots`, `browser/staging` and the
-rest of `accounts/<uuid>/browser` with a scoped, no-follow removal; record
-completion in `state.json`. A snapshot job publishes only if the
+`reset_browser` share one path, in this order: take the lock; publish
+`browser-state.json` with the operation fence and the next
+`profile_revision` (an admission fence that survives a crash); cancel any
+in-flight snapshot (the launcher's copy is interrupted and its staging
+directory abandoned, or the unit is killed, which has the same effect);
+stop the running unit and wait for its cgroup to be empty, escalating
+`SIGTERM` to `SIGKILL` on the unit's own timeout; delete
+`accounts/<uuid>/browser` (snapshots and staging) with a scoped, no-follow
+removal while `browser-state.json` stays in place; publish
+`browser-state.json` again with the completion. A snapshot job publishes only if the
 `(incarnation, profile_revision)` it captured still match under the lock;
 otherwise its staging is discarded. A restart in the middle resumes the
 fenced operation from `state.json` and preserves its receipt; a delayed
@@ -511,17 +572,20 @@ start time and reads from outside the namespace:
   contract's policy directory;
 - the whole cgroup subtree of the unit (`cgroup.procs` recursively, because
   `Delegate=yes` lets children create sub-cgroups): no process owns a
-  listening TCP socket or an explicitly bound UDP socket, matched by socket
-  inode against `/proc/<pid>/net/{tcp,tcp6,udp,udp6}` of each distinct
-  network namespace found among those processes, and no process owns an
-  abstract Unix socket (`/proc/<pid>/net/unix` entries with an `@` path).
+  listening TCP socket or **any** UDP socket, matched by socket inode
+  against `/proc/<pid>/net/{tcp,tcp6,udp,udp6}` of each distinct network
+  namespace found among those processes, and no process owns an abstract
+  Unix socket (`/proc/<pid>/net/unix` entries with an `@` path);
+- `/proc/<pid>/mountinfo` also shows `/mnt/sockets` read-only, and the
+  `RuntimeDirectory` on the host contains exactly the two sockets.
 
 The socket scan repeats every 10 s while the instance runs and at every
 attach, navigate and resize; a violation stops the instance with reason
 `listener_detected`. The scan is detection evidence; prevention is the
-sealed profile (below) plus the browser policy (no QUIC, no non-proxied
-WebRTC UDP, no remote debugging), and admission refuses when prevention is
-unavailable.
+sealed profile (below: no UDP at all, no TCP bind/listen/accept, no abstract
+addresses) plus the browser policy (no QUIC, no non-proxied WebRTC UDP, no
+built-in resolver, no remote debugging), and admission refuses when
+prevention is unavailable.
 
 ### Storage during a run
 
@@ -534,8 +598,8 @@ does during a run can write to the shared filesystem.
 
 ### Profile compatibility and rollback
 
-`state.json` records the full `browser_version` of the artifact that last
-opened the profile, written and fsynced before the launcher restores the
+`browser-state.json` records the full `browser_version` of the artifact that
+last opened the profile, published before the launcher restores the
 snapshot. `open` compares it with the runtime's `browser_version`: an older
 runtime, including an older build of the same major, refuses with
 `profile_newer_than_runtime` and offers Reset; a newer runtime advances the
@@ -784,20 +848,24 @@ denial for every other process stay exactly as they are.
 
 **`bootstrap`** attaches to the Plugin's launcher executable through a glob
 over the Machine state root and runtime digest directory (derived from
-`runtime.launcher`). It grants `userns`; the mount, umount and remount
-operations of step 2 and of the snapshot aliases, each with its exact
-source pattern, destination alias and flags (read-only bind of the installed
-generation, tmpfs at the fixed alias paths, read-only bind of
-`accounts/*/browser/snapshots/gen-*` at `/mnt/snapshot`, read-write bind of
-`accounts/*/browser/staging/gen-*` at `/mnt/publish`, the `/etc` scaffold
-binds); read of the runtime and of the snapshot alias; read-write of
-`/mnt/instance`, `/mnt/profile`, `/mnt/publish` and `/mnt/sockets`; and
-`change_profile -> sealed` plus `signal` and `ptrace (read)` toward its own
-children for supervision. It denies everything else under the Machine user's
-home and the Machine state root with audit logging. The bootstrap profile
-can bind an alias only from the patterns above; it cannot, for example, bind
-another unit's `RuntimeDirectory` or another account's native directory,
-and the launcher is the only process that ever runs under it.
+`runtime.launcher`). It grants `userns`; separate `mount` rules for each
+bind, tmpfs and `proc` mount of step 2 with its exact resolved source
+pattern and destination alias (read-only bind of the installed generation,
+tmpfs at the fixed alias paths, bind of `accounts/*/browser/snapshots/gen-*`
+at `/mnt/snapshot`, bind of `accounts/*/browser/staging/gen-*` at
+`/mnt/publish`, the `/etc` scaffold binds); separate `remount` rules for the
+read-only, `nosuid`, `nodev` flags on the artifact binds and on
+`/mnt/sockets` (a remount carries no source pathname, so it is matched on
+the destination and flags alone); `umount` rules for `/mnt/snapshot` and
+`/mnt/publish`; read of the runtime and of the snapshot alias; read-write of
+`/mnt/instance`, `/mnt/profile`, `/mnt/publish` and `/mnt/sockets`; write to
+the unit's own cgroup tree for placing children; and `change_profile ->
+sealed` plus `signal` and `ptrace (read)` toward its own children for
+supervision. It denies everything else under the Machine user's home and the
+Machine state root with audit logging. The bootstrap profile can bind an
+alias only from the patterns above; it cannot, for example, bind another
+unit's `RuntimeDirectory` or another account's native directory, and the
+launcher is the only process that ever runs under it.
 
 **`sealed`** is reached only by `change_profile` from `bootstrap` and is
 inherited by every descendant, including Chromium's nested sandboxes. It has
@@ -806,17 +874,19 @@ descendant that creates a new user and mount namespace cannot bind or mask
 anything there either. It grants `userns` (for the zygote), read and map of
 `/usr/**`, `/opt/**` and the scaffolded `/etc`, read-write of
 `/mnt/profile/**`, `/mnt/instance/**`, `/tmp/**` and `/dev/shm/**`, creation
-of exactly `/mnt/sockets/rfb.sock` and the X socket in `/tmp/.X11-unix/`,
-and `network inet stream (connect send receive)` and
-`network inet6 stream (connect send receive)` plus
-`network inet dgram (connect send receive)` and the `inet6` equivalent. It
-denies `bind`, `listen` and `accept` on every `inet`/`inet6` socket (a UDP
-receiver that binds port 0 is an explicit `bind` and is refused; a
-connected client UDP socket is auto-bound by the kernel and does not pass
-the `bind` hook), denies every abstract Unix address (`deny unix addr=@**`),
-denies `/mnt/snapshot/**`, `/mnt/publish/**`, `/home/**` and the Machine
-state root with audit logging, and denies `ptrace` and `signal` toward
-anything outside its own instance.
+of exactly `/mnt/sockets/rfb.sock` (only possible before the launcher
+remounts that export read-only) and the X socket in `/tmp/.X11-unix/`, the
+namespaced `sys_chroot` capability and `/proc` reads Chromium's sandbox
+uses, and `network inet stream (connect send receive)` and
+`network inet6 stream (connect send receive)`. It denies every `dgram`
+socket (`deny network inet dgram`, `deny network inet6 dgram`: the browser
+resolves names over TCP and has no other UDP use, so no UDP channel,
+auto-bound or otherwise, can exist), denies `bind`, `listen` and `accept`
+on every `inet`/`inet6` stream socket, denies every abstract Unix address
+(`deny unix addr=@**`), denies `/mnt/snapshot/**`, `/mnt/publish/**`,
+`/home/**`, the Machine state root and any write to the cgroup tree with
+audit logging, and denies `ptrace` and `signal` toward anything outside its
+own instance.
 
 The Machine checks that the host's AppArmor exposes the features these
 profiles rely on (`/sys/kernel/security/apparmor/features`: network
@@ -844,8 +914,8 @@ design, not a side effect:
 | `/tmp`, X display socket, X lock files | private tmpfs per instance; the X server's abstract socket is disabled and abstract addresses are denied by the sealed profile; each instance has its own `Xtigervnc`, so X selections, window state and input never cross |
 | `/dev/shm`, SysV and POSIX IPC | private tmpfs and private IPC namespace per instance |
 | Processes and signals | private PID namespace per instance with its own `/proc`; the sealed profile also denies `ptrace` and `signal` outside the instance |
-| Abstract Unix sockets, UDP receivers, TCP listeners | denied by the sealed profile; the Machine's recursive socket scan is the evidence |
-| Control and RFB sockets | per instance, inside the unit's 0700 `RuntimeDirectory`; reachable only through that host path (the same-user boundary below) |
+| Abstract Unix sockets, UDP sockets of any kind, TCP listeners | denied by the sealed profile (DNS goes over TCP through the artifact's glibc); the Machine's recursive socket scan is the evidence |
+| Control and RFB sockets | per instance, inside the unit's 0700 `RuntimeDirectory`, read-only to every sealed process once created; reachable only through that host path (the same-user boundary below) |
 | Memory and CPU accounting | one systemd unit and cgroup per instance; `max_instances` may allow several at once, each in its own namespaces |
 | Remote clipboard | held per attachment in the viewer, never shared between accounts, dropped on attachment, incarnation or login-request change; the owner's device clipboard is only ever pasted by an explicit action |
 | Runtime files (browser, fonts, policy, glibc) | shared read-only artifact; they carry no state |
@@ -902,12 +972,19 @@ broadens the AppArmor or userns permissions or relaxes the sysctl; adds
 
 ## Acceptance before any real account
 
-Each row cites the round-1 (R1-n), round-2 (R2-n), round-3 (R3-n) or
-round-4 (R4-n) finding it closes.
+Each row cites the round-1 (R1-n), round-2 (R2-n), round-3 (R3-n), round-4
+(R4-n) or round-5 (R5-n) finding it closes.
 
 | Evidence | Findings |
 |---|---|
-| Socket evidence throughout a run: recursive cgroup scan across every network namespace at ready, navigate, resize, reconnect and every 10 s for TCP listeners, explicitly bound UDP sockets and abstract Unix sockets; from inside the sealed profile a TCP `listen`, a UDP `bind` to port 0 and an abstract `bind`/`connect` are all refused; admission refuses on a host without the AppArmor features; X auth enforced; private `/tmp`; no abstract X socket; QUIC and non-proxied WebRTC UDP off, with the effective `WebRtcIPHandling` value read back | R1-1, R2-17, R3-9, R4-12 |
+| Socket evidence throughout a run: recursive cgroup scan across every network namespace at ready, navigate, resize, reconnect and every 10 s for TCP listeners, UDP sockets of any kind and abstract Unix sockets; from inside the sealed profile a TCP `listen`, any UDP `socket()`/`sendto` and an abstract `bind`/`connect` are all refused; name resolution still works over TCP (`getent hosts` and a page load inside the sealed profile); admission refuses on a host without the AppArmor features; X auth enforced; private `/tmp`; no abstract X socket; QUIC and non-proxied WebRTC UDP off, with the effective `WebRtcIPHandling`, `BuiltInDnsClientEnabled` and `DnsOverHttpsMode` values read back | R1-1, R2-17, R3-9, R4-12, R5-6 |
+| Socket export immutability: after the RFB socket exists, a sealed helper's `unlink`, recreate and regular-file write attempts in `/mnt/sockets` fail; the host `RuntimeDirectory` holds exactly the two sockets throughout; the Machine still connects | R5-2 |
+| Control record durability: `browser-state.json` survives reset and revocation and crash injection at every step of both; it is replaced only by temp-file, fsync, rename and parent fsync; an orphan generation left by a crash between rename and pointer update is removed by reconciliation | R5-1, R5-4 |
+| Supervisor and namespace init: the unit's `MainPID` survives the PID-namespace fork, `SIGTERM` to the unit reaches the init, the init outlives a graceful stop's copy and publication, and the cgroup is empty afterwards | R5-7 |
+| Transition order: the final sealed label, empty outer capability sets and `NoNewPrivs` are verified together on every child on Ubuntu 26.04 with the stock sysctl, and Chromium's namespace sandbox is active (`chrome://sandbox` equivalent evidence from the conformance helper) | R5-5 |
+| Freezer recovery: Machine failure injected before the copy, during the copy and before the thaw leaves no frozen browser and no deleted live staging after reconciliation | R5-9 |
+| Staging bind after masking: a real post-ready snapshot binds the staging generation through the retained descriptor and publishes; AppArmor audit shows the resolved source matched | R5-3 |
+| Graceful shutdown: state written just before `hibernate` is present in the snapshot; a shutdown that overruns the stop timeout is recorded as crash-consistent, not flushed | R5-8 |
 | Policy text accepted and accurate about transit, host visibility and the remaining shared channels; Controller stream path has no persistence or logging of payloads (code review + test) | R1-2, R2-7, R3-14, R4-13 |
 | Syscall-level canaries from inside a running instance (a conformance helper exec'd under the sealed profile, not the browser UI): `open`, `openat`, `stat`, `rename`, `mount`, `umount` and `pivot_root` against another synthetic account's snapshot, native credentials, the Machine state root and another instance's `RuntimeDirectory` fail, including from a freshly created descendant user+mount namespace that tries to bind one of those onto `/mnt/profile` or `/mnt/sockets`; the mount table shows only the bound aliases; AppArmor audit shows the denials; `file://` and dialog UI tests are additional, not sufficient | R1-3, R2-1, R3-1, R3-3, R4-1 |
 | Nested sandbox evidence on pristine Ubuntu 26.04 with the stock sysctl: Chromium's zygote creates its user, PID and network namespaces under the inherited sealed profile; the outer instance namespace's `uid_map` is the single self-mapping; capability sets of the display server, window manager and browser main process are empty with `NoNewPrivs`; sandboxed descendants are identified by namespace ancestry and carry the sealed label | R3-1, R4-10 |
@@ -916,7 +993,7 @@ round-4 (R4-n) finding it closes.
 | Hermetic runtime: `Xtigervnc` finds `xkbcomp` and XKB data, Chromium finds fonts and GSettings, all from the artifact, with no `LD_LIBRARY_PATH`; `ldd` audit of every ELF object against the tree alone; `host_requirements` check and refusal on a host that fails it | R2-13, R3-13 |
 | Stream binding and authorization: token single-use, wrong `ConnectionToken`, wrong incarnation, wrong attachment, revoked owner, expired session or step-up during continuous traffic, revoked device, disabled account, gate closed, Origin mismatch all close both hops; takeover detaches only the old attachment; old-connection rejection after Machine reconnection | R1-4, R2-4, R2-6, R2-9, R3-8 |
 | Race and fencing tests: login completes between reservation and unit registration; Machine restart with a live unit (same and different boot) re-verifies confinement before adoption; delayed hibernate/resize/snapshot/reset/detach for a superseded incarnation, attachment or profile revision; browser OOM during login leaves the native login and generation untouched; cross-account open refused | R1-5, R2-3, R2-4, R2-5 |
-| Durable fences and snapshot serialization: crash injection after the fence is written, after the unit is stopped, after deletion but before completion, and during an in-flight snapshot copy and publication, for both reset and revocation; restart resumes the operation, the revision never goes backwards, a stale snapshot never publishes over a reset or replacement profile, abandoned staging is reconciled | R2-2, R3-2, R4-4 |
+| Durable fences and snapshot serialization: crash injection after the fence is written, after the unit is stopped, after deletion but before completion, and during an in-flight snapshot copy and publication, for both reset and revocation; restart resumes the operation, the revision never goes backwards, a stale snapshot never publishes over a reset or replacement profile, abandoned staging is reconciled | R2-2, R3-2, R4-4, R5-1 |
 | Snapshot coherence: frozen-copy snapshots under concurrent Chromium writes recover cleanly (SQLite WAL and LevelDB open without error, cookies intact); graceful-stop snapshots capture state written just before the stop; publication is atomic (generation directory plus fsynced `state.json`), the previous generation survives a crash at every point, and the retained generation is the one `state.json` names | R4-2, R4-6 |
 | Snapshot contents as untrusted input: a profile containing absolute and relative symlinks, FIFOs, sockets, hard links, sparse files, deep trees and oversized files is copied without following, hanging or expanding beyond the bound, and restored the same way; the Machine's validation rejects the hostile staging tree | R4-3 |
 | Restoration and memory accounting: restoring a full-size snapshot charges the unit's cgroup (not the supervisor), the sum of browser plus profile, `/tmp` and `/dev/shm` tmpfs stays below `MemoryMax` under the defaults, no swap is used, and the loss window after a crash equals the state since the last published generation | R4-7 |
