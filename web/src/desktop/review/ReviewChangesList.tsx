@@ -119,8 +119,13 @@ function ComparisonMenu({
 }): React.JSX.Element {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
+  // A request opens the menu once: remounting (a new context, a tab
+  // switch) must not replay the last one.
+  const handled = useRef(openRequest);
   useEffect(() => {
-    if (openRequest > 0) setOpen(true);
+    if (openRequest === handled.current) return;
+    handled.current = openRequest;
+    setOpen(true);
   }, [openRequest]);
   const result = changes.result;
   const comparisons = result?.comparisons ?? [];

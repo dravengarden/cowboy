@@ -316,7 +316,12 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       }
       if (url.pathname.endsWith("/commit")) {
         return json({ apiVersion: 1, oid: "abcdef01", parents: [], author: "Fixture", authorEmail: "fixture@example.test",
-          authoredAt: "2026-10-17T00:00:00Z", message: "Improve review", files: [], filesTruncated: false });
+          authoredAt: "2026-10-17T00:00:00Z", message: "Improve review",
+          files: [{ path: "src/app.ts", status: "modified" }], filesTruncated: false });
+      }
+      if (url.pathname.endsWith("/commit-diff")) {
+        return json({ apiVersion: 1, path, revision: "abcdef01", added: 1, removed: 1, truncated: false,
+          text: "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-before\n+committed\n" });
       }
       if (url.pathname.endsWith("/tree")) {
         return json({

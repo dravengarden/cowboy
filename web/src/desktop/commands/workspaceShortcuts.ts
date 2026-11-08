@@ -239,6 +239,7 @@ export const DESKTOP_SHORTCUTS = {
   focusReview: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusReview),
   reviewChanges: desktopWorkspaceSequence("VC"),
   reviewMark: desktopWorkspaceSequence("VM"),
+  reviewContext: desktopWorkspaceSequence("VX"),
   focusPlan: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPlan),
   focusCalls: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusCalls),
   focusQueue: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusQueue),

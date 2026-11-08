@@ -215,7 +215,7 @@ device and is never synced.
 
 The workbench has two regions, `review.navigator` and `review.document`;
 `Ctrl+H/L` move between them and the Prompt. The Navigator's tabs (Changes,
-Files) are a Cowboy list: `J/K`, `gg/G`, `Ctrl-D/U`, `zz`, `'` labels, `L` or
+Files, History, Worktrees) are a Cowboy list: `J/K`, `gg/G`, `Ctrl-D/U`, `zz`, `'` labels, `L` or
 `Enter` opens (a folder expands), `H` collapses or goes to the parent, `[`/`]`
 switch the tab and `/` filters (`Esc`, `↓` or `Enter` return to the list). The
 Document is a read-only codemirror-vim buffer with the Desktop Vim runtime and
@@ -225,10 +225,17 @@ change queue (the Unread filter does not change it), `]u`/`[u` unreviewed
 file, `gt`/`gT`/`{n}gt` file tab, and `Enter` (Normal or Visual), which
 appends the lines with their location to the Prompt and focuses it, unfolding
 a folded Prompt. The Review group (`␣V`, while Review is shown): `V` focus,
-`C`/`F` Changes/Files, `A` compare against, `U` unread only, `M` mark
+`C`/`F`/`H`/`W` Changes/Files/History/Worktrees, `X` what to review (the
+Session's default, its project checkout, linked, bound or same-project
+sessions; per device, and choosing never moves the Agent), `,` Review
+settings, `A` compare against, `U` unread only, `M` mark
 reviewed (the focused row, else the open file), `S` send and stay, `Q` close
 the file tab, `P` keep it, `[` fold the Navigator, `L` the classic layout.
-Below 900 px of Review width the Navigator folds to a rail and `␣VC`/`␣VF`
+In History `L` opens a commit's files and their diffs open as commit tabs;
+`H` returns to the commits. In Worktrees `L` reviews a worktree: one a
+session owns as that session, an unowned one on this Service's Machine as a
+worktree context. The Navigator's edge drags, and Resize mode (`␣WR`, `Tab`)
+reaches it as `review-navigator`. Below 900 px of Review width the Navigator folds to a rail and `␣VC`/`␣VF`
 open it inset; `Esc` or `H` at its root closes it.
 
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).

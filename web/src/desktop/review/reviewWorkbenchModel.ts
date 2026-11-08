@@ -52,7 +52,8 @@ export function adjacentEntry(
 }
 
 /** The Composer text for the Document's selection, naming a root that is
- *  not the Agent's own worktree so a same-named path cannot be confused. */
+ *  not the Agent's own worktree so a same-named path cannot be confused, and
+ *  the commit a History file belongs to. */
 export function documentRemark(
   view: EditorView,
   document: DesktopReviewDocument,
@@ -61,11 +62,12 @@ export function documentRemark(
   const message = reviewSelectionMessage({
     path: document.path,
     text: view.state.doc.toString(),
-    kind: document.kind,
+    kind: document.kind === "source" ? "source" : "diff",
     selection: editorSelection(view),
     comparison: document.kind === "diff" ? document.comparison : undefined,
   });
-  return root ? `In \`${root}\`:\n${message}` : message;
+  const commit = document.kind === "commit" ? `In commit ${document.oid.slice(0, 10)}:\n` : "";
+  return `${root ? `In \`${root}\`:\n` : ""}${commit}${message}`;
 }
 
 export function pathRemark(path: string, root: string | undefined): string {

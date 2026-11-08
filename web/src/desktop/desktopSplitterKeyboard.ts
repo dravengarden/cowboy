@@ -8,6 +8,18 @@ export const DESKTOP_SPLITTER_ADJUST_EVENT =
 export const DESKTOP_SPLITTER_STEP = 16;
 export const DESKTOP_SPLITTER_LARGE_STEP = 48;
 
+/** Every splitter Resize mode cycles: the work panes', then Review's
+ *  Navigator edge (docs/desktop-code-review.md "Inner width policy"). */
+export const DESKTOP_SPLITTER_IDS: readonly DesktopSplitterId[] = [
+  "sessions-prompt",
+  "prompt-conversation",
+  "review-navigator",
+];
+
+export function isDesktopSplitterId(value: unknown): value is DesktopSplitterId {
+  return typeof value === "string" && (DESKTOP_SPLITTER_IDS as readonly string[]).includes(value);
+}
+
 export interface DesktopSplitterAdjustment {
   splitter: DesktopSplitterId;
   delta: number;
@@ -19,9 +31,7 @@ export function splitterAdjustment(event: Event): DesktopSplitterAdjustment | nu
   const detail = event.detail as Record<string, unknown>;
   const splitter = detail.splitter;
   const delta = detail.delta;
-  if (splitter !== "sessions-prompt" && splitter !== "prompt-conversation") {
-    return null;
-  }
+  if (!isDesktopSplitterId(splitter)) return null;
   return typeof delta === "number" && Number.isFinite(delta)
     ? { splitter, delta }
     : null;
@@ -33,9 +43,7 @@ export function visibleDesktopSplitterIds(
   return [...root.querySelectorAll<HTMLElement>("[data-desktop-splitter]")]
     .filter((element) => element.offsetParent !== null)
     .map((element) => element.dataset.desktopSplitter)
-    .filter((id): id is DesktopSplitterId =>
-      id === "sessions-prompt" || id === "prompt-conversation"
-    );
+    .filter(isDesktopSplitterId);
 }
 
 export function preferredDesktopSplitter(

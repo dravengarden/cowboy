@@ -60,3 +60,11 @@ test("stored tabs are validated and keep at most one preview", () => {
   assertEquals(parsed.active, reviewDocumentKey(diff("a")));
   assertEquals(parseReviewTabs("junk"), NO_REVIEW_TABS);
 });
+
+test("a commit file is its own tab and survives a reload", () => {
+  const commit: DesktopReviewDocument = { kind: "commit", oid: "abcdef01", path: "a.rs" };
+  const state = openReviewDocument(openReviewDocument(NO_REVIEW_TABS, diff("a.rs"), true), commit, true);
+  assertEquals(state.tabs.length, 2);
+  assertEquals(parseReviewTabs(JSON.parse(JSON.stringify(state))).tabs.length, 2);
+  assertEquals(parseReviewTabs({ tabs: [{ document: { kind: "commit", oid: "nope!", path: "a" } }] }).tabs.length, 0);
+});

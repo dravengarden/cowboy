@@ -8,6 +8,7 @@ import {
 import { sessionExecution } from "../../sessionExecution";
 import { useMobileReviewState, useStoreSelector } from "../../store";
 import type { MobileReviewState } from "../../mobileReviewState";
+import { useReviewContextChoice } from "./desktopReviewContextChoice";
 
 /** The code a Desktop Review reads: the Session's worktree, or the review
  *  directory its folder defaults name (13-code-review "Code surface"). */
@@ -19,6 +20,11 @@ export interface DesktopReviewTarget {
   readonly label: string;
   /** Whether this is the Agent's own worktree (remarks then need no root). */
   readonly own: boolean;
+  /** Where the files are: the Machine and, for project code, its workspace. */
+  readonly machineId: string | undefined;
+  readonly workspaceId: string | undefined;
+  /** What kind of code this is, for the context control. */
+  readonly kind: string;
 }
 
 export interface DesktopReviewContext {
@@ -32,6 +38,8 @@ export interface DesktopReviewContext {
   readonly synced: MobileReviewState;
   /** The Agent Session's own synced state: its reveal requests. */
   readonly agentSynced: MobileReviewState;
+  /** The reader's pick on this device, absent when following the default. */
+  readonly choice: string | undefined;
 }
 
 export function useDesktopReviewContext(): DesktopReviewContext {
@@ -41,6 +49,7 @@ export function useDesktopReviewContext(): DesktopReviewContext {
   const folders = useStoreSelector((snapshot) => snapshot.sessionFolders);
   const session = sessions.find((item) => item.id === binding?.sessionId);
   const own = useMobileReviewState(session?.id);
+  const choice = useReviewContextChoice(session?.id);
   const ready = useStoreSelector((snapshot) =>
     snapshot.sessionFoldersReady &&
     (!session || snapshot.mobileReviewReady.has(session.id))
@@ -48,7 +57,7 @@ export function useDesktopReviewContext(): DesktopReviewContext {
   const resolved = useMemo((): { target: DesktopReviewTarget | null; error?: string } => {
     if (!session || !binding) return { target: null };
     if (!ready) return { target: null, error: "Loading review defaults…" };
-    const directory = inheritedReviewDirectory(session, folders, own.directory).value;
+    const directory = choice ?? inheritedReviewDirectory(session, folders, own.directory).value;
     const result = resolveReviewDirectory(directory, session, sessions, machines);
     if (result.error) return { target: null, error: result.error };
     if (result.context && result.context.sessionId !== session.id) {
@@ -58,6 +67,9 @@ export function useDesktopReviewContext(): DesktopReviewContext {
           cwd: result.context.cwd,
           label: result.context.title,
           own: false,
+          machineId: result.context.machineId,
+          workspaceId: result.context.workspaceId,
+          kind: result.context.kind,
         },
       };
     }
@@ -76,9 +88,12 @@ export function useDesktopReviewContext(): DesktopReviewContext {
         cwd: execution.cwd,
         label: execution.cwd.split("/").filter(Boolean).slice(-2).join("/") || session.title,
         own: true,
+        machineId: result.context?.machineId ?? execution.machineId,
+        workspaceId: result.context?.workspaceId,
+        kind: result.context?.kind ?? "Worktree",
       },
     };
-  }, [binding, folders, machines, own.directory, ready, session, sessions]);
+  }, [binding, choice, folders, machines, own.directory, ready, session, sessions]);
   const stateKey = resolved.target
     ? reviewStateKey(session?.id, resolved.target.sessionId)
     : undefined;
@@ -90,5 +105,6 @@ export function useDesktopReviewContext(): DesktopReviewContext {
     stateKey,
     synced,
     agentSynced: own,
+    choice,
   };
 }

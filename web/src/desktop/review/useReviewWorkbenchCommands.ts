@@ -8,7 +8,9 @@ import { desktopReviewShown } from "./desktopWorkView";
 import { REVIEW_NAVIGATOR_REGION } from "./DesktopReviewNavigator";
 
 export interface ReviewWorkbenchActions {
-  readonly showNavigator: (tab: "changes" | "files") => void;
+  readonly showNavigator: (tab: "changes" | "files" | "history" | "worktrees") => void;
+  readonly openContext: () => void;
+  readonly openSettings: () => void;
   readonly openComparison: () => void;
   readonly toggleUnread: () => void;
   readonly mark: () => void;
@@ -70,6 +72,10 @@ export function useReviewWorkbenchCommands(actions: ReviewWorkbenchActions): voi
     return [
       leader("review.changes", "VC", "Review: Changes", () => a().showNavigator("changes")),
       leader("review.files", "VF", "Review: Files", () => a().showNavigator("files")),
+      leader("review.history", "VH", "Review: History", () => a().showNavigator("history")),
+      leader("review.worktrees", "VW", "Review: Worktrees", () => a().showNavigator("worktrees")),
+      leader("review.context", "VX", "Review: Choose what to review…", () => a().openContext()),
+      leader("review.settings", "V,", "Review: Settings", () => a().openSettings()),
       leader("review.compare", "VA", "Review: Compare against…", () => a().openComparison()),
       leader("review.unread", "VU", "Review: Only unreviewed files", () => a().toggleUnread()),
       leader("review.mark", "VM", "Review: Mark reviewed", () => a().mark()),

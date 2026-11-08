@@ -39,6 +39,7 @@ const CODES: Record<string, [string, number]> = {
   "]": ["BracketRight", 221],
   "[": ["BracketLeft", 219],
   "/": ["Slash", 191],
+  ",": ["Comma", 188],
 };
 const key = async (value: string, modifiers = 0) => {
   const upper = value.length === 1 && value !== value.toLowerCase();
@@ -64,6 +65,19 @@ const activeTab = `document.querySelector("[data-review-file-tab][aria-selected=
 const mac = (await page.evaluate<string>("navigator.platform")).toLowerCase().includes("mac");
 // The leader from a text field: Cmd+K on macOS, Alt+K elsewhere.
 const prefix = () => key("k", mac ? 4 : 1);
+const click = async (selector: string) => {
+  const point = await page.evaluate<{ x: number; y: number } | null>(`(() => {
+    const node = document.querySelector(${JSON.stringify(selector)});
+    if (!node) return null;
+    const r = node.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  })()`);
+  check(point, `Missing ${selector}`);
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    await page.send("Input.dispatchMouseEvent", { type, button: "left", clickCount: 1, ...point });
+  }
+  await sleep(150);
+};
 const viewport = (width: number, height: number) =>
   page.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
 
@@ -178,6 +192,69 @@ try {
   await until(`!document.querySelector("[data-review-tree-path='src/app.ts']")`, "H collapses it");
   await shot("3-files");
   results.push("Files: ␣VF, L expands, H goes to the parent and collapses");
+
+  await keys(" ", "v", "h");
+  await until(`document.querySelector("[data-review-navigator-tab='history'][aria-selected='true']")`, "␣VH shows History");
+  await until(`document.querySelector("[data-review-commit]")`, "commits load");
+  await page.evaluate(`document.querySelector("[data-review-commit]").focus()`);
+  await key("l");
+  await until(`document.querySelector("[data-review-commit-file='src/app.ts']")`, "L opens the commit's files");
+  await key("j");
+  await key("Enter");
+  await until(`document.querySelector("[data-review-file-tab-kind='commit'][aria-selected='true']")`, "Enter opens the commit file");
+  await until(`document.querySelector("[data-desktop-review-editor]")?.textContent.includes("committed")`, "the commit diff is shown");
+  await keys(" ", "v", "h");
+  await page.evaluate(`document.querySelector("[data-review-commit-file]").focus()`);
+  await key("h");
+  await until(`document.activeElement?.dataset.reviewCommit`, "H returns to the commits");
+  results.push("History: ␣VH, L opens a commit's files, Enter opens its diff as a commit tab, H returns");
+
+  await keys(" ", "v", "w");
+  await until(`document.querySelector("[data-review-worktree]")`, "␣VW lists the worktrees");
+  await keys(" ", "v", "x");
+  await until(`document.querySelector("[data-review-context-option='default']")`, "␣VX opens the context menu");
+  const option = await page.evaluate<string>(`[...document.querySelectorAll("[data-review-context-option]")].map((n) => n.dataset.reviewContextOption).find((v) => v !== "default") ?? ""`);
+  check(option, "the context menu offers another context");
+  await shot("5-context");
+  const before = await text("[data-review-context]");
+  await click(`[data-review-context-option="${option}"]`);
+  await until(`document.querySelector("[data-review-context]")?.textContent.includes("chosen here")`, "choosing a context marks it chosen");
+  check((await text("[data-review-context]")) !== before, "the context control names the chosen context");
+  await until(`document.querySelector("[data-review-progress]")?.textContent.includes("reviewed")`, "the chosen context's changes load");
+  await until(`!document.querySelector("[role=menu]")`, "the menu closes");
+  await until(focusIn("review.navigator"), "focus lands in the new context's Navigator");
+  await keys(" ", "v", "x");
+  await until(`document.querySelector("[data-review-context-option='default']")`, "␣VX reopens the menu");
+  await click(`[data-review-context-option="default"]`);
+  await until(`!document.querySelector("[data-review-context]")?.textContent.includes("chosen here")`, "This session restores the default");
+  await until(`!document.querySelector("[role=menu]")`, "the menu closes again");
+  await until(focusIn("review.navigator"), "focus returns to the Navigator");
+  results.push(`Worktrees list; ␣VX switches Review to ${option} and back to This session`);
+
+  await keys(" ", "v", ",");
+  await until(`[...document.querySelectorAll("[role=dialog]")].some((d) => d.textContent.includes("Review settings"))`, "␣V, opens Review settings");
+  await shot("6-settings");
+  await key("Escape");
+  await until(`![...document.querySelectorAll("[role=dialog]")].some((d) => d.textContent.includes("Review settings"))`, "Escape closes the settings");
+  results.push("␣V, opens Review settings and Escape closes them");
+
+  const navigatorWidth = () => page.evaluate<number>(`document.querySelector("[data-review-navigator]").getBoundingClientRect().width`);
+  const startWidth = await navigatorWidth();
+  const edge = await page.evaluate<{ x: number; y: number }>(`(() => { const r = document.querySelector("[data-desktop-splitter='review-navigator']").getBoundingClientRect(); return { x: r.x, y: r.y + r.height / 2 }; })()`);
+  await page.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...edge });
+  await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "left", x: edge.x + 80, y: edge.y });
+  await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, x: edge.x + 80, y: edge.y });
+  await sleep(150);
+  const widened = await navigatorWidth();
+  check(widened >= startWidth + 60, `dragging the Navigator edge widens it (${String(startWidth)} → ${String(widened)})`);
+  // A pointer on a bar selects it for Resize mode, as the work-pane bars do.
+  check(
+    await page.evaluate<boolean>(`document.querySelector("[data-desktop-splitter='review-navigator']")?.dataset.desktopSplitterSelected === "true"`),
+    "the dragged edge is selected in Resize mode",
+  );
+  await key("Escape");
+  await until(`!document.querySelector("[data-desktop-splitter-selected='true']")`, "Escape leaves Resize mode");
+  results.push(`The Navigator edge drags from ${String(Math.round(startWidth))} to ${String(Math.round(widened))} px and joins Resize mode`);
 
   await viewport(1180, 900);
   await until(`document.querySelector("[data-review-compact='true']")`, "a narrow Review is compact");
