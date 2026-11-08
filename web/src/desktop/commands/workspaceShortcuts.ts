@@ -131,6 +131,8 @@ export const DESKTOP_WORKSPACE_KEYS = {
   // `␣V` is the Review group and `␣VV` focuses it, as `␣SS`/`␣TT` do.
   review: "V",
   focusReview: "VV",
+  // Review's classic (phone) layout, until the workbench covers it.
+  reviewLayout: "VL",
   focusPlan: "L",
   // Managed calls delegated to other Agents: `G` for aGents.
   focusCalls: "G",
@@ -235,6 +237,8 @@ export const DESKTOP_SHORTCUTS = {
   ),
   review: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.review),
   focusReview: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusReview),
+  reviewChanges: desktopWorkspaceSequence("VC"),
+  reviewMark: desktopWorkspaceSequence("VM"),
   focusPlan: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPlan),
   focusCalls: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusCalls),
   focusQueue: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusQueue),

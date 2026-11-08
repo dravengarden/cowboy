@@ -211,8 +211,25 @@ device and is never synced.
 - The transcript's bare keys (`V` History/Explore, `F` Follow, `P` Page
   Index) do not run while Review is shown; the palette explains why.
 - The approval dock belongs to the work pane and stays under either view.
-- While Review is shown the region is `conversation.review` and the status
-  line's pane segment reads `REVIEW`.
+- While Review is shown the status line's pane segment reads `REVIEW`.
+
+The workbench has two regions, `review.navigator` and `review.document`;
+`Ctrl+H/L` move between them and the Prompt. The Navigator's tabs (Changes,
+Files) are a Cowboy list: `J/K`, `gg/G`, `Ctrl-D/U`, `zz`, `'` labels, `L` or
+`Enter` opens (a folder expands), `H` collapses or goes to the parent, `[`/`]`
+switch the tab and `/` filters (`Esc`, `↓` or `Enter` return to the list). The
+Document is a read-only codemirror-vim buffer with the Desktop Vim runtime and
+the user's vimrc; Insert is refused. Review adds, per editor and below any user
+mapping of the same keys: `]c`/`[c` hunk, `]f`/`[f` file over the complete
+change queue (the Unread filter does not change it), `]u`/`[u` unreviewed
+file, `gt`/`gT`/`{n}gt` file tab, and `Enter` (Normal or Visual), which
+appends the lines with their location to the Prompt and focuses it, unfolding
+a folded Prompt. The Review group (`␣V`, while Review is shown): `V` focus,
+`C`/`F` Changes/Files, `A` compare against, `U` unread only, `M` mark
+reviewed (the focused row, else the open file), `S` send and stay, `Q` close
+the file tab, `P` keep it, `[` fold the Navigator, `L` the classic layout.
+Below 900 px of Review width the Navigator folds to a rail and `␣VC`/`␣VF`
+open it inset; `Esc` or `H` at its root closes it.
 
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
 Numbered session slots (`Alt/Option+1…0`) are retired: labels replace them,

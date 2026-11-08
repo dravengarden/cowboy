@@ -86,7 +86,10 @@ export async function surfacesFlow(
   await key(" ");
   await key("v");
   await until(reviewShown, "␣V shows Review");
-  await until(focusIn("conversation.review"), "␣V focuses Review");
+  // Review owns focus in either layout: the workbench's Document region, or
+  // the classic layout's single region.
+  const inReview = `document.activeElement?.closest("[data-desktop-review]")`;
+  await until(inReview, "␣V focuses Review");
   check(
     await page.evaluate<boolean>(
       `document.querySelector("[data-desktop-work-view='review']").getAttribute("aria-selected") === "true"`,
@@ -105,7 +108,7 @@ export async function surfacesFlow(
   await until(`document.querySelector('[data-desktop-leader-menu="group:v"]')`, "␣V opens the Review group while Review is shown");
   await shot("surfaces-4-review-group");
   await key("v");
-  await until(focusIn("conversation.review"), "␣V V focuses Review");
+  await until(inReview, "␣V V focuses Review");
   results.push(`Review group: ${mac ? "⌘K" : "Alt+K"} V opens it from the Prompt, V focuses Review`);
 
   await key(" ");

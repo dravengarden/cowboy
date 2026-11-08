@@ -1,6 +1,6 @@
 # Desktop Code Review
 
-**Status: design proposal r3 (2026-11-08); D0 implemented, D1–D4 planned.** r3 records the
+**Status: design proposal r3 (2026-11-08); D0 and the D1 core implemented, D1b–D4 planned.** r3 records the
 owner's answers to the r2 open questions. r2 folds in a
 Codex Astra Max design review of r1 (managed call
 `call-53884a467577cfb02c34574f`: verdict *needs-attention*, five high and ten
@@ -535,11 +535,24 @@ together" reads "Prompt and the work pane".
 | Phase | Scope | Acceptance |
 | --- | --- | --- |
 | D0 seam (implemented) | Work-pane view tabs; `review.open`/`review.focus` and the gated `␣V` group; `REVIEW` status segment; `Esc` policy; `DesktopPane` `review`; the approval dock hosted by the work pane; FOCUS.md updated; the current `ReviewApp` still renders inside | `just desktop-browser-gate`; shortcut audit lists no uncovered control; an approval arriving while Review is open is answerable at the pane's full width; Mobile screenshots and chunks unchanged |
-| D1 workbench | Width tiers, Navigator with list grammar and tabs, Document as read-only Vim buffer (unified diff, source, file tabs, `]c ]f ]u gt`, `Enter`/`␣VS`), editor-scoped Vim additions, device-local state and reveal adapter, comparison/unread/mark | Keyboard-only scripted review of a 50-file change at 1100, 1440 and 1728 px; no synced tab writes from Desktop; Composer and Review mounted together with a vimrc mapping of `]c` still owned by the user; `H` across width tiers without remount |
+| D1 workbench (core implemented) | Width tiers, Navigator with list grammar and tabs, Document as read-only Vim buffer (unified diff, source, file tabs, `]c ]f ]u gt`, `Enter`/`␣VS`), editor-scoped Vim additions, device-local state and reveal adapter, comparison/unread/mark | Keyboard-only scripted review of a 50-file change at 1100, 1440 and 1728 px; no synced tab writes from Desktop; Composer and Review mounted together with a vimrc mapping of `]c` still owned by the user; `H` across width tiers without remount |
+| D1b (planned) | History and Worktrees tabs, the context control (`␣VX`: linked sessions, project checkout, bound worktrees, Remote PR), Navigator resize; until then `␣VL` switches Review to the classic (phone) layout, which keeps them | the same acceptance plus the classic layout's suites |
 | D2 tools | Streaming patch decoder and `@codemirror/merge` split view (patch-only), Inspector (Outline, Hunks, Problems, Details), `K` `gd` `gr` `gO` `]d`, checks `␣VK` with context gating, Review settings | Decoder fixtures pass; split and unified agree on every hunk of the fixture; hover/definition round trips under the measured `review_read_completed` budget |
 | D2b sides | Comparison-bound side windows; expanded context in the split layout | Expanded old-side text equals `git show <base>:<path>` for the fixture; an edited worktree never changes it |
 | D3 agent loop | Delegation contract, Explain/Review forks as kept-source preview tabs, findings projection with anchor states, `␣VS` on a problem | A managed review's findings land on their lines at `exact`, move to `heuristic`/`unmapped` after an edit, and disappear with a deleted fork; a prose result is shown as text |
 | D4 isolation | Desktop drops `mobile/review` UI imports; shared domain under `web/src/review/`; `open` reveal payload; 13 updated | Structure ratchet totals not above baseline; Mobile unchanged |
+
+D1 as implemented (`web/src/desktop/review/`): the Navigator has Changes and
+Files; the Document is the read-only Vim buffer with unified diffs, source
+files, file tabs and the footer (path, `+n −m`, hunk position, Mark reviewed,
+Send to Prompt). Two deviations from the table above: the leader has no
+nested groups, so file-tab commands are `␣VQ` close and `␣VP` keep instead of
+a `␣VB` sub-group, and Review settings stay in the classic layout. The
+Desktop code font is at least 12 px. The context is the Session's worktree
+or its folder's review directory; an agent's reveal opens a file only in the
+Session's own worktree. `tools/cdp-review-acceptance.ts` drives the
+workbench with trusted keys in both themes and is part of
+`just desktop-keyboard-acceptance`.
 
 D0 keeps the Desktop pane model at three panes: Review is the region
 `conversation.review` of the Conversation pane rather than a fourth

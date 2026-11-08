@@ -88,3 +88,20 @@ export function desktopWorkViewFromEvent(event: Event): DesktopWorkView | null {
   const detail = (event as CustomEvent<unknown>).detail;
   return detail === "conversation" || detail === "review" ? detail : null;
 }
+
+// An agent's or a link's reveal can arrive before the workbench has mounted:
+// the work-view hook marks it pending and the workbench takes it on mount or
+// at once when it is already there.
+let revealPending = false;
+export const DESKTOP_REVIEW_REVEAL_EVENT = "cowboy:desktop-review-reveal";
+
+export function requestDesktopReviewReveal(): void {
+  revealPending = true;
+  globalThis.dispatchEvent(new Event(DESKTOP_REVIEW_REVEAL_EVENT));
+}
+
+export function takeDesktopReviewReveal(): boolean {
+  const pending = revealPending;
+  revealPending = false;
+  return pending;
+}

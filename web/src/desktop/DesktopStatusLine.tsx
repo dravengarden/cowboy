@@ -117,6 +117,29 @@ const REVIEW_HINTS: RegionHint[] = [
   { keys: DESKTOP_SHORTCUTS.focusReview, label: "Focus Review" },
 ];
 
+const REVIEW_NAVIGATOR_HINTS: RegionHint[] = [
+  { keys: "J/K", label: "Row" },
+  { keys: "L/Enter", label: "Open" },
+  { keys: "H", label: "Collapse/up" },
+  { keys: "[/]", label: "Changes/Files" },
+  { keys: "/", label: "Filter" },
+  { keys: "'", label: "Labels" },
+  { keys: DESKTOP_SHORTCUTS.reviewMark, label: "Mark" },
+  { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
+];
+
+const REVIEW_DOCUMENT_HINTS: RegionHint[] = [
+  { keys: "]c/[c", label: "Hunk" },
+  { keys: "]f/[f", label: "File" },
+  { keys: "]u", label: "Unreviewed" },
+  { keys: "gt/gT", label: "Tab" },
+  { keys: "V", label: "Select" },
+  { keys: "Enter", label: "Send" },
+  { keys: DESKTOP_SHORTCUTS.reviewMark, label: "Mark" },
+  { keys: DESKTOP_SHORTCUTS.reviewChanges, label: "Changes" },
+  { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
+];
+
 function regionHints(
   region: string | null,
   status: Status,
@@ -185,6 +208,10 @@ function regionHints(
       return projection === "explore" ? EXPLORE_HINTS : HISTORY_HINTS;
     case "conversation.review":
       return REVIEW_HINTS;
+    case "review.navigator":
+      return REVIEW_NAVIGATOR_HINTS;
+    case "review.document":
+      return REVIEW_DOCUMENT_HINTS;
     case "prompt.composer":
       return [
         // Only Vim turns Esc into a mode change; without it the editor keeps

@@ -86,6 +86,8 @@ desktop-keyboard-acceptance ENDPOINT OUT:
     bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" tabs
     bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" run-config
     bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" surfaces
+    bun tools/cdp-review-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" light
+    bun tools/cdp-review-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" dark
     bun tools/cdp-shortcut-audit.ts "{{ENDPOINT}}" "{{OUT}}"
 
 # Desktop performance profile under a production-sized synthetic workload

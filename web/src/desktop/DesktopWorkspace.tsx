@@ -42,6 +42,10 @@ const ReviewApp = lazy(async () => {
   const module = await import("../mobile/review/ReviewApp");
   return { default: module.ReviewApp };
 });
+const DesktopReviewView = lazy(async () => {
+  const module = await import("./review/DesktopReviewView");
+  return { default: module.DesktopReviewView };
+});
 const ignoreReviewDrawer = (): void => {};
 
 const PROMPT_MIN = DESKTOP_PROMPT_MIN;
@@ -207,7 +211,7 @@ export function DesktopWorkspace({
   const workspace = useDesktopWorkspace();
   const promptCollapsed = workspace.collapsedPanes.prompt;
   const conversationCollapsed = workspace.collapsedPanes.conversation;
-  const { view, reviewMounted, showView } = useDesktopWorkView(sessionId);
+  const { view, reviewMounted, showView, layout } = useDesktopWorkView(sessionId);
   const reviewShown = view === "review";
   const conversationShortcutsActive = workspace.focusedPane === "conversation" &&
     !reviewShown;
@@ -422,7 +426,8 @@ export function DesktopWorkspace({
         {reviewMounted && (
           <Box
             data-desktop-review
-            data-desktop-region={DESKTOP_REVIEW_REGION}
+            data-desktop-review-layout={layout}
+            data-desktop-region={layout === "classic" ? DESKTOP_REVIEW_REGION : undefined}
             hidden={!reviewShown}
             tabIndex={-1}
             sx={{
@@ -434,7 +439,9 @@ export function DesktopWorkspace({
             }}
           >
             <Suspense fallback={null}>
-              <ReviewApp active={reviewShown} onDrawerOpenChange={ignoreReviewDrawer} />
+              {layout === "classic"
+                ? <ReviewApp active={reviewShown} onDrawerOpenChange={ignoreReviewDrawer} />
+                : <DesktopReviewView active={reviewShown} />}
             </Suspense>
           </Box>
         )}

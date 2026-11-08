@@ -31,7 +31,7 @@ async function until(predicate: () => boolean, message: string) {
   throw new Error(`${message}: ${document.body.textContent?.slice(0, 1500)}`);
 }
 
-export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false, checksEnabled = false) {
+export function renderReviewContextPreview(dense = false, deferDefaults = false, branches = false, linked = false, desktop = false, checksEnabled = false, content?: () => React.ReactNode) {
   const originalFetch = globalThis.fetch;
   const originalSocket = globalThis.WebSocket;
   const sessions: SessionMeta[] = [
@@ -385,7 +385,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       <BrowserProductTheme>
         <CssBaseline />
         <SurfaceProvider>
-          {desktop ? <SurfaceContext.Provider value={{ kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true }}>
+          {content ? content() : desktop ? <SurfaceContext.Provider value={{ kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true }}>
             <DesktopWorkspaceProvider><DesktopCommandProvider><ReviewApp active onDrawerOpenChange={() => {}} /></DesktopCommandProvider></DesktopWorkspaceProvider>
           </SurfaceContext.Provider> : <ReviewApp active onDrawerOpenChange={() => {}} />}
         </SurfaceProvider>
