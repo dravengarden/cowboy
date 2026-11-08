@@ -525,6 +525,12 @@ mod tests {
         restarted.restore_continuations();
         assert!(resumed(&restarted));
 
+        // Deleting the session purges the choice with it.
+        restarted.set_handoff_resumed("source", true);
+        restarted.delete_session("source");
+        assert_eq!(restarted.setting(&key), None);
+        session(&restarted, "source", "me");
+
         restarted.set_handoff_resumed("source", false);
         assert!(!resumed(&restarted));
         assert_eq!(restarted.setting(&key), None);

@@ -240,7 +240,7 @@ fn view(
     principal: &ProductPrincipal,
     id: &str,
 ) -> Result<serde_json::Value, String> {
-    owned(state, principal, id)?;
+    let resumed = owned(state, principal, id)?.meta.handoff_resumed;
     let context = crate::session_context::read(&state.hub, id)?;
     let links: Vec<_> = context.known_links().iter().map(|link| {
         match owned(state, principal, &link.session_id) {
@@ -263,6 +263,7 @@ fn view(
         "revision":context.revision,"applied_revision":context.applied_revision,
         "sources":context.sources,"source_sessions":sources,"links":links,"pending_links":crate::session_context::pending_links(&context),"next_agent":context.next_agent,
         "delivery":delivery,"injection_pending":context.injection.is_some(),"max_sources":crate::session_context::MAX_SOURCES,
+        "handoff_resumed":resumed,
     }))
 }
 
@@ -813,8 +814,13 @@ async fn retire_source(
     delivery.source_trashed = kept.is_empty();
     delivery.source_kept = (!kept.is_empty()).then_some(kept);
     // A replayed receipt still offers Undo, and a kept source says why.
-    // The outcome itself stands, so a failed write only loses that note.
+    // The outcome itself stands, so a failed write only loses that note. A
+    // new revision makes readers of the accepted receipt reload for it.
     context.delivery = Some(delivery.clone());
+    if let Err(reason) = advance_applied(context) {
+        tracing::info!(session = %id, %reason, "handoff Trash outcome not recorded");
+        return;
+    }
     if let Err(reason) = save(state, id, context).await {
         tracing::info!(session = %id, %reason, "handoff Trash outcome not recorded");
     }

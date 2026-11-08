@@ -26,6 +26,8 @@ export interface ContextDelivery {
 }
 export interface SessionContext {
   revision: number;
+  /** The user kept working here after this session's handoff. */
+  handoff_resumed?: boolean;
   applied_revision: number;
   sources: string[];
   next_agent: NextAgent | null;
@@ -320,7 +322,7 @@ export async function sendWithContext(
   if (
     !request && context.revision === context.applied_revision &&
     context.delivery?.state === "accepted" &&
-    context.delivery.session_id !== id &&
+    context.delivery.session_id !== id && !context.handoff_resumed &&
     !observedHandoffs.has(context.delivery.operation)
   ) {
     openContextDestination(context.delivery);

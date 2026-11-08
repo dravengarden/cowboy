@@ -1,14 +1,21 @@
 import { useMemo } from "react";
 import type { SessionMeta } from "./protocol";
+import { newestContinuation } from "./sessionSelection";
 import { useStoreSelector } from "./store";
 
 /** The session that took over from this one, if any. Synced with the session
  *  list, so it holds after a reload and on every device; deleting the
- *  continuation returns its source to an ordinary session. */
-export function useContinuation(sessionId: string): SessionMeta | undefined {
-  return useStoreSelector((state) =>
-    state.sessions.find((entry) => entry.continued_from === sessionId)
-  );
+ *  continuation returns its source to an ordinary session. A source kept
+ *  open and handed off again has several: `preferred` names the one its
+ *  accepted receipt went to, otherwise the newest wins. */
+export function useContinuation(
+  sessionId: string,
+  preferred?: string,
+): SessionMeta | undefined {
+  return useStoreSelector((state) => {
+    const matches = state.sessions.filter((entry) => entry.continued_from === sessionId);
+    return matches.find((entry) => entry.id === preferred) ?? newestContinuation(matches);
+  });
 }
 
 /** Whether this session is history: something continued it and the user

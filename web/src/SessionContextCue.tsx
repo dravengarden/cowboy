@@ -336,8 +336,10 @@ export function SessionHandedOffDock(
   const session = useStoreSelector((state) =>
     state.sessions.find((entry) => entry.id === sessionId)
   );
-  const continuation = useContinuation(sessionId);
-  const context = useAnnouncedSessionContext(sessionId, continuation !== undefined);
+  const latest = useContinuation(sessionId);
+  const context = useAnnouncedSessionContext(sessionId, latest !== undefined);
+  // A source kept open and handed off again names its current continuation.
+  const continuation = useContinuation(sessionId, context?.delivery?.session_id);
   const { data: accounts } = useSubscriptionAccounts();
   const [busy, setBusy] = useState<"resume" | "trash" | null>(null);
   const [error, setError] = useState("");

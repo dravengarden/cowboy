@@ -3423,6 +3423,7 @@ impl Hub {
                 settings_keys::SESSION_CONTEXT_PREFIX,
                 settings_keys::SESSION_CONTEXT_CARRIER_PREFIX,
                 settings_keys::SESSION_CONTINUED_FROM_PREFIX,
+                settings_keys::SESSION_HANDOFF_RESUMED_PREFIX,
                 settings_keys::SESSION_FORK_PREFIX,
                 settings_keys::SESSION_CONFIG_REVERT_PREFIX,
             ] {
