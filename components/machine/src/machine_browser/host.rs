@@ -82,8 +82,8 @@ pub fn check_in(root: &Path, requirements: &MachineBrowserHostRequirements) -> R
             return Err(Unmet(format!("AppArmor feature {feature} is unavailable")));
         }
     }
-    let profiles = std::fs::read_to_string(apparmor.join("profiles"))
-        .map_err(|_| Unmet("AppArmor profile list is unreadable".to_owned()))?;
+    let profiles = loaded_profiles(&apparmor)
+        .ok_or_else(|| Unmet("AppArmor profile list is unreadable".to_owned()))?;
     for profile in [BOOTSTRAP_PROFILE, SEALED_PROFILE] {
         if !profile_enforced(&profiles, profile) {
             return Err(Unmet(format!(
@@ -95,6 +95,28 @@ pub fn check_in(root: &Path, requirements: &MachineBrowserHostRequirements) -> R
         return Err(Unmet("cgroup v2 is unavailable".to_owned()));
     }
     Ok(())
+}
+
+/// Loaded profiles as `name (mode)` lines. The summary file `profiles` is
+/// root-only on Ubuntu; the per-profile `policy/profiles/<name>.<n>/name`
+/// and `mode` files are world-readable and say the same, so the unprivileged
+/// Machine reads those when the summary is refused.
+fn loaded_profiles(apparmor: &Path) -> Option<String> {
+    if let Ok(profiles) = std::fs::read_to_string(apparmor.join("profiles")) {
+        return Some(profiles);
+    }
+    let mut lines = String::new();
+    for entry in std::fs::read_dir(apparmor.join("policy/profiles")).ok()? {
+        let directory = entry.ok()?.path();
+        let (Ok(name), Ok(mode)) = (
+            std::fs::read_to_string(directory.join("name")),
+            std::fs::read_to_string(directory.join("mode")),
+        ) else {
+            continue;
+        };
+        lines.push_str(&format!("{} ({})\n", name.trim(), mode.trim()));
+    }
+    Some(lines)
 }
 
 /// `/sys/kernel/security/apparmor/profiles` lists `name (mode)` per line.
@@ -192,6 +214,28 @@ mod tests {
         without_feature.apparmor_features.push("ptrace_v9".into());
         let error = check_in(temp.path(), &without_feature).unwrap_err();
         assert!(error.0.contains("ptrace_v9"), "{error:?}");
+    }
+
+    #[test]
+    fn per_profile_policy_files_stand_in_for_a_root_only_summary() {
+        let temp = tempfile::tempdir().unwrap();
+        synthetic_host(temp.path(), "");
+        let apparmor = temp.path().join(APPARMOR_ROOT);
+        // Ubuntu makes the summary root-only; the Machine user cannot read it.
+        std::fs::remove_file(apparmor.join("profiles")).unwrap();
+        let profile = |directory: &str, name: &str, mode: &str| {
+            let path = apparmor.join("policy/profiles").join(directory);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("name"), format!("{name}\n")).unwrap();
+            std::fs::write(path.join("mode"), format!("{mode}\n")).unwrap();
+        };
+        profile("cowboy-browser-bootstrap.179", BOOTSTRAP_PROFILE, "enforce");
+        profile("cowboy-browser-sealed.178", SEALED_PROFILE, "complain");
+        profile("other.3", "other", "enforce");
+        let error = check_in(temp.path(), &requirements()).unwrap_err();
+        assert!(error.0.contains(SEALED_PROFILE), "{error:?}");
+        profile("cowboy-browser-sealed.178", SEALED_PROFILE, "enforce");
+        check_in(temp.path(), &requirements()).unwrap();
     }
 
     #[test]
