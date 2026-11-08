@@ -101,3 +101,15 @@ export function orderUsageAccounts(cards: UsageAccountCard[], order: string[]): 
   const position = (card: UsageAccountCard) => rank.get(card.id) ?? rank.get(card.group) ?? Infinity;
   return [...cards].sort((a, b) => position(a) - position(b));
 }
+
+/** Claude reports `max` for both Max and Ultra. When the collector could not
+ * read the tier, a reported quota without any 5-hour window is Ultra; this uses
+ * only the already-collected usage and never requests anything. */
+export function displayPlan(usage: ProviderUsage, plan: string | undefined): string | undefined {
+  if (plan !== "max" || usage.provider !== "anthropic") return plan;
+  const limits = usage.rate_limits?.rateLimitsByLimitId;
+  const windows = limits && typeof limits === "object" ? Object.values(limits) : [];
+  if (windows.length === 0) return plan;
+  const minutes = (limit: unknown) => (limit as { primary?: { windowDurationMins?: unknown } } | null)?.primary?.windowDurationMins;
+  return windows.some((limit) => minutes(limit) === 300) ? plan : "ultra";
+}

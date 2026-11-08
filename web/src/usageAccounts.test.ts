@@ -3,7 +3,7 @@ import { assertEquals } from "../../tools/test-assert.ts";
 import type { SessionMeta } from "./protocol";
 import { applyUsageHostPlugins, type UsageSnapshot, usageLimits } from "./usageLimits";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
-import { orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota } from "./usageAccounts";
 import { loadProviderCatalog, resetProviderCatalog } from "./providerCatalogRegistry";
 import { providerUiManifestFixture } from "./providerUiContract.fixture";
 
@@ -174,3 +174,16 @@ test("sign-in states name the action instead of an unreported status", () => {
     assertEquals(registeredUsageAccounts(snapshot, registry, [], [observation])[1].statusLabel, label);
   }
 });
+test("a Max report without a 5-hour window is shown as Ultra; nothing else is inferred", () => {
+  const window = (minutes: number) => ({ primary: { usedPercent: 1, windowDurationMins: minutes } });
+  const usage = (limits?: Record<string, unknown>) => ({ provider: "anthropic", status: "available", source: "", observed_at_ms: 1,
+    ...(limits ? { rate_limits: { rateLimitsByLimitId: limits } } : {}) }) as never;
+  assertEquals(displayPlan(usage({ "claude-seven_day": window(10080) }), "max"), "ultra");
+  assertEquals(displayPlan(usage({ "claude-five_hour": window(300), "claude-seven_day": window(10080) }), "max"), "max");
+  assertEquals(displayPlan(usage(), "max"), "max");
+  assertEquals(displayPlan(usage({}), "max"), "max");
+  assertEquals(displayPlan(usage({ "claude-seven_day": window(10080) }), "pro"), "pro");
+  assertEquals(displayPlan(usage({ "claude-seven_day": window(10080) }), "ultra"), "ultra");
+  assertEquals(displayPlan({ ...usage({ "x": window(10080) }), provider: "openai" } as never, "max"), "max");
+});
+
