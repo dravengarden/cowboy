@@ -551,10 +551,13 @@ Describes every idle, unpaused bound session once per target connection and
 recreates a proven-lost lifetime through that same preflight, at most four per
 30-second pass. Once a target proves a lifetime lost, `start_session` refuses to
 launch on it, Reload recovers instead of replacing the worker, and a Provider
-update is refused until the lifetime is back. A background-task count does not
-hold automatic recovery after that proof, because the shells it counted died
-with the lifetime. Busy, paused, dormant and crashed sessions are left to their
-own paths: a prompt or Reload recovers them.
+update is refused until the lifetime is back. The background-task count mixes
+shells that died with the lifetime and never report an end with subagents that
+live in the worker, so after the proof it holds automatic recovery for only five
+minutes. The reconciler rechecks pause, hibernation, in-flight prompts and the
+Provider lifecycle fence after its awaits, before it moves a worker. Busy,
+paused, dormant and crashed sessions are left to their own paths: a prompt or
+Reload recovers them.
 
 ### A turn in progress when the target reboots
 

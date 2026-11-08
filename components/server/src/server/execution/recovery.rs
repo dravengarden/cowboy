@@ -8,6 +8,7 @@ use crate::machine_protocol::execution::{Action, Request, Response};
 use axum::extract::{Extension, Path, State};
 use serde::Deserialize;
 use serde_json::json;
+use std::time::Duration;
 
 /// A bounded optimization, never durable authority. A host reboot changes
 /// the enrolled target connection; a changed binding cannot reuse a cache hit.
@@ -172,11 +173,18 @@ async fn confirm_lost(state: &AppState, session: &str, binding: &BindingV1) -> b
         })
     );
     if lost {
-        state
-            .hub
-            .mark_execution_lost(session, &binding.environment.incarnation);
+        record_lost(state, session, binding);
     }
     lost
+}
+
+/// A loss overrides any readiness cached on the same connection: a keeper can
+/// die while its Machine stays connected.
+fn record_lost(state: &AppState, session: &str, binding: &BindingV1) {
+    state.execution_readiness.forget(session, binding);
+    state
+        .hub
+        .mark_execution_lost(session, &binding.environment.incarnation);
 }
 
 #[derive(Deserialize)]
@@ -536,12 +544,12 @@ fn recovery_action(
 /// Dispatch owns one not-yet-delivered prompt. An idle surviving worker may
 /// be replaced only after target-proven loss; an active turn or child may not.
 /// Automatic recovery has no Operator grant: it stops because the session is
-/// not idle, and must not report that as an authority change.
+/// not idle yet, so its prompt waits and retries instead of failing the send.
 fn authority_refusal(grant: Option<&Grant>, detail: &str) -> String {
     if grant.is_some() {
         format!("Local Operator authority changed{detail}")
     } else {
-        format!("Session has unfinished work; execution recovery waits until it is idle{detail}")
+        target_not_ready()
     }
 }
 
@@ -564,18 +572,24 @@ async fn authority_current(
         && idle_for_recovery(state, session, target_lost)
 }
 
-/// Background shells run in the execution lifetime, and the worker never hears
-/// that they ended once the target has lost it. A count kept after that proof
-/// is stale and must not hold the session's prompts forever.
-fn background_work_blocks_recovery(background_tasks: u32, target_lost: bool) -> bool {
-    background_tasks > 0 && !target_lost
+/// How long a worker's subagents get to finish after their target is lost.
+const LOST_TARGET_BACKGROUND_GRACE: Duration = Duration::from_secs(300);
+
+/// The count mixes shells that died with the lifetime, which never report an
+/// end, with subagents that live in the worker and can still finish. Only the
+/// grace period separates them, so a stale count cannot hold prompts forever.
+fn background_work_blocks_recovery(background_tasks: u32, lost_for: Option<Duration>) -> bool {
+    background_tasks > 0 && lost_for.is_none_or(|lost| lost < LOST_TARGET_BACKGROUND_GRACE)
 }
 
 fn idle_for_recovery(state: &AppState, session: &str, target_lost: bool) -> bool {
     let Some(info) = state.hub.session_info(session) else {
         return false;
     };
-    !background_work_blocks_recovery(info.meta.background_tasks, target_lost)
+    let lost_for = target_lost
+        .then(|| state.hub.execution_lost_for(session))
+        .flatten();
+    !background_work_blocks_recovery(info.meta.background_tasks, lost_for)
         && info.meta.status != Status::Busy
         && state
             .runtime_router
@@ -701,6 +715,7 @@ async fn preflight(
         if !intent.operation_id.starts_with("execution-wake-") {
             return Err("Explicit execution maintenance must finish before sending".into());
         }
+        record_lost(state, session, &intent.previous);
         intent
     } else {
         let previous = record
@@ -743,7 +758,7 @@ async fn preflight(
                 return worker_recovery_for_ready_target(state, session, &previous).await;
             }
             Response::Refused { reason: crate::machine_protocol::execution::Refusal::EnvironmentLost } => {
-                state.hub.mark_execution_lost(session, &previous.environment.incarnation);
+                record_lost(state, session, &previous);
             }
             Response::Refused { reason } if transient(reason) => return Err(target_not_ready()),
             _ => return Err("Execution target unavailable or identity changed; retained prompt was not delivered".into()),
@@ -781,6 +796,52 @@ pub(in crate::server) async fn target_proved_lost(
         return false;
     };
     confirm_lost(state, &meta.id, &binding).await
+}
+
+/// Reload replaces the worker, which cannot repair a lost lifetime or finish a
+/// recovery that stopped before its worker moved. Those go through recovery.
+pub(in crate::server) async fn before_reload(
+    state: &Arc<AppState>,
+    session: &str,
+    confirm_active_turn: bool,
+) -> Result<Option<RecoveryV1>, String> {
+    let meta = state
+        .hub
+        .session_info(session)
+        .ok_or("Session no longer exists")?
+        .meta;
+    if !reload_must_recover(state, &meta).await {
+        return Ok(None);
+    }
+    let result = before_reset(state, session).await;
+    if result.is_err() && confirm_active_turn && meta.status == Status::Busy {
+        state.supervisor.send(session, AgentCommand::Cancel)?;
+        return Err(
+            "Stopped the turn on the lost execution environment; Reload again to recover it".into(),
+        );
+    }
+    result
+}
+
+async fn reload_must_recover(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
+    let Some(record) = &meta.execution_binding else {
+        return false;
+    };
+    if record.managed().is_some() {
+        return false;
+    }
+    if record.recovery().is_some() {
+        return true;
+    }
+    let Ok(binding) = record.decode() else {
+        return false;
+    };
+    let stale_worker = state
+        .runtime_router
+        .runtime(&meta.machine_id)
+        .and_then(|runtime| runtime.worker_execution_binding(&meta.id))
+        .is_some_and(|worker| worker != binding);
+    stale_worker || confirm_lost(state, &meta.id, &binding).await
 }
 
 /// Clear also starts a native agent. Verify its target before discarding
@@ -1008,17 +1069,19 @@ mod dispatch_safety_tests {
 
     #[test]
     fn background_work_only_holds_recovery_while_its_lifetime_may_be_alive() {
-        assert!(background_work_blocks_recovery(1, false));
-        assert!(!background_work_blocks_recovery(1, true));
-        assert!(!background_work_blocks_recovery(0, false));
+        assert!(background_work_blocks_recovery(1, None));
+        assert!(background_work_blocks_recovery(1, Some(Duration::ZERO)));
+        assert!(!background_work_blocks_recovery(
+            1,
+            Some(LOST_TARGET_BACKGROUND_GRACE)
+        ));
+        assert!(!background_work_blocks_recovery(0, None));
     }
 
     #[test]
-    fn only_a_grant_refusal_reports_an_authority_change() {
+    fn an_automatic_refusal_waits_instead_of_reporting_authority() {
         let automatic = authority_refusal(None, "; recovery remains fenced");
-        assert!(automatic.starts_with("Session has unfinished work"));
-        assert!(automatic.ends_with("; recovery remains fenced"));
-        assert!(!automatic.contains("authority"));
+        assert_eq!(automatic, target_not_ready());
     }
 
     #[test]

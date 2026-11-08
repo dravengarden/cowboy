@@ -30,7 +30,9 @@ async fn pass(state: &Arc<AppState>, shutdown: &tokio::sync::watch::Receiver<boo
         if *shutdown.borrow() || recovered >= MAX_RECOVERIES_PER_PASS {
             return;
         }
-        if !unverified(state, &meta) {
+        if !unverified(state, &meta)
+            || provider_fenced(state, &meta.id, &state.plugin_lifecycle_fences.read())
+        {
             continue;
         }
         // The same preflight a prompt runs, so idle, in-flight and busy
@@ -43,8 +45,17 @@ async fn pass(state: &Arc<AppState>, shutdown: &tokio::sync::watch::Receiver<boo
                 continue;
             }
         };
-        match state.supervisor.recover_execution_session(&meta.id, intent) {
-            Ok(()) => {
+        // The preflight awaited: a prompt, pause, hibernation or Plugin change
+        // that began meanwhile owns the session now. The committed binding
+        // waits safely for it, and a later pass finishes the worker move.
+        let replaced = {
+            let fences = state.plugin_lifecycle_fences.read();
+            (!provider_fenced(state, &meta.id, &fences) && idle_now(state, &meta.id))
+                .then(|| state.supervisor.recover_execution_session(&meta.id, intent))
+        };
+        match replaced {
+            None => {}
+            Some(Ok(())) => {
                 recovered += 1;
                 tracing::info!(
                     event_name = "cowboy.execution.lifetime_reconciled",
@@ -52,7 +63,7 @@ async fn pass(state: &Arc<AppState>, shutdown: &tokio::sync::watch::Receiver<boo
                     "recreated an idle session's lost execution lifetime"
                 );
             }
-            Err(error) => {
+            Some(Err(error)) => {
                 tracing::warn!(session = %meta.id, %error, "replacing the worker of a recovered lifetime failed");
             }
         }
@@ -73,19 +84,44 @@ fn unverified(state: &AppState, meta: &SessionMeta) -> bool {
     let binding = record.decode().ok();
     if record.managed().is_some()
         || (binding.is_none() && record.recovery().is_none())
-        || !awaits_reconciliation(meta.status, meta.paused)
-        || state.hub.session_is_trashed(&meta.id)
+        || !idle_now(state, &meta.id)
     {
         return false;
     }
     let Some(runtime) = state.runtime_router.runtime(&meta.machine_id) else {
         return false;
     };
-    runtime.has_worker(&meta.id)
-        && !binding.is_some_and(|binding| {
-            recovery::verified(state, &meta.id, &binding)
-                && runtime.worker_matches_execution(&meta.id, &binding)
-        })
+    !binding.is_some_and(|binding| {
+        recovery::verified(state, &meta.id, &binding)
+            && runtime.worker_matches_execution(&meta.id, &binding)
+    })
+}
+
+/// Read fresh, never from a snapshot taken before an await.
+fn idle_now(state: &AppState, session: &str) -> bool {
+    let Some(meta) = state.hub.session_info(session).map(|info| info.meta) else {
+        return false;
+    };
+    awaits_reconciliation(meta.status, meta.paused)
+        && !state.hub.session_is_trashed(session)
+        && !state.hub.session_has_in_flight_prompt(session)
+        && state
+            .runtime_router
+            .runtime(&meta.machine_id)
+            .is_some_and(|runtime| {
+                runtime.has_worker(session) && !runtime.hibernation_pending(session)
+            })
+}
+
+fn provider_fenced(
+    state: &AppState,
+    session: &str,
+    fences: &HashMap<(String, String), PluginFenceState>,
+) -> bool {
+    provider_fence_key_for_session(&state.hub, session)
+        .and_then(|key| fences.get(&key).copied())
+        .and_then(provider_fence_refusal)
+        .is_some()
 }
 
 #[cfg(test)]

@@ -90,7 +90,7 @@ pub(super) async fn api_session_reload(
     let Some(info) = state.hub.session_info(&session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let _maintenance = match session_maintenance::reload_lease(&state, &session_id) {
+    let maintenance = match session_maintenance::reload_lease(&state, &session_id) {
         Ok(lease) => lease,
         Err(error) => return (StatusCode::CONFLICT, error).into_response(),
     };
@@ -142,25 +142,26 @@ pub(super) async fn api_session_reload(
     {
         return (StatusCode::ACCEPTED, "preparing the workspace").into_response();
     }
-    // A worker replacement cannot repair a dead keeper, so recreate a lost
-    // target first. Any other target state keeps the ordinary Reload.
-    let recovery = if execution::recovery::target_proved_lost(&state, &info.meta).await {
-        match execution::recovery::before_reset(&state, &session_id).await {
+    let recovery =
+        match execution::recovery::before_reload(&state, &session_id, query.confirm_active_turn)
+            .await
+        {
             Ok(recovery) => recovery,
             Err(error) => return (StatusCode::CONFLICT, error).into_response(),
-        }
-    } else {
-        None
-    };
+        };
     // Held from here so a Plugin change cannot begin during the replacement.
     let reload_fence = state.plugin_lifecycle_fences.read();
     if let Some(refusal) = fence_refusal(&reload_fence) {
         return (StatusCode::CONFLICT, refusal).into_response();
     }
     let result = match recovery {
-        Some(intent) => state
-            .supervisor
-            .recover_execution_session(&session_id, intent),
+        Some(intent) => {
+            // Recovery takes this same non-reentrant lease itself.
+            drop(maintenance);
+            state
+                .supervisor
+                .recover_execution_session(&session_id, intent)
+        }
         None => state
             .supervisor
             .reload_session(&session_id, query.confirm_active_turn),

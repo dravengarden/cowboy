@@ -1686,9 +1686,10 @@ struct HubInner {
     /// When an unattended Provider update last left each session crashed.
     /// Never held with `sessions`.
     automatic_update_failed_sessions: Mutex<HashMap<String, std::time::Instant>>,
-    /// The execution incarnation a target last proved lost, by session. A
-    /// replacement has a new incarnation, so a stale entry never refuses it.
-    lost_execution: Mutex<HashMap<String, String>>,
+    /// The execution incarnation a target last proved lost and when it first
+    /// did, by session. A replacement has a new incarnation, so a stale entry
+    /// never refuses it.
+    lost_execution: Mutex<HashMap<String, (String, std::time::Instant)>>,
     /// Canonicalizes the raw ACP stream for the in-memory replay tail. The DB
     /// writer still reduces compact deltas so streaming text coalesces without
     /// enqueueing the accumulated string on every token.
