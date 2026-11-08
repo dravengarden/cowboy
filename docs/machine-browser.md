@@ -187,7 +187,16 @@ with the owner notified), then proceeds; the generic uninstall path gains a
 link. The drain stops every instance gracefully with reason `reclaim`,
 refuses new opens until the uninstall finishes, and proceeds only once every
 unit's exit is confirmed; otherwise the uninstall step stays pending
-(`slot_fenced`) and nothing is unlinked. Generation retirement treats browser leases like Code leases: a
+(`slot_fenced`) and nothing is unlinked. The drain runs only for a step the
+journal would execute at that moment (owner, admission, execution lease,
+installation CAS, slot fences and the exact installed target all hold), and
+the lease is re-checked before every individual stop, so a stale or orphaned
+uninstall stops no browser. It needs no journal entry of its own: it changes
+no Plugin state, a repeated drain stops only what still runs, and a
+hibernated browser reopens. Starts and drains share one gate: a drain refuses
+new starts at once and waits until every start already admitted (including
+one still waiting for memory, which gives up) has settled into a registered
+instance, so no open can launch a unit after the drain completed. Generation retirement treats browser leases like Code leases: a
 generation retires only after its last browser lease releases. After the
 Plugin is uninstalled, profile snapshots remain account data; reset and
 revocation still delete them.
@@ -465,7 +474,14 @@ all browser staging on the Machine, admits a snapshot only when the
 reservation fits under the Device disk low-watermark with the previous
 generation retained, allows at most one staging and one published
 generation per account, and reconciles abandoned staging directories at
-start and before every new admission. A snapshot that cannot be admitted is
+start and before every new admission. Publication reports how far it got: a
+failure before the rename removes the staging generation before its budget is
+released; a failure after the rename (the directory or record fsync, or the
+record write) reconciles the renamed generation against the durable state
+file first (it is published exactly when the file names it, otherwise it is
+an orphan and is removed), and keeps the budget reserved, retried before the
+account's next admission, while that reconciliation fails. A prune of the
+superseded generation that fails leaves the publication standing. A snapshot that cannot be admitted is
 refused, never queued.
 
 Periodic and explicit snapshots run as a cancellable copy job: the account
@@ -479,7 +495,14 @@ long as a copier may write it: a copy the launcher refused or finished is
 removed (scoped, no-follow) before its budget is released; a cancelled or
 timed-out copy keeps its reservation until the unit's exit is confirmed. A
 removal that fails keeps the budget reserved and is retried before the
-account's next admission.
+account's next admission. A copy binds `/mnt/publish` in the instance's mount
+namespace, which [confinement verification](#confinement-verification)
+rejects; so no copy runs while a navigation verifies and navigates: new copies
+are refused while it does, and a running copy is awaited within its own bound
+(the browser is frozen meanwhile) and cancelled if it overruns. The verifier
+stays strict instead of tolerating a transient publish mount. A sign-in rebind
+quiesces copies before it takes the lifecycle lock, because a copy publishes
+under that lock.
 
 Snapshot failure is subordinate to mandatory stops: a graceful stop attempts
 the snapshot at most twice within the stop deadline; a stop forced by login
@@ -527,7 +550,19 @@ collect the unit, the Machine writes `cgroup.kill` and waits for the cgroup to
 empty; when even that cannot be confirmed the instance stays registered, the
 profile is not deleted, the operation answers `failed` with the fence still
 raised, and a background retry repeats the termination and completes the
-fenced operation once the exit is confirmed. A snapshot job publishes only if the
+fenced operation once the exit is confirmed. Every `systemctl` and
+`systemd-run` call is bounded (killed after 10 s) and the systemd phase of a
+termination as a whole is bounded, so a stalled user manager reaches the
+`cgroup.kill` fallback on the retained cgroup path instead of blocking the
+account's command queue. A termination is bound to the systemd invocation ID
+it stopped: a unit of the same name with another invocation is never stopped
+or killed and counts as the original's exit. When a retry confirms the exit,
+the Machine reports a terminal `hibernated` observation for the retained
+incarnation (its stop reason and `unsaved_state_lost`), then completes each
+fenced operation the unit blocked and reports the completion as the account's
+`hibernated` observation with the operation's reason (`owner_request` for a
+reset, `revoked` for a revocation) and the advanced `profile_revision`; a
+reset's earlier `failed` receipt is replaced by that completion. A snapshot job publishes only if the
 `(incarnation, profile_revision)` it captured still match under the lock;
 otherwise its staging is discarded. A restart in the middle resumes the
 fenced operation from `state.json` and preserves its receipt; a delayed
@@ -576,14 +611,20 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
   carry the `attachment_id`; reset carries the expected `profile_revision`.
   A command whose expectation no longer matches is a recorded no-op with
   reason `superseded`. Replays of the same request ID return the original
-  receipt.
+  receipt. An attach re-checks the instance's phase where it installs the
+  attachment, after its asynchronous resize: a stop (hibernate, reset,
+  revocation) that began meanwhile wins, the new stream is torn down and the
+  attach answers `busy` with the stopping state.
 - Failure never retries with weaker isolation. A namespace or sandbox failure
   reports `sandbox_unavailable` with the host policy pointer; a confinement
   verification failure reports `confinement_unverified`; a missing host
   prerequisite reports `host_requirements`. All leave the instance
   hibernated with the reservation refunded. A failed start's unit is
   terminated with the same confirmation as any stop; an unconfirmed exit
-  keeps the instance slot reserved and the account's fences raised.
+  keeps the instance slot reserved and the account's fences raised, and
+  refuses (`busy`) every open of that account, or of any account for a unit
+  of unknown ownership, or with the same unit name, until the exit is
+  confirmed.
 
 ### Confinement verification
 
@@ -693,6 +734,12 @@ and namespace identities. At Machine start:
   only once its unit's exit is confirmed, and a pending reset or revocation
   of its account (of every account, for an unrecorded unit) is completed only
   then;
+- a recorded unit that cannot be observed (`systemctl show` fails) is not
+  treated as gone: it keeps its record, a capacity slot, its account's fences
+  and admission held, and a retry bound to its recorded invocation stops it.
+  When the unit listing itself fails, every account's fences and opens stay
+  held until a retried listing succeeds and every unit no record, registered
+  instance or retained unit accounts for is stopped;
 - abandoned staging directories are reconciled against the staging ledger;
 - a sign-in-bound record is stopped at reconciliation, because the Machine's
   native logins do not survive a restart: a lost Controller connection
