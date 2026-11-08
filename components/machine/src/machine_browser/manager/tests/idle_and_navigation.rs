@@ -442,3 +442,61 @@ async fn a_rebinding_waiting_on_an_unanswered_navigation_is_refused() {
     let _ = tokio::time::timeout(Duration::from_secs(10), navigation).await;
     assert_eq!(fixture.instance.live.lock().phase, Phase::Stopping);
 }
+
+#[tokio::test]
+async fn a_challenge_published_during_a_rebinding_is_not_lost() {
+    let mut fixture = fixture().await;
+    fixture
+        .manager
+        .trust_confinement
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let logins: LoginSessions = Arc::default();
+    let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+    let _uplink = fixture.manager.attach(
+        events,
+        reqwest::Url::parse("https://controller.invalid/").unwrap(),
+        &logins,
+    );
+    // Login B has no verification URL when the rebinding captures it.
+    logins.lock().insert(
+        "login-b".into(),
+        login(&fixture.account, unix_ms() + 60_000),
+    );
+    let url = "https://claude.ai/oauth/authorize?b";
+    // Its challenge is published before the binding is: the notification
+    // finds no instance bound to login B and is dropped.
+    *fixture.manager.before_rebinding_published.lock() = Some({
+        let logins = Arc::clone(&logins);
+        let manager = Arc::clone(&fixture.manager);
+        Box::new(move || {
+            logins.lock().get_mut("login-b").unwrap().verification_url = Some(url.into());
+            manager.login_challenge("login-b", url);
+        })
+    });
+    let open = {
+        let manager = Arc::clone(&fixture.manager);
+        let account = fixture.account.clone();
+        tokio::spawn(async move {
+            manager
+                .open(
+                    "o1",
+                    account,
+                    "inst-1".into(),
+                    Purpose::SignIn {
+                        login_request_id: "login-b".into(),
+                    },
+                    Viewport {
+                        width: 1280,
+                        height: 800,
+                        scale: 1,
+                    },
+                )
+                .await
+        })
+    };
+    // The open still navigates to login B's challenge.
+    answer_navigation(&mut fixture.launcher, url, true).await;
+    let shown = open.await.unwrap();
+    assert_eq!(shown.reason, None);
+    assert_eq!(fixture.instance.login_request().as_deref(), Some("login-b"));
+}

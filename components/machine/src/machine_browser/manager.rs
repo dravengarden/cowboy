@@ -399,6 +399,10 @@ pub struct BrowserManager {
     /// confinement verification could pass.
     #[cfg(test)]
     trust_confinement: std::sync::atomic::AtomicBool,
+    /// Test-only: runs between a sign-in rebinding capturing the login's
+    /// URL and publishing the binding.
+    #[cfg(test)]
+    before_rebinding_published: parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl BrowserManager {
@@ -458,6 +462,8 @@ impl BrowserManager {
             this: this.clone(),
             #[cfg(test)]
             trust_confinement: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            before_rebinding_published: parking_lot::Mutex::new(None),
         });
         manager.register_drain();
         Ok(manager)

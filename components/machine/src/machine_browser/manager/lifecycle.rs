@@ -260,6 +260,10 @@ impl BrowserManager {
             let purpose = Purpose::SignIn {
                 login_request_id: login_request_id.to_owned(),
             };
+            #[cfg(test)]
+            if let Some(hook) = self.before_rebinding_published.lock().take() {
+                hook();
+            }
             *existing.binding.lock() =
                 Binding::new(purpose.clone(), previous.deadline_ms.min(expires_at_ms));
             // Restart reconciliation must see a sign-in instance and stop it.
@@ -280,6 +284,18 @@ impl BrowserManager {
             url
         };
         drop(rebinding);
+        // The login's challenge may have been published between capturing
+        // its URL and publishing this binding; `login_challenge` then found
+        // no bound instance and dropped it. The login keeps its URL, so read
+        // it again now that the binding is visible.
+        let rebound = previous.purpose != existing.purpose();
+        let url = url.or_else(|| {
+            if rebound {
+                self.login_url(login_request_id)
+            } else {
+                None
+            }
+        });
         let bound = Purpose::SignIn {
             login_request_id: login_request_id.to_owned(),
         };
