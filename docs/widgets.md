@@ -5,11 +5,12 @@ activated. Revision 1 received an Astra Max design review ("request changes",
 16 findings, 6 blocking); revision 2 a second ("request changes", 15
 findings, 4 blocking); revision 3 a third ("request changes", 14 findings,
 5 blocking); revision 4 a fourth ("request changes", 13 findings, 5
-blocking); revision 5 a fifth ("request changes", 10 findings, 3 blocking).
-The owner chose to keep the full interactive design (2026-11-08) rather than
-narrow Phase 1 to display-only widgets. Every finding is resolved below and
-none was rejected ([§1](#1-review-findings-and-resolutions)); revision 6 is
-the current text. Statements marked
+blocking); revision 5 a fifth ("request changes", 10 findings, 3 blocking);
+revision 6 a sixth ("request changes", 6 findings, 1 blocking). The owner
+chose to keep the full interactive design (2026-11-08) rather than narrow
+Phase 1 to display-only widgets. Every finding is resolved below and none
+was rejected ([§1](#1-review-findings-and-resolutions)); revision 7 is the
+current text. Statements marked
 **[unverified]** are inferred from code or history and still need evidence.
 
 Related: [`agent-api.md`](agent-api.md) (the MCP read/execute/receipt surface
@@ -149,6 +150,20 @@ typing-free, auditable decisions within measured bounds.
 | G9 | 512 B is an example budget, not a three-op bound; §3 contradicted §11 (P2) | The bound is scoped to a benchmark update class (≤ 3 ops, paths and values ≤ 64 chars); general patches are bounded by the patch and document limits; §3 and §11 now state the same thing | §3, §11 |
 | G10 | The checker let a single choice carry `max_selected: 13` (P3) | The raw field is validated 1..12 independently of the effective cardinality; vector added | §5.3, contract |
 
+### 1.6 Revision 6 (Astra Max, `b1827e8b1`)
+
+| # | Finding (severity) | Resolution | Section |
+|---|---|---|---|
+| H1 | Dropping a written widget command from `pending` also drops the protection `pending_prompt_for` gives `idle_snapshot_guard`: an idle snapshot could release the dispatch guard while the command is still travelling, two prompts overlap, and the worker's mutable `current_turn_id` lets the first prompt's `TurnEnded` name the second (P1) | Unresolved attempts keep dispatch ownership: the runtime consults them wherever it consults `pending`, so idle reconciliation cannot release the guard until the attempt settles or its worker is revoked. Independently, interactive widgets require a worker generation whose `TurnEnded` carries the prompt task's own turn id (`widget_turn_identity`): the capability becomes a Phase 1 prerequisite with a Machine release, and a session on an older generation renders prompt controls inert with a notice | §8.3, §12 |
+| H2 | The record contract still sent startup withdrawals back to the relay (P2) | `InteractionRecord.state` distinguishes runtime returns (`returned → admitted`) from the person's Stop (`cancelled (stopped)`) | contract |
+| H3 | `worstCaseRecordBytes` was not an upper bound: ASCII reserved for metadata, single-escape ranking for labels (P2) | Metadata strings are printable ASCII by contract; `recordContribution` ranks labels by their exact serialized contribution (escaped once in `selected`, once inside the message string, twice inside its JSON line); every counter at `maxCounter`; the test constructs every permitted selection independently and checks none exceeds the estimate | §5.3, contract |
+| H4 | A maximal document plus 32 decided groups and five linked summaries exceeds 32 KiB (P2) | `worstCaseSnapshotBytes` reserves every metadata field at its maximum around the document at publish; `snapshotBytes` is 36 KiB and a lookup page fits seven | §5.3, §6.5, contract |
+| H5 | Bootstrap absence was not ordered against concurrent creation (P2) | A per-session `index_version` advances on every creation and tombstone; bootstrap pages share one; snapshots carry the creator's; absence removes only cached widgets created at or before the index's version | §6.5, contract |
+| H6 | The benchmark class maximum exceeds 512 B (P2) | The class is defined with its identifier maxima and its computed maximum is bounded at 1 KiB; `progressPatch` is the measured 438 B instance; §3 and §11 say so | §3, §11, contract |
+
+Also fixed: the stale "≤ 6 KiB" interaction read claim (§6.1) and explicit
+wire domains for counters and timestamps (`maxCounter`, `maxTimestampMs`).
+
 Rulings on decisions are folded into §14.
 
 ## 2. Evidence from history
@@ -227,10 +242,11 @@ Goals, in priority order:
    terse Markdown reply, updating it costs more than a one-line status for
    any report smaller than about 330 bytes, and this design claims no net
    token saving (§11). What it claims is a bound: publication ≤ 4.5× the
-   same-language report; a benchmark update (≤ 3 ops, paths and values ≤ 64
-   chars) ≤ 512 B of envelope and result, with general patches bounded only
-   by the patch and document limits; a decision message ≤ 2 KiB and fixed in
-   shape. The bounds are measured on complete exchanges with every envelope
+   same-language report; a benchmark update (≤ 3 `set` ops with paths and
+   string values ≤ 64 chars, a widget id ≤ 64 and an operation id ≤ 128
+   chars) ≤ 1 KiB of envelope and result at the class maximum, with general
+   patches bounded only by the patch and document limits; a decision message
+   ≤ 2 KiB and fixed in shape. The bounds are measured on complete exchanges with every envelope
    counted, per prefix, and the measurement is a ship gate that stops the
    design if it fails.
 3. **Act without typing, without delegating authority.** A widget can offer
@@ -351,12 +367,21 @@ choice's effective cardinality is one whatever `max_selected` says. The
 worst-case composed message of every prompt node, computed by
 `worstCaseMessageBytes` (options ranked by their serialized contribution,
 raw label plus JSON-escaped copy, the effective cardinality largest
-selected), must fit `messageBytes` (2 KiB); the worst-case record, with
-`reason` ≤ 200 chars, handles ≤ 16, `stop_reason` ≤ 64 and five attempts,
-must fit `interactionRecordBytes` (8 KiB), so admission-time growth is
-reserved rather than hoped for, and a snapshot is ≤ 32 KiB; all are
-re-checked when built, and the quote/emoji vector in the test shows why raw
-length is not the right rank.
+selected), must fit `messageBytes` (2 KiB). The worst-case record
+(`worstCaseRecordBytes`) ranks option labels by their exact serialized
+contribution — escaped once in `selected`, once inside the message string,
+twice inside the message's JSON line — selects the effective cardinality of
+them, and places every identifier and counter at its maximum
+(`idChars`, `maxCounter`, `maxTimestampMs`), five attempts, a maximal
+`reason` and all retry links; metadata strings (`reason`, `stop_reason`,
+handles, identifiers) are printable ASCII by contract so their size is their
+length; the result must fit `interactionRecordBytes` (8 KiB). The
+worst-case snapshot (`worstCaseSnapshotBytes`) reserves 32 decided groups,
+five linked summaries and every metadata field at its maximum around the
+document and must fit `snapshotBytes` (36 KiB). Both are validated at
+publish and replace, so no later settlement can grow a record or a snapshot
+past its bound; the tests construct every permitted selection independently
+and check none exceeds the estimate.
 
 Field domains are part of the contract: `percent` cells are fractions 0..1,
 `bytes` integer byte counts, `duration` seconds, `date` epoch milliseconds
@@ -442,10 +467,10 @@ read restarts only when `revision` changes between pages; a **pinned** read
 (`revision` given) is immutable, bound to its `sha256`, and never
 interrupted by interaction settlement or later revisions. A pinned revision
 exists for every revision a decision was made on (§6.3). `interactions`
-returns records by cursor, at least one per page, each ≤ 6 KiB by
-construction. Read outcomes: `ok`, `unknown_widget`, `cleared`,
-`unknown_revision`. Pages — document windows, interaction records, pinned
-`revisions` — are packed against the **complete encoded response** including
+returns records by cursor, at least one per page. Read outcomes: `ok`, `unknown_widget`, `cleared`,
+`unknown_revision` (records are ≤ 8 KiB by construction). Pages — document
+windows, interaction records, pinned `revisions` — are packed against the
+**complete encoded response** including
 `WidgetMeta` and escaping, to `readPageBytes` (12 KiB) under the 16 KiB
 result cap, and return the actual continuation offset; `WidgetMeta` carries
 `pinned_count`, not the list.
@@ -668,21 +693,27 @@ the exhaustive case; `applyEnvelope` merges a snapshot in place like
 String(env.seq)`.
 
 Reconciliation: the bootstrap carries `widget_state {epoch,
-transcript_generation, entries, complete, next}` for the session's widgets
-(open and closed, each with `seq`), paginated so the client always obtains
-the complete authoritative index. Against that index the client discards
-every cached widget it does not list and asks `POST
-/api/sessions/:id/widgets/lookup {widget_ids ≤ 200, epoch,
-transcript_generation, after?}` for every entry that is **missing locally or
-stale** (`state_version` newer than the cached one) — including widgets
-created while the device was away and already outside the reconnect tail.
-The answer carries the same epoch and generation or is discarded and
-reconciliation restarts; each id has an outcome: `current` with the snapshot
-(placed at its `seq` when the row is not in the cache or the tail),
-`cleared` or `unknown` (the cached row is removed). Pages are packed against
-the complete encoded response (≤ 256 KiB, snapshots ≤ 32 KiB by construction
-and the envelope accounted), always carry at least one outcome, and `next`
-resumes the rest; progress is guaranteed.
+transcript_generation, index_version, entries, complete, next}` for the
+session's widgets (open and closed, each with `seq`), paginated so the
+client always obtains the complete authoritative index; every page of one
+bootstrap shares its `index_version`, a per-session counter the Controller
+advances on every widget creation and tombstone, and every snapshot carries
+the `indexVersion` current when its widget was created. Against that index
+the client discards a cached widget only when the index does not list it
+**and** the widget's `indexVersion` is at or below the index's version — a
+widget whose live snapshot arrived while the index was being fetched is
+newer and is kept — and asks `POST /api/sessions/:id/widgets/lookup
+{widget_ids ≤ 200, epoch, transcript_generation, after?}` for every entry
+that is **missing locally or stale** (`state_version` newer than the cached
+one), including widgets created while the device was away and already
+outside the reconnect tail. The answer carries the same epoch and generation
+or is discarded and reconciliation restarts; each id has an outcome:
+`current` with the snapshot (placed at its `seq` when the row is not in the
+cache or the tail), `cleared` or `unknown` (the cached row is removed).
+Pages are packed against the complete encoded response (≤ 256 KiB,
+snapshots ≤ 36 KiB by construction and the envelope accounted), always
+carry at least one outcome, and `next` resumes the rest; progress is
+guaranteed.
 
 Every integration file (`MarkdownImpl.tsx`, `TranscriptItems.tsx`,
 `derive.ts`, `Transcript.tsx`, `tools/blocks.tsx`) is at its
@@ -934,20 +965,30 @@ a widget command is written to exactly one connection.
    open without a handoff and resolves to `uncertain` (step 5). At most five
    attempts are recorded per interaction; exhausting them makes the record
    `uncertain`.
-5. **Write once, never retransmit.** The runtime keeps a `CoreCommand::Prompt`
-   in `pending` until its `CommandAck` and, on reconnect, clears `sent` and
-   retransmits every pending command; the worker's `seen_commands` dedup is
-   per process, so a replacement worker would execute a retransmitted prompt
-   again, outside any dispatch CAS. Widget commands opt out: the runtime
-   marks a widget command `written` the moment it is handed to a connection
-   and, on reconnect, removes a written-but-unacknowledged widget command
-   from `pending` instead of resending it; the attempt closes as `uncertain`
-   unless the old epoch's replayed events prove it (step 6). A command never
-   written (the connection was down the whole time) is still pending and is
-   written once to the next connection. Consequently one attempt executes in
-   at most one epoch, and `DispatchAttempt.worker_epoch` is exact. A rejected
-   `CommandAck` therefore always refers to the one and only write and is
-   definite (see "returned" below).
+5. **Write once, never retransmit, keep ownership.** The runtime keeps a
+   `CoreCommand::Prompt` in `pending` until its `CommandAck` and, on
+   reconnect, clears `sent` and retransmits every pending command; the
+   worker's `seen_commands` dedup is per process, so a replacement worker
+   would execute a retransmitted prompt again, outside any dispatch CAS.
+   Widget commands opt out: the runtime marks a widget command `written` the
+   moment it is handed to a connection and, on reconnect, removes a
+   written-but-unacknowledged widget command from `pending` instead of
+   resending it; a command never written is still pending and is written
+   once to the next connection. Removal from `pending` must not remove the
+   session's protection against overlapping dispatch: `pending_prompt_for`
+   is what lets `idle_snapshot_guard` release the Hub's dispatch guard, and a
+   dropped command may still be travelling from the Machine to a worker. The
+   runtime therefore keeps every **unresolved attempt** (written, not
+   returned, not yet proven or settled) in a per-session set that
+   `pending_prompt_for` and `idle_snapshot_guard` consult exactly as they
+   consult `pending`; an idle snapshot cannot release the guard, and the
+   Hub cannot dispatch another prompt, until the attempt reaches
+   `delivered`, `uncertain` or `returned`, or the worker epoch that could
+   still receive it is revoked (the broker reports no worker and the
+   connection the command was written to is gone). The attempt's epoch is
+   bound by the first `TurnStarted` carrying its `turn_id`; a second
+   `TurnStarted` for the same turn from another epoch marks the attempt
+   `uncertain` rather than re-binding it.
 6. **Proof: the turn, identified.** The turn's identity is the pair
    `(worker_epoch, turn_id)`, exactly what Steer already targets. Three
    Controller-only changes make it usable (no Machine, wire or
@@ -1025,11 +1066,21 @@ a widget command is written to exactly one connection.
 
    ACP has no "prompt accepted" acknowledgement — `send_request` only queues
    the JSON-RPC request — so the `session/prompt` response is the only
-   absolute proof, and the Phase 2 worker change is to stamp `TurnEnded`
-   from the prompt task itself (today it reads the worker snapshot's
-   `current_turn_id`), to tag `Update` events of the active prompt with its
-   `turn_id`, and to distinguish "cancelled before send" from a provider
-   `Cancelled`.
+   absolute proof. Today the worker stamps `TurnEnded.turn_id` from its
+   mutable snapshot slot (`current_turn_id`), which a second overlapping
+   prompt could overwrite; the Controller-side ownership above prevents the
+   overlap, but attribution must not rest on that alone. **Interactive
+   widgets therefore require a worker generation that stamps `TurnEnded`
+   from the prompt task itself** (and tags the active prompt's `Update`
+   events with its `turn_id`, and distinguishes "cancelled before send" from
+   a provider `Cancelled`), advertised as the capability
+   `widget_turn_identity`. That is a Machine release and an explicit
+   maintenance boundary, and it is a Phase 1 prerequisite for `button` and
+   `choice`: a session whose worker generation lacks the capability renders
+   prompt controls inert with the notice "interactions need a newer worker"
+   (`interactive: false`, `inertReason: worker_capability_missing` on the
+   snapshot) and refuses `widget_action` with `capability_missing`; display
+   widgets work everywhere.
 7. **Retry.** `widget_action_retry {interaction_id, retry_interaction_id}`
    is the only Send-again for an `uncertain` or `failed` record. It copies
    the original's pinned intent (label, selection, revision, message)
@@ -1214,9 +1265,11 @@ tokenizer traces are the ship gate below, not this table **[unverified]**:
 | The person's answer | a typed sentence the agent then parses | 97 B button · ≈200 B choice with question | fixed shape |
 
 An update's cost does not grow with the report: a **benchmark update** (≤ 3
-ops, paths and values ≤ 64 chars; `progressPatch` is one) is 438 B and is
-bounded at 512 B, while a general patch is bounded only by the patch and
-document limits (an op may set an 8 K-char text). Patching therefore beats
+`set` ops with paths and string values ≤ 64 chars, a widget id ≤ 64 and an
+operation id ≤ 128 chars) measures 438 B for `progressPatch` and is bounded
+at 1 KiB at the class maximum (`benchmarkUpdateBytes`, constructed in the
+test), while a general patch is bounded only by the patch and document
+limits (an op may set an 8 K-char text). Patching therefore beats
 re-sending a report only when the report is larger than about 330 bytes: the **median historical
 table is at that boundary and the top third is above it**; against a
 one-sentence status, patching never wins. Prefix totals on the approval
@@ -1228,9 +1281,10 @@ For a p90 table (675 B) re-sent with its sentence, the widget gains about
 345 B per update and recovers its publication overhead after roughly six
 updates **[arithmetic on the measured examples; tokenizer traces pending]**.
 **The design therefore claims no token saving.** What it claims is a bound —
-publication ≤ 4.5× the same-language report, a benchmark update ≤ 512 B, a
-decision message ≤ 2 KiB — in exchange for in-place updates, readable Mobile
-rendering and typing-free, auditable decisions. The one measurable token
+publication ≤ 4.5× the same-language report, a benchmark update ≤ 1 KiB at
+its class maximum (438 B measured), a decision message ≤ 2 KiB — in
+exchange for in-place updates, readable Mobile rendering and typing-free,
+auditable decisions. The one measurable token
 effect in the design's favour is on the person's side: a decision is a
 97–200 byte fixed-shape message instead of a typed sentence plus the agent's
 parsing of it.
@@ -1251,8 +1305,9 @@ agent's read of it — and two Markdown lifecycles of the same exchange (the
 report then one-sentence statuses; the report then the report re-sent with
 the sentence; plus a typed answer), reporting each prefix separately against
 each baseline. Phase 1 ships only if measured publication is ≤ 4.5× its
-report for every archetype, a benchmark update is ≤ 512 B of envelope and
-result, a decision message is ≤ 2 KiB, and warm discovery plus one publish
+report for every archetype, the benchmark class maximum is ≤ 1 KiB of
+envelope and result, a decision message is ≤ 2 KiB, and warm discovery plus
+one publish
 stays under 4 K tokens; otherwise the design stops here and is reworked, not
 narrowed automatically. The contract test enforces the byte forms of these
 bounds on the committed examples today.
@@ -1261,8 +1316,8 @@ bounds on the committed examples today.
 
 | Phase | Content | Components | Release boundary |
 |---|---|---|---|
-| 1 | Contract v1 (18 types); `button`/`choice` with `prompt`/`open`/`copy`; `widgets.publish/update/list/read`, receipts, help topic; `sessions.transcript_generation`, `session_widgets`, `widget_revisions`, `widget_interactions`, `widget_artifact_refs`; acknowledged in-order store-writer variants, generation stamping on envelopes and durable-first Clear with an operation identity; notice-projected anchored rows, acknowledged publication watermark and sweep, bootstrap `widget_state` (paged) and lookup; `widget_action` admission, relay, queue reconciliation with cancellation settlement, acknowledged CAS handoff with recorded attempts, write-once widget commands (no reconnect retransmission), turn identity carried from `prompt_traced` through `apply_event` to the persisted `TurnEnd` envelope with its round-trip fixture, late proof, `uncertain` and `widget_action_retry`; the artifact pin lock; inline read-only carrier; Mobile and Desktop renderers with preview lines and the entered region; `session.events` widget kind; collector root | Controller + Web (four tables, one column) | no Machine release |
-| 2 | Worker-side turn stamping (`TurnEnded` from the prompt task, `turn_id` on active-prompt `Update`s, cancelled-before-send distinguished) so `uncertain` resolves sooner; `form` fields if elicitation proves insufficient; `control` actions behind the product confirm and an explicit allowlist; pin a widget to the Desktop side pane / Mobile dock; `metric`, `distribution`, `grid`, `tabs`; SVG `data` images under a bounded policy; image sources from execution-machine files through the verified artifact delivery used by image Calls | Controller + Web; **Machine release** for the worker signal and file sources | explicit maintenance boundary |
+| 1 | Contract v1 (18 types); display widgets on Controller + Web alone; `button`/`choice` with `prompt`/`open`/`copy` **gated on the worker capability `widget_turn_identity`**; `widgets.publish/update/list/read`, receipts, help topic; `sessions.transcript_generation` and `widget_index_version`, `session_widgets`, `widget_revisions`, `widget_interactions`, `widget_artifact_refs`; acknowledged in-order store-writer variants, generation stamping on envelopes and durable-first Clear with an operation identity; notice-projected anchored rows, acknowledged publication watermark and sweep, bootstrap `widget_state` (paged, index-versioned) and lookup; `widget_action` admission, relay, queue reconciliation with cancellation settlement, acknowledged CAS handoff with recorded attempts, write-once widget commands with retained dispatch ownership, turn identity carried from `prompt_traced` through `apply_event` to the persisted `TurnEnd` envelope with its round-trip fixture, late proof, `uncertain` and `widget_action_retry`; the artifact pin lock; inline read-only carrier; Mobile and Desktop renderers with preview lines and the entered region; `session.events` widget kind; collector root | Controller + Web (four tables, two columns) for display; **Machine release** (worker generation with prompt-owned `TurnEnded` identity) before interactions are enabled | display: no Machine release; interactions: explicit maintenance boundary |
+| 2 | Delayed acknowledgement of tracked `TurnEnded` if not already in Phase 1; `form` fields if elicitation proves insufficient; `control` actions behind the product confirm and an explicit allowlist; pin a widget to the Desktop side pane / Mobile dock; `metric`, `distribution`, `grid`, `tabs`; SVG `data` images under a bounded policy; image sources from execution-machine files through the verified artifact delivery used by image Calls | Controller + Web; **Machine release** for the worker signal and file sources | explicit maintenance boundary |
 | 3 | `widget_template` Plugin kind; Call children's result documents rendered as parent widgets; live `Ref` badges; `chart` | Controller, Web, Plugin SDK | separate reviewed contracts |
 
 Phase 1 ships readers before writers: the Web renderer and reducer cases
@@ -1326,7 +1381,17 @@ guidance; the §11 gate runs before the domain is enabled.
   response budget and continues after the last included entry. Labels: the
   positive and negative label vectors; a single choice with
   `max_selected: 13` refused; duplicate initial values refused; the maximal
-  record fixture within 8 KiB.
+  record fixture within 8 KiB, constructed independently for every permitted
+  selection; the maximal snapshot fixture within 36 KiB; the benchmark class
+  maximum within 1 KiB. Ownership: a reconnect that drops a written widget
+  command followed by an idle snapshot before `TurnStarted` does not release
+  the dispatch guard or dispatch a second prompt; a second `TurnStarted` for
+  the same turn from another epoch makes the attempt `uncertain`; a session
+  on a worker generation without `widget_turn_identity` renders prompt
+  controls inert and refuses `widget_action` with `capability_missing`.
+  Index: a live snapshot arriving during a bootstrap fetch is kept because
+  its `indexVersion` exceeds the index's, while a widget tombstoned before
+  the index is removed.
 - Reducer tests mirroring `backgroundTasksReconcile.test.ts` T1 and
   `persistence_tests.rs` T3/T4: a cached open widget at seq 10 and a
   200-event reconnect tail must show the newest `state_version`; a cached
@@ -1381,12 +1446,14 @@ guidance; the §11 gate runs before the domain is enabled.
 | 14 | Transcript generation as the Clear fence | r3 request changes (R3) | §6.3: Clear durable first; generation CAS at the database; dispatched work becomes uncertain |
 | 15 | Decision-pinned revisions | r3 request changes (R4, R12) | §6.3: refs per revision retained for pinned ones; reads bound to `sha256` |
 | 16 | Queued widget prompts are delete-only | r3 request changes (R2, R8) | §8.4: every mutation path refused; content hash verified at handoff |
-| 17 | Delivery evidence is the turn the prompt started, never the echo | r4 request changes (N1); r5 request changes (G1, G2, G5) | §8.3: write-once widget commands, exact epoch per attempt, Stop settles without relay, late proof reconciled with retries |
+| 17 | Delivery evidence is the turn the prompt started, never the echo | r4, r5, r6 request changes (N1, G1/G2/G5, H1) | §8.3: unresolved attempts keep dispatch ownership; interactions require the `widget_turn_identity` worker capability (prompt-owned `TurnEnded`) |
 | 18 | A commit-acknowledged store operation gates every widget effect | r4 conditional; r5 conditional (G6) | §8.3 step 3 settles committed cancellation intents at start |
 | 19 | `widget_action_retry` as the only Send-again | r4 request changes; r5 request changes (G5) | §8.3: late proof serialized with retry admission, `duplicate_of`/`retried_by` projected, missing-original and mismatch refusals |
 | 20 | The design claims bounded overhead and no token saving | r4/r5 claim approved; evidence corrected (G9) | §3 and §11 agree; benchmark class defined |
-| 21 | An update's bound is a constant for a benchmark update class, not for arbitrary patches | r5 request changes (G9) | §11 scoped |
+| 21 | An update's bound is a constant for a benchmark update class, not for arbitrary patches | r5 request changes (G9); r6 request changes (H6) | §11: class maximum computed and bounded at 1 KiB |
 | 22 | Clear is an identified, conditional, acknowledged writer operation | r5 approve | retained |
-| 23 | A widget command is written to exactly one connection and never retransmitted (new) | — | §8.3 step 5; for review |
-| 24 | Artifact pin admission and collection share one lock (new) | — | §6.3; for review |
-| 25 | A Stop during configuration startup settles the decision as cancelled, never relayed (new) | — | §8.3; for review |
+| 23 | A widget command is written to exactly one connection and never retransmitted | r6 request changes (H1) | §8.3 step 5: unresolved attempts retain dispatch ownership |
+| 24 | Artifact pin admission and collection share one lock | r6 approve | retained |
+| 25 | A Stop during configuration startup settles the decision as cancelled, never relayed | r6 request changes (H2) | contract aligned |
+| 26 | Interactive widgets require the `widget_turn_identity` worker capability; display widgets do not (new) | — | §8.3, §12; for review |
+| 27 | Bootstrap absence is ordered by a per-session index version (new) | — | §6.5; for review |

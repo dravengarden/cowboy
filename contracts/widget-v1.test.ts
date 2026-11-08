@@ -29,6 +29,7 @@ import {
   type WidgetDocument,
   worstCaseMessageBytes,
   worstCaseRecordBytes,
+  worstCaseSnapshotBytes,
 } from "./widget-v1.ts";
 
 const encoder = new TextEncoder();
@@ -421,7 +422,9 @@ test("a three-op update envelope stays under its constant bound and is dearer th
   };
   const update = bytes(envelope) + bytes(result);
   if (progressPatch.length > WIDGET_LIMITS.patchOps) throw new Error("too many ops");
-  if (update > 512) throw new Error("three-op update exceeds its 512-byte bound");
+  if (update > WIDGET_LIMITS.benchmarkUpdateBytes)
+    throw new Error("benchmark update exceeds its bound");
+  if (update > 450) throw new Error("progressPatch grew past its documented 438-byte measurement");
   if (update <= bytes(progressMarkdown))
     throw new Error("the document claims an update costs more than a one-line status");
   if (update <= bytes(progressResendMarkdown)) {
@@ -484,24 +487,118 @@ test("the label pattern accepts ordinary labels and refuses invisible or multi-l
   }
 });
 
-test("a maximal choice's worst-case record fits the record bound by construction", () => {
-  const quotes = `${'"'.repeat(199)}a`;
+test("the record estimator is an upper bound over every permitted selection", () => {
+  const quotes = `${'"'.repeat(198)}a`;
+  const emoji = "😀".repeat(50);
   const maximal: ChoiceNode = {
     type: "choice",
     id: "x".repeat(WIDGET_LIMITS.idChars),
     label: quotes,
     multiple: true,
     max_selected: 2,
-    options: Array.from({ length: 2 }, (_, index) => ({
-      value: `q${index}`,
-      label: `${quotes}${index}`,
-    })),
+    options: [
+      { value: "q1", label: `${quotes}1` },
+      { value: "q2", label: `${quotes}2` },
+      { value: "e1", label: emoji },
+      { value: "e2", label: `${emoji}!` },
+    ],
   };
-  if (worstCaseMessageBytes(maximal) > WIDGET_LIMITS.messageBytes)
-    throw new Error("vector exceeds the message bound");
-  const record = worstCaseRecordBytes(maximal);
-  if (record > WIDGET_LIMITS.interactionRecordBytes)
-    throw new Error(`maximal record is ${record} bytes`);
-  if (record < WIDGET_LIMITS.interactionRecordBytes / 2)
+  check({ ...twoQuestions, root: maximal });
+  const estimate = worstCaseRecordBytes(maximal);
+  if (estimate > WIDGET_LIMITS.interactionRecordBytes)
+    throw new Error(`maximal record is ${estimate} bytes`);
+  if (estimate < WIDGET_LIMITS.interactionRecordBytes / 2)
     throw new Error("vector is not near the bound");
+  // Independently construct the record for every two-option selection and
+  // check none exceeds the estimate.
+  const handle = "w".padEnd(WIDGET_LIMITS.handleChars, "9");
+  const id = "x".repeat(WIDGET_LIMITS.idChars);
+  const labels = maximal.options.map((option) => option.label);
+  for (let a = 0; a < labels.length; a += 1) {
+    for (let b = a + 1; b < labels.length; b += 1) {
+      const selected = [labels[a] as string, labels[b] as string];
+      const record = {
+        interaction_id: id,
+        handle,
+        node_id: maximal.id,
+        group: id,
+        revision: WIDGET_LIMITS.maxCounter,
+        state_version: WIDGET_LIMITS.maxCounter,
+        transcript_generation: WIDGET_LIMITS.maxCounter,
+        label: maximal.label,
+        selected,
+        message: composeInteractionMessage(
+          handle,
+          WIDGET_LIMITS.maxCounter,
+          maximal.label,
+          selected,
+        ),
+        message_sha256: "f".repeat(64),
+        at_ms: WIDGET_LIMITS.maxTimestampMs,
+        state: "uncertain",
+        reason: "r".repeat(WIDGET_LIMITS.reasonChars),
+        cancel_requested: true,
+        attempts: Array.from({ length: WIDGET_LIMITS.attemptsPerInteraction }, () => ({
+          command_id: "c".repeat(WIDGET_LIMITS.idChars),
+          turn_id: "t".repeat(WIDGET_LIMITS.idChars),
+          worker_epoch: "e".repeat(WIDGET_LIMITS.idChars),
+          dispatched_at_ms: WIDGET_LIMITS.maxTimestampMs,
+          outcome: "uncertain",
+          stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
+        })),
+        retry_of: id,
+        retried_by: id,
+        duplicate_of: id,
+      };
+      if (bytes(record) > estimate)
+        throw new Error(`selection ${a},${b} exceeds the estimate: ${bytes(record)} > ${estimate}`);
+    }
+  }
+});
+
+test("a maximal snapshot around a maximal document fits the snapshot bound", () => {
+  // A document of 8,000 three-byte characters is just under 24 KiB.
+  const document: WidgetDocument = {
+    schema: "cowboy.widget/1",
+    title: "t".repeat(WIDGET_LIMITS.titleChars),
+    summary: "s".repeat(WIDGET_LIMITS.summaryChars),
+    root: { type: "text", id: "x".repeat(WIDGET_LIMITS.idChars), text: "中".repeat(7_900) },
+  };
+  if (bytes(document) > WIDGET_LIMITS.documentBytes) throw new Error("fixture document too large");
+  if (bytes(document) < WIDGET_LIMITS.documentBytes - 1024)
+    throw new Error("fixture document not near the bound");
+  const snapshot = worstCaseSnapshotBytes(document);
+  if (snapshot > WIDGET_LIMITS.snapshotBytes)
+    throw new Error(`maximal snapshot is ${snapshot} bytes`);
+  if (Math.floor(WIDGET_LIMITS.lookupBytes / WIDGET_LIMITS.snapshotBytes) < 7)
+    throw new Error("lookup page fits too few snapshots");
+});
+
+test("the benchmark update class maximum fits its bound", () => {
+  const envelope = {
+    action: "widgets.update",
+    arguments: {
+      widget_id: "w".repeat(WIDGET_LIMITS.idChars),
+      expected_revision: WIDGET_LIMITS.maxCounter,
+      change: {
+        type: "patch",
+        ops: Array.from({ length: 3 }, (_, index) => ({
+          op: "set",
+          path: `#${"p".repeat(62)}${index}`,
+          value: "v".repeat(64),
+        })),
+      },
+    },
+    operation: "o".repeat(128),
+  };
+  const result = {
+    status: "committed",
+    widget_id: "w".repeat(WIDGET_LIMITS.idChars),
+    revision: WIDGET_LIMITS.maxCounter,
+    state_version: WIDGET_LIMITS.maxCounter,
+    warnings: [],
+  };
+  const total = bytes(envelope) + bytes(result);
+  if (total > WIDGET_LIMITS.benchmarkUpdateBytes)
+    throw new Error(`benchmark class maximum is ${total} bytes`);
 });

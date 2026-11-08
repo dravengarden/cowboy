@@ -83,8 +83,18 @@ export const WIDGET_LIMITS = {
   readPageBytes: 12 * 1024,
   /** Interaction summaries carried inside a snapshot; full records are paged. */
   snapshotInteractions: 5,
-  /** Serialized `WidgetSnapshot` (document plus bounded metadata). */
-  snapshotBytes: 32 * 1024,
+  /** Serialized `WidgetSnapshot`: a maximal document plus every metadata
+   *  field at its maximum (`worstCaseSnapshotBytes`), reserved at publish. */
+  snapshotBytes: 36 * 1024,
+  /** Revisions, state versions, generations, index versions and sequence
+   *  numbers are integers in 0..`maxCounter`; timestamps are epoch
+   *  milliseconds in 0..`maxTimestampMs`. */
+  maxCounter: 2 ** 31 - 1,
+  maxTimestampMs: 2 ** 53 - 1,
+  /** The benchmark update class of docs/widgets.md §11: ≤ 3 `set` ops whose
+   *  paths and string values are ≤ 64 chars, a widget id ≤ 64 chars and an
+   *  operation id ≤ 128 chars; its envelope plus result never exceed this. */
+  benchmarkUpdateBytes: 1024,
   interactionsPerWidget: 200,
   widgetsPerSession: 500,
   openWidgetsPerSession: 200,
@@ -104,6 +114,11 @@ export const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 /** The Controller-assigned public handle of a widget (`w17`), shown in the
  *  row header and used in composed messages instead of the agent's id. */
 export const WIDGET_HANDLE_PATTERN = /^w[1-9][0-9]*$/;
+
+/** Controller- and runtime-written metadata strings (`reason`,
+ *  `stop_reason`, handles, identifiers) are printable ASCII, so their
+ *  serialized size equals their length. */
+export const ASCII_PATTERN = /^[\x20-\x7E]+$/;
 
 /** Visible labels (titles, summaries, interactive labels, option labels)
  *  are one line of printable text: no control characters (`Cc`), no line or
@@ -652,19 +667,22 @@ export type InteractionRecord = {
   /** admitted: recorded durably; the relay keeps it in the session queue.
    *  dispatched: the durable `admitted → dispatched` CAS recorded an
    *  attempt `(command_id, turn_id)` and the prompt was then handed to the
-   *  worker; a prompt the runtime returns (rejected ack, undelivered,
-   *  withdrawn before any send) closes the attempt as `returned` and the
-   *  record goes back to `admitted`. delivered: a `TurnEnd` carrying the
+   *  worker; a prompt the runtime itself gives back and requeues (rejected
+   *  first ack, `UndeliveredPrompt`) closes the attempt as `returned` and
+   *  the record goes back to `admitted`, whereas a prompt the person stops
+   *  before any send settles the record `cancelled` (reason `stopped`) and
+   *  is never relayed again. delivered: a `TurnEnd` carrying the
    *  attempt's `(turn_id, worker_epoch)` ended with `EndTurn`, `MaxTokens`,
    *  `MaxTurnRequests` or `Refusal` (the transcript echo, `TurnStarted`,
    *  command acks and agent output are never evidence). uncertain: the
    *  attempt ended `Cancelled` or in error, its worker exited without that
    *  `TurnEnd`, the reference is missing, a reset or Clear fenced it, or
    *  the attempt budget is exhausted; never replayed blindly. cancelled:
-   *  deleted from the queue or fenced by a Clear before dispatch. failed:
+   *  deleted from the queue (`removed`), fenced by a Clear (`cleared`) or
+   *  withdrawn by the person's Stop before any send (`stopped`). failed:
    *  refused by the session before the handoff. */
   state: "admitted" | "dispatched" | "delivered" | "uncertain" | "cancelled" | "failed";
-  /** ≤ `reasonChars`. */
+  /** ≤ `reasonChars`, `ASCII_PATTERN`. */
   reason?: string;
   /** A durable cancellation intent recorded before the queue entry is
    *  touched; the dispatch CAS requires it to be false. */
@@ -682,41 +700,41 @@ export type InteractionRecord = {
   duplicate_of?: string;
 };
 
-/** Worst-case serialized size of an interaction record for a prompt node:
- *  its worst-case message, the selected labels repeated, the label, five
- *  attempts with bounded fields, a maximal reason and all retry links.
- *  Validated at publish against `interactionRecordBytes`. */
-export function worstCaseRecordBytes(node: InputNode): number {
+/** Bytes a selected option label adds to the serialized record: once in
+ *  `selected` (escaped), once on message line one (escaped inside the
+ *  record's message string) and once on message line two (escaped twice,
+ *  as JSON inside that string), plus the separators. Additive per label, so
+ *  the top-k by this value is the exact worst selection. */
+export function recordContribution(label: string): number {
+  const once = JSON.stringify(label);
+  const twice = JSON.stringify(once);
+  return utf8(once) + (utf8(once) - 2) + (utf8(twice) - 2) + 4;
+}
+
+function maximalRecord(node: InputNode, selected: string[] | undefined): InteractionRecord {
   const handle = "w".padEnd(WIDGET_LIMITS.handleChars, "9");
   const id = "x".repeat(WIDGET_LIMITS.idChars);
-  const selected =
-    node.type === "choice"
-      ? [...node.options]
-          .map((option) => option.label)
-          .sort((a, b) => utf8(JSON.stringify(b)) - utf8(JSON.stringify(a)))
-          .slice(0, effectiveMaxSelected(node))
-      : undefined;
   const attempt: DispatchAttempt = {
-    command_id: "cmd-".padEnd(WIDGET_LIMITS.idChars, "9"),
-    turn_id: "turn-".padEnd(WIDGET_LIMITS.idChars, "9"),
-    worker_epoch: "".padEnd(WIDGET_LIMITS.idChars, "9"),
-    dispatched_at_ms: 2 ** 53 - 1,
+    command_id: "c".repeat(WIDGET_LIMITS.idChars),
+    turn_id: "t".repeat(WIDGET_LIMITS.idChars),
+    worker_epoch: "e".repeat(WIDGET_LIMITS.idChars),
+    dispatched_at_ms: WIDGET_LIMITS.maxTimestampMs,
     outcome: "uncertain",
-    stop_reason: "e".repeat(WIDGET_LIMITS.stopReasonChars),
+    stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
   };
-  const record: InteractionRecord = {
+  return {
     interaction_id: id,
     handle,
     node_id: node.id,
     group: id,
-    revision: 2 ** 31 - 1,
-    state_version: 2 ** 31 - 1,
-    transcript_generation: 2 ** 31 - 1,
+    revision: WIDGET_LIMITS.maxCounter,
+    state_version: WIDGET_LIMITS.maxCounter,
+    transcript_generation: WIDGET_LIMITS.maxCounter,
     label: node.label,
     selected,
-    message: composeInteractionMessage(handle, 2 ** 31 - 1, node.label, selected),
+    message: composeInteractionMessage(handle, WIDGET_LIMITS.maxCounter, node.label, selected),
     message_sha256: "f".repeat(64),
-    at_ms: 2 ** 53 - 1,
+    at_ms: WIDGET_LIMITS.maxTimestampMs,
     state: "uncertain",
     reason: "r".repeat(WIDGET_LIMITS.reasonChars),
     cancel_requested: true,
@@ -725,7 +743,70 @@ export function worstCaseRecordBytes(node: InputNode): number {
     retried_by: id,
     duplicate_of: id,
   };
-  return utf8(JSON.stringify(record));
+}
+
+/** Worst-case serialized size of an interaction record for a prompt node:
+ *  the selection that contributes the most serialized bytes
+ *  (`recordContribution`), every identifier and counter at its maximum,
+ *  five attempts, a maximal ASCII reason and all retry links. Validated at
+ *  publish against `interactionRecordBytes`, so no later settlement can
+ *  grow a record past the bound. */
+export function worstCaseRecordBytes(node: InputNode): number {
+  const selected =
+    node.type === "choice"
+      ? [...node.options]
+          .map((option) => option.label)
+          .sort((a, b) => recordContribution(b) - recordContribution(a))
+          .slice(0, effectiveMaxSelected(node))
+      : undefined;
+  return utf8(JSON.stringify(maximalRecord(node, selected)));
+}
+
+/** Worst-case serialized size of a widget snapshot around `document`: every
+ *  identifier and counter at its maximum, 32 decided groups and five
+ *  interaction summaries with all retry links. Validated at publish against
+ *  `snapshotBytes`; a lookup page always fits `lookupBytes / snapshotBytes`
+ *  snapshots. */
+export function worstCaseSnapshotBytes(document: WidgetDocument): number {
+  const id = "x".repeat(WIDGET_LIMITS.idChars);
+  const summary: InteractionSummary = {
+    interaction_id: id,
+    node_id: id,
+    group: id,
+    revision: WIDGET_LIMITS.maxCounter,
+    state: "uncertain",
+    at_ms: WIDGET_LIMITS.maxTimestampMs,
+    retry_of: id,
+    retried_by: id,
+    duplicate_of: id,
+  };
+  const decided: WidgetSnapshot["decided"] = {};
+  for (let index = 0; index < WIDGET_LIMITS.groups; index += 1) {
+    decided[`g${String(index).padStart(WIDGET_LIMITS.idChars - 1, "0")}`] = {
+      interaction_id: id,
+      revision: WIDGET_LIMITS.maxCounter,
+    };
+  }
+  const snapshot: WidgetSnapshot = {
+    widgetId: id,
+    handle: "w".padEnd(WIDGET_LIMITS.handleChars, "9"),
+    revision: WIDGET_LIMITS.maxCounter,
+    stateVersion: WIDGET_LIMITS.maxCounter,
+    transcriptGeneration: WIDGET_LIMITS.maxCounter,
+    indexVersion: WIDGET_LIMITS.maxCounter,
+    seq: WIDGET_LIMITS.maxCounter,
+    publishedAtMs: WIDGET_LIMITS.maxTimestampMs,
+    updatedAtMs: WIDGET_LIMITS.maxTimestampMs,
+    origin: { kind: "mcp", operation: "o".repeat(128) },
+    closed: true,
+    interactive: false,
+    inertReason: "worker_capability_missing",
+    document,
+    documentSha256: "f".repeat(64),
+    recentInteractions: Array.from({ length: WIDGET_LIMITS.snapshotInteractions }, () => summary),
+    decided,
+  };
+  return utf8(JSON.stringify(snapshot));
 }
 
 /** One handoff of an interaction's prompt to a worker (docs/widgets.md
@@ -745,7 +826,7 @@ export type DispatchAttempt = {
    *  command is written to exactly one connection and never retransmitted
    *  (§8.3), so one epoch per attempt is exact. */
   outcome: "open" | "delivered" | "uncertain" | "returned" | "cancelled";
-  /** ≤ `stopReasonChars`. */
+  /** ≤ `stopReasonChars`, `ASCII_PATTERN`; longer runtime text is truncated. */
   stop_reason?: string;
 };
 
@@ -773,12 +854,21 @@ export type WidgetSnapshot = {
   revision: number;
   stateVersion: number;
   transcriptGeneration: number;
+  /** The session's widget index version when this widget was created
+   *  (docs/widgets.md §6.5): a bootstrap index applies absence only to
+   *  widgets created at or before its own index version. */
+  indexVersion: number;
   /** Anchor seq once known; null in the first snapshot. */
   seq: number | null;
   publishedAtMs: number;
   updatedAtMs: number;
   origin: { kind: "mcp"; operation: string } | { kind: "repaired" };
   closed: boolean;
+  /** False when prompt controls must render inert: the session's worker
+   *  generation lacks prompt-owned turn identity (`widget_turn_identity`),
+   *  which interactions require (docs/widgets.md §8.3). */
+  interactive: boolean;
+  inertReason?: "worker_capability_missing";
   document: WidgetDocument;
   /** Content identity of `document`'s compact JSON. */
   documentSha256: string;
@@ -811,6 +901,10 @@ export type WidgetState = {
   /** Controller boot epoch; a new epoch replaces, never merges, cached entries. */
   epoch: string;
   transcript_generation: number;
+  /** Monotonic per session; advanced by every widget creation and
+   *  tombstone. Pages of one bootstrap share it; absence from the complete
+   *  index removes only cached widgets whose `indexVersion` ≤ this value. */
+  index_version: number;
   entries: WidgetStateEntry[];
   /** False when more entries follow; `next` fetches them so the client can
    *  always obtain the complete authoritative index. */
@@ -902,6 +996,7 @@ export type WidgetActionRefusal =
   | "retry_chain"
   | "unknown_interaction"
   | "widget_mismatch"
+  | "capability_missing"
   | "rate_limited"
   | "session_unavailable"
   | "conflict";
