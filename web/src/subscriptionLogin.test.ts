@@ -497,6 +497,22 @@ test("a saved attempt that never started yields to the named active sign-in", as
   assert(live.snapshot.error); assertEquals(live.snapshot.pending?.request, "request");
 });
 
+test("a start the Machine refuses for a running login continues that login", async () => {
+  const f = fixture();
+  const receipt = (status: string, request_id: string) => ({ status, request_id, account_id: scope.account, provider_id: scope.provider, machine_id: "machine" });
+  f.setFetch(async (path) => Response.json(path.includes("/logins?")
+    ? { account_id: scope.account, provider_id: scope.provider, next_after_machine: null, logins: [receipt("active", "running")] }
+    : path.includes("/api/providers/") ? { request_id: "running", events: [] }
+    : path.endsWith("/logins/running") ? receipt("active", "running") : receipt("not_started", "rejected")));
+  const owner = subscriptionLogin(scope, f.ports); owner.restore();
+  await owner.start(options, "native");
+  assertEquals(owner.snapshot.error, "");
+  assertEquals(owner.snapshot.pending?.request, "running");
+  assertEquals(owner.snapshot.observation?.status, "active");
+  assertEquals(f.calls.filter((call) => call.init?.method === "POST").length, 1);
+  assertEquals(JSON.parse([...f.values.values()][0]!).request, "running");
+});
+
 test("a GUI operation can reopen its discovered request without redispatch", async () => {
   const f = fixture();
   const first = subscriptionLogin(scope, f.ports); first.restore(); await first.start(options, "native");

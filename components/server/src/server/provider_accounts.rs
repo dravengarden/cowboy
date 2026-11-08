@@ -92,8 +92,12 @@ pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &
     let enabled = state
         .service_config
         .get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_SESSIONS);
+    let revoked = store
+        .completed_provider_account_revocations(owner)
+        .await
+        .map_err(|_| "unavailable")?;
     Ok(
-        json!({"registry":registry,"display_preferences":display,"session_admission":if enabled {"enabled"} else {"not_enabled"},
+        json!({"registry":registry,"display_preferences":display,"revoked_accounts":revoked,"session_admission":if enabled {"enabled"} else {"not_enabled"},
         "session_providers":if enabled {vec!["claude-code"]} else {vec![]}}),
     )
 }
