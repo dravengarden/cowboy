@@ -1072,6 +1072,19 @@ the text above:
   stream's close cannot touch the replacement because the attachment id
   differs; lease renewals are bounded to 30 s from now whatever the
   Controller sends.
+- Controller (`components/server/src/server/provider_accounts/browser*`):
+  the viewer WebSocket requires the `cowboy-browser-v1` subprotocol and the
+  `width`, `height`, `scale` query (plus `takeover=true` to replace a live
+  attachment); the server sends `{type:"state",state}` first and on every
+  resize, the product authentication snapshot messages exactly as `/ws`, and
+  `{type:"error",code}`; the viewer sends `{type:"lease"}` every 10 s and
+  `{type:"resize",width,height}`; everything binary is RFB relayed verbatim.
+  `GET .../browser` returns `{machine_id, state, placements, admission}`,
+  where `admission` is the refusal code (`machine_browser_not_enabled`,
+  `browser_not_enabled`, `account_unavailable`) or null. Opens choose the
+  account's placement Machine, else a Machine holding its native generation.
+  The Machine-side revocation operation id is `revoke-<sha256(operation)[..32]>`,
+  so a retried reconciliation replays the Machine's receipt.
 
 ## Alternatives considered
 
