@@ -223,13 +223,17 @@ the user's vimrc; Insert is refused. Review adds, per editor and below any user
 mapping of the same keys: `]c`/`[c` hunk, `]f`/`[f` file over the complete
 change queue (the Unread filter does not change it), `]u`/`[u` unreviewed
 file, `]d`/`[d` the next problem the Inspector places, `gO` the outline in
-the Inspector, `gt`/`gT`/`{n}gt` file tab, and `Enter` (Normal or Visual), which
+the Inspector, `K` hover (a popover at the cursor; `Esc` returns), `gd`
+`gD` `gy` `gI` `gr` definition, declaration, type definition,
+implementation and references (one location opens, several open a menu; a
+jump keeps the file it left as a tab), `gt`/`gT`/`{n}gt` file tab, and `Enter` (Normal or Visual), which
 appends the lines with their location to the Prompt and focuses it, unfolding
 a folded Prompt. The Review group (`␣V`, while Review is shown): `V` focus,
 `C`/`F`/`H`/`W`/`G` Changes/Files/History/Worktrees/Pull request, `X` what to review (the
 Session's default, its project checkout, linked, bound or same-project
 sessions; per device, and choosing never moves the Agent), `,` Review
-settings, `O` the outline, `]` fold the Inspector, `K` run a project check, `A` compare against, `U` unread only, `M` mark
+settings, `D` unified or split diff (per device; in a split the new side
+holds the Vim buffer and the old side follows its scroll), `O` the outline, `]` fold the Inspector, `K` run a project check, `A` compare against, `U` unread only, `M` mark
 reviewed (the focused row, else the open file), `S` send and stay, `Q` close
 the file tab, `P` keep it, `[` fold the Navigator, `L` the classic layout.
 From 1320 px of Review width the Inspector (`review.inspector`) sits on the

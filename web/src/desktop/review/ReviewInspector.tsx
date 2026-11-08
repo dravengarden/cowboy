@@ -6,6 +6,7 @@ import { notify } from "../../store";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
 import { sendCheckRequest } from "../../mobile/review/checkRequest";
+import type { CodeDiagnostic } from "../../mobile/review/codeApi";
 import { checkStatusSummary } from "../../mobile/review/checkAnnotations";
 import { refreshReviewChecks } from "../../mobile/review/reviewChecksStore";
 import { symbolKindLabel } from "../../mobile/review/outlineModel";
@@ -106,12 +107,14 @@ function InspectorDetails({ review, placement }: {
  * outline, hunks, problems and facts. `Enter` on a row moves the Document's
  * cursor there; `]d`/`[d` step the placed problems; `gO` arrives here.
  */
-export function ReviewInspector({ review, onShow }: {
+export function ReviewInspector({ review, onShow, diagnostics }: {
   review: ReviewWorkbench;
+  /** The language engine's diagnostics of the open source file. */
+  diagnostics: readonly CodeDiagnostic[];
   /** Make the Inspector visible (a narrow Review keeps it folded). */
   onShow: () => void;
 }): React.JSX.Element {
-  const data = useInspectorData(review);
+  const data = useInspectorData(review, diagnostics);
   const list = useRef<HTMLUListElement>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -121,12 +124,15 @@ export function ReviewInspector({ review, onShow }: {
   const own = review.target?.own === true;
   const runCheck = useRunCheck(review.target?.sessionId ?? "");
   const runnable = own && data.checks?.allowed === true && data.checks.runnable === true && !!data.checks.epoch;
+  // Rows are unified patch rows; a split diff shows them on its own rows.
   const jump = (row: number | undefined): void => {
     const view = review.editor.current;
     if (!view || row === undefined) return;
-    revealEditorLine(view, row);
+    revealEditorLine(view, review.viewRowOf(row));
     view.focus();
   };
+  const viewRowOf = useRef(review.viewRowOf);
+  viewRowOf.current = review.viewRowOf;
   const latest = useRef(data);
   latest.current = data;
   const latestShow = useRef(onShow);
@@ -139,7 +145,7 @@ export function ReviewInspector({ review, onShow }: {
         return;
       }
       if (action.kind !== "problem") return;
-      const rows = latest.current.problems.flatMap((problem) => problem.row === undefined ? [] : [problem.row]);
+      const rows = latest.current.problems.flatMap((problem) => problem.row === undefined ? [] : [viewRowOf.current(problem.row)]);
       const cursor = view.state.doc.lineAt(view.state.selection.main.head).number;
       const row = adjacentLine([...new Set(rows)].sort((a, b) => a - b), cursor, action.offset);
       if (row === undefined) notify(rows.length === 0 ? "No problems placed in this document" : "No more problems", "info");

@@ -777,7 +777,7 @@ function maximalRecord(node: InputNode, selected: string[] | undefined): Interac
     state_version: WIDGET_LIMITS.maxCounter,
     transcript_generation: WIDGET_LIMITS.maxCounter,
     label: node.label,
-    selected,
+    ...(selected ? { selected } : {}),
     message: composeInteractionMessage(handle, WIDGET_LIMITS.maxCounter, node.label, selected),
     message_sha256: "f".repeat(64),
     at_ms: WIDGET_LIMITS.maxTimestampMs,

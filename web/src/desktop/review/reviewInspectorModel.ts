@@ -3,7 +3,7 @@
 // Rows are one-based Document lines; in a diff a file line is placed only
 // through a verified projection, never guessed from the patch text.
 
-import type { CodeCheckDiagnostic, CodeChecks, CodeDocumentSymbol } from "../../mobile/review/codeApi";
+import type { CodeCheckDiagnostic, CodeChecks, CodeDiagnostic, CodeDocumentSymbol } from "../../mobile/review/codeApi";
 import { checkTitle } from "../../mobile/review/checkAnnotations";
 import { diffHunkLines } from "../../mobile/review/diffNavigationModel";
 
@@ -73,6 +73,28 @@ export function inspectorProblems(
   return problems.sort((left, right) =>
     (left.row ?? Number.MAX_SAFE_INTEGER) - (right.row ?? Number.MAX_SAFE_INTEGER) ||
     left.line - right.line || ORDER[left.severity] - ORDER[right.severity]
+  );
+}
+
+const LSP_SEVERITY: Readonly<Record<number, CodeCheckDiagnostic["severity"]>> = { 1: "error", 2: "warning" };
+
+/** The language engine's diagnostics of an open source file, as problems
+ *  merged with the check findings in Document order. */
+export function withLanguageProblems(
+  problems: readonly InspectorProblem[],
+  diagnostics: readonly CodeDiagnostic[],
+): InspectorProblem[] {
+  const language = diagnostics.map((diagnostic, index): InspectorProblem => ({
+    key: `language:${String(index)}`,
+    severity: LSP_SEVERITY[diagnostic.severity] ?? "note",
+    message: diagnostic.message,
+    source: diagnostic.source ?? "Language",
+    line: diagnostic.start.row + 1,
+    row: diagnostic.start.row + 1,
+  }));
+  return [...problems, ...language].sort((left, right) =>
+    (left.row ?? Number.MAX_SAFE_INTEGER) - (right.row ?? Number.MAX_SAFE_INTEGER) ||
+    ORDER[left.severity] - ORDER[right.severity]
   );
 }
 

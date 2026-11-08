@@ -153,6 +153,34 @@ try {
   await until(`${activeTab} !== ${JSON.stringify(second)}`, "]u skips the reviewed file");
   results.push("␣VM marks the file reviewed; ]u skips it while ]f would not");
 
+  // Side by side: the old side mirrors, the new side keeps the Vim buffer.
+  await keys(" ", "v", "d");
+  await until(`document.querySelector("[data-review-diff-layout='split'] [data-desktop-review-split-old]")`, "␣VD shows the split diff");
+  const sides = await page.evaluate<{ old: string; next: string }>(`({
+    old: document.querySelector("[data-desktop-review-split-old] .cm-content").textContent,
+    next: document.querySelector("[data-desktop-review-editor] .cm-content").textContent,
+  })`);
+  check(sides.old.includes("a") && !sides.old.includes("+b") && sides.next.includes("b") && !sides.next.includes("-a"),
+    `the split shows each side without diff markers (${sides.old} | ${sides.next})`);
+  // The split has no file header rows, so its first row is hunk 1's header.
+  await keys("g", "g");
+  await until(`document.querySelector("[data-review-hunk-position]")?.textContent.includes("1/2")`, "gg starts in hunk 1");
+  await keys("]", "c");
+  await until(`document.querySelector("[data-review-hunk-position]")?.textContent.includes("2/2")`, "]c works in the split");
+  await keys("[", "c");
+  await until(`document.querySelector("[data-review-hunk-position]")?.textContent.includes("1/2")`, "[c returns in the split");
+  await key("Enter");
+  await until(focusIn("prompt.composer"), "Enter sends from the split");
+  const splitRemark = await page.evaluate<string>(`document.querySelector("[data-fixture-prompt]").value`);
+  check(/src\/file-\d+\.ts:1\b/.test(splitRemark) && splitRemark.includes("+b"), `a split remark names the new file line: ${splitRemark.slice(0, 120)}`);
+  await prefix();
+  await keys("v", "v");
+  await until(focusIn("review.document"), "back in the Document");
+  await shot("9-split");
+  await keys(" ", "v", "d");
+  await until(`document.querySelector("[data-review-diff-layout='unified']")`, "␣VD returns to the unified diff");
+  results.push("Split diff: ␣VD shows both sides aligned, ]c steps hunks, Enter sends the new-side file line, ␣VD returns");
+
   await keys("V", "j", "Enter");
   await until(focusIn("prompt.composer"), "Enter hands focus to the Prompt");
   const remark = await page.evaluate<string>(`document.querySelector("[data-fixture-prompt]").value`);
@@ -206,6 +234,20 @@ try {
   await until(`document.querySelector("[data-review-cursor-line='1']")`, "gg reaches line 1");
   await keys("]", "d");
   await until(`document.querySelector("[data-review-cursor-line='3']")`, "]d moves to the finding's line");
+  await until(`document.querySelector("[data-desktop-review-editor] .cowboy-review-diagnostic-warning")`, "the language diagnostic is underlined");
+  await until(`document.querySelector("[data-review-inspector-section='problems']")?.textContent.includes("Fixture diagnostic")`, "the diagnostic joins Problems");
+  await keys("g", "g");
+  await key("K");
+  await until(`document.querySelector("[data-review-hover]")?.textContent.includes("Project guide heading")`, "K shows the hover");
+  await shot("10-hover");
+  await key("Escape");
+  await until(`!document.querySelector("[data-review-hover]")`, "Escape closes the hover");
+  await until(focusIn("review.document"), "focus returns to the Document");
+  await keys("g", "d");
+  await until(`${activeTab} === "src/app.ts"`, "gd opens the definition");
+  await keys("g", "T");
+  await until(`${activeTab} === "README.md"`, "gT returns to the file");
+  results.push("Language: the diagnostic is underlined and listed, K shows the hover, Escape returns, gd opens the definition");
   await keys("g", "O");
   await until(`document.activeElement?.closest("[data-review-inspector-section='outline']")`, "gO focuses the outline");
   await key("Enter");
