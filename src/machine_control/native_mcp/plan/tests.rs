@@ -13,7 +13,13 @@ fn fixture() -> (
 ) {
     let control = Arc::new(MachineControl::default());
     let (tx, rx) = mpsc::unbounded_channel();
-    let connection = control.install("hawk".into(), "epoch".into(), false, crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION, tx);
+    let connection = control.install(
+        "hawk".into(),
+        "epoch".into(),
+        false,
+        crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION,
+        tx,
+    );
     let cli = crate::execution_protocol::Executor {
         command: "/nix/store/fixture/bin/cowboy".into(),
         sha256: "a".repeat(64),

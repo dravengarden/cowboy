@@ -58,9 +58,21 @@ impl Fixture {
         let service = identity.as_str().to_owned();
         let control = Arc::new(MachineControl::new(identity));
         let (tx, commands) = mpsc::unbounded_channel();
-        let execution = control.install("hawk".into(), "epoch".into(), false, crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION, tx);
+        let execution = control.install(
+            "hawk".into(),
+            "epoch".into(),
+            false,
+            crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION,
+            tx,
+        );
         let (tx, runtime_commands) = mpsc::unbounded_channel();
-        control.install("ovh".into(), "epoch".into(), false, crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION, tx);
+        control.install(
+            "ovh".into(),
+            "epoch".into(),
+            false,
+            crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION,
+            tx,
+        );
         let runtimes = crate::runtime_router::RuntimeRouter::new();
         let runtime = crate::remote_runtime::RemoteRuntime::for_test(hub.clone(), vec![]);
         runtime.connect_for_test();
@@ -267,8 +279,13 @@ async fn controller_hook_delivers_owned_plan_and_refuses_connection_replacement(
     assert!(super::super::launch_mcp(&f.hub, &f.meta).unwrap().is_some());
     assert_eq!(f.hub.setting(&super::super::key(&f.meta.id)), stored);
     let (tx, mut replacement) = mpsc::unbounded_channel();
-    f.control
-        .install("hawk".into(), "epoch".into(), false, crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION, tx);
+    f.control.install(
+        "hawk".into(),
+        "epoch".into(),
+        false,
+        crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION,
+        tx,
+    );
     assert!(super::super::launch_mcp(&f.hub, &f.meta).is_err());
     launches.sweep(&context);
     assert!(launches.entries.lock().is_empty());
