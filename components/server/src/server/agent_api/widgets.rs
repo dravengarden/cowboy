@@ -12,6 +12,12 @@ use crate::widgets;
 static WIDGET_WRITES: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 
+/// A write whose commit state is unknown: log the cause, report it opaquely.
+fn unknown(session: &str, error: impl std::fmt::Display) -> &'static str {
+    tracing::warn!(%session, %error, "widget write outcome unknown");
+    "outcome_unknown"
+}
+
 fn success(value: Value) -> Value {
     json!({"schema":1,"state":"ok","value":value})
 }
@@ -108,7 +114,7 @@ async fn effect(
             match store
                 .publish_session_widget(&meta.id, &widget_id, &document, now)
                 .await
-                .map_err(|_| "outcome_unknown")?
+                .map_err(|error| unknown(&meta.id, error))?
             {
                 PublishOutcome::Committed(widget) => {
                     push(state, &meta.id, &widget, operation);
@@ -204,7 +210,7 @@ async fn effect(
             match store
                 .update_session_widget(&meta.id, widget_id, expected, write, now)
                 .await
-                .map_err(|_| "outcome_unknown")?
+                .map_err(|error| unknown(&meta.id, error))?
             {
                 UpdateOutcome::Committed(widget) => {
                     push(state, &meta.id, &widget, operation);
@@ -256,7 +262,7 @@ pub(super) async fn execute(
     store
         .finish_agent_operation(&owner, &meta.id, &key, &result)
         .await
-        .map_err(|_| "outcome_unknown")?;
+        .map_err(|error| unknown(&meta.id, error))?;
     Ok(result)
 }
 

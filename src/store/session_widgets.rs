@@ -140,6 +140,12 @@ impl Store {
         );
         macro_rules! publish { ($db:expr) => {{
             let mut tx = $db.pool.begin().await?;
+            // Reserve the writer before the first SELECT: upgrading a deferred
+            // SQLite read transaction fails at once with SQLITE_BUSY when
+            // another writer commits first, instead of honoring busy_timeout.
+            // This statement changes no rows.
+            sqlx::query("UPDATE session_widgets SET revision = revision WHERE FALSE")
+                .execute(&mut *tx).await?;
             if let Some(row) = sqlx::query_as::<_, Row>(&select).bind(session_id).bind(widget_id).fetch_optional(&mut *tx).await? {
                 tx.rollback().await?;
                 return Ok(PublishOutcome::Exists(widget(row)?));
