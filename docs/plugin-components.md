@@ -83,6 +83,14 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.100.0 records the signed MCP server Plugin kind: plugin-contract
+1.12.0 (`mcp_server`), plugin-sdk 1.13.0 (MCP contract, discovery and granted
+source names), provider-sdk 3.2.0 (`provider.mcp-bindings.v1`), provider-ui 3.2.0
+and provider-runtime 1.2.0 (execution CLI probe and MCP binding preparation);
+provider-authoring 1.0.12 follows provider-ui. Every Plugin advances one patch
+version for the changed contract and SDK; the Zed adapter moves with its Plugin.
+Native pins are unchanged.
+
 Scoped release 3.82.0 replaces the packaged plugin-api, app-shell and state-store
 tests' external assertion imports with Node built-ins. It versions those packages,
 state-store's dependent packages and the plugin-api consumers without changing

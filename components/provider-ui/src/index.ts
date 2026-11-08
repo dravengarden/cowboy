@@ -15,7 +15,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.1.17" as const;
+export const PROVIDER_SDK_VERSION = "3.2.0" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,

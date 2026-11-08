@@ -20,7 +20,7 @@
   "files": [
     "components/provider-runtime/build.ts",
     "components/provider-runtime/check.ts",
-    "components/provider-runtime/mcp-bindings.test.ts",
+    "tools/mcp-bindings_test.ts",
     "components/provider-ui/validate-packages.ts",
     "plugins/claude-code/runtime/build.ts",
     "plugins/codex/runtime/build.ts",

@@ -607,10 +607,10 @@ claude-remote-check:
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
 provider-check: claude-remote-check plugin-check
-    bun test components/provider-runtime/mcp-bindings.test.ts
-    node --import ./tools/register-memory-client.mjs --test components/provider-runtime/execution-probe.test.mjs
-    bun x --no-install biome format components/provider-runtime/execution-connection.mjs components/provider-runtime/execution-probe.mjs components/provider-runtime/execution-probe.test.mjs plugins/codex/runtime/bindings.mjs
-    bun x --no-install biome format components/provider-runtime/mcp-bindings.mjs components/provider-runtime/mcp-bindings.test.ts
+    bun test ./tools/mcp-bindings_test.ts
+    node --import ./tools/register-memory-client.mjs --test tools/execution-probe_test.mjs
+    bun x --no-install biome format components/provider-runtime/execution-connection.mjs components/provider-runtime/execution-probe.mjs tools/execution-probe_test.mjs plugins/codex/runtime/bindings.mjs
+    bun x --no-install biome format components/provider-runtime/mcp-bindings.mjs tools/mcp-bindings_test.ts
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
     node --test components/provider-runtime/packages/deepseek-harness/launch_test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs

@@ -1,7 +1,7 @@
 import { test } from "bun:test";
-import { assertEquals, assertRejects } from "../../tools/test-assert.ts";
-import { prepareMcpBindings } from "./mcp-bindings.mjs";
-import { sessionMcpServers, nativeMcpServers } from "../../plugins/claude-code/runtime/mcp.mjs";
+import { assertEquals, assertRejects } from "./test-assert.ts";
+import { prepareMcpBindings } from "../components/provider-runtime/mcp-bindings.mjs";
+import { sessionMcpServers, nativeMcpServers } from "../plugins/claude-code/runtime/mcp.mjs";
 
 const capabilities = {
   schema: 1,

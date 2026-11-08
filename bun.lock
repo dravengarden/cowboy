@@ -25,14 +25,14 @@
     },
     "components/provider-authoring": {
       "name": "@cowboy/provider-authoring",
-      "version": "1.0.11",
+      "version": "1.0.12",
       "peerDependencies": {
-        "@cowboy/provider-ui": "3.1.23",
+        "@cowboy/provider-ui": "3.2.0",
       },
     },
     "components/provider-ui": {
       "name": "@cowboy/provider-ui",
-      "version": "3.1.23",
+      "version": "3.2.0",
     },
     "components/state-store": {
       "name": "@cowboy/state-store",

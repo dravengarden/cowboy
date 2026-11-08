@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { once } from "node:events";
 import { WebSocketServer } from "ws";
-import { probeExecutionCli, verifyExecutionCli } from "./execution-probe.mjs";
-import { codexMcpBindings, bindingConfiguration } from "../../plugins/codex/runtime/bindings.mjs";
+import {
+  probeExecutionCli,
+  verifyExecutionCli,
+} from "../components/provider-runtime/execution-probe.mjs";
+import { codexMcpBindings, bindingConfiguration } from "../plugins/codex/runtime/bindings.mjs";
 
-import { Connection } from "./execution-connection.mjs";
+import { Connection } from "../components/provider-runtime/execution-connection.mjs";
 
 const identity = {
   command: "/nix/store/test-cli/bin/cowboy",

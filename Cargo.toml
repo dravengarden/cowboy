@@ -87,7 +87,7 @@ p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
 ring = "0.17"
 rand = "0.8"
 rpassword = "=7.5.4"
-cowboy-provider-sdk = { version = "=3.1.17", path = "components/provider-sdk" }
+cowboy-provider-sdk = { version = "=3.2.0", path = "components/provider-sdk" }
 cowboy-wire = { version = "0.1.0", path = "components/wire", optional = true }
 tempfile = "3"
 cowboy-plugin-sdk = { version = "=1.13.0", path = "components/plugin-sdk" }

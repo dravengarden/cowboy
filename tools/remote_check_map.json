@@ -155,8 +155,7 @@
     "tools/remote_check_map.json",
     "components/provider-runtime/packages/deepseek-harness/",
     "components/provider-runtime/check.ts",
-    "plugins/codex/runtime/resume_conformance.py",
-    "components/provider-runtime/mcp-bindings.test.ts"
+    "plugins/codex/runtime/resume_conformance.py"
   ],
   "suites": {
     "claude-remote-check": {
