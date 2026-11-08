@@ -550,11 +550,19 @@ test("the record estimator is an upper bound over every permitted selection", ()
           stop_reason: normalizeMetadata('"\\'.repeat(64), WIDGET_LIMITS.stopReasonChars),
           ownership: "released",
           released_by: "fate_rejected_history_unknown",
-          delivered_to: "e".repeat(WIDGET_LIMITS.idChars),
+          recipients: Array.from({ length: WIDGET_LIMITS.recipientsPerAttempt }, () => ({
+            worker_epoch: "e".repeat(WIDGET_LIMITS.idChars),
+            launch: "l".repeat(WIDGET_LIMITS.idChars),
+            status: "submitted_failed",
+            turn_id: "t".repeat(WIDGET_LIMITS.idChars),
+            stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
+          })),
+          duplicate_execution: false,
         })),
         retry_of: id,
         retried_by: id,
         duplicate_of: id,
+        superseded_by: id,
       };
       if (bytes(record) > estimate)
         throw new Error(`selection ${a},${b} exceeds the estimate: ${bytes(record)} > ${estimate}`);
@@ -642,6 +650,8 @@ test("a maximal snapshot around a maximal document fits the snapshot bound", () 
             state,
             ownership: "released",
             retryable,
+            retry_of: id,
+            superseded_by: id,
           })),
           decided,
         };

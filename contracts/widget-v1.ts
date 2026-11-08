@@ -70,7 +70,7 @@ export const WIDGET_LIMITS = {
    *  by `worstCaseRecordBytes` at publish for every prompt node and re-checked
    *  at admission, so later attempts can never push a record past it. A read
    *  page holds at least one record and stays under the 16 KiB result cap. */
-  interactionRecordBytes: 10 * 1024,
+  interactionRecordBytes: 12 * 1024,
   reasonChars: 200,
   handleChars: 16,
   stopReasonChars: 64,
@@ -78,6 +78,9 @@ export const WIDGET_LIMITS = {
   retryChain: 1,
   /** Dispatch attempts recorded per interaction before it becomes `uncertain`. */
   attemptsPerInteraction: 5,
+  /** Recipient epochs the broker may record per attempt; a further routing
+   *  is refused and the attempt settles `uncertain` once the rest are terminal. */
+  recipientsPerAttempt: 2,
   /** Target size of one `widgets.read` or lookup page measured on the
    *  complete encoded response, including metadata and escaping; a page
    *  always carries at least one item. */
@@ -86,7 +89,7 @@ export const WIDGET_LIMITS = {
   snapshotInteractions: 5,
   /** Serialized `WidgetSnapshot`: a maximal document plus every metadata
    *  field at its maximum (`worstCaseSnapshotBytes`), reserved at publish. */
-  snapshotBytes: 44 * 1024,
+  snapshotBytes: 48 * 1024,
   /** Unsettled interactions a widget may hold at once (one per interactive
    *  node, projected in full on every snapshot); the next admission is
    *  refused `interaction_limit`. */
@@ -718,6 +721,9 @@ export type InteractionRecord = {
   /** Set on a retry when a late proof arrives for its original: the original
    *  becomes `delivered` and the retry is a known duplicate (§8.3). */
   duplicate_of?: string;
+  /** Set when a replacement decision was admitted on this record's reset
+   *  group; a superseded intent is never retried. */
+  superseded_by?: string;
 };
 
 /** Bytes a selected option label adds to the serialized record: once in
@@ -734,6 +740,13 @@ export function recordContribution(label: string): number {
 function maximalRecord(node: InputNode, selected: string[] | undefined): InteractionRecord {
   const handle = "w".padEnd(WIDGET_LIMITS.handleChars, "9");
   const id = "x".repeat(WIDGET_LIMITS.idChars);
+  const recipient: RecipientEpoch = {
+    worker_epoch: "e".repeat(WIDGET_LIMITS.idChars),
+    launch: "l".repeat(WIDGET_LIMITS.idChars),
+    status: "submitted_failed",
+    turn_id: "t".repeat(WIDGET_LIMITS.idChars),
+    stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
+  };
   const attempt: DispatchAttempt = {
     command_id: "c".repeat(WIDGET_LIMITS.idChars),
     turn_id: "t".repeat(WIDGET_LIMITS.idChars),
@@ -743,7 +756,8 @@ function maximalRecord(node: InputNode, selected: string[] | undefined): Interac
     stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
     ownership: "released",
     released_by: "fate_rejected_history_unknown",
-    delivered_to: "e".repeat(WIDGET_LIMITS.idChars),
+    recipients: Array.from({ length: WIDGET_LIMITS.recipientsPerAttempt }, () => recipient),
+    duplicate_execution: false,
   };
   // Every enumerated field is reserved at its longest valid serialization.
   return {
@@ -766,6 +780,7 @@ function maximalRecord(node: InputNode, selected: string[] | undefined): Interac
     retry_of: id,
     retried_by: id,
     duplicate_of: id,
+    superseded_by: id,
   };
 }
 
@@ -817,6 +832,8 @@ export function worstCaseSnapshotBytes(document: WidgetDocument): number {
     state: "dispatched",
     ownership: "released",
     retryable: false,
+    retry_of: id,
+    superseded_by: id,
   };
   const snapshot: WidgetSnapshot = {
     widgetId: id,
@@ -862,124 +879,125 @@ export type DispatchAttempt = {
   /** ≤ `stopReasonChars`, `METADATA_PATTERN` after `normalizeMetadata`. */
   stop_reason?: string;
   /** Transport ownership, separate from delivery (docs/widgets.md §8.3
-   *  step 5): `held` from the dispatch CAS until a terminal transport event
-   *  releases it; while any attempt of the session is held, no prompt from
-   *  any producer may be admitted for the session and an idle snapshot
-   *  cannot release the guard. */
+   *  step 5): `held` from the dispatch CAS; `released` only when **every**
+   *  recipient epoch in `recipients` is terminal (a receipt, a receipt
+   *  tombstone installed before any receipt, or a proven process-tree
+   *  termination) and routing is tombstoned or the attempt finished. One
+   *  recipient's receipt is delivery evidence, never by itself a release.
+   *  While any attempt of the session is held, no prompt from any producer
+   *  may be admitted for the session and an idle snapshot cannot release
+   *  the guard. */
   ownership: "held" | "released";
-  released_by?: /** The attempt's own `TurnEnd(T, E)`, settled durably before the
-   *  runtime acknowledgement. */
+  released_by?: /** Single recipient whose own `TurnEnd(T, E)` or `finished` arrived;
+   *  the inventory had no other epoch. */
     | "turn_end"
-    /** `CommandFate.finished`: a terminal receipt from the worker journal. */
-    | "fate_finished"
-    /** `CommandFate.aborted`: the worker journaled that the prompt never
-     *  reached the provider (cancelled before start, configuration failure,
-     *  ACP channel failure); the record is `returned`, or `cancelled
-     *  (stopped)` when the abort was the person's Stop. */
-    | "fate_aborted"
+    /** `settled` after an acknowledged revocation: every recipient terminal. */
+    | "settled"
     /** A proven-unsent return before any write, or a Stop before any write. */
     | "returned"
     | "cancelled"
-    /** `CommandFate.rejected` after an acknowledged `RevokeCommand`: routing
-     *  tombstoned, every recipient epoch fenced or proven terminated, journals
-     *  intact and no receipt anywhere. */
+    /** `rejected` with intact journals. */
     | "fate_rejected"
-    /** `CommandFate.rejected` with `journals_unavailable`: future execution
-     *  is fenced and every recipient epoch is proven terminated, but the past
-     *  cannot be proven; delivery `uncertain`. */
-    | "fate_rejected_history_unknown"
-    /** `CommandFate.received_exited`: received by an epoch whose process tree
-     *  is proven terminated without a terminal receipt; delivery `uncertain`. */
-    | "fate_received_exited";
-  /** Worker epoch that received the command, from `CommandFate`; null when
-   *  no receipt exists. */
-  delivered_to?: string | null;
+    /** `rejected` with `journals_unavailable`. */
+    | "fate_rejected_history_unknown";
+  /** Every worker epoch the broker ever wrote this command to (the durable
+   *  recipient inventory), with the epoch's terminal status. Normally one
+   *  entry; a broker restart or reconnect can add a second, which keeps
+   *  ownership held until both are terminal. */
+  recipients: RecipientEpoch[];
+  /** True when more than one recipient reports `finished`: the provider
+   *  may have executed the prompt twice; both outcomes stay visible. */
+  duplicate_execution?: boolean;
+};
+
+export type RecipientEpoch = {
+  worker_epoch: string;
+  /** Immutable binding recorded at worker registration; the termination
+   *  proof is keyed by it and retained while this entry exists. */
+  launch: string;
+  status:
+    | "routed"
+    | "received"
+    | "running"
+    | "finished"
+    | "aborted"
+    | "submitted_failed"
+    | "never_received"
+    | "terminated";
+  turn_id?: string;
+  /** ≤ `stopReasonChars`, `METADATA_PATTERN`. */
+  stop_reason?: string;
 };
 
 /** Machine-side command-fate protocol (docs/widgets.md §8.3 step 5), part of
  *  the `widget_delivery_v1` bundle. Every request and answer carries the
  *  session id and the command id.
  *
- *  Controller → broker: `QueryCommandFate {session_id, command_id}` is a
- *  read: it never installs a tombstone and its answer never releases
- *  ownership unless it is a terminal receipt (`finished`, `aborted`).
- *  `RevokeCommand {session_id, command_id}` installs the routing tombstone,
- *  fences every epoch in the command's durable recipient inventory that is
- *  still connected (`FenceCommand` on each epoch's own FIFO channel, so the
- *  answer is ordered after every earlier write to it), and requires a
- *  confirmed process-tree termination proof for every recipient epoch that
- *  is neither connected nor finished; only then may it answer `rejected`.
- *  Until those proofs exist it answers `pending_epochs`, and ownership stays
- *  held.
+ *  `QueryCommandFate` is a read: it installs nothing and may answer only
+ *  `CommandFateObservation`; a single terminal receipt in it is delivery
+ *  evidence but never releases ownership by itself. `RevokeCommand`
+ *  installs the routing tombstone, fences every inventoried recipient epoch
+ *  that is still connected (`FenceCommand` on that epoch's own FIFO channel,
+ *  so the answer is ordered after every earlier write to it), requires an
+ *  immutable process-tree termination proof for every recipient that is
+ *  neither connected nor terminal, and answers `CommandFateSettlement` —
+ *  `pending_epochs` until every recipient is terminal, then exactly one
+ *  terminal settlement.
  *
- *  Broker ledger per command: `held` (queued, no worker), `routed
+ *  Broker ledger per command: `held`, the recipient inventory (`routed
  *  {worker_epoch}` recorded under the routing lock before the write to that
- *  epoch's channel (the recipient inventory), `received`/`finished`/`aborted`
- *  relayed from worker journals, `rejected_by_worker` recorded before a
- *  negative ack is forwarded, and the routing tombstone.
- *
- *  Broker → worker: `FenceCommand {session_id, command_id}`; worker → broker:
- *  `CommandFenced {session_id, command_id, state}` where `state` is
- *  `never_received` (a receipt tombstone is installed: a later copy is
- *  refused), `running {turn_id}`, `finished {turn_id, stop_reason}` or
- *  `aborted {reason}`. The worker journal records exactly one disposition
- *  after `received`: `finished` after the `session/prompt` response, or
- *  `aborted {reason}` when the prompt never reached the provider (cancelled
- *  before start, configuration failure, ACP channel failure); it carries the
- *  real command id on every `UndeliveredPrompt`. */
-export type CommandFate =
-  /** Queued at the broker, no recipient yet; not terminal. */
+ *  epoch's channel, with the epoch's immutable launch binding),
+ *  `received`/`finished`/`aborted`/`submitted_failed` relayed from worker
+ *  journals, `rejected_by_worker` recorded before a negative ack is
+ *  forwarded, and the routing tombstone. Worker journal per command:
+ *  `received` before the prompt reaches ACP, then exactly one disposition:
+ *  `finished {turn_id, stop_reason}` (provider response), `aborted {reason}`
+ *  (never submitted: cancelled before start, configuration or managed-round
+ *  failure, ACP channel failure) or `submitted_failed {reason}` (submitted,
+ *  no response: agent or connection failure; execution unknown, never an
+ *  automatic return). `FenceCommand` → `CommandFenced {never_received |
+ *  running | finished | aborted | submitted_failed}`; `never_received`
+ *  installs a receipt tombstone. */
+export type CommandFateObservation =
+  /** No ledger entry on this Machine; not terminal. */
+  | { session_id: string; command_id: string; fate: "unobserved" }
   | { session_id: string; command_id: string; fate: "held" }
-  /** Written to an epoch's channel, no receipt yet; not terminal. */
-  | { session_id: string; command_id: string; fate: "routed"; worker_epoch: string }
-  /** Received by an epoch whose disposition is not yet known; not terminal. */
-  | { session_id: string; command_id: string; fate: "received"; worker_epoch: string }
-  /** The current worker is executing it; not terminal. */
-  | {
-      session_id: string;
-      command_id: string;
-      fate: "running";
-      worker_epoch: string;
-      turn_id: string;
-    }
-  /** Revocation is waiting for fences or termination proofs of these
-   *  recipient epochs; not terminal. */
-  | { session_id: string; command_id: string; fate: "pending_epochs"; worker_epochs: string[] }
-  /** Terminal: the prompt reached the provider and the response arrived. */
-  | {
-      session_id: string;
-      command_id: string;
-      fate: "finished";
-      worker_epoch: string;
-      turn_id: string;
-      stop_reason: string;
-    }
-  /** Terminal: the worker received it but it never reached the provider. */
-  | {
-      session_id: string;
-      command_id: string;
-      fate: "aborted";
-      worker_epoch: string;
-      reason: string;
-    }
-  /** Terminal, only after an acknowledged `RevokeCommand`: routing
-   *  tombstoned, every recipient epoch fenced or proven terminated, no
-   *  receipt anywhere. With intact journals the command never executed. */
+  | { session_id: string; command_id: string; fate: "routed"; recipients: RecipientEpoch[] }
+  | { session_id: string; command_id: string; fate: "received"; recipients: RecipientEpoch[] }
+  | { session_id: string; command_id: string; fate: "running"; recipients: RecipientEpoch[] }
+  /** Receipts present; ownership still needs the settlement barrier. */
+  | { session_id: string; command_id: string; fate: "receipts"; recipients: RecipientEpoch[] };
+
+export type CommandFateSettlement =
+  /** Waiting for fences or termination proofs of these recipients. */
+  | { session_id: string; command_id: string; fate: "pending_epochs"; recipients: RecipientEpoch[] }
+  /** Routing tombstoned, every recipient fenced `never_received` or proven
+   *  terminated, no receipt anywhere. With intact journals the command never
+   *  executed (`returned`); with `journals_unavailable` the future is fenced
+   *  and every recipient terminated but the past is unknown (`uncertain`). */
   | { session_id: string; command_id: string; fate: "rejected"; journals_unavailable: boolean }
-  /** Terminal: received by an epoch whose process tree is proven terminated
-   *  without a disposition. */
-  | { session_id: string; command_id: string; fate: "received_exited"; worker_epoch: string };
+  /** Every recipient terminal; the final statuses decide delivery:
+   *  `finished` with a completing stop reason → `delivered`; `aborted` only →
+   *  `returned` (or `cancelled (stopped)`); `submitted_failed` or
+   *  `terminated` without `finished` → `uncertain`. */
+  | { session_id: string; command_id: string; fate: "settled"; recipients: RecipientEpoch[] };
+
+/** Either answer; `RevokeCommand` never returns an observation. */
+export type CommandFate = CommandFateObservation | CommandFateSettlement;
 
 /** Control availability for one interaction the renderer must know about
- *  (docs/widgets.md §8.6). Membership: every `admitted` or `dispatched`
- *  record, plus every `uncertain`/`failed` record that is retryable. A
- *  record leaves the list when it settles, when its retry is admitted (the
- *  retry represents it; `retry_of` links back), or when a new decision on a
- *  reset group supersedes it. `retryable` is true only for an
- *  `uncertain`/`failed` record whose attempts have all released ownership,
- *  that has no `retry_of` (chains have length one) and no `retried_by`, and
- *  whose group signature is unchanged. At most one entry per interactive
- *  node by construction. Older records stay readable through
+ *  (docs/widgets.md §8.6). Membership: every record with **any attempt still
+ *  holding ownership**, whatever its delivery state; every `admitted` or
+ *  `dispatched` record; and every record for which `retryable` is true. A
+ *  record leaves the list when ownership is released and it is settled or
+ *  not retryable, when its retry is admitted (the retry represents it;
+ *  `retry_of` links back), or when it is superseded. `retryable` is the one
+ *  predicate shared with `widget_action_retry`: state `uncertain` or
+ *  `failed`, every attempt released, no `retry_of`, no `retried_by`, no
+ *  `superseded_by`. Supersession is persisted on the record when a
+ *  replacement decision is admitted on a reset group, and a retry of a
+ *  superseded intent is refused `superseded`. At most one entry per
+ *  interactive node by construction. Older records stay readable through
  *  `widgets.read(select:"interactions")`. */
 export type OutstandingInteraction = {
   interaction_id: string;
@@ -987,6 +1005,8 @@ export type OutstandingInteraction = {
   state: InteractionRecord["state"];
   ownership: "held" | "released";
   retryable: boolean;
+  retry_of?: string;
+  superseded_by?: string;
 };
 
 export type InteractionSummary = Pick<
@@ -1171,6 +1191,7 @@ export type WidgetActionRefusal =
   | "retry_chain"
   | "unknown_interaction"
   | "widget_mismatch"
+  | "superseded"
   | "capability_missing"
   | "rate_limited"
   | "session_unavailable"

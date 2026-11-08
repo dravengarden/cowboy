@@ -10,11 +10,13 @@ revision 6 a sixth ("request changes", 6 findings, 1 blocking); revision 7
 a seventh ("request changes", 6 findings, 1 blocking); revision 8 an eighth
 ("request changes", 6 findings, 2 blocking); revision 9 a ninth ("request
 changes", 7 findings, 3 blocking); revision 10 a tenth ("request changes",
-7 findings, 2 blocking; its first run was cut off by a Controller restart).
-The owner chose to keep the full interactive design (2026-11-08) rather
-than narrow Phase 1 to display-only widgets. Every finding is resolved below
-and none was rejected ([§1](#1-review-findings-and-resolutions)); revision
-11 is the current text. Statements marked
+7 findings, 2 blocking; its first run was cut off by a Controller restart);
+revision 11 an eleventh ("request changes", 7 findings, 1 blocking; twelve
+of the design decisions approved). The owner chose to keep the full
+interactive design (2026-11-08) rather than narrow Phase 1 to display-only
+widgets. Every finding is resolved below and none was rejected
+([§1](#1-review-findings-and-resolutions)); revision 12 is the current
+text. Statements marked
 **[unverified]** are inferred from code or history and still need evidence.
 
 Related: [`agent-api.md`](agent-api.md) (the MCP read/execute/receipt surface
@@ -213,6 +215,18 @@ wire domains for counters and timestamps (`maxCounter`, `maxTimestampMs`).
 | 5 | Settled-attempt idempotency discarded permitted late proof (P2) | Ownership release is idempotent; completing evidence still upgrades `uncertain → delivered` and marks an existing retry `duplicate_of`, through the retry-admission conditional update | §8.3 step 5–6 |
 | 6 | `outstanding` membership conflicted with retry admission and the per-node bound (P2) | Exact membership predicate: `admitted`/`dispatched` records plus retryable `uncertain`/`failed` ones; a record leaves when it settles, when its retry is admitted or when a new decision on a reset group supersedes it; `retryable` is false for records with `retry_of` or `retried_by`; one entry per node by construction | §8.6, contract |
 | 7 | Estimators reserved the shorter boolean and state forms; fixtures only re-ran the estimator (P3) | Estimators reserve the longest valid alternatives; the tests construct records and snapshots independently across every boolean and state value and compare them with the estimate | contract, tests |
+
+### 1.11 Revision 11 (Astra Max, `d73b8fc7f`)
+
+| # | Finding (severity) | Resolution | Section |
+|---|---|---|---|
+| F1 | One recipient's terminal receipt could release ownership while another recipient remained active (P1) | Delivery evidence and ownership settlement are separated: a receipt is evidence; ownership is released only when **every** epoch in the attempt's recipient inventory is terminal (receipt, receipt tombstone installed before any receipt, or proven termination) — trivially immediate for the normal single recipient; conflicting or duplicate recipients keep the attempt held until all are terminal, and two `finished` receipts are recorded as `duplicate_execution` | §8.3 step 5, contract |
+| F2 | `tree_exited` receipts are keyed by launch UUID, overwritten per launch, and skipped for default-account launches (P2) | The broker records an immutable `worker_epoch → launch (boot, containment)` binding at registration and retains an immutable copy of the launch's termination proof while any inventory references the epoch; the bundle requires contained launches for every capability-enabled session, default accounts included; an unavailable inventory keeps ownership held, releasable only by a Machine reset that proves all worker trees exited | §8.3 step 5, §12 |
+| F3 | The rollback prohibition had no authoritative admission barrier (P2) | The component activator enforces a persistent compatibility floor: before activating a build below the recovery reader it asks the Controller, which is the authority on holds, for held attempts on that Machine and drains new reservations; an unreachable Controller refuses the rollback | §8.3 step 5, §12 |
+| F4 | The recovery recipe still called the read a fence; no query result for an unobserved command (P2) | Recovery revokes; `QueryCommandFate` answers only observations (`unobserved`, `held`, `routed`, `received`, `running`, `receipts`) and `RevokeCommand` only settlements (`pending_epochs`, `rejected`, `settled`); the wire contract encodes the split | §8.3 step 5–6, contract |
+| F5 | No disposition for a request that failed after submission without a response (P2) | The worker journals `submitted_failed {reason}` as the third disposition: terminal for the recipient, delivery `uncertain`, never an automatic return | §8.3 step 5, contract |
+| F6 | `outstanding` excluded held-but-uncertain interactions (P2) | Membership includes every record with any held attempt, whatever its delivery state, until ownership settles | §8.6, contract |
+| F7 | Retry eligibility contradicted supersession and the one-per-node guarantee; `retry_of` missing from the projection type (P2) | One predicate (`retryable`) shared by retry admission and projection; supersession is persisted (`superseded_by`) when a replacement decision is admitted on a reset group and a retry of a superseded intent is refused `superseded`; `OutstandingInteraction` carries `retry_of` and `superseded_by` with their byte reservation | §8.3 step 7, §8.6, contract |
 
 Rulings on decisions are folded into §14.
 
@@ -432,7 +446,7 @@ before storage, so their serialized size is their length; the result must
 fit `interactionRecordBytes` (10 KiB). The
 worst-case snapshot (`worstCaseSnapshotBytes`) reserves 32 decided groups,
 five linked summaries and every metadata field at its maximum around the
-document and must fit `snapshotBytes` (44 KiB, including the `outstanding`
+document and must fit `snapshotBytes` (48 KiB, including the `outstanding`
 list). Both are validated at
 publish and replace, so no later settlement can grow a record or a snapshot
 past its bound; the tests construct every permitted selection independently
@@ -792,7 +806,7 @@ or is discarded and reconciliation restarts; each id has an outcome:
 `current` with the snapshot (placed at its `seq` when the row is not in the
 cache or the tail), `cleared` or `unknown` (the cached row is removed).
 Pages are packed against the complete encoded response (≤ 256 KiB,
-snapshots ≤ 44 KiB by construction and the envelope accounted, so at least
+snapshots ≤ 48 KiB by construction and the envelope accounted, so at least
 five fit), always
 carry at least one outcome, and `next` resumes the rest; progress is
 guaranteed.
@@ -1099,77 +1113,84 @@ a widget command is written to exactly one connection.
    - the **worker** journals `received {command_id}` in the session's
      private state directory before the prompt reaches ACP and then exactly
      one disposition: `finished {command_id, turn_id, stop_reason}` after the
-     `session/prompt` response, or `aborted {command_id, reason}` when the
-     prompt never reached the provider — cancelled before it started,
-     configuration or managed-round failure, ACP channel delivery failure
-     (today the worker unmarks such a command so a reconnect may retry it;
-     a guarded command is instead journaled `aborted` and acked negatively).
-     It carries the real command id on every `UndeliveredPrompt` and answers
-     `FenceCommand {command_id}` with `CommandFenced {state}` —
-     `never_received` (installing a receipt tombstone so a later copy is
-     refused), `running {turn_id}`, `finished {turn_id, stop_reason}` or
-     `aborted {reason}`. An ACP-level re-issue of `session/prompt` inside the
-     same prompt task (the adapter's stall and stream-recovery retries) is
-     one attempt and one turn for the ledger: `received` is journaled once,
-     the disposition once, and no second `TurnStarted` is emitted; the worker
-     never re-submits a guarded prompt in a new task — only the Controller
-     creates a new attempt. Whether such a re-issue can reach the provider
-     twice is the pre-existing property of every prompt and is unchanged
-     here; the widget message is idempotent for the agent;
+     `session/prompt` response; `aborted {command_id, reason}` when the
+     prompt was never submitted — cancelled before it started, configuration
+     or managed-round failure, ACP channel delivery failure (today the worker
+     unmarks such a command so a reconnect may retry it; a guarded command is
+     instead journaled `aborted` and acked negatively); or `submitted_failed
+     {command_id, reason}` when `send_request` queued the request and it
+     failed through an agent or connection failure without a response —
+     execution may have happened, so this is terminal for the recipient but
+     never an automatic return. It carries the real command id on every
+     `UndeliveredPrompt` and answers `FenceCommand {command_id}` with
+     `CommandFenced {state}` — `never_received` (installing a receipt
+     tombstone so a later copy is refused), `running {turn_id}`, `finished`,
+     `aborted` or `submitted_failed`. An ACP-level re-issue of
+     `session/prompt` inside the same prompt task is one attempt and one
+     turn for the ledger: `received` once, one disposition, no second
+     `TurnStarted`; the worker never re-submits a guarded prompt in a new
+     task;
    - the **broker** keeps a per-command ledger in the Machine state store
-     (as `session-account-stops/` is kept today): `held` when queued, the
+     (as `session-account-stops/` is kept today): `held` when queued; the
      **recipient inventory** — `routed {worker_epoch}` recorded under the
      routing lock **before** the write to that epoch's channel, one entry per
-     epoch ever written to — `received`/`finished`/`aborted` relayed from
-     worker journals, `rejected_by_worker` recorded **before** a negative
-     `CommandAck` is forwarded, and the routing tombstone;
-   - the **Controller** keeps the attempt.
+     epoch ever written to, at most two (a further routing is refused and the
+     attempt settles `uncertain` once the rest are terminal); the immutable
+     **epoch binding** `worker_epoch → launch UUID, boot id, containment
+     identity` recorded at worker registration, together with an immutable
+     copy of that launch's `tree_exited` proof once it exists, retained while
+     any inventory references the epoch (the session-level receipt is
+     overwritten by the next launch, so the copy is what recovery reads);
+     `received`/`finished`/`aborted`/`submitted_failed` relayed from worker
+     journals; `rejected_by_worker` recorded **before** a negative
+     `CommandAck` is forwarded; and the routing tombstone;
+   - the **Controller** keeps the attempt with its copy of the inventory.
 
-   `QueryCommandFate` is a read: it installs nothing and its answer releases
-   ownership only when it is a terminal receipt (`finished`, `aborted`).
-   `RevokeCommand` installs the routing tombstone, forwards `FenceCommand`
-   to **every** epoch in the recipient inventory that is still connected (on
-   that epoch's own FIFO channel, so the answer is ordered after every earlier
-   write to it; a reconnected earlier epoch is a recipient too, whatever the
-   broker projected while it was away), and for every inventoried epoch that
-   is neither connected nor finished requires a **confirmed process-tree
-   termination proof** — the `tree_exited` receipts the Machine already
-   produces for contained worker launches. Until every recipient epoch has
-   answered or is proven terminated it answers `pending_epochs
-   {worker_epochs}` and ownership stays held; disconnection, replacement and
-   missing journals never release it. The terminal answers: `finished` and
-   `aborted` (receipts); `rejected {journals_unavailable}` — tombstoned, every
-   recipient fenced `never_received` or proven terminated, no receipt
-   anywhere — with intact journals the command never executed and the
-   attempt is `returned`, with `journals_unavailable` the future is fenced
-   and every recipient is terminated but the past is unknown, so delivery is
-   `uncertain`; `received_exited {epoch}` — received by an epoch proven
-   terminated without a disposition, delivery `uncertain`. A never-observed
-   command is therefore `rejected` once revoked, never "unknown". A broker
-   that recorded `routed` and crashed before the write is resolved by the
-   fence: the surviving idle worker answers `never_received`.
+   `QueryCommandFate` is a read: it installs nothing and answers only an
+   **observation** — `unobserved` (no ledger entry on this Machine), `held`,
+   `routed`, `received`, `running` or `receipts` — none of which releases
+   ownership by itself. `RevokeCommand` installs the routing tombstone,
+   forwards `FenceCommand` to **every** inventoried epoch that is still
+   connected (on that epoch's own FIFO channel, so the answer is ordered
+   after every earlier write to it; a reconnected earlier epoch is a
+   recipient too, whatever the broker projected while it was away), requires
+   the retained termination proof for every inventoried epoch that is
+   neither connected nor terminal, and answers a **settlement**:
+   `pending_epochs {recipients}` until every recipient is terminal
+   (`finished`, `aborted`, `submitted_failed`, `never_received` or
+   `terminated`), then exactly one of `rejected {journals_unavailable}`
+   (tombstoned, every recipient fenced `never_received` or proven terminated,
+   no receipt anywhere — with intact journals the command never executed;
+   with `journals_unavailable` the future is fenced and every recipient
+   terminated but the past is unknown) or `settled {recipients}`. A
+   never-observed command is `rejected` once revoked. A broker that recorded
+   `routed` and crashed before the write is resolved by the fence: the
+   surviving idle worker answers `never_received`. If the inventory itself
+   is unavailable, ownership stays held; the only release is a Machine reset
+   that proves every worker tree of the Machine exited.
 
-   **Release rules.** Ownership is released by: the attempt's own
-   `TurnEnd(T, E)` (settled durably before the acknowledgement, step 6);
-   `finished`; `aborted` (the attempt is `returned`, or the record settles
-   `cancelled (stopped)` when the abort was the person's Stop); a
-   proven-unsent return before any write (rejected first ack recorded by the
-   broker, `UndeliveredPrompt` with the command id, a local pre-write
-   refusal) or a Stop before any write; `rejected` (the attempt is
-   `returned`, `cancelled (superseded)` when a retry already exists, or
-   `cancelled (cleared)` when the generation was cleared); `received_exited`
-   (`uncertain`). Release is idempotent — a second answer for a released
-   attempt changes ownership nothing — but **completing evidence still
-   counts**: a `finished` with a completing stop reason that arrives for a
-   record released as `uncertain` upgrades it to `delivered` and marks an
-   existing retry `duplicate_of`, through the same conditional update that
-   admits retries (step 7). The runtime revokes whenever it drops a
-   written-but-unacknowledged widget command, whenever a bound epoch exits
-   without `TurnEnd(T)`, for every held attempt found at start, and before
-   any generation change for the session (below). The attempt's epoch is
-   bound by the first `TurnStarted` carrying its `turn_id` or by a `received`
-   receipt, whichever arrives first; a conflicting second binding marks the
-   attempt `uncertain`.
+   **Settlement rules.** Delivery evidence and ownership are decided
+   separately from the final recipient statuses. **Ownership** is released
+   when every recipient is terminal and routing can no longer deliver: the
+   normal attempt has one recipient, so its own `TurnEnd(T, E)` or `finished`
+   releases it at once; an attempt with two recipients stays held until both
+   are terminal. **Delivery**: any recipient `finished` with a completing stop
+   reason → `delivered` (two such recipients → `delivered` with
+   `duplicate_execution`, both messages visible); only `aborted` → the
+   attempt is `returned` (record `admitted`), or the record settles
+   `cancelled (stopped)` when the abort was the person's Stop, `cancelled
+   (superseded)` when a retry already exists, `cancelled (cleared)` when the
+   generation was cleared; `rejected` → as `aborted` with intact journals,
+   `uncertain` with `journals_unavailable`; any `submitted_failed` or
+   `terminated` without `finished` → `uncertain`. Release is idempotent — a
+   later answer for a released attempt changes ownership nothing — but
+   completing evidence still counts: a `finished` with a completing stop
+   reason that arrives for a record released as `uncertain` upgrades it to
+   `delivered` and marks an existing retry `duplicate_of`, through the same
+   conditional update that admits retries (step 7). The Controller revokes
+   whenever it drops a written-but-unacknowledged widget command, whenever a
+   bound epoch exits without `TurnEnd(T)`, for every held attempt found at
+   start, and before any generation change for the session (below).
 
    **Capability, fail closed, at the write.** Interactions require the
    Machine capability bundle `widget_delivery_v1` (step 6). The Controller
@@ -1189,10 +1210,15 @@ a widget command is written to exactly one connection.
    smaller **recovery-reader capability** `widget_delivery_recovery_v1`
    (answer `RevokeCommand` and `FenceCommand`, report termination proofs,
    serve journals) is retained by every worker and broker build from the
-   bundle's introduction onward, and the Machine refuses to cut a session
-   over to, or roll a broker back to, a build without it while any attempt
-   is held. The projection flips the controls inert as soon as the current
-   generation lacks `widget_delivery_v1`.
+   bundle's introduction onward, and the component activator enforces it as
+   a persistent **compatibility floor**: before activating a Machine build
+   below the floor it asks the Controller — the authority on holds, since a
+   reservation can exist in `widget_interactions` before the broker ever saw
+   the command — for held attempts on that Machine, the Controller drains
+   new reservations for the maintenance window, and an unreachable Controller
+   or an unanswered query refuses the activation; "no Machine record" never
+   means "no holds". The projection flips the controls inert as soon as the
+   current generation lacks `widget_delivery_v1`.
 6. **Proof: the turn, identified.** The turn's identity is the pair
    `(worker_epoch, turn_id)`, exactly what Steer already targets. Three
    Controller-side changes make it usable for display and attribution —
@@ -1262,8 +1288,8 @@ a widget command is written to exactly one connection.
    restart the open attempts are resolved from durable evidence: a persisted
    `TurnEnd(T, E)` found in the store; a `TurnEnded` the worker replays
    because it was never acknowledged; a Welcome snapshot whose
-   `current_turn_id` is still `T` (keep waiting); otherwise the fence
-   (`QueryCommandFate`) settles it. The remaining gap — a `TurnEnded`
+   `current_turn_id` is still `T` (keep waiting); otherwise the Controller
+   revokes (`RevokeCommand`) and the settlement decides. The remaining gap — a `TurnEnded`
    acknowledged to the worker but lost before the write-behind store
    persisted it — would leave an attempt held while the surviving worker sits
    idle, so **the acknowledgement of a tracked `TurnEnded` is delayed until
@@ -1273,7 +1299,7 @@ a widget command is written to exactly one connection.
    ledger commit therefore leaves the event unacknowledged; the worker
    replays it and settlement completes without acknowledgement loss. On
    recovery a held attempt is also settled from the worker journal's
-   `finished` receipt through the fence.
+   receipts through the revocation.
 
    ACP has no "prompt accepted" acknowledgement — `send_request` only queues
    the JSON-RPC request — so the `session/prompt` response is the only
@@ -1309,10 +1335,14 @@ a widget command is written to exactly one connection.
    belongs to another widget), `cleared`, `not_retryable` (the original is
    not `uncertain` or `failed`, including one just proven delivered),
    `already_retried`, `retry_chain` (the original is itself a retry; chains
-   have length one), `in_flight` (**including an original whose attempt
-   still holds transport ownership**: an `uncertain` record is retryable
-   only once its ownership is released), `capability_missing`,
+   have length one), `superseded` (a replacement decision was admitted on
+   the original's reset group; supersession is persisted on the record when
+   that decision is admitted), `in_flight` (**including an original whose
+   attempt still holds transport ownership**), `capability_missing`,
    `interaction_limit`, `rate_limited`, `session_unavailable` or `conflict`.
+   Eligibility is the single predicate `retryable` the snapshot projects:
+   state `uncertain` or `failed`, every attempt released, no `retry_of`, no
+   `retried_by`, no `superseded_by`.
    Retry admission and the settlement of a revocation answer are the same
    conditional update on the record, so they cannot interleave: a
    `CommandFate.rejected` for an original whose retry already exists settles
@@ -1420,14 +1450,17 @@ session is exited or deleted, the person's snapshot is stale, the node is
 capability bundle, or an interaction for that node is in flight
 (`admitted`, `dispatched`, or any attempt still holding transport
 ownership). The renderer learns all of this from the snapshot's
-`outstanding` list, whose membership is exact: every `admitted` or
-`dispatched` record, plus every `uncertain`/`failed` record that is
-retryable (attempts released, no `retry_of`, no `retried_by`, group
-signature unchanged). A record leaves the list when it settles, when its
-retry is admitted (the retry represents it and links back with `retry_of`)
-or when a new decision on a reset group supersedes it, so there is at most
-one entry per interactive node by construction (≤ 32; the next admission is
-refused `interaction_limit`); older records stay readable through
+`outstanding` list, whose membership is exact: every record with **any
+attempt still holding ownership**, whatever its delivery state; every
+`admitted` or `dispatched` record; and every record for which `retryable`
+is true (the predicate retry admission shares: `uncertain` or `failed`,
+every attempt released, no `retry_of`, no `retried_by`, no `superseded_by`).
+A record leaves the list when its ownership is released and it is settled
+or not retryable, when its retry is admitted (the retry represents it and
+links back with `retry_of`) or when a replacement decision on its reset
+group supersedes it (`superseded_by`), so there is at most one entry per
+interactive node by construction (≤ 32; the next admission is refused
+`interaction_limit`); older records stay readable through
 `widgets.read(select:"interactions")`. Every ownership change advances
 `stateVersion`, so the list is ordered like every other snapshot change.
 Display nodes always render.
@@ -1562,7 +1595,7 @@ bounds on the committed examples today.
 
 | Phase | Content | Components | Release boundary |
 |---|---|---|---|
-| 1 | Contract v1 (18 types); display widgets on Controller + Web alone; `button`/`choice` with `prompt`/`open`/`copy` **gated on the Machine capability bundle `widget_delivery_v1`** (prompt-owned `TurnEnded` identity, the `GuardedPrompt` frame variant, the worker's durable command journal with `finished`/`aborted` dispositions and `FenceCommand`/`CommandFenced`, the broker's durable command-fate ledger and recipient inventory with `QueryCommandFate`/`RevokeCommand` → `CommandFate`, negative acks recorded before forwarding, real command ids on `UndeliveredPrompt`, tree-contained worker launches with termination proofs, the retained recovery reader `widget_delivery_recovery_v1`, stop-before-send distinguished); `widgets.publish/update/list/read`, receipts, help topic; `sessions.transcript_generation` and `widget_index_version`, `session_widgets`, `widget_revisions`, `widget_interactions`, `widget_artifact_refs`; acknowledged in-order store-writer variants, generation stamping on envelopes and durable-first Clear with an operation identity; notice-projected anchored rows, acknowledged publication watermark and sweep, bootstrap `widget_state` (paged, index-versioned) and lookup; `widget_action` admission, relay, queue reconciliation with cancellation settlement, acknowledged CAS handoff with recorded attempts, write-once widget commands with ownership as its own state, the command-fate protocol, the permit-based single admission gate for every producer, identity-matched `complete_turn` for every completion, identity-checked transport settlement across Clear, `outstanding` projection, delayed acknowledgement of tracked `TurnEnded`, pre-write capability checks, capability projection through `cowboy_delivery_capabilities`, turn identity carried from `prompt_traced` through `apply_event` to the persisted `TurnEnd` envelope with its round-trip fixture, late proof, `uncertain` and `widget_action_retry`; the artifact pin lock; inline read-only carrier; Mobile and Desktop renderers with preview lines and the entered region; `session.events` widget kind; collector root | Controller + Web (four tables, three columns) for display; **Machine release** (`widget_delivery_v1`: worker, broker and wire) before interactions are enabled | display: no Machine release; interactions: explicit maintenance boundary |
+| 1 | Contract v1 (18 types); display widgets on Controller + Web alone; `button`/`choice` with `prompt`/`open`/`copy` **gated on the Machine capability bundle `widget_delivery_v1`** (prompt-owned `TurnEnded` identity, the `GuardedPrompt` frame variant, the worker's durable command journal with `finished`/`aborted` dispositions and `FenceCommand`/`CommandFenced`, the broker's durable command-fate ledger and recipient inventory with `QueryCommandFate`/`RevokeCommand` → `CommandFate`, negative acks recorded before forwarding, real command ids on `UndeliveredPrompt`, tree-contained worker launches for every capability-enabled session including default accounts, immutable epoch→launch bindings with retained termination proofs, the retained recovery reader `widget_delivery_recovery_v1` enforced as a component-activator compatibility floor that consults the Controller, `submitted_failed` dispositions, stop-before-send distinguished); `widgets.publish/update/list/read`, receipts, help topic; `sessions.transcript_generation` and `widget_index_version`, `session_widgets`, `widget_revisions`, `widget_interactions`, `widget_artifact_refs`; acknowledged in-order store-writer variants, generation stamping on envelopes and durable-first Clear with an operation identity; notice-projected anchored rows, acknowledged publication watermark and sweep, bootstrap `widget_state` (paged, index-versioned) and lookup; `widget_action` admission, relay, queue reconciliation with cancellation settlement, acknowledged CAS handoff with recorded attempts, write-once widget commands with ownership as its own state, the command-fate protocol, the permit-based single admission gate for every producer, identity-matched `complete_turn` for every completion, identity-checked transport settlement across Clear, `outstanding` projection, delayed acknowledgement of tracked `TurnEnded`, pre-write capability checks, capability projection through `cowboy_delivery_capabilities`, turn identity carried from `prompt_traced` through `apply_event` to the persisted `TurnEnd` envelope with its round-trip fixture, late proof, `uncertain` and `widget_action_retry`; the artifact pin lock; inline read-only carrier; Mobile and Desktop renderers with preview lines and the entered region; `session.events` widget kind; collector root | Controller + Web (four tables, three columns) for display; **Machine release** (`widget_delivery_v1`: worker, broker and wire) before interactions are enabled | display: no Machine release; interactions: explicit maintenance boundary |
 | 2 | `form` fields if elicitation proves insufficient; `control` actions behind the product confirm and an explicit allowlist; pin a widget to the Desktop side pane / Mobile dock; `metric`, `distribution`, `grid`, `tabs`; SVG `data` images under a bounded policy; image sources from execution-machine files through the verified artifact delivery used by image Calls | Controller + Web; **Machine release** for the worker signal and file sources | explicit maintenance boundary |
 | 3 | `widget_template` Plugin kind; Call children's result documents rendered as parent widgets; live `Ref` badges; `chart` | Controller, Web, Plugin SDK | separate reviewed contracts |
 
@@ -1628,7 +1661,7 @@ guidance; the §11 gate runs before the domain is enabled.
   positive and negative label vectors; a single choice with
   `max_selected: 13` refused; duplicate initial values refused; the maximal
   record fixture within 10 KiB, constructed independently for every permitted
-  selection; the maximal snapshot fixture within 44 KiB; the benchmark class
+  selection; the maximal snapshot fixture within 48 KiB; the benchmark class
   maximum within 1 KiB. Ownership: a reconnect that drops a written widget
   command followed by an idle snapshot before `TurnStarted` does not release
   the dispatch guard or dispatch a second prompt; a second `TurnStarted` for
@@ -1655,7 +1688,7 @@ guidance; the §11 gate runs before the domain is enabled.
   once; a held attempt found at start is settled through the fence from the
   worker journal; a never-observed command is tombstoned at the broker and
   fenced at the worker and its late arrival is refused; a broker that
-  committed `received` and crashed before the write is resolved by the
+  recorded `routed` and crashed before the write is resolved by the
   surviving idle worker's `never_received`; a lost negative ack is recovered
   from the broker ledger; a broker restart with lost journals answers
   `rejected {journals_unavailable: true}` and the attempt releases as
@@ -1679,7 +1712,16 @@ guidance; the §11 gate runs before the domain is enabled.
   before its provider request journals `aborted` and the attempt is
   `returned` or `cancelled (stopped)`; a fallback requested while an attempt
   is held is refused until settled and the recovery reader answers the
-  revocation.
+  revocation. Aggregate settlement: one recipient `finished` while a second
+  inventoried epoch is disconnected keeps ownership held (`pending_epochs`)
+  until that epoch is fenced or its retained termination proof exists; two
+  `finished` receipts record `duplicate_execution`; a `submitted_failed`
+  disposition settles `uncertain` and never requeues; a query of a command
+  that never reached the broker answers `unobserved` and releases nothing
+  while the revocation answers `rejected`; the activator refuses a rollback
+  below the floor while the Controller reports holds or cannot be reached; a
+  replacement decision on a reset group persists `superseded_by` and a retry
+  of the superseded intent is refused.
 - Reducer tests mirroring `backgroundTasksReconcile.test.ts` T1 and
   `persistence_tests.rs` T3/T4: a cached open widget at seq 10 and a
   200-event reconnect tail must show the newest `state_version`; a cached
@@ -1736,20 +1778,21 @@ guidance; the §11 gate runs before the domain is enabled.
 | 16 | Queued widget prompts are delete-only | r3 request changes (R2, R8) | §8.4: every mutation path refused; content hash verified at handoff |
 | 17 | Delivery evidence is the turn the prompt started, never the echo | r4–r10 request changes (N1, G1/G2/G5, H1, r7 #1/#2, r8 #1–#4, r9 #1–#3/#5, r10 #1–#5) | §8.3: reads never release; revocation with recipient inventory and termination proofs; journal dispositions for every exit; idempotent release with late upgrades |
 | 18 | A commit-acknowledged store operation gates every widget effect | r4 conditional; r5 conditional (G6) | §8.3 step 3 settles committed cancellation intents at start |
-| 19 | `widget_action_retry` as the only Send-again | r4, r5, r7, r8 request changes (G5, r7 #2, r8 #6) | §8.3: held ownership is in flight; revocation settlement and retry admission share one conditional update; `superseded` |
+| 19 | `widget_action_retry` as the only Send-again | r4, r5, r7, r8, r11 request changes (G5, r7 #2, r8 #6, F7) | §8.3: one `retryable` predicate shared with the projection; persisted supersession; `superseded` refusal |
 | 20 | The design claims bounded overhead and no token saving | r4/r5 claim approved; evidence corrected (G9) | §3 and §11 agree; benchmark class defined |
 | 21 | An update's bound is a constant for a benchmark update class, not for arbitrary patches | r5, r6, r7 request changes (G9, H6, r7 #6) | §11: class defined by escaped bytes; maximum built with quote and emoji values, bounded at 1 KiB |
 | 22 | Clear is an identified, conditional, acknowledged writer operation | r5 approve | retained |
-| 23 | A widget command is written to exactly one connection and never retransmitted | r6, r7, r8 request changes (H1, r7 #1, r8 #2/#3/#5) | §8.3 step 5: command-fate ledger, pre-write capability check, undecodable guarded frame, single admission gate |
+| 23 | A widget command is written to exactly one connection and never retransmitted | r6–r8, r11 request changes (H1, r7 #1, r8 #2/#3/#5, F1) | §8.3 step 5: write-once at the Controller; the broker's recipient inventory records every epoch it ever wrote to, and ownership settles over the whole inventory |
 | 24 | Artifact pin admission and collection share one lock | r6 approve | retained |
 | 25 | A Stop during configuration startup settles the decision as cancelled, never relayed | r6 request changes (H2) | contract aligned |
 | 26 | Interactive widgets require the `widget_delivery_v1` Machine capability bundle; display widgets do not | r7, r8 request changes (r7 #2/#4, r8 #5) | enforced at admission, retry, handoff and immediately before every write; `GuardedPrompt` frame; projected through `cowboy_delivery_capabilities` |
 | 27 | Bootstrap absence is ordered by a per-session index version | r7 request changes (#5) | §6.3: durable counter and creation version written atomically; consistent paged read |
-| 28 | Transport ownership is a per-attempt state distinct from delivery | r8–r10 request changes (r8 #1–#4/#6, r9 #1–#3/#6, r10 #1/#2/#6) | §8.3: held until a terminal receipt or an acknowledged revocation whose recipients are all fenced or proven terminated; exact `outstanding` membership |
-| 29 | The command-fate protocol spans worker journal and broker ledger | r8–r10 request changes (r8 #2, r9 #1/#2/#7, r10 #1–#5) | §8.3: read versus revoke, recipient inventory, `routed`/`received`/`finished`/`aborted`, `pending_epochs`, termination proofs |
+| 28 | Transport ownership is a per-attempt state distinct from delivery | r8–r11 request changes (…, F1, F6) | §8.3: released only when every recipient is terminal; held records always projected |
+| 29 | The command-fate protocol spans worker journal and broker ledger | r8–r11 request changes (…, F1/F2/F4/F5) | §8.3: observations versus settlements, epoch bindings with retained proofs, `submitted_failed`, `unobserved` |
 | 30 | Acknowledgement of a tracked `TurnEnded` waits for its ledger commit | r9 approve the ordering (#3 made settlement possible) | §6.3: identity-checked settlement across Clear |
 | 31 | `prompt_traced` is the single prompt admission gate for every producer | r9 request changes (#4) | §8.3: attempt-bound single-use handoff permit |
 | 32 | Transport settlement writes are identity-checked, not generation-checked, and never republish old-generation content (new) | — | §6.3; for review |
-| 33 | The worker keeps a durable per-command journal and answers fences from it | r10 request changes (#2, #4) | journal dispositions `finished`/`aborted`; fences to every connected recipient epoch |
-| 34 | Ownership release after revocation requires every recipient epoch fenced or proven terminated (`tree_exited`); reads never release (new) | — | §8.3; for review |
-| 35 | A retained recovery-reader capability makes settlement possible across generation changes, which are refused while attempts are held (new) | — | §8.3, §12; for review |
+| 33 | The worker keeps a durable per-command journal and answers fences from it | r10, r11 request changes (r10 #2/#4, F5) | dispositions `finished`/`aborted`/`submitted_failed` |
+| 34 | Ownership release requires every recipient epoch terminal (receipt, pre-receipt tombstone or retained termination proof); reads never release | r11 request changes (F1, F2) | §8.3: aggregate settlement; immutable epoch→launch bindings; contained launches for every capability-enabled session |
+| 35 | A retained recovery-reader capability makes settlement possible across generation changes | r11 request changes (F3) | §8.3, §12: component-activator compatibility floor that consults the Controller and refuses when unreachable |
+| 36 | Delivery evidence and ownership settlement are decided separately over the recipient inventory (new) | — | §8.3; for review |
