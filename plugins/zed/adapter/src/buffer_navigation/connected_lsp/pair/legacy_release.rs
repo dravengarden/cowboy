@@ -49,6 +49,7 @@ pub(super) async fn exercise(client: &Client, root: &Path) {
         .request(Request::BufferLanguage {
             worktree: workspace.clone(),
             path: "file.txt".into(),
+            refresh: None,
         })
         .await;
     assert_eq!(language["sourceState"], "matching");

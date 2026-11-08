@@ -176,6 +176,15 @@ impl Registry {
         });
     }
 
+    /// The issued owner ID of this instance's reference, without expiry or
+    /// state checks. Absent for another instance or a malformed reference.
+    pub(super) fn issued(&self, lease: &LeaseRef) -> Option<u64> {
+        (self.instance.as_ref() == Some(&lease.instance) && lease.id.len() == 16)
+            .then(|| u64::from_str_radix(&lease.id, 16).ok())
+            .flatten()
+            .filter(|id| *id <= self.last_id)
+    }
+
     fn resolve(&mut self, lease: &LeaseRef) -> Result<u64> {
         self.expire_prepared();
         ensure!(

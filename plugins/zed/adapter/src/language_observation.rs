@@ -36,14 +36,47 @@ pub(crate) struct BufferSnapshot {
     pub(crate) content: crate::content_reads::Content,
 }
 
+pub(crate) async fn respond(
+    request: crate::Request,
+    worktrees: &crate::Worktrees,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    let crate::Request::BufferLanguage {
+        worktree,
+        path,
+        refresh,
+    } = request
+    else {
+        anyhow::bail!("not a language observation request");
+    };
+    crate::trust::ensure_language(&worktree, worktrees).await?;
+    buffer_language(worktree, path, refresh, buffers, zed).await
+}
+
 pub(crate) async fn buffer_language(
     worktree: PathBuf,
     path: PathBuf,
+    refresh: Option<crate::agent_refresh::Refresh>,
     buffers: &Buffers,
     zed: Option<&Zed>,
 ) -> Result<Response> {
     let source_path = path.clone();
     let (worktree, path) = buffer_key(worktree, path).await?;
+    let refresh = match (refresh, zed) {
+        (Some(crate::agent_refresh::Refresh::AgentOwned), Some(zed)) => Some(
+            crate::agent_refresh::refresh(
+                &worktree,
+                &source_path,
+                &(worktree.clone(), path.clone()),
+                buffers,
+                zed,
+            )
+            .await,
+        ),
+        (Some(_), None) => Some(crate::agent_refresh::Outcome::Refused),
+        (None, _) => None,
+    };
     let all = buffers.active.read().await;
     let lease = all
         .get(&(worktree.clone(), path.clone()))
@@ -83,5 +116,6 @@ pub(crate) async fn buffer_language(
         inlay_hints: observation.inlay_hints,
         semantic_tokens: observation.semantic_tokens,
         analysis: observation.analysis,
+        refresh,
     })
 }

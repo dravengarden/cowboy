@@ -89,6 +89,11 @@ state-store's dependent packages and the plugin-api consumers without changing
 native pins. It removes the temporary root `@std/assert` dependency; package
 closure validation remains strict and historical release records stay unchanged.
 
+Release 3.98.0 records Zed Plugin 1.39.0 (agent-owned mirror reload) and
+app-shell 1.1.40 for the already-committed floating-island changes in
+`270f49cd9`, which 3.97.0 did not cover. The worker registry input follows the
+new release; native pins are unchanged.
+
 Scoped release 3.85.0 records app-shell 1.1.39 for the already-committed
 floating dock, footer edge and test-assertion changes after 3.84.0
 (`bd212af9`..`ca711c65`); no Plugin depends on that component, so the worker

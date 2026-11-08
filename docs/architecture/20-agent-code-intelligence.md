@@ -734,6 +734,23 @@ source mismatch detection, not watcher frontiers or automatic baselines.
   the native mirror to observe new text: until an agent-owned reload on source
   change (or a write receipt) exists, disk edits by tools do not produce one.
   Reopening a buffer is reported as `buffer_replaced`.
+
+  Zed 1.39.0 closes that gap for agent-only buffers. `bufferLanguage` accepts
+  `refresh: "agent_owned"`; the adapter reloads the mirror through the
+  existing bounded native reload route only when every owner of the buffer is
+  an automatic agent acquisition (owner IDs are never reused), no
+  synchronization reservation or unresolved close exists, and its bounded
+  source reader reports `changed`. The active-buffer read lock is held through
+  the reload, so no owner joins or leaves meanwhile. Outcomes are
+  `not_needed`, `reloaded`, `refused` (another owner, fence or native
+  size/binary/symlink refusal, mirror unchanged) or `unknown` (unobserved
+  within 5 s; never retried). Nothing is saved, opened or synchronized. When an
+  explicit `code.diagnostics` read of a file the agent already holds sees
+  `changed`, the Controller sends one refresh and, after `reloaded`, waits up
+  to 4 s for analysis of the new text before answering. The Machine already
+  classifies `bufferLanguage` as passive, so no Machine release is needed; an
+  older adapter rejects the unknown field and the original observation is
+  kept. A file a Code pane also holds stays `stale`.
 - **Hunk overlap** orders diagnostics within the budget (`in_edit` before
   `elsewhere`); it never asserts that an edit caused a diagnostic and never
   replaces the baseline comparison.

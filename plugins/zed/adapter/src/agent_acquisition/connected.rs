@@ -124,3 +124,104 @@ pub(crate) async fn exercise(zed: &Zed, root: &Path) {
         "native worktree acquisition: real Add/Trust/Remove reply loss, original query recovery, registration before cleanup and retired worktree rejection passed"
     );
 }
+
+async fn observe(
+    f: &Fixture<'_>,
+    refresh: bool,
+) -> (
+    crate::source_snapshot::State,
+    Option<crate::agent_refresh::Outcome>,
+) {
+    let Response::BufferLanguage {
+        source_state,
+        refresh,
+        ..
+    } = crate::language_observation::buffer_language(
+        f.root.clone(),
+        "file.txt".into(),
+        refresh.then_some(crate::agent_refresh::Refresh::AgentOwned),
+        &f.buffers,
+        Some(f.zed),
+    )
+    .await
+    .unwrap()
+    else {
+        panic!("not a language observation")
+    };
+    (source_state, refresh)
+}
+
+/// The actual native reload of an agent-only mirror, and its refusal while
+/// another owner shares the buffer.
+pub(crate) async fn refresh(zed: &Zed, root: &Path) {
+    use crate::agent_refresh::Outcome;
+    use crate::source_snapshot::State as Source;
+    let workspace = root.join("acquisition-refresh");
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::write(workspace.join("file.txt"), "original\n").unwrap();
+    let f = Fixture {
+        zed,
+        root: workspace,
+        trees: Arc::default(),
+        buffers: Arc::default(),
+    };
+    let reference = f.prepare("automatic-refresh").await;
+    assert_eq!(
+        f.act(&reference, Action::Execute).await.unwrap(),
+        State::Ready
+    );
+    assert_eq!(
+        observe(&f, true).await,
+        (Source::Matching, Some(Outcome::NotNeeded))
+    );
+    std::fs::write(f.root.join("file.txt"), "agent edit\n").unwrap();
+    assert_eq!(observe(&f, false).await, (Source::Changed, None));
+    // A second owner shares the mirror: no reload, text unchanged.
+    let legacy = crate::open_buffer(
+        f.root.clone(),
+        "file.txt".into(),
+        "interactive-tab".into(),
+        &f.trees,
+        &f.buffers,
+        Some(zed),
+    )
+    .await;
+    legacy.expect("a second legacy owner joins the same native buffer");
+    {
+        assert_eq!(
+            observe(&f, true).await,
+            (Source::Changed, Some(Outcome::Refused))
+        );
+        crate::close_buffer(
+            f.root.clone(),
+            "file.txt".into(),
+            "interactive-tab".into(),
+            &f.buffers,
+            Some(zed),
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(observe(&f, true).await.1, Some(Outcome::Reloaded));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while observe(&f, false).await.0 != Source::Matching {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "reloaded mirror never matched"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(observe(&f, true).await.1, Some(Outcome::NotNeeded));
+    assert_eq!(
+        f.act(&reference, Action::Release).await.unwrap(),
+        State::Released
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.join("file.txt")).unwrap(),
+        "agent edit\n",
+        "refresh must never write the source"
+    );
+    println!(
+        "agent-owned native reload: exclusive-owner reload, shared-owner refusal and no source write passed"
+    );
+}
