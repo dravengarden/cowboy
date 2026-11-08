@@ -53,6 +53,7 @@
     "session_context::get": "sessions.context",
     "session_context::set": "sessions.context_set",
     "session_context::send": "sessions.context_send",
+    "session_context::cancel": "exception:human — taking a handoff back returns its message to the Composer of the person who wrote it; an agent has no Composer to restore it into.",
     "session_context::fork": "sessions.fork",
     "session_context::duplicate": "sessions.duplicate",
     "session_context::continue_here": "exception:browser — keeping a handed-off session open only lifts a Web read-only presentation; agents and scripts were never refused writes to it.",

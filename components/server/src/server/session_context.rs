@@ -4,8 +4,10 @@ use super::*;
 use crate::core::SessionInfo;
 use crate::session_context::{Context, Delivery, Injection, Link, NextAgent, Source};
 
+mod cancel;
 mod fork;
 mod inheritance;
+pub(super) use cancel::cancel;
 pub(super) use fork::{duplicate, fork};
 
 // Serializes short durable mutations and creation admission, including requests
@@ -144,6 +146,7 @@ pub(super) async fn initialize(
             error: None,
             source_trashed: false,
             source_kept: None,
+            returned: None,
         }),
         injection: initial_cmid.map(|cmid| Injection {
             cmid,
@@ -708,9 +711,7 @@ async fn deliver(
         fingerprint: fingerprint(&request),
         session_id: target_id.clone(),
         state: "preparing".into(),
-        error: None,
-        source_trashed: false,
-        source_kept: None,
+        ..Delivery::default()
     };
     context.delivery = Some(delivery.clone());
     save(&state, &id, &context).await?;
@@ -998,6 +999,7 @@ mod tests {
                 error: None,
                 source_trashed: false,
                 source_kept: None,
+                returned: None,
             }),
             ..Context::default()
         };

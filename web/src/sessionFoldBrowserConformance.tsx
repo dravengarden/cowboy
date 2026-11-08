@@ -7,6 +7,7 @@ import { MobileSheetActionGroup } from "@cowboy/app-shell";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { SessionFoldIcon, useSessionFoldControl } from "./SessionFoldControl";
+import { MobileSessionsDock } from "./MobileSessionsDock";
 import { CreateDialog } from "./App";
 import { runFolderCreationBrowserChecks } from "./folderCreationBrowserChecks";
 import { checkSessionAttention } from "./sessionAttentionBrowserChecks";
@@ -222,6 +223,25 @@ export async function runSessionFoldBrowserConformance(): Promise<string[]> {
       else html.style.removeProperty("--cowboy-font-scale");
     }
     results.push("all five footer glyphs match IconButton at 65%, 100% and 125% with stable touch targets");
+
+    // The drawer's islands share the sheet-footer edge and fade the rows out.
+    flushSync(() => root.render(
+      <BrowserProductTheme>
+        <CssBaseline />
+        <Box sx={{ position: "fixed", inset: 0 }}>
+          <MobileSessionsDock phone fold={{ action: null, label: "Fold", icon: null, run: () => {} }} onNew={() => {}}
+            onClose={() => {}} onOpenAbout={() => {}} onOpenSettings={() => {}} />
+        </Box>
+      </BrowserProductTheme>,
+    ));
+    await tick();
+    const dock = document.querySelector<HTMLElement>("[data-sessions-floating-controls]")!;
+    const islandBottom = Math.max(...[...dock.querySelectorAll<HTMLElement>("[data-mobile-sheet-footer-shield]")]
+      .map((island) => island.getBoundingClientRect().bottom));
+    check(Math.abs(innerHeight - islandBottom - 12) < 0.5, `Sessions islands sit ${innerHeight - islandBottom}px above the edge`);
+    const frost = getComputedStyle(dock, "::before");
+    check(frost.backdropFilter === "blur(8px)" && frost.maskImage.includes("linear-gradient"), "Sessions islands lack the footer frost");
+    results.push("Sessions islands share the sheet footer edge and frost");
 
     render(nested, "s20-1");
     await tick();

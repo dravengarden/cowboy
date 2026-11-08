@@ -400,22 +400,48 @@ async function reviewFilesAndDiff(p: FixturePage) {
     `Array.from(document.querySelectorAll('[role="button"]')).find(n=>n.textContent?.startsWith('app.ts'))?.click()`,
   );
   await until("!!document.querySelector('[aria-label=\"Mark reviewed\"]')");
-  await until("!!document.querySelector('[data-review-check-action=\"lint\"]')");
+  // Line counts share the file pager's row; checks live in More actions, so
+  // the diff adds no control row above the file controls.
+  await until("!!document.querySelector('[data-review-diff-counts]')?.textContent?.includes('+1')");
+  await p.evaluate(`(()=>{
+    if(document.querySelector('[data-review-check-action]'))throw new Error('Check actions should be in More actions');
+    if(document.querySelector('[data-review-document-controls]')?.getBoundingClientRect().height)throw new Error('Diff should not add a control row');
+  })()`);
   await readingSizes("diff", [
-    '[data-review-check-action="lint"]',
-    '[aria-label="Next hunk"]',
+    "[data-review-diff-counts]",
     '[aria-label="Mark reviewed"]',
     '[aria-label="Next change"]',
     '[aria-label="Open Git changes sidebar"]',
   ]);
+  await click('[aria-label="More review actions"]');
+  await until("!!document.querySelector('[data-review-check-action=\"lint\"]')");
+  await capture("diff-check-actions", ['[data-review-check-action="lint"]']);
   await click('[data-review-check-action="lint"]');
   await until("fixture.requests.some(r=>r.startsWith('POST ') && r.endsWith('/checks'))");
+  await until("!document.querySelector('[data-review-check-action]')");
   await until("!!document.querySelector('[data-review-check-status]')");
-  await capture("diff-check-completed", ['[data-review-check-action="lint"]']);
+  await capture("diff-check-completed", ["[data-review-check-status]"]);
   await click('[aria-label="Mark reviewed"]');
   await until("!!document.querySelector('[aria-label=\"Mark unreviewed\"]')");
   await click('[aria-label="Next change"]');
-  await capture("diff-next", ['[aria-label="Previous change"]', '[aria-label="Next change"]']);
+  await until("document.querySelector('[aria-label=\"Next hunk\"]')?.dataset.reviewHunkPosition==='1/2'");
+  await capture("diff-next", [
+    '[aria-label="Previous change"]',
+    '[aria-label="Next change"]',
+    '[aria-label="Next hunk"]',
+  ]);
+  await viewport(375, 667);
+  await capture("diff-hunks-375", ['[aria-label="Next hunk"]', '[aria-label="Open Git changes sidebar"]']);
+  await p.evaluate(`(()=>{
+    const row=document.querySelector('[data-review-file-controls]').getBoundingClientRect();
+    const tree=document.querySelector('[aria-label="Open Git changes sidebar"]').getBoundingClientRect();
+    if(tree.top>=row.top+44)throw new Error('Hunk control pushed the file controls onto a second row');
+  })()`);
+  await click('[aria-label="Next hunk"]');
+  await viewport(390, 844);
+  await until("document.querySelector('[aria-label=\"Next hunk\"]')?.dataset.reviewHunkPosition==='2/2'");
+  await click('[aria-label="Next hunk"]');
+  await until("document.querySelector('[aria-label=\"Next hunk\"]')?.dataset.reviewHunkPosition==='1/2'");
   await navigationActions();
   await contextPickerLayout(p);
   await viewport(1280, 900, false);

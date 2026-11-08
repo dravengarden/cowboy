@@ -7,6 +7,7 @@ import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionContextSettings } from "./SessionContextSettings";
 import { PreparingConversation } from "./PreparingConversation";
+import { DeleteSessionShell } from "./DeleteSessionShell";
 import { SessionContextCue, SessionContinuedFrom, SessionHandedOffDock, SessionNextMessageBadge, SessionProvenance } from "./SessionContextCue";
 import {
   CLOSE_SESSION_SETTINGS_EVENT,
@@ -19,6 +20,7 @@ import { announceContext, type SessionContext } from "./sessionContext";
 import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice";
 import { frontPrompt, submitPrompt, useStore } from "./store";
 import { bindProductSyncPrincipal } from "./productSyncIdentity";
+import { getDraft } from "./draftStore";
 import { managementEntryFixture } from "./providerManagement.fixture";
 import { runCreateDefaultsBrowserChecks } from "./createDefaultsBrowserChecks";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
@@ -128,7 +130,7 @@ export async function runSessionContextBrowserConformance(
         outbox_contract: "atomic-delta-v1",
       });
     }
-    if (url.endsWith("/hibernate")) {
+    if (url.endsWith("/hibernate") || url.endsWith("/reload")) {
       writes.push({ url, body: {} });
       return new Response(null, { status: 204 });
     }
@@ -144,6 +146,16 @@ export async function runSessionContextBrowserConformance(
         session_id: url.endsWith("/fork") ? "fork-copy" : "linked-copy",
         session: null,
       }, { status: 201 });
+    }
+    if (url.endsWith("/context/cancel")) {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      writes.push({ url, body });
+      return Response.json({
+        source_session_id: sessions[1]!.id,
+        text: "keep going",
+        content: [],
+        session: null,
+      });
     }
     if (url.endsWith("/context/send")) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -1138,14 +1150,76 @@ export async function runSessionContextBrowserConformance(
         </BrowserProductTheme>,
       ));
       for (const socket of Socket.active) socket.publish({ type: "sessions", sessions });
+      Socket.active.at(-1)?.publish({
+        type: "sync_patch",
+        state: `queue:${sessions[3]!.id}`,
+        version: width,
+        value: { queue: [{ id: "first", text: "keep going", content: [], cmid: "context-handoff-op" }] },
+        confirmed: [],
+        resync: true,
+      });
       await until(() => Boolean(container.querySelector('[data-session-handoff-link="trash"]')));
+      await until(() => Boolean(container.querySelector("[data-handoff-cancel]")));
+      check(container.textContent!.includes("keep going"),
+        `preparing ${width}: the queued first message is shown with Cancel`);
       const status = container.querySelector('[role="status"]')!.getBoundingClientRect();
       const bounds = container.getBoundingClientRect();
       check(Math.abs(status.top + status.height / 2 - (bounds.top + bounds.height / 2)) < 65 && container.scrollWidth <= width,
         `preparing ${width}: status is centered without horizontal overflow`);
       check(Boolean(exactButton("Restore")), `preparing ${width}: source recovery stays visible`);
       await observe?.(`preparing-${width}`);
+      // A startup that failed keeps the same page: why, Retry, and the source.
+      flushSync(() => root.render(
+        <BrowserProductTheme>
+          <CssBaseline />
+          <Box sx={{ height: 560, display: "flex", flexDirection: "column-reverse" }}>
+            <PreparingConversation
+              sessionId={sessions[3]!.id}
+              location="columbus on hawk"
+              blocked={{ detail: "The selected workspace could not be prepared (hawk). This session is retained; send a message or reload it to try again." }}
+            />
+          </Box>
+        </BrowserProductTheme>,
+      ));
+      await until(() => Boolean(container.querySelector('[data-conversation-empty-state="blocked"] [data-session-handoff-link="trash"]')));
+      const alert = container.querySelector('[role="alert"]');
+      check(Boolean(alert?.textContent?.includes("Session didn't start") && alert.textContent.includes("could not be prepared")) &&
+        container.scrollWidth <= width, `blocked ${width}: the reason replaces the progress without horizontal overflow`);
+      check(Boolean(exactButton("Restore")), `blocked ${width}: source recovery stays visible`);
+      const beforeRetry = writes.length;
+      exactButton("Retry")!.click();
+      await until(() => writes.length > beforeRetry);
+      check(writes.at(-1)!.url.endsWith(`/sessions/${sessions[3]!.id}/reload`), `blocked ${width}: Retry reloads the session`);
+      await observe?.(`blocked-${width}`);
     }
+    container.querySelector<HTMLButtonElement>("[data-handoff-cancel]")!.click();
+    await until(() => writes.some((write) => write.url.endsWith("/context/cancel")));
+    const cancelled = writes.find((write) => write.url.endsWith("/context/cancel"))!;
+    await until(() => getDraft(sessions[1]!.id).text === "keep going");
+    check(
+      cancelled.url.includes(sessions[3]!.id) && cancelled.body.operation === "handoff-op",
+      "preparing: Cancel takes the handoff back and returns its message to the original",
+    );
+    // The Trash confirmation names the session it removes.
+    container.style.cssText = "width:680px;max-width:100%;margin:auto";
+    const { trashed_at_ms: _trashed, ...live } = sessions[1]!;
+    const named: SessionMeta = { ...live, status: "running", title: "Fix the flaky sync test", workspace_name: "cowboy" };
+    const desktop = classifySurface({ finePointer: true, hover: true, tabletWidth: false, touchCapable: false, desktopHost: true });
+    flushSync(() => root.render(
+      <SurfaceContext.Provider value={desktop}>
+        <BrowserProductTheme>
+          <CssBaseline />
+          <DeleteSessionShell session={named} onClose={() => {}} onStopAndTrash={() => {}} onDeletePermanently={() => {}} />
+        </BrowserProductTheme>
+      </SurfaceContext.Provider>,
+    ));
+    await until(() => Boolean(document.querySelector("[data-delete-session-name]")));
+    check(
+      document.querySelector("[data-delete-session-name]")!.textContent === "Fix the flaky sync testcowboy",
+      "trash: the confirmation names the session and its project",
+    );
+    await observe?.("trash-confirmation");
+    flushSync(() => root.render(null));
   } finally {
     root.unmount();
     container.remove();

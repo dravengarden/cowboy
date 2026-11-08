@@ -61,13 +61,23 @@ export function conversationEmptyPresentation(input: {
   optimisticCount: number;
   cleared: boolean;
   fresh: boolean;
-}): { kind: "preparing" | "cleared" | "ready"; preparing: boolean } | null {
+  /** Its complete history holds no conversation (a crash marker at most). */
+  unstarted?: boolean;
+}): { kind: "preparing" | "blocked" | "cleared" | "ready"; preparing: boolean } | null {
   // An optimistic bubble is already conversation: never replace it with an
   // empty state, however the session status reads.
   if (input.optimisticCount > 0) return null;
   const preparing = input.status === "starting";
   if (input.itemCount === 0 && preparing) {
     return { kind: "preparing", preparing: true };
+  }
+  // A session that failed before its first turn is still a startup: show the
+  // stopped startup in place, not an empty page with a footer error.
+  if (
+    input.itemCount === 0 && input.status === "crashed" &&
+    input.unstarted === true && !input.cleared
+  ) {
+    return { kind: "blocked", preparing: false };
   }
   if (input.cleared) return { kind: "cleared", preparing };
   if (input.fresh) return { kind: "ready", preparing };

@@ -136,7 +136,7 @@ pub fn without_preamble(
     content
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Delivery {
     pub operation: String,
     pub fingerprint: String,
@@ -151,6 +151,18 @@ pub struct Delivery {
     /// Why the handoff left its source out of Trash, as read-only history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_kept: Option<String>,
+    /// A cancelled handoff keeps the message it took back, so a lost Cancel
+    /// reply can be replayed instead of losing what was written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returned: Option<Returned>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Returned {
+    pub source_session_id: String,
+    pub text: String,
+    #[serde(default)]
+    pub content: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -352,7 +364,7 @@ pub fn read(hub: &crate::core::Hub, id: &str) -> Result<Context, String> {
         || context.delivery.as_ref().is_some_and(|delivery| {
             !matches!(
                 delivery.state.as_str(),
-                "preparing" | "accepted" | "failed" | "unknown"
+                "preparing" | "accepted" | "failed" | "unknown" | "cancelled"
             )
         })
     {
@@ -387,6 +399,20 @@ pub fn allows_dispatch(hub: &crate::core::Hub, id: &str, cmid: Option<&str>) -> 
                     .injection
                     .as_ref()
                     .is_some_and(|injection| Some(injection.cmid.as_str()) == cmid))
+    })
+}
+
+/// A continuation's first message waits in its queue, where every device can
+/// see it and still take the handoff back, until its new agent is running.
+pub fn waits_for_agent(hub: &crate::core::Hub, id: &str, cmid: Option<&str>) -> bool {
+    cmid.is_some_and(|cmid| {
+        hub.session_info(id)
+            .is_some_and(|info| info.meta.continued_from.is_some())
+            && read(hub, id).is_ok_and(|context| {
+                context
+                    .injection
+                    .is_some_and(|injection| injection.cmid == cmid)
+            })
     })
 }
 
@@ -696,6 +722,7 @@ mod tests {
                 error: None,
                 source_trashed: false,
                 source_kept: None,
+                returned: None,
             }),
             injection: Some(Injection {
                 cmid: "admitted".into(),
@@ -728,6 +755,7 @@ mod tests {
                     error: None,
                     source_trashed: false,
                     source_kept: None,
+                    returned: None,
                 }),
                 injection: Some(Injection {
                     cmid: cmid.into(),

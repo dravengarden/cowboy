@@ -101,8 +101,21 @@ placeholder reads "Message the new agent…" so the cue survives the mobile
 keyboard hiding auxiliary rows. After a handoff the link is history, not a
 next-send choice, so it leaves the Composer. The switch itself stays in Session
 Settings. While a continuation prepares, or any session with its first message queued,
-its page shows only the progress: the setup form is for a session nothing has
-been sent to yet, and Session Settings stays available. A continuation opens with one link, "Continued from SOURCE · OLD → NEW" (also in
+its page shows only the progress and that message: the setup form is for a
+session nothing has been sent to yet, and Session Settings stays available.
+
+A continuation's first message waits in the destination's queue, visible on
+every device, until its new agent is running. The dispatcher launches the
+worker without a prompt under the same wake admission and requeues the
+message; the Running edge then sends it. While it waits, **Cancel** under the
+message takes the whole switch back (`POST .../context/cancel` with the send
+`operation`): the message leaves the queue atomically, the original returns
+from Trash, the destination loses its continuation mark and goes to Trash (a
+worker still launching is hibernated once it is up), both receipts become
+`cancelled`, and the sending device puts the message back in the original's
+Composer and opens it. Selected sources and the staged target are not
+restored. Once the agent has the message, or other messages are queued behind
+it, Cancel is refused; Stop applies to the running turn instead. A continuation opens with one link, "Continued from SOURCE · OLD → NEW" (also in
 its empty and preparing state), with `+N` for its other links.
 
 The links list in Session Settings starts folded under "N links" and has one row per link: "Forked from",
@@ -351,6 +364,9 @@ reuse across accounts, or imitation of another account's identity.
 - `POST /api/sessions/{id}/context/send` takes
   `{revision,operation,text,content?}`. Keep `operation` stable after
   uncertainty.
+- `POST /api/sessions/{id}/context/cancel` takes `{operation}` on the
+  destination and returns the message `{source_session_id,text,content}`.
+  It is Web-only: an agent has no Composer to return the message to.
 - Both session creation APIs accept `context_sources`.
 
 The existing four-tool MCP surface exposes `sessions.context`,

@@ -27,13 +27,12 @@ export function MobileSheetContextDock({ context, onBack, onClose, actions = [] 
     const footer = ref.current?.closest<HTMLElement>("[data-detent-sheet-footer]");
     const dialog = ref.current?.closest<HTMLElement>('[role="dialog"]');
     if (!footer || !dialog) return;
-    dialog.style.setProperty("--cowboy-sheet-footer-gap", "4px");
     dialog.style.setProperty("--cowboy-sheet-footer-inline", "16px");
     const measure = (): void => dialog.style.setProperty("--cowboy-sheet-dock-clearance", `${footer.getBoundingClientRect().height}px`);
     const observer = new ResizeObserver(measure);
     observer.observe(footer);
     measure();
-    return () => { observer.disconnect(); dialog.style.removeProperty("--cowboy-sheet-dock-clearance"); dialog.style.removeProperty("--cowboy-sheet-footer-gap"); dialog.style.removeProperty("--cowboy-sheet-footer-inline"); };
+    return () => { observer.disconnect(); dialog.style.removeProperty("--cowboy-sheet-dock-clearance"); dialog.style.removeProperty("--cowboy-sheet-footer-inline"); };
   }, []);
   const inlineActions = actions.length === 1 ? actions : [];
   const navigationWidth = (onBack ? 50 : 0) + inlineActions.length * 50 + 56;

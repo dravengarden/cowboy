@@ -19,6 +19,7 @@ use super::only_keys;
 use crate::core::SessionMeta;
 
 mod acquire;
+mod baselines;
 mod diagnostics;
 mod hover;
 mod summary;

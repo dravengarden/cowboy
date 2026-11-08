@@ -31,6 +31,7 @@ import {
 import type { SessionMeta } from "../../protocol";
 import { ReviewModeSwitcher } from "./ReviewModeSwitcher";
 import { ReviewMoreActions } from "./ReviewMoreActions";
+import { ReviewDiffPager, ReviewDocumentSlotsContext, useReviewSlotContainers } from "./reviewDocumentSlots";
 import { ReviewContextButton } from "./ReviewContextButton";
 import { ReviewProjectCheckoutRow } from "./ReviewProjectCheckoutRow";
 import { SegmentedTabs } from "../../SegmentedTabs";
@@ -316,7 +317,8 @@ export function ReviewApp({
   );
   const [contextProjectKey, setContextProjectKey] = useState<string>();
   const [inlineNavigationContainer, setInlineNavigationContainer] = useState<HTMLElement | null>(null);
-  const [inlineActionsContainer, setInlineActionsContainer] = useState<HTMLElement | null>(null);
+  const [documentSlots, slotRefs] = useReviewSlotContainers();
+  const inlineActionsContainer = documentSlots.inlineActions;
   const navigationInline = !!workspace && target.kind === "changes" && !commitTarget;
   const navigationTouchGuard = useRetargetedTouchClickGuard<HTMLDivElement>();
   const [contextError, setContextError] = useState<string>();
@@ -1554,7 +1556,7 @@ export function ReviewApp({
             />
           )
           : (
-            <DocumentView
+            <ReviewDocumentSlotsContext.Provider value={documentSlots}><DocumentView
               key={`${reviewStateKey(boundWorkspace?.sessionId, workspace.sessionId)}:${target.kind}:${target.path}:${
                 target.kind === "diff"
                   ? target.comparison ?? target.scope
@@ -1648,7 +1650,7 @@ export function ReviewApp({
                   end: location.end,
                 });
               }}
-            />
+            /></ReviewDocumentSlotsContext.Provider>
           )}
         <Box
           data-mobile-backdrop-chrome="true"
@@ -1819,32 +1821,8 @@ export function ReviewApp({
                     <VisibilityOutlined />
                   </IconButton>
                 )}
-              {target.kind === "diff" && (
-                <>
-                  <Box sx={{ flex: 1 }} />
-                  <IconButton
-                    aria-label="Previous change"
-                    disabled={reviewIndex <= 0}
-                    onClick={() => moveReview(-1)}
-                  >
-                    <ChevronLeft />
-                  </IconButton>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ minWidth: 52, textAlign: "center" }}
-                  >
-                    {reviewIndex + 1} / {target.queue.length}
-                  </Typography>
-                  <IconButton
-                    aria-label="Next change"
-                    disabled={reviewIndex >= target.queue.length - 1}
-                    onClick={() => moveReview(1)}
-                  >
-                    <ChevronRight />
-                  </IconButton>
-                </>
-              )}
+              {target.kind === "diff" && <ReviewDiffPager index={reviewIndex} total={target.queue.length}
+                onMove={moveReview} countsRef={slotRefs.counts} hunksRef={slotRefs.hunks} />}
               <Box sx={{ flex: 1 }} />
               {target.kind === "source" && (
                 <IconButton
@@ -1937,7 +1915,8 @@ export function ReviewApp({
               <ReviewModeSwitcher mode={mode} onChange={activateReviewMode} />
               <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={currentMachineId}
                 renderTrigger={({ disabled, open }) => <ReviewMoreActions>{(close) => <>
-                {navigationInline && <Box ref={setInlineActionsContainer} sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", minWidth: 0 }} />}
+                {navigationInline && <Box ref={slotRefs.inlineActions} sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", minWidth: 0 }} />}
+                {target.kind === "diff" && <Box ref={slotRefs.actions} data-review-document-actions sx={{ "&:empty": { display: "none" } }} />}
                 {contextReturnSession && (
                   <Button
                     aria-label={`Back to session ${contextReturnSession.title}`}

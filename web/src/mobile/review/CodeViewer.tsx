@@ -9,7 +9,6 @@ import {
   Decoration,
   type DecorationSet,
   EditorView,
-  lineNumbers,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
@@ -38,6 +37,7 @@ import {
   diffPointToNewFile,
   diffSourceProjection,
 } from "./diffSourceModel";
+import { reviewLineGutter } from "./reviewLineGutter";
 import { rankAndDedupeInspectCandidates } from "./symbolCandidateModel";
 import {
   bindCodeViewerSwipeFreeze,
@@ -409,15 +409,11 @@ export default function CodeViewer({
   const onToggleLineRef = useRef(onToggleLine);
   onToggleLineRef.current = onToggleLine;
   const selectionExtensions = useMemo(() => [
-    lineNumbers({
-      domEventHandlers: {
-        click: (view, block) => {
-          onToggleLineRef.current?.(view.state.doc.lineAt(block.from).number);
-          return onToggleLineRef.current !== undefined;
-        },
-      },
+    reviewLineGutter(kind, (row) => {
+      onToggleLineRef.current?.(row);
+      return onToggleLineRef.current !== undefined;
     }),
-  ], []);
+  ], [kind]);
   const visibleLineReporterRef = useRef<
     MobileCodeScrollIdleReporter<EditorView> | null
   >(null);

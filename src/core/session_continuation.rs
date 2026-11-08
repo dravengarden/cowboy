@@ -41,6 +41,29 @@ impl Hub {
         Ok(())
     }
 
+    /// Take back a continuation's first message while it is the only queued
+    /// prompt. `None` once it was dispatched, or while other work is queued.
+    pub fn take_sole_queued(
+        &self,
+        session_id: &str,
+        cmid: &str,
+    ) -> Option<(String, Vec<serde_json::Value>)> {
+        let taken = {
+            let mut sessions = self.inner.sessions.lock();
+            let s = sessions.get_mut(session_id)?;
+            if s.queue.len() != 1 || s.queue[0].cmid.as_deref() != Some(cmid) {
+                return None;
+            }
+            if s.editing.as_deref() == Some(s.queue[0].id.as_str()) {
+                s.editing = None;
+            }
+            let message = s.queue.remove(0);
+            (message.text, message.content)
+        };
+        self.emit_pending(session_id);
+        Some(taken)
+    }
+
     /// Place an admitted fork beside its source, like a continuation, under
     /// the source title marked as a fork.
     pub fn place_fork(
@@ -223,7 +246,13 @@ impl Hub {
             else {
                 continue;
             };
-            if sessions.iter().any(|meta| meta.id == delivery.session_id)
+            // A handoff taken back is recorded on its destination first.
+            let cancelled = crate::session_context::read(self, &delivery.session_id)
+                .ok()
+                .and_then(|context| context.delivery)
+                .is_some_and(|receipt| receipt.state == "cancelled");
+            if !cancelled
+                && sessions.iter().any(|meta| meta.id == delivery.session_id)
                 && self.setting(&key(&delivery.session_id)).is_none()
             {
                 self.set_setting(key(&delivery.session_id), json!(source.id));

@@ -135,8 +135,9 @@ pub(super) async fn api_session_reload(
         confirm_active_turn = query.confirm_active_turn,
         "session runtime reload requested"
     );
-    if info.meta.status != Status::Starting
-        && workspace_preparation::resume(&state, &session_id).is_some()
+    if execution::sessions::retry_blocked(&state, &session_id)
+        || (info.meta.status != Status::Starting
+            && workspace_preparation::resume(&state, &session_id).is_some())
     {
         return (StatusCode::ACCEPTED, "preparing the workspace").into_response();
     }

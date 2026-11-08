@@ -9,14 +9,21 @@ import { ReviewCheckActions } from "./ReviewCheckActions";
 export function ReviewCheckStatus({
   sessionId,
   path,
+  actionsContainer,
 }: {
   sessionId: string;
   path: string;
+  /** Where check actions render instead of this row; null while closed. */
+  actionsContainer?: HTMLElement | null;
 }): React.JSX.Element | null {
   const status = checkStatusSummary(useReviewChecks(sessionId), path, Date.now());
   return (
     <>
-      <ReviewCheckActions key={sessionId} sessionId={sessionId} />
+      <ReviewCheckActions
+        key={sessionId}
+        sessionId={sessionId}
+        {...(actionsContainer === undefined ? {} : { container: actionsContainer })}
+      />
       {status && (
         <Alert
           data-review-check-status={status.severity}

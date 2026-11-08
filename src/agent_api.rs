@@ -630,13 +630,19 @@ export interface Cowboy {
   code: { // language engine's diagnostics; opens files no Code pane holds (acquired:true) when Project language servers is on
     diagnostics(paths:string[]): Promise<{coverage:"open_buffers";files:({path:string;acquired?:true;
       state:"document_current"|"stale"|"last_observed";sourceState?:"matching"|"changed"|"unavailable";counts:Record<"error"|"warning"|"information"|"hint",number>;diagnostics:CodeDiagnostic[];truncated:boolean;
-      analysis?:{server:string;state:"document_current"|"stale"|"unknown";reason:string|null}[];bufferSnapshot?:CodeBufferSnapshot|null}
+      analysis?:{server:string;state:"document_current"|"stale"|"unknown";reason:string|null}[];bufferSnapshot?:CodeBufferSnapshot|null;comparison?:CodeComparison}
       | {path:string;state:"not_open"|"restricted"|"refused"|"unavailable"})[]}>; // 1..20 paths, <=50 per file, 1-based
   };
 }
 // document_current: source matches the buffer and every server analysed its text (other inputs may differ); stale: changed source or older analysis.
 // last_observed: analysis or source equality is unverified (a just-opened file may need another read).
 // not_open (agent share full) /unavailable is never "clean". Compile to confirm.
+// comparison: against the previous document_current text this session read (against.sha256), matched by server/source/code
+// multiplicity, not position or message. unknown (no_baseline|not_current|buffer_replaced|servers_changed|over_capture_bound)
+// is never "no change"; uncoded diagnostics stay unmatched (partial); ambiguous candidates share a pre-existing identity.
+export type CodeComparison = {state:"unknown";reason:string} | {state:"complete"|"partial";against:{sha256:string;utf8Bytes:number};
+  introduced:number;resolved:number;persisting:number;escalated:number;unmatched:{baseline:number;current:number};
+  candidates:{severity:string;line:number;column:number;source:string|null;code:string;ambiguous:boolean}[]};
 export interface Cowboy {
   code: { // passive counts over files this session tracked; never opens or refreshes a holding
     summary(): Promise<{coverage:"agent_observed_files";
