@@ -14,6 +14,11 @@ import {
 import { Search } from "@mui/icons-material";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import {
+  focusConversationCommand,
+  TRANSCRIPT_HIDDEN_REASON,
+  transcriptShown,
+} from "../review/conversationViewCommands";
+import {
   type DesktopCommand,
   useDesktopCommand,
   useDesktopCommands,
@@ -354,14 +359,7 @@ export function DesktopCommandHost({
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusPrompt),
       run: () => workspace.focusRegion("prompt.composer"),
     },
-    {
-      id: "workspace.focusConversation",
-      title: "Focus Conversation",
-      group: "Workspace",
-      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusConversation),
-      when: sessionWorkspaceMounted,
-      run: () => workspace.focusPane("conversation"),
-    },
+    focusConversationCommand(workspace.focusPane, sessionWorkspaceMounted),
     {
       id: "workspace.enterResize",
       title: "Select Layout Resize Bar",
@@ -539,6 +537,8 @@ export function DesktopCommandHost({
       group: "Conversation",
       shortcut: "F",
       contexts: ["conversation"],
+      when: transcriptShown,
+      disabledReason: TRANSCRIPT_HIDDEN_REASON,
       run: () => {
         document.querySelector<HTMLButtonElement>(
           "[data-desktop-conversation-follow]",

@@ -114,6 +114,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣S` + `S/Z/N/M/P/U` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project; `U` is Undo history, this device's undoable changes from the last 24 hours (LazyVim's `<leader>su`) |
 | `␣T` + `R/U/A/N/L/T` | Top bar group: run config, usage, verify, Provider update (only while one is available), reload; `T` focuses the bar |
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
+| `␣V` | Show the code Review in the work pane and focus it; while Review is shown, `␣V` is the Review group (`␣VV` focuses Review) |
 | `␣G` | Open Background tasks: the subagents and calls this session started (with the previous Calls panel restored: open or close Calls) |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
@@ -136,7 +137,7 @@ first moving focus there.
 A group opens only when one of its commands can run in the current focus
 (Interface needs the Prompt pane or an open Draft; Sessions and Top bar run
 from anywhere) and otherwise leaves its key to the root meaning. New families
-become groups instead of taking root letters. Free root letters: `I V X`.
+become groups instead of taking root letters. Free root letters: `X`.
 
 #### Vim in text fields
 
@@ -189,9 +190,29 @@ group's slot (the History/Explore toggle's `V`), reached through an item
 verb (row menus and grips), or is not a control at all: read-outs such as
 the status line's mode and pane segments render as text, not buttons.
 
-`␣V` shows the session's code Review in the Conversation pane and returns.
-The transcript stays mounted behind it, the Prompt stays beside the code, and
-Review's Agent action and **Send to Agent** return to the Conversation.
+#### Review view
+
+The work pane (the Conversation pane) shows one of two views of the Session,
+named by the `Conversation ␣C | Review ␣V` tabs in its header
+([docs/desktop-code-review.md](../../../docs/desktop-code-review.md)). Both
+stay mounted: the transcript keeps its reading position behind Review, and
+Review, once opened, keeps its files and cursor behind the Conversation (it
+stops polling while hidden). The view is remembered per Session on this
+device and is never synced.
+
+- `␣V` shows Review and focuses it. While Review is shown `␣V` is the Review
+  group (the group rule above), whose `␣VV` focuses Review from any focus.
+- `␣C` and the Conversation tab return. `Esc` never leaves Review: reading
+  code presses it constantly (leaving Visual, closing a popover, cancelling a
+  search), so it only unwinds Review's own layers.
+- Review's Send and Agent actions append to the Prompt and focus it,
+  unfolding a folded Prompt; Review stays shown beside it.
+- An agent's or a link's reveal request shows Review, as live navigation only.
+- The transcript's bare keys (`V` History/Explore, `F` Follow, `P` Page
+  Index) do not run while Review is shown; the palette explains why.
+- The approval dock belongs to the work pane and stays under either view.
+- While Review is shown the region is `conversation.review` and the status
+  line's pane segment reads `REVIEW`.
 
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
 Numbered session slots (`Alt/Option+1…0`) are retired: labels replace them,

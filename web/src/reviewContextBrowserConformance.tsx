@@ -1014,6 +1014,8 @@ export async function runReviewContextBrowserConformance(): Promise<string[]> {
 }
 
 async function checkDesktopReviewPane(fixture: ReturnType<typeof renderReviewContextPreview>): Promise<string> {
+  // The work view is remembered per device; start from the Conversation.
+  localStorage.removeItem("cowboy.desktop.workView.v1");
   const host = document.createElement("div");
   host.style.cssText = "height:600px;display:flex";
   document.body.append(host);
@@ -1041,33 +1043,40 @@ async function checkDesktopReviewPane(fixture: ReturnType<typeof renderReviewCon
         </SurfaceProvider>,
       )
     );
-    const toggle = () => host.querySelector<HTMLElement>("[data-desktop-review-toggle]");
-    await until(() => !!toggle(), "Desktop should offer Review");
+    const tab = (view: string) => host.querySelector<HTMLElement>(`[data-desktop-work-view="${view}"]`);
+    const shown = () => host.querySelector("[data-desktop-review]:not([hidden])");
+    await until(() => !!tab("review"), "Desktop should offer Review");
     const transcript = host.querySelector("[data-fixture-transcript]");
-    flushSync(() => toggle()!.click());
+    flushSync(() => tab("review")!.click());
     await until(
-      () => host.querySelector("[data-desktop-review]")?.textContent?.includes("Compare") === true ||
+      () => shown()?.textContent?.includes("Compare") === true ||
         !!host.querySelector("[data-desktop-review] [data-review-compare]"),
       "Review should open in the Conversation pane",
     );
     check(transcript?.isConnected, "Opening Review unmounted the transcript");
+    check(tab("review")?.getAttribute("aria-selected") === "true", "The Review tab is not selected");
+    // Send and Agent land in the Prompt beside the code; Review stays.
     openMobileProduct("agent");
-    await until(() => !host.querySelector("[data-desktop-review]"), "Agent should return to the Conversation");
+    await wait();
+    check(!!shown(), "Review's Agent action left Review");
+    flushSync(() => tab("conversation")!.click());
+    await until(() => !shown(), "The Conversation tab should return to the Conversation");
     check(host.querySelector("[data-fixture-transcript]") === transcript, "Returning replaced the transcript");
+    check(!!host.querySelector("[data-desktop-review][hidden]"), "Review was unmounted instead of kept behind the tabs");
     const request = {mode:"files",tabs:[{path:"README.md",pinned:false}],active:"README.md",progress:{},positions:{},open_revision:1,reveal_revision:1};
     fixture.sync("mobile-review:project", request, 1000);
     await wait();
-    check(!host.querySelector("[data-desktop-review]"), "Another session's open request stole focus");
+    check(!shown(), "Another session's open request stole focus");
     fixture.sync("mobile-review:worktree", request, 1000);
-    await until(() => !!host.querySelector("[data-desktop-review]"), "Live MCP navigation did not open Review");
-    openMobileProduct("agent");
-    await until(() => !host.querySelector("[data-desktop-review]"), "Could not leave requested Review");
+    await until(() => !!shown(), "Live MCP navigation did not open Review");
+    flushSync(() => tab("conversation")!.click());
+    await until(() => !shown(), "Could not leave requested Review");
     fixture.sync("mobile-review:worktree", request, 1001);
     await wait();
-    check(!host.querySelector("[data-desktop-review]"), "Repeated observation replayed navigation");
+    check(!shown(), "Repeated observation replayed navigation");
     fixture.sync("mobile-review:worktree", {...request,open_revision:2,reveal_revision:2}, 1002);
-    await until(() => !!host.querySelector("[data-desktop-review]"), "A fresh same-file request was ignored");
-    return "Desktop shows Review in the Conversation pane and returns to the same transcript";
+    await until(() => !!shown(), "A fresh same-file request was ignored");
+    return "Desktop shows Review as a work-pane view, keeps it on Send, and returns to the same transcript";
   } finally {
     root.unmount();
     host.remove();
