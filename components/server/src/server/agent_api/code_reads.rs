@@ -260,7 +260,6 @@ pub(super) async fn post_edit(
     let mut projected = post_edit::project(&value);
     post_edit::attach_writes(&mut projected, &value, |path| {
         let target = format!("{}/{path}", observed.session().cwd().trim_end_matches('/'));
-        tracing::info!(event_name = "cowboy.code.post_edit_write_lookup", session = %meta.id, target = %target);
         super::super::execution::writes::latest(&meta.id, &target).map(|write| write.sha256)
     });
     Ok(projected)

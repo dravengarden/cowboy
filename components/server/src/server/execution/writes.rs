@@ -74,16 +74,6 @@ fn helper_request(params: &serde_json::Value) -> Option<(String, String, String)
     ))
 }
 
-/// Whether a started process is a self-executed patch application.
-fn patch_process(params: &serde_json::Value) -> bool {
-    params["argv"].as_array().is_some_and(|argv| {
-        argv.iter()
-            .take(4)
-            .filter_map(serde_json::Value::as_str)
-            .any(|arg| arg.starts_with("--codex-run-as-apply-patch") || arg == "apply_patch")
-    })
-}
-
 /// The helper's applied outcome for exactly the expected digest.
 fn applied(output: &str, expect: &str) -> Option<usize> {
     output.lines().find_map(|line| {
@@ -117,15 +107,6 @@ fn helper_output(log: &mut Log, session: &str, process: &str, reply: &serde_json
             output.push_str(&String::from_utf8_lossy(&bytes));
         }
     }
-    tracing::info!(
-        event_name = "cowboy.execution.apply_helper_output",
-        session,
-        chunks = reply["chunks"].as_array().map_or(0, Vec::len),
-        closed = reply["closed"] == true,
-        exited = reply["exited"] == true,
-        expect = %expect,
-        head = %output.chars().take(160).collect::<String>().escape_debug(),
-    );
     if let Some(size) = applied(output, expect) {
         // The helper's digest is of the written bytes; LF files share it with
         // the native mirror, CRLF files never match.
@@ -201,12 +182,6 @@ fn record(log: &mut Log, session: &str, (path, sha256, utf8_bytes): (String, Str
         log.writes.remove(&oldest);
     }
     log.sequence += 1;
-    tracing::info!(
-        event_name = "cowboy.execution.write_observed",
-        session,
-        sequence = log.sequence,
-        path = %path
-    );
     let write = Write {
         sequence: log.sequence,
         sha256,
@@ -236,10 +211,6 @@ pub(super) fn observe(session: &str, command: &Command, response: &Response) {
             }
         }
         Command::Invoke { invocation, .. } if invocation.method == "process/start" => {
-            if patch_process(&invocation.params) {
-                // Identifies the patch route only; the patch text is not logged.
-                tracing::info!(event_name = "cowboy.execution.patch_process", session);
-            }
             let Some((process, path, expect)) = helper_request(&invocation.params) else {
                 return;
             };
@@ -247,10 +218,6 @@ pub(super) fn observe(session: &str, command: &Command, response: &Response) {
             if completed(response) == Some(false) || log.helpers.len() >= MAX_PENDING {
                 return;
             }
-            tracing::info!(
-                event_name = "cowboy.execution.apply_helper_started",
-                session
-            );
             log.helpers
                 .insert((session.to_owned(), process), (path, expect, String::new()));
         }
@@ -265,7 +232,6 @@ pub(super) fn observe(session: &str, command: &Command, response: &Response) {
             {
                 return;
             }
-            tracing::info!(event_name = "cowboy.execution.apply_helper_read", session, completed = ?completed(response));
             match response {
                 Response::Call {
                     response:

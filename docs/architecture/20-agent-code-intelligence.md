@@ -182,9 +182,19 @@ consumers of the [Code Review Engine](19-code-review-engine.md) capabilities.
   that process's `process/read` stdout and records the write only for an
   `applied` outcome with exactly the expected digest. The helper digest is of
   the written bytes, so CRLF files never match the LF-normalized mirror.
-  Requests large enough to travel in a file are not observed. A process that
-  looks like Codex's self-executed patch application is logged as
-  `cowboy.execution.patch_process` (no patch text) to settle its route.
+  Requests large enough to travel in a file are not observed. Helper reads that
+  wait are followed through `Observe` by operation ID, and a helper is dropped
+  only once its output pipe closes (exit can precede the last output).
+
+  Production evidence with temporary path/route logs (since removed),
+  Controller `713486b22`: a Codex 3.5.21 create-and-edit wrote through
+  `fs/writeFile` with `file://` URLs. Both writes were observed at the exact
+  paths the post-edit lookup used, and the steered row carried
+  `write: {observed: true, matches_analyzed: true}`. Claude coverage is not
+  achieved: for a Claude 3.20.27 Write the Controller saw the helper start and
+  one helper read with no output, but the reads that carried the outcome never
+  reached this observer, so no `write` was recorded; the cause is unresolved.
+  Claude rows therefore never carry `write` today, which proves nothing.
 
 On 2026-11-07 the Controller activated
 `1ad869c5fed6f033583b75a5c2db09869b60b678` through transaction
