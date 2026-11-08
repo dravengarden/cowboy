@@ -4,6 +4,7 @@ import { Box, IconButton, Typography } from "@mui/material";
 import type { ReactNode } from "react";
 
 import { MobileSheetActionGroup } from "./bottom-sheet.tsx";
+import { FLOATING_CONTROLS_BOTTOM } from "./reader-bottom-edge.ts";
 
 export function TemporaryNav({ title, backLabel, onBack, onClose, spatial, children }: {
   readonly title?: string | undefined;
@@ -69,7 +70,7 @@ export function TemporaryNav({ title, backLabel, onBack, onClose, spatial, child
               zIndex: 3,
               left: 0,
               right: 0,
-              bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+              bottom: FLOATING_CONTROLS_BOTTOM,
               display: "flex",
               justifyContent: "center",
               pointerEvents: "none",

@@ -36,6 +36,8 @@ export async function checkMobileSettingsReader(keep = false): Promise<void> {
     const frost = getComputedStyle(footer.closest('[data-detent-sheet-footer]')!, "::before");
     check(frost.backdropFilter === "blur(8px)" && frost.maskImage.includes("linear-gradient") && frost.pointerEvents === "none", "Footer frost fades progressively without intercepting touch");
     check(footer.scrollWidth <= footer.clientWidth, "Navigation fits the available width");
+    const edge = dialog.getBoundingClientRect().bottom - footer.querySelector<HTMLElement>("[data-settings-navigation-actions]")!.getBoundingClientRect().bottom;
+    check(Math.abs(edge - 12) < 0.5, `Navigation sits on the Sessions island edge (${edge}px)`);
     const back = footer.querySelector<HTMLButtonElement>('[aria-label="Back to Settings from About"]')!;
     check(back.getBoundingClientRect().height >= 44, "Back retains its touch target");
     check(back.getBoundingClientRect().width === 46, "Back uses the shared floating action target");

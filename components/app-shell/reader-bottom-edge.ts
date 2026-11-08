@@ -1,5 +1,9 @@
 import { alpha, type Theme } from "@mui/material/styles";
 
+/** Bottom edge of every floating control island (Sessions, sheets, Review):
+ *  on the home-indicator inset, or 12px above the edge without one. */
+export const FLOATING_CONTROLS_BOTTOM = "max(env(safe-area-inset-bottom, 0px), 12px)";
+
 /** One bounded frost layer behind floating controls, never on scrolling content. */
 export function readerBottomEdge(theme: Theme) {
   const color = theme.palette.background.default;

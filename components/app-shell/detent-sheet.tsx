@@ -68,7 +68,7 @@ import { markDetentSheetOpen, useIsTopDetentSheet } from "./detent-sheet-open.ts
 import { haptic as fireHaptic } from "./haptics.ts";
 import { ScrollEdges } from "./scroll-edges.tsx";
 import { readerTopEdge } from "./reader-top-edge.ts";
-import { readerBottomEdge } from "./reader-bottom-edge.ts";
+import { FLOATING_CONTROLS_BOTTOM, readerBottomEdge } from "./reader-bottom-edge.ts";
 // The sheet sizes to its content but never taller than this fraction of the
 // viewport, so a strip of dimmed page always stays beyond it (it reads as a
 // sheet, not a full-page modal).
@@ -169,7 +169,7 @@ const frostSheen = (mode: "light" | "dark", isTop: boolean): string => {
 // behind the sheet" bug). Keeping the sheet < 1300 lets all those overlays
 // render above it for free — no per-control z-index overrides needed anywhere.
 const Z = 1250;
-const SAFE_BOTTOM = "calc(var(--cowboy-sheet-footer-gap, 16px) + env(safe-area-inset-bottom, 0px))";
+const SAFE_BOTTOM = FLOATING_CONTROLS_BOTTOM; // the edge every floating island shares
 // Prefer Cowboy's iPad PWA floor when the host publishes it. Standalone
 // WebKit often reports a zero safe-area while still painting status chrome
 // over the grabber; env() remains the fallback for hosts without the var.
