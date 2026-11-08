@@ -692,9 +692,10 @@ export type InteractionRecord = {
    *  attempt ended `Cancelled` or in error, its worker exited without that
    *  `TurnEnd`, the reference is missing, a reset or Clear fenced it, or
    *  the attempt budget is exhausted; never replayed blindly. cancelled:
-   *  deleted from the queue (`removed`), fenced by a Clear (`cleared`) or
-   *  withdrawn by the person's Stop before any send (`stopped`). failed:
-   *  refused by the session before the handoff. */
+   *  deleted from the queue (`removed`), fenced by a Clear (`cleared`),
+   *  withdrawn by the person's Stop before any send (`stopped`), or
+   *  returned by the broker after a retry was already admitted
+   *  (`superseded`). failed: refused by the session before the handoff. */
   state: "admitted" | "dispatched" | "delivered" | "uncertain" | "cancelled" | "failed";
   /** ≤ `reasonChars`, `METADATA_PATTERN`. */
   reason?: string;
@@ -736,7 +737,7 @@ function maximalRecord(node: InputNode, selected: string[] | undefined): Interac
     outcome: "uncertain",
     stop_reason: "s".repeat(WIDGET_LIMITS.stopReasonChars),
     ownership: "released",
-    released_by: "revoked_delivered_worker_exited",
+    released_by: "delivered_worker_exited",
     delivered_to: "e".repeat(WIDGET_LIMITS.idChars),
   };
   return {
@@ -836,30 +837,65 @@ export type DispatchAttempt = {
   dispatched_at_ms: number;
   /** open: handed off, no attributed end yet; delivered / uncertain: as the
    *  record state; returned: the runtime gave the prompt back before any
-   *  provider request (rejected first ack, `UndeliveredPrompt`, or the
-   *  broker dropped it undelivered on revocation) and it is requeued under
-   *  its cmid; cancelled: withdrawn by the person's Stop before any send,
-   *  settled without relay. A widget command is written to exactly one
-   *  connection and never retransmitted (§8.3); its epoch is bound by the
-   *  first `TurnStarted` or by the broker's `delivered_to`. */
+   *  provider request (rejected first ack, `UndeliveredPrompt`, a
+   *  pre-write capability refusal, or the broker's `rejected` tombstone)
+   *  and it is requeued under its cmid unless a retry already exists;
+   *  cancelled: withdrawn by the person's Stop before any send, settled
+   *  without relay. A widget command is written to exactly one connection
+   *  and never retransmitted (§8.3); its epoch is bound by the first
+   *  `TurnStarted` or by the broker's `delivered_to`. */
   outcome: "open" | "delivered" | "uncertain" | "returned" | "cancelled";
   /** ≤ `stopReasonChars`, `METADATA_PATTERN` after `normalizeMetadata`. */
   stop_reason?: string;
   /** Transport ownership, separate from delivery (docs/widgets.md §8.3
    *  step 5): `held` from the dispatch CAS until a terminal transport event
-   *  releases it; while any attempt of the session is held, no other prompt
-   *  may be dispatched and an idle snapshot cannot release the guard. */
+   *  releases it; while any attempt of the session is held, no prompt from
+   *  any producer may be admitted for the session and an idle snapshot
+   *  cannot release the guard. */
   ownership: "held" | "released";
-  released_by?:
+  released_by?: /** The attempt's own `TurnEnd(T, E)`, settled durably before the
+   *  runtime acknowledgement. */
     | "turn_end"
+    /** A terminal receipt recovered from the broker's command-fate ledger. */
+    | "broker_terminal_receipt"
     | "returned"
     | "cancelled"
-    | "revoked_dropped"
-    | "revoked_delivered_worker_exited";
+    /** `CommandFate.rejected`: the broker tombstoned the command before any
+     *  delivery, so it can never execute. */
+    | "revoked_rejected"
+    /** `CommandFate.delivered` to an epoch that has since exited without a
+     *  terminal receipt. */
+    | "delivered_worker_exited"
+    /** `CommandFate.unknown_history` while the worker snapshot shows no
+     *  active or pending turn for this command. */
+    | "unknown_history_idle";
   /** Worker epoch the broker reports having delivered the command to, from
-   *  `CommandRevoked`; null when the broker dropped it undelivered. */
+   *  `CommandFate`; null when the broker rejected it undelivered. */
   delivered_to?: string | null;
 };
+
+/** The Machine broker's answer to `QueryCommandFate {command_id}` and to
+ *  `RevokeCommand {command_id}` (docs/widgets.md §8.3 step 5). Backed by the
+ *  broker's durable command-fate ledger, which records `delivered` under the
+ *  routing lock before the command is written to the worker channel and
+ *  records `terminal` when it relays the matching `TurnEnded`. A revocation
+ *  installs a `rejected` tombstone for a command that is `held` or has never
+ *  been observed, so a copy that arrives later is dropped on arrival.
+ *  `unknown_history` means the ledger cannot answer (lost or corrupt
+ *  storage) and is never treated as proven unsent. Part of the
+ *  `widget_delivery_v1` Machine bundle. */
+export type CommandFate =
+  | { command_id: string; fate: "rejected" }
+  | { command_id: string; fate: "held" }
+  | { command_id: string; fate: "delivered"; worker_epoch: string }
+  | {
+      command_id: string;
+      fate: "terminal";
+      worker_epoch: string;
+      turn_id: string;
+      stop_reason: string;
+    }
+  | { command_id: string; fate: "unknown_history" };
 
 export type InteractionSummary = Pick<
   InteractionRecord,
@@ -1003,9 +1039,13 @@ export type WidgetActionCommand = {
  *  original is not `uncertain`/`failed`), `already_retried`, `retry_chain`
  *  (the original is itself a retry), `capability_missing` (the session's
  *  current worker generation cannot carry interactions), `in_flight`,
- *  `interaction_limit`, `rate_limited`, `session_unavailable`, `conflict`. A late proof of the
- *  original marks the retry `duplicate_of` it. The session's ordinary turn
- *  Retry routes widget-originated prompts here. */
+ *  `interaction_limit`, `rate_limited`, `session_unavailable`, `conflict`.
+ *  `in_flight` includes an original whose attempt still holds transport
+ *  ownership: a retry is admitted only after ownership is released. A late
+ *  proof of the original marks the retry `duplicate_of` it; a broker
+ *  `rejected` answer for the original after a retry exists settles the
+ *  original `cancelled (superseded)` instead of requeueing it. The
+ *  session's ordinary turn Retry routes widget-originated prompts here. */
 export type WidgetActionRetryCommand = {
   type: "widget_action_retry";
   session_id: string;

@@ -549,7 +549,7 @@ test("the record estimator is an upper bound over every permitted selection", ()
           // Adversarial runtime text is normalized before it is stored.
           stop_reason: normalizeMetadata('"\\'.repeat(64), WIDGET_LIMITS.stopReasonChars),
           ownership: "released",
-          released_by: "revoked_delivered_worker_exited",
+          released_by: "delivered_worker_exited",
           delivered_to: "e".repeat(WIDGET_LIMITS.idChars),
         })),
         retry_of: id,
