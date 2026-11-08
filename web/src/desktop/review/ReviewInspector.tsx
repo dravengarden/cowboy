@@ -6,6 +6,7 @@ import { notify } from "../../store";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
 import { sendCheckRequest } from "../../mobile/review/checkRequest";
+import type { CodeDiagnostic } from "../../mobile/review/codeApi";
 import { checkStatusSummary } from "../../mobile/review/checkAnnotations";
 import { refreshReviewChecks } from "../../mobile/review/reviewChecksStore";
 import { symbolKindLabel } from "../../mobile/review/outlineModel";
@@ -106,12 +107,14 @@ function InspectorDetails({ review, placement }: {
  * outline, hunks, problems and facts. `Enter` on a row moves the Document's
  * cursor there; `]d`/`[d` step the placed problems; `gO` arrives here.
  */
-export function ReviewInspector({ review, onShow }: {
+export function ReviewInspector({ review, onShow, diagnostics }: {
   review: ReviewWorkbench;
+  /** The language engine's diagnostics of the open source file. */
+  diagnostics: readonly CodeDiagnostic[];
   /** Make the Inspector visible (a narrow Review keeps it folded). */
   onShow: () => void;
 }): React.JSX.Element {
-  const data = useInspectorData(review);
+  const data = useInspectorData(review, diagnostics);
   const list = useRef<HTMLUListElement>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

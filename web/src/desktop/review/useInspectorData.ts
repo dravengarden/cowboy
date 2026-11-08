@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { type CodeDocumentSymbol, fetchCodeOutline } from "../../mobile/review/codeApi";
+import { type CodeDiagnostic, type CodeDocumentSymbol, fetchCodeOutline } from "../../mobile/review/codeApi";
 import { useReviewChecks } from "../../mobile/review/reviewChecksStore";
 import { useOwnedReviewDiff } from "../../mobile/review/useOwnedReviewDiff";
 import {
   inspectorHunks,
   inspectorOutline,
   inspectorProblems,
+  withLanguageProblems,
   type InspectorHunk,
   type InspectorProblem,
   type InspectorSymbol,
@@ -27,7 +28,7 @@ export interface InspectorData {
  * projection the phone uses (useOwnedReviewDiff); commits, PRs, committed
  * comparisons and unverified diffs list problems without placing them.
  */
-export function useInspectorData(review: ReviewWorkbench): InspectorData {
+export function useInspectorData(review: ReviewWorkbench, diagnostics: readonly CodeDiagnostic[] = []): InspectorData {
   const { document, load, target, changes } = review;
   const sessionId = target?.sessionId ?? "";
   const checks = useReviewChecks(sessionId);
@@ -76,7 +77,9 @@ export function useInspectorData(review: ReviewWorkbench): InspectorData {
   return {
     hunks: ready && document?.kind !== "source" ? inspectorHunks(ready.text) : [],
     outline: observed === "unavailable" ? "unavailable" : observed && inspectorOutline(observed, rowOf),
-    problems: document ? inspectorProblems(checks, document.path, rowOf) : [],
+    problems: document
+      ? withLanguageProblems(inspectorProblems(checks, document.path, rowOf), document.kind === "source" ? diagnostics : [])
+      : [],
     placement,
     checks,
   };

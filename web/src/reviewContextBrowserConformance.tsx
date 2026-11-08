@@ -273,6 +273,22 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       const clean = context === "project" || context === "copy";
       const branch = context === "worktree" ? "feature/review" : "main";
       const path = url.searchParams.get("path") ?? "";
+      // The Desktop fixture's language engine (legacy buffers): one warning on
+      // README line 3, a hover and a definition on line 1.
+      if ((globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests) {
+        if (url.pathname.endsWith("/buffer")) return json({ apiVersion: 1, path, leases: 1 });
+        if (url.pathname.endsWith("/language")) {
+          return json({ apiVersion: 1, path, version: [], inlayHints: [], semanticTokens: [], diagnostics: path === "README.md"
+            ? [{ start: { row: 2, column: 0 }, end: { row: 2, column: 6 }, severity: 2, source: "fixture-ls", message: "Fixture diagnostic" }]
+            : [] });
+        }
+        if (url.pathname.endsWith("/intelligence/hover")) {
+          return json({ apiVersion: 1, path, contents: [{ text: "Project guide heading", markdown: false }] });
+        }
+        if (url.pathname.endsWith("/intelligence/navigation")) {
+          return json({ apiVersion: 1, path, locations: [{ path: "src/app.ts", start: { row: 0, column: 0 }, end: { row: 0, column: 3 } }] });
+        }
+      }
       if (url.pathname.endsWith("/intelligence/outline")) {
         if (!(globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests) return new Response("unavailable", { status: 404 });
         const at = (row: number) => ({ row, column: 0 });
@@ -290,7 +306,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
             ? "/tasks/cowboy/feature"
             : "/projects/cowboy",
           changeCount: clean ? 0 : 1,
-          bufferMode: "unavailable",
+          bufferMode: (globalThis as { __fixturePullRequests?: boolean }).__fixturePullRequests ? "legacy" : "unavailable",
           language: {
             provider: "none",
             state: "unavailable",

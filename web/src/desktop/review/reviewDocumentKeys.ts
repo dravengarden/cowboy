@@ -16,7 +16,19 @@ export type ReviewDocumentAction =
   /** `]d`/`[d`: the next problem the Inspector places in this Document. */
   | { readonly kind: "problem"; readonly offset: 1 | -1 }
   /** `gO`: the outline, in the Inspector (Vim's `gO`). */
-  | { readonly kind: "outline" };
+  | { readonly kind: "outline" }
+  /** `K`: hover for the symbol under the cursor. */
+  | { readonly kind: "hover" }
+  /** `gd` `gD` `gy` `gI` `gr`: LazyVim's language navigation. */
+  | { readonly kind: "navigate"; readonly to: "definition" | "declaration" | "typeDefinition" | "implementation" | "references" };
+
+const NAVIGATION: Readonly<Record<string, Extract<ReviewDocumentAction, { kind: "navigate" }>["to"]>> = {
+  gd: "definition",
+  gD: "declaration",
+  gy: "typeDefinition",
+  gI: "implementation",
+  gr: "references",
+};
 
 export interface ReviewVimInput {
   /** codemirror-vim's pending multi-key prefix (`]`, `g`). */
@@ -54,6 +66,9 @@ export function reviewDocumentAction(
   }
   if (sequence === "gT") return { kind: "tab", offset: -Math.max(1, input.count) };
   if (sequence === "gO") return { kind: "outline" };
+  if (sequence === "K") return { kind: "hover" };
+  const to = NAVIGATION[sequence];
+  if (to) return { kind: "navigate", to };
   return null;
 }
 

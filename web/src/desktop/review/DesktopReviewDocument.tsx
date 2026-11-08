@@ -20,6 +20,7 @@ import {
 import { ReviewCodeEditor } from "./ReviewCodeEditor";
 import { ReviewSplitMirror } from "./ReviewSplitMirror";
 import type { SplitDiff } from "./splitDiffModel";
+import type { CodeDiagnostic } from "../../mobile/review/codeApi";
 import { useState } from "react";
 import type { ReviewDocumentAction } from "./reviewDocumentKeys";
 import type { ReviewDocumentLoad } from "./useReviewDocumentText";
@@ -147,6 +148,7 @@ export function DesktopReviewDocument({
   onSend,
   empty,
   split,
+  diagnostics,
 }: {
   tabs: DesktopReviewTabs;
   document: ReviewDocumentRef | undefined;
@@ -165,6 +167,7 @@ export function DesktopReviewDocument({
   onSend: () => void;
   empty: React.ReactNode;
   split?: SplitDiff | undefined;
+  diagnostics?: readonly CodeDiagnostic[] | undefined;
 }): React.JSX.Element {
   const ready = load?.state === "ready" ? load.value : undefined;
   const [scrollTop, setScrollTop] = useState(0);
@@ -196,6 +199,7 @@ export function DesktopReviewDocument({
           text={split?.right.text ?? ready?.text ?? ""}
           side={split?.right}
           onScroll={split ? setScrollTop : undefined}
+          diagnostics={diagnostics}
           wrap={wrap}
           fontSize={fontSize}
           restoreLine={restoreLine}

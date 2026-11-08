@@ -16,6 +16,8 @@ import { vimCommandKey } from "../vim/vimCommandKey";
 import { reviewDiffDecorations } from "./reviewDiffDecorations";
 import type { SplitSide } from "./splitDiffModel";
 import { splitSideExtensions } from "./splitSideExtensions";
+import { diagnosticMarks } from "./diagnosticMarks";
+import type { CodeDiagnostic } from "../../mobile/review/codeApi";
 import { revealEditorLine } from "./reviewEditorSelection";
 import {
   type ReviewDocumentAction,
@@ -105,6 +107,7 @@ export function ReviewCodeEditor({
   onView,
   side,
   onScroll,
+  diagnostics,
 }: {
   documentKey: string;
   path: string;
@@ -120,6 +123,8 @@ export function ReviewCodeEditor({
   side?: SplitSide | undefined;
   /** The scroller's position, for a split's mirror side. */
   onScroll?: ((top: number) => void) | undefined;
+  /** A source file's language diagnostics, underlined. */
+  diagnostics?: readonly CodeDiagnostic[] | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
   const host = useRef<HTMLDivElement>(null);
@@ -158,6 +163,7 @@ export function ReviewCodeEditor({
         }),
         ...(kind === "diff" ? [reviewDiffDecorations(theme)] : support ? [support] : []),
       ]),
+    ...(diagnostics && diagnostics.length > 0 && kind === "source" ? diagnosticMarks(theme, diagnostics) : []),
     // A split's two sides scroll together row for row, so neither wraps.
     ...(wrap && !side ? [EditorView.lineWrapping] : []),
     ...(onScrollRef.current ? [EditorView.domEventHandlers({
@@ -180,7 +186,7 @@ export function ReviewCodeEditor({
         borderRightColor: theme.palette.divider,
       },
     }),
-  ], [fontSize, kind, side, support, theme, wrap]);
+  ], [diagnostics, fontSize, kind, side, support, theme, wrap]);
 
   useEffect(() => {
     if (!host.current) return undefined;

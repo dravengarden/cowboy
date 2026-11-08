@@ -1,6 +1,6 @@
 # Desktop Code Review
 
-**Status: design proposal r3 (2026-11-08); D0, D1, D1b, D1c, D2a and D2b implemented, D2c–D4 planned.** r3 records the
+**Status: design proposal r3 (2026-11-08); D0–D2c implemented, D2d–D4 planned.** r3 records the
 owner's answers to the r2 open questions. r2 folds in a
 Codex Astra Max design review of r1 (managed call
 `call-53884a467577cfb02c34574f`: verdict *needs-attention*, five high and ten
@@ -540,6 +540,7 @@ together" reads "Prompt and the work pane".
 | D1c (implemented) | Remote PR in the workbench: the Pull request tab (`␣VG`) binds a PR through the synced `remote_review`, lists its files and opens them as in-memory `pr` tabs with viewed marks in the synced progress; Desktop ignores the phone's `remote_selected` | the acceptance's Pull request step against an opt-in GitHub fixture |
 | D2a (implemented) | Inspector (Outline, Hunks, Problems, Details) beside or inset, `]d`/`[d`, `gO`, `␣VO`, `␣V]`, `␣VK`; Problems are check findings, placed only on source lines or through the verified diff projection; language diagnostics wait for D2c's buffer leases | acceptance Inspector steps (check, `]d`, `gO`, inset at narrow width) |
 | D2b (implemented) | Split diff (`␣VD`, per device): an incremental decoder (`unifiedPatchDecoder.ts`) and an aligned two-sided layout (`splitDiffModel.ts`); the new side is the Vim buffer, the old side a passive mirror that follows its scroll; selections, `]c`, the Inspector and remarks map split rows to patch rows | decoder tests at every cut offset; acceptance split step |
+| D2c (implemented) | Language intelligence on source files in the manifest's buffer mode: owned buffers through `useOwnedReviewBuffer` (every answer checked against the shown text), legacy through a buffer lease and the language routes; `K` hover, `gd` `gD` `gy` `gI` `gr` (legacy only, as on the phone; owned reports navigation unavailable), diagnostics underlined and merged into Problems; a jump keeps its source tab. Diffs point to the file | acceptance language step (diagnostic, `K`, `gd`, `gT`) |
 | D2 tools | Streaming patch decoder and `@codemirror/merge` split view (patch-only), Inspector (Outline, Hunks, Problems, Details), `K` `gd` `gr` `gO` `]d`, checks `␣VK` with context gating, Review settings | Decoder fixtures pass; split and unified agree on every hunk of the fixture; hover/definition round trips under the measured `review_read_completed` budget |
 | D2b sides | Comparison-bound side windows; expanded context in the split layout | Expanded old-side text equals `git show <base>:<path>` for the fixture; an edited worktree never changes it |
 | D3 agent loop | Delegation contract, Explain/Review forks as kept-source preview tabs, findings projection with anchor states, `␣VS` on a problem | A managed review's findings land on their lines at `exact`, move to `heuristic`/`unmapped` after an edit, and disappear with a deleted fork; a prose result is shown as text |

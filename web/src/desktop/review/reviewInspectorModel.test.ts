@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../../tools/test-assert.ts";
 import type { CodeChecks } from "../../mobile/review/codeApi.ts";
-import { inspectorHunks, inspectorOutline, inspectorProblems } from "./reviewInspectorModel.ts";
+import { inspectorHunks, inspectorOutline, inspectorProblems, withLanguageProblems } from "./reviewInspectorModel.ts";
 
 test("hunks name their header row and count their lines", () => {
   const text = "diff --git a/x b/x\n@@ -1,2 +1,2 @@\n-a\n+b\n+c\n x\n@@ -9 +9 @@\n-d\n";
@@ -43,5 +43,16 @@ test("the outline flattens with depth and places each symbol", () => {
   assertEquals(inspectorOutline(symbols, (line) => line + 100).map((s) => [s.name, s.depth, s.line, s.row]), [
     ["A", 0, 1, 101],
     ["b", 1, 3, 103],
+  ]);
+});
+
+test("language diagnostics join the check findings in Document order", () => {
+  const point = (row: number) => ({ row, column: 0 });
+  const merged = withLanguageProblems(inspectorProblems(checks, "src/a.ts", (line) => line), [
+    { start: point(4), end: point(4), severity: 1, source: "rust-analyzer", message: "mismatched types" },
+    { start: point(0), end: point(0), severity: 4, message: "hint" },
+  ]);
+  assertEquals(merged.map((p) => [p.row, p.severity, p.source]), [
+    [1, "note", "Language"], [3, "error", "Lint"], [5, "error", "rust-analyzer"], [9, "warning", "Lint"],
   ]);
 });
