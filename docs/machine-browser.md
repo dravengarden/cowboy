@@ -100,7 +100,7 @@ graph; it has no UI, URLs, credentials or network targets.
     "kernel_min": "5.15",
     "merged_usr": true,
     "mount_points": ["/opt", "/mnt"],
-    "apparmor_features": ["network_v9", "unix", "mount", "namespaces/userns"],
+    "apparmor_features": ["network_v9", "unix", "mount", "namespaces/userns_create"],
     "built_from": {"id": "ubuntu", "version_id": "26.04"}
   },
   "runtime": {
@@ -814,11 +814,13 @@ not used. The viewer always shows the label of the account whose browser it
 displays.
 
 - **Resize authority.** The viewer is the only size authority: it measures
-  its container in CSS pixels, requests `width = css × scale` and
-  `height = css × scale` through `POST .../browser/resize` (debounced,
-  bounded), and renders the framebuffer scaled to fit. The server never
-  resizes on its own and `AcceptSetDesktopSize` is off, so the noVNC
-  CSS-pixel resize race cannot occur.
+  its container in CSS pixels (a `ResizeObserver`, debounced and ignoring
+  sub-threshold jitter), requests `width = css × scale` and
+  `height = css × scale` as a `{type:"resize"}` text frame on the attached
+  stream, bounded to the wire limits, and renders the framebuffer scaled to
+  fit. The server never resizes on its own and `AcceptSetDesktopSize` is off,
+  so the noVNC CSS-pixel resize race cannot occur. `POST .../browser/resize`
+  stays for callers without a stream (the MCP operation).
 - **Scale and device handoff.** `scale` is chosen at open (1 on pointer
   devices, 2 on touch devices) and is immutable for the incarnation because
   it is a Chromium launch flag. A device that attaches with a different
@@ -827,15 +829,24 @@ displays.
   reopens with the new scale (new incarnation). For a sign-in-bound instance
   the Machine re-navigates to the stored verification URL after the restart;
   the page state before the restart is lost, which the action says.
+- **Attachment.** The stream socket carries the device proof as a
+  subprotocol and renews the lease every 10 s while open; the Machine drops
+  an attachment whose lease lapses for 30 s. Attaching while another device
+  holds the display is an explicit, confirmed takeover. A refused or
+  unanswered attachment ends the viewer with the stream's close code
+  (`browser_attach_refused`, `browser_attach_failed`) and a notice naming
+  the state; re-attaching is a user action, never automatic.
 - **Mobile sheet.** Full-height sheet with the bottom workbench: Keyboard
   (focuses a hidden input with autocorrect, autocapitalize and smart
   punctuation off; composition events are sent as text), Paste (local
   clipboard to remote via `ClientCutText`), Use remote clipboard as code,
   Hibernate, Close. Tap focuses the remote, two-finger drag scrolls, long
-  press is right click. The sheet resizes to `visualViewport` so the keyboard
-  never covers the focused field. Backgrounding the app stops lease renewal,
-  which detaches within 30 s; returning re-attaches to the same instance
-  while the grace period keeps it alive.
+  press is right click. The workbench sits above the app shell's keyboard
+  inset (`--kb-inset`) so the software keyboard never covers it; the
+  framebuffer keeps the geometry the sheet was opened with. Backgrounding
+  the app suspends lease renewal, which detaches within 30 s; returning
+  shows the detached state and the attach action while the grace period
+  keeps the instance alive.
 - **Remote clipboard.** Xvnc forwards only explicit copies (`SendPrimary=0`).
   A received cut text is held in viewer memory for the open attachment and
   shown as "Remote clipboard: n characters". The authorization code field is

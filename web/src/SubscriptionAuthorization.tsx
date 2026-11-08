@@ -3,13 +3,17 @@ import { useRef, useState } from "react";
 import { copyText } from "./clipboard";
 import { hasNativeAuthenticationBrowser, hasNativeExternalOpener, openAccountAuthorizationUrl } from "./openExternal";
 import type { ProviderLoginEvent } from "./providerAuthenticationOwner";
+import { SubscriptionSignInBrowser } from "./SubscriptionSignInBrowser";
+import type { LoginScope } from "./subscriptionLoginController";
 
 /** Mounted for one account/request/challenge only. Authorization material stays
  * in this component, never in account metadata or browser recovery storage. */
-export function SubscriptionAuthorization({ label, link, challenge, busy, checking, submit }: {
+export function SubscriptionAuthorization({ label, link, challenge, busy, checking, submit, scope }: {
   label: string; link: string;
   challenge: Extract<ProviderLoginEvent, { event: "login_challenge" }>;
   busy: boolean; checking: boolean; submit: (code: string) => Promise<void>;
+  /** Offers the account's Machine browser for this sign-in when present. */
+  scope?: LoginScope | undefined;
 }): React.JSX.Element {
   const [code, setCode] = useState("");
   const [notice, setNotice] = useState("");
@@ -43,6 +47,7 @@ export function SubscriptionAuthorization({ label, link, challenge, busy, checki
           else setError("Could not copy the link. Press and hold Open Claude sign-in to copy its link.");
         });
       }}>Copy sign-in link</Button>
+      {scope && <SubscriptionSignInBrowser scope={scope} label={label} request={challenge.request_id} disabled={busy} onCode={setCode} />}
     </Stack>
     <Typography variant="caption" color="text.secondary">
       Another Claude account already open? Use a separate browser profile, or close other private sign-in tabs and paste the link into a new private session.

@@ -195,7 +195,7 @@ export default defineConfig({
       "/ws": { target: devBackend, ws: true },
       "/healthz": devBackend,
       "/version": devBackend,
-      "/api": devBackend,
+      "/api": { target: devBackend, ws: true },
     },
   },
 });

@@ -10,6 +10,8 @@ export interface SubscriptionAccount {
   label: string;
   enabled: boolean;
   revoking?: boolean;
+  /** Owner-enabled Machine browser for this account (`set_browser_enabled`). */
+  browser_enabled?: boolean;
 }
 export interface SubscriptionSnapshot {
   dataset: { dataset_id: string; user_id: string };
@@ -37,7 +39,8 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
     Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
       text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean" &&
-      (account.revoking === undefined || typeof account.revoking === "boolean"));
+      (account.revoking === undefined || typeof account.revoking === "boolean") &&
+      (account.browser_enabled === undefined || typeof account.browser_enabled === "boolean"));
 }
 
 const empty: { data?: SubscriptionSnapshot; error: string } = { error: "" };
