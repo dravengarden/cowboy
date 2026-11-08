@@ -419,7 +419,8 @@ before storage, so their serialized size is their length; the result must
 fit `interactionRecordBytes` (10 KiB). The
 worst-case snapshot (`worstCaseSnapshotBytes`) reserves 32 decided groups,
 five linked summaries and every metadata field at its maximum around the
-document and must fit `snapshotBytes` (36 KiB). Both are validated at
+document and must fit `snapshotBytes` (44 KiB, including the `outstanding`
+list). Both are validated at
 publish and replace, so no later settlement can grow a record or a snapshot
 past its bound; the tests construct every permitted selection independently
 and check none exceeds the estimate.
@@ -778,7 +779,8 @@ or is discarded and reconciliation restarts; each id has an outcome:
 `current` with the snapshot (placed at its `seq` when the row is not in the
 cache or the tail), `cleared` or `unknown` (the cached row is removed).
 Pages are packed against the complete encoded response (≤ 256 KiB,
-snapshots ≤ 36 KiB by construction and the envelope accounted), always
+snapshots ≤ 44 KiB by construction and the envelope accounted, so at least
+five fit), always
 carry at least one outcome, and `next` resumes the rest; progress is
 guaranteed.
 
@@ -1024,9 +1026,14 @@ a widget command is written to exactly one connection.
    issues the acknowledged conditional write `admitted → dispatched` that
    also appends the attempt `{command_id, turn_id, worker_epoch: null,
    outcome: open, ownership: held}`, under the current generation **and**
-   `cancel_requested = false`. `committed`: the CAS has yielded a single-use
-   **handoff permit** bound to `(command_id, turn_id)`; hand the prompt to
-   the runtime with that permit (step 5) and `note_dispatched`. `failed` (the record is no longer `admitted`, a
+   `cancel_requested = false`. The CAS is issued under the runtime's
+   per-session admission lock and only while that lock shows **no admitted
+   prompt still unfinished and no active turn** (`pending` empty, no held
+   attempt, no `current_turn_id`), so an ordinary prompt admitted an instant
+   earlier cannot be overlapped by the reservation. `committed`: the CAS has
+   yielded a single-use **handoff permit** bound to `(command_id,
+   turn_id)`; hand the prompt to the runtime with that permit (step 5) and
+   `note_dispatched`. `failed` (the record is no longer `admitted`, a
    cancellation intent is recorded, or the generation moved): drop the queue
    entry. `unknown`: hand nothing off, keep the entry, retry the same
    statement; if the retry reads the record as already `dispatched` with
@@ -1083,7 +1090,15 @@ a widget command is written to exactly one connection.
      answers `FenceCommand {command_id}` with `CommandFenced {state}` —
      `never_received` (installing a receipt tombstone so a later copy is
      refused), `running {turn_id}`, `finished {turn_id, stop_reason}` or
-     `rejected`;
+     `rejected`. An ACP-level re-issue of `session/prompt` inside the same
+     prompt task (the adapter's stall and stream-recovery retries) is one
+     attempt and one turn for the ledger: `received` is journaled once,
+     `finished` once after the final response, and no second `TurnStarted`
+     is emitted; the worker never re-submits a guarded prompt in a new task
+     — only the Controller creates a new attempt. Whether such a re-issue
+     can reach the provider twice is the pre-existing property of every
+     prompt and is unchanged here; the widget message is idempotent for the
+     agent (same handle, revision and labels);
    - the **broker** keeps a per-command ledger in the Machine state store
      (as `session-account-stops/` is kept today): `held` when queued,
      `rejected_by_worker` recorded **before** a negative `CommandAck` is
@@ -1292,20 +1307,24 @@ a widget command is written to exactly one connection.
 | cancellation intent `committed`, completion lost | `cancel_requested` | removed, record settled `cancelled` at start | never sent |
 | cancellation intent `unknown` | `admitted`, intent possibly set | entry kept, not dispatched until re-read | sent once or cancelled, never both |
 | cancellation intent never durable (crash before commit) | `admitted` | re-enqueued | may still dispatch; shown as queued again |
-| CAS acknowledged, process dies before handoff | `dispatched` | entry removed by reconciliation | `uncertain`, Send-again offered |
-| CAS acknowledgement lost, process alive | `admitted` or `dispatched` | entry kept | retry CAS; handoff once or `uncertain` |
-| command written, connection drops before ack | `dispatched` | not retransmitted; dropped from pending | `uncertain`; late proof from the old epoch's replayed `TurnEnded` can still deliver |
-| command never written, connection drops | `dispatched` | written once to the next connection | one execution |
-| handoff done, turn never ends (worker replaced) | `dispatched` | entry gone | `uncertain` |
-| turn ends cancelled / errored before output | `dispatched` | — | `uncertain` |
-| turn ends normally with the attempt's `(turn_id, worker_epoch)` | `delivered` | — | proven |
-| late `TurnEnd(T, E)` after `uncertain` | `delivered`; retry marked `duplicate_of` | — | both messages visible |
-| prompt returned (rejected first ack, undelivered) | attempt `returned`, record `admitted` | requeued by cmid | sent once on a later attempt |
+| CAS acknowledged, process dies before the write | `dispatched`, ownership held | entry removed by reconciliation; fence issued at start | `rejected` (never observed, never received): attempt `returned`, record `admitted`, sent once later |
+| CAS acknowledgement lost, process alive | `admitted` or `dispatched` | entry kept | retry CAS; the owning command passes its permit once |
+| command written, connection drops before ack | `dispatched`, held | not retransmitted; fence issued | `rejected` → `returned`; `running` → wait; `finished` → settled; `received_exited` → `uncertain`, released |
+| broker committed `received`, crashed before the worker write | `dispatched`, held | fence to the surviving idle worker | `never_received` → `rejected` → `returned` |
+| command never written, connection drops | `dispatched`, held | written once to the next connection after the capability re-check | one execution, or a local proven-unsent return |
+| handoff done, worker replaced before `TurnEnd` | `dispatched`, held | fence | `received_exited` → `uncertain`, released; journal `finished` → settled |
+| turn ends `Cancelled`, `Error` or `error:` | `uncertain`, released by `turn_end` | — | Send-again available |
+| turn ends `EndTurn`/`MaxTokens`/`MaxTurnRequests`/`Refusal` with the attempt's `(turn_id, worker_epoch)` | `delivered` | — | proven |
+| late `TurnEnd(T, E)` or `finished` after `uncertain` | `delivered`; an existing retry marked `duplicate_of` | — | both messages visible |
+| prompt returned (rejected first ack recorded by the broker, `UndeliveredPrompt` with its command id) | attempt `returned`, record `admitted` | requeued by cmid | sent once on a later attempt |
 | person stops during configuration startup | attempt `cancelled`, record `cancelled (stopped)` | not requeued | never sent |
-| `TurnEnd` for another turn id or epoch | unchanged | — | ignored as evidence |
-| `TurnEnded` acknowledged but lost before persistence | `dispatched` | — | `uncertain` unless the ack is delayed until the ledger commits |
+| `TurnEnd` for another turn id or epoch | unchanged | — | ignored for the ledger and for the dispatch guard |
+| `TurnEnded` arrives, Controller crashes before the ledger commit | `dispatched`, held; event unacknowledged | — | the worker replays it; settled once; no acknowledgement loss |
 | echo present without provider request | any | — | ignored as evidence |
-| Clear during awaited CAS | CAS fails on generation → `cancelled`; or already `dispatched` → `uncertain` | entries removed | nothing from the old generation dispatches |
+| Clear while an attempt is held | ownership kept; generation moved | entries removed | terminal event still settles by identity: `delivered`/`uncertain`, or `cancelled (cleared)` on return; nothing republished or requeued |
+| broker restart with lost journals | `dispatched`, held | fence | `rejected {journals_unavailable}` → `uncertain`, future fenced, released |
+| direct API prompt while an attempt is held | — | — | refused `widget_attempt_held`; the owning command passes with its permit |
+| retry admitted, then `rejected` for the original | original `cancelled (superseded)` | one copy queued | no duplicate |
 | restored stale queue copy of a dispatched record | `dispatched` | removed before drain | never re-sent |
 
 The Web shows admitted → queued → dispatched → delivered on the control with
@@ -1562,7 +1581,7 @@ guidance; the §11 gate runs before the domain is enabled.
   positive and negative label vectors; a single choice with
   `max_selected: 13` refused; duplicate initial values refused; the maximal
   record fixture within 10 KiB, constructed independently for every permitted
-  selection; the maximal snapshot fixture within 36 KiB; the benchmark class
+  selection; the maximal snapshot fixture within 44 KiB; the benchmark class
   maximum within 1 KiB. Ownership: a reconnect that drops a written widget
   command followed by an idle snapshot before `TurnStarted` does not release
   the dispatch guard or dispatch a second prompt; a second `TurnStarted` for
