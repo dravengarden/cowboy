@@ -1390,7 +1390,7 @@ OpenAI · Pika for `openai`, Grok · Fox for `xai`, and any other).
   account.
 - **Enablement.** Off by default, per owner and card, in
   `provider_legacy_browsers (owner_user_id, card_id)` (migrations
-  `0081_provider_legacy_browsers.sql` and sqlite `0054`; a row means
+  `0081_provider_legacy_browsers.sql` and sqlite `0055`; a row means
   enabled). It changes only through `accounts.update`
   `{type: "set_legacy_browser_enabled", card, enabled}`, under the owner lock
   with the registry's revision and operation receipt, without changing any
