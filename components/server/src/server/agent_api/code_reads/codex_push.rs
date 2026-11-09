@@ -288,8 +288,14 @@ pub(super) async fn shell_changes(state: &AppState, session: &str) -> Vec<String
     CURSORS
         .lock()
         .insert(session.to_owned(), changes.cursor.clone());
+    // A gap (any create, delete or rename, as `sed -i` does) drops the
+    // changes before it. Fall back to the files this session already holds:
+    // their reads reload a changed mirror and compare it, and identical
+    // results are suppressed by the delivery ledger.
     let files = if changes.gap {
-        Vec::new()
+        let mut held = super::acquire::observed_paths(scope.session());
+        held.truncate(super::post_edit::MAX_PATHS);
+        held
     } else {
         source_files(&changes.paths)
     };

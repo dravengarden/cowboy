@@ -957,7 +957,12 @@ uniquely resolvable, otherwise candidates or `stale/ambiguous`.
   command reads the changes since then. A Codex `execute` tool call triggers
   this from the Controller; Claude's Mod asks with
   `code.post_edit {changed: true}` after a main-agent foreground Bash. Gaps
-  and resets only move the cursor. Up to five changed files with an extension,
+  and resets move the cursor and fall back to the files the session already
+  holds (their reads reload a changed mirror; identical results are
+  suppressed). The protocol-42 observer turns any create, delete or rename
+  (for example `sed -i`'s temporary file) into a coverage gap that drops the
+  changes before it, so this fallback is the common shell path. Otherwise up
+  to five changed files with an extension,
   outside `.git`, `node_modules`, `target`, `dist` and `.cache`, then go through
   the same read, comparison, ledger and delivery as an edit. A session whose
   observer never started (no earlier post-edit read, no Cowboy MCP grant, or
