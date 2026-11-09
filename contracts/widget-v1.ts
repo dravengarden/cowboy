@@ -51,6 +51,9 @@ export const WIDGET_LIMITS = {
   previewRows: 20,
   /** Top-level list or kv items drawn in the transcript preview. */
   previewItems: 50,
+  /** App source and props, measured as serialized JSON (docs/widget-apps.md §8). */
+  appCodeBytes: 14 * 1024,
+  appPropsBytes: 6 * 1024,
   /** Gallery images drawn in the transcript preview. */
   previewImages: 6,
   /** Table rows per inspector page. */
@@ -233,7 +236,7 @@ interface NodeBase {
   fallback?: string;
 }
 
-export type Node = LayoutNode | ContentNode | StatusNode | MediaNode | InputNode;
+export type Node = LayoutNode | ContentNode | StatusNode | MediaNode | InputNode | AppNode;
 
 // Layout. A container adapts to the width it is actually given (a phone, a
 // split Desktop pane, an inspector), never to a surface name; documents
@@ -366,6 +369,24 @@ export type MediaNode =
       type: "gallery";
       images: { src: ImageSource; alt: string; caption?: string }[];
     });
+
+/** An agent-written React component (docs/widget-apps.md): TSX compiled and
+ *  run in Cowboy's bounded sandbox, drawn with `@cowboy/ui` components. Only
+ *  published widgets run apps; everywhere else, and on clients where apps are
+ *  not enabled, `fallback` is shown. `props` is opaque JSON passed to the
+ *  component: node addressing never enters it. */
+export type AppNode = NodeBase & {
+  type: "app";
+  id: string;
+  title: string;
+  /** One TSX module whose default export is the component; ≤ `appCodeBytes`. */
+  code: string;
+  /** ≤ `appPropsBytes` serialized. */
+  props?: { [key: string]: unknown };
+  height?: Size;
+  /** Required: what every client without the app shows. */
+  fallback: string;
+};
 
 // Input. A tap resolves to an `Action`. The only path back to the agent is
 // `prompt`, and it carries no hidden text: the Controller composes the user

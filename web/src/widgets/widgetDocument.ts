@@ -53,6 +53,7 @@ const KNOWN = new Set([
   "gallery",
   "button",
   "choice",
+  "app",
 ]);
 const TONES = new Set(["neutral", "info", "success", "warning", "error", "running"]);
 const STEP_STATES = new Set(["pending", "active", "done", "failed", "skipped"]);
@@ -211,6 +212,19 @@ function leaf(node: Record<string, unknown>, type: string, path: string, budget:
       budget.images += images.length;
       return;
     }
+    case "app":
+      if (typeof node["id"] !== "string") fail(`${path}.id`, "required");
+      line(node["title"], `${path}.title`, WIDGET_LIMITS.titleChars);
+      text(node["fallback"], `${path}.fallback`, 2048);
+      if (typeof node["code"] !== "string" || JSON.stringify(node["code"]).length > WIDGET_LIMITS.appCodeBytes) {
+        fail(`${path}.code`, `expected TSX of at most ${WIDGET_LIMITS.appCodeBytes} bytes`);
+      }
+      if (node["props"] !== undefined) {
+        if (!isObject(node["props"]) || JSON.stringify(node["props"]).length > WIDGET_LIMITS.appPropsBytes) {
+          fail(`${path}.props`, `expected an object of at most ${WIDGET_LIMITS.appPropsBytes} bytes`);
+        }
+      }
+      return;
     case "button":
       if (typeof node["id"] !== "string") fail(`${path}.id`, "required");
       line(node["label"], `${path}.label`, WIDGET_LIMITS.labelChars);

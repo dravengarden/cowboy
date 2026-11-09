@@ -1,6 +1,7 @@
 // Use the same lock-pinned, checkout-local Vite builder as the product Web.
 // No bundler download is permitted in the conformance network namespace.
 import { build } from "../web/node_modules/vite/dist/node/index.js";
+import { cowboyAppRuntime } from "../web/appRuntimePlugin.mjs";
 
 const outDir = process.argv[2];
 const suite = process.argv[3] ?? "idb";
@@ -50,6 +51,7 @@ if (
   suite !== "boot-snapshot" &&
   suite !== "elicitation" &&
   suite !== "widgets" &&
+  suite !== "widget-apps" &&
   suite !== "subagents" &&
   suite !== "background-tasks"
 ) {
@@ -66,6 +68,9 @@ await build({
   logLevel: "error",
   envDir: false,
   publicDir: false,
+  // The widget app runtime is built by its own plugin (web/appRuntimePlugin.mjs);
+  // any suite that bundles the widget renderer imports it lazily.
+  plugins: [cowboyAppRuntime()],
   define: {
     "process.env.NODE_ENV": JSON.stringify(
       suite === "desktop-viewport" ||
@@ -140,6 +145,8 @@ await build({
   build: {
     outDir,
     emptyOutDir: false,
+    // The fixture serves one artifact: the app runtime's wasm rides inline.
+    ...(suite === "widget-apps" ? { assetsInlineLimit: 1 << 30 } : {}),
     minify: false,
     // CodeMirror's language loaders otherwise extract shared static chunks.
     // Keep the isolated runner's one served/hashed artifact, not an open file server.
@@ -169,6 +176,7 @@ await build({
     suite === "session-context" ||
     suite === "elicitation" ||
     suite === "widgets" ||
+    suite === "widget-apps" ||
     suite === "subagents" ||
     suite === "background-tasks"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
@@ -179,6 +187,8 @@ await build({
           ? "../web/src/sessionContextBrowserConformance.tsx"
           : suite === "elicitation"
             ? "../web/src/elicitationBrowserConformance.tsx"
+            : suite === "widget-apps"
+              ? "../web/src/widgetAppsBrowserConformance.tsx"
             : suite === "widgets"
               ? "../web/src/widgetsBrowserConformance.tsx"
               : suite === "subagents"
