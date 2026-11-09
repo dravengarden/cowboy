@@ -180,34 +180,76 @@ export function validBrowserResult(value: unknown): value is BrowserResult {
   return record(value) && text(value.machine_id) && validBrowserState(value.state);
 }
 
-/** Framebuffer size for a container measured in CSS pixels: the container
- * times the device scale, held within the wire bounds. */
+/** A fixed remote screen mode. The remote is never resized to the device:
+ * like a hardware display it runs one of a few ordinary modes at scale 1, and
+ * the viewer scales and letterboxes it into whatever frame it has (the neko
+ * model; docs/machine-browser.md, "Viewer (core web)"). */
+export interface ScreenMode {
+  width: number;
+  height: number;
+}
+
+/** Pointer screens, smallest first: the largest that fits the frame at
+ * DPR 1 is used, never less than the first. */
+export const DESKTOP_MODES: readonly ScreenMode[] = [
+  { width: 1280, height: 800 },
+  { width: 1440, height: 900 },
+  { width: 1920, height: 1080 },
+];
+/** Touch devices held upright: a 9:16 HD portrait screen. Narrower than the
+ * common 768 px tablet breakpoint, so sites lay out for a phone, and close
+ * to a phone frame's aspect, so little of the frame is letterbox. */
+export const PORTRAIT_MODE: ScreenMode = { width: 720, height: 1280 };
+/** Touch devices on their side: 16:9 HD. */
+export const LANDSCAPE_MODE: ScreenMode = { width: 1280, height: 720 };
+
+/** How the viewer's device is used now; see `inputProfile.ts`. */
+export interface ScreenClass {
+  /** Touch input (neko's media-query rule) rather than a mouse. */
+  touch: boolean;
+  /** The device is held upright (screen orientation, not the frame, so the
+   * soft keyboard never flips it). */
+  portrait: boolean;
+}
+
+function screenMode(cssWidth: number, cssHeight: number, screen: ScreenClass): ScreenMode {
+  if (screen.touch) return screen.portrait ? PORTRAIT_MODE : LANDSCAPE_MODE;
+  const width = Number.isFinite(cssWidth) ? cssWidth : 0;
+  const height = Number.isFinite(cssHeight) ? cssHeight : 0;
+  let chosen = DESKTOP_MODES[0] as ScreenMode;
+  for (const mode of DESKTOP_MODES) {
+    if (mode.width <= width && mode.height <= height) chosen = mode;
+  }
+  return chosen;
+}
+
+/** Every new incarnation runs at an ordinary desktop DPR. */
+export const PREFERRED_SCALE: BrowserScale = 1;
+
+/** The framebuffer to request for a frame of `cssWidth` x `cssHeight` CSS
+ * pixels: a fixed mode for the device class and orientation, always at
+ * scale 1, held within the wire bounds. */
 export function browserViewport(
   cssWidth: number,
   cssHeight: number,
-  scale: BrowserScale,
+  screen: ScreenClass,
 ): BrowserViewport {
-  const bound = (value: number, min: number): number => {
-    const scaled = Number.isFinite(value) ? Math.round(value * scale) : 0;
-    return Math.min(VIEWPORT_LIMITS.maxDimension, Math.max(min, scaled));
-  };
+  const mode = screenMode(cssWidth, cssHeight, screen);
+  const bound = (value: number, min: number): number =>
+    Math.min(VIEWPORT_LIMITS.maxDimension, Math.max(min, value));
   return {
-    width: bound(cssWidth, VIEWPORT_LIMITS.minWidth),
-    height: bound(cssHeight, VIEWPORT_LIMITS.minHeight),
-    scale,
+    width: bound(mode.width, VIEWPORT_LIMITS.minWidth),
+    height: bound(mode.height, VIEWPORT_LIMITS.minHeight),
+    scale: PREFERRED_SCALE,
   };
 }
 
-/** Whether a measured size moved enough in either dimension for a resize. */
-export function sizeChanged(
+/** Whether two requested framebuffers differ (a mode change to send). */
+export function viewportChanged(
   previous: { width: number; height: number },
   next: { width: number; height: number },
-  thresholdPx: number,
 ): boolean {
-  return (
-    Math.abs(next.width - previous.width) >= thresholdPx ||
-    Math.abs(next.height - previous.height) >= thresholdPx
-  );
+  return previous.width !== next.width || previous.height !== next.height;
 }
 
 function accountPath(account: string): string {

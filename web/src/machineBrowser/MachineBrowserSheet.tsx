@@ -1,8 +1,9 @@
-/** The panel an account card opens for its Machine browser: a slim identity
- * row on top and the remote page filling the frame; the remote Chromium shows
- * its own address bar and tabs. Mobile is an edge-to-edge cover with a bottom
- * toolbar (Back, Forward, Reload, Keyboard, menu); Desktop is a large
- * workbench with the menu in its top row and an explicit full-screen mode.
+/** The panel an account card opens for its Machine browser: the remote page
+ * filling the frame; the remote Chromium shows its own address bar and tabs.
+ * Mobile is an edge-to-edge cover whose frame starts right below the status
+ * bar, with the identity line and a bottom toolbar (Close, Back, Forward,
+ * Reload, Keyboard, menu) under it; Desktop is a large workbench with a slim
+ * identity row, the menu and an explicit full-screen mode.
  * See docs/machine-browser.md, "Viewer (core web)". */
 import { Box } from "@mui/material";
 import { type RefObject, useEffect, useRef, useState } from "react";
@@ -10,7 +11,7 @@ import { Sheet } from "../Sheet";
 import { copyText } from "../clipboard";
 import { useStoreSelector } from "../store";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
-import { type BrowserScale, type BrowserViewport, browserStateLabel, browserViewport } from "./api";
+import { type BrowserViewport, PREFERRED_SCALE, browserStateLabel, browserViewport } from "./api";
 import {
   type BrowserChromeState,
   type ViewerControls,
@@ -21,9 +22,11 @@ import {
 import { type BrowserModel, autoEntry, linkEntry, linkTarget } from "./browserModel";
 import type { ConfirmKind } from "./confirmation";
 import { type BrowserCommands, useBrowserConfirm } from "./MachineBrowserActions";
-import { DesktopBrowserTopBar, MobileBrowserTopBar } from "./MachineBrowserAddressBar";
+import { DesktopBrowserTopBar, Identity } from "./MachineBrowserAddressBar";
 import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { BrowserMenu, type BrowserMenuItem, MobileBrowserToolbar } from "./MachineBrowserToolbar";
+import { devicePortrait, useTouchInput } from "./inputProfile";
+import { useDevicePaste } from "./MachineBrowserPaste";
 import { useBrowserFullscreen } from "./useBrowserFullscreen";
 import { type MachineBrowserController, useMachineBrowser } from "./useMachineBrowser";
 
@@ -46,12 +49,13 @@ export interface MachineBrowserSheetProps {
   enabling?: boolean | undefined;
 }
 
-/** Commands over the controller; the viewport is measured from the frame
- * at the moment of the request. `pinned` keeps every open on that Machine. */
+/** Commands over the controller; the screen mode is chosen from the frame
+ * and the device orientation at the moment of the request. `pinned` keeps
+ * every open on that Machine. */
 function browserCommands(
   browser: MachineBrowserController,
   areaRef: RefObject<HTMLDivElement | null>,
-  scale: BrowserScale,
+  touch: boolean,
   pinned: string | undefined,
 ): BrowserCommands {
   const viewportNow = (): BrowserViewport => {
@@ -59,7 +63,7 @@ function browserCommands(
     return browserViewport(
       rect?.width || globalThis.innerWidth,
       rect?.height || globalThis.innerHeight - 160,
-      scale,
+      { touch, portrait: devicePortrait() },
     );
   };
   const { dispatch } = browser;
@@ -112,40 +116,20 @@ function useAutoEntry(
   }, [browser, link, shownLink]);
 }
 
-/** Read the device clipboard on the press itself (the permission prompt
- * needs the user gesture) and paste it into this viewer's session. */
-function pasteFromDevice(
-  controls: ViewerControls | undefined,
-  notice: (text: string) => void,
-): void {
-  const clipboard = globalThis.navigator?.clipboard;
-  if (!controls) return;
-  if (typeof clipboard?.readText !== "function") {
-    notice("Reading the clipboard is not available in this browser.");
-    return;
-  }
-  clipboard.readText().then(
-    (text) => {
-      if (text) controls.paste(text);
-      else notice("The clipboard is empty.");
-    },
-    () => notice("Clipboard access was denied."),
-  );
-}
-
 function browserMenuItems({
   model,
   chrome,
-  controls,
   commands,
   ask,
+  onPaste,
   onClose,
 }: {
   model: BrowserModel;
   chrome: BrowserChromeState;
-  controls: ViewerControls | undefined;
   commands: BrowserCommands;
   ask: (kind: ConfirmKind) => void;
+  /** Opens the paste sheet; runs inside the menu tap. */
+  onPaste: () => void;
   onClose: () => void;
 }): BrowserMenuItem[] {
   const remote = model.remoteClipboard;
@@ -182,10 +166,10 @@ function browserMenuItems({
     },
     {
       key: "paste",
-      label: "Paste from this device",
+      label: "Paste from this device…",
       group: true,
       disabled: !chrome.paste,
-      onSelect: () => pasteFromDevice(controls, commands.notice),
+      onSelect: onPaste,
     },
     {
       key: "copy",
@@ -216,14 +200,15 @@ function browserMenuItems({
 }
 
 /** The per-account chrome state: viewer controls bound to this account's
- * shown browser and the keyboard. */
-function useBrowserChrome(account: string, model: BrowserModel, scale: BrowserScale) {
+ * shown browser and the keyboard. New incarnations always run at
+ * `PREFERRED_SCALE`; only an older one at another scale offers a restart. */
+function useBrowserChrome(account: string, model: BrowserModel) {
   const [published, setPublished] = useState<ViewerControls | undefined>(undefined);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const controls = controlsFor(published, account, model);
   return {
     controls,
-    chrome: chromeState(model, controls !== undefined, scale),
+    chrome: chromeState(model, controls !== undefined, PREFERRED_SCALE),
     keyboardOpen: controls !== undefined && keyboardOpen,
     setPublished,
     setKeyboardOpen,
@@ -234,8 +219,8 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   const { open, onClose, account, owner, dataset, link, enabling = false } = props;
   const surface = useSurfaceProfile();
   const desktop = surface.kind === "desktop";
-  // A phone renders Chromium at device scale 2; pointer surfaces at 1.
-  const scale: BrowserScale = surface.kind === "mobile" && surface.touchCapable ? 2 : 1;
+  // Input follows neko's touch rule; the layout follows the surface.
+  const touch = useTouchInput(!desktop);
   const machines = useStoreSelector((state) => state.machines);
   const browser = useMachineBrowser({
     account: account.id,
@@ -251,9 +236,10 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   const machineLabel = machineId
     ? machines.find((machine) => machine.id === machineId)?.display_name || machineId
     : "no Machine yet";
-  const commands = browserCommands(browser, areaRef, scale, link?.machine);
+  const commands = browserCommands(browser, areaRef, touch, link?.machine);
   useAutoEntry(props, browser, commands);
-  const ui = useBrowserChrome(account.id, model, scale);
+  const ui = useBrowserChrome(account.id, model);
+  const paste = useDevicePaste(ui.controls);
   const confirm = useBrowserConfirm(model, state, commands);
   const full = useBrowserFullscreen(desktop && open);
   const close = desktop ? full.guardClose(onClose) : onClose;
@@ -265,9 +251,9 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
       items={browserMenuItems({
         model,
         chrome: ui.chrome,
-        controls: ui.controls,
         commands,
         ask: confirm.ask,
+        onPaste: paste.start,
         onClose,
       })}
     />
@@ -278,8 +264,7 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
     browser,
     account,
     machineLabel,
-    scale,
-    touch: !desktop,
+    touch,
     link: link !== undefined,
     pinned: link !== undefined,
     retry: retryOffered(model, link !== undefined),
@@ -316,6 +301,7 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
           <BrowserFrame {...frameProps} />
         </Box>
         {confirm.dialog}
+        {paste.dialog}
       </Sheet>
     );
   }
@@ -333,19 +319,29 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
     >
       <Box
         data-machine-browser-sheet={account.id}
-        sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          bgcolor: "background.default",
+          // No top row: the frame starts right below the status bar.
+          pt: "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
+        }}
       >
-        <MobileBrowserTopBar {...identity} onClose={onClose} />
         <BrowserFrame {...frameProps} />
         <MobileBrowserToolbar
-          chrome={ui.chrome}
+          chrome={{ ...ui.chrome, keyboard: ui.chrome.keyboard && touch }}
           keyboardOpen={ui.keyboardOpen}
+          identity={<Identity {...identity} align="center" />}
           onChord={chord}
           onKeyboard={() => ui.controls?.toggleKeyboard()}
+          onClose={onClose}
           menu={menu}
         />
       </Box>
       {confirm.dialog}
+      {paste.dialog}
     </Sheet>
   );
 }

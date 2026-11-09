@@ -13,7 +13,7 @@ import {
   createBrowserStream,
 } from "./stream";
 import { type BrowserChord, chordStrokes } from "./browserKeys";
-import type { KeyAction } from "./touchKeyboard";
+import type { KeyAction, KeyboardSink } from "./touchKeyboard";
 
 export type ViewerEnd =
   | { kind: "closed"; close: StreamClose }
@@ -28,6 +28,8 @@ export interface ViewerSessionOptions {
   /** The final stream URL including every query parameter. */
   url: string;
   onState(state: BrowserStateEvent): void;
+  /** The stream accepts resizes from now on. */
+  onStreamOpen(): void;
   onStreamError(code: string): void;
   onAuthSession(session: unknown): void;
   onConnected(): void;
@@ -35,16 +37,19 @@ export interface ViewerSessionOptions {
   onEnded(end: ViewerEnd): void;
 }
 
-export interface ViewerSession {
-  resize(width: number, height: number): void;
-  paste(text: string): void;
+export interface ViewerSession extends KeyboardSink {
+  /** Whether the resize went out; it cannot before the stream opens. */
+  resize(width: number, height: number): boolean;
   sendKey(action: KeyAction): void;
-  /** Press a browser navigation chord (`chordStrokes`) on the remote. */
+  /** Press a browser chord (`chordStrokes`) on the remote. */
   sendChord(chord: BrowserChord): void;
-  /** Whether a tap or click on the screen moves keyboard focus to it. */
-  setFocusOnClick(value: boolean): void;
   focus(): void;
   close(): void;
+}
+
+function sendChord(client: RFB | undefined, chord: BrowserChord): void {
+  if (!client) return;
+  for (const stroke of chordStrokes(chord)) client.sendKey(stroke.keysym, stroke.code, stroke.down);
 }
 
 export function startViewerSession(options: ViewerSessionOptions): ViewerSession {
@@ -66,6 +71,9 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
       if (closing) return;
       const socket = new WebSocket(options.url, [BROWSER_STREAM_SUBPROTOCOL, deviceProtocol]);
       stream = createBrowserStream(socket, {
+        onOpen: () => {
+          if (!closing) options.onStreamOpen();
+        },
         onControl: (message) => {
           switch (message.type) {
             case "state":
@@ -108,16 +116,16 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
     () => end({ kind: "device_proof_failed" }),
   );
   return {
-    resize: (width, height) => {
-      stream?.sendResize(width, height);
-    },
-    paste: (text) => rfb?.clipboardPasteFrom(text),
+    resize: (width, height) => stream?.sendResize(width, height) ?? false,
     sendKey: (action) => rfb?.sendKey(action.keysym, action.code),
-    sendChord: (chord) => {
+    sendChord: (chord) => sendChord(rfb, chord),
+    // ClientCutText and the key events travel in order on one RFB stream,
+    // so the remote clipboard holds `text` before Ctrl+V is pressed.
+    pasteText: (text) => {
       const client = rfb;
       if (!client) return;
-      for (const stroke of chordStrokes(chord))
-        client.sendKey(stroke.keysym, stroke.code, stroke.down);
+      client.clipboardPasteFrom(text);
+      sendChord(client, "paste");
     },
     setFocusOnClick: (value) => {
       focusOnClick = value;

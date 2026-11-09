@@ -1,7 +1,11 @@
-/** Translation of on-screen keyboard input into X11 keysyms for noVNC's
- * `sendKey`. Touch surfaces raise no key events for most characters, so the
- * viewer reads them from a hidden input's `beforeinput` and composition
- * events and forwards them one keysym at a time. */
+/** Translation of on-screen keyboard input into what the remote receives.
+ * Committed text is never inferred from key events (that is neko #724:
+ * guacamole.js guesses characters from keydown and loses capitals, shifted
+ * symbols and text after an IME composition on iOS). The keyboard overlay
+ * reads the text the OS committed into it and sends it whole: short
+ * printable ASCII as one keysym press per character (Xvnc adds any Shift
+ * the keysym needs), anything else through the remote clipboard and Ctrl+V.
+ * Only editing and navigation keys come from `keydown`. */
 
 export interface KeyAction {
   keysym: number;
@@ -47,12 +51,16 @@ export function keysymForCharacter(character: string): number | undefined {
   return 0x01000000 | point;
 }
 
-/** Typed text as key presses; line breaks become Return. */
+/** Typed text as key presses; line breaks become Return and tabs Tab. */
 export function keyActionsForText(text: string): KeyAction[] {
   const actions: KeyAction[] = [];
   for (const character of text) {
     if (character === "\n" || character === "\r") {
       actions.push(NAMED_KEYS.Enter);
+      continue;
+    }
+    if (character === "\t") {
+      actions.push(NAMED_KEYS.Tab);
       continue;
     }
     const keysym = keysymForCharacter(character);
@@ -61,42 +69,47 @@ export function keyActionsForText(text: string): KeyAction[] {
   return actions;
 }
 
-/** A key the hidden input receives as `keydown`. Backspace is deliberately
- * absent: soft keyboards report it through `beforeinput`
- * (`deleteContentBackward`) and iOS raises no `keydown` for it on an empty
- * field, so handling both would send it twice. */
+/** The editing and navigation key a `keydown` on the overlay stands for.
+ * Printable keys are absent on purpose: their text arrives as `input`. */
 export function keyActionForKey(key: string): KeyAction | undefined {
-  if (key === "Backspace" || !Object.hasOwn(NAMED_KEYS, key)) return undefined;
+  if (!Object.hasOwn(NAMED_KEYS, key)) return undefined;
   return (NAMED_KEYS as Record<string, KeyAction>)[key];
 }
 
-/** The keys an `InputEvent` on the hidden input stands for, or `undefined`
- * when the event belongs to an IME composition still in progress and must be
- * left to the browser until `compositionend`. */
-export function keyActionsForInput(
-  inputType: string,
-  data: string | null,
-): KeyAction[] | undefined {
-  switch (inputType) {
-    case "insertText":
-    case "insertFromPaste":
-    case "insertReplacementText":
-      return keyActionsForText(data ?? "");
-    case "insertLineBreak":
-    case "insertParagraph":
-      return [NAMED_KEYS.Enter];
-    case "deleteContentBackward":
-    case "deleteWordBackward":
-    case "deleteSoftLineBackward":
-    case "deleteHardLineBackward":
-      return [NAMED_KEYS.Backspace];
-    case "deleteContentForward":
-    case "deleteWordForward":
-      return [NAMED_KEYS.Delete];
-    case "insertCompositionText":
-    case "deleteCompositionText":
-      return undefined;
-    default:
-      return [];
+/** Longer committed text is pasted rather than typed key by key. */
+export const TYPED_TEXT_LIMIT = 32;
+
+const TYPEABLE = /^[\x20-\x7e\n\r\t]*$/;
+
+export type TextDelivery = { kind: "keys"; actions: KeyAction[] } | { kind: "paste"; text: string };
+
+/** How committed text reaches the remote: printable ASCII up to
+ * `TYPED_TEXT_LIMIT` characters as key presses, everything else (non-ASCII,
+ * IME results, emoji, long insertions) as clipboard text plus Ctrl+V, which
+ * no keyboard layout on the remote can garble. */
+export function textDelivery(text: string): TextDelivery {
+  if ([...text].length <= TYPED_TEXT_LIMIT && TYPEABLE.test(text)) {
+    return { kind: "keys", actions: keyActionsForText(text) };
   }
+  return { kind: "paste", text };
+}
+
+/** Where the keyboard overlay sends input: the session of the one viewer
+ * that owns the overlay. */
+export interface KeyboardSink {
+  sendKey(action: KeyAction): void;
+  /** Set the remote clipboard to `text` and press Ctrl+V. */
+  pasteText(text: string): void;
+  /** Whether a tap on the screen moves keyboard focus to it. */
+  setFocusOnClick(value: boolean): void;
+}
+
+export function deliverText(sink: KeyboardSink, text: string): void {
+  if (!text) return;
+  const delivery = textDelivery(text.replace(/\r\n?/g, "\n"));
+  if (delivery.kind === "paste") {
+    sink.pasteText(delivery.text);
+    return;
+  }
+  for (const action of delivery.actions) sink.sendKey(action);
 }

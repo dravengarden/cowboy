@@ -195,3 +195,17 @@ test("control parsing accepts only the Controller's message shapes", () => {
   assertEquals(parseStreamControl("[]"), undefined);
   assertEquals(parseStreamControl("{"), undefined);
 });
+
+test("the viewer learns when the socket opens, when a resize can first go out", () => {
+  const socket = new FakeSocket();
+  const resized: boolean[] = [];
+  const stream = createBrowserStream(socket, {
+    onOpen: () => resized.push(stream.sendResize(1920, 1080)),
+    onControl: () => {},
+    onClose: () => {},
+  });
+  assertEquals(stream.sendResize(1920, 1080), false, "a resize before open is refused");
+  socket.accept();
+  assertEquals(resized, [true]);
+  assertEquals(socket.sent, [JSON.stringify({ type: "resize", width: 1920, height: 1080 })]);
+});

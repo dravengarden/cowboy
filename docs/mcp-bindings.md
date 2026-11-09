@@ -4,10 +4,10 @@ Status: in production on Hawk. On 2026-11-09 a native Claude Code 3.20.34
 session (runtime OVH, execution Hawk) called the third-party Suger 0.1.0
 binding's `suger_status` and `suger_read` through the owner policy, Controller
 launch plan, OVH worker `--mcp-plan`, relay and Hawk Machine process, reading
-the granted `github` and `local_env` sources. Only Claude Code 3.20.34 declares
-`provider.mcp-bindings.v1`. A Machine still passes `--mcp-plan` to a retained
-worker without checking that its CLI accepts it; such a worker exits before
-readiness instead of the launch being refused. The policy API reports
+the granted `github` and `local_env` sources; a Codex 3.5.27 session repeated it.
+Claude Code 3.20.34 and Codex 3.5.27 declare `provider.mcp-bindings.v1`. A
+Machine probes each worker executable's CLI once and refuses an MCP launch on a
+retained worker that predates `--mcp-plan`, instead of starting one that exits. The policy API reports
 preparation, worker readiness and installed-grant readiness separately. No MCP
 process starts from this API.
 

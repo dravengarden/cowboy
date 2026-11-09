@@ -2,10 +2,14 @@ import { test } from "bun:test";
 import { assertEquals } from "../../../tools/test-assert.ts";
 import {
   KEYSYM,
+  type KeyAction,
+  type KeyboardSink,
+  TYPED_TEXT_LIMIT,
+  deliverText,
   keyActionForKey,
-  keyActionsForInput,
   keyActionsForText,
   keysymForCharacter,
+  textDelivery,
 } from "./touchKeyboard";
 
 test("characters map to Latin-1 or Unicode keysyms and control characters to none", () => {
@@ -32,29 +36,74 @@ test("typed text becomes one press per code point with Return for line breaks", 
   ]);
 });
 
-test("keydown handles navigation keys but leaves Backspace to beforeinput", () => {
+test("keydown handles editing and navigation keys and never printable ones", () => {
   assertEquals(keyActionForKey("Enter"), { keysym: KEYSYM.Return, code: "Enter" });
+  assertEquals(keyActionForKey("Backspace"), { keysym: KEYSYM.BackSpace, code: "Backspace" });
   assertEquals(keyActionForKey("ArrowLeft"), { keysym: KEYSYM.Left, code: "ArrowLeft" });
   assertEquals(keyActionForKey("Tab"), { keysym: KEYSYM.Tab, code: "Tab" });
-  assertEquals(keyActionForKey("Backspace"), undefined);
+  // Printable keys and Shift come as committed text, never as key guesses.
   assertEquals(keyActionForKey("a"), undefined);
+  assertEquals(keyActionForKey("A"), undefined);
+  assertEquals(keyActionForKey("Shift"), undefined);
+  assertEquals(keyActionForKey("Unidentified"), undefined);
   assertEquals(keyActionForKey("constructor"), undefined);
 });
 
-test("input types translate to keys and compositions wait for their end", () => {
-  assertEquals(keyActionsForInput("insertText", "hi"), [
-    { keysym: 0x68, code: null },
-    { keysym: 0x69, code: null },
-  ]);
-  assertEquals(keyActionsForInput("deleteContentBackward", null), [
-    { keysym: KEYSYM.BackSpace, code: "Backspace" },
-  ]);
-  assertEquals(keyActionsForInput("deleteContentForward", null), [
-    { keysym: KEYSYM.Delete, code: "Delete" },
-  ]);
-  assertEquals(keyActionsForInput("insertLineBreak", null), [
+test("short printable ASCII is typed, including capitals and shifted symbols", () => {
+  assertEquals(textDelivery("Hi!"), {
+    kind: "keys",
+    actions: [
+      { keysym: 0x48, code: null },
+      { keysym: 0x69, code: null },
+      { keysym: 0x21, code: null },
+    ],
+  });
+  assertEquals(textDelivery('@#$%^&*()_+{}|:"<>?~'), {
+    kind: "keys",
+    actions: [...'@#$%^&*()_+{}|:"<>?~'].map((character) => ({
+      keysym: character.charCodeAt(0),
+      code: null,
+    })),
+  });
+  assertEquals(textDelivery("a\tb").kind, "keys");
+  assertEquals(textDelivery("x".repeat(TYPED_TEXT_LIMIT)).kind, "keys");
+});
+
+test("non-ASCII and long text are pasted whole", () => {
+  assertEquals(textDelivery("中文"), { kind: "paste", text: "中文" });
+  assertEquals(textDelivery("café"), { kind: "paste", text: "café" });
+  assertEquals(textDelivery("👍"), { kind: "paste", text: "👍" });
+  const long = "x".repeat(TYPED_TEXT_LIMIT + 1);
+  assertEquals(textDelivery(long), { kind: "paste", text: long });
+});
+
+function recordingSink(): KeyboardSink & {
+  keys: KeyAction[];
+  pastes: string[];
+  focusOnClick: boolean[];
+} {
+  const keys: KeyAction[] = [];
+  const pastes: string[] = [];
+  const focusOnClick: boolean[] = [];
+  return {
+    keys,
+    pastes,
+    focusOnClick,
+    sendKey: (action) => keys.push(action),
+    pasteText: (text) => pastes.push(text),
+    setFocusOnClick: (value) => focusOnClick.push(value),
+  };
+}
+
+test("delivered text reaches the sink once by the chosen path", () => {
+  const sink = recordingSink();
+  deliverText(sink, "");
+  deliverText(sink, "ok\r\n");
+  deliverText(sink, "你好");
+  assertEquals(sink.keys, [
+    { keysym: 0x6f, code: null },
+    { keysym: 0x6b, code: null },
     { keysym: KEYSYM.Return, code: "Enter" },
   ]);
-  assertEquals(keyActionsForInput("insertCompositionText", "中"), undefined);
-  assertEquals(keyActionsForInput("formatBold", null), []);
+  assertEquals(sink.pastes, ["你好"]);
 });
