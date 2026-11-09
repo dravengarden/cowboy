@@ -191,6 +191,7 @@ export async function runWidgetAppsBrowserConformance(): Promise<string[]> {
   );
   passed.push(await sendChecks(container));
   passed.push(...(await registryChecks(container)));
+  passed.push(await versionChecks(container));
   root.unmount();
   container.remove();
   void sent;
@@ -241,7 +242,7 @@ async function registryChecks(container: HTMLElement): Promise<string[]> {
       />
     ));
     show(<Box>{many}</Box>);
-    await waitFor(() => (container.textContent ?? "").includes("app 3"), "four apps run");
+    await waitFor(() => (container.textContent ?? "").includes("app 3"), "four apps run").catch((error: Error) => { throw new Error(`${error.message}: ${(container.textContent ?? "").slice(0, 600)}`); });
     check(
       (container.textContent ?? "").includes("Too many apps are running"),
       "the fifth app waits",
@@ -372,6 +373,91 @@ async function sendChecks(container: HTMLElement): Promise<string> {
       "the confirm closes",
     );
     return "an app's message is sent only after the person confirms its exact text";
+  } finally {
+    setAppMessageTransport(null);
+    root.unmount();
+  }
+}
+
+async function hex(text: string): Promise<string> {
+  const bytes = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
+  );
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** An agent update never replaces an app the person typed into: every view
+ *  offers the choice, a kept version keeps its code, and its sends carry
+ *  the running code so the Controller can refuse them (§5.3, §7). */
+async function versionChecks(container: HTMLElement): Promise<string> {
+  const calls: Record<string, unknown>[] = [];
+  setAppMessageTransport(async (_url, body) => {
+    calls.push(body as Record<string, unknown>);
+    return { status: 409, body: { code: "app_updated" } };
+  });
+  const version = (label: string): string =>
+    app(
+      'import { TextField, Button, useSend } from "@cowboy/ui";\n' +
+        "export default function A() { const send = useSend(); " +
+        'const [v, setV] = React.useState(""); ' +
+        `return <Stack><Text>${label}</Text><TextField label="Note" value={v} onChange={(e: { value: string }) => setV(e.value)} />` +
+        '<Button onPress={() => send("note: " + v)}>Ask</Button></Stack>; }',
+    );
+  const root = createRoot(container);
+  const show = (code: string): void => {
+    const parsed = parseWidgetValue({
+      schema: "cowboy.widget/1",
+      title: "Versions",
+      root: { type: "app", id: "versions", title: "Versions app", fallback: "Versions", code },
+    });
+    check(parsed.ok, "the versioned widget validates");
+    flushSync(() =>
+      root.render(
+        <SurfaceContext.Provider value={DESKTOP}>
+          <BrowserProductTheme>
+            <CssBaseline />
+            <WidgetView
+              document={parsed.document}
+              verified
+              interaction={{ sessionId: "s", widgetId: "versions", revision: 1, closed: false, decided: {} }}
+            />
+          </BrowserProductTheme>
+        </SurfaceContext.Provider>,
+      ),
+    );
+  };
+  const text = (): string => container.textContent ?? "";
+  try {
+    const first = version("first");
+    show(first);
+    const input = await waitFor(
+      () => container.querySelector<HTMLInputElement>("[data-widget-app] input"),
+      "the versioned app's input",
+    );
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "draft");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    show(version("second"));
+    await waitFor(() => text().includes("The agent updated this app"), "the update is offered");
+    check(text().includes("first"), "the typed-into app keeps running its code");
+    [...container.querySelectorAll("button")].find((b) => b.textContent === "Keep editing")?.click();
+    await waitFor(() => !text().includes("The agent updated this app"), "the choice is kept");
+    [...container.querySelectorAll("button")].find((b) => b.textContent === "Ask")?.click();
+    const send = await waitFor(
+      () => document.querySelector<HTMLElement>("[data-app-message-send]"),
+      "the confirm for the kept version",
+    );
+    send.click();
+    await waitFor(() => calls.length === 1, "the kept version's send");
+    check(
+      calls[0]?.["code_sha256"] === (await hex(first)),
+      "the send carries the running code, not the newest",
+    );
+    await waitFor(
+      () => document.querySelector("[data-app-message-confirm]")?.textContent?.includes("updated"),
+      "the outdated send is refused",
+    );
+    return "an update never replaces a typed-into app, and its sends carry the running code";
   } finally {
     setAppMessageTransport(null);
     root.unmount();

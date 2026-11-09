@@ -25,6 +25,8 @@ globalThis.__cowboyTimersDue = (max) => {
     .filter(([, timer]) => timer.due <= now)
     .sort((a, b) => a[1].due - b[1].due);
   for (const [id, timer] of due.slice(0, max)) {
+    // An earlier callback in this batch may have cancelled this one.
+    if (timers.get(id) !== timer) continue;
     if (timer.every) timer.due = now + timer.every;
     else timers.delete(id);
     if (typeof timer.callback === "function") timer.callback(...timer.args);

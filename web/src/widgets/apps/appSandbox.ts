@@ -158,14 +158,16 @@ export function startAppRuntime(start: AppRuntimeStart, events: AppRuntimeEvents
   globalThis.addEventListener("message", onWindowMessage);
   document.body.append(frame);
 
-  // Latest props/context sent before the handshake completes, replayed after.
+  // The latest props, context and run state (suspend/resume) sent before the
+  // handshake completes, replayed after it.
   type Outbound = { t: string } & Record<string, unknown>;
   const early: Outbound[] = [];
+  const slot = (t: string): string => (t === "suspend" || t === "resume" ? "run" : t);
   const post = (message: Outbound): void => {
     if (closed) return;
     if (verified) channel.port1.postMessage(message);
-    else if (message.t === "props" || message.t === "context") {
-      const index = early.findIndex((update) => update.t === message.t);
+    else if (["props", "context", "suspend", "resume"].includes(message.t)) {
+      const index = early.findIndex((update) => slot(update.t) === slot(message.t));
       if (index >= 0) early.splice(index, 1);
       early.push(message);
     }

@@ -2,11 +2,12 @@
 // by the page-wide registry (appRuntimes.ts) so the inline row and the
 // inspector share one app. This view draws the tree with Cowboy components,
 // contains any drawing failure to this app, and asks before replacing an app
-// the person typed into with the agent's newer code.
+// the person typed into with the agent's newer code (the registry holds the
+// choice, so every view of the app agrees).
 
-import { Component, Fragment, useMemo, useState, type ReactNode } from "react";
+import { Component, Fragment, useMemo, type ReactNode } from "react";
 import { Alert, Box, Button, Typography, useTheme } from "@mui/material";
-import { appRuntimeDirty, stopAppRuntime, useAppRuntime } from "./appRuntimes";
+import { stopAppRuntime, useAppRuntime } from "./appRuntimes";
 import { isText, type AppTreeState } from "./appTree";
 import { renderAppElement, type Dispatch } from "./AppComponents";
 
@@ -16,8 +17,9 @@ export type AppNodeProps = {
   title: string;
   /** Session, widget and node of the app; null outside a published widget. */
   identity?: string | null | undefined;
-  /** Asked to send a message: the host must confirm before anything is sent. */
-  onSend?: ((text: string) => void) | undefined;
+  /** Asked to send a message from the running `code`: the host must confirm
+   *  before anything is sent. */
+  onSend?: ((text: string, code: string) => void) | undefined;
 };
 
 function renderTree(tree: AppTreeState, id: number, dispatch: Dispatch): ReactNode {
@@ -53,24 +55,22 @@ class AppBoundary extends Component<
   }
 }
 
-/** A short stable digest of the code, for the runtime identity. */
-function codeKey(code: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < code.length; index += 1) {
-    hash ^= code.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `${(hash >>> 0).toString(36)}:${code.length}`;
-}
+type AppViewProps = Omit<AppNodeProps, "identity" | "onSend"> & {
+  identity: string;
+  onSend?: ((text: string, code: string) => void) | undefined;
+};
 
-function AppView({ code, props, title, identity, onSend }: AppNodeProps): React.JSX.Element {
+function AppView({ code, props, title, identity, onSend }: AppViewProps): React.JSX.Element {
   const theme = useTheme();
-  const key = `${identity ?? `local:${title}`}:${codeKey(code)}`;
+  // A published app keeps one runtime across code versions (the registry
+  // decides which version runs); a local preview is one app per exact source.
+  const key = identity.startsWith("local:") ? `${identity}:${code}` : identity;
+  const scope = identity.split(":")[0] ?? identity;
   const context = useMemo(
     () => ({ theme: theme.palette.mode, locale: navigator.language, platform: "web" }),
     [theme.palette.mode],
   );
-  const app = useAppRuntime(key, { code, props, context }, onSend);
+  const app = useAppRuntime(key, scope, { code, props, context }, onSend);
   if (app.waiting) {
     return (
       <Typography variant="caption" color="text.secondary">
@@ -100,55 +100,18 @@ function AppView({ code, props, title, identity, onSend }: AppNodeProps): React.
       </Alert>
     );
   }
-  if (app.tree.root.length === 0) {
-    return (
-      <Typography variant="caption" color="text.secondary">
-        Starting the app…
-      </Typography>
-    );
-  }
   return (
-    <AppBoundary
-      key={key}
-      onError={(): void => stopAppRuntime(key, "This app stopped: Cowboy could not draw it.")}
-    >
-      {app.tree.root.map((id) => (
-        <Fragment key={id}>{renderTree(app.tree, id, app.dispatch)}</Fragment>
-      ))}
-    </AppBoundary>
-  );
-}
-
-export default function AppNode(props: AppNodeProps): React.JSX.Element {
-  const identity = props.identity ?? `local:${props.title}`;
-  // The code the person is using. A newer version replaces it at once unless
-  // they typed into the app; then they choose (docs/widget-apps.md §5.3).
-  const [active, setActive] = useState(props.code);
-  const [keep, setKeep] = useState<string | null>(null);
-  const outdated = active !== props.code;
-  if (outdated && keep !== props.code && !appRuntimeDirty(`${identity}:${codeKey(active)}`)) {
-    setActive(props.code);
-  }
-  return (
-    <Box data-widget-app={props.title} sx={{ display: "grid", gap: 1, minWidth: 0 }}>
-      {outdated && keep !== props.code ? (
+    <>
+      {app.outdated ? (
         <Alert
           severity="info"
           variant="outlined"
           action={
             <>
-              <Button
-                size="small"
-                onClick={(): void => setKeep(props.code)}
-                sx={{ textTransform: "none" }}
-              >
+              <Button size="small" onClick={app.keep} sx={{ textTransform: "none" }}>
                 Keep editing
               </Button>
-              <Button
-                size="small"
-                onClick={(): void => setActive(props.code)}
-                sx={{ textTransform: "none" }}
-              >
+              <Button size="small" onClick={app.reload} sx={{ textTransform: "none" }}>
                 Reload
               </Button>
             </>
@@ -157,7 +120,28 @@ export default function AppNode(props: AppNodeProps): React.JSX.Element {
           The agent updated this app. Reload discards what you typed.
         </Alert>
       ) : null}
-      <AppView {...props} code={active} identity={identity} />
+      {app.tree.root.length === 0 ? (
+        <Typography variant="caption" color="text.secondary">
+          Starting the app…
+        </Typography>
+      ) : (
+        <AppBoundary
+          key={key}
+          onError={(): void => stopAppRuntime(key, "This app stopped: Cowboy could not draw it.")}
+        >
+          {app.tree.root.map((id) => (
+            <Fragment key={id}>{renderTree(app.tree, id, app.dispatch)}</Fragment>
+          ))}
+        </AppBoundary>
+      )}
+    </>
+  );
+}
+
+export default function AppNode(props: AppNodeProps): React.JSX.Element {
+  return (
+    <Box data-widget-app={props.title} sx={{ display: "grid", gap: 1, minWidth: 0 }}>
+      <AppView {...props} identity={props.identity ?? `local:${props.title}`} />
     </Box>
   );
 }

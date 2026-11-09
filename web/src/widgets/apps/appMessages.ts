@@ -2,9 +2,11 @@
 // the device before the person confirms it: it is checked and shown locally,
 // and only the confirmed send reaches the Controller, carrying the digest of
 // the exact text and the code identity it was written under. Each
-// confirmation is one occurrence, kept in a local outbox from Send until the
-// Controller acknowledges it, so a reload retries the same prompt and never
-// sends it twice. Fixtures substitute the transport.
+// confirmation is one occurrence, saved to a local outbox before it is sent
+// and kept until the Controller acknowledges or authoritatively refuses it.
+// An uncertain send is retried in the background under the same occurrence
+// (so it is never sent twice), whatever became of its widget since.
+// Fixtures substitute the transport.
 
 export type AppMessageTarget = {
   sessionId: string;
@@ -22,8 +24,10 @@ export type PendingAppMessage = {
   codeSha256: string;
   text: string;
   textSha256: string;
-  /** `sending` survives a reload as an uncertain send to retry or discard. */
+  /** `sending` survives a reload as an uncertain send to retry. */
   state: "confirming" | "sending";
+  /** When the person confirmed it; old uncertain sends are given up. */
+  savedAtMs?: number;
 };
 
 export type AppMessageResult =
@@ -97,11 +101,13 @@ export async function prepareAppMessage(
   };
 }
 
-function save(pending: PendingAppMessage): void {
+/** Persists `pending`; false if the device would not store it. */
+function save(pending: PendingAppMessage): boolean {
   try {
     localStorage.setItem(OUTBOX + pending.occurrence, JSON.stringify(pending));
+    return true;
   } catch {
-    // A full or blocked storage only loses reload recovery, not the send.
+    return false;
   }
 }
 
@@ -111,33 +117,18 @@ function forget(pending: PendingAppMessage): void {
   } catch {}
 }
 
-/** Uncertain sends of one app left by an earlier page. */
-export function pendingAppMessages(
-  sessionId: string,
-  widgetId: string,
-  nodeId: string,
-): PendingAppMessage[] {
+/** Every uncertain send left in this browser's outbox. */
+export function pendingAppMessages(): PendingAppMessage[] {
   const found: PendingAppMessage[] = [];
   try {
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index);
       if (!key?.startsWith(OUTBOX)) continue;
       const value = JSON.parse(localStorage.getItem(key) ?? "null") as PendingAppMessage | null;
-      if (
-        value &&
-        value.sessionId === sessionId &&
-        value.widgetId === widgetId &&
-        value.nodeId === nodeId
-      ) {
-        found.push(value);
-      }
+      if (value?.state === "sending") found.push(value);
     }
   } catch {}
   return found;
-}
-
-export function discardAppMessage(pending: PendingAppMessage): void {
-  forget(pending);
 }
 
 const REFUSALS: Readonly<Record<string, string>> = {
@@ -153,10 +144,27 @@ function url(pending: PendingAppMessage): string {
   return `/api/sessions/${part(pending.sessionId)}/widgets/${part(pending.widgetId)}/apps/${part(pending.nodeId)}/messages`;
 }
 
-/** Sends a confirmed message under its own occurrence. */
+// Refusals that may pass (sign-in, rate limits, a pending context change)
+// keep the outbox entry; the others are the Controller's final answer.
+const TRANSIENT_STATUS = new Set([401, 403, 408, 425, 429]);
+const TRANSIENT_CODES = new Set(["context_pending"]);
+
+/** Sends a confirmed message under its own occurrence. Nothing is sent
+ *  unless the outbox entry was saved first. */
 export async function sendAppMessage(pending: PendingAppMessage): Promise<AppMessageResult> {
-  const sending: PendingAppMessage = { ...pending, state: "sending" };
-  save(sending);
+  const sending: PendingAppMessage = {
+    ...pending,
+    state: "sending",
+    savedAtMs: pending.savedAtMs ?? Date.now(),
+  };
+  if (!save(sending)) {
+    return {
+      kind: "refused",
+      code: "storage",
+      message: "Not sent: this browser would not save the message first. Free some storage and try again.",
+      final: false,
+    };
+  }
   let reply: { status: number; body: Record<string, unknown> };
   try {
     reply = await transport(url(sending), {
@@ -181,8 +189,40 @@ export async function sendAppMessage(pending: PendingAppMessage): Promise<AppMes
   }
   const code =
     typeof body["code"] === "string" ? body["code"] : status >= 500 ? "unavailable" : "refused";
-  const final = status < 500;
+  const final = status < 500 && !TRANSIENT_STATUS.has(status) && !TRANSIENT_CODES.has(code);
   if (final) forget(sending);
   const detail = typeof body["message"] === "string" ? body["message"] : "Not sent. Try again.";
   return { kind: "refused", code, message: REFUSALS[code] ?? detail, final };
+}
+
+const GIVE_UP_MS = 7 * 24 * 60 * 60 * 1000;
+const RETRY_GAP_MS = 30_000;
+let retrying = false;
+let lastRetry = 0;
+
+/** Retries every uncertain send once; final answers and old entries leave
+ *  the outbox, the rest wait for the next attempt. */
+export async function retryAppMessages(): Promise<void> {
+  if (retrying || Date.now() - lastRetry < RETRY_GAP_MS) return;
+  retrying = true;
+  lastRetry = Date.now();
+  try {
+    for (const pending of pendingAppMessages()) {
+      if (Date.now() - (pending.savedAtMs ?? 0) > GIVE_UP_MS) forget(pending);
+      else await sendAppMessage(pending);
+    }
+  } finally {
+    retrying = false;
+  }
+}
+
+/** Retries uncertain sends after load, on reconnect and when the page shows. */
+export function installAppMessageRecovery(): void {
+  if (typeof window === "undefined") return;
+  const retry = (): void => {
+    if (document.visibilityState === "visible") void retryAppMessages();
+  };
+  setTimeout(retry, 3000);
+  window.addEventListener("online", retry);
+  document.addEventListener("visibilitychange", retry);
 }

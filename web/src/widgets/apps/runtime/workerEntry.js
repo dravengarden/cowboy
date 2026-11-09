@@ -205,14 +205,24 @@ function run(code, deadlineMs, startup = false) {
     stop("it kept the processor busy");
     return { ok: false };
   }
-  if (!jobsQueued && runtime.hasPendingJob()) {
-    jobsQueued = true;
-    setTimeout(() => {
-      jobsQueued = false;
-      if (!stopped && !suspended) run("undefined", LIMITS.eventMs);
-    }, 16);
-  }
-  return { ok: true, value };
+  if (runtime.hasPendingJob()) scheduleJobs(16);
+  return { ok: true, value, jobs };
+}
+
+/** Continues promise jobs left over from a turn. A throttled turn retries;
+ *  a suspended app or full draw queue waits for `resume` or a credit, which
+ *  run timers and so the jobs too. Jobs can schedule timers, so the timer
+ *  wake is recomputed afterwards. */
+function scheduleJobs(delay) {
+  if (jobsQueued) return;
+  jobsQueued = true;
+  setTimeout(() => {
+    jobsQueued = false;
+    if (stopped || suspended || !ready || pending.length >= LIMITS.pendingBatches) return;
+    const result = run("undefined", LIMITS.eventMs);
+    if (result.busy) return scheduleJobs(100);
+    if (result.ok) wakeTimers(0);
+  }, delay);
 }
 
 function hostFunctions() {
@@ -267,7 +277,10 @@ function drainTimers() {
   if (pending.length >= LIMITS.pendingBatches) return;
   const result = run(`__cowboyTimersRun(${LIMITS.timersPerTurn})`, LIMITS.eventMs);
   if (result.busy) return wakeTimers(100);
-  if (result.ok && typeof result.value === "number" && result.value >= 0) wakeTimers(result.value);
+  if (!result.ok) return;
+  // Promise jobs that ran after the timers may have scheduled new ones.
+  if (result.jobs > 0) return wakeTimers(0);
+  if (typeof result.value === "number" && result.value >= 0) wakeTimers(result.value);
 }
 
 function wakeTimers(ms) {

@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Alert, Box, Button, Typography } from "@mui/material";
 import { ConfirmSheet } from "../../Sheet";
 import { copyText } from "../../clipboard";
-import { discardAppMessage, sendAppMessage, type PendingAppMessage } from "./appMessages";
+import { sendAppMessage, type PendingAppMessage } from "./appMessages";
 
 export default function AppMessageConfirm({
   pending,
@@ -24,21 +24,30 @@ export default function AppMessageConfirm({
     const reply = await sendAppMessage(pending);
     setBusy(false);
     if (reply.kind === "sent") onClose();
-    else setNotice({ text: reply.message, outdated: reply.code === "app_updated" });
+    else {
+      const queued = !reply.final && reply.code !== "storage";
+      setNotice({
+        text: queued
+          ? `${reply.message} Closing keeps it queued: Cowboy retries it in the background.`
+          : reply.message,
+        outdated: reply.code === "app_updated",
+      });
+    }
   };
+  // Nothing was saved before Send; while a send is in flight the sheet
+  // stays, and after a failure its outbox entry is retried in the background.
   const cancel = (): void => {
-    discardAppMessage(pending);
-    onClose();
+    if (!busy) onClose();
   };
   return (
     <ConfirmSheet
       open
       onClose={cancel}
-      title={pending.state === "sending" ? "Send this message again?" : "Send this message?"}
+      title="Send this message?"
       actions={
         <>
           <Button onClick={cancel} disabled={busy} sx={{ textTransform: "none" }}>
-            {pending.state === "sending" ? "Discard" : "Cancel"}
+            {notice ? "Close" : "Cancel"}
           </Button>
           {notice?.outdated ? (
             <Button
@@ -67,9 +76,7 @@ export default function AppMessageConfirm({
     >
       <Box sx={{ display: "grid", gap: 1.5 }} data-app-message-confirm="">
         <Typography variant="caption" color="text.secondary">
-          {pending.state === "sending"
-            ? `This message from the app “${title}” may not have been sent. Sending again never sends it twice.`
-            : `Written by the app “${title}”. The agent receives it as your message:`}
+          {`Written by the app “${title}”. The agent receives it as your message:`}
         </Typography>
         <Box
           data-app-message-text=""

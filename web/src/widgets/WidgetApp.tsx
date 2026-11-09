@@ -4,7 +4,7 @@
 // `fallback` text stands in. An app's send(text) becomes a product
 // confirmation of that exact text before anything leaves the device.
 
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useRef, useState } from "react";
 import { Box, Typography } from "@mui/material";
 import WidgetsOutlined from "@mui/icons-material/WidgetsOutlined";
 import type { ParsedNode } from "./widgetDocument";
@@ -12,7 +12,6 @@ import { useWidgetVerified } from "./widgetMode";
 import { appsEnabled } from "./apps/appsEnabled";
 import {
   appMessageProblem,
-  pendingAppMessages,
   prepareAppMessage,
   type AppMessageTarget,
   type PendingAppMessage,
@@ -58,26 +57,18 @@ function Fallback({ node, note }: { node: AppNodeData; note: string | null }): R
   );
 }
 
-/** Turns an app's send(text) into a confirmation; one at a time per app. */
-function useAppSend(node: AppNodeData, target: AppMessageTarget | null) {
+/** Turns an app's send(text) into a confirmation; one at a time per app.
+ *  The send carries the code that is running, which may be an older version
+ *  the person kept, so the Controller can refuse it as `app_updated`. */
+function useAppSend(node: AppNodeData, target: Omit<AppMessageTarget, "code"> | null) {
   const [pending, setPending] = useState<PendingAppMessage | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // Reserved synchronously, so a request that arrives while one is being
   // prepared or shown is refused instead of replacing it.
   const slot = useRef(false);
   const last = useRef(0);
-  useEffect(() => {
-    if (!target) return;
-    const [uncertain] = pendingAppMessages(target.sessionId, target.widgetId, target.nodeId).filter(
-      (entry) => entry.state === "sending",
-    );
-    if (uncertain && !slot.current) {
-      slot.current = true;
-      setPending(uncertain);
-    }
-  }, [target?.sessionId, target?.widgetId, target?.nodeId]);
   const onSend = target
-    ? (text: string): void => {
+    ? (text: string, code: string): void => {
         const now = Date.now();
         if (slot.current || now - last.current < CONFIRM_INTERVAL_MS) return;
         const problem = appMessageProblem(text);
@@ -87,7 +78,7 @@ function useAppSend(node: AppNodeData, target: AppMessageTarget | null) {
         }
         slot.current = true;
         last.current = now;
-        void prepareAppMessage(target, text).then(setPending, () => {
+        void prepareAppMessage({ ...target, code }, text).then(setPending, () => {
           slot.current = false;
         });
       }
@@ -111,14 +102,9 @@ function useAppSend(node: AppNodeData, target: AppMessageTarget | null) {
 export function WidgetApp({ node }: { node: AppNodeData }): React.JSX.Element {
   const verified = useWidgetVerified();
   const interaction = useWidgetInteraction();
-  const target: AppMessageTarget | null =
+  const target =
     interaction && !interaction.closed
-      ? {
-          sessionId: interaction.sessionId,
-          widgetId: interaction.widgetId,
-          nodeId: node.id,
-          code: node.code,
-        }
+      ? { sessionId: interaction.sessionId, widgetId: interaction.widgetId, nodeId: node.id }
       : null;
   const send = useAppSend(node, target);
   if (!verified) return <Fallback node={node} note={null} />;

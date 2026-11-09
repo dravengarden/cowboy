@@ -21,6 +21,9 @@ export type AppTreeState = {
   readonly root: readonly number[];
   /** Expansion cost of the whole tree (§6). */
   readonly units: number;
+  /** Units the last batch committed: its created and changed nodes with
+   *  their expansions, plus one per structural change (§6 frame budget). */
+  readonly charged: number;
 };
 
 export const APP_BUDGET = {
@@ -33,7 +36,7 @@ export const APP_BUDGET = {
 const elements = new Set(ELEMENT_NAMES);
 
 export function emptyAppTree(): AppTreeState {
-  return { nodes: new Map(), root: [], units: 0 };
+  return { nodes: new Map(), root: [], units: 0, charged: 0 };
 }
 
 export function isText(node: AppElement | AppText | undefined): node is AppText {
@@ -127,7 +130,11 @@ export function applyAppOps(state: AppTreeState, json: string): AppTreeState {
     nodes.set(id, isText(node) ? node : { ...node, children: [...node.children] });
   }
   const root = [...state.root];
+  const touched = new Set<number>();
+  let structural = 0;
   for (const raw of ops as Op[]) {
+    if (raw[0] === "create" || raw[0] === "text" || raw[0] === "props") touched.add(raw[1]);
+    else structural += 1;
     switch (raw[0]) {
       case "create":
         if (!elements.has(raw[2])) throw new AppBudgetError(`unknown component ${raw[2]}`);
@@ -186,5 +193,10 @@ export function applyAppOps(state: AppTreeState, json: string): AppTreeState {
   if (chars > APP_BUDGET.textChars) throw new AppBudgetError("the app showed too much text");
   if (points > APP_BUDGET.chartPoints)
     throw new AppBudgetError("the app's charts had too many points");
-  return { nodes, root, units };
+  let charged = structural;
+  for (const id of touched) {
+    const node = nodes.get(id);
+    if (node) charged += nodeUnits(node);
+  }
+  return { nodes, root, units, charged };
 }

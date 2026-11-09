@@ -39,9 +39,6 @@ pub(in crate::server) async fn api_widget_app_message(
     Path((session_id, widget_id, node_id)): Path<(String, String, String)>,
     Json(request): Json<AppMessageRequest>,
 ) -> Response {
-    if let Err((status, code)) = admissible(&state, &session_id) {
-        return refusal(status, code, json!({}));
-    }
     if !valid_occurrence(&request.occurrence) {
         return refusal(StatusCode::BAD_REQUEST, "invalid_occurrence", json!({}));
     }
@@ -81,8 +78,9 @@ pub(in crate::server) async fn api_widget_app_message(
             .into_response()
     };
     // A recorded occurrence answers from its record before any eligibility
-    // check: a retry after a lost response must not turn into `closed` or
-    // `app_updated` because the widget moved on since.
+    // check: a retry after a lost response must not turn into `closed`,
+    // `app_updated` or `session_unavailable` because things moved on since.
+    // Only a send that still has to be queued needs an admissible session.
     match store.widget_interaction(&session_id, &cmid).await {
         Ok(Some(existing)) if existing.message != request.text => {
             return refusal(StatusCode::CONFLICT, "occurrence_reused", json!({}));
@@ -90,13 +88,21 @@ pub(in crate::server) async fn api_widget_app_message(
         Ok(Some(_)) => {
             match store.prompt_echoed(&session_id, &cmid).await {
                 Ok(true) => {}
-                Ok(false) => queue(),
+                Ok(false) => {
+                    if let Err((status, code)) = admissible(&state, &session_id) {
+                        return refusal(status, code, json!({}));
+                    }
+                    queue();
+                }
                 Err(_) => return unavailable(),
             }
             return sent();
         }
         Ok(None) => {}
         Err(_) => return unavailable(),
+    }
+    if let Err((status, code)) = admissible(&state, &session_id) {
+        return refusal(status, code, json!({}));
     }
     let widget = match store.session_widget(&session_id, &widget_id).await {
         Ok(Some(widget)) => widget,
