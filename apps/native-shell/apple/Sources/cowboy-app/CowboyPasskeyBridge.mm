@@ -58,7 +58,8 @@ static BOOL cowboyMessageMatchesRelyingParty(
     NSString *rpID
 ) {
     WKSecurityOrigin *origin = message.frameInfo.securityOrigin;
-    return [origin.protocol isEqualToString:@"https"] &&
+    return message.frameInfo.isMainFrame &&
+        [origin.protocol isEqualToString:@"https"] &&
         [origin.host isEqualToString:rpID];
 }
 
@@ -247,7 +248,11 @@ static NSString *cowboyPasskeyBrowserCallbackStatus(NSURL *url) {
 - (void)userContentController:(__unused WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message
                   replyHandler:(CowboyPasskeyReply)replyHandler {
-    if (![message.body isKindOfClass:NSDictionary.class]) {
+    // Handlers are reachable from every frame of the page, including the
+    // sandboxed frames of widget apps (docs/widget-apps.md §9): only the
+    // main frame may drive the Passkey browser, including `close`.
+    if (!message.frameInfo.isMainFrame ||
+        ![message.body isKindOfClass:NSDictionary.class]) {
         replyHandler(cowboyFailure(
             @"invalid_request",
             @"Invalid native Passkey browser request."
@@ -423,7 +428,9 @@ static CowboyPasskeyBrowserHandler *cowboyPasskeyBrowserHandler(void) {
 - (void)userContentController:(__unused WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message
                   replyHandler:(CowboyPasskeyReply)replyHandler {
-    if (![message.body isKindOfClass:NSDictionary.class]) {
+    // Only the main frame may ask for Passkeys (docs/widget-apps.md §9).
+    if (!message.frameInfo.isMainFrame ||
+        ![message.body isKindOfClass:NSDictionary.class]) {
         replyHandler(cowboyFailure(@"invalid_request", @"Invalid native Passkey request."), nil);
         return;
     }

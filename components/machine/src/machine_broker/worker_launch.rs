@@ -7,6 +7,19 @@ use super::*;
 use crate::machine_plugins::ProviderLaunchContext;
 use cowboy_provider_sdk::ProviderBehaviorContract;
 
+pub(super) fn should_recycle_for_explicit_revive(
+    worker: &WorkerSnapshot,
+    desired_generation: &str,
+) -> bool {
+    matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+        || (!desired_generation.is_empty()
+            && worker.generation != desired_generation
+            && worker.drain_requested
+            && worker.current_turn_id.is_none()
+            && worker.pending_permissions.is_empty()
+            && matches!(worker.state, WorkerState::Running | WorkerState::Draining))
+}
+
 impl Broker {
     /// The registered worker for this generation. A retained bundle may predate
     /// MCP launch plans, so an MCP launch is refused before it starts a worker

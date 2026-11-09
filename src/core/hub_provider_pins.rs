@@ -2,7 +2,76 @@
 
 use super::*;
 
+fn update_failure_key(machine_id: &str, provider: &str, digest: &str) -> String {
+    format!(
+        "{}{machine_id}:{provider}:{digest}",
+        settings_keys::PROVIDER_UPDATE_FAILURE_PREFIX
+    )
+}
+
 impl Hub {
+    /// Remember an unattended update that left a session crashed. The release
+    /// hold is durable: a Controller restart must not let one bad release crash
+    /// the next idle session.
+    pub(super) fn record_automatic_update_failure(
+        &self,
+        session_id: &str,
+        machine_id: &str,
+        provider: &str,
+        digest: &str,
+    ) {
+        self.set_setting(
+            update_failure_key(machine_id, provider, digest),
+            serde_json::json!(now_ms()),
+        );
+        self.inner
+            .automatic_update_failed_sessions
+            .lock()
+            .insert(session_id.to_owned(), std::time::Instant::now());
+    }
+
+    /// Whether an unattended update to this exact release left a session on
+    /// the Machine crashed within `window`. The update pass holds further
+    /// unattended updates to it meanwhile, so one bad release cannot crash
+    /// every idle session in turn.
+    #[must_use]
+    pub fn automatic_update_failed_within(
+        &self,
+        machine_id: &str,
+        provider: &str,
+        digest: &str,
+        window: std::time::Duration,
+    ) -> bool {
+        let window = i64::try_from(window.as_millis()).unwrap_or(i64::MAX);
+        self.setting(&update_failure_key(machine_id, provider, digest))
+            .and_then(|at| at.as_i64())
+            .is_some_and(|at| now_ms().saturating_sub(at) < window)
+    }
+
+    /// Whether this session's last unattended Provider update left it crashed
+    /// and nothing has happened in it since. The idle policy leaves such a
+    /// session alone until it is used or opened, instead of retrying the same
+    /// resume on every release while nobody is there to see it fail.
+    #[must_use]
+    pub fn automatic_update_failed_since_activity(&self, session_id: &str) -> bool {
+        let failed_at = self
+            .inner
+            .automatic_update_failed_sessions
+            .lock()
+            .get(session_id)
+            .copied();
+        failed_at.is_some_and(|failed_at| {
+            // Compare the recorded instants. Two elapsed() calls observe
+            // different "now"s; a scheduling pause between them could lift
+            // this hold even though no session activity occurred.
+            self.inner
+                .sessions
+                .lock()
+                .get(session_id)
+                .is_some_and(|session| session.last_activity <= failed_at)
+        })
+    }
+
     /// Return the native id only when Codex has had a user turn in the current
     /// context generation. An id allocated by `session/new` alone has no rollout
     /// and must not be handed to `session/load` after a restart.

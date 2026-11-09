@@ -83,6 +83,10 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.106.0 records Claude Code 3.20.35 and Claude DeepSeek
+3.1.57, which keep the worker after the adapter's `incomplete_tool_call` turn
+failure. No component changes.
+
 Component release 3.105.0 records Codex 3.5.27, which declares
 `provider.mcp-bindings.v1` and ships the MCP binding launch and execution CLI
 probe runtime. No component changes.

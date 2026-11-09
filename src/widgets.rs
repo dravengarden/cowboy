@@ -8,7 +8,10 @@ use std::collections::HashSet;
 mod images;
 pub mod interactions;
 use images::image_source;
-pub use images::{ARTIFACT_PREFIX, SourceAt, artifact_name, image_sources};
+pub use images::{
+    APP_IMAGE_BYTES, APP_IMAGE_PIXELS, APP_PIXELS, ARTIFACT_PREFIX, SourceAt, app_png,
+    artifact_name, image_sources,
+};
 
 pub const SCHEMA: &str = "cowboy.widget/1";
 pub const DOCUMENT_BYTES: usize = 24 * 1024;
@@ -32,6 +35,10 @@ const STEPS: usize = 50;
 const OPTIONS: usize = 50;
 const CARD_ACTIONS: usize = 6;
 const GALLERY: usize = 24;
+/// Images one app may draw, each a key of its node's `images`.
+const APP_IMAGES: usize = 8;
+const APP_CODE_BYTES: usize = 14 * 1024;
+const APP_PROPS_BYTES: usize = 6 * 1024;
 pub const PATCH_OPS: usize = 64;
 const DESCRIPTION_CHARS: usize = 2048;
 
@@ -172,6 +179,7 @@ fn reference(value: Option<&Value>, path: &str) -> Checked {
 
 #[derive(Default)]
 struct Budget {
+    apps: usize,
     nodes: usize,
     cells: usize,
     items: usize,
@@ -345,10 +353,83 @@ fn kv(node: &Map<String, Value>, path: &str, budget: &mut Budget) -> Checked {
 }
 
 #[allow(clippy::too_many_lines)]
+/// An agent-written app (docs/widget-apps.md §8): bounds only; the Controller
+/// never parses or runs the TSX, and `props` stays opaque JSON.
+fn app(node: &Map<String, Value>, path: &str, budget: &mut Budget) -> Checked {
+    let field = |name: &str| format!("{path}.{name}");
+    budget.apps += 1;
+    if budget.apps > 1 {
+        return Err(Invalid::at(path, "at most one app per widget"));
+    }
+    if !node.get("id").and_then(Value::as_str).is_some_and(valid_id) {
+        return Err(Invalid::at(&field("id"), "required on an app"));
+    }
+    line(node.get("title"), &field("title"), TITLE_CHARS, false)?;
+    text(
+        node.get("fallback"),
+        &field("fallback"),
+        FALLBACK_CHARS,
+        false,
+    )?;
+    let serialized = |value: &Value| serde_json::to_string(value).map_or(usize::MAX, |s| s.len());
+    match node.get("code") {
+        Some(code @ Value::String(_)) if serialized(code) <= APP_CODE_BYTES => {}
+        _ => {
+            return Err(Invalid::at(
+                &field("code"),
+                "expected TSX of at most 14 KiB (serialized)",
+            ));
+        }
+    }
+    match node.get("props") {
+        None => {}
+        Some(props @ Value::Object(_)) if serialized(props) <= APP_PROPS_BYTES => {}
+        Some(_) => {
+            return Err(Invalid::at(
+                &field("props"),
+                "expected an object of at most 6 KiB (serialized)",
+            ));
+        }
+    }
+    if let Some(images) = node.get("images") {
+        let images = object(images, &field("images"))?;
+        if images.len() > APP_IMAGES {
+            return Err(Invalid::at(&field("images"), "at most 8 images"));
+        }
+        for (key, source) in images {
+            let at = format!("{}.{key}", field("images"));
+            if !valid_id(key) {
+                return Err(Invalid::at(&at, "keys are ids ([A-Za-z0-9_-]{1,64})"));
+            }
+            image_source(Some(source), &at)?;
+            // Apps draw only still PNGs (docs/widget-apps.md §6).
+            if source.get("kind").and_then(Value::as_str) == Some("artifact")
+                && !source
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .is_some_and(|url| url.ends_with(".png"))
+            {
+                return Err(Invalid::at(
+                    &format!("{at}.url"),
+                    "apps take PNG artifacts only",
+                ));
+            }
+        }
+        budget.images += images.len();
+    }
+    one_of(
+        node.get("height"),
+        &field("height"),
+        &["xs", "sm", "md", "lg"],
+        true,
+    )
+}
+
 fn leaf(node: &Map<String, Value>, kind: &str, path: &str, budget: &mut Budget) -> Checked {
     let field = |name: &str| format!("{path}.{name}");
     match kind {
         "divider" => Ok(()),
+        "app" => app(node, path, budget),
         "text" => {
             text(node.get("text"), &field("text"), TEXT_CHARS, false)?;
             one_of(
@@ -583,26 +664,37 @@ pub fn validate(document: &Value) -> Result<(), Invalid> {
 }
 
 /// The JSON Pointer of the node whose `id` is `id`.
+/// The rendered child edges of a node, by its type: `children` on containers
+/// and `actions` on cards. Extra properties of any node — an app's ignored
+/// `children`, anything inside `props` — are never followed.
+pub(crate) fn node_edges(
+    map: &Map<String, Value>,
+) -> impl Iterator<Item = (&'static str, &Vec<Value>)> {
+    let kind = map.get("type").and_then(Value::as_str).unwrap_or_default();
+    let children = matches!(kind, "stack" | "section" | "card")
+        .then(|| map.get("children").and_then(Value::as_array))
+        .flatten()
+        .map(|items| ("children", items));
+    let actions = (kind == "card")
+        .then(|| map.get("actions").and_then(Value::as_array))
+        .flatten()
+        .map(|items| ("actions", items));
+    children.into_iter().chain(actions)
+}
+
+/// The JSON Pointer of the node with `id`, following rendered edges only
+/// (docs/widget-apps.md §8).
 fn node_pointer(value: &Value, id: &str, here: &str) -> Option<String> {
-    match value {
-        Value::Object(map) => {
-            if map.get("id").and_then(Value::as_str) == Some(id) && map.contains_key("type") {
-                return Some(here.to_owned());
-            }
-            map.iter().find_map(|(key, child)| {
-                node_pointer(
-                    child,
-                    id,
-                    &format!("{here}/{}", key.replace('~', "~0").replace('/', "~1")),
-                )
-            })
-        }
-        Value::Array(items) => items
+    let map = value.as_object()?;
+    if map.get("id").and_then(Value::as_str) == Some(id) && map.contains_key("type") {
+        return Some(here.to_owned());
+    }
+    node_edges(map).find_map(|(key, items)| {
+        items
             .iter()
             .enumerate()
-            .find_map(|(index, child)| node_pointer(child, id, &format!("{here}/{index}"))),
-        _ => None,
-    }
+            .find_map(|(index, child)| node_pointer(child, id, &format!("{here}/{key}/{index}")))
+    })
 }
 
 fn split_last(pointer: &str) -> Option<(&str, String)> {
@@ -631,7 +723,7 @@ pub fn apply_patch(document: &Value, ops: &[Value]) -> Result<Value, Invalid> {
                 let (id, inner) = rest
                     .split_once('/')
                     .map_or((rest, ""), |(id, inner)| (id, inner));
-                let base = node_pointer(&next, id, "")
+                let base = node_pointer(&next["root"], id, "/root")
                     .ok_or_else(|| Invalid::at(&format!("{at}.path"), "no node has this id"))?;
                 if inner.is_empty() {
                     base
@@ -827,6 +919,79 @@ mod tests {
         assert_eq!(
             validate(&cells).unwrap_err().message,
             "more than 2000 table cells"
+        );
+    }
+
+    #[test]
+    fn app_nodes_are_bounded_and_their_props_stay_opaque() {
+        let app = json!({"type":"app","id":"dash","title":"Dashboard","fallback":"Disk usage",
+            "code":"export default function A(){ return null }",
+            "props":{"hidden":{"type":"text","id":"note","text":"x"},
+                     "picture":{"type":"image","alt":"x","src":{"kind":"event","seq":1}}}});
+        let mut document = approval();
+        document["root"] = json!({"type":"stack","children":[app.clone(),
+            {"type":"text","id":"note","text":"visible"}]});
+        validate(&document).unwrap();
+        let patched = apply_patch(
+            &document,
+            &[json!({"op":"set","path":"#note/text","value":"changed"})],
+        )
+        .unwrap();
+        assert_eq!(patched["root"]["children"][1]["text"], "changed");
+        assert_eq!(
+            patched["root"]["children"][0]["props"]["hidden"]["text"],
+            "x"
+        );
+        assert!(
+            image_sources(&document).is_empty(),
+            "image-shaped props are not sources"
+        );
+        let mut smuggled = document.clone();
+        smuggled["root"]["children"][0]["children"] =
+            json!([{"type":"text","id":"note","text":"hidden"}]);
+        let patched = apply_patch(
+            &smuggled,
+            &[json!({"op":"set","path":"#note/text","value":"changed"})],
+        )
+        .unwrap();
+        assert_eq!(
+            patched["root"]["children"][1]["text"], "changed",
+            "ignored children are never addressed"
+        );
+        let mut two = document.clone();
+        two["root"]["children"][1] =
+            json!({"type":"app","id":"b","title":"B","fallback":"b","code":""});
+        assert_eq!(
+            validate(&two).unwrap_err().message,
+            "at most one app per widget"
+        );
+        let mut pictured = document.clone();
+        pictured["root"]["children"][0]["images"] = json!({"logo":{"kind":"event","seq":2}});
+        validate(&pictured).unwrap();
+        assert_eq!(image_sources(&pictured).len(), 1);
+        pictured["root"]["children"][0]["images"]["logo"] =
+            json!({"kind":"artifact","url":format!("/api/artifacts/{}.jpg", "a".repeat(64))});
+        assert_eq!(
+            validate(&pictured).unwrap_err().message,
+            "apps take PNG artifacts only"
+        );
+        pictured["root"]["children"][0]["images"] = Value::Object(
+            (0..9)
+                .map(|i| (format!("k{i}"), json!({"kind":"event","seq":i})))
+                .collect(),
+        );
+        assert_eq!(validate(&pictured).unwrap_err().message, "at most 8 images");
+        let mut big = document.clone();
+        big["root"]["children"][0]["code"] = json!("x".repeat(15 * 1024));
+        assert_eq!(validate(&big).unwrap_err().path, "root.children[0].code");
+        let mut bare = document;
+        bare["root"]["children"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("fallback");
+        assert_eq!(
+            validate(&bare).unwrap_err().path,
+            "root.children[0].fallback"
         );
     }
 

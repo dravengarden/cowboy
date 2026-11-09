@@ -22,7 +22,7 @@ const PASS_INTERVAL: Duration = Duration::from_secs(30);
 const REQUEST_POLL: Duration = Duration::from_secs(5);
 /// How long unattended updates to a release pause on a Machine after one of
 /// them left a session crashed. An explicit request still goes through.
-const FAILURE_HOLD: Duration = Duration::from_mins(30);
+const FAILURE_HOLD: Duration = Duration::from_hours(24);
 /// A session starting for longer than this no longer paces its Machine. Every
 /// start phase gives up well inside it (the longest, a native resume, at 240s).
 const STARTING_STALL: Duration = Duration::from_mins(10);

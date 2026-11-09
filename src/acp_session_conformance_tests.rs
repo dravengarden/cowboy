@@ -1607,6 +1607,28 @@ async fn partial_stream_failure_keeps_native_session_without_replaying_completed
 }
 
 #[test]
+fn incomplete_tool_bookkeeping_fails_the_turn_but_keeps_the_worker() {
+    // The exact detail of a session that had just ended its turn normally: the
+    // tool had a result in the native transcript, 48 minutes before this error.
+    let detail = "Internal error: Claude ended the turn without returning results for tool calls: toolu_01SwPmTTqAo1NZ1zh8jFDY88: {\n  \"errorKind\": \"incomplete_tool_call\"\n}";
+    for manifest in [
+        include_str!("../plugins/claude-code/provider.json"),
+        include_str!("../plugins/claude-deepseek/provider.json"),
+    ] {
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(manifest).unwrap();
+        let behavior = source.compile().unwrap().runtime.behavior;
+        assert!(crate::provider::keeps_worker_alive_for_behavior(
+            &behavior, detail
+        ));
+        // The tool may have run; never replay the prompt.
+        assert!(!crate::provider::should_retry_without_visible_update(
+            &behavior, detail, false, 0
+        ));
+    }
+}
+
+#[test]
 fn partial_stream_policy_preserves_worker_but_never_replays_a_prompt() {
     let source: cowboy_provider_sdk::StandardProviderSource =
         serde_json::from_str(include_str!("../plugins/claude-code/provider.json")).unwrap();

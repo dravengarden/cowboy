@@ -345,7 +345,7 @@
           "components/state-sync"
           "components/state-sync-idb"
         ];
-        depsHash = "sha256-6tpzuehx8vgf3byF4QW7T7fK08N1zGHU1fY5QpS5QYc=";
+        depsHash = "sha256-EhMlyaJaT8LL9xyl4ebftJLXLS7uL+hINmq7R1oVSCU=";
       }).overrideAttrs (previous: {
         # A Web release cannot be built from a commit that grows a structure
         # offender or breaks a web unit test (both also run in just check,
@@ -728,18 +728,23 @@
         };
       });
 
-      # Pin the exact wrapper and its transitive Nix closure only for new full
-      # releases. Resident-only releases do not retrofit retained environments.
-      execution-configuration = pkgs.runCommand "cowboy-execution.json" {
+      # New environments pin the exact agent CLI their keeper offers; MCP
+      # bindings require that identity. Existing environments keep their saved
+      # contracts either way.
+      pinned-execution-configuration = cli: runtime: pkgs.runCommand "cowboy-execution.json" {
         nativeBuildInputs = [ pkgs.jq ];
       } ''
-        digest="$(${pkgs.coreutils}/bin/sha256sum ${cowboy-machine}/bin/cowboy)"
-        jq --arg command "${cowboy-machine}/bin/cowboy" \
-          --arg sha256 "''${digest%% *}" --arg version "${cowboy-machine.version}" \
+        digest="$(${pkgs.coreutils}/bin/sha256sum ${cli}/bin/cowboy)"
+        jq --arg command "${cli}/bin/cowboy" \
+          --arg sha256 "''${digest%% *}" --arg version "${cli.version}" \
           '. + {agent_cli: {command: $command, sha256: $sha256, version: $version}}' \
-          ${execution-configuration-for execution-runtime} > "$out"
+          ${execution-configuration-for runtime} > "$out"
       '';
-      retained-execution-configuration = execution-configuration-for retained-execution-runtime;
+      execution-configuration = pinned-execution-configuration cowboy-machine execution-runtime;
+      # Resident-only releases pin the accepted retained bundle's CLI, never the
+      # newer resident build.
+      retained-execution-configuration =
+        pinned-execution-configuration retained-worker-package retained-execution-runtime;
 
       retained-worker-bundle = cowboy-workers.packages.${system}.cowboy-machine-release;
       retained-worker-package = cowboy-workers.packages.${system}.cowboy;

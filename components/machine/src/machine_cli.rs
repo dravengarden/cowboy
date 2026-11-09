@@ -512,7 +512,6 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     let file_buffers_policy = crate::config::file_buffers::path(&args.state_dir);
     let _file_buffers_policy =
         crate::config::file_buffers::start(device_config.clone(), file_buffers_policy.clone())?;
-    let runtime_socket = args.socket.clone();
     let bootstrap_acp_generation = if args.desired_generation.is_empty() {
         env!("CARGO_PKG_VERSION").to_owned()
     } else {
@@ -545,6 +544,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     );
     let worker_command =
         active_acp.map_or_else(|| args.worker_command.clone(), |(_, executable)| executable);
+    providers.set_worker_command(worker_command.clone());
     let log_directory = crate::logs::directory(&args.state_dir);
     let mut log_context = crate::logs::Context::new("cowboy-machine");
     log_context.machine = resolve_runtime_machine_id(&args.machine_id, &args.state_dir, None);
@@ -582,7 +582,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         None
     };
     let mut broker = MachineBrokerArgs {
-        socket: args.socket,
+        socket: args.socket.clone(),
         worker_command,
         desired_generation,
         spawn_mode: match args.spawn_mode {
@@ -699,7 +699,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         machine_id: machine_id.clone(),
         display_name,
         identity,
-        runtime_socket,
+        runtime_socket: args.socket,
         workspaces: Arc::clone(&workspaces),
         components: Arc::clone(&components),
         providers,

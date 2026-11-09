@@ -112,6 +112,37 @@ async fn event_payload(
         .transpose()
 }
 
+/// Pixels of a resolved app image, decoded completely (docs/widget-apps.md
+/// §6): `Err(message)` when it is not a still PNG within the app bounds.
+fn app_image_pixels(
+    store: &cowboy::artifacts::ArtifactStore,
+    source: &Value,
+) -> Result<u64, &'static str> {
+    let bytes = match source["kind"].as_str() {
+        Some("data") => base64::engine::general_purpose::STANDARD
+            .decode(source["base64"].as_str().unwrap_or_default())
+            .map_err(|_| "not a valid PNG")?,
+        _ => {
+            let name = source["url"]
+                .as_str()
+                .and_then(rules::artifact_name)
+                .ok_or("apps take PNG artifacts only")?;
+            if !name.ends_with(".png") {
+                return Err("apps take PNG artifacts only");
+            }
+            let path = store.path(name).ok_or("no such artifact")?;
+            let size = std::fs::metadata(&path)
+                .map_err(|_| "no such artifact")?
+                .len();
+            if size > rules::APP_IMAGE_BYTES as u64 {
+                return Err("larger than 1 MiB");
+            }
+            std::fs::read(path).map_err(|_| "no such artifact")?
+        }
+    };
+    rules::app_png(&bytes)
+}
+
 /// Verify, pin and resolve every image source of `document` in place.
 /// `Ok(Some(refusal))` names the first source that cannot be used.
 pub(super) async fn resolve(
@@ -120,10 +151,12 @@ pub(super) async fn resolve(
     document: &mut Value,
 ) -> Result<Option<Value>, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?.artifacts();
+    let mut app_pixels = 0_u64;
     for rules::SourceAt {
         pointer,
         path,
         source,
+        app,
     } in rules::image_sources(document)
     {
         let url = match source["kind"].as_str() {
@@ -132,6 +165,12 @@ pub(super) async fn resolve(
                 let name = rules::artifact_name(url).unwrap_or_default();
                 if !store.pin(name).map_err(|_| "unavailable")? {
                     return Ok(Some(refusal(&format!("{path}.url"), "no such artifact")));
+                }
+                if app {
+                    match app_image_pixels(&store, &source) {
+                        Ok(pixels) => app_pixels += pixels,
+                        Err(message) => return Ok(Some(refusal(&path, message))),
+                    }
                 }
                 continue;
             }
@@ -154,11 +193,31 @@ pub(super) async fn resolve(
                 };
                 url
             }
-            _ => continue,
+            _ => {
+                if app {
+                    match app_image_pixels(&store, &source) {
+                        Ok(pixels) => app_pixels += pixels,
+                        Err(message) => return Ok(Some(refusal(&path, message))),
+                    }
+                }
+                continue;
+            }
         };
+        if app {
+            match app_image_pixels(&store, &json!({"kind":"artifact","url":url})) {
+                Ok(pixels) => app_pixels += pixels,
+                Err(message) => return Ok(Some(refusal(&path, message))),
+            }
+        }
         if let Some(slot) = document.pointer_mut(&pointer) {
             *slot = json!({"kind":"artifact","url":url});
         }
+    }
+    if app_pixels > rules::APP_PIXELS {
+        return Ok(Some(refusal(
+            "root",
+            "an app's images decode to more than 16 megapixels together",
+        )));
     }
     Ok(None)
 }

@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-deepseek",
-  "version": "3.1.56",
+  "version": "3.1.57",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.2.0",
   "display": {
@@ -195,6 +195,15 @@
           "classification": "provider-empty-stream",
           "keep_worker_alive": true,
           "retry_once_without_visible_update": true
+        },
+        {
+          "when": {
+            "op": "contains",
+            "value": "incomplete_tool_call"
+          },
+          "classification": "provider-incomplete-tool-call",
+          "keep_worker_alive": true,
+          "retry_once_without_visible_update": false
         }
       ]
     },

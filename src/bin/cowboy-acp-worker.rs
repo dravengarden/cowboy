@@ -1,5 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use anyhow::Context as _;
 use clap::Parser;
 use cowboy::worker::WorkerArgs;
 
@@ -46,8 +47,27 @@ struct Args {
     mcp_plan: Option<String>,
 }
 
+/// Ask this exact worker build whether it can read a Provider package. The
+/// Machine runs it before activating a release, so a package only a newer
+/// worker understands is refused at install instead of crashing sessions.
+const CHECK_PROVIDER_PACKAGE: &str = "--check-provider-package";
+
+fn check_provider_package(path: &Path) -> anyhow::Result<()> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("reading Provider package {}", path.display()))?;
+    cowboy_provider_sdk::ProviderPackage::from_historical_bytes(&bytes)?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let mut arguments = std::env::args_os().skip(1);
+    if arguments.next().as_deref() == Some(std::ffi::OsStr::new(CHECK_PROVIDER_PACKAGE)) {
+        let path = arguments
+            .next()
+            .context("a Provider package path is required")?;
+        return check_provider_package(Path::new(&path));
+    }
     let args = Args::parse();
     if args.launch_gate {
         anyhow::ensure!(

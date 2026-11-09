@@ -179,7 +179,7 @@ workspace-extensions-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" workspace-extensions' conformance "{{BROWSER}}"
 
 idb-conformance-check:
-    bun x --no-install biome format tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs tools/cdp-fixture.ts tools/cdp-browser-conformance.ts tools/cdp-keyboard-acceptance.ts
+    bun x --no-install biome format tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs tools/cdp-fixture.ts tools/cdp-browser-conformance.ts tools/cdp-keyboard-acceptance.ts tools/ios-simulator-conformance.ts
     bun run typecheck
 
 # Retain an actual product-store bundle before and after a latency change.

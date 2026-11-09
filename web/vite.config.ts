@@ -5,6 +5,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { splashLoadingCss } from "../components/app-shell/loading";
 import { EDITOR_PLUGIN_SANDBOX_BOOT, EDITOR_PLUGIN_SANDBOX_BOOT_ID } from "./src/editorPlugins/sandboxBoot";
+import { APP_SANDBOX_BOOT, APP_SANDBOX_BOOT_ID } from "./src/widgets/apps/appSandboxBoot";
+import { cowboyAppRuntime } from "./appRuntimePlugin.mjs";
 
 const webRoot = dirname(fileURLToPath(import.meta.url));
 
@@ -159,6 +161,7 @@ export default defineConfig({
         },
       },
     },
+    cowboyAppRuntime(),
     {
       // Never executed here. Its hash in the served CSP is what lets the same
       // text run inside the srcdoc sandbox (src/editorPlugins/sandboxBoot.ts).
@@ -171,7 +174,9 @@ export default defineConfig({
           return html.replace(
             "</head>",
             () =>
-              `<script type="text/plain" id="${EDITOR_PLUGIN_SANDBOX_BOOT_ID}">${EDITOR_PLUGIN_SANDBOX_BOOT}</script></head>`,
+              `<script type="text/plain" id="${EDITOR_PLUGIN_SANDBOX_BOOT_ID}">${EDITOR_PLUGIN_SANDBOX_BOOT}</script>` +
+              // Same mechanism for the widget app sandbox (src/widgets/apps/appSandboxBoot.ts).
+              `<script type="text/plain" id="${APP_SANDBOX_BOOT_ID}">${APP_SANDBOX_BOOT}</script></head>`,
           );
         },
       },

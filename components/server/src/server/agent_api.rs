@@ -36,10 +36,12 @@ mod observations;
 mod review_defaults;
 mod session_reads;
 mod usage_reads;
+mod widget_app_messages;
 mod widget_images;
 mod widget_interactions;
 mod widgets;
 pub(super) use actions::{invoke, read_parent};
+pub(super) use widget_app_messages::api_widget_app_message;
 pub(super) use widget_interactions::{api_widget_interaction, recover_decisions};
 /// Concurrent programs across the Controller; excess is refused, not queued.
 static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));

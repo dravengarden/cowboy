@@ -27,6 +27,7 @@ import { WidgetLinkText } from "./WidgetLinkText";
 import { WidgetTable } from "./WidgetTable";
 import { GalleryNode, ImageNode } from "./WidgetImages";
 import { ButtonNode, ChoiceNode } from "./WidgetInputs";
+import { WidgetApp } from "./WidgetApp";
 import { moreLabel, previewSlice, useWidgetMode } from "./widgetMode";
 import { WIDGET_LIMITS } from "../../../contracts/widget-v1.ts";
 
@@ -393,7 +394,7 @@ function AlertNode({ node }: { node: Of<"alert"> }): React.JSX.Element {
 }
 
 type Leaf = Of<
-  "progress" | "steps" | "alert" | "image" | "gallery" | "button" | "choice" | "unsupported"
+  "progress" | "steps" | "alert" | "image" | "gallery" | "app" | "button" | "choice" | "unsupported"
 >;
 
 /** Status, media and input nodes. */
@@ -409,6 +410,8 @@ function WidgetLeaf({ node }: { node: Leaf }): React.JSX.Element {
       return <ImageNode node={node} />;
     case "gallery":
       return <GalleryNode node={node} />;
+    case "app":
+      return <WidgetApp node={node} />;
     case "button":
       return <ButtonNode node={node} />;
     case "choice":

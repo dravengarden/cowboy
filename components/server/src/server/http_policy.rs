@@ -445,6 +445,27 @@ pub(super) fn session_id_from_sync_state(state: &str) -> Option<&str> {
         .filter(|id| !id.is_empty())
 }
 
+/// `/api/sessions/{id}/widgets/{widget}/interactions` and
+/// `/api/sessions/{id}/widgets/{widget}/apps/{node}/messages`.
+fn human_only_session_route(path: &str) -> bool {
+    let parts: Vec<&str> = path.trim_end_matches('/').split('/').collect();
+    matches!(
+        parts.as_slice(),
+        ["", "api", "sessions", _, "widgets", _, "interactions"]
+            | [
+                "",
+                "api",
+                "sessions",
+                _,
+                "widgets",
+                _,
+                "apps",
+                _,
+                "messages"
+            ]
+    )
+}
+
 pub(super) fn automation_route_allowed(
     identity: &crate::client_auth::DeviceAccessIdentity,
     method: &Method,
@@ -462,6 +483,11 @@ pub(super) fn automation_route_allowed(
             || (!path.starts_with("/api/auth/") && !path.starts_with("/api/admin/")))
     {
         return true;
+    }
+    // A widget decision or an app's message speaks for the person who read it:
+    // no automation credential may submit one, whatever its scopes.
+    if human_only_session_route(path) {
+        return false;
     }
     identity.has_scope("sessions:write")
         && ((method == Method::POST && matches!(path, "/api/sessions" | "/api/execution-sessions"))

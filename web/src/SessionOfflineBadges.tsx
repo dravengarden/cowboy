@@ -49,8 +49,10 @@ export function SessionObligationBadge(
           color: "info.main",
         }}
       >
-        {/* Inline on the project line: sized by its caption, never taller. */}
-        <CloudUploadOutlined sx={{ fontSize: "1.25em" }} />
+        {/* Inline on the project line: sized by its caption, never taller.
+            The cloud reaches the viewBox edge and an em size lands on a
+            fractional pixel, so the default clip shaved its right side on iOS. */}
+        <CloudUploadOutlined sx={{ fontSize: "1.25em", overflow: "visible" }} />
         <Typography variant="caption" sx={{ lineHeight: 1 }}>{pending}</Typography>
       </Box>
     </Tooltip>

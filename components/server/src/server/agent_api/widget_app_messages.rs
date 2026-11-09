@@ -1,0 +1,157 @@
+//! Messages an app asks to send (docs/widget-apps.md §7). The app's text is
+//! shown to the person, labelled as written by the app; the confirmed send
+//! carries its digest and is queued as the person's ordinary prompt. Like a
+//! decision, it is recorded before it is queued, retried only while no stored
+//! echo proves delivery, and re-queued after a Controller restart. One
+//! confirmation (`occurrence`) is one message: two confirmed sends of the same
+//! text are two prompts, a retried one is one.
+use super::widget_interactions::{admissible, digest, refusal, unavailable};
+use super::*;
+use crate::store::session_widgets::interactions::StoredInteraction;
+use crate::widgets::interactions;
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse as _, Response};
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::server) struct AppMessageRequest {
+    code_sha256: String,
+    /// Host-owned id of one confirmation, kept across retries of that send.
+    occurrence: String,
+    text: String,
+    /// The digest of the exact text the person confirmed; required.
+    #[serde(default)]
+    message_sha256: Option<String>,
+}
+
+fn valid_occurrence(occurrence: &str) -> bool {
+    (8..=64).contains(&occurrence.len())
+        && occurrence
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+/// `POST /api/sessions/{id}/widgets/{widget_id}/apps/{node_id}/messages`.
+pub(in crate::server) async fn api_widget_app_message(
+    State(state): State<Arc<AppState>>,
+    Path((session_id, widget_id, node_id)): Path<(String, String, String)>,
+    Json(request): Json<AppMessageRequest>,
+) -> Response {
+    if !valid_occurrence(&request.occurrence) {
+        return refusal(StatusCode::BAD_REQUEST, "invalid_occurrence", json!({}));
+    }
+    let Some(store) = state.store.as_ref() else {
+        return unavailable();
+    };
+    // The text never leaves the device before the person confirms it: there
+    // is no preview round-trip, and a send must carry the digest of the text
+    // the person saw (docs/widget-apps.md §7).
+    let Some(confirmed) = request.message_sha256.as_deref() else {
+        return refusal(StatusCode::BAD_REQUEST, "confirmation_required", json!({}));
+    };
+    if confirmed != digest(&request.text) {
+        return refusal(StatusCode::CONFLICT, "changed", json!({}));
+    }
+    let _order = super::widgets::WIDGET_WRITES.lock().await;
+    let cmid = interactions::app_message_cmid(
+        &session_id,
+        &widget_id,
+        &node_id,
+        &request.code_sha256,
+        &request.occurrence,
+    );
+    let queue = || {
+        state.hub.submit(
+            &session_id,
+            request.text.clone(),
+            Vec::new(),
+            Some(cmid.clone()),
+        );
+    };
+    let sent = || {
+        (
+            StatusCode::OK,
+            Json(json!({"status": "sent", "cmid": cmid, "message": request.text})),
+        )
+            .into_response()
+    };
+    // A recorded occurrence answers from its record before any eligibility
+    // check: a retry after a lost response must not turn into `closed`,
+    // `app_updated` or `session_unavailable` because things moved on since.
+    // A recorded message is the Controller's to deliver: it is re-queued
+    // here when the session admits prompts, and otherwise stays queued in
+    // the Hub or is re-queued by startup recovery.
+    match store.widget_interaction(&session_id, &cmid).await {
+        Ok(Some(existing)) if existing.message != request.text => {
+            return refusal(StatusCode::CONFLICT, "occurrence_reused", json!({}));
+        }
+        Ok(Some(_)) => {
+            match store.prompt_echoed(&session_id, &cmid).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    if admissible(&state, &session_id).is_ok() {
+                        queue();
+                    }
+                }
+                Err(_) => return unavailable(),
+            }
+            return sent();
+        }
+        Ok(None) => {}
+        Err(_) => return unavailable(),
+    }
+    if let Err((status, code)) = admissible(&state, &session_id) {
+        return refusal(status, code, json!({}));
+    }
+    let widget = match store.session_widget(&session_id, &widget_id).await {
+        Ok(Some(widget)) => widget,
+        Ok(None) => return refusal(StatusCode::NOT_FOUND, "unknown_widget", json!({})),
+        Err(_) => return unavailable(),
+    };
+    if widget.closed {
+        return refusal(StatusCode::CONFLICT, "closed", json!({}));
+    }
+    let message = match interactions::app_message(
+        &widget.document,
+        &node_id,
+        &request.code_sha256,
+        &request.text,
+    ) {
+        Ok(message) => message,
+        Err(refused) => {
+            let status = if refused.code == "app_updated" {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::UNPROCESSABLE_ENTITY
+            };
+            return refusal(status, refused.code, json!({"message": refused.message}));
+        }
+    };
+    let record = StoredInteraction {
+        cmid: cmid.clone(),
+        revision: widget.revision,
+        node_id: node_id.clone(),
+        group_key: message.group_key,
+        signature: message.signature,
+        labels: Vec::new(),
+        message: request.text.clone(),
+        created_at_ms: chrono::Utc::now().timestamp_millis(),
+    };
+    let updated = match store
+        .record_widget_interaction(&session_id, &widget_id, &record)
+        .await
+    {
+        Ok(Some(updated)) => updated,
+        Ok(None) => return refusal(StatusCode::CONFLICT, "cleared", json!({})),
+        Err(error) => {
+            tracing::warn!(session = %session_id, %error, "widget app message record failed");
+            return unavailable();
+        }
+    };
+    queue();
+    let decided = super::widget_interactions::decided(store, &session_id, &updated).await;
+    super::widgets::push(&state, &session_id, &updated, "app_message", decided);
+    sent()
+}

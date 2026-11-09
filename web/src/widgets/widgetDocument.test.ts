@@ -90,7 +90,11 @@ test("the aggregate cell budget is enforced across tables", () => {
 });
 
 test("a button's action fields are checked before any renderer reads them", () => {
-  for (const action of [{ kind: "open" }, { kind: "open", to: { kind: "url" } }, { kind: "copy" }]) {
+  for (const action of [
+    { kind: "open" },
+    { kind: "open", to: { kind: "url" } },
+    { kind: "copy" },
+  ]) {
     const parsed = parseWidgetValue({
       schema: "cowboy.widget/1",
       title: "x",

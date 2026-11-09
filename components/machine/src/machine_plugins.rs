@@ -39,11 +39,13 @@ pub use mcp_servers::{McpProcess, McpSessions};
 pub use mcp_servers::{PreparedMcpBinding, PreparedMcpServer};
 pub use native_profile::LogoutPreparation;
 mod operations;
+mod platform_match;
 mod remove_projection;
 mod retirement;
 mod session_extensions;
 mod telemetry;
 mod uninstall;
+mod worker_contract;
 use crate::machine_protocol::plugin_install::InstallPhase;
 use installation::{InstallGuard, ensure_machine_installable_kind};
 
@@ -291,6 +293,8 @@ impl MachineEncryptionIdentity {
     }
 }
 
+use platform_match::{matching_payload, matching_runtime_artifacts};
+
 #[derive(Clone)]
 pub struct MachinePluginStore {
     root: PathBuf,
@@ -318,6 +322,8 @@ pub struct MachinePluginStore {
     /// The Device configuration, once the daemon has loaded it. Retention
     /// policy reads it live; without it the artifact cache is never pruned.
     device_config: std::sync::Arc<std::sync::OnceLock<crate::config::Handle>>,
+    /// The worker build new sessions launch with; see `worker_contract`.
+    worker_command: std::sync::Arc<parking_lot::Mutex<Option<PathBuf>>>,
     browser_drain: machine_browser::DrainSlot,
     #[cfg(test)]
     runtime_verifications: std::sync::Arc<AtomicU64>,
@@ -387,6 +393,7 @@ impl MachinePluginStore {
             runtime_proofs: std::sync::Arc::default(),
             device_config: std::sync::Arc::default(),
             browser_drain: std::sync::Arc::default(),
+            worker_command: std::sync::Arc::default(),
             #[cfg(test)]
             runtime_verifications: std::sync::Arc::new(AtomicU64::new(0)),
             #[cfg(test)]
@@ -620,27 +627,14 @@ impl MachinePluginStore {
         fs::create_dir_all(&content)
             .with_context(|| format!("creating Provider generation {}", generation.display()))?;
         fs::set_permissions(&generation, fs::Permissions::from_mode(0o700))?;
-        atomic_write(
-            &content.join("package.cowboy-provider"),
-            &package.canonical_bytes()?,
-            0o600,
+        write_provider_generation_files(
+            &content,
+            &package,
+            plugin_package,
+            desired,
+            host_bundle,
+            host_bundle_bytes,
         )?;
-        atomic_write(
-            &content.join("package.cowboy-plugin"),
-            &plugin_package.canonical_bytes()?,
-            0o600,
-        )?;
-        atomic_write(
-            &content.join("plugin-release.json"),
-            &serde_json::to_vec(&desired.release)?,
-            0o600,
-        )?;
-        atomic_write(
-            &content.join("publisher.pub"),
-            desired.publisher_public_key.as_bytes(),
-            0o600,
-        )?;
-        stage_plugin_host_bundle(&content, host_bundle, host_bundle_bytes)?;
 
         let started = Instant::now();
         let runtime = guard
@@ -676,6 +670,13 @@ impl MachinePluginStore {
             staging_ms = started.elapsed().as_millis(),
             "Provider generation staged"
         );
+        // Last, so a worker selected while staging is the one that is checked.
+        guard
+            .bounded(self.ensure_worker_reads_package(
+                &content.join("package.cowboy-provider"),
+                &package.manifest.runtime.required_capabilities,
+            ))
+            .await?;
         guard.before_activation(self)?;
         let pending =
             self.begin_installation(&package.manifest.id, &desired.release.artifact_digest)?;
@@ -839,6 +840,11 @@ impl MachinePluginStore {
         }
         let (package, release, package_path, _) =
             self.verified_generation(provider_id, generation_digest)?;
+        self.ensure_worker_reads_package(
+            &package_path,
+            &package.manifest.runtime.required_capabilities,
+        )
+        .await?;
         let payload = matching_payload(&package, &self.platform, &self.architecture)?;
         let runtime_artifacts =
             matching_runtime_artifacts(&release, &self.platform, &self.architecture)?;
@@ -3973,48 +3979,36 @@ pub fn derive_seal_key(shared: &[u8; 32]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn matching_payload<'a>(
-    package: &'a ProviderPackage,
-    platform: &Platform,
-    architecture: &str,
-) -> Result<&'a cowboy_provider_sdk::PlatformPayload> {
-    let os = match platform {
-        Platform::Linux => OperatingSystem::Linux,
-        Platform::Macos => OperatingSystem::Macos,
-    };
-    let architecture = match architecture {
-        "x86_64" => Architecture::X86_64,
-        "aarch64" => Architecture::Aarch64,
-        other => bail!("unsupported Machine architecture {other:?}"),
-    };
-    package
-        .manifest
-        .runtime
-        .platforms
-        .iter()
-        .find(|payload| payload.os == os && payload.architecture == architecture)
-        .context("Provider has no payload for this Machine platform")
-}
-
-fn matching_runtime_artifacts<'a>(
-    release: &'a cowboy_provider_sdk::AgentRuntimeBinding,
-    platform: &Platform,
-    architecture: &str,
-) -> Result<&'a PlatformRuntimeArtifacts> {
-    let os = match platform {
-        Platform::Linux => OperatingSystem::Linux,
-        Platform::Macos => OperatingSystem::Macos,
-    };
-    let architecture = match architecture {
-        "x86_64" => Architecture::X86_64,
-        "aarch64" => Architecture::Aarch64,
-        other => bail!("unsupported Machine architecture {other:?}"),
-    };
-    release
-        .runtime_artifacts
-        .iter()
-        .find(|artifacts| artifacts.os == os && artifacts.architecture == architecture)
-        .context("Agent Plugin binding has no runtime artifacts for this Machine platform")
+fn write_provider_generation_files(
+    content: &Path,
+    package: &ProviderPackage,
+    plugin_package: &PluginPackage,
+    desired: &DesiredPlugin,
+    host_bundle: Option<&PluginHostBundle>,
+    host_bundle_bytes: Option<&[u8]>,
+) -> Result<()> {
+    atomic_write(
+        &content.join("package.cowboy-provider"),
+        &package.canonical_bytes()?,
+        0o600,
+    )?;
+    atomic_write(
+        &content.join("package.cowboy-plugin"),
+        &plugin_package.canonical_bytes()?,
+        0o600,
+    )?;
+    atomic_write(
+        &content.join("plugin-release.json"),
+        &serde_json::to_vec(&desired.release)?,
+        0o600,
+    )?;
+    atomic_write(
+        &content.join("publisher.pub"),
+        desired.publisher_public_key.as_bytes(),
+        0o600,
+    )?;
+    stage_plugin_host_bundle(content, host_bundle, host_bundle_bytes)?;
+    Ok(())
 }
 
 async fn stage_provider_runtime(
@@ -6492,6 +6486,20 @@ mod tests {
         let store =
             MachinePluginStore::new(&root.join("machine"), Platform::Linux, "x86_64".to_owned())
                 .unwrap();
+        let refusing = root.join("refusing-worker");
+        atomic_write(
+            &refusing,
+            b"#!/bin/sh\necho 'unknown variant' >&2\nexit 1\n",
+            0o700,
+        )
+        .unwrap();
+        store.set_worker_command(refusing);
+        let refused = store.install(&desired).await.unwrap_err();
+        assert!(format!("{refused:#}").contains("worker cannot read"));
+        assert!(store.inventory().unwrap().is_empty());
+        let accepting = root.join("accepting-worker");
+        atomic_write(&accepting, b"#!/bin/sh\nexit 0\n", 0o700).unwrap();
+        store.set_worker_command(accepting);
         let installed = store.install(&desired).await.unwrap();
         assert_eq!(installed.generation_digest, release.artifact_digest);
         let service_signer =

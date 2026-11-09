@@ -53,6 +53,7 @@ const KNOWN = new Set([
   "gallery",
   "button",
   "choice",
+  "app",
 ]);
 const TONES = new Set(["neutral", "info", "success", "warning", "error", "running"]);
 const STEP_STATES = new Set(["pending", "active", "done", "failed", "skipped"]);
@@ -124,6 +125,41 @@ function listItems(value: unknown, path: string, depth: number): number {
       count += listItems(item["children"], `${at}.children`, depth + 1);
   });
   return count;
+}
+
+/** An agent-written app (docs/widget-apps.md §8): bounds only; `props`
+ *  stays opaque and every image is a source the Controller verified. */
+function app(node: Record<string, unknown>, path: string, budget: Budget): void {
+    if (typeof node["id"] !== "string") fail(`${path}.id`, "required");
+    line(node["title"], `${path}.title`, WIDGET_LIMITS.titleChars);
+    text(node["fallback"], `${path}.fallback`, 2048);
+    if (
+      typeof node["code"] !== "string" ||
+      JSON.stringify(node["code"]).length > WIDGET_LIMITS.appCodeBytes
+    ) {
+      fail(`${path}.code`, `expected TSX of at most ${WIDGET_LIMITS.appCodeBytes} bytes`);
+    }
+    if (node["props"] !== undefined) {
+      if (
+        !isObject(node["props"]) ||
+        JSON.stringify(node["props"]).length > WIDGET_LIMITS.appPropsBytes
+      ) {
+        fail(
+          `${path}.props`,
+          `expected an object of at most ${WIDGET_LIMITS.appPropsBytes} bytes`,
+        );
+      }
+    }
+    if (node["images"] !== undefined) {
+      if (!isObject(node["images"])) fail(`${path}.images`, "expected an object");
+      const entries = Object.entries(node["images"] as Record<string, unknown>);
+      if (entries.length > WIDGET_LIMITS.appImages) fail(`${path}.images`, "at most 8 images");
+      for (const [key, source] of entries) {
+        if (!/^[A-Za-z0-9_-]{1,64}$/.test(key)) fail(`${path}.images.${key}`, "expected an id");
+        if (!isObject(source)) fail(`${path}.images.${key}`, "expected an image source");
+      }
+      budget.images += entries.length;
+    }
 }
 
 function leaf(node: Record<string, unknown>, type: string, path: string, budget: Budget): void {
@@ -211,6 +247,9 @@ function leaf(node: Record<string, unknown>, type: string, path: string, budget:
       budget.images += images.length;
       return;
     }
+    case "app":
+      app(node, path, budget);
+      return;
     case "button":
       if (typeof node["id"] !== "string") fail(`${path}.id`, "required");
       line(node["label"], `${path}.label`, WIDGET_LIMITS.labelChars);
