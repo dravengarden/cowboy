@@ -32,7 +32,7 @@ pub(in crate::server) struct InteractionRequest {
     message_sha256: Option<String>,
 }
 
-fn refusal(status: StatusCode, code: &str, extra: Value) -> Response {
+pub(super) fn refusal(status: StatusCode, code: &str, extra: Value) -> Response {
     let mut body = json!({"code": code});
     if let (Some(map), Value::Object(extra)) = (body.as_object_mut(), extra) {
         map.extend(extra);
@@ -40,11 +40,11 @@ fn refusal(status: StatusCode, code: &str, extra: Value) -> Response {
     (status, Json(body)).into_response()
 }
 
-fn unavailable() -> Response {
+pub(super) fn unavailable() -> Response {
     refusal(StatusCode::SERVICE_UNAVAILABLE, "unavailable", json!({}))
 }
 
-fn digest(message: &str) -> String {
+pub(super) fn digest(message: &str) -> String {
     format!("{:x}", Sha256::digest(message.as_bytes()))
 }
 
@@ -100,8 +100,11 @@ pub(super) async fn refresh(
     let Ok(records) = active(store, session_id, &widget.widget_id).await else {
         return Map::new();
     };
+    // App messages are delivery records, not decisions: an update never
+    // retires them, so restart recovery keeps them until their echo lands.
     let obsolete: Vec<String> = records
         .iter()
+        .filter(|record| !record.group_key.starts_with("app:"))
         .filter(|record| !interactions::still_live(&widget.document, &decided_ref(record)))
         .map(|record| record.cmid.clone())
         .collect();
@@ -162,7 +165,10 @@ pub(in crate::server) async fn recover_decisions(state: &AppState) {
 }
 
 /// The session may take a person's prompt right now.
-fn admissible(state: &AppState, session_id: &str) -> Result<(), (StatusCode, &'static str)> {
+pub(super) fn admissible(
+    state: &AppState,
+    session_id: &str,
+) -> Result<(), (StatusCode, &'static str)> {
     let Some(info) = state.hub.session_info(session_id) else {
         return Err((StatusCode::NOT_FOUND, "unknown_session"));
     };

@@ -47,30 +47,18 @@ struct Input<'v> {
 fn inputs(node: &Value) -> Vec<Input<'_>> {
     fn walk<'v>(node: &'v Value, card: Option<&'v str>, out: &mut Vec<Input<'v>>) {
         let Some(map) = node.as_object() else { return };
-        match map.get("type").and_then(Value::as_str) {
-            Some("button" | "choice") if map.get("id").and_then(Value::as_str).is_some() => {
-                out.push(Input { node: map, card });
-            }
-            Some("card") => {
-                let id = map.get("id").and_then(Value::as_str);
-                for action in map
-                    .get("actions")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                {
-                    walk(action, id, out);
-                }
-            }
-            _ => {}
-        }
-        for child in map
-            .get("children")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
+        if matches!(
+            map.get("type").and_then(Value::as_str),
+            Some("button" | "choice")
+        ) && map.get("id").and_then(Value::as_str).is_some()
         {
-            walk(child, None, out);
+            out.push(Input { node: map, card });
+        }
+        let id = map.get("id").and_then(Value::as_str);
+        for (key, items) in super::node_edges(map) {
+            for child in items {
+                walk(child, if key == "actions" { id } else { None }, out);
+            }
         }
     }
     let mut out = Vec::new();
@@ -291,6 +279,84 @@ pub fn decision_cmid(
     format!("widget-{}", &format!("{digest:x}")[..32])
 }
 
+/// Bounds of a message an app asks to send (docs/widget-apps.md §7).
+const APP_MESSAGE_CHARS: usize = 2000;
+const APP_MESSAGE_BYTES: usize = 8 * 1024;
+
+/// A message an app asked to send, checked against the widget it lives in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppMessage {
+    pub group_key: String,
+    /// The SHA-256 of the app's code: a send from an out-of-date runtime is
+    /// refused (the person can still copy it into their composer).
+    pub signature: String,
+}
+
+/// Checks that `node_id` is a rendered app whose code hashes to
+/// `code_sha256`, and that `text` is a plain message the person can read
+/// exactly as it will be sent: bounded, no control characters except
+/// newline and tab, no bidi or invisible format characters.
+pub fn app_message(
+    document: &Value,
+    node_id: &str,
+    code_sha256: &str,
+    text: &str,
+) -> Result<AppMessage, Refusal> {
+    let app = app_node(&document["root"], node_id)
+        .ok_or_else(|| refuse("unknown_app", "this widget has no such app"))?;
+    let code = app.get("code").and_then(Value::as_str).unwrap_or_default();
+    let digest = format!("{:x}", Sha256::digest(code.as_bytes()));
+    if digest != code_sha256 {
+        return Err(refuse("app_updated", "the agent updated this app"));
+    }
+    if text.trim().is_empty()
+        || text.chars().count() > APP_MESSAGE_CHARS
+        || text.len() > APP_MESSAGE_BYTES
+    {
+        return Err(refuse(
+            "invalid_message",
+            "a message is 1 to 2,000 characters",
+        ));
+    }
+    if text
+        .chars()
+        .any(|c| (c.is_control() && c != '\n' && c != '\t') || super::format_char(c))
+    {
+        return Err(refuse(
+            "invalid_message",
+            "the message contains invisible or control characters",
+        ));
+    }
+    Ok(AppMessage {
+        group_key: format!("app:{node_id}"),
+        signature: digest,
+    })
+}
+
+fn app_node<'v>(node: &'v Value, id: &str) -> Option<&'v Map<String, Value>> {
+    let map = node.as_object()?;
+    if map.get("type").and_then(Value::as_str) == Some("app")
+        && map.get("id").and_then(Value::as_str) == Some(id)
+    {
+        return Some(map);
+    }
+    super::node_edges(map).find_map(|(_, items)| items.iter().find_map(|child| app_node(child, id)))
+}
+
+/// The prompt id of one confirmation: one occurrence is one message.
+#[must_use]
+pub fn app_message_cmid(
+    session_id: &str,
+    widget_id: &str,
+    node_id: &str,
+    code_sha256: &str,
+    occurrence: &str,
+) -> String {
+    let seen = json!([session_id, widget_id, node_id, code_sha256, occurrence]);
+    let digest = Sha256::digest(seen.to_string().as_bytes());
+    format!("widget-app-{}", &format!("{digest:x}")[..32])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +409,35 @@ mod tests {
                 &decide(&doc, "w4", 2, "cache", &["cargo".into(), "logs".into()]).unwrap()
             ),
             "the same selection is the same prompt"
+        );
+    }
+
+    #[test]
+    fn app_messages_are_bound_to_current_code_and_plain_text() {
+        let doc = json!({"title":"T","root":{"type":"stack","children":[
+            {"type":"app","id":"dash","title":"D","fallback":"f","code":"export default 1"}]}});
+        let sha = format!("{:x}", Sha256::digest(b"export default 1"));
+        let ok = app_message(&doc, "dash", &sha, "Please clean the cache\nthanks").unwrap();
+        assert_eq!(ok.group_key, "app:dash");
+        assert_eq!(
+            app_message(&doc, "dash", "stale", "hi").unwrap_err().code,
+            "app_updated"
+        );
+        assert_eq!(
+            app_message(&doc, "nope", &sha, "hi").unwrap_err().code,
+            "unknown_app"
+        );
+        for bad in ["", "evil \u{202E}txt", "bell\u{7}", &"x".repeat(2001)] {
+            assert_eq!(
+                app_message(&doc, "dash", &sha, bad).unwrap_err().code,
+                "invalid_message",
+                "{bad:?}"
+            );
+        }
+        assert_ne!(
+            app_message_cmid("s", "w", "dash", &sha, "o1"),
+            app_message_cmid("s", "w", "dash", &sha, "o2"),
+            "two confirmations are two messages"
         );
     }
 

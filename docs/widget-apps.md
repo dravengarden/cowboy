@@ -7,6 +7,70 @@ Astra Max reviews of revisions 2 and 3 (§12). It extends [`widgets.md`](widgets
 the `cowboy.widget/1` JSON nodes stay the lightweight, patchable path for
 status, tables and decisions.
 
+## 0. Implementation status
+
+- **A1 (Web runtime)**: `web/src/widgets/apps/` — the srcdoc sandbox and
+  hash-authorized boot (`appSandboxBoot.ts`, `appSandbox.ts`), the trusted
+  Worker hosting QuickJS (`runtime/workerEntry.js`), the VM bundle with React,
+  the Cowboy reconciler and Sucrase (`runtime/vmEntry.js`), budgets
+  (`runtime/limits.js`, `appTree.ts`), the host renderer (`AppNode.tsx`,
+  `AppComponents.tsx`, `AppChart.tsx`), built by `web/appRuntimePlugin.mjs`.
+  The `widget-apps` browser suite covers rendering, round-trips and the
+  hostile cases of §9 on Chrome.
+- **A2 (contract)**: the `app` node in `contracts/widget-v1.ts`, the Web and
+  Controller validators, schema-edge-only `#id` lookup and image walks
+  (`props` stays opaque), and the authoring contract in `help("widgets")`.
+- **A3 (messages)**: `POST /api/sessions/{id}/widgets/{widget_id}/apps/{node_id}/messages`
+  (`agent_api/widget_app_messages.rs`) with the decision durability pattern;
+  the Web preview, occurrence and confirmation (`apps/appMessages.ts`,
+  `apps/AppMessageConfirm.tsx`). The Controller refuses control, bidi and
+  invisible format characters instead of escaping them, so the confirmation
+  always shows exactly what is sent.
+- Implementation review (Astra Max, `call-75530fb67335e655127cf740`) changed
+  these details of the design: an app's text is checked and confirmed on the
+  device and only the confirmed send reaches the Controller (no preview
+  round-trip), held in a local outbox until acknowledged; automation
+  credentials cannot reach either widget endpoint; app messages are never
+  retired by updates; node lookups follow edges by node type; runtimes live
+  in a page registry (`apps/appRuntimes.ts`) so the inline row and the
+  inspector share one app, with at most four per page, credit paced by the
+  committed work and suspension of hidden pages; the Worker meters CPU over
+  a rolling second, gives compiling 1.5 s and the first render 1 s, keeps
+  deferred commands, rate-bounds `send`/`log` and tracks whole subtrees; the
+  host enforces whole-app text and chart-point budgets and contains drawing
+  failures per app; the import allowlist is `react` and `@cowboy/ui` (no
+  date-fns or lodash, keeping the VM small); enablement requires desktop
+  Chromium 140+ on Linux, macOS or Windows.
+- Second implementation review (`call-5344903a82f61fe71acffd38`) changed:
+  the registry, not each view, owns which code version runs, so every view
+  agrees, a kept version keeps its own props, and sends carry the running
+  code's hash; render batches commit under the 1,500-unit frame budget
+  (charged by created and changed nodes with their expansions) across all
+  apps, with credits returned only on commit, and a session view's apps
+  share 12,000 units; a published app's runtime is keyed by (session,
+  widget, node) with the exact code compared for updates; off-screen apps
+  pause, untouched ones end after 1.5 s, typed-into ones survive until a
+  visible app needs the room (idle apps are evicted first, then the one
+  hidden longest), and Reload is admitted against the quota; the outbox is
+  written before anything is sent, kept on transient refusals (401, 403,
+  408, 425, 429, `context_pending`) and retried in the background under the
+  same occurrence after load, reconnect and page show, whatever became of
+  the widget; the confirmation cannot be dismissed while a send is in
+  flight, and the confirmation and background recovery share one request
+  per occurrence; recovery reschedules itself instead of dropping a retry;
+  the Controller answers a recorded occurrence with its receipt before
+  checking the session (it re-queues only when the session admits prompts,
+  since the Hub or startup recovery owns the rest); the Worker
+  continues promise jobs after a throttled turn, holds them while the draw
+  queue is full, recomputes the timer wake after jobs without ever
+  postponing an earlier wake, skips timers
+  cancelled earlier in the same batch, and a suspend sent during startup is
+  replayed after the handshake.
+- Deferred: `Image` inside apps shows its `alt` text until node `images`
+  (§6) land; apps are enabled only on desktop Chromium outside the native
+  shells until **A4** (native `isMainFrame` gates, the `appsSandbox`
+  capability, WebKit and iPhone acceptance with the egress sink).
+
 ## 1. Goals and non-goals
 
 Goals:
@@ -200,7 +264,9 @@ evaluation.
 
 ### 5.3 Identity and updates
 
-- App identity: (session, widget, app node id, SHA-256 of `code`).
+- App identity: (session, widget, app node id); the registry compares the
+  exact `code` to decide whether a version is new, and sends carry the
+  SHA-256 of the code that is running.
 - A document revision that changes only `props` (or other nodes) delivers the
   new props to the running app as an update (MCP Apps `tool-input` semantics);
   the runtime keeps its state.
@@ -212,8 +278,9 @@ evaluation.
   composer", which copies the exact text into the person's own composer.
 - The inline row and the inspector render the same tree from one runtime; the
   inline row shows a placeholder while the inspector has it.
-- Off-screen eviction after 60 s, except pinned apps (focused, holding input,
-  or awaiting a confirmation).
+- Off-screen apps pause. An untouched one ends after a short grace; one
+  holding person-entered input (or that asked to send) survives until a
+  visible app needs its room, idle apps being evicted first (§0).
 
 ## 6. Components and their budgets
 

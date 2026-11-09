@@ -450,6 +450,10 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/sessions/{id}/widgets/{widget_id}/interactions",
             post(agent_api::api_widget_interaction),
         )
+        .route(
+            "/api/sessions/{id}/widgets/{widget_id}/apps/{node_id}/messages",
+            post(agent_api::api_widget_app_message),
+        )
         .route("/api/sessions/{id}/config-revert", get(config_revert::get))
         .route(
             "/api/sessions/{id}/config-revert/restore",

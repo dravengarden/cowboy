@@ -38,9 +38,11 @@ import { SessionActionWaitDialog } from "./SessionActionWaitDialog";
 import { EditorExtensionsDialog } from "./editorExtensions/EditorExtensionsDialog";
 import { lowPriorityInterval } from "./network/bandwidth";
 import { restoreSubscriptionSignIn, subscribeSignInLocation, subscriptionSignInLocation } from "./subscriptionSignInLink";
+import { installAppMessageRecovery } from "./widgets/apps/appMessages";
 
 restoreSubscriptionSignIn();
 installBrowserDevice();
+installAppMessageRecovery();
 
 // How long a freshly swapped-in build has to stay up before it counts as
 // started. Long enough to cover the gates, the lazy surface chunk and its
