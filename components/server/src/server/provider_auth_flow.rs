@@ -185,7 +185,8 @@ pub(super) async fn provider_installations(
 /// Machines. `runtime_policy` additionally applies the Provider execution
 /// policy (where a Provider may run); credential discovery does not, since
 /// Service credentials reach every enrolled Machine. An unreadable Machine
-/// inventory is an error, never an empty result.
+/// list is an error, never an empty result; an undecodable inventory is
+/// skipped for executor selection (`runtime_policy`) and an error otherwise.
 pub(in crate::server) async fn catalogued_installations(
     state: &AppState,
     connected_only: bool,
@@ -207,7 +208,12 @@ pub(in crate::server) async fn catalogued_installations(
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!([])),
         ) else {
-            continue;
+            // Executor selection is best-effort; credential discovery must
+            // not read an undecodable inventory as "no installation here".
+            if runtime_policy {
+                continue;
+            }
+            return Err(());
         };
         for installed in providers.into_iter().filter(|provider| {
             provider.state == crate::machine_protocol::PluginInstallationState::Active
