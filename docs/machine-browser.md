@@ -1130,8 +1130,10 @@ whose browser it displays and the Machine it runs on.
   shape), never from the frame. The viewer is the only size authority: it
   re-requests a mode, debounced, only when the mode changes (a rotation, or
   a Desktop window resize crossing into another mode) as a
-  `{type:"resize"}` text frame on the attached stream; the soft keyboard
-  and the panel chrome never resize the remote. Every mode lies within the
+  `{type:"resize"}` text frame on the attached stream; touch input coming or
+  going (an iPad trackpad) resizes the same attachment at once and never
+  reattaches, which would race the Machine's detach acknowledgement. The
+  soft keyboard and the panel chrome never resize the remote. Every mode lies within the
   wire bounds (320x480 to 4096x4096). The server never resizes on its own
   and `AcceptSetDesktopSize` is off, so the noVNC CSS-pixel resize race
   cannot occur. `POST .../browser/resize` stays for callers without a
@@ -1219,12 +1221,22 @@ whose browser it displays and the Machine it runs on.
   on the page do not move focus. Text is the text the OS committed, never
   inferred from key events: it is sent on `input` when no composition is
   running and on `compositionend`, never during a composition, and the field
-  is emptied after every send. Short printable ASCII (at most 32
+  is reset after every send. The field is never rewritten under a live
+  composition (iOS WebKit would strand the IME, PITFALLS #110): blurring it
+  mid-composition (Hide keyboard, More) keeps the marked text, and the
+  commit WebKit delivers after the blur is sent once, only to the session
+  the composition began in while it is still live; teardown drops it. The
+  idle field holds one untransmitted zero-width sentinel, so a keyboard
+  that reports Backspace only as an edit (Android Gboard: key code 229, then
+  `deleteContentBackward`) deletes the sentinel, which is one remote
+  Backspace. Short printable ASCII (at most 32
   characters) is pressed as keysyms (Xvnc adds the Shift a capital or
   shifted symbol needs); non-ASCII text such as an IME result, emoji and
   longer insertions go through the remote clipboard and Ctrl+V. Backspace,
   Enter, Tab, Escape, Delete, Home, End and the arrows come from `keydown`
-  (prevented; IME key code 229 and composing keys are ignored). This avoids
+  (prevented; IME key code 229 and composing keys are ignored; the edit of
+  a key already sent is not sent again where the OS ignores the prevention).
+  This avoids
   neko #724, where guacamole.js guesses characters from key events and
   loses capitals, shifted symbols and text after a composition on iOS. The
   overlay feeds only the session of the viewer that owns it, which is
