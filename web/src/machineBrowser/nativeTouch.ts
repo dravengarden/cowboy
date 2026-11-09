@@ -3,8 +3,8 @@
  * pseudo-encoding -1883 in noVNC's SetEncodings; only once the display
  * server answers with message 192 does it send touch contacts as message 193
  * (u8 type, u8 state 0 begin / 1 update / 2 end, u32 id, u16 x, u16 y, big
- * endian, framebuffer pixels), and only then does it take touch input away
- * from noVNC's gesture-to-mouse emulation. Without the answer (a display
+ * endian, framebuffer pixels), and only then, between touch sequences, does
+ * it take touch input away from noVNC's gesture-to-mouse emulation. Without the answer (a display
  * server without the patch or with the feature off) nothing changes: noVNC
  * keeps emulating the mouse and no 193 is ever sent, because a stock server
  * disconnects on it. Mouse and pen input always stay with noVNC.
@@ -27,7 +27,6 @@ export type TouchState = typeof TOUCH_BEGIN | typeof TOUCH_UPDATE | typeof TOUCH
 
 /** The noVNC `Websock` calls this module makes. */
 export interface RfbSocket {
-  rQlen(): number;
   rQpeek8(): number;
   rQshift8(): number;
   rQwait(message: string, bytes: number): boolean;
@@ -89,7 +88,7 @@ export function hookAcknowledgement(
   requesting.add(rfb._sock);
   rfb._normalMsg = () => {
     const sock = rfb._sock;
-    if (rfb._FBU.rects > 0 || sock.rQlen() < 1 || sock.rQpeek8() !== TOUCH_ACK_MESSAGE) {
+    if (rfb._FBU.rects > 0 || sock.rQwait("message", 1) || sock.rQpeek8() !== TOUCH_ACK_MESSAGE) {
       return original();
     }
     if (sock.rQwait("TouchEventsSupported", 3)) return false;
@@ -159,7 +158,8 @@ export interface NativeTouchOptions {
 }
 
 export interface NativeTouch {
-  /** Whether the display server acknowledged native touch. */
+  /** Whether native touch drives touch input: acknowledged by the display
+   * server, and no sequence noVNC started is still running. */
   readonly enabled: boolean;
   /** End every active contact (blur, hidden page). */
   cancelAll(): void;
@@ -185,10 +185,60 @@ export function hookable(rfb: Partial<RfbInternals>): rfb is RfbInternals {
     typeof rfb._normalMsg === "function" &&
     typeof rfb._FBU === "object" &&
     typeof rfb._rfbConnectionState === "string" &&
-    ["rQlen", "rQpeek8", "rQshift8", "rQwait", "sQpushBytes", "flush"].every(
+    ["rQpeek8", "rQshift8", "rQwait", "sQpushBytes", "flush"].every(
       (name) => typeof sock?.[name as keyof RfbSocket] === "function",
     )
   );
+}
+
+/** Native touch turns on only between touch sequences: a sequence that
+ * began while noVNC emulated the mouse must reach noVNC to its end, or its
+ * emulated button stays pressed. The gate follows those sequences (touch
+ * pointers down, and the touches a touch event reports still down) and,
+ * once acknowledged and idle, activates after the current event has been
+ * dispatched to noVNC. */
+export function activationGate(
+  activate: () => void,
+  schedule: (run: () => void) => void = (run) => setTimeout(run, 0),
+) {
+  let acknowledged = false;
+  let scheduled = false;
+  let touches = 0;
+  const pointers = new Set<number>();
+  const idle = () => pointers.size === 0 && touches === 0;
+  const check = (): void => {
+    if (!acknowledged || scheduled || !idle()) return;
+    scheduled = true;
+    schedule(() => {
+      scheduled = false;
+      if (acknowledged && idle()) {
+        acknowledged = false;
+        activate();
+      }
+    });
+  };
+  return {
+    acknowledge(): void {
+      acknowledged = true;
+      check();
+    },
+    pointer(type: string, pointerId: number): void {
+      if (type === "pointerdown") pointers.add(pointerId);
+      else if (type === "pointerup" || type === "pointercancel") pointers.delete(pointerId);
+      check();
+    },
+    /** A touch event reported this many touches still down. */
+    touches(remaining: number): void {
+      touches = remaining;
+      check();
+    },
+    /** The page lost the touches (blur, hidden). */
+    reset(): void {
+      pointers.clear();
+      touches = 0;
+      check();
+    },
+  };
 }
 
 const DISABLED: NativeTouch = { enabled: false, cancelAll: () => {}, close: () => {} };
@@ -202,8 +252,11 @@ export function attachNativeTouch(
   let closed = false;
   let nextId = 1;
   const contacts = new Map<number, Contact>();
+  const gate = activationGate(() => {
+    enabled = !closed;
+  });
   hookAcknowledgement(rfb, (version, count) => {
-    enabled = !closed && version >= 1 && count > 0;
+    if (!closed && version >= 1 && count > 0) gate.acknowledge();
   });
   const send = (state: TouchState, contact: Contact): void => {
     if (rfb._rfbConnectionState !== "connected") return;
@@ -226,7 +279,11 @@ export function attachNativeTouch(
   };
   const onPointer = (event: Event): void => {
     const pointer = event as unknown as TouchPointer;
-    if (!enabled || pointer.pointerType !== "touch") return;
+    if (pointer.pointerType !== "touch") return;
+    if (!enabled) {
+      gate.pointer(event.type, pointer.pointerId);
+      return;
+    }
     pointer.preventDefault();
     pointer.stopPropagation();
     const canvas = options.canvas();
@@ -268,12 +325,19 @@ export function attachNativeTouch(
   // gesture handler would emulate a mouse, and the browser's compatibility
   // mouse events and click follow an unprevented touch.
   const onTouch = (event: Event): void => {
-    if (!enabled) return;
+    if (!enabled) {
+      gate.touches((event as Event & { touches?: { length: number } }).touches?.length ?? 0);
+      return;
+    }
     if (event.cancelable) event.preventDefault();
     event.stopPropagation();
   };
+  const onLeave = (): void => {
+    cancelAll();
+    gate.reset();
+  };
   const onHidden = (): void => {
-    if (options.visibility.visibilityState === "hidden") cancelAll();
+    if (options.visibility.visibilityState === "hidden") onLeave();
   };
   for (const type of POINTER_EVENTS) {
     options.surface.addEventListener(type, onPointer, { capture: true });
@@ -281,8 +345,8 @@ export function attachNativeTouch(
   for (const type of TOUCH_EVENTS) {
     options.surface.addEventListener(type, onTouch, { capture: true, passive: false });
   }
-  options.page.addEventListener("blur", cancelAll);
-  options.page.addEventListener("pagehide", cancelAll);
+  options.page.addEventListener("blur", onLeave);
+  options.page.addEventListener("pagehide", onLeave);
   options.visibility.addEventListener("visibilitychange", onHidden);
   return {
     get enabled() {
@@ -300,8 +364,8 @@ export function attachNativeTouch(
       for (const type of TOUCH_EVENTS) {
         options.surface.removeEventListener(type, onTouch, { capture: true });
       }
-      options.page.removeEventListener("blur", cancelAll);
-      options.page.removeEventListener("pagehide", cancelAll);
+      options.page.removeEventListener("blur", onLeave);
+      options.page.removeEventListener("pagehide", onLeave);
       options.visibility.removeEventListener("visibilitychange", onHidden);
     },
   };

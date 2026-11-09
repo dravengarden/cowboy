@@ -22,9 +22,6 @@ class FakeSock implements RfbSocket {
   received: number[] = [];
   pending: number[] = [];
   flushed: number[][] = [];
-  rQlen(): number {
-    return this.received.length;
-  }
   rQpeek8(): number {
     return this.received[0];
   }
@@ -88,7 +85,10 @@ function pointer(
   });
 }
 
-function setup(acknowledge = true) {
+/** Let the gate's deferred activation run. */
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+async function setup(acknowledge = true) {
   const rfb = new FakeRfb();
   const surface = new FakeSurface();
   const page = new EventTarget();
@@ -106,6 +106,7 @@ function setup(acknowledge = true) {
   if (acknowledge) {
     rfb._sock.received.push(192, 1, 10);
     rfb._normalMsg();
+    await tick();
   }
   const sent = () => rfb._sock.flushed.map((frame) => decode(frame));
   return { rfb, surface, page, visibility, touch, sent, begun: () => contactsBegun };
@@ -178,8 +179,8 @@ test("framebuffer points follow noVNC's scaling and the letterbox", () => {
   assertEquals(framebufferPoint(CANVAS, 5, 700, true), { x: 0, y: 1279 });
 });
 
-test("without the acknowledgement touch input stays with noVNC", () => {
-  const { surface, sent } = setup(false);
+test("without the acknowledgement touch input stays with noVNC", async () => {
+  const { surface, sent } = await setup(false);
   const down = pointer("pointerdown", 1, 100, 100);
   surface.dispatchEvent(down);
   const start = new Event("touchstart", { cancelable: true });
@@ -189,8 +190,8 @@ test("without the acknowledgement touch input stays with noVNC", () => {
   assertEquals(sent(), []);
 });
 
-test("acknowledged touch sends begin, moves and end in framebuffer pixels", () => {
-  const { surface, sent, begun } = setup();
+test("acknowledged touch sends begin, moves and end in framebuffer pixels", async () => {
+  const { surface, sent, begun } = await setup();
   const down = pointer("pointerdown", 7, 110, 120);
   surface.dispatchEvent(down);
   surface.dispatchEvent(pointer("pointermove", 7, 120, 120));
@@ -205,8 +206,8 @@ test("acknowledged touch sends begin, moves and end in framebuffer pixels", () =
   assertEquals(surface.captured.size, 0);
 });
 
-test("two fingers are two contacts and noVNC never sees their touch events", () => {
-  const { surface, sent } = setup();
+test("two fingers are two contacts and noVNC never sees their touch events", async () => {
+  const { surface, sent } = await setup();
   surface.dispatchEvent(pointer("pointerdown", 1, 100, 300));
   surface.dispatchEvent(pointer("pointerdown", 2, 200, 300));
   surface.dispatchEvent(pointer("pointermove", 1, 90, 300));
@@ -238,8 +239,8 @@ test("two fingers are two contacts and noVNC never sees their touch events", () 
   );
 });
 
-test("letterbox, mouse and the eleventh contact are not sent", () => {
-  const { surface, sent } = setup();
+test("letterbox, mouse and the eleventh contact are not sent", async () => {
+  const { surface, sent } = await setup();
   surface.dispatchEvent(pointer("pointerdown", 1, 2, 300));
   const mouse = pointer("pointerdown", 2, 100, 100, "mouse");
   surface.dispatchEvent(mouse);
@@ -252,8 +253,8 @@ test("letterbox, mouse and the eleventh contact are not sent", () => {
   assertEquals(sent().length, MAX_CONTACTS);
 });
 
-test("blur, a hidden page and pagehide end every active contact", () => {
-  const { surface, page, visibility, sent } = setup();
+test("blur, a hidden page and pagehide end every active contact", async () => {
+  const { surface, page, visibility, sent } = await setup();
   surface.dispatchEvent(pointer("pointerdown", 1, 100, 100));
   surface.dispatchEvent(pointer("pointerdown", 2, 150, 100));
   page.dispatchEvent(new Event("blur"));
@@ -287,13 +288,13 @@ test("blur, a hidden page and pagehide end every active contact", () => {
   assertEquals(sent().length, 8);
 });
 
-test("a closed or disconnected session sends nothing and gives touch back", () => {
-  const disconnected = setup();
+test("a closed or disconnected session sends nothing and gives touch back", async () => {
+  const disconnected = await setup();
   disconnected.rfb._rfbConnectionState = "disconnected";
   disconnected.surface.dispatchEvent(pointer("pointerdown", 1, 100, 100));
   assertEquals(disconnected.sent(), []);
 
-  const { surface, touch, sent } = setup();
+  const { surface, touch, sent } = await setup();
   surface.dispatchEvent(pointer("pointerdown", 1, 100, 100));
   touch.close();
   assertEquals(touch.enabled, false);
@@ -316,4 +317,133 @@ test("a noVNC without the hooked internals keeps the emulated mouse", () => {
   assertEquals(down.defaultPrevented, false);
   hookEncodings(undefined);
   hookEncodings({});
+});
+
+function touchEvent(type: string, remaining: number): Event {
+  return Object.assign(new Event(type, { cancelable: true }), {
+    touches: { length: remaining },
+  });
+}
+
+test("an acknowledgement during an emulated drag waits for that drag to end", async () => {
+  const { rfb, surface, touch, sent } = await setup(false);
+  // noVNC is emulating a mouse drag when the acknowledgement arrives.
+  surface.dispatchEvent(pointer("pointerdown", 1, 100, 100));
+  surface.dispatchEvent(touchEvent("touchstart", 1));
+  rfb._sock.received.push(192, 1, 10);
+  rfb._normalMsg();
+  await tick();
+  assertEquals(touch.enabled, false);
+  const move = pointer("pointermove", 1, 110, 100);
+  const touchMove = touchEvent("touchmove", 1);
+  surface.dispatchEvent(move);
+  surface.dispatchEvent(touchMove);
+  surface.dispatchEvent(pointer("pointerup", 1, 120, 100));
+  await tick();
+  // The pointer is up but noVNC has not seen touchend yet.
+  assertEquals(touch.enabled, false);
+  const touchEnd = touchEvent("touchend", 0);
+  surface.dispatchEvent(touchEnd);
+  // Every event of the emulated drag reached noVNC unprevented.
+  assertEquals(
+    [move, touchMove, touchEnd].map((event) => event.defaultPrevented),
+    [false, false, false],
+  );
+  assertEquals(sent(), []);
+  await tick();
+  assertEquals(touch.enabled, true);
+  surface.dispatchEvent(pointer("pointerdown", 2, 100, 100));
+  assertEquals(
+    sent().map(({ state }) => state),
+    [TOUCH_BEGIN],
+  );
+});
+
+test("a second finger landing before activation keeps deferring it", async () => {
+  const { rfb, surface, page, touch } = await setup(false);
+  surface.dispatchEvent(pointer("pointerdown", 1, 100, 100));
+  surface.dispatchEvent(touchEvent("touchstart", 1));
+  rfb._sock.received.push(192, 1, 10);
+  rfb._normalMsg();
+  surface.dispatchEvent(pointer("pointerup", 1, 100, 100));
+  surface.dispatchEvent(touchEvent("touchend", 0));
+  // Before the deferred activation runs, another touch starts.
+  surface.dispatchEvent(pointer("pointerdown", 2, 100, 100));
+  surface.dispatchEvent(touchEvent("touchstart", 1));
+  await tick();
+  assertEquals(touch.enabled, false);
+  // Losing the page ends the browser's touches too.
+  page.dispatchEvent(new Event("blur"));
+  await tick();
+  assertEquals(touch.enabled, true);
+});
+
+/** A file of the pinned noVNC package (`web/package.json`), resolved as
+ * Vite resolves it. */
+function novncCore(file: string): string {
+  return `${Bun.resolveSync("@novnc/novnc", import.meta.dir).replace(/rfb\.js$/, "")}${file}`;
+}
+
+test("the real noVNC Websock carries the acknowledgement and touch messages", async () => {
+  // noVNC's logging module reads `window.console` once when it loads.
+  const scope = globalThis as { window?: unknown };
+  const hadWindow = "window" in scope;
+  scope.window ??= globalThis;
+  const { default: Websock } = await import(novncCore("websock.js"));
+  if (!hadWindow) delete scope.window;
+  const frames: number[][] = [];
+  const channel = {
+    binaryType: "arraybuffer",
+    protocol: "",
+    readyState: 1,
+    onopen: null,
+    onmessage: null as ((event: { data: ArrayBuffer }) => void) | null,
+    onclose: null,
+    onerror: null,
+    send: (data: Uint8Array) => frames.push([...data]),
+    close: () => {},
+  };
+  const sock = new Websock();
+  sock.attach(channel);
+  const handled: number[] = [];
+  const rfb = {
+    _sock: sock,
+    _FBU: { rects: 0 },
+    _rfbConnectionState: "connected",
+    _normalMsg(): boolean {
+      handled.push(sock.rQshift8());
+      return true;
+    },
+  };
+  const surface = new FakeSurface();
+  const touch = attachNativeTouch(rfb, {
+    surface,
+    canvas: () => CANVAS,
+    page: new EventTarget(),
+    visibility: new EventTarget(),
+  });
+  // A bell, then the acknowledgement split across two frames.
+  channel.onmessage?.({ data: Uint8Array.from([2, 192, 1]).buffer });
+  assertEquals(rfb._normalMsg(), true);
+  assertEquals(rfb._normalMsg(), false);
+  channel.onmessage?.({ data: Uint8Array.from([10]).buffer });
+  assertEquals(rfb._normalMsg(), true);
+  assertEquals(handled, [2]);
+  await tick();
+  assertEquals(touch.enabled, true);
+  surface.dispatchEvent(pointer("pointerdown", 1, 110, 120));
+  assertEquals(frames, [[193, 0, 0, 0, 0, 1, 0, 200, 0, 200]]);
+});
+
+test("the pinned noVNC still has the internals native touch hooks", async () => {
+  const source = await Bun.file(novncCore("rfb.js")).text();
+  // _sendEncodings writes through RFB.messages.clientEncodings on its socket.
+  assertEquals(source.includes("RFB.messages.clientEncodings(this._sock, encs);"), true);
+  assertEquals(/\n {4}clientEncodings\(sock, encodings\) \{/.test(source), true);
+  // The message loop calls the instance's _normalMsg; FBU rectangles are
+  // counted in _FBU.rects; the connection state and socket fields exist.
+  assertEquals(source.includes("if (!this._normalMsg()) {"), true);
+  assertEquals(source.includes("if (this._FBU.rects > 0) {"), true);
+  assertEquals(source.includes("this._rfbConnectionState = state;"), true);
+  assertEquals(source.includes("this._sock = new Websock();"), true);
 });
