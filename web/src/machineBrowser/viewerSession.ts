@@ -13,6 +13,13 @@ import {
   createBrowserStream,
 } from "./stream";
 import { type BrowserChord, chordStrokes } from "./browserKeys";
+import {
+  type NativeTouch,
+  type RfbInternals,
+  type RfbMessages,
+  attachNativeTouch,
+  hookEncodings,
+} from "./nativeTouch";
 import type { KeyAction, KeyboardSink } from "./touchKeyboard";
 
 export type ViewerEnd =
@@ -52,17 +59,32 @@ function sendChord(client: RFB | undefined, chord: BrowserChord): void {
   for (const stroke of chordStrokes(chord)) client.sendKey(stroke.keysym, stroke.code, stroke.down);
 }
 
+/** Native touch on this RFB client: requested in its SetEncodings, used
+ * only once the display server acknowledges it (`nativeTouch.ts`). */
+function startNativeTouch(rfb: RFB, target: HTMLElement, focus: () => void): NativeTouch {
+  hookEncodings((RFB as unknown as { messages: RfbMessages }).messages);
+  return attachNativeTouch(rfb as unknown as RfbInternals, {
+    surface: target,
+    canvas: () => target.querySelector("canvas"),
+    page: globalThis,
+    visibility: globalThis.document,
+    onContact: focus,
+  });
+}
+
 export function startViewerSession(options: ViewerSessionOptions): ViewerSession {
   let ended = false;
   let closing = false;
   let rfb: RFB | undefined;
   let stream: BrowserStream | undefined;
+  let touch: NativeTouch | undefined;
   let lease: ReturnType<typeof setInterval> | undefined;
   let focusOnClick = true;
   const end = (value: ViewerEnd): void => {
     if (ended) return;
     ended = true;
     clearInterval(lease);
+    touch?.close();
     if (!closing) options.onEnded(value);
   };
   // The proof signs the final URL; the Controller validates it on upgrade.
@@ -92,7 +114,12 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
         onClose: (close) =>
           end(close.authRequired ? { kind: "auth_required" } : { kind: "closed", close }),
       });
-      rfb = new RFB(options.target, stream.channel, { shared: true });
+      const client = new RFB(options.target, stream.channel, { shared: true });
+      rfb = client;
+      // A contact focuses the canvas as noVNC's own tap would.
+      touch = startNativeTouch(client, options.target, () => {
+        if (focusOnClick) client.focus({ preventScroll: true });
+      });
       rfb.scaleViewport = true;
       rfb.clipViewport = false;
       rfb.resizeSession = false;
@@ -108,6 +135,7 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
         end({ kind: "security_failure", reason: event.detail.reason }),
       );
       rfb.addEventListener("credentialsrequired", () => end({ kind: "credentials_required" }));
+      rfb.addEventListener("disconnect", () => touch?.close());
       // The socket's close is the end of record; noVNC's own disconnect follows it.
       lease = setInterval(() => {
         stream?.sendLease();
@@ -136,6 +164,7 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
       closing = true;
       ended = true;
       clearInterval(lease);
+      touch?.close();
       rfb?.disconnect();
       stream?.close();
     },
