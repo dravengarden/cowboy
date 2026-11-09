@@ -1333,17 +1333,27 @@ viewer speaks one RFB extension.
   byte-for-byte stock protocol.
 - **Gating and bounds.** `AcceptTouchEvents` defaults off and is not in
   `AllowOverride`, so no X client can turn it on; the launcher passes it for
-  every instance. Contacts are server-wide slots (at most 10); a duplicate
+  every instance. Contacts are slots of one pool shared by every screen of
+  the process, because all of them feed the one XI2 device (Xvnc has a
+  single screen; the pool stays process-wide for the Xorg module's case): at
+  most 10 in total, so ids from different clients never collide. A duplicate
   begin, an update or end of an unknown id and a begin beyond the bound are
   ignored; coordinates are clamped to the framebuffer; any other state is a
   protocol error for that connection. Every contact a connection leaves
   active is ended when it closes, so a dropped viewer never leaves a finger
-  down (neko issue 719) and the next attachment starts clean.
+  down (neko issue 719) and the next attachment starts clean. Without pointer
+  permission (access rights, or `AcceptPointerEvents` turned off through the
+  VNC extension) nothing new is accepted but active contacts still end, at
+  their last accepted positions: at once when the parameter changes,
+  otherwise on the client's next touch message.
 - **Viewer.** `web/src/machineBrowser/nativeTouch.ts` hooks noVNC 1.7's
   SetEncodings writer (only for the viewer's own sockets) and consumes the
   acknowledgement before noVNC's message loop, which would fail on an
   unknown message. Until the acknowledgement nothing changes: noVNC's
-  gesture-to-mouse emulation stays the fallback. After it, Pointer Events of
+  gesture-to-mouse emulation stays the fallback. Native touch takes over only
+  between touch sequences: one noVNC already began (its touchstart reached
+  noVNC) runs to its end there, or its emulated button would stay pressed.
+  After that, Pointer Events of
   type `touch` (one contact per `pointerId`, captured to the frame) are
   mapped through noVNC's CSS scaling to framebuffer pixels and sent; a
   contact may not begin in the letterbox, and moves outside it clamp. The
@@ -1404,7 +1414,12 @@ client), an invalid state, clamping, and then, against a loopback page in
 the instance's Chromium, the device capabilities, touchstart/move/end with
 mapped coordinates, a two-finger pinch, contacts ended when their connection
 closes, no stuck contact after reconnecting, and the ten-contact bound. The
-same display server without the flag is checked to answer like stock.
+same display server without the flag is checked to answer like stock, and
+with the flag `AcceptPointerEvents` is turned off through the VNC extension
+while ten contacts are down: all ten end at once (XI2 events observed with
+`xinput`), nothing new is accepted, and all ten slots are free once pointer
+input is allowed again. The viewer's tests run its hooks against noVNC's own
+`Websock` and pin the `rfb.js` internals they rely on.
 
 ## Host sandbox policy (outside Cowboy)
 
