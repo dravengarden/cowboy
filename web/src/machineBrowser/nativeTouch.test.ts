@@ -372,8 +372,81 @@ test("a second finger landing before activation keeps deferring it", async () =>
   surface.dispatchEvent(touchEvent("touchstart", 1));
   await tick();
   assertEquals(touch.enabled, false);
-  // Losing the page ends the browser's touches too.
+  // Losing the page forgets the pointers, but the touch noVNC began is
+  // still open until a touch event reports none left.
   page.dispatchEvent(new Event("blur"));
+  await tick();
+  assertEquals(touch.enabled, false);
+  surface.dispatchEvent(touchEvent("touchcancel", 0));
+  await tick();
+  assertEquals(touch.enabled, true);
+});
+
+/** noVNC's gesture handler as far as the remote button goes: a touch
+ * sequence presses it, its last touchend or touchcancel releases it, and it
+ * never sees an event native touch stopped in the capture phase. */
+function emulatedButton(surface: EventTarget) {
+  const state = { pressed: false };
+  const listen = (type: string, pressed: (remaining: number) => boolean) =>
+    surface.addEventListener(type, (event) => {
+      const touches = event as Event & { stopped?: boolean; touches: { length: number } };
+      if (!touches.stopped) state.pressed = pressed(touches.touches.length);
+    });
+  listen("touchstart", () => true);
+  listen("touchmove", () => true);
+  listen("touchend", (remaining) => remaining > 0);
+  listen("touchcancel", (remaining) => remaining > 0);
+  return state;
+}
+
+function stoppableTouch(type: string, remaining: number) {
+  const event = Object.assign(touchEvent(type, remaining), { stopped: false });
+  event.stopPropagation = () => {
+    event.stopped = true;
+  };
+  return event;
+}
+
+test("blur during an emulated drag still lets its delayed touchend release the button", async () => {
+  const { rfb, surface, page, touch, sent } = await setup(false);
+  const button = emulatedButton(surface);
+  surface.dispatchEvent(pointer("pointerdown", 1, 100, 100));
+  surface.dispatchEvent(stoppableTouch("touchstart", 1));
+  assertEquals(button.pressed, true);
+  // The acknowledgement arrives mid-drag, then the page loses focus.
+  rfb._sock.received.push(192, 1, 10);
+  rfb._normalMsg();
+  page.dispatchEvent(new Event("blur"));
+  await tick();
+  assertEquals(touch.enabled, false);
+  surface.dispatchEvent(stoppableTouch("touchmove", 1));
+  const end = stoppableTouch("touchend", 0);
+  surface.dispatchEvent(end);
+  assertEquals([end.defaultPrevented, end.stopped], [false, false]);
+  assertEquals(button.pressed, false);
+  assertEquals(sent(), []);
+  // Only now does native touch take over, and noVNC sees nothing more.
+  await tick();
+  assertEquals(touch.enabled, true);
+  surface.dispatchEvent(stoppableTouch("touchstart", 1));
+  assertEquals(button.pressed, false);
+});
+
+test("a hidden page during an emulated drag defers activation the same way", async () => {
+  const { rfb, surface, visibility, touch } = await setup(false);
+  const button = emulatedButton(surface);
+  surface.dispatchEvent(pointer("pointerdown", 1, 100, 100));
+  surface.dispatchEvent(stoppableTouch("touchstart", 1));
+  rfb._sock.received.push(192, 1, 10);
+  rfb._normalMsg();
+  visibility.visibilityState = "hidden";
+  visibility.dispatchEvent(new Event("visibilitychange"));
+  await tick();
+  assertEquals(touch.enabled, false);
+  const cancel = stoppableTouch("touchcancel", 0);
+  surface.dispatchEvent(cancel);
+  assertEquals(cancel.stopped, false);
+  assertEquals(button.pressed, false);
   await tick();
   assertEquals(touch.enabled, true);
 });

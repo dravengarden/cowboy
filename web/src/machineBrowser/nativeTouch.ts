@@ -232,10 +232,12 @@ export function activationGate(
       touches = remaining;
       check();
     },
-    /** The page lost the touches (blur, hidden). */
+    /** The page lost focus or visibility. Pointer ids are forgotten (their
+     * up may never arrive), but a touch sequence noVNC began stays open
+     * until a touch event reports no touches: its touchend or touchcancel
+     * must still reach noVNC, or its emulated button stays pressed. */
     reset(): void {
       pointers.clear();
-      touches = 0;
       check();
     },
   };
