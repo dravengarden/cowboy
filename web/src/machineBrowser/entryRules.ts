@@ -61,3 +61,22 @@ export function machineChoices(
     label: machines.find((machine) => machine.id === machine_id)?.display_name || machine_id,
   }));
 }
+
+/** Whether a sign-in dialog may offer to show its verification link in the
+ * account's ordinary Machine browser on `machine`, the Machine its login
+ * runs on. The same admission as the account cards (named account, gate
+ * on, browser enabled), that Machine able to run browsers now, and an open
+ * pinned there being the account's own (its placement, or a first open the
+ * owner may choose). Nothing about the login itself is consulted, and the
+ * browser never feeds anything back into it. */
+export function linkBrowserOffered(read: BrowserRead | undefined, machine: string): boolean {
+  if (!read || read.admission !== null) return false;
+  if (!(read.capable_machines ?? []).some((capable) => capable.machine_id === machine)) {
+    return false;
+  }
+  return (
+    read.choose_machine === true ||
+    read.placements.length === 0 ||
+    read.placements.some((placement) => placement.machine_id === machine)
+  );
+}

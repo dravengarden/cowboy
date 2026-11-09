@@ -11,7 +11,7 @@ import {
   type BrowserTarget,
   browserStateLabel,
 } from "./api";
-import { type BrowserModel, browserRunning, looksLikeAuthorizationCode } from "./browserModel";
+import { type BrowserModel, browserRunning } from "./browserModel";
 import {
   type ConfirmKind,
   type Confirmation,
@@ -63,7 +63,7 @@ const CONFIRM_TEXT: Record<
   },
   restart: {
     title: "Restart for this screen?",
-    body: "The browser hibernates with a snapshot and reopens at this screen’s scale. Page state since the last snapshot may be lost; a sign-in browser returns to its sign-in page.",
+    body: "The browser hibernates with a snapshot and reopens at this screen’s scale. Page state since the last snapshot may be lost.",
     action: "Restart",
     destructive: false,
   },
@@ -73,14 +73,14 @@ const CONFIRM_TEXT: Record<
 export function BrowserPrimaryAction({
   model,
   state,
-  signIn = false,
+  pinned = false,
   commands,
   onConfirm,
 }: {
   model: BrowserModel;
   state: BrowserStateEvent | null;
-  /** A sign-in panel opens where its login runs and never offers a choice. */
-  signIn?: boolean;
+  /** The panel's opens are pinned to one Machine: no choice is offered. */
+  pinned?: boolean;
   commands: BrowserCommands;
   onConfirm: (kind: Confirm) => void;
 }): React.JSX.Element | null {
@@ -95,7 +95,7 @@ export function BrowserPrimaryAction({
       </Stack>
     );
   }
-  if ((!state || state.state === "hibernated") && !signIn && needsMachineChoice(model.read)) {
+  if ((!state || state.state === "hibernated") && !pinned && needsMachineChoice(model.read)) {
     return (
       <MachineBrowserChooser
         read={model.read}
@@ -160,19 +160,17 @@ export function BrowserActionBar({
   model,
   state,
   desktop,
-  signIn,
+  pinned = false,
   preferredScale,
   commands,
-  onUseCode,
   onClose,
 }: {
   model: BrowserModel;
   state: BrowserStateEvent | null;
   desktop: boolean;
-  signIn: boolean;
+  pinned?: boolean;
   preferredScale: BrowserScale;
   commands: BrowserCommands;
-  onUseCode?: ((code: string) => void) | undefined;
   onClose: () => void;
 }): React.JSX.Element {
   const [confirm, setConfirm] = useState<Confirmation | undefined>(undefined);
@@ -221,11 +219,6 @@ export function BrowserActionBar({
           >
             Copy to this device
           </Button>
-          {signIn && onUseCode && looksLikeAuthorizationCode(remote) && (
-            <Button size="small" variant="contained" onClick={() => onUseCode(remote.trim())}>
-              Use as authorization code
-            </Button>
-          )}
         </Stack>
       )}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
@@ -233,7 +226,7 @@ export function BrowserActionBar({
           <BrowserPrimaryAction
             model={model}
             state={state}
-            signIn={signIn}
+            pinned={pinned}
             commands={commands}
             onConfirm={ask}
           />

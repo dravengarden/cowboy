@@ -38,8 +38,6 @@ export interface MachineBrowserInput {
   /** The panel is open; reads and polling run only then. */
   active: boolean;
   browserEnabled: boolean;
-  /** Opens bind to this native login instead of a plain tab. */
-  signInRequest?: string | undefined;
   api?: MachineBrowserApi;
 }
 
@@ -47,16 +45,12 @@ export interface MachineBrowserController {
   model: BrowserModel;
   dispatch: (event: BrowserEvent) => void;
   refresh(): void;
-  /** Open (or, for a sign-in, re-validate) the browser; `takeover` mounts
-   * the viewer over another attachment when the open answers attached, and
-   * only over `expected` when the owner confirmed that browser. `machine`
-   * pins the open to the Machine the owner chose for a first open. */
-  open(
-    viewport: BrowserViewport,
-    takeover?: boolean,
-    expected?: BrowserTarget,
-    machine?: string,
-  ): void;
+  /** Open the account's ordinary tab browser; `machine` pins the open to
+   * that Machine (the owner's choice for a first open, or the Machine a
+   * caller names). */
+  open(viewport: BrowserViewport, machine?: string): void;
+  /** Navigate exactly `target` to an `https` URL. */
+  navigate(url: string, target: BrowserTarget): void;
   /** Instance commands name `target`, the browser a confirmation captured,
    * else the one shown now (`shownTarget`). */
   hibernate(target?: BrowserTarget): void;
@@ -150,7 +144,6 @@ export function useMachineBrowser({
   owner,
   active,
   browserEnabled,
-  signInRequest,
   api = machineBrowserApi,
 }: MachineBrowserInput): MachineBrowserController {
   const { model, modelRef, dispatch } = useAccountModel(account);
@@ -201,16 +194,12 @@ export function useMachineBrowser({
       action: BrowserAction,
       call: (signal: AbortSignal) => Promise<BrowserResult>,
       timeoutMs: number,
-      takeover = false,
-      expected?: BrowserTarget,
     ): void => {
       if (modelRef.current.busy) return;
       dispatch({ type: "busy", action });
       call(signal(timeoutMs)).then(
         (result) => {
-          if (live()) {
-            dispatch({ type: "result", action, result, now: Date.now(), takeover, expected });
-          }
+          if (live()) dispatch({ type: "result", action, result, now: Date.now() });
         },
         (cause: unknown) => {
           if (live()) dispatch({ type: "failed", action, message: errorText(cause) });
@@ -221,21 +210,22 @@ export function useMachineBrowser({
   );
   const openCall = useCallback(
     (viewport: BrowserViewport, abort: AbortSignal, machine?: string): Promise<BrowserResult> =>
-      signInRequest
-        ? api.openSignIn(account, signInRequest, dataset, viewport, abort, machine)
-        : api.open(account, dataset, viewport, abort, machine),
-    [account, api, dataset, signInRequest],
+      api.open(account, dataset, viewport, abort, machine),
+    [account, api, dataset],
   );
   const open = useCallback(
-    (viewport: BrowserViewport, takeover = false, expected?: BrowserTarget, machine?: string) =>
-      run(
-        "open",
-        (abort) => openCall(viewport, abort, machine),
-        OPEN_TIMEOUT_MS,
-        takeover,
-        expected,
-      ),
+    (viewport: BrowserViewport, machine?: string) =>
+      run("open", (abort) => openCall(viewport, abort, machine), OPEN_TIMEOUT_MS),
     [openCall, run],
+  );
+  const navigate = useCallback(
+    (url: string, target: BrowserTarget) =>
+      run(
+        "navigate",
+        (abort) => api.navigate(account, dataset, target, url, abort),
+        COMMAND_TIMEOUT_MS,
+      ),
+    [account, api, dataset, run],
   );
   // Every command names the Machine and instance the panel shows, or the
   // one a confirmation captured.
@@ -285,5 +275,5 @@ export function useMachineBrowser({
     [account, api, dataset, openCall, run],
   );
 
-  return { model, dispatch, refresh, open, hibernate, snapshot, reset, restart };
+  return { model, dispatch, refresh, open, navigate, hibernate, snapshot, reset, restart };
 }

@@ -8,7 +8,6 @@ import {
   POLL_STARTING_MS,
   STARTING_FAST_POLL_MS,
   autoEntry,
-  looksLikeAuthorizationCode,
   openRefused,
   pinnedMachine,
   CHANGED_BEFORE_CONFIRM,
@@ -70,10 +69,8 @@ test("an open that answers detached mounts the viewer; a refused open explains i
   assertEquals(refused.error.includes("_"), false);
 });
 
-test("a refused sign-in open never mounts the viewer or takes the display over", () => {
+test("a refused open never mounts the viewer", () => {
   for (const [state, reason] of [
-    ["detached", "login_mismatch"],
-    ["attached", "login_mismatch"],
     ["attached", "failed"],
     ["detached", "busy"],
     ["starting", "busy"],
@@ -85,7 +82,6 @@ test("a refused sign-in open never mounts the viewer or takes the display over",
       action: "open",
       result: { machine_id: "ovh", state: answer },
       now: 10,
-      takeover: true,
     });
     assertEquals(model.viewer, undefined, `${state}/${reason}`);
     assertEquals(model.awaitingOpen, undefined, `${state}/${reason}`);
@@ -96,14 +92,6 @@ test("a refused sign-in open never mounts the viewer or takes the display over",
   // Without a reason the same answers are ordinary successes.
   assertEquals(openRefused(event("detached")), false);
   assertEquals(openRefused(event("hibernated", { reason: "capacity" })), false);
-  const bound = reduceBrowser(INITIAL_BROWSER_MODEL, {
-    type: "result",
-    action: "open",
-    result: { machine_id: "ovh", state: event("attached") },
-    now: 10,
-    takeover: true,
-  });
-  assertEquals(bound.viewer, { takeover: true, generation: 1, target: shown(), since: 1 });
 });
 
 test("a starting open polls fast and attaches once the instance runs", () => {
@@ -133,12 +121,12 @@ test("hibernated, stopping and superseded states end the viewer and keep the las
   assertEquals(held.remoteClipboard, "code-1");
   const hibernated = reduceBrowser(held, {
     type: "stream_state",
-    state: event("hibernated", { reason: "login_ended" }),
+    state: event("hibernated", { reason: "grace" }),
   });
   assertEquals(hibernated.viewer, undefined);
   assertEquals(hibernated.remoteClipboard, undefined);
   assertEquals(hibernated.read?.state?.state, "hibernated");
-  assertEquals(hibernated.notice.includes("sign-in"), true);
+  assertEquals(hibernated.notice.includes("Nobody was attached"), true);
   const superseded = reduceBrowser(held, {
     type: "stream_state",
     state: event("attached", { reason: "superseded" }),
@@ -179,16 +167,6 @@ test("a closed stream clears the viewer and its clipboard with a visible message
   });
   assertEquals(failed.busy, undefined);
   assertEquals(failed.error, "nope");
-});
-
-test("only one whitespace-free token within the server bound reads as an authorization code", () => {
-  assertEquals(looksLikeAuthorizationCode("abc123#def"), true);
-  assertEquals(looksLikeAuthorizationCode("  token  "), true);
-  assertEquals(looksLikeAuthorizationCode(""), false);
-  assertEquals(looksLikeAuthorizationCode("two words"), false);
-  assertEquals(looksLikeAuthorizationCode("a\nb"), false);
-  assertEquals(looksLikeAuthorizationCode("x".repeat(4096)), true);
-  assertEquals(looksLikeAuthorizationCode("x".repeat(4097)), false);
 });
 
 const noInstance = (extra: Partial<BrowserStateEvent> = {}): BrowserStateEvent => ({
@@ -243,25 +221,45 @@ test("a reset reports success only when the Machine carried it out", () => {
   }
 });
 
-test("a sign-in panel enters every browser through the sign-in open", () => {
-  assertEquals(autoEntry(true, "detached"), "open");
-  assertEquals(autoEntry(true, "hibernated"), "open");
-  assertEquals(autoEntry(true, null), "open");
-  assertEquals(autoEntry(true, "attached"), undefined);
-  assertEquals(autoEntry(false, "detached"), "attach");
-  assertEquals(autoEntry(false, undefined), "open");
-  assertEquals(autoEntry(false, "starting"), undefined);
-  // The sign-in open answers attached: only an explicit takeover mounts it.
-  const open = (takeover: boolean): BrowserModel =>
-    reduceBrowser(INITIAL_BROWSER_MODEL, {
-      type: "result",
-      action: "open",
-      result: { machine_id: "ovh", state: event("attached", { attachment_id: "att-1" }) },
-      now: 1,
-      takeover,
-    });
-  assertEquals(open(true).viewer, { takeover: true, generation: 1, target: shown(), since: 1 });
-  assertEquals(open(false).viewer, undefined);
+test("a panel opens a stopped browser and attaches to a detached one", () => {
+  assertEquals(autoEntry("detached"), "attach");
+  assertEquals(autoEntry("hibernated"), "open");
+  assertEquals(autoEntry(null), "open");
+  assertEquals(autoEntry(undefined), "open");
+  assertEquals(autoEntry("attached"), undefined);
+  assertEquals(autoEntry("starting"), undefined);
+  // An open answering attached never takes the display over by itself.
+  const open = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "result",
+    action: "open",
+    result: { machine_id: "ovh", state: event("attached", { attachment_id: "att-1" }) },
+    now: 1,
+  });
+  assertEquals(open.viewer, undefined);
+});
+
+test("a refused navigation reports its reason and keeps the viewer", () => {
+  const viewing = reduceBrowser(
+    reduceBrowser(INITIAL_BROWSER_MODEL, { type: "read", read: read(event("detached")), now: 1 }),
+    { type: "attach", takeover: false },
+  );
+  const refused = reduceBrowser(reduceBrowser(viewing, { type: "busy", action: "navigate" }), {
+    type: "result",
+    action: "navigate",
+    result: { machine_id: "ovh", state: event("attached", { reason: "failed" }) },
+    now: 2,
+  });
+  assertEquals(refused.busy, undefined);
+  assertEquals(refused.error.startsWith("The page was not opened."), true);
+  assertEquals(refused.viewer?.target, shown());
+  const landed = reduceBrowser(reduceBrowser(viewing, { type: "busy", action: "navigate" }), {
+    type: "result",
+    action: "navigate",
+    result: { machine_id: "ovh", state: event("attached") },
+    now: 2,
+  });
+  assertEquals(landed.error, "");
+  assertEquals(landed.viewer?.target, shown());
 });
 
 test("a starting open attaches only to the instance it opened, on its Machine", () => {
@@ -486,17 +484,6 @@ test("a confirmed takeover never attaches to a browser that replaced the confirm
     target: shown("alpha"),
   });
   assertEquals(taken.viewer?.target, shown("alpha"));
-  // A sign-in takeover goes through an open; another answer is refused.
-  const signIn = reduceBrowser(INITIAL_BROWSER_MODEL, {
-    type: "result",
-    action: "open",
-    result: { machine_id: "beta", state: event("attached") },
-    now: 3,
-    takeover: true,
-    expected: shown("alpha"),
-  });
-  assertEquals(signIn.viewer, undefined);
-  assertEquals(signIn.error, CHANGED_BEFORE_CONFIRM);
 });
 
 test("a read issued before a lifecycle transition never ends the viewer it established", () => {

@@ -17,7 +17,13 @@ import {
   browserStateLabel,
   browserViewport,
 } from "./api";
-import { type BrowserModel, autoEntry, browserRunning } from "./browserModel";
+import {
+  type BrowserModel,
+  autoEntry,
+  browserRunning,
+  linkEntry,
+  linkTarget,
+} from "./browserModel";
 import { BrowserActionBar, type BrowserCommands } from "./MachineBrowserActions";
 import { type MachineBrowserController, useMachineBrowser } from "./useMachineBrowser";
 
@@ -29,15 +35,17 @@ export interface MachineBrowserSheetProps {
   account: { id: string; label: string; browserEnabled: boolean };
   owner: string;
   dataset: string;
-  /** Sign-in mode: opens bind to this native login and the remote clipboard
-   * may fill the authorization code through `onUseCode`. */
-  signInRequest?: string | undefined;
   /** Open or attach as soon as the state is known. */
   autoOpen?: boolean | undefined;
+  /** A link to show once in the account's ordinary tab browser on
+   * `machine` (for example a Provider sign-in's verification URL): opens
+   * are pinned to that Machine and the browser navigates there once it
+   * runs. Nothing flows back: the panel never reads or fills anything for
+   * the caller. */
+  link?: { url: string; machine: string } | undefined;
   onEnableBrowser?: (() => void) | undefined;
   /** The enablement write is pending elsewhere. */
   enabling?: boolean | undefined;
-  onUseCode?: ((code: string) => void) | undefined;
 }
 
 /** State line for headers and the idle panel: label, reason and grace deadline. */
@@ -100,12 +108,12 @@ function BrowserIdle({
   model,
   state,
   machineLabel,
-  signIn,
+  link,
 }: {
   model: BrowserModel;
   state: BrowserStateEvent | null;
   machineLabel: string;
-  signIn: boolean;
+  link: boolean;
 }): React.JSX.Element {
   return (
     <Stack
@@ -127,10 +135,10 @@ function BrowserIdle({
       <Typography variant="caption" color="text.secondary">
         Machine: {machineLabel}
       </Typography>
-      {signIn && (
+      {link && (
         <Typography variant="caption" color="text.secondary">
-          Complete the sign-in inside this browser. When the page shows an authorization code, copy
-          it there; it appears here as the remote clipboard.
+          The link opens in this account’s browser once it runs. Anything the page shows you (such
+          as a code) stays yours to copy back.
         </Typography>
       )}
     </Stack>
@@ -145,7 +153,7 @@ function BrowserDisplay({
   machineLabel,
   scale,
   desktop,
-  signIn,
+  link,
   onNotice,
 }: {
   areaRef: RefObject<HTMLDivElement | null>;
@@ -154,7 +162,7 @@ function BrowserDisplay({
   machineLabel: string;
   scale: BrowserScale;
   desktop: boolean;
-  signIn: boolean;
+  link: boolean;
   onNotice: (message: string) => void;
 }): React.JSX.Element {
   const { model, dispatch } = browser;
@@ -188,7 +196,7 @@ function BrowserDisplay({
           />
         </Suspense>
       ) : (
-        <BrowserIdle model={model} state={state} machineLabel={machineLabel} signIn={signIn} />
+        <BrowserIdle model={model} state={state} machineLabel={machineLabel} link={link} />
       )}
     </Box>
   );
@@ -252,12 +260,13 @@ function DesktopBrowserHeader({
 }
 
 /** Commands over the controller; the viewport is measured from the display
- * area at the moment of the request. */
+ * area at the moment of the request. `pinned` keeps every open on that
+ * Machine. */
 function browserCommands(
   browser: MachineBrowserController,
   areaRef: RefObject<HTMLDivElement | null>,
   scale: BrowserScale,
-  signIn: boolean,
+  pinned: string | undefined,
 ): BrowserCommands {
   const viewportNow = (): BrowserViewport => {
     const rect = areaRef.current?.getBoundingClientRect();
@@ -269,13 +278,8 @@ function browserCommands(
   };
   const { dispatch } = browser;
   return {
-    open: (machine) => browser.open(viewportNow(), false, undefined, machine),
-    // A sign-in panel never attaches directly: the sign-in open lets the
-    // Machine validate and bind this login first, then the viewer mounts.
-    attach: (takeover, target) =>
-      signIn
-        ? browser.open(viewportNow(), takeover, target)
-        : dispatch({ type: "attach", takeover, target }),
+    open: (machine) => browser.open(viewportNow(), pinned ?? machine),
+    attach: (takeover, target) => dispatch({ type: "attach", takeover, target }),
     detach: () => dispatch({ type: "detach" }),
     hibernate: browser.hibernate,
     snapshot: browser.snapshot,
@@ -294,7 +298,7 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
     account,
     owner,
     dataset,
-    signInRequest,
+    link,
     autoOpen = false,
     enabling = false,
   } = props;
@@ -309,7 +313,6 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
     owner,
     active: open,
     browserEnabled: account.browserEnabled,
-    signInRequest,
   });
   const { model } = browser;
   const areaRef = useRef<HTMLDivElement | null>(null);
@@ -319,20 +322,32 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   const machineLabel = machineId
     ? machines.find((machine) => machine.id === machineId)?.display_name || machineId
     : "no Machine yet";
-  const commands = browserCommands(browser, areaRef, scale, Boolean(signInRequest));
+  const commands = browserCommands(browser, areaRef, scale, link?.machine);
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
-  const readyToAutoOpen = autoOpen && open && model.loaded && !model.busy && !model.read?.admission;
+  const readyToAutoOpen =
+    (autoOpen || link !== undefined) &&
+    open &&
+    model.loaded &&
+    !model.busy &&
+    !model.read?.admission;
   useEffect(() => {
     if (!readyToAutoOpen || autoOpened.current) return;
     autoOpened.current = true;
-    const entry = autoEntry(Boolean(signInRequest), state?.state);
+    const entry = link ? linkEntry(model.read, link.machine) : autoEntry(state?.state);
     if (entry === "attach") commandsRef.current.attach(false);
     else if (entry === "open") commandsRef.current.open();
-  }, [readyToAutoOpen, signInRequest, state]);
+  }, [readyToAutoOpen, link, model.read, state]);
+  // The link is shown once, in the running browser on its Machine only.
+  const linked = useRef(false);
+  const shownLink = link && !model.busy ? linkTarget(model, link.machine) : undefined;
+  useEffect(() => {
+    if (!link || !shownLink || linked.current) return;
+    linked.current = true;
+    browser.navigate(link.url, shownLink);
+  }, [browser, link, shownLink]);
 
-  const signIn = Boolean(signInRequest);
-  const title = signIn ? `Sign-in browser of ${account.label}` : `Browser of ${account.label}`;
+  const title = `Browser of ${account.label}`;
   const summary = `${browserStateSummary(state)} · ${machineLabel}`;
   const body = (
     <Box
@@ -361,7 +376,7 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
         machineLabel={machineLabel}
         scale={scale}
         desktop={desktop}
-        signIn={signIn}
+        link={link !== undefined}
         onNotice={commands.notice}
       />
       <Box
@@ -375,10 +390,9 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
           model={model}
           state={state}
           desktop={desktop}
-          signIn={signIn}
+          pinned={link !== undefined}
           preferredScale={scale}
           commands={commands}
-          onUseCode={props.onUseCode}
           onClose={onClose}
         />
       </Box>

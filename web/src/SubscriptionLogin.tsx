@@ -188,7 +188,7 @@ function ScopedSubscriptionLoginForm({ scope, label, onClose, request, machine: 
       <Alert severity="info">The authorization link has expired. Choose Start again to request a new one.</Alert>}
     {loginAllowed && link && challenge && <SubscriptionAuthorization
       key={JSON.stringify([challenge.request_id, link, challenge.expires_at_ms])}
-      label={label} scope={scope} link={link} challenge={challenge} busy={view.busy} checking={view.checking === true} submit={(code) => owner.submit(code)} />}
+      label={label} scope={scope} machine={view.pending?.machine} link={link} challenge={challenge} busy={view.busy} checking={view.checking === true} submit={(code) => owner.submit(code)} />}
     <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
       {alreadySignedIn && !renewing && <>
         <Button variant="contained" onClick={onClose}>Close</Button>

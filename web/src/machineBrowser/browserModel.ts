@@ -12,7 +12,7 @@ import {
   namesInstance,
 } from "./api";
 
-export type BrowserAction = "open" | "hibernate" | "snapshot" | "reset";
+export type BrowserAction = "open" | "navigate" | "hibernate" | "snapshot" | "reset";
 
 export interface BrowserModel {
   read?: BrowserRead | undefined;
@@ -55,11 +55,6 @@ export type BrowserEvent =
       action: BrowserAction;
       result: BrowserResult;
       now: number;
-      /** An open asked to take over an attached display (sign-in entry). */
-      takeover?: boolean;
-      /** The browser the owner confirmed taking over; another answer never
-       * takes a display over. */
-      expected?: BrowserTarget | undefined;
     }
   | { type: "failed"; action: BrowserAction; message: string }
   | {
@@ -259,26 +254,41 @@ export function viewerEnds(state: BrowserStateEvent): boolean {
 }
 
 /** Whether an open was refused although the Machine answered with a live
- * instance: reusing a running browser for a sign-in answers with that
- * browser's own state, and a reason on it (`login_mismatch`, `busy`,
- * `failed`, ...) means the sign-in was not bound. Such an answer never
- * mounts the viewer or takes the display over. */
+ * instance: a reason on a running browser's state (`busy`, `failed`, ...)
+ * means the open did not take effect. Such an answer never mounts the
+ * viewer. */
 export function openRefused(state: BrowserStateEvent): boolean {
   return state.state !== "hibernated" && state.reason !== undefined;
 }
 
-/** How the panel enters a browser it was asked to show at once. A sign-in
- * panel always goes through the sign-in open, even for a running browser,
- * so the Machine validates and binds the login before anything attaches; a
- * tab panel attaches to a detached browser directly. An attached display is
+/** How the panel enters a browser it was asked to show at once: it opens
+ * a stopped browser and attaches to a detached one. An attached display is
  * never entered without the owner's takeover. */
-export function autoEntry(
-  signIn: boolean,
-  state: BrowserState | null | undefined,
-): "open" | "attach" | undefined {
+export function autoEntry(state: BrowserState | null | undefined): "open" | "attach" | undefined {
   if (!state || state === "hibernated") return "open";
-  if (state === "detached") return signIn ? "open" : "attach";
+  if (state === "detached") return "attach";
   return undefined;
+}
+
+/** How a panel asked to show a link on `machine` enters the browser: the
+ * browser the panel shows on that Machine as `autoEntry` would, anything
+ * else (nothing yet, another Machine's browser) through an open pinned to
+ * that Machine. */
+export function linkEntry(
+  read: BrowserRead | undefined,
+  machine: string,
+): "open" | "attach" | undefined {
+  return read?.machine_id === machine ? autoEntry(read.state?.state) : "open";
+}
+
+/** The running browser on `machine` a link may be shown in: the one the
+ * panel shows, only while it runs on exactly that Machine. */
+export function linkTarget(model: BrowserModel, machine: string): BrowserTarget | undefined {
+  const target = shownTarget(model);
+  if (!target || target.machine_id !== machine || model.read?.machine_id !== machine) {
+    return undefined;
+  }
+  return browserRunning(model.read.state?.state) ? target : undefined;
 }
 
 /** What a finished snapshot or reset means for the owner: the success text,
@@ -302,13 +312,6 @@ export function operationOutcome(
   return {
     error: `The profile was not reset. ${browserReasonText(state.reason) ?? "The Machine did not confirm the reset."}`,
   };
-}
-
-/** The remote clipboard text the sign-in dialog may offer as an authorization
- * code: one non-empty token without whitespace, within the server's bound. */
-export function looksLikeAuthorizationCode(text: string): boolean {
-  const value = text.trim();
-  return value.length > 0 && value.length <= 4096 && !/\s/.test(value);
 }
 
 export const CHANGED_BEFORE_CONFIRM =
@@ -433,12 +436,6 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
             viewer: { takeover: false, generation: nextGeneration(model), target },
           };
         }
-        if (state.state === "attached" && event.takeover && target) {
-          if (event.expected && !sameTarget(event.expected, target)) {
-            return { ...next, error: CHANGED_BEFORE_CONFIRM };
-          }
-          return { ...next, viewer: { takeover: true, generation: nextGeneration(model), target } };
-        }
         if (state.state === "starting" && target) return { ...next, awaitingOpen: target };
         if (state.state === "hibernated") {
           return {
@@ -446,6 +443,12 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
             error: browserReasonText(state.reason) ?? "The browser did not start.",
           };
         }
+      }
+      if (event.action === "navigate" && state.reason) {
+        return {
+          ...next,
+          error: `The page was not opened. ${browserReasonText(state.reason) ?? ""}`.trim(),
+        };
       }
       if (event.action === "snapshot" || event.action === "reset") {
         return { ...next, ...operationOutcome(event.action, state) };

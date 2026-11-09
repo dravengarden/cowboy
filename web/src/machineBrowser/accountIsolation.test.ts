@@ -5,19 +5,28 @@ import {
   type BrowserRead,
   type BrowserStateEvent,
   browserStreamUrl,
+  createMachineBrowserApi,
   validBrowserRead,
 } from "./api";
 import {
   type AccountBrowserModel,
   INITIAL_BROWSER_MODEL,
+  linkEntry,
+  linkTarget,
   modelFor,
   pinnedMachine,
   readTicket,
   reduceAccountBrowser,
+  reduceBrowser,
   resetTarget,
   shownTarget,
 } from "./browserModel";
-import { accountBrowserEntry, machineChoices, needsMachineChoice } from "./entryRules";
+import {
+  accountBrowserEntry,
+  linkBrowserOffered,
+  machineChoices,
+  needsMachineChoice,
+} from "./entryRules";
 
 const A = "11111111-2222-4333-8444-555555555555";
 const B = "66666666-7777-4888-9999-000000000000";
@@ -168,4 +177,97 @@ test("a never-signed-in account chooses among the offered Machines", () => {
     { id: "hawk", label: "Hawk" },
     { id: "ovh", label: "ovh" },
   ]);
+});
+
+test("a sign-in link is offered only for the account's admitted browser on the login's Machine", () => {
+  const read: BrowserRead = {
+    machine_id: null,
+    state: null,
+    placements: [],
+    admission: null,
+    choose_machine: true,
+    capable_machines: [{ machine_id: "hawk" }],
+  };
+  assertEquals(linkBrowserOffered(read, "hawk"), true);
+  // The login's Machine cannot run browsers now.
+  assertEquals(linkBrowserOffered(read, "ovh"), false);
+  // The same admission as the account cards.
+  for (const admission of ["machine_browser_not_enabled", "browser_not_enabled"]) {
+    assertEquals(linkBrowserOffered({ ...read, admission }, "hawk"), false);
+  }
+  assertEquals(linkBrowserOffered(undefined, "hawk"), false);
+  // An account placed elsewhere keeps its browser there.
+  const placement = (machine: string) => ({
+    account_id: A,
+    machine_id: machine,
+    instance_id: "b-aaaaaaaaaaaaaaaaaaaaaaaa",
+    profile_revision: 1,
+    last_open_ms: 1,
+  });
+  const placed = { ...read, choose_machine: false, placements: [placement("ovh")] };
+  assertEquals(linkBrowserOffered(placed, "hawk"), false);
+  assertEquals(
+    linkBrowserOffered({ ...placed, placements: [placement("ovh"), placement("hawk")] }, "hawk"),
+    true,
+  );
+});
+
+test("a link opens and navigates only this account's browser on the login's Machine", async () => {
+  // The panel shows A's browser on ovh: the link for hawk opens there.
+  const onOvh: BrowserRead = {
+    ...openB,
+    state: running(A, "b-aaaaaaaaaaaaaaaaaaaaaaaa", 7),
+    placements: [],
+    admission: null,
+  };
+  assertEquals(linkEntry(onOvh, "hawk"), "open");
+  assertEquals(linkEntry(undefined, "hawk"), "open");
+  assertEquals(linkEntry({ ...onOvh, machine_id: "hawk" }, "hawk"), "attach");
+  const shownOnOvh = reduceBrowser(INITIAL_BROWSER_MODEL, { type: "read", read: onOvh, now: 1 });
+  assertEquals(linkTarget(shownOnOvh, "hawk"), undefined);
+  // Only the pinned open's answer, running on hawk, receives the link.
+  const opened = reduceBrowser(shownOnOvh, {
+    type: "result",
+    action: "open",
+    result: openA,
+    now: 2,
+  });
+  assertEquals(linkTarget(opened, "hawk"), shownTarget(opened));
+  assertEquals(linkTarget(opened, "hawk")?.instance.account_id, A);
+  const starting = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "result",
+    action: "open",
+    result: { machine_id: "hawk", state: { ...openA.state, state: "starting" } },
+    now: 2,
+  });
+  assertEquals(linkTarget(starting, "hawk"), undefined);
+
+  // The calls: a tab open pinned to hawk, then a navigation of exactly that
+  // instance. No route names a login, and nothing reads a code back.
+  const calls: { path: string; body: unknown }[] = [];
+  const api = createMachineBrowserApi((path, init) => {
+    calls.push({ path, body: JSON.parse(String(init.body)) });
+    return Promise.resolve(new Response(JSON.stringify(openA), { status: 200 }));
+  });
+  const signal = new AbortController().signal;
+  await api.open(A, "d", { width: 800, height: 600, scale: 1 }, signal, "hawk");
+  await api.navigate(A, "d", linkTarget(opened, "hawk")!, "https://claude.ai/oauth/x", signal);
+  assertEquals(
+    calls.map((call) => call.path),
+    [`/api/provider-accounts/${A}/browser/open`, `/api/provider-accounts/${A}/browser/navigate`],
+  );
+  assertEquals(calls[0]?.body, {
+    dataset: "d",
+    width: 800,
+    height: 600,
+    scale: 1,
+    machine_id: "hawk",
+  });
+  assertEquals(calls[1]?.body, {
+    dataset: "d",
+    machine_id: "hawk",
+    instance: openA.state.instance,
+    url: "https://claude.ai/oauth/x",
+  });
+  assertEquals("openSignIn" in api, false);
 });

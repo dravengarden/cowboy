@@ -263,13 +263,13 @@ export interface MachineBrowserApi {
     signal: AbortSignal,
     machine?: string,
   ): Promise<BrowserResult>;
-  openSignIn(
+  /** Navigate exactly `target` to an owner-supplied `https` URL. */
+  navigate(
     account: string,
-    request: string,
     dataset: string,
-    viewport: BrowserViewport,
+    target: BrowserTarget,
+    url: string,
     signal: AbortSignal,
-    machine?: string,
   ): Promise<BrowserResult>;
   hibernate(
     account: string,
@@ -364,10 +364,10 @@ export function createMachineBrowserApi(
         { dataset, ...viewport, ...(machine ? { machine_id: machine } : {}) },
         signal,
       ),
-    openSignIn: (account, request, dataset, viewport, signal, machine) =>
+    navigate: (account, dataset, target, url, signal) =>
       post(
-        `${accountPath(account)}/logins/${encodeURIComponent(request)}/browser`,
-        { dataset, ...viewport, ...(machine ? { machine_id: machine } : {}) },
+        `${accountPath(account)}/browser/navigate`,
+        { dataset, ...targetBody(target), url },
         signal,
       ),
     hibernate: (account, dataset, target, signal) =>
@@ -409,13 +409,6 @@ const ERROR_TEXT: Record<string, string> = {
   dataset_changed: "Your Cowboy account data changed. Reload before continuing.",
   invalid_viewport: "This screen size is outside the supported range.",
   invalid_argument: "The Service did not accept the request.",
-  login_inactive: "This sign-in is no longer active on its Machine. Start the sign-in again.",
-  login_mismatch:
-    "This sign-in is not the account’s active native login, so the browser was not opened for it.",
-  browser_sign_in_refused:
-    "The Machine did not bind this sign-in to the running browser. Check the browser state and retry.",
-  login_operation_not_found: "This sign-in could not be found. Start the sign-in again.",
-  invalid_login_reference: "This sign-in reference is not valid.",
   unavailable: "The Service is temporarily unavailable.",
   resize_failed: "The Machine did not apply the new screen size.",
   account_revoking: "This account is being revoked; its browser profile is deleted with it.",
@@ -440,8 +433,9 @@ const REASON_TEXT: Record<string, string> = {
   profile_newer_than_runtime:
     "The saved profile was written by a newer browser. Reset the profile to continue.",
   superseded: "A newer instance replaced this one.",
-  login_ended: "The sign-in ended, so its browser was hibernated.",
-  login_mismatch: "This sign-in is not the account’s active native login.",
+  // Retired sign-in reasons an older Machine may still report.
+  login_ended: "An older Machine stopped this browser with its sign-in.",
+  login_mismatch: "An older Machine refused this browser for a sign-in.",
   deadline: "The browser reached its maximum running time.",
   grace: "Nobody was attached, so the browser was hibernated.",
   reclaim: "The Machine reclaimed memory and hibernated the browser.",
