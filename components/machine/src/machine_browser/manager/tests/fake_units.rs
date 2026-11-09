@@ -14,6 +14,8 @@ pub(super) struct FakeUnit {
     stoppable: bool,
     /// Whether `show` answers for it.
     observable: bool,
+    /// The `MemoryMax` `show` reports.
+    memory_max: Option<u64>,
 }
 
 impl FakeUnit {
@@ -23,6 +25,7 @@ impl FakeUnit {
             live: true,
             stoppable: true,
             observable: true,
+            memory_max: None,
         }
     }
 
@@ -33,6 +36,11 @@ impl FakeUnit {
 
     pub(super) fn unobservable(mut self) -> Self {
         self.observable = false;
+        self
+    }
+
+    pub(super) fn memory_max(mut self, bytes: u64) -> Self {
+        self.memory_max = Some(bytes);
         self
     }
 }
@@ -120,6 +128,7 @@ impl UnitControl for FakeUnits {
                     load_state: "loaded".into(),
                     active_state: if fake.live { "active" } else { "failed" }.into(),
                     invocation_id: fake.invocation,
+                    memory_max: fake.memory_max,
                     ..unit::UnitStatus::default()
                 }),
             }

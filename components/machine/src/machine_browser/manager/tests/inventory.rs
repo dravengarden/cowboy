@@ -10,13 +10,13 @@ const UNIT: &str = "cowboy-browser-inst-1";
 
 /// Forget the fixture's registered instance: these tests reconcile from
 /// records and the unit listing alone.
-fn unregistered(fixture: &Fixture) {
+pub(super) fn unregistered(fixture: &Fixture) {
     *fixture.manager.slot(&fixture.account).instance.lock() = None;
 }
 
 /// A record of this boot for `account`'s instance `instance_id` running
 /// invocation `invocation`.
-fn record(
+pub(super) fn record(
     fixture: &Fixture,
     account: &ProviderAccountId,
     instance_id: &str,
@@ -59,7 +59,7 @@ fn pending(manager: &BrowserManager, account: &ProviderAccountId) -> bool {
         .is_some()
 }
 
-async fn eventually(what: &str, condition: impl Fn() -> bool) {
+pub(super) async fn eventually(what: &str, condition: impl Fn() -> bool) {
     let waited = Instant::now();
     while !condition() {
         assert!(

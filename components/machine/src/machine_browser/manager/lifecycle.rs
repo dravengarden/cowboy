@@ -302,36 +302,32 @@ impl BrowserManager {
                 Ok(instance)
             }
             Err(failure) => {
-                // Never retry with weaker isolation: the unit ends, and its
-                // slot is released only once that is confirmed.
-                if !self
-                    .units
-                    .terminate(&unit_name, cgroup_dir.as_deref(), invocation_id.as_deref())
-                    .await
-                {
-                    self.retain_unconfirmed(Retained {
-                        unit: unit_name,
-                        cgroup_dir,
-                        invocation_id,
-                        account: Some(account_id.clone()),
-                        instance: None,
-                        record: None,
-                        capacity: Some(capacity),
-                        generation: Some(plan.generation_digest.clone()),
-                        // The open answered the failure; the confirmed exit
-                        // reports the incarnation's terminal state, which
-                        // `Query` reports as stopping until then.
-                        outcome: StopOutcome {
-                            reason: failure.reason,
-                            unsaved: true,
-                            reference: Some(InstanceRef {
-                                account_id: account_id.clone(),
-                                instance_id: instance_id.to_owned(),
-                                incarnation,
-                            }),
-                        },
-                    });
-                }
+                // Never retry with weaker isolation: the unit ends (a
+                // verification failure included), and its slot and memory
+                // budget are released only once that is confirmed.
+                self.terminate_or_retain(Retained {
+                    unit: unit_name,
+                    cgroup_dir,
+                    invocation_id,
+                    account: Some(account_id.clone()),
+                    instance: None,
+                    record: None,
+                    capacity: Some(capacity),
+                    generation: Some(plan.generation_digest.clone()),
+                    // The open answered the failure; the confirmed exit
+                    // reports the incarnation's terminal state, which
+                    // `Query` reports as stopping until then.
+                    outcome: StopOutcome {
+                        reason: failure.reason,
+                        unsaved: true,
+                        reference: Some(InstanceRef {
+                            account_id: account_id.clone(),
+                            instance_id: instance_id.to_owned(),
+                            incarnation,
+                        }),
+                    },
+                })
+                .await;
                 Err(failure)
             }
         }

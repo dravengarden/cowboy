@@ -1525,12 +1525,22 @@ the text above:
   `max_instances` slot on confirmed exit releases the budget with it.
   `Reservation::charge_to` credits the unit cgroup's usage net of
   `inactive_file` against the budget.
-- Adoption at restart re-admits a survivor with the `MemoryMax` systemd
-  reports for its unit (`browser.memory_max` when it reports none). Without
-  headroom for it the survivor is kept and the budget force-reserved, with a
-  WARN: its pages are already resident, every later admission must see what
-  it may still grow into, and stopping it would only lose unsaved state for
-  accounting.
+- Restart reconciliation reserves a budget for every unit that may still be
+  alive, before deciding its fate: a recorded invocation (whether adopted,
+  refused at adoption, ending, of the retired sign-in purpose, or
+  unobservable) and an unrecorded or replacement invocation. The budget is
+  the `MemoryMax` systemd reports for the unit, or `browser.memory_max` when
+  it reports none or cannot be observed. Without headroom for it the budget
+  is force-reserved with a WARN: its pages are already resident, every later
+  admission (browser or worker) must see what it may still grow into, and
+  stopping it would only lose unsaved state for accounting. The cgroup
+  usage credit applies only when the unit's cgroup is known (recorded, or
+  reported by systemd); otherwise the full budget is held. That one
+  `CapacityGuard` moves into the adopted instance, or back out of a refused
+  adoption into the stop and, when the exit is unconfirmed, its termination
+  retry; it is released once, only on confirmed exit. A failed start
+  (including a confinement verification failure after the budget was
+  admitted) likewise keeps its slot and budget until its stop is confirmed.
 - Host pids are never taken from the launcher. The Machine enumerates the
   unit's cgroup tree and matches the launcher's namespace-local pids through
   `/proc/<pid>/status` `NSpid` and `PPid`; the supervisor must be the unit's

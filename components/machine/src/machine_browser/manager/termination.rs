@@ -179,6 +179,27 @@ impl BrowserManager {
         ticket
     }
 
+    /// Stop an unregistered unit (a failed start, an unrecorded survivor).
+    /// A confirmed exit releases what `retained` holds (its slot and memory
+    /// budget) at once; otherwise it is all retained until a retry confirms
+    /// the exit. Returns whether the exit was confirmed now.
+    pub(super) async fn terminate_or_retain(&self, retained: Retained) -> bool {
+        if self
+            .units
+            .terminate(
+                &retained.unit,
+                retained.cgroup_dir.as_deref(),
+                retained.invocation_id.as_deref(),
+            )
+            .await
+        {
+            drop(retained);
+            return true;
+        }
+        self.retain_unconfirmed(retained);
+        false
+    }
+
     /// Whether the manager already accounts for `invocation` of `unit_name`:
     /// a registered instance runs it, or a retention's termination is bound
     /// to it (or to whatever runs under the name).

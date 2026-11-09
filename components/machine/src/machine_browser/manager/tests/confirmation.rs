@@ -120,9 +120,15 @@ async fn an_unobservable_survivor_keeps_its_record_capacity_fence_and_admission(
     state_file::write_instance(&fixture.manager.state_dir, &record).unwrap();
     let used = fixture.manager.capacity.used();
     // `systemctl show` failed for it at restart.
-    fixture
+    let slot = fixture
         .manager
-        .retain_recorded(&record, Some(record.cgroup_dir.clone()), Reason::Failed);
+        .survivor_slot(&record.unit, None, Some(&record.cgroup_dir));
+    fixture.manager.retain_recorded(
+        &record,
+        Some(record.cgroup_dir.clone()),
+        Reason::Failed,
+        slot,
+    );
     assert!(
         fixture
             .manager

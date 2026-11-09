@@ -130,7 +130,7 @@ impl BrowserManager {
             Err(error) => {
                 // Unclaimed: whatever runs under the name is stopped.
                 tracing::warn!(%error, unit = %unit_name, "stopping unobservable unrecorded browser unit");
-                self.stop_unrecorded(unit_name, None, None).await;
+                self.stop_unrecorded(unit_name, None, None, None).await;
                 return true;
             }
         };
@@ -142,7 +142,7 @@ impl BrowserManager {
                 tracing::warn!(unit = %unit_name, "claimed browser unit reports no invocation; inventory incomplete");
                 return false;
             }
-            self.stop_unrecorded(unit_name, status.cgroup_dir(), None)
+            self.stop_unrecorded(unit_name, status.cgroup_dir(), None, status.memory_max)
                 .await;
             return true;
         }
@@ -151,41 +151,44 @@ impl BrowserManager {
         }
         tracing::warn!(unit = %unit_name, invocation = %status.invocation_id, "stopping unrecorded browser unit invocation");
         let invocation = status.invocation_id.clone();
-        self.stop_unrecorded(unit_name, status.cgroup_dir(), Some(invocation))
-            .await;
+        self.stop_unrecorded(
+            unit_name,
+            status.cgroup_dir(),
+            Some(invocation),
+            status.memory_max,
+        )
+        .await;
         true
     }
 
     /// Stop a unit invocation no record accounts for; one whose exit is
     /// unconfirmed is retained with every account's fence held (it may have
-    /// run for any account).
+    /// run for any account). Its slot and memory budget (`memory_max`, its
+    /// unit's `MemoryMax` when observed) are held from before the stop until
+    /// its exit is confirmed.
     async fn stop_unrecorded(
         &self,
         unit_name: &str,
         cgroup: Option<PathBuf>,
         invocation: Option<String>,
+        memory_max: Option<u64>,
     ) {
+        let capacity = self.survivor_slot(unit_name, memory_max, cgroup.as_deref());
         if let Some(cgroup) = &cgroup {
             let _ = unit::set_frozen(&cgroup.join("browser"), false);
         }
-        if self
-            .units
-            .terminate(unit_name, cgroup.as_deref(), invocation.as_deref())
-            .await
-        {
-            return;
-        }
-        self.retain_unconfirmed(Retained {
+        self.terminate_or_retain(Retained {
             unit: unit_name.to_owned(),
             cgroup_dir: cgroup,
             invocation_id: invocation,
             account: None,
             instance: None,
             record: None,
-            capacity: Some(self.capacity.force_reserve()),
+            capacity: Some(capacity),
             outcome: StopOutcome::unreported(Reason::Failed),
             generation: None,
-        });
+        })
+        .await;
     }
 
     pub(super) async fn reconcile_record(self: &Arc<Self>, record: InstanceRecord) -> Result<()> {
@@ -196,9 +199,17 @@ impl BrowserManager {
             Ok(status) => status,
             Err(error) => {
                 // Unobservable is not gone: the unit keeps its record,
-                // capacity and its account's fences and admission held
-                // while a retry bound to its recorded invocation stops it.
-                self.retain_recorded(&record, Some(record.cgroup_dir.clone()), Reason::Failed);
+                // capacity, memory budget (`browser.memory_max`, its own
+                // limit being unknown) and its account's fences and
+                // admission held while a retry bound to its recorded
+                // invocation stops it.
+                let capacity = self.survivor_slot(&record.unit, None, Some(&record.cgroup_dir));
+                self.retain_recorded(
+                    &record,
+                    Some(record.cgroup_dir.clone()),
+                    Reason::Failed,
+                    capacity,
+                );
                 return Err(error.context("surviving browser unit unobservable; retained"));
             }
         };
@@ -208,28 +219,38 @@ impl BrowserManager {
         if unit::invocation_gone(&status, Some(&record.invocation_id)) {
             return self.discard_record(&record, "unit ended or replaced");
         }
+        // From here the recorded invocation may be alive: its slot and the
+        // budget it was admitted with are held until it is adopted (and move
+        // into the instance) or its exit is confirmed.
+        let capacity =
+            self.survivor_slot(&record.unit, status.memory_max, Some(&record.cgroup_dir));
         if !status.live() {
             return self
-                .stop_recorded(&record, "unit ending", Reason::Failed)
+                .stop_recorded(&record, "unit ending", Reason::Failed, capacity)
                 .await;
         }
         // An instance recorded by an earlier Machine under the retired
         // sign-in purpose is not adopted.
         if record.purpose != Purpose::Tab {
             return self
-                .stop_recorded(&record, "retired sign-in browser", Reason::NotAvailable)
+                .stop_recorded(
+                    &record,
+                    "retired sign-in browser",
+                    Reason::NotAvailable,
+                    capacity,
+                )
                 .await;
         }
-        match self.adopt(&record, &status).await {
+        match self.adopt(&record, &status, capacity).await {
             Ok(instance) => {
                 *self.slot(&instance.account_id).instance.lock() = Some(Arc::clone(&instance));
                 self.spawn_supervisor(&instance);
                 tracing::info!(instance = %record.instance_id, "adopted surviving browser instance");
                 Ok(())
             }
-            Err(error) => {
+            Err((error, capacity)) => {
                 tracing::warn!(%error, instance = %record.instance_id, "browser instance not adopted; stopping");
-                self.stop_recorded(&record, "adoption failed", Reason::Failed)
+                self.stop_recorded(&record, "adoption failed", Reason::Failed, capacity)
                     .await
             }
         }
@@ -240,13 +261,15 @@ impl BrowserManager {
         state_file::remove_instance(&self.state_dir, &record.instance_id)
     }
 
-    /// Stop a recorded, unadopted unit; its record is cleared only once the
-    /// exit is confirmed.
+    /// Stop a recorded, unadopted unit; its record is cleared, and its slot
+    /// and memory budget (`capacity`) released, only once the exit is
+    /// confirmed.
     async fn stop_recorded(
         &self,
         record: &InstanceRecord,
         why: &str,
         reason: Reason,
+        capacity: CapacityGuard,
     ) -> Result<()> {
         let _ = unit::set_frozen(&record.cgroup_dir.join("browser"), false);
         let cgroup = Some(record.cgroup_dir.clone());
@@ -255,23 +278,25 @@ impl BrowserManager {
             .terminate(&record.unit, cgroup.as_deref(), Some(&record.invocation_id))
             .await
         {
+            drop(capacity);
             return self.discard_record(record, why);
         }
-        self.retain_recorded(record, cgroup, reason);
+        self.retain_recorded(record, cgroup, reason, capacity);
         bail!(
             "browser unit {} exit unconfirmed; record retained",
             record.unit
         )
     }
 
-    /// Keep a recorded unit as running (record, capacity slot, its account's
-    /// fence and admission) while a retry bound to its recorded invocation
-    /// confirms its exit.
+    /// Keep a recorded unit as running (record, `capacity` with its memory
+    /// budget, its account's fence and admission) while a retry bound to its
+    /// recorded invocation confirms its exit.
     pub(super) fn retain_recorded(
         &self,
         record: &InstanceRecord,
         cgroup_dir: Option<PathBuf>,
         reason: Reason,
+        capacity: CapacityGuard,
     ) {
         let account = ProviderAccountId::try_from(record.account_id.clone()).ok();
         self.retain_unconfirmed(Retained {
@@ -281,7 +306,7 @@ impl BrowserManager {
             account: account.clone(),
             instance: None,
             record: Some(record.instance_id.clone()),
-            capacity: Some(self.capacity.force_reserve()),
+            capacity: Some(capacity),
             generation: Some(record.generation_digest.clone()),
             outcome: StopOutcome {
                 reason,
@@ -295,7 +320,26 @@ impl BrowserManager {
         });
     }
 
+    /// Adopt a surviving `Tab` instance, moving `capacity` (its slot and
+    /// re-admitted budget) into it; a refusal hands `capacity` back, so the
+    /// stop that follows keeps it until the unit's exit is confirmed.
     pub(super) async fn adopt(
+        &self,
+        record: &InstanceRecord,
+        status: &unit::UnitStatus,
+        capacity: CapacityGuard,
+    ) -> Result<Arc<Instance>, (anyhow::Error, CapacityGuard)> {
+        match self.adopted(record, status).await {
+            Ok(instance) => {
+                *instance.capacity.lock() = Some(capacity);
+                Ok(instance)
+            }
+            Err(error) => Err((error, capacity)),
+        }
+    }
+
+    /// The verified instance of a surviving unit, without its slot.
+    async fn adopted(
         &self,
         record: &InstanceRecord,
         status: &unit::UnitStatus,
@@ -356,13 +400,9 @@ impl BrowserManager {
             last_snapshot: control_record
                 .current_generation
                 .zip(control_record.current_generation_at_ms),
-            // A survivor counts against the limit whatever it is now, with
-            // the memory budget it was admitted with.
-            capacity: Some(
-                self.capacity
-                    .force_reserve()
-                    .with_memory(self.readmit_budget(record, status, &settings).await),
-            ),
+            // The slot and budget reserved for the survivor are moved in
+            // by `adopt` once verification passed.
+            capacity: None,
         });
         let bootstrap = host::enforce_label(BOOTSTRAP_PROFILE);
         let sealed = host::enforce_label(SEALED_PROFILE);
@@ -375,39 +415,39 @@ impl BrowserManager {
         Ok(Arc::new(instance))
     }
 
-    /// Re-admit a surviving unit's budget: its own `MemoryMax` (which is
-    /// never raised), or `browser.memory_max` when systemd reports none.
-    /// Without headroom for it the browser is kept and its budget reserved
-    /// anyway: its pages are already resident and every later admission
-    /// must see what it may still grow into, while stopping it would only
-    /// lose its unsaved state for accounting.
-    pub(super) async fn readmit_budget(
+    /// The capacity slot and memory budget of a unit that may still be
+    /// alive (a restart survivor, adopted or not), counted whatever the
+    /// current limit and headroom. The budget is the unit's own `MemoryMax`
+    /// (`memory_max`, never raised), or `browser.memory_max` when it is not
+    /// known; once the unit's `cgroup` is known its usage is credited
+    /// against it. Without headroom for it the budget is reserved anyway:
+    /// the unit's pages are already resident and every later admission must
+    /// see what it may still grow into, while stopping it only for
+    /// accounting would lose its unsaved state.
+    pub(super) fn survivor_slot(
         &self,
-        record: &InstanceRecord,
-        status: &unit::UnitStatus,
-        settings: &Settings,
-    ) -> crate::launch_ledger::Reservation {
-        let bytes = status.memory_max.unwrap_or(settings.memory_max);
-        let budget = match self
-            .ledger
-            .reserve(bytes, self.headroom, || false, Duration::ZERO, MEMORY_POLL)
-            .await
-        {
-            Admission::Reserved { reservation, .. } => reservation,
-            Admission::Cancelled | Admission::Exhausted => {
-                tracing::warn!(
-                    instance = %record.instance_id,
-                    headroom_bytes = (self.headroom)(),
-                    reserved_bytes = self.ledger.reserved_bytes(),
-                    budget_bytes = bytes,
-                    floor_bytes = FLOOR_BYTES,
-                    "adopted browser budget exceeds the memory headroom; kept and reserved anyway"
-                );
-                self.ledger.force(bytes)
-            }
-        };
-        budget.charge_to(&record.cgroup_dir);
-        budget
+        unit_name: &str,
+        memory_max: Option<u64>,
+        cgroup: Option<&Path>,
+    ) -> CapacityGuard {
+        let bytes = memory_max.unwrap_or(self.settings().memory_max);
+        let headroom = (self.headroom)();
+        let reserved = self.ledger.reserved_bytes();
+        if headroom.is_some_and(|headroom| !Ledger::fits(headroom, reserved, bytes)) {
+            tracing::warn!(
+                unit = %unit_name,
+                headroom_bytes = headroom,
+                reserved_bytes = reserved,
+                budget_bytes = bytes,
+                floor_bytes = FLOOR_BYTES,
+                "surviving browser budget exceeds the memory headroom; reserved anyway"
+            );
+        }
+        let budget = self.ledger.force(bytes);
+        if let Some(cgroup) = cgroup {
+            budget.charge_to(cgroup);
+        }
+        self.capacity.force_reserve().with_memory(budget)
     }
 
     /// Resume fenced operations and remove orphan generations and abandoned
