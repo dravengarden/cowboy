@@ -37,10 +37,17 @@ pub(super) async fn prepare(
             json!({"schema":1,"epoch":request.epoch,"launch_prepared":true,"runtime_ready":false}),
         )
         .into_response(),
-        Err(_) => (
-            StatusCode::CONFLICT,
-            Json(json!({"error":"mcp_launch_preparation_unavailable"})),
-        )
-            .into_response(),
+        Err(error) => {
+            tracing::warn!(
+                session = %session,
+                error = %format!("{error:#}"),
+                "MCP launch preparation unavailable"
+            );
+            (
+                StatusCode::CONFLICT,
+                Json(json!({"error":"mcp_launch_preparation_unavailable"})),
+            )
+                .into_response()
+        }
     }
 }
