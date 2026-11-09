@@ -179,6 +179,8 @@ pub(in crate::server) async fn run(state: Arc<AppState>) {
                 let state = Arc::clone(&state);
                 let push = Arc::clone(&push);
                 tokio::spawn(async move {
+                    // Let the watcher record the command's last writes.
+                    tokio::time::sleep(SETTLE).await;
                     let paths = shell_changes(&state, &session).await;
                     if !paths.is_empty() {
                         schedule(&state, &push, session, paths, target);
@@ -286,11 +288,20 @@ pub(super) async fn shell_changes(state: &AppState, session: &str) -> Vec<String
     CURSORS
         .lock()
         .insert(session.to_owned(), changes.cursor.clone());
-    if changes.gap {
-        return Vec::new();
-    }
+    let files = if changes.gap {
+        Vec::new()
+    } else {
+        source_files(&changes.paths)
+    };
+    tracing::info!(
+        event_name = "cowboy.code.shell_changes",
+        session,
+        gap = changes.gap,
+        changed = changes.paths.len(),
+        files = files.len()
+    );
     let root = scope.session().cwd().trim_end_matches('/').to_owned();
-    source_files(&changes.paths)
+    files
         .into_iter()
         .map(|path| format!("{root}/{path}"))
         .collect()
