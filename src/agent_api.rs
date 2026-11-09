@@ -700,6 +700,10 @@ type Id = string; // [A-Za-z0-9_-]{1,64}
 type Tone = "neutral"|"info"|"success"|"warning"|"error"|"running";
 type Ref = {kind:"url";url:string /* https: only */}|{kind:"file";path:string;line?:number};
 type Cell = string|number|boolean|null|{v:string|number|boolean|null;tone?:Tone;to?:Ref};
+// Img: {kind:"event";seq;index?} = the index-th image (default 0) of this session's event seq, e.g. a
+// screenshot a tool returned (stored as an artifact on write) | {kind:"artifact";url:"/api/artifacts/<sha256>.<ext>"}
+// | {kind:"data";mime:"image/png";base64} (a still PNG ≤ 8 KiB, ≤ 256×256). Never a remote URL.
+type Img = {kind:"event";seq:number;index?:number}|{kind:"artifact";url:string}|{kind:"data";mime:"image/png";base64:string};
 type WidgetDocument = {schema:"cowboy.widget/1";title:string;summary?:string;root:Node;
   presentation?:{inline?:boolean;height?:"xs"|"sm"|"md"|"lg"}};
 type Node = {id?:Id;fallback?:string} & (
@@ -716,7 +720,8 @@ type Node = {id?:Id;fallback?:string} & (
   | {type:"status";label:string;tone:Tone} | {type:"progress";value?:number /* 0..1 */;label?:string;tone?:Tone}
   | {type:"steps";steps:{label:string;state:"pending"|"active"|"done"|"failed"|"skipped";detail?:string}[]}
   | {type:"alert";severity:"info"|"success"|"warning"|"error";title?:string;text:string}
-  | {type:"image";alt:string;src:object} /* shows alt only for now */
+  | {type:"image";alt:string;src:Img;caption?:string;fit?:"contain"|"cover";height?:"xs"|"sm"|"md"|"lg"}
+  | {type:"gallery";images:{src:Img;alt:string;caption?:string}[]} /* the row shows 6; Open shows all */
   | {type:"button";id:Id;label:string;action:{kind:"prompt"}} | {type:"choice";id:Id;label:string;options:{value:Id;label:string}[]});
 // Bounds: 24 KiB, 400 nodes, depth 12, table 200x12, 2000 cells/document; percent cells are 0..1, bytes integers,
 // duration seconds. Labels are one printable line; unknown node types are refused.

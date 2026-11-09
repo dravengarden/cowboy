@@ -51,6 +51,8 @@ export const WIDGET_LIMITS = {
   previewRows: 20,
   /** Top-level list or kv items drawn in the transcript preview. */
   previewItems: 50,
+  /** Gallery images drawn in the transcript preview. */
+  previewImages: 6,
   /** Table rows per inspector page. */
   inspectorPageRows: 50,
   listItems: 200,
@@ -218,8 +220,9 @@ export type ImageSource =
   | { kind: "event"; seq: number; index?: number }
   /** A small still image (icon, glyph): ≤ `inlineImageBytes`, intrinsic size
    *  ≤ `inlineImagePixels` square, no animation; verified by the Controller,
-   *  so not allowed in the inline carrier. SVG is deferred. */
-  | { kind: "data"; mime: "image/png" | "image/jpeg" | "image/webp"; base64: string };
+   *  so not allowed in the inline carrier. The Controller decodes the whole
+   *  file, so only PNG is accepted for now; JPEG, WebP and SVG are deferred. */
+  | { kind: "data"; mime: "image/png"; base64: string };
 
 interface NodeBase {
   /** Required on nodes a patch, a group or a value refers to, and on a card

@@ -21,7 +21,8 @@ export function sortKey(cell: Cell | undefined, format: Column["format"]): Key {
   const value = typeof cell === "object" && cell !== null ? cell.v : cell;
   if (value === null || value === undefined || value === "") return { rank: 2 };
   if (typeof value === "boolean") return { rank: 0, n: value ? 1 : 0 };
-  if (typeof value === "number") return Number.isFinite(value) ? { rank: 0, n: value } : { rank: 2 };
+  if (typeof value === "number")
+    return Number.isFinite(value) ? { rank: 0, n: value } : { rank: 2 };
   if (format === "date") {
     const ms = Date.parse(value);
     if (Number.isFinite(ms)) return { rank: 0, n: ms };

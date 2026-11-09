@@ -96,7 +96,22 @@ typing-free, auditable decisions within measured bounds.
   in-row entered region of §7.5 while widgets have no live inputs; revisit it
   with interactions, when a choice must be operable without opening the
   inspector.
-- Not built yet: interactions and image sources.
+- **Images (Controller + Web).** Published widgets draw `image` and
+  `gallery` nodes. On every publish, replace and patch the Controller
+  verifies each `artifact` source, rewrites each `event` source to the
+  artifact of that image block of the session's event (storing inline bytes
+  first), and fully decodes each `data` source as a still PNG of at most
+  8 KiB and 256 × 256 (JPEG and WebP `data` images are deferred: they would
+  need a header parser the Controller does not have). Retention needs no
+  separate reference table: the stored notice event carries the artifact URL,
+  which the existing collector already roots for as long as the row exists,
+  and the pin lock in `src/artifacts.rs` closes the G3 race (a pin refreshes
+  the age under the lock; the collector re-reads it under the lock before
+  unlinking). The Web draws verified sources through `ProtectedImage` with
+  the product lightbox (`web/src/widgets/WidgetPictures.tsx`, lazy) and keeps
+  the inline fence on `alt` text; inline `event` resolution is not wired.
+  The transcript preview shows the first 6 gallery images (`previewImages`).
+- Not built yet: interactions.
 
 ## 1. Review findings and resolutions
 

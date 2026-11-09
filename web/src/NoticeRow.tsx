@@ -54,6 +54,7 @@ export function NoticeRow({ item }: { item: Notice }): React.JSX.Element {
           handle={widget.handle}
           closed={widget.closed}
           updatedAtMs={widget.updatedAtMs}
+          verified
         />
       </Suspense>
     </Box>
