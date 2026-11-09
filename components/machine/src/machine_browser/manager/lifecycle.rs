@@ -105,7 +105,7 @@ impl BrowserManager {
             Ok(instance) => instance,
             Err(failure) => {
                 tracing::warn!(event_name = "browser.open.failed",
-                    browser_account = %account_id.as_str(), browser_violation = %failure.detail,
+                    browser_account = %account_id.as_str(), detail = %failure.detail,
                     reason = ?failure.reason, "browser open failed");
                 return hibernated(failure.reason);
             }

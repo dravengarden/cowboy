@@ -677,14 +677,13 @@ pub(in crate::server) async fn instance_command(
 ) -> Result<Value, &'static str> {
     authorize(state, owner, account_id, authority).await?;
     let observed = named_instance(state, account_id, machine_id, instance)?;
+    let request = request_id("browser");
+    if let Command::Hibernate { instance } = &command {
+        hibernate_sent(&observed.machine_id, instance, &request, "owner_request");
+    }
     let event = state
         .machine_control
-        .browser_command(
-            &observed.connection,
-            request_id("browser"),
-            command,
-            timeout,
-        )
+        .browser_command(&observed.connection, request, command, timeout)
         .await
         .map_err(|error| {
             tracing::warn!(%error, "browser command failed");
@@ -841,7 +840,7 @@ async fn send_hibernate(
 
 /// Why the Controller asked a Machine to hibernate a browser; the Machine
 /// logs the same request id with the stop it carried out.
-fn hibernate_sent(machine_id: &str, instance: &InstanceRef, request: &str, cause: &str) {
+fn hibernate_sent(machine_id: &str, instance: &InstanceRef, request: &str, cause: &'static str) {
     tracing::info!(event_name = "browser.hibernate.requested", machine = %machine_id,
         browser_account = %instance.account_id.as_str(), browser_instance = %instance.instance_id,
         browser_request = %request, browser_cause = %cause, "browser hibernate requested");
@@ -1050,7 +1049,6 @@ pub(in crate::server) async fn http_hibernate(
     if !dataset_ok(&state, &auth, body.dataset.as_deref()) {
         return respond(Err("dataset_changed"));
     }
-    hibernate_sent(&body.machine_id, &body.instance, "", "owner_request");
     respond(
         instance_command(
             &state,

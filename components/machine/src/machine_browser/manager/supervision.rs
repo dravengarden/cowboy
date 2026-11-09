@@ -94,7 +94,7 @@ impl BrowserManager {
         }
         if scan_due {
             instance.live.lock().last_scan = now;
-            if let Err(reason) = self.recheck(instance) {
+            if let Err(reason) = self.recheck_periodic(instance) {
                 let event = self.stop_instance(instance, reason, false, None).await;
                 self.send_state(event);
                 return true;
@@ -104,7 +104,7 @@ impl BrowserManager {
             match control.next_event(Duration::from_millis(20)).await {
                 Ok(Some(LauncherEvent::Exited { process, code })) => {
                     drop(control);
-                    tracing::warn!(event_name = "browser.process.exited", browser_instance = %instance.instance_id, browser_cause = %process, exit_code = ?code, "browser process exited");
+                    tracing::warn!(event_name = "browser.process.exited", browser_instance = %instance.instance_id, %process, exit_code = ?code, "browser process exited");
                     let event = self
                         .stop_instance(instance, Reason::Failed, false, None)
                         .await;
@@ -134,26 +134,51 @@ impl BrowserManager {
         false
     }
 
-    /// Cheap periodic evidence: pins, socket scan and runtime directory.
-    pub(super) fn recheck(&self, instance: &Arc<Instance>) -> Result<(), Reason> {
+    /// Cheap confinement evidence: pins, socket scan and runtime directory.
+    /// A scan the ptrace access check denied is [`Recheck::Unverified`]:
+    /// operations refuse it, and only periodic supervision may wait for it.
+    pub(super) fn recheck(&self, instance: &Arc<Instance>) -> Result<(), Recheck> {
         if !instance.live.lock().verified.pins_hold() {
-            return Err(Reason::ConfinementUnverified);
+            return Err(Recheck::Stop(Reason::ConfinementUnverified));
         }
         match verify::scan_sockets_periodic(&instance.cgroup_dir) {
-            Ok(()) => instance.live.lock().scan_denied = 0,
+            Ok(()) => {}
             Err(verify::ScanFailure::Violation(violation)) => {
                 tracing::warn!(event_name = "browser.scan.violation",
-                    browser_instance = %instance.instance_id, browser_violation = %violation,
+                    browser_instance = %instance.instance_id, detail = %violation,
                     "browser socket scan violation");
-                return Err(Reason::ListenerDetected);
+                return Err(Recheck::Stop(Reason::ListenerDetected));
             }
             Err(verify::ScanFailure::Denied(violation)) => {
+                tracing::info!(event_name = "browser.scan.denied",
+                    browser_instance = %instance.instance_id, detail = %violation,
+                    "browser socket scan denied");
+                return Err(Recheck::Unverified);
+            }
+        }
+        if let Err(violation) = verify::runtime_directory_clean(&instance.runtime_dir) {
+            tracing::warn!(event_name = "browser.runtime_dir.violation",
+                browser_instance = %instance.instance_id, detail = %violation,
+                "browser runtime directory violation");
+            return Err(Recheck::Stop(Reason::ConfinementUnverified));
+        }
+        Ok(())
+    }
+
+    /// [`Self::recheck`] for the supervisor's periodic scan: a denial is
+    /// rescanned about a second later, and the instance stops once
+    /// [`SCAN_DENIED_LIMIT`] consecutive periodic scans were denied.
+    fn recheck_periodic(&self, instance: &Arc<Instance>) -> Result<(), Reason> {
+        match self.recheck(instance) {
+            Ok(()) => {
+                instance.live.lock().scan_denied = 0;
+                Ok(())
+            }
+            Err(Recheck::Stop(reason)) => Err(reason),
+            Err(Recheck::Unverified) => {
                 let attempt = {
                     let mut live = instance.live.lock();
                     live.scan_denied = live.scan_denied.saturating_add(1);
-                    // Rescan on the next tick but one instead of a full
-                    // interval later: a denial outlasting a few seconds is
-                    // treated as unverified confinement.
                     if let Some(soon) = Instant::now()
                         .checked_sub(SOCKET_SCAN_INTERVAL.saturating_sub(SCAN_DENIED_RETRY))
                     {
@@ -163,23 +188,24 @@ impl BrowserManager {
                 };
                 if attempt >= SCAN_DENIED_LIMIT {
                     tracing::warn!(event_name = "browser.scan.unverified",
-                        browser_instance = %instance.instance_id, browser_violation = %violation,
-                        attempt, "browser socket scan denied repeatedly");
+                        browser_instance = %instance.instance_id, attempt,
+                        "browser socket scan denied repeatedly");
                     return Err(Reason::ConfinementUnverified);
                 }
-                tracing::info!(event_name = "browser.scan.denied",
-                    browser_instance = %instance.instance_id, browser_violation = %violation,
-                    attempt, "browser socket scan denied; rescanning shortly");
+                Ok(())
             }
         }
-        if let Err(violation) = verify::runtime_directory_clean(&instance.runtime_dir) {
-            tracing::warn!(event_name = "browser.runtime_dir.violation",
-                browser_instance = %instance.instance_id, browser_violation = %violation,
-                "browser runtime directory violation");
-            return Err(Reason::ConfinementUnverified);
-        }
-        Ok(())
     }
+}
+
+/// Why a confinement recheck did not pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Recheck {
+    /// A finding: the instance must stop for this reason.
+    Stop(Reason),
+    /// Only the ptrace access check denied some evidence: unverified, so
+    /// an operation is refused, but nothing was found.
+    Unverified,
 }
 
 /// Consecutive denied periodic scans tolerated before the instance stops.

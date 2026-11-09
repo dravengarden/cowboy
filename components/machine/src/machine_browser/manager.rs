@@ -41,6 +41,7 @@ mod lifecycle;
 mod reconcile;
 mod snapshots;
 mod supervision;
+use supervision::Recheck;
 mod termination;
 #[cfg(test)]
 pub(crate) mod tests;

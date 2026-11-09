@@ -23,10 +23,19 @@ impl BrowserManager {
                 .state(Some(request_id.to_owned()))
                 .with_reason(Reason::Busy);
         }
-        if let Err(violation) = self.recheck(&instance) {
-            return self
-                .stop_instance(&instance, violation, false, Some(request_id))
-                .await;
+        match self.recheck(&instance) {
+            Ok(()) => {}
+            Err(Recheck::Stop(violation)) => {
+                return self
+                    .stop_instance(&instance, violation, false, Some(request_id))
+                    .await;
+            }
+            // Refused, not stopped: periodic supervision decides.
+            Err(Recheck::Unverified) => {
+                return instance
+                    .state(Some(request_id.to_owned()))
+                    .with_reason(Reason::Busy);
+            }
         }
         let endpoint = match self
             .uplink
@@ -165,7 +174,8 @@ impl BrowserManager {
         if detached {
             tracing::info!(event_name = "browser.viewer.detached",
                 browser_instance = %instance.instance_id, browser_attachment = %attachment_id,
-                browser_cause = "stream_ended", browser_end = ?end, "browser viewer detached");
+                browser_cause = "stream_ended", browser_end = end.kind(), detail = ?end,
+                "browser viewer detached");
             self.send_state(instance.state(None));
         }
     }
@@ -274,10 +284,19 @@ impl BrowserManager {
                 .state(Some(request_id.to_owned()))
                 .with_reason(Reason::Failed);
         }
-        if let Err(violation) = self.recheck(&instance) {
-            return self
-                .stop_instance(&instance, violation, false, Some(request_id))
-                .await;
+        match self.recheck(&instance) {
+            Ok(()) => {}
+            Err(Recheck::Stop(violation)) => {
+                return self
+                    .stop_instance(&instance, violation, false, Some(request_id))
+                    .await;
+            }
+            // Refused, not stopped: periodic supervision decides.
+            Err(Recheck::Unverified) => {
+                return instance
+                    .state(Some(request_id.to_owned()))
+                    .with_reason(Reason::Busy);
+            }
         }
         let resized = {
             let mut control = instance.control.lock().await;

@@ -708,7 +708,6 @@ fn field_name(name: &str) -> Option<&'static str> {
         "browser_cause" => "cowboy.browser.cause",
         "browser_phase" => "cowboy.browser.phase",
         "browser_end" => "cowboy.browser.stream.end",
-        "browser_violation" => "cowboy.browser.violation",
         "graceful" => "cowboy.graceful",
         "unsaved" => "cowboy.unsaved",
         "age_ms" => "cowboy.age_ms",

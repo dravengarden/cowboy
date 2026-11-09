@@ -321,7 +321,11 @@ impl BrowserManager {
             if Instant::now() >= instance.deadline() {
                 return Err(Reason::Deadline);
             }
-            self.recheck(instance)?;
+            match self.recheck(instance) {
+                // An unverified scan is decided by periodic supervision.
+                Ok(()) | Err(Recheck::Unverified) => {}
+                Err(Recheck::Stop(reason)) => return Err(reason),
+            }
             let _ = tokio::time::timeout(SUPERVISOR_TICK, done.wait_for(|done| *done)).await;
         }
     }

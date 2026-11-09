@@ -269,12 +269,14 @@ and physical production disk/power fault experiments remain unverified.
 
 ## Machine browser lifecycle evidence
 
-Machine browser events carry `event_name` and the `browser_*`, `reason`,
-`graceful`, `unsaved`, `age_ms`, `idle_ms`, `duration_ms`, `*_bytes` and
-`generation` fields only: identifiers and outcomes, never a page, URL, title,
-clipboard or input. Each instance produces a few dozen records over its life
-(open, ready, viewer attach/detach, periodic snapshots, stop), so they go to the
-ordinary INFO lane and the journal; nothing is logged per frame or per tick.
+Machine browser events carry `event_name`, `browser_*` identifiers and closed
+codes, and the `reason`, `graceful`, `unsaved`, `age_ms`, `idle_ms`,
+`duration_ms`, `*_bytes` and `generation` fields only: never a page, URL, title,
+clipboard, input or other free text. Violation details, error chains and process
+names are untrusted text, so they stay in the journal's `detail` field and never
+reach the store. Each instance produces a few dozen records over its life (open,
+ready, viewer attach/detach, periodic snapshots, stop), so they go to the
+ordinary INFO lane; nothing is logged per frame or per tick.
 Retention and rotation are the store's policy above.
 
 | Event | Where | Meaning |
@@ -300,5 +302,7 @@ The periodic socket scan fails closed. A process whose `/proc` evidence the
 kernel's ptrace access check denies (EACCES/EPERM, e.g. while a Chromium helper
 execs or changes dumpability) is unverified, not clean: the scan is repeated
 about a second later and the instance stops as `confinement_unverified` after
-three consecutive denials. A found listener or datagram socket still stops it
-immediately, and the startup verification remains strict.
+three consecutive denied periodic scans. While a scan is denied, an attach or
+resize is refused as busy rather than allowed, and only the supervisor's own
+scans count toward the limit. A found listener or datagram socket still stops
+the instance immediately, and the startup verification remains strict.

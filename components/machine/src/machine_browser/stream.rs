@@ -36,6 +36,20 @@ pub enum StreamEnd {
     Cancelled,
 }
 
+impl StreamEnd {
+    /// A closed name for diagnostics; the carried text is not.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::ViewerClosed => "viewer_closed",
+            Self::DisplayClosed => "display_closed",
+            Self::PairingFailed(_) => "pairing_failed",
+            Self::Failed(_) => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counters {
     pub frames_to_viewer: u64,
