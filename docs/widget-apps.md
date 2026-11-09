@@ -155,6 +155,18 @@ third-party MCP Apps through a spec-conformant proxy there (§10).
 - At most 4 live app runtimes per session view; at most 1 app per document in
   phase A.
 
+Feasibility spike (2026-11-09, Bun on Hawk, `quickjs-emscripten` 0.32,
+React 19.2, `react-reconciler` 0.33, Sucrase 3.35; the VM bundle of React,
+reconciler and Sucrase is 341 KB minified): loading the runtime into a fresh
+VM 40–260 ms; compile and first render of a 50-row app 40 ms cold, 18 ms
+warm; a 400-row table 27 ms emitting one 42 KB batch; `while(true)` stopped
+by the 300 ms deadline; an allocation loop stopped by the 32 MiB limit
+(`out of memory`); a non-allowlisted import fails; `fetch`, `Worker`, XHR,
+WebSocket and `postMessage` are undefined in the VM. React's scheduler must
+see the VM's timer shim before it loads (a separate first module), updates
+use synchronous priority, and the host drains QuickJS pending jobs after each
+evaluation.
+
 ### 5.2 Rendering protocol
 
 - Inside the VM, React 19 runs with a small Cowboy reconciler that emits
