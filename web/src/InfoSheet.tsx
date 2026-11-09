@@ -794,7 +794,7 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
           onRefresh={account.collector ? () => loadProvider(account.collector!)
             : account.native?.available ? () => native.refresh(account.id) : undefined}
           refreshing={account.collector ? usageRefreshing(snapshot, account.collector) : account.native?.refreshing ?? false}
-          action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} />}
+          action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} label={account.title} />}
         >
           {execution && account.collector && (
             <UsageExecutorPicker

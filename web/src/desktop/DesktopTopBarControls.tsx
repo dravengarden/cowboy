@@ -1462,7 +1462,7 @@ export function DesktopTopBarControls({
                     onRefresh={account.collector ? () => requestUsageRefresh(account.collector)
                       : account.native?.available ? () => native.refresh(account.id) : undefined}
                     onUsageChanged={() => loadUsage(false)}
-                    action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} />}
+                    action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} label={account.title} />}
                   />
                 </Stack>
               ))}

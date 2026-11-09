@@ -389,7 +389,7 @@ const ERROR_TEXT: Record<string, string> = {
   machine_browser_not_enabled: "Machine browsers are not enabled on this Cowboy Service.",
   browser_not_enabled: "The browser is not enabled for this account.",
   account_unavailable: "This account is unavailable.",
-  named_account_required: "Only a named account can have a Machine browser.",
+  browser_key_required: "Open the browser from its account card; the shared default identity has none.",
   machine_unavailable: "No connected Machine can run this account’s browser right now.",
   browser_host_requirements:
     "The Machine holding this account does not meet the browser host requirements.",

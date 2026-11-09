@@ -21,8 +21,10 @@ import {
   resetTarget,
   shownTarget,
 } from "./browserModel";
+import { validSubscriptionSnapshot } from "../subscriptionAccounts";
 import {
   accountBrowserEntry,
+  legacyBrowserOfProvider,
   linkBrowserOffered,
   machineChoices,
   needsMachineChoice,
@@ -155,6 +157,106 @@ test("usage-card entries follow the gate and the account's own enablement", () =
     "none",
   );
   assertEquals(accountBrowserEntry(undefined, A).kind, "none");
+});
+
+// Legacy default usage cards, each with its own browser key (UUID version 8).
+const LYNX = "aaaaaaaa-bbbb-8ccc-8ddd-eeeeeeeeeeee";
+const MOLE = "12345678-9abc-8def-9012-3456789abcde";
+const PIKA = "0f0f0f0f-1e1e-8d2d-ac3c-4b4b4b4b4b4b";
+
+function legacySnapshot(
+  enabled: Partial<Record<string, boolean>> = {},
+  gate: "enabled" | "not_enabled" = "enabled",
+): SubscriptionSnapshot {
+  const card = (name: string, key: string, providers: string[], available = true) => ({
+    card: name,
+    account_id: key,
+    providers,
+    browser_enabled: enabled[name] === true,
+    available,
+  });
+  return {
+    ...snapshot({ browser_enabled: true }, gate),
+    legacy_browsers: [
+      card("anthropic", LYNX, ["claude-code"]),
+      card("deepseek", MOLE, ["claude-deepseek", "codex-deepseek", "deepseek-harness"]),
+      card("openai", PIKA, ["codex"]),
+      card("xai", "99999999-8888-8777-a666-555555555555", ["grok"], false),
+    ],
+  };
+}
+
+test("each legacy default card opens its own browser key, never another card's or a named account's", () => {
+  const accounts = legacySnapshot({ anthropic: true, deepseek: true, openai: true });
+  assertEquals(validSubscriptionSnapshot(accounts, "u"), true);
+  const keys = new Set<string>();
+  for (const [card, key] of [["anthropic", LYNX], ["deepseek", MOLE], ["openai", PIKA]] as const) {
+    const entry = accountBrowserEntry(accounts, card, `Card ${card}`);
+    assertEquals(entry.kind, "ready");
+    if (entry.kind !== "ready") continue;
+    assertEquals(entry.account, { id: key, label: `Card ${card}`, browser_enabled: true, legacy: true });
+    keys.add(entry.account.id);
+  }
+  const named = accountBrowserEntry(accounts, A);
+  assertEquals(named.kind === "ready" && named.account.legacy === false && named.account.id === A, true);
+  keys.add(A);
+  assertEquals(keys.size, 4);
+  // The DeepSeek card is one card collected for three Providers: one
+  // browser, controlled from its first Provider's row only.
+  assertEquals(legacyBrowserOfProvider(accounts, "claude-deepseek")?.account_id, MOLE);
+  assertEquals(legacyBrowserOfProvider(accounts, "codex-deepseek"), undefined);
+  assertEquals(legacyBrowserOfProvider(accounts, "deepseek-harness"), undefined);
+  assertEquals(legacyBrowserOfProvider(accounts, "claude-code")?.account_id, LYNX);
+  // A card the Service no longer collects, and the shared default identity,
+  // offer nothing.
+  assertEquals(accountBrowserEntry(accounts, "xai").kind, "none");
+  assertEquals(accountBrowserEntry(accounts, "default").kind, "none");
+  assertEquals(
+    validSubscriptionSnapshot({ ...accounts, legacy_browsers: [{ card: "anthropic" }] }, "u"),
+    false,
+  );
+});
+
+test("a legacy card's browser stays disabled until its owner enables that card", () => {
+  // Lynx is off by default: disabled with the reason and a link to account
+  // management, while another card's enablement changes nothing for it.
+  const lynx = accountBrowserEntry(legacySnapshot({ deepseek: true }), "anthropic", "Claude · Lynx");
+  assertEquals(lynx.kind === "disabled" && lynx.manage, true);
+  assertEquals(lynx.kind === "disabled" && lynx.account.id === LYNX, true);
+  assertEquals(accountBrowserEntry(legacySnapshot({ deepseek: true }), "deepseek").kind, "ready");
+  assertEquals(accountBrowserEntry(legacySnapshot({ anthropic: true }), "anthropic").kind, "ready");
+  // The Service gate still applies to legacy cards.
+  const gated = accountBrowserEntry(legacySnapshot({ anthropic: true }, "not_enabled"), "anthropic");
+  assertEquals(gated.kind === "disabled" && !gated.manage, true);
+});
+
+test("a legacy card's panel never shows another card's browser", () => {
+  let state: AccountBrowserModel = { account: LYNX, model: INITIAL_BROWSER_MODEL };
+  const openLynx = { machine_id: "ovh", state: running(LYNX, "b-llllllllllllllllllllllll", 1) };
+  state = reduceAccountBrowser(state, {
+    kind: "event",
+    account: LYNX,
+    event: { type: "result", action: "open", result: openLynx, now: 1 },
+  });
+  assertEquals(shownTarget(modelFor(state, LYNX))?.machine_id, "ovh");
+  state = reduceAccountBrowser(state, { kind: "bind", account: MOLE });
+  assertEquals(modelFor(state, MOLE), INITIAL_BROWSER_MODEL);
+  state = reduceAccountBrowser(state, {
+    kind: "event",
+    account: LYNX,
+    event: { type: "result", action: "open", result: openLynx, now: 2 },
+  });
+  assertEquals(modelFor(state, MOLE), INITIAL_BROWSER_MODEL);
+  // A card signed out everywhere has no credential Machine: the owner chooses.
+  const read: BrowserRead = {
+    machine_id: null,
+    state: null,
+    placements: [],
+    admission: null,
+    choose_machine: true,
+    capable_machines: [{ machine_id: "ovh" }],
+  };
+  assertEquals(needsMachineChoice(read), true);
 });
 
 test("a never-signed-in account chooses among the offered Machines", () => {

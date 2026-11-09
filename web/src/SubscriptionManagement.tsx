@@ -8,7 +8,7 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { providerSubscriptionEnabled } from "./SessionSubscription";
 import { SubscriptionLogins } from "./SubscriptionLogins";
 import { SubscriptionRevocation } from "./SubscriptionRevocation";
-import { SubscriptionBrowserActions } from "./SubscriptionBrowserActions";
+import { LegacyBrowserActions, SubscriptionBrowserActions } from "./SubscriptionBrowserActions";
 import { ProviderAccountIdentity, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { legacySubscriptionLabel, validLegacyLabels, validSubscriptionLabel } from "./subscriptionDisplay";
 import { type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot } from "./subscriptionAccounts";
@@ -20,7 +20,8 @@ type Change = { type: "create"; provider_id: string; label: string }
   | { type: "set_enabled"; id: string; enabled: boolean }
   | { type: "set_default"; provider_id: string; id: string }
   | { type: "set_legacy_labels"; labels: Record<string, string> }
-  | { type: "set_browser_enabled"; id: string; enabled: boolean };
+  | { type: "set_browser_enabled"; id: string; enabled: boolean }
+  | { type: "set_legacy_browser_enabled"; card: string; enabled: boolean };
 interface Pending { operation: string; dataset: string; expected_revision: number; change: Change }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -40,6 +41,7 @@ export function validPendingSubscription(value: unknown): value is Pending {
     : change.type === "rename" ? ["type", "id", "label"]
     : change.type === "set_enabled" ? ["type", "id", "enabled"]
     : change.type === "set_browser_enabled" ? ["type", "id", "enabled"]
+    : change.type === "set_legacy_browser_enabled" ? ["type", "card", "enabled"]
     : change.type === "set_default" ? ["type", "provider_id", "id"] : [];
   if (fields.length === 0 || Object.keys(change).some((key) => !fields.includes(key))) return false;
   switch (change.type) {
@@ -47,6 +49,7 @@ export function validPendingSubscription(value: unknown): value is Pending {
     case "create": return text(change.provider_id) && typeof change.label === "string" && validSubscriptionLabel(change.label);
     case "rename": return text(change.id) && typeof change.label === "string" && validSubscriptionLabel(change.label);
     case "set_enabled": case "set_browser_enabled": return text(change.id) && typeof change.enabled === "boolean";
+    case "set_legacy_browser_enabled": return text(change.card) && typeof change.enabled === "boolean";
     case "set_default": return text(change.provider_id) && text(change.id);
     default: return false;
   }
@@ -194,6 +197,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
       </Stack>
       <Typography variant="caption" color="text.secondary">{id} · Service account{!snapshot?.registry.defaults[id] ? " · Default" : ""}</Typography>
       {snapshot?.registry.defaults[id] && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: id, id: "default" })}>Use by default</Button>}
+      <LegacyBrowserActions snapshot={snapshot} provider={id} label={current} owner={owner} disabled={disabled} onSetBrowserEnabled={(card, enabled) => save({ type: "set_legacy_browser_enabled", card, enabled })} />
     </Stack> };
   };
   const named: SubscriptionCards["named"] = snapshot?.registry.accounts.filter((account) => !snapshot.revoked_accounts?.includes(account.id)).map((account) => {

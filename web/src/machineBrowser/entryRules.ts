@@ -1,24 +1,58 @@
 /** Pure rules of the Browser entries on account cards: which card offers
  * a browser, why one is unavailable, and when an open needs the owner's
  * Machine choice. See docs/machine-browser.md, "Viewer (core web)". */
-import type { SubscriptionAccount, SubscriptionSnapshot } from "../subscriptionAccounts";
+import type { LegacyBrowser, SubscriptionSnapshot } from "../subscriptionAccounts";
 import { type BrowserRead, browserErrorText } from "./api";
+
+/** What a Browser entry opens: a named registry account, or a legacy
+ * default usage card through its own browser key (`id`). */
+export interface BrowserEntryAccount {
+  id: string;
+  label: string;
+  browser_enabled: boolean;
+  legacy: boolean;
+}
 
 export type AccountBrowserEntryState =
   | { kind: "none" }
-  | { kind: "disabled"; account: SubscriptionAccount; reason: string; manage: boolean }
-  | { kind: "ready"; account: SubscriptionAccount };
+  | { kind: "disabled"; account: BrowserEntryAccount; reason: string; manage: boolean }
+  | { kind: "ready"; account: BrowserEntryAccount };
 
-/** What a usage card with `id` offers. Only a named account of this
- * owner's registry has a browser; nothing is enabled implicitly. */
+/** The browser of the legacy default usage card `card`, if the Service
+ * reports one. Each card has its own key; none is shared. */
+export function legacyBrowser(
+  snapshot: SubscriptionSnapshot | undefined,
+  card: string,
+): LegacyBrowser | undefined {
+  return snapshot?.legacy_browsers?.find((browser) => browser.card === card);
+}
+
+/** The legacy card whose browser the account management row of `provider`
+ * controls: only the first Provider of a card shows the control, so a card
+ * collected for several Providers (DeepSeek) still has one switch. */
+export function legacyBrowserOfProvider(
+  snapshot: SubscriptionSnapshot | undefined,
+  provider: string,
+): LegacyBrowser | undefined {
+  return snapshot?.legacy_browsers?.find((browser) => browser.providers[0] === provider);
+}
+
+/** What a usage card with `id` offers: a named account of this owner's
+ * registry, or a legacy default card (`id` is its usage provider) through
+ * its own browser key. Nothing is enabled implicitly. */
 export function accountBrowserEntry(
   snapshot: SubscriptionSnapshot | undefined,
   id: string,
+  label: string = id,
 ): AccountBrowserEntryState {
-  const account = snapshot?.registry.accounts.find((candidate) => candidate.id === id);
-  if (!snapshot || !account || account.revoking || snapshot.revoked_accounts?.includes(id)) {
-    return { kind: "none" };
-  }
+  if (!snapshot) return { kind: "none" };
+  const named = snapshot.registry.accounts.find((candidate) => candidate.id === id);
+  const legacy = named ? undefined : legacyBrowser(snapshot, id);
+  if (named && (named.revoking || snapshot.revoked_accounts?.includes(id))) return { kind: "none" };
+  if (!named && !legacy?.available) return { kind: "none" };
+  const account: BrowserEntryAccount = named
+    ? { id: named.id, label: named.label, browser_enabled: named.browser_enabled === true, legacy: false }
+    : { id: legacy!.account_id, label, browser_enabled: legacy!.browser_enabled, legacy: true };
   if (snapshot.machine_browser !== "enabled") {
     return {
       kind: "disabled",
@@ -27,10 +61,10 @@ export function accountBrowserEntry(
       manage: false,
     };
   }
-  if (!account.enabled) {
+  if (named && !named.enabled) {
     return { kind: "disabled", account, reason: "This account is disabled.", manage: true };
   }
-  if (account.browser_enabled !== true) {
+  if (!account.browser_enabled) {
     return {
       kind: "disabled",
       account,

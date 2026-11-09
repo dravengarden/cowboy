@@ -13,6 +13,21 @@ export interface SubscriptionAccount {
   /** Owner-enabled Machine browser for this account (`set_browser_enabled`). */
   browser_enabled?: boolean;
 }
+/** The Machine browser of a legacy default usage card (the Service-collected
+ * default account of an account-usage provider such as `anthropic` or
+ * `deepseek`): its own browser key, never shared with another card or a
+ * named account, and its owner enablement (off by default). */
+export interface LegacyBrowser {
+  /** The usage card id: its account-usage provider. */
+  card: string;
+  /** The card's own browser key for the browser routes. */
+  account_id: string;
+  /** The Providers whose default account the card shows. */
+  providers: string[];
+  browser_enabled: boolean;
+  /** The Service collects the card now. */
+  available: boolean;
+}
 export interface SubscriptionSnapshot {
   dataset: { dataset_id: string; user_id: string };
   registry: { revision: number; accounts: SubscriptionAccount[]; defaults: Record<string, string> };
@@ -23,12 +38,17 @@ export interface SubscriptionSnapshot {
   session_providers?: string[];
   /** The Service gate of the optional Machine browser (`accounts.machine_browser`). */
   machine_browser?: "enabled" | "not_enabled";
+  legacy_browsers?: LegacyBrowser[];
 }
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function text(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
+function validLegacyBrowser(value: unknown): value is LegacyBrowser {
+  return record(value) && text(value.card) && text(value.account_id) && Array.isArray(value.providers) &&
+    value.providers.every(text) && typeof value.browser_enabled === "boolean" && typeof value.available === "boolean";
+}
 
 export function validSubscriptionSnapshot(value: unknown, owner: string | undefined): value is SubscriptionSnapshot {
   if (!owner || !record(value) || !record(value.dataset) || !record(value.registry)) return false;
@@ -39,6 +59,7 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
     (value.session_providers === undefined || (Array.isArray(value.session_providers) && value.session_providers.every(text))) &&
     (value.revoked_accounts === undefined || (Array.isArray(value.revoked_accounts) && value.revoked_accounts.every(text))) &&
     (value.machine_browser === undefined || value.machine_browser === "enabled" || value.machine_browser === "not_enabled") &&
+    (value.legacy_browsers === undefined || (Array.isArray(value.legacy_browsers) && value.legacy_browsers.every(validLegacyBrowser))) &&
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
     Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
       text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean" &&
