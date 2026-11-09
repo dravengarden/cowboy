@@ -508,8 +508,6 @@ impl Broker {
     }
 
     fn new(args: MachineBrokerArgs) -> Self {
-        args.provider_store
-            .set_worker_command(args.worker_command.clone());
         let mut generation_commands = HashMap::new();
         if !args.desired_generation.is_empty() {
             generation_commands

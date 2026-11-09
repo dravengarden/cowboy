@@ -635,12 +635,6 @@ impl MachinePluginStore {
             host_bundle,
             host_bundle_bytes,
         )?;
-        guard
-            .bounded(self.ensure_worker_reads_package(
-                &content.join("package.cowboy-provider"),
-                &package.manifest.runtime.required_capabilities,
-            ))
-            .await?;
 
         let started = Instant::now();
         let runtime = guard
@@ -676,6 +670,13 @@ impl MachinePluginStore {
             staging_ms = started.elapsed().as_millis(),
             "Provider generation staged"
         );
+        // Last, so a worker selected while staging is the one that is checked.
+        guard
+            .bounded(self.ensure_worker_reads_package(
+                &content.join("package.cowboy-provider"),
+                &package.manifest.runtime.required_capabilities,
+            ))
+            .await?;
         guard.before_activation(self)?;
         let pending =
             self.begin_installation(&package.manifest.id, &desired.release.artifact_digest)?;
@@ -839,6 +840,11 @@ impl MachinePluginStore {
         }
         let (package, release, package_path, _) =
             self.verified_generation(provider_id, generation_digest)?;
+        self.ensure_worker_reads_package(
+            &package_path,
+            &package.manifest.runtime.required_capabilities,
+        )
+        .await?;
         let payload = matching_payload(&package, &self.platform, &self.architecture)?;
         let runtime_artifacts =
             matching_runtime_artifacts(&release, &self.platform, &self.architecture)?;

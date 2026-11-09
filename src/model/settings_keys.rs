@@ -28,7 +28,8 @@ pub const TRANSCRIPT_ANCHORS_CALLS_SINCE: &str = "transcript_anchors.calls_since
 /// Session id -> first epoch ms a retention pass saw the session dormant.
 pub const SESSION_DORMANT_SINCE: &str = "session_dormant_since";
 /// `<machine>:<provider>:<digest>` -> epoch ms an unattended update to that
-/// release last crashed a session. Survives a Controller restart.
+/// release last crashed a session. Survives a Controller restart; one short
+/// row per failed release, so it needs no pruning.
 pub const PROVIDER_UPDATE_FAILURE_PREFIX: &str = "provider_update_failure:";
 /// UI-owned per-Machine maintenance policy; TOML supplies inherited defaults.
 pub const MACHINE_MAINTENANCE_PREFIX: &str = "machine_maintenance:";

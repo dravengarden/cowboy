@@ -2,9 +2,6 @@
 
 use super::*;
 
-/// Longer than any hold, so expired release failures can be dropped.
-const UPDATE_FAILURE_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
-
 fn update_failure_key(machine_id: &str, provider: &str, digest: &str) -> String {
     format!(
         "{}{machine_id}:{provider}:{digest}",
@@ -23,24 +20,9 @@ impl Hub {
         provider: &str,
         digest: &str,
     ) {
-        let now = now_ms();
-        let expired: Vec<String> = self
-            .settings_snapshot()
-            .into_iter()
-            .filter(|(key, at)| {
-                key.starts_with(settings_keys::PROVIDER_UPDATE_FAILURE_PREFIX)
-                    && at
-                        .as_i64()
-                        .is_none_or(|at| now.saturating_sub(at) > UPDATE_FAILURE_RETENTION_MS)
-            })
-            .map(|(key, _)| key)
-            .collect();
-        for key in expired {
-            self.set_setting(key, serde_json::Value::Null);
-        }
         self.set_setting(
             update_failure_key(machine_id, provider, digest),
-            serde_json::json!(now),
+            serde_json::json!(now_ms()),
         );
         self.inner
             .automatic_update_failed_sessions

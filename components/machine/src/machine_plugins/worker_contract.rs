@@ -35,20 +35,33 @@ async fn run_worker(worker: &Path, arguments: &[&OsStr]) -> Result<Output> {
     }
 }
 
-/// A worker built before [`CHECK_FLAG`] existed cannot be asked. Every
-/// capability named here is one those builds already shipped, except MCP
-/// bindings, which arrived together with `--mcp-plan`. The match is exhaustive
-/// so a new capability is a compile error here rather than an assumed yes.
-/// Delete once no retained worker bundle predates the flag.
-fn legacy_worker_supports(capability: &RuntimeCapability, help: &str) -> bool {
-    match capability {
-        RuntimeCapability::ProviderRuntimeV1
-        | RuntimeCapability::ProviderGatewayV1
-        | RuntimeCapability::ProviderExecutionJsonrpcV1
-        | RuntimeCapability::ProviderManagedProfilesV1
-        | RuntimeCapability::ProviderManagedImageV1 => true,
-        RuntimeCapability::ProviderMcpBindingsV1 => help.contains("--mcp-plan"),
+/// A worker built before [`CHECK_FLAG`] cannot be asked, so look for the
+/// capability names its own decoder was compiled with. A wrapper or stripped
+/// build shows none and is refused. Delete once no retained worker bundle
+/// predates the flag.
+async fn ensure_legacy_worker_names(
+    worker: &Path,
+    required: &BTreeSet<RuntimeCapability>,
+) -> Result<()> {
+    let binary = tokio::fs::read(worker)
+        .await
+        .with_context(|| format!("reading worker {}", worker.display()))?;
+    let mut unsupported = Vec::new();
+    for capability in required {
+        let name = serde_json::to_value(capability)?;
+        let name = name.as_str().context("capability is not a string")?;
+        if !binary
+            .windows(name.len())
+            .any(|window| window == name.as_bytes())
+        {
+            unsupported.push(name.to_owned());
+        }
     }
+    ensure!(
+        unsupported.is_empty(),
+        "this Machine's worker does not support {unsupported:?}; roll out a newer worker generation first"
+    );
+    Ok(())
 }
 
 async fn ensure_worker_reads(
@@ -66,17 +79,7 @@ async fn ensure_worker_reads(
         "this Machine's worker cannot read the Provider package; roll out a newer worker generation first: {}",
         stderr.trim()
     );
-    let help = run_worker(worker, &[OsStr::new("--help")]).await?;
-    let help = String::from_utf8_lossy(&help.stdout);
-    let unsupported: Vec<_> = required
-        .iter()
-        .filter(|capability| !legacy_worker_supports(capability, &help))
-        .collect();
-    ensure!(
-        unsupported.is_empty(),
-        "this Machine's worker does not support {unsupported:?}; roll out a newer worker generation first"
-    );
-    Ok(())
+    ensure_legacy_worker_names(worker, required).await
 }
 
 impl MachinePluginStore {
@@ -85,7 +88,8 @@ impl MachinePluginStore {
         *self.worker_command.lock() = Some(worker);
     }
 
-    /// No command is known only before the broker exists, when nothing can launch.
+    /// Machine startup records the worker before it accepts Controller commands;
+    /// only a store with no Machine around it has none.
     pub(super) async fn ensure_worker_reads_package(
         &self,
         package: &Path,
@@ -114,7 +118,8 @@ mod tests {
         BTreeSet::from([capability])
     }
 
-    const LEGACY_REFUSAL: &str = r#"[ "$1" = --help ] && { echo "$HELP_TEXT"; exit 0; }; echo "error: unexpected argument '--check-provider-package' found" >&2; exit 2"#;
+    const LEGACY_REFUSAL: &str =
+        "echo \"error: unexpected argument '--check-provider-package' found\" >&2; exit 2";
 
     #[tokio::test]
     async fn a_worker_that_reads_the_package_admits_it() {
@@ -139,34 +144,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_worker_before_the_check_is_judged_by_its_arguments() {
+    async fn a_worker_before_the_check_is_judged_by_its_compiled_names() {
         let root = tempfile::tempdir().unwrap();
-        let without = script(
-            root.path(),
-            &format!("HELP_TEXT='--socket'; {LEGACY_REFUSAL}"),
-        );
+        let without = script(root.path(), LEGACY_REFUSAL);
         let mcp = required(RuntimeCapability::ProviderMcpBindingsV1);
         assert!(
             ensure_worker_reads(&without, Path::new("/pkg"), &mcp)
                 .await
                 .is_err()
         );
-        ensure_worker_reads(
-            &without,
-            Path::new("/pkg"),
-            &required(RuntimeCapability::ProviderManagedImageV1),
-        )
-        .await
-        .unwrap();
-
         let root = tempfile::tempdir().unwrap();
         let with = script(
             root.path(),
-            &format!("HELP_TEXT='--mcp-plan <MCP_PLAN>'; {LEGACY_REFUSAL}"),
+            &format!("# provider.mcp-bindings.v1\n{LEGACY_REFUSAL}"),
         );
         ensure_worker_reads(&with, Path::new("/pkg"), &mcp)
             .await
             .unwrap();
+        assert!(
+            ensure_worker_reads(
+                &with,
+                Path::new("/pkg"),
+                &required(RuntimeCapability::ProviderManagedImageV1),
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[tokio::test]
