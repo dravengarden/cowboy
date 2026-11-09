@@ -1,19 +1,45 @@
 //! Machine-wide instance capacity: `browser.max_instances` is reserved
 //! atomically before any asynchronous start and released only once the
 //! instance's unit is confirmed gone, so concurrent opens for different
-//! accounts can never exceed it.
+//! accounts can never exceed it. The slot also carries the instance's
+//! admitted memory budget, so both are released together, exactly once.
 
+use std::path::Path;
 use std::sync::Arc;
+
+use crate::launch_ledger::Reservation;
 
 #[derive(Debug, Default)]
 pub(super) struct CapacityLedger {
     used: parking_lot::Mutex<usize>,
 }
 
-/// One reserved instance slot; dropping it releases the slot.
+/// One reserved instance slot and the memory budget admitted with it;
+/// dropping it releases both.
 #[derive(Debug)]
 pub(super) struct CapacityGuard {
     ledger: Arc<CapacityLedger>,
+    memory: Option<Reservation>,
+}
+
+impl CapacityGuard {
+    /// Hold `memory` (the unit's admitted budget) with this slot.
+    pub(super) fn with_memory(mut self, memory: Reservation) -> Self {
+        self.memory = Some(memory);
+        self
+    }
+
+    /// The admitted memory budget held with this slot.
+    pub(super) fn memory_bytes(&self) -> Option<u64> {
+        self.memory.as_ref().map(Reservation::bytes)
+    }
+
+    /// Credit the unit's cgroup usage against its held budget.
+    pub(super) fn charge_memory_to(&self, cgroup: &Path) {
+        if let Some(memory) = &self.memory {
+            memory.charge_to(cgroup);
+        }
+    }
 }
 
 impl Drop for CapacityGuard {
@@ -33,6 +59,7 @@ impl CapacityLedger {
         *used += 1;
         Some(CapacityGuard {
             ledger: Arc::clone(self),
+            memory: None,
         })
     }
 
@@ -42,6 +69,7 @@ impl CapacityLedger {
         *self.used.lock() += 1;
         CapacityGuard {
             ledger: Arc::clone(self),
+            memory: None,
         }
     }
 
@@ -68,6 +96,25 @@ mod tests {
         assert_eq!(ledger.used(), 3);
         assert!(ledger.try_reserve(3).is_none());
         drop((second, third, forced));
+        assert_eq!(ledger.used(), 0);
+    }
+
+    #[test]
+    fn a_slot_releases_its_memory_budget_with_it_exactly_once() {
+        static MEMORY: crate::launch_ledger::Ledger = crate::launch_ledger::Ledger::new();
+        let ledger = Arc::new(CapacityLedger::default());
+        let slot = ledger
+            .try_reserve(1)
+            .unwrap()
+            .with_memory(MEMORY.force(1 << 30));
+        assert_eq!(slot.memory_bytes(), Some(1 << 30));
+        let forced = ledger.force_reserve().with_memory(MEMORY.force(512 << 20));
+        assert_eq!(MEMORY.reserved_bytes(), (1 << 30) + (512 << 20));
+        drop(slot);
+        assert_eq!(MEMORY.reserved_bytes(), 512 << 20);
+        assert_eq!(ledger.used(), 1);
+        drop(forced);
+        assert_eq!(MEMORY.reserved_bytes(), 0);
         assert_eq!(ledger.used(), 0);
     }
 

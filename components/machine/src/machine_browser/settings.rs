@@ -8,10 +8,12 @@ use crate::config::{Config, Handle, Scope, schema};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     pub max_instances: u32,
+    /// Upper bound of an open's admitted budget (the unit's `MemoryMax`).
     pub memory_max: u64,
+    /// Upper bound of the unit's `MemoryHigh`.
     pub memory_high: u64,
-    /// Bytes an open reserves in the launch ledger: the expected resident
-    /// working set, not the unit's hard limit.
+    /// Smallest budget an open is admitted with: about the expected
+    /// resident working set.
     pub memory_reserve: u64,
     pub cpu_quota_percent: u32,
     pub tasks_max: u32,

@@ -427,7 +427,11 @@ swaps. With swap disabled these pages compete with Chromium's own memory, so
 the unit's OOM kill can precede tmpfs `ENOSPC`; the defaults below leave
 headroom for a full profile plus the measured browser footprint and are
 confirmed by the restore and full-profile measurements in
-[Acceptance](#acceptance-before-any-real-account).
+[Acceptance](#acceptance-before-any-real-account). An open admitted on a
+tight Device gets a smaller `MemoryMax` (down to `browser.memory_reserve`,
+see [admission](#lifecycle)); such a browser has less room for a full
+profile and is OOM-killed inside its own unit sooner, losing at most the
+state since its last published generation.
 
 Persistence is a **published snapshot** under
 `provider-auth/accounts/<uuid>/browser/`:
@@ -617,32 +621,44 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
   is not reached, and the recorded writer version is not newer than the
   runtime's. The `max_instances` slot is reserved atomically before any
   asynchronous step (memory wait, unit start) and released only when the
-  unit's exit is confirmed. Memory admission goes through the same compare-and-swap launch
-  ledger as cold workers, converted to a byte-weighted reservation with
-  exact refunds and the existing floor preserved: a browser reserves
-  `browser.memory_reserve` bytes (default 768 MiB, its expected resident
-  working set; a live Chromium, Xvnc and window manager measure about
-  640 MiB), a cold worker its existing reserve, so a browser and a worker
-  can never both count the same headroom. The reservation is held until
-  `ready` or failure, then refunded exactly; afterwards the running unit's
-  pages are part of `cowboy-agents.slice` usage and so of every later
-  headroom sample. An open is admitted when the Device headroom (the
-  tightest of host `MemAvailable` and every finite cgroup limit from
+  unit's exit is confirmed. Memory admission goes through the same launch
+  ledger as cold workers (a byte-weighted reservation, checked and taken in
+  one step under the ledger lock, with exact refunds and the existing floor
+  preserved), so a browser and a worker can never both count the same
+  headroom. An open is admitted with a **memory budget**: the largest
+  amount up to `browser.memory_max` that the Device headroom (the tightest
+  of host `MemAvailable` and every finite cgroup limit from
   `cowboy-agents.slice` up, less usage net of `inactive_file`, and zero
   while a stalled scope has less than a quarter of its limit left) covers
-  every in-flight reservation, the browser's reserve and the 512 MiB floor,
-  within a 15 s wait. `active_file` is not credited: it is recently
-  referenced cache whose reclaim would refault. The reserve is not the
-  hard bound: `MemoryHigh`/`MemoryMax` stay on the unit, so a browser that
-  grows past its reserve is throttled and then OOM-killed inside its own
-  cgroup, and `OOMScoreAdjust=1000` makes it the first victim if a shared
-  ancestor runs out, never a session. A refusal (`Reason::Memory`) logs
-  the measured headroom, the outstanding reservations and the requested
-  bytes at INFO. The schema rejects `memory_reserve > memory_high` and
-  `memory_high > memory_max`.
+  beside every outstanding reservation and the 512 MiB floor, rounded down
+  to whole MiB. The open is refused (`Reason::Memory`) when not even
+  `browser.memory_reserve` (default 768 MiB, about the resident working
+  set; a live Chromium, Xvnc and window manager measure about 640 MiB)
+  fits within a 15 s wait; the refusal logs the measured headroom, the
+  outstanding reservations, the requested minimum and maximum and the floor
+  at INFO. `active_file` is not credited: it is recently referenced cache
+  whose reclaim would refault. The budget becomes the unit's `MemoryMax`,
+  and its `MemoryHigh` is the lesser of `browser.memory_high` and the
+  budget less an eighth (at least 64 MiB); with ample headroom these are
+  the configured 2 GiB and 1.5 GiB. The browser therefore can never take
+  shared memory beyond what admission granted: growth past its budget is
+  throttled and then OOM-killed inside its own cgroup, before any shared
+  ancestor's `memory.high` throttles a session, whether or not
+  `sessions.memory_reclaim` is enabled. `OOMScoreAdjust=1000` additionally
+  makes it the first victim if a shared ancestor still runs out. The
+  budget is held with the instance's `max_instances` slot for the
+  instance's whole life and released with it, exactly once, only when the
+  unit's exit is confirmed (directly, by a termination retry, or with a
+  failed start's retained slot). Once the unit's cgroup is known the
+  reservation is charged to it: the ledger then counts only the part of the
+  budget the unit has not used yet (budget less its `memory.current` net
+  of `inactive_file`), because the used part is already deducted from every
+  headroom sample. A running unit's `MemoryMax` is never raised; a larger
+  budget needs a new open. The schema rejects
+  `memory_reserve > memory_high` and `memory_high > memory_max`.
 - The unit is `systemd-run --user --collect --unit cowboy-browser-<instance>
   --slice cowboy-agents.slice -p Delegate=yes -p KillMode=control-group
-  -p MemoryMax=<browser.memory_max> -p MemoryHigh=<browser.memory_high>
+  -p MemoryMax=<budget> -p MemoryHigh=<min(browser.memory_high, budget - max(budget/8, 64 MiB))>
   -p MemorySwapMax=0 -p CPUQuota=<browser.cpu_quota> -p TasksMax=<browser.tasks_max>
   -p OOMScoreAdjust=1000 -p LimitCORE=0 -p RuntimeMaxSec=<browser.max_runtime>
   -p TimeoutStopSec=20 -p RuntimeDirectory=cowboy-browser/<instance>
@@ -984,8 +1000,8 @@ properties they were started with; bounds enforced by the schema):
 | Key | Default | Bounds | Meaning |
 |---|---|---|---|
 | `browser.max_instances` | 1 | 0–4 | running instances per Machine |
-| `browser.memory_max` / `browser.memory_high` | 2048 MiB / 1536 MiB | 1–6 GiB | unit limits, including every tmpfs page; `memory_high <= memory_max` |
-| `browser.memory_reserve` | 768 MiB | 256 MiB–6 GiB, `<= memory_high` | admission weight in the launch ledger: the expected resident working set |
+| `browser.memory_max` / `browser.memory_high` | 2048 MiB / 1536 MiB | 1–6 GiB | upper bounds of the unit limits (the admitted budget and the `MemoryHigh` derived from it), including every tmpfs page; `memory_high <= memory_max` |
+| `browser.memory_reserve` | 768 MiB | 256 MiB–6 GiB, `<= memory_high` | smallest admitted budget: an open that cannot reserve this much is refused |
 | `browser.cpu_quota_percent` | 200 | 50–400 | unit CPU quota in percent of one CPU |
 | `browser.tasks_max` | 512 | 128–2048 | unit task limit |
 | `browser.hibernate_after` | 120 s | 30 s–30 min | detached grace |
@@ -1501,9 +1517,20 @@ Where the Machine code (`components/machine/src/machine_browser/`) refines
 the text above:
 
 - The launch ledger is `components/machine/src/launch_ledger.rs`: one
-  byte-weighted compare-and-swap reservation shared by cold worker launches
-  (512 MiB each) and browser opens (`browser.memory_reserve`), with a 512 MiB
-  floor and exact refunds on drop.
+  byte-weighted reservation set, checked and changed under one lock, shared
+  by cold worker launches (512 MiB each, until ready) and browser instances
+  (their admitted budget, `reserve_within(memory_reserve, memory_max)`),
+  with a 512 MiB floor and exact refunds on drop. A browser's reservation
+  rides on its `CapacityGuard`, so every path that releases the
+  `max_instances` slot on confirmed exit releases the budget with it.
+  `Reservation::charge_to` credits the unit cgroup's usage net of
+  `inactive_file` against the budget.
+- Adoption at restart re-admits a survivor with the `MemoryMax` systemd
+  reports for its unit (`browser.memory_max` when it reports none). Without
+  headroom for it the survivor is kept and the budget force-reserved, with a
+  WARN: its pages are already resident, every later admission must see what
+  it may still grow into, and stopping it would only lose unsaved state for
+  accounting.
 - Host pids are never taken from the launcher. The Machine enumerates the
   unit's cgroup tree and matches the launcher's namespace-local pids through
   `/proc/<pid>/status` `NSpid` and `PPid`; the supervisor must be the unit's

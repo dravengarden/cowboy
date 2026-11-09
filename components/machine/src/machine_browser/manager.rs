@@ -23,7 +23,7 @@ use super::state_file::{
 use super::stream::{Stream, StreamEnd};
 use super::unit::{self, Launch, Limits};
 use super::verify::{self, Expectations, Verified};
-use crate::launch_ledger::{Admission, FLOOR_BYTES, LEDGER};
+use crate::launch_ledger::{Admission, FLOOR_BYTES, LEDGER, Ledger};
 use crate::machine_plugins::{MachineBrowserRuntimePlan, MachinePluginStore};
 use crate::machine_protocol::MachineEvent;
 use crate::machine_protocol::machine_browser::{
@@ -49,7 +49,7 @@ mod units;
 use capacity::{CapacityGuard, CapacityLedger};
 use drain::StartGate;
 use generations::GenerationPins;
-use launch::{VersionOrder, compare_versions, launch_arguments};
+use launch::{VersionOrder, admitted_limits, compare_versions, launch_arguments};
 use lifecycle::complete_fenced;
 use snapshots::CopyJob;
 use termination::{Leftover, Retained, StopOutcome, Unconfirmed};
@@ -349,6 +349,9 @@ pub struct BrowserManager {
     masks: Vec<PathBuf>,
     receipts: parking_lot::Mutex<VecDeque<(String, StateEvent)>>,
     headroom: fn() -> Option<u64>,
+    /// The Device launch ledger every instance's admitted memory budget is
+    /// held in until its unit's exit is confirmed.
+    ledger: &'static Ledger,
     this: Weak<BrowserManager>,
     /// Tests drive navigation against a fake launcher whose processes no
     /// confinement verification could pass.
@@ -373,6 +376,7 @@ impl BrowserManager {
             providers,
             device_config,
             headroom,
+            &LEDGER,
             Arc::new(Systemd),
         )
     }
@@ -382,6 +386,7 @@ impl BrowserManager {
         providers: Arc<MachinePluginStore>,
         device_config: Option<crate::config::Handle>,
         headroom: fn() -> Option<u64>,
+        ledger: &'static Ledger,
         units: Arc<dyn UnitControl>,
     ) -> Result<Arc<Self>> {
         let boot_id = crate::boot_identity::current()?
@@ -410,6 +415,7 @@ impl BrowserManager {
             masks: sensitive_paths(state_dir, uid),
             receipts: parking_lot::Mutex::new(VecDeque::new()),
             headroom,
+            ledger,
             this: this.clone(),
             #[cfg(test)]
             trust_confinement: std::sync::atomic::AtomicBool::new(false),

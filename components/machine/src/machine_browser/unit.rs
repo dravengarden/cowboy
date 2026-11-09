@@ -189,6 +189,9 @@ pub struct UnitStatus {
     pub invocation_id: String,
     pub control_group: String,
     pub result: String,
+    /// The unit's `MemoryMax` (its admitted budget); `None` when unlimited
+    /// or not reported.
+    pub memory_max: Option<u64>,
 }
 
 impl UnitStatus {
@@ -223,7 +226,7 @@ pub async fn show(unit: &str) -> Result<UnitStatus> {
         "--user",
         "show",
         unit,
-        "--property=LoadState,ActiveState,SubState,MainPID,InvocationID,ControlGroup,Result",
+        "--property=LoadState,ActiveState,SubState,MainPID,InvocationID,ControlGroup,Result,MemoryMax",
     ])
     .await
     .with_context(|| format!("querying browser unit {unit}"))?;
@@ -252,6 +255,8 @@ fn parse_show(text: &str) -> Result<UnitStatus> {
         invocation_id: field("InvocationID").unwrap_or_default(),
         control_group: field("ControlGroup").unwrap_or_default(),
         result: field("Result").unwrap_or_default(),
+        // `infinity` (unlimited) does not parse and reads as `None`.
+        memory_max: field("MemoryMax").and_then(|value| value.parse().ok()),
     })
 }
 
@@ -664,10 +669,11 @@ mod tests {
     #[test]
     fn show_output_parses_and_a_missing_unit_is_gone() {
         let status = parse_show(
-            "LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=4242\nInvocationID=abc\nControlGroup=/user.slice/x/cowboy-browser-a.service\nResult=success\n",
+            "LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=4242\nInvocationID=abc\nControlGroup=/user.slice/x/cowboy-browser-a.service\nResult=success\nMemoryMax=1363148800\n",
         )
         .unwrap();
         assert_eq!(status.main_pid, 4242);
+        assert_eq!(status.memory_max, Some(1300 << 20));
         assert!(status.live());
         assert_eq!(
             status.cgroup_dir().unwrap(),
@@ -676,6 +682,9 @@ mod tests {
         let gone = parse_show("LoadState=not-found\nActiveState=inactive\nMainPID=0\n").unwrap();
         assert!(gone.gone());
         assert!(gone.cgroup_dir().is_none());
+        assert_eq!(gone.memory_max, None);
+        let unlimited = parse_show("LoadState=loaded\nMemoryMax=infinity\n").unwrap();
+        assert_eq!(unlimited.memory_max, None);
         assert!(parse_show("ActiveState=active\n").is_err());
     }
 

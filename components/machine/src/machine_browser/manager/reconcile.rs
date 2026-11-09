@@ -320,24 +320,6 @@ impl BrowserManager {
         );
         ensure!(record.deadline_ms > unix_ms(), "deadline passed");
         let settings = self.settings();
-        let reservation = match LEDGER
-            .reserve(
-                settings.memory_reserve,
-                self.headroom,
-                || false,
-                Duration::ZERO,
-                MEMORY_POLL,
-            )
-            .await
-        {
-            Admission::Reserved { reservation, .. } => reservation,
-            _ => bail!(
-                "no memory headroom to adopt: headroom {:?} bytes, reserved {} bytes, requested {} bytes, floor {FLOOR_BYTES} bytes",
-                (self.headroom)(),
-                LEDGER.reserved_bytes(),
-                settings.memory_reserve
-            ),
-        };
         let readiness = Duration::from_millis(plan.contract.launch.readiness_timeout_ms);
         let mut control = Control::connect(&record.runtime_dir, Duration::from_secs(5)).await?;
         let mut report = control.status(COMMAND_TIMEOUT).await?;
@@ -374,8 +356,13 @@ impl BrowserManager {
             last_snapshot: control_record
                 .current_generation
                 .zip(control_record.current_generation_at_ms),
-            // A survivor counts against the limit whatever it is now.
-            capacity: Some(self.capacity.force_reserve()),
+            // A survivor counts against the limit whatever it is now, with
+            // the memory budget it was admitted with.
+            capacity: Some(
+                self.capacity
+                    .force_reserve()
+                    .with_memory(self.readmit_budget(record, status, &settings).await),
+            ),
         });
         let bootstrap = host::enforce_label(BOOTSTRAP_PROFILE);
         let sealed = host::enforce_label(SEALED_PROFILE);
@@ -385,8 +372,42 @@ impl BrowserManager {
         )
         .map_err(|violation| anyhow!("confinement: {violation}"))?;
         instance.live.lock().verified = verified;
-        drop(reservation);
         Ok(Arc::new(instance))
+    }
+
+    /// Re-admit a surviving unit's budget: its own `MemoryMax` (which is
+    /// never raised), or `browser.memory_max` when systemd reports none.
+    /// Without headroom for it the browser is kept and its budget reserved
+    /// anyway: its pages are already resident and every later admission
+    /// must see what it may still grow into, while stopping it would only
+    /// lose its unsaved state for accounting.
+    pub(super) async fn readmit_budget(
+        &self,
+        record: &InstanceRecord,
+        status: &unit::UnitStatus,
+        settings: &Settings,
+    ) -> crate::launch_ledger::Reservation {
+        let bytes = status.memory_max.unwrap_or(settings.memory_max);
+        let budget = match self
+            .ledger
+            .reserve(bytes, self.headroom, || false, Duration::ZERO, MEMORY_POLL)
+            .await
+        {
+            Admission::Reserved { reservation, .. } => reservation,
+            Admission::Cancelled | Admission::Exhausted => {
+                tracing::warn!(
+                    instance = %record.instance_id,
+                    headroom_bytes = (self.headroom)(),
+                    reserved_bytes = self.ledger.reserved_bytes(),
+                    budget_bytes = bytes,
+                    floor_bytes = FLOOR_BYTES,
+                    "adopted browser budget exceeds the memory headroom; kept and reserved anyway"
+                );
+                self.ledger.force(bytes)
+            }
+        };
+        budget.charge_to(&record.cgroup_dir);
+        budget
     }
 
     /// Resume fenced operations and remove orphan generations and abandoned

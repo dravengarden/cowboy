@@ -10,6 +10,7 @@ mod fake_units;
 mod idle_and_navigation;
 mod inventory;
 mod legacy_keys;
+mod memory_budget;
 mod retention;
 
 use fake_units::{FakeUnit, FakeUnits};
@@ -67,6 +68,7 @@ async fn fixture() -> Fixture {
         Arc::new(store),
         None,
         || None,
+        Box::leak(Box::new(Ledger::new())),
         Arc::clone(&units) as Arc<dyn UnitControl>,
     )
     .unwrap();

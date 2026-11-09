@@ -83,9 +83,17 @@ impl BrowserManager {
         let incarnation = u64::try_from(unix_ms()).unwrap_or(1).max(1);
         let deadline_ms = unix_ms()
             .saturating_add(i64::try_from(settings.max_runtime.as_millis()).unwrap_or(i64::MAX));
-        let reservation = match LEDGER
-            .reserve(
+        // The admitted budget: at most `memory_max`, at least
+        // `memory_reserve`, never more than the headroom left beside every
+        // outstanding reservation and the floor. It becomes the unit's
+        // MemoryMax and is held with the capacity slot until the unit's exit
+        // is confirmed, so the browser can never take shared memory beyond
+        // what was admitted.
+        let budget = match self
+            .ledger
+            .reserve_within(
                 settings.memory_reserve,
+                settings.memory_max,
                 self.headroom,
                 || self.starts.draining(),
                 MEMORY_WAIT,
@@ -97,8 +105,9 @@ impl BrowserManager {
             Admission::Exhausted => {
                 tracing::info!(
                     headroom_bytes = (self.headroom)(),
-                    reserved_bytes = LEDGER.reserved_bytes(),
-                    requested_bytes = settings.memory_reserve,
+                    reserved_bytes = self.ledger.reserved_bytes(),
+                    requested_min_bytes = settings.memory_reserve,
+                    requested_max_bytes = settings.memory_max,
                     floor_bytes = FLOOR_BYTES,
                     waited_secs = MEMORY_WAIT.as_secs(),
                     "browser open refused: no memory headroom"
@@ -107,6 +116,11 @@ impl BrowserManager {
             }
             Admission::Cancelled => return hibernated(Reason::Memory),
         };
+        tracing::info!(
+            budget_bytes = budget.bytes(),
+            headroom_bytes = (self.headroom)(),
+            "browser open admitted"
+        );
         let started = self
             .start_instance(
                 &account_dir,
@@ -118,10 +132,9 @@ impl BrowserManager {
                 incarnation,
                 viewport,
                 deadline_ms,
-                capacity,
+                capacity.with_memory(budget),
             )
             .await;
-        drop(reservation);
         let instance = match started {
             Ok(instance) => instance,
             Err(failure) => {
@@ -194,6 +207,7 @@ impl BrowserManager {
         incarnation: u64,
         viewport: Viewport,
         deadline_ms: i64,
+        // The instance slot, holding the admitted memory budget.
         capacity: CapacityGuard,
     ) -> Result<Arc<Instance>, Failure> {
         let unit_name = unit::unit_name(instance_id);
@@ -218,13 +232,10 @@ impl BrowserManager {
         let launch = Launch {
             unit: &unit_name,
             instance_id,
-            limits: Limits {
-                memory_max: settings.memory_max,
-                memory_high: settings.memory_high,
-                cpu_quota_percent: settings.cpu_quota_percent,
-                tasks_max: settings.tasks_max,
-                max_runtime: settings.max_runtime,
-            },
+            limits: admitted_limits(
+                &settings,
+                capacity.memory_bytes().unwrap_or(settings.memory_max),
+            ),
             launcher: &plan.launcher,
             arguments,
         };
@@ -278,9 +289,15 @@ impl BrowserManager {
             Ok::<_, Failure>(instance)
         }
         .await;
+        // From here the unit's own usage counts against every headroom
+        // sample; the budget holds only what it may still grow into.
+        if let Some(cgroup) = &cgroup_dir {
+            capacity.charge_memory_to(cgroup);
+        }
         match outcome {
             Ok(instance) => {
-                // The instance holds the slot reserved by the open.
+                // The instance holds the slot (and its memory budget)
+                // reserved by the open.
                 *instance.capacity.lock() = Some(capacity);
                 Ok(instance)
             }

@@ -39,6 +39,25 @@ pub(super) fn compare_versions(recorded: Option<&str>, runtime: &str) -> Version
     }
 }
 
+/// Least gap kept between a unit's `MemoryHigh` and its `MemoryMax`.
+const MEMORY_HIGH_GAP: u64 = 64 << 20;
+const MIB: u64 = 1 << 20;
+
+/// Unit limits for an admitted memory `budget`: `MemoryMax` is the budget
+/// itself, so the unit can never take shared memory beyond what admission
+/// granted, and `MemoryHigh` throttles it an eighth (at least 64 MiB) below,
+/// never above `browser.memory_high`.
+pub(super) fn admitted_limits(settings: &Settings, budget: u64) -> Limits {
+    let throttle = budget.saturating_sub((budget / 8).max(MEMORY_HIGH_GAP));
+    Limits {
+        memory_max: budget,
+        memory_high: (throttle - throttle % MIB).min(settings.memory_high),
+        cpu_quota_percent: settings.cpu_quota_percent,
+        tasks_max: settings.tasks_max,
+        max_runtime: settings.max_runtime,
+    }
+}
+
 /// Argument vector of `cowboy-browser-launcher run` for one start.
 pub(super) fn launch_arguments(
     plan: &MachineBrowserRuntimePlan,
@@ -125,6 +144,54 @@ mod tests {
             compare_versions(Some("weird"), "143.0.1.1"),
             VersionOrder::RecordNewer
         );
+    }
+
+    #[test]
+    fn unit_limits_follow_the_admitted_budget() {
+        let settings = Settings::from_config(None);
+        // Ample headroom: the configured limits.
+        let ample = admitted_limits(&settings, settings.memory_max);
+        assert_eq!(ample.memory_max, 2 << 30);
+        assert_eq!(ample.memory_high, 1536 << 20);
+        // A tight budget throttles an eighth below its own MemoryMax.
+        let tight = admitted_limits(&settings, 1280 * MIB);
+        assert_eq!(tight.memory_max, 1280 * MIB);
+        assert_eq!(tight.memory_high, 1120 * MIB);
+        // The smallest admissible budget (the default reserve).
+        let least = admitted_limits(&settings, settings.memory_reserve);
+        assert_eq!(least.memory_max, 768 * MIB);
+        assert_eq!(least.memory_high, 672 * MIB);
+        // The 64 MiB gap applies below 512 MiB; never 0 or above MemoryMax.
+        let small = admitted_limits(&settings, 256 * MIB);
+        assert_eq!(small.memory_high, 192 * MIB);
+        for budget in [256 * MIB, 1000 * MIB + 7, 6 << 30] {
+            let limits = admitted_limits(&settings, budget);
+            assert!(limits.memory_high > 0 && limits.memory_high < limits.memory_max);
+            assert!(limits.memory_high <= settings.memory_high);
+            assert_eq!(limits.cpu_quota_percent, settings.cpu_quota_percent);
+            assert_eq!(limits.tasks_max, settings.tasks_max);
+            assert_eq!(limits.max_runtime, settings.max_runtime);
+        }
+        // The unit is started with exactly these limits.
+        let launch = Launch {
+            unit: "cowboy-browser-inst",
+            instance_id: "inst",
+            limits: tight,
+            launcher: Path::new("/launcher"),
+            arguments: Vec::new(),
+        };
+        let arguments: Vec<String> = unit::systemd_run_arguments(&launch)
+            .into_iter()
+            .map(|argument| argument.into_string().unwrap())
+            .collect();
+        for expected in [
+            format!("--property=MemoryMax={}", 1280 * MIB),
+            format!("--property=MemoryHigh={}", 1120 * MIB),
+            "--property=MemorySwapMax=0".to_owned(),
+            "--property=OOMScoreAdjust=1000".to_owned(),
+        ] {
+            assert!(arguments.contains(&expected), "{expected}");
+        }
     }
 
     #[test]

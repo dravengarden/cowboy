@@ -18,6 +18,7 @@ fn manager(state: &Path) -> Arc<BrowserManager> {
         Arc::new(store),
         None,
         || None,
+        Box::leak(Box::new(Ledger::new())),
         Arc::new(FakeUnits::default()) as Arc<dyn UnitControl>,
     )
     .unwrap()

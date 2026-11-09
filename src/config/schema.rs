@@ -502,7 +502,7 @@ pub static DEVICE_FIELDS: &[Field] = &[
         },
         default: Value::Bytes(2 << 30),
         reload: Reload::Live,
-        doc: "MemoryMax of one browser unit, including every page of its profile,\ninstance, /tmp and /dev/shm tmpfs. The kernel OOM-kills inside the unit\nalone above it; never below memory_high.",
+        doc: "Upper bound of one browser unit's MemoryMax. An open sets MemoryMax to its\nadmitted budget: this, or less when the Device headroom is short, never\nbelow memory_reserve. It covers every page of the profile, instance, /tmp\nand /dev/shm tmpfs; the kernel OOM-kills inside the unit alone above it.\nNever below memory_high.",
     },
     Field {
         key: "browser.memory_high",
@@ -512,7 +512,7 @@ pub static DEVICE_FIELDS: &[Field] = &[
         },
         default: Value::Bytes(1536 << 20),
         reload: Reload::Live,
-        doc: "MemoryHigh of one browser unit; the kernel throttles the unit above it.\nNever below memory_reserve nor above memory_max.",
+        doc: "Upper bound of one browser unit's MemoryHigh; the kernel throttles the unit\nabove it. An open uses the lesser of this and its admitted budget less an\neighth (at least 64 MiB). Never below memory_reserve nor above memory_max.",
     },
     Field {
         key: "browser.memory_reserve",
@@ -522,7 +522,7 @@ pub static DEVICE_FIELDS: &[Field] = &[
         },
         default: Value::Bytes(768 << 20),
         reload: Reload::Live,
-        doc: "Expected resident working set of one browser (Chromium, Xvnc and the\nwindow manager): the bytes a browser start reserves in the Device launch\nledger beside worker starts. MemoryHigh/MemoryMax stay the hard bound;\nnever above memory_high.",
+        doc: "Smallest memory budget a browser open is admitted with: about the\nresident working set of Chromium, Xvnc and the window manager. An open is\nrefused when the Device launch ledger cannot reserve at least this beside\nworker starts and the floor. Never above memory_high.",
     },
     Field {
         key: "browser.cpu_quota_percent",
