@@ -1,237 +1,296 @@
-# Widget apps: an MCP Apps host and a Cowboy TSX runtime
+# Widget apps: agent-written TSX on a Worker runtime, MCP Apps later
 
-Status: design, revision 1 (2026-11-09). The owner chose this direction:
+Status: design, revision 2 (2026-11-09). The owner chose the direction:
 Cowboy provides a secure sandbox in which agent-written React runs, and
-widgets will grow into an advanced, extensible surface. This document extends
-[`widgets.md`](widgets.md); the `cowboy.widget/1` JSON nodes stay the
-lightweight, patchable path for status, tables and decisions.
+widgets grow into an advanced, extensible surface. Revision 2 replaces the
+revision 1 phase A (agent code in a same-site DOM frame) after the Astra Max
+review in §11. It extends [`widgets.md`](widgets.md); the `cowboy.widget/1`
+JSON nodes stay the lightweight, patchable path for status, tables and
+decisions.
 
 ## 1. Goals and non-goals
 
 Goals:
 
-- An agent can publish an **app**: a React component written in TSX that
-  Cowboy compiles and runs in an isolated frame inside a widget row, on
-  iPhone, iPad and Desktop, styled by Cowboy's theme.
-- The frame cannot read or act as the person: no Cowboy cookies, storage, DOM,
-  credentials or network. Everything it shows is data the agent gave it.
-- The frame talks to Cowboy only through the **MCP Apps** protocol
-  (SEP-1865, final 2026-01-26), so the same host can later render `ui://`
-  resources from any MCP server, as Claude, ChatGPT, VS Code and Goose do.
-- Every effect an app requests that speaks for the person (a message, a link,
-  later a tool call) goes through a product-owned confirmation.
+- An agent can publish an **app**: a React component in TSX that Cowboy
+  compiles and runs, drawn inside a widget row with Cowboy's own components on
+  iPhone, iPad and Desktop.
+- Running an app can never read or act as the person: no Cowboy cookies,
+  storage, DOM, credentials, native bridges or network, and no path by which
+  text the person types into an app leaves the device except a message the
+  person confirms.
+- A hung or abusive app can always be stopped without freezing Cowboy, on
+  every engine Cowboy ships (Chromium, WebKit on iOS/iPadOS/macOS, Tauri).
+- The host side follows **MCP Apps** (SEP-1865, final 2026-01-26) semantics
+  for its bridge, so phase C can render `ui://` resources from MCP servers.
 
-Non-goals for the first phases: network access from apps, third-party MCP
-server UIs (phase C), persistent per-app storage, camera/microphone/location.
+Non-goals for phase A: arbitrary DOM, canvas or WebGL in apps (phase B), apps
+calling tools (§10), third-party MCP server UIs (phase C), persistent per-app
+storage.
 
 ## 2. What the community does (2026-11)
 
 - **MCP Apps** ([SEP-1865](https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp),
   [spec 2026-01-26](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx)):
-  the first official MCP extension, co-developed by Anthropic and OpenAI. A
-  tool declares a `ui://` resource (`text/html;profile=mcp-app`); the host
-  renders it in a sandboxed iframe and talks JSON-RPC over `postMessage`
-  (`ui/initialize`, `ui/message`, `ui/open-link`, `tools/call`,
-  `ui/notifications/size-changed`, `ui/request-display-mode`,
-  `ui/notifications/host-context-changed`, `ui/resource-teardown`). Web hosts
-  MUST use a sandbox proxy on a different origin; the default CSP is
-  `default-src 'none'` with `connect-src 'none'`; `ui/message` and
-  `tools/call` MAY require consent; hosts SHOULD mark UI boundaries and limit
-  CPU and memory. MCP-UI now recommends this pattern over its earlier
-  Remote DOM path ([MCP-UI](https://github.com/MCP-UI-Org/mcp-ui)).
-- **Claude Artifacts** ([analysis](https://pluto.security/blog/inside-claude-artifacts-how-your-agent-publishes-to-the-web/),
-  [docs](https://code.claude.com/docs/en/artifacts)): each artifact on its own
-  origin under a separate registrable domain (`<uuid>.frame.claudeusercontent.com`)
-  with site isolation, a strict CSP, a frozen library allowlist (React,
-  Tailwind, Recharts, shadcn/ui, Lucide, D3, …) and a bridge through which the
-  host makes privileged calls as the viewer. Remaining risk noted publicly:
-  social engineering such as "run this command" ([issue](https://github.com/anthropics/claude-code/issues/77409)).
-- **ChatGPT Apps SDK**: sandboxed iframe on `*.web-sandbox.oaiusercontent.com`,
-  `window.openai` bridge, declared `connect_domains` / `resource_domains`.
-- **Running LLM-written TSX in the browser**
+  HTML views in sandboxed iframes; web hosts MUST interpose a sandbox proxy on
+  a different origin; JSON-RPC over `postMessage`; default CSP denies all
+  network; `ui/message` and `tools/call` may require consent; hosts should
+  mark UI boundaries and limit CPU and memory.
+- **MCP-UI / Shopify Remote DOM** ([MCP-UI](https://github.com/MCP-UI-Org/mcp-ui),
+  [Shopify](https://shopify.engineering/mcp-ui-breaking-the-text-wall)): the
+  remote code builds a component tree in an isolated realm; the host renders
+  that tree with its own component library, so the UI matches the host and the
+  code never touches the host DOM. `@remote-dom/core` 1.12 and
+  `@remote-dom/react` 1.2 (MIT, maintained in 2026).
+- **Claude Artifacts** ([analysis](https://pluto.security/blog/inside-claude-artifacts-how-your-agent-publishes-to-the-web/)):
+  per-artifact origins on a separate registrable domain, strict CSP, a frozen
+  library allowlist, privileged calls made by the host as the viewer.
+- **LLM-written TSX in the browser**
   ([component-playground](https://github.com/luisrrv/component-playground),
-  [local-agent-chat #35](https://github.com/aquerman/local-agent-chat/pull/35),
-  [Renderify](https://github.com/webllm/renderify)): compile with Sucrase
-  (≈200 KB, fast, strips types without checking), resolve every import at one
-  allowlisted choke point to vendored modules, run in `sandbox="allow-scripts"`
-  without `allow-same-origin`, kill a hung frame with a heartbeat watchdog.
+  [Renderify](https://github.com/webllm/renderify)): Sucrase compile, one
+  allowlisted import resolver, `sandbox="allow-scripts"` without
+  `allow-same-origin`, and a terminable boundary (Renderify runs everything
+  in a Worker) for hangs.
 
-## 3. Architecture
+## 3. Architecture (phase A)
 
 ```
-agent ──widgets.publish──▶ Controller (validate, store, project)
-                                   │ notice row (_cowboy.widget)
-Cowboy Web (cowboy.stormbird.xyz) ─┴─▶ WidgetView ─▶ AppNode
-   │  MCP Apps host: bridge, consent, sizing, theme, watchdog
-   ▼
-<iframe sandbox="allow-scripts" src="/widget-sandbox/v1/view.html">   (opaque origin)
-   Cowboy TSX runtime: Sucrase → module map → React root → <App props/>
+agent ──widgets.publish──▶ Controller: validate bounds, store, project row
+Cowboy Web ──▶ WidgetView ──▶ AppNode (host): owns one runtime per app identity
+   │  renders the remote tree with Cowboy MUI components; bridge, consent,
+   │  rates, watchdog, lifecycle
+   ▼  srcdoc <iframe sandbox="allow-scripts">   (opaque origin, inherits App CSP
+   │                                             + stricter meta CSP; trusted
+   │                                             boot code only, no app code)
+   ▼  Worker (blob:)  ── Sucrase compile ── module map ── React + @remote-dom/react
+                        agent component renders <Button>, <Chart>, … as remote
+                        elements; mutations stream to the host as data
 ```
 
-- A new node type `app` joins `cowboy.widget/1`:
-  `{type:"app", id, title, code, props?, height?, fallback}`. `code` is one TSX
-  module whose default export is the component; `props` is JSON passed to it
-  and patchable by node id like any other field; `fallback` is the required
-  text for notifications, search and older clients.
-- The Web renders an `app` node through `AppNode`, which owns one frame and the
-  host side of the bridge. Inline fences may not contain `app` nodes (only
-  published, Controller-validated widgets run code).
-- The runtime speaks MCP Apps inside the frame: the agent's component is the
-  View; Cowboy's runtime performs `ui/initialize`, delivers `props` as the
-  `ui/notifications/tool-input` arguments and exposes a small `cowboy` client
-  (`sendMessage`, `openLink`, `requestDisplayMode`, `useHostContext`) built on
-  the standard methods. Phase C reuses the same host for `ui://` resources.
+- **Agent code runs only in the Worker.** A Worker has no DOM, no window, no
+  `RTCPeerConnection`, no navigation and no access to native script-message
+  handlers. It is created inside a `srcdoc` frame (the editor plugin pattern,
+  [`editor-plugins.md`](editor-plugins.md)) so its origin is opaque: no
+  cookies, storage or same-origin APIs. The frame's own script is Cowboy's
+  fixed boot code; it never evaluates app code.
+- **No document is fetched for the sandbox.** The frame is `srcdoc`, so no
+  request carries the session cookie and there is no sandbox page to navigate
+  to or substitute (the service worker navigation fallback is not involved).
+- **The host renders.** The Worker's React tree uses `@cowboy/ui` remote
+  elements; `@remote-dom` serializes mutations; the host maps each allowlisted
+  element to a Cowboy MUI component with validated props. Unknown elements,
+  unknown props and non-JSON values are dropped and counted.
+- **Phase B** adds a full-DOM tier (arbitrary DOM, canvas, SVG libraries,
+  Three.js) in a frame on a separate registrable domain, enabled only on
+  engines that give that frame its own process and a killable boundary.
+- **Phase C** renders third-party MCP Apps `ui://` resources through a spec
+  conformant sandbox proxy on that separate domain (§9).
 
-## 4. Isolation (phase A)
+## 4. Isolation
 
-### 4.1 The frame
+### 4.1 Frame and Worker
 
-- `<iframe sandbox="allow-scripts" src="/widget-sandbox/v1/view.html" allow="">`
-  with no `allow-same-origin`, `allow-forms`, `allow-popups`,
-  `allow-top-navigation*`, `allow-modals` or `allow-downloads`. The document
-  has an **opaque origin**: no access to Cowboy cookies, `localStorage`,
-  IndexedDB, the parent DOM, or same-origin APIs; `window.parent` exposes only
-  `postMessage`.
-- The sandbox page is served by the Controller with its **own** response CSP
-  (a URL-loaded frame does not inherit the App's CSP, unlike `srcdoc`):
+- `<iframe sandbox="allow-scripts" srcdoc=… allow="">`: no `allow-same-origin`,
+  forms, popups, top navigation, modals, downloads or permissions.
+- The frame inherits the App document CSP and adds the editor plugin's
+  stricter meta CSP (`default-src 'none'; script-src 'unsafe-inline' blob:;
+  worker-src blob:`); both apply, and the Worker inherits them. The
+  intersection allows the Worker's own `blob:` script (App `worker-src blob:`)
+  but no further script loading (App `script-src` has neither `blob:` nor
+  `'unsafe-eval'`), no `fetch`, WebSocket, EventSource, images, fonts or
+  frames.
+- The boot frame compiles the app with Sucrase (input ≤ 14 KiB; the
+  transform is linear, so trusted boot code stays responsive) and builds one
+  `blob:` from the runtime bundle (React, `@remote-dom`, the `@cowboy/ui`
+  remote elements, allowlisted libraries; static, content-hashed, shipped with
+  the Web release) followed by the compiled module. That blob starts the
+  Worker; nothing evaluates strings and nothing is fetched.
 
-  ```
-  default-src 'none';
-  script-src https://<host>/widget-sandbox/v1/runtime-<hash>.js blob:;
-  style-src 'unsafe-inline' https://<host>/widget-sandbox/v1/;
-  img-src data: blob:; font-src https://<host>/widget-sandbox/v1/;
-  connect-src 'none'; frame-src 'none'; worker-src 'none';
-  object-src 'none'; base-uri 'none'; form-action 'none';
-  frame-ancestors https://<host>
-  ```
+### 4.2 Egress
 
-  `script-src` names the exact, content-hashed runtime file (not `'self'`, so
-  no other same-origin path can be loaded as a script) plus `blob:` for the
-  compiled agent module. No `'unsafe-eval'`.
-- The runtime and its vendored libraries are static, versioned, immutable
-  files under `/widget-sandbox/v1/`; no CDN is ever contacted.
-- The host accepts a message only when `event.source` is that frame's
-  `contentWindow` and the origin is `"null"`, and posts to the frame with a
-  per-frame `MessageChannel` port established once, so another frame cannot
-  inject or read bridge traffic.
+| Channel | Phase A status |
+|---|---|
+| Cookies, storage, IndexedDB, Cache API | Opaque origin: unavailable |
+| `fetch`, XHR, WebSocket, EventSource, `importScripts`, `eval` | Inherited CSP denies them in the Worker |
+| WebRTC, DNS prefetch, navigation, `window.open`, forms, downloads | Not available in a Worker; the frame's own code is trusted |
+| Native bridges (WKWebView message handlers, Tauri IPC) | Not exposed to Workers; release gate §8 also requires every privileged handler to reject subframes |
+| Bridge to host | Only bounded data messages; the only person-visible effects are confirmed (§6) |
 
-### 4.2 What the frame can still reach, and why it is acceptable
+Person-typed text enters the Worker only as values of host-rendered inputs; it
+can leave only through a `ui/message` the person confirms. Agent-supplied
+`props` are treated as confidential with the same rule: an app cannot
+disclose them except into the transcript after confirmation.
 
-- **Same-site requests.** The opaque-origin frame is still same-site with
-  `cowboy.stormbird.xyz`. Its CSP blocks `connect-src`, images and frames to
-  any address; forms and navigation are sandboxed off; script loads are pinned
-  to one file. Cowboy's mutating routes also require a matching `Origin`
-  (`ProductSessionMutate`), which an opaque origin (`null`) never has.
-- **Data the frame holds.** Only the agent's code and `props`. Exfiltration
-  channels CSP does not cover (for example WebRTC in some engines) can carry
-  only what the agent already had; no person data, Cowboy state or other
-  widget's data ever enters a frame. Host context sends theme, size, locale and
-  platform only.
-- **Side channels.** Same-site frames may share a renderer process. Chromium
-  desktop isolates sandboxed frames in their own process; iOS WebKit does
-  not. Without cross-origin isolation there is no `SharedArrayBuffer` and
-  timers are coarse. Phase B removes this residual risk with a separate
-  registrable domain (§9).
-- **Resource abuse.** The host pings the frame every second; three missed
-  pongs remove it and show "This app stopped responding" with Reload.
-  Frames off screen for 30 s are torn down (`ui/resource-teardown`) and
-  rebuilt on scroll-in from the stored `props`. At most 4 live frames per
-  session view.
-- **Phishing and social engineering.** Every app frame sits inside a
-  product-drawn border with an "App by the agent" label outside the frame; an
-  app can never draw over Cowboy chrome. The confirm sheet for any app-sent
-  message says it was written by the app, not composed by Cowboy.
+### 4.3 Termination and resource limits
+
+- The host owns the Worker lifecycle through the boot frame. A heartbeat
+  every second; three misses terminate the Worker (`Worker.terminate()` runs on
+  the frame's thread, which never executes app code, so a busy Worker cannot
+  block it). The host shows "This app stopped responding" with Reload.
+- Host-enforced budgets per app, revoked on violation (Reload required):
+  remote tree ≤ 2,000 nodes and depth ≤ 32; mutation batches ≤ 60/s and
+  ≤ 256 KiB/s; bridge requests ≤ 20/s with ≤ 4 outstanding; diagnostics
+  queue ≤ 100 entries; per-session aggregate ≤ 3× one app. Size changes are
+  coalesced per animation frame.
+- Memory: Worker heap is not directly limitable in browsers. The host
+  terminates an app whose serialized tree, message volume or
+  `performance.measureUserAgentSpecificMemory` (where available) exceeds its
+  budget; at most 4 live app Workers per session view.
+- Eviction: an app off screen for 60 s is terminated and rebuilt from `props`
+  on return, **unless** it is pinned: focused, holding person-entered input
+  since mount (the host knows because it renders the inputs), or awaiting a
+  confirmation. Pinned apps stay live; the limit of 4 counts them.
+
+### 4.4 One runtime per app identity
+
+An app identity is (session, widget, app node id, document revision). The
+inline row and the inspector render the **same** remote tree from one Worker;
+while the inspector shows the app, the inline row shows a placeholder ("Open
+in the app view"). A new revision of the document starts a new runtime.
 
 ## 5. The runtime
 
-- Compile: Sucrase (`typescript`, `jsx` automatic runtime, `imports` to
-  CommonJS) inside the frame. Compile errors render a readable error card;
-  types are not checked.
-- Imports: one resolver maps an allowlist to vendored modules; anything else
-  is a compile-time error naming the allowlist. Initial allowlist:
-  `react`, `react-dom/client` (implicit), `@cowboy/ui` (the MUI-style kit:
-  Box, Stack, Typography, Button, Chip, Table, Tabs, TextField, Select,
-  Slider, Switch, Card, Alert, Tooltip, icons), `recharts`, `d3-*` subsets,
-  `date-fns`, `lodash-es`. The kit is pre-themed from host context so apps
-  look native without writing styles.
-- Rendering: React 19 root, error boundary, `ResizeObserver` →
-  `ui/notifications/size-changed` (debounced, clamped to the row budget
-  inline and to the viewport in fullscreen).
-- Budget: compiled runtime ≤ 900 KB gzip, cached immutably; first app paint
-  target 300 ms on Desktop warm cache, 800 ms on iPhone warm cache.
+- Compile: Sucrase (`typescript`, `jsx` automatic, `imports`) in the boot
+  frame before the Worker starts (§4.1); types are not checked. Compile and
+  runtime errors render an error card with the message and "Show code".
+- Imports resolve through one allowlist to modules inside the bundle; any
+  other specifier is a compile error naming the allowlist. Phase A allowlist:
+  `react`, `@cowboy/ui`, `date-fns`, `lodash-es` (pure modules only).
+- `@cowboy/ui` remote elements (host renders with Cowboy MUI, themed, touch
+  targets ≥ 44 px on touch surfaces): `Stack`, `Box`, `Grid`, `Text`,
+  `Heading`, `Divider`, `Card`, `Chip`, `Badge`, `Alert`, `Progress`,
+  `Button`, `IconButton` (allowlisted icon names), `TextField`, `Select`,
+  `Checkbox`, `Switch`, `Slider`, `Tabs`, `Table` (sortable), `List`,
+  `Tooltip`, `Markdown` (product renderer), `Image` (artifact or verified data
+  sources only), `Chart` (line, bar, area, pie, scatter; host-rendered with
+  Recharts from data). Event props deliver sanitized payloads (`value`,
+  `checked`, `index`) to the Worker.
+- Hooks from the runtime: `useHostContext()` (theme mode, density, platform,
+  locale, container size), `sendMessage(text)`, `openLink(url)`,
+  `requestDisplayMode("inline" | "fullscreen")`.
+- Budget: runtime bundle ≤ 450 KB gzip, cached immutably; first paint target
+  300 ms Desktop / 800 ms iPhone with a warm cache.
 
-## 6. Bridge (MCP Apps subset)
+## 6. Bridge and consent
 
-| View → host | Phase A behaviour |
+The host↔runtime messages follow MCP Apps method names and semantics.
+
+| Request | Phase A behaviour |
 |---|---|
-| `ui/initialize` | Returns `hostContext`: `theme`, `styles.variables` (MUI palette, typography, radius mapped to the standard `--color-*`, `--font-*`, `--border-radius-*`), `containerDimensions`, `displayMode`, `availableDisplayModes`, `locale`, `timeZone`, `platform`, `safeAreaInsets` |
-| `ui/notifications/size-changed` | Resizes the frame within its bounds |
-| `ui/message` | Opens the product confirm with the exact text, labelled as written by the app; confirmed text is queued as the person's prompt under a `cmid` derived from widget, revision and text (same idempotency as decisions). Bounded to 2,000 chars, one pending confirm per frame |
-| `ui/open-link` | `https:` only, through the existing external-link confirmation |
-| `ui/request-display-mode` | `inline` ↔ `fullscreen` (the inspector); `pip` declined |
-| `ui/update-model-context` | Phase A: stored on the widget (≤ 8 KiB) and returned by `widgets.read`, never injected into prompts automatically |
-| `tools/call`, `resources/read` | Refused in phase A (`method not available`) |
-| `notifications/message` | Logged (bounded) to the browser diagnostics |
+| `ui/initialize` | Host context: theme, density, platform, locale, time zone, container dimensions, display mode |
+| `ui/notifications/size-changed` | Coalesced; frame and row resize within bounds |
+| `ui/message` | Text only, ≤ 2,000 Unicode scalars and ≤ 8 KiB; C0/C1 controls (except newline) rejected; bidi and invisible format characters shown escaped (for example `⟨U+202E⟩`) in the preview. The product confirm sheet freezes and shows those exact bytes, labelled "Written by the app"; Send queues exactly those bytes as the person's prompt. Each opened confirmation gets a host-owned occurrence id; the prompt's `cmid` is derived from (session, widget, node, revision, occurrence) and reused only for retries of that same confirmed payload. One open confirmation per app |
+| `ui/open-link` | `https:` only, ≤ 2,048 chars; a new product confirm sheet shows the frozen, validated destination and app attribution; the opener runs only after confirmation with `noopener,noreferrer`; repeated unsolicited requests are rate-limited (1 per 5 s) and revoke at the third denial |
+| `ui/request-display-mode` | `inline` ↔ `fullscreen` (the inspector), only in response to a person's gesture inside the app |
+| `ui/update-model-context`, `tools/call`, `resources/read` | Refused in phase A |
+| `notifications/message` | Bounded diagnostics only |
 
-Every message is schema-validated and size-bounded on the host; malformed
-messages are dropped and counted.
+Bootstrap and channel authentication:
+
+- The host creates the frame, then posts one bootstrap message containing a
+  fresh per-load nonce and a transferred `MessagePort`. The boot script accepts
+  only the first bootstrap whose `event.source` is `window.parent`, echoes the
+  nonce over the port, and only then starts the Worker; later bootstrap
+  attempts are ignored.
+- The host accepts messages only on that port; the port is bound to the app
+  identity (§4.4). Navigation, replacement, a new revision, Clear, sign-out
+  and teardown close the port, terminate the Worker and cancel any open
+  confirmation.
 
 ## 7. Contract and Controller
 
-- `app` node: `code` ≤ 48 KiB, `props` ≤ 16 KiB JSON, `title` and `fallback`
-  required; a document containing an app may be up to 64 KiB; at most 2 app
-  nodes per document and 20 apps per session view.
-- The Controller validates shape and bounds only; it never runs or parses the
-  TSX. `props` patches use the existing `widgets.update` patch ops.
-- `widgets.read` returns `model_context` (from `ui/update-model-context`).
-- Help text teaches the authoring contract with one compact example.
+- New node `{type:"app", id, title, code, props?, height?, fallback}`. `code`
+  is one TSX module whose default export is the component; `props` is JSON
+  passed as its props.
+- Bounds fit the existing transport (32 KiB serialized tool arguments,
+  24 KiB widget document, 48 KiB snapshot): `code` ≤ 14 KiB and `props`
+  ≤ 6 KiB measured as serialized JSON; at most one app node per document in
+  phase A. Raising them later is a staged transport and snapshot change.
+- **`props` is opaque.** Node traversal (patch `#id` lookup, image source
+  walk, input walk, description projection) follows schema edges only and
+  never enters `props`. `widgets.update` may patch inside `props` only through
+  a JSON Pointer under the app node (`/root/…/props/…`). Fixtures: ids and
+  image-shaped objects inside `props` are neither addressed nor rewritten.
+- The Controller validates shape and bounds only; it never parses or runs TSX.
+  Inline fences may not contain app nodes.
 
-## 8. UX
+## 8. Acceptance and release gates
 
-- Inline: the frame lives inside the widget row's height budget with the
-  existing fold and Open; Open (or `ui/request-display-mode: fullscreen`) shows
-  the app in the inspector (Desktop modal, phone/iPad cover sheet) where it
-  gets the full container.
-- Loading: a skeleton of the reserved height, then the app; an error card with
-  the compiler or runtime message and "Show code".
-- Desktop: the row toggle opens the inspector; inside, focus enters the frame
-  and `Esc` is forwarded by the runtime to the host to close (the frame cannot
-  capture the product's global shortcuts).
-- iPhone: touch targets from the kit are ≥ 44 px; the frame never scrolls
-  horizontally; keyboard opens only on explicit text-field focus.
+Browser suite `widget-apps` (hawk Chrome, disposable context, authenticated
+fixture with sentinel cookie and storage values, Controller-side request log):
+
+- Positive: a TSX app using `@cowboy/ui`, `Chart` and `date-fns` compiles and
+  renders under the production CSP at 320/375/768/1100 px in light and dark;
+  events round-trip; inline↔inspector keeps one runtime and its input state.
+- Isolation from inside a hostile app: no sentinel cookie or storage visible;
+  `fetch`/WebSocket/EventSource/`importScripts` blocked and **no request
+  reaches the Controller log**; WebRTC and DOM globals absent in the Worker;
+  forged bootstrap or port messages from a sibling frame ignored; unknown
+  elements and props dropped.
+- Resource: an infinite loop at compile time and at render time is terminated
+  within 3 s while Cowboy stays responsive; tree, mutation and request
+  budgets revoke; eviction preserves pinned apps.
+- Consent: `ui/message` never sends without the confirm; bidi text is shown
+  escaped; a repeated confirmed message sends twice, a retried one once;
+  `ui/open-link` never opens without its confirm.
+
+Release gates outside Chrome:
+
+- Native shells: every privileged handler (WKWebView script message handlers
+  including the passkey bridge, Tauri capabilities) rejects calls from
+  subframes, verified by direct calls from a test subframe on macOS, iOS and
+  Tauri builds; this also hardens the existing editor plugin sandbox.
+- WebKit (iOS/iPadOS physical device via the native shell, per
+  `conventions/pwa.md`): Worker termination of a busy app keeps Cowboy
+  responsive; the hostile-app probes above pass.
 
 ## 9. Phases
 
-- **A — Cowboy TSX apps** (no network or DNS change): sandbox page and runtime
-  served by the Controller, `app` node, bridge subset, escape conformance
-  suite, watchdog and teardown, light/dark/phone/iPad/Desktop acceptance,
-  physical iPhone check through the native shell.
-- **B — Separate-site sandbox** (owner decision needed): serve the sandbox from
-  a separate registrable domain with per-app subdomains (as
-  `claudeusercontent.com`), restoring process isolation on every engine and
-  meeting the MCP Apps sandbox-proxy requirement exactly. Requires a domain,
-  a wildcard certificate and DNS publication.
-- **C — Third-party MCP Apps**: render `ui://` resources declared by MCP
-  servers the agents use, with declared CSP domains shown to the person,
-  `tools/call` with per-call consent and visibility rules. Requires the
-  provider adapters to surface `_meta.ui.resourceUri` and a resource read path.
+- **A — Worker apps** (no network or DNS change): runtime bundle, `app` node,
+  host renderer for `@cowboy/ui`, bridge subset with the new confirmations,
+  budgets and lifecycle, acceptance and release gates of §8.
+- **B — Full-DOM apps on a separate site**: a dedicated registrable domain
+  (not a `stormbird.xyz` subdomain) with one subdomain per app, served by a
+  cookie-free static endpoint without redirects, `frame-ancestors` limited to
+  Cowboy, and enabled per engine only where the frame is process-isolated and
+  killable; elsewhere the app shows its `fallback` with "Open on Desktop".
+- **C — Third-party MCP Apps**: a spec-conformant sandbox proxy on the phase B
+  domain that preserves the standard View-facing `postMessage` transport,
+  initialization and capability negotiation, notification ordering and
+  teardown; declared CSP domains shown to the person; tool calls per §10.
+  Compatibility is claimed only after an unmodified MCP Apps client fixture
+  passes.
 
-## 10. Acceptance (phase A)
+## 10. Decisions (owner delegated, 2026-11-09)
 
-The `widget-apps` browser suite runs on hawk Chrome in a disposable context
-and proves, from inside a hostile app: `document.cookie` is empty; storage
-APIs throw; `parent.document` throws; `fetch`, `WebSocket`, `EventSource`,
-image, font, CSS `url()` and `<link rel=prefetch>` loads to the Controller
-and to an external address are blocked; `window.open`, form submit, top
-navigation and downloads fail; an import outside the allowlist fails to
-compile; an infinite loop is torn down by the watchdog; a forged message from
-another frame is ignored; `ui/message` never sends without the confirm. It
-also checks theme propagation, sizing at 320/375/768/1100 px, fullscreen and
-teardown/rebuild. The physical iPhone check follows `conventions/pwa.md`.
+1. Phase B domain: a separate registrable domain dedicated to app content
+   (working name `stormbirdusercontent.xyz`); the owner buys it when phase B
+   starts; Cowboy prepares the resource record, Caddy and certificate.
+2. Libraries: phase A as in §5; Three.js and canvas libraries come with phase
+   B; map libraries are excluded (they need network tiles).
+3. Tools: none in phase A. Later, only Cowboy read-only reads, with a
+   per-widget consent that names the data read; write tools are never
+   available to apps.
 
-## 11. Open questions
+## 11. Review record
 
-1. Phase B domain: which registrable domain hosts the sandbox.
-2. Library allowlist beyond the initial set (for example Three.js, maps).
-3. Whether apps may ever call Cowboy MCP read tools (`tools/call`) and with
-   which consent model.
+Revision 1 (Astra Max, `call-2b49e88dbf282591a7768b54`, incomplete: spec
+not captured) — resolutions:
+
+| Finding | Resolution |
+|---|---|
+| Same-site URL sandbox carries the session cookie and is not a different-origin proxy (high) | Phase A loads no sandbox document (srcdoc, opaque); HTML views wait for phase B/C on a separate site with a cookie-free proxy (§3, §9) |
+| A parent watchdog cannot stop a shared-thread loop; no heap/DOM limits (high) | App code runs only in a terminable Worker; tree, mutation, request and memory budgets (§4.3) |
+| Person-typed and confidential data can leave through channels CSP misses (high) | Worker has no WebRTC/DOM/navigation; inputs are host-rendered; data leaves only by confirmed message (§4.2) |
+| `ui/open-link` reused an opener without confirmation (high) | New frozen-destination confirm, `noopener,noreferrer`, rate limit (§6) |
+| Bootstrap authentication and revocation (medium) | Nonce bootstrap, port binding, revocation list (§6) |
+| Phase C transport adapter unspecified (medium) | Phase C requirements and unmodified-client gate (§9) |
+| Aggregate bridge work unbounded (medium) | Per-app and per-session rate and byte budgets with revocation (§4.3) |
+| Identical message text dedupes legitimate repeats (medium) | Host-owned occurrence id per confirmation (§6) |
+| App-authored confirm text can hide bidi/invisible characters (medium) | Text-only, bounds, controls rejected, format characters escaped, frozen bytes (§6) |
+| Sizes exceed transport and snapshot limits (medium) | Bounds fitted to existing limits (§7) |
+| `props` participate in node traversal (medium) | `props` opaque; schema-edge traversal; fixtures (§7) |
+| Model-context writes lack authority (medium) | `ui/update-model-context` refused in phase A (§6) |
+| Eviction and inspector lose unsent input (medium) | One runtime per identity; pinning (§4.3, §4.4) |
+| Probes must be observed outside the frame (medium) | Sentinel values and Controller request log (§8) |
+| Native IPC denial must be a release gate (medium) | Native-shell gate including the passkey bridge (§8) |
