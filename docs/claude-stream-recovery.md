@@ -67,6 +67,22 @@ A retained history containing only an assistant diagnostic, with no terminal
 event, is not sufficient evidence to infer that the process stopped. This
 change does not synthesize completion from message text or rewrite such history.
 
+## An unmatched tool result fails the turn, not the worker
+
+At a turn's end the Claude adapter (0.99.1) reports `incomplete_tool_call` for a
+dispatched tool it never saw complete. The check runs only when the turn
+settles, which a running background subagent defers, so the error can name a
+call from long before. On 2026-11-09 it named a Bash call whose result was in
+the native transcript 48 minutes earlier, right after the turn had ended
+normally. Why the adapter missed that result is unknown; its SDK stream is not
+retained.
+
+Claude Code Plugin 3.20.35 and Claude DeepSeek Plugin 3.1.57 match that error
+kind with `keep_worker_alive`. The adapter has already closed the call as failed
+and its query is still healthy, so the turn ends with the error, the session
+stays usable and queued messages drain. The prompt is never resent, because the
+tool may have run.
+
 ## Verification boundaries
 
 `src/acp_session_conformance_tests.rs` drives the production ACP client/session
