@@ -83,13 +83,20 @@ schema = 1
 # integer from 0 to 4; applies live.
 # max_instances = 1
 # MemoryMax of one browser unit, including every page of its profile,
-# instance, /tmp and /dev/shm tmpfs. Also the bytes a browser start reserves
-# in the Device launch ledger beside worker starts.
+# instance, /tmp and /dev/shm tmpfs. The kernel OOM-kills inside the unit
+# alone above it; never below memory_high.
 # size string such as "1.5GiB", from 1GiB to 6GiB; applies live.
 # memory_max = "2GiB"
 # MemoryHigh of one browser unit; the kernel throttles the unit above it.
+# Never below memory_reserve nor above memory_max.
 # size string such as "1.5GiB", from 1GiB to 6GiB; applies live.
 # memory_high = "1536MiB"
+# Expected resident working set of one browser (Chromium, Xvnc and the
+# window manager): the bytes a browser start reserves in the Device launch
+# ledger beside worker starts. MemoryHigh/MemoryMax stay the hard bound;
+# never above memory_high.
+# size string such as "1.5GiB", from 256MiB to 6GiB; applies live.
+# memory_reserve = "768MiB"
 # CPUQuota of one browser unit in percent of one CPU.
 # integer from 50 to 400; applies live.
 # cpu_quota_percent = 200

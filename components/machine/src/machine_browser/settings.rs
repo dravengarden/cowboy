@@ -10,6 +10,9 @@ pub struct Settings {
     pub max_instances: u32,
     pub memory_max: u64,
     pub memory_high: u64,
+    /// Bytes an open reserves in the launch ledger: the expected resident
+    /// working set, not the unit's hard limit.
+    pub memory_reserve: u64,
     pub cpu_quota_percent: u32,
     pub tasks_max: u32,
     pub hibernate_after: Duration,
@@ -36,6 +39,7 @@ impl Settings {
             max_instances: integer(&schema::DEVICE_BROWSER_MAX_INSTANCES),
             memory_max: config.get(&schema::DEVICE_BROWSER_MEMORY_MAX),
             memory_high: config.get(&schema::DEVICE_BROWSER_MEMORY_HIGH),
+            memory_reserve: config.get(&schema::DEVICE_BROWSER_MEMORY_RESERVE),
             cpu_quota_percent: integer(&schema::DEVICE_BROWSER_CPU_QUOTA),
             tasks_max: integer(&schema::DEVICE_BROWSER_TASKS_MAX),
             hibernate_after: config.get(&schema::DEVICE_BROWSER_HIBERNATE_AFTER),
@@ -70,6 +74,9 @@ mod tests {
         assert_eq!(settings.max_instances, 1);
         assert_eq!(settings.memory_max, 2 << 30);
         assert_eq!(settings.memory_high, 1536 << 20);
+        assert_eq!(settings.memory_reserve, 768 << 20);
+        assert!(settings.memory_reserve <= settings.memory_high);
+        assert!(settings.memory_high <= settings.memory_max);
         assert_eq!(settings.cpu_quota_percent, 200);
         assert_eq!(settings.tasks_max, 512);
         assert_eq!(settings.hibernate_after, Duration::from_secs(120));

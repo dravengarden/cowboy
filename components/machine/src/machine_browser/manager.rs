@@ -23,7 +23,7 @@ use super::state_file::{
 use super::stream::{Stream, StreamEnd};
 use super::unit::{self, Launch, Limits};
 use super::verify::{self, Expectations, Verified};
-use crate::launch_ledger::{Admission, LEDGER};
+use crate::launch_ledger::{Admission, FLOOR_BYTES, LEDGER};
 use crate::machine_plugins::{MachineBrowserRuntimePlan, MachinePluginStore};
 use crate::machine_protocol::MachineEvent;
 use crate::machine_protocol::machine_browser::{

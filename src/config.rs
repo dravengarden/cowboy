@@ -70,6 +70,15 @@ impl Scope {
         }
     }
 
+    /// Byte settings of this scope ordered `(lower, upper)`.
+    #[must_use]
+    pub fn byte_order(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::Service => &[],
+            Self::Device => schema::DEVICE_BYTE_ORDER,
+        }
+    }
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -673,6 +682,61 @@ impl Checker<'_> {
             });
         }
         self.walk("", &root);
+        self.check_byte_order();
+    }
+
+    /// Reject an ordered pair whose effective values are inverted. Only a
+    /// pair with at least one value from the file can be inverted.
+    fn check_byte_order(&mut self) {
+        let effective = |values: &BTreeMap<&'static str, Value>, key: &str| {
+            values
+                .get(key)
+                .or_else(|| {
+                    self.scope
+                        .fields()
+                        .iter()
+                        .find(|field| field.key == key)
+                        .map(|field| &field.default)
+                })
+                .and_then(|value| match value {
+                    Value::Bytes(bytes) => Some(*bytes),
+                    _ => None,
+                })
+        };
+        for &(lower, upper) in self.scope.byte_order() {
+            let (Some(low), Some(high)) = (
+                effective(&self.values, lower),
+                effective(&self.values, upper),
+            ) else {
+                continue;
+            };
+            if low <= high {
+                continue;
+            }
+            let path = if self.values.contains_key(lower) {
+                lower
+            } else {
+                upper
+            };
+            self.diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "out-of-order",
+                path: path.to_owned(),
+                line: None,
+                column: None,
+                message: format!("`{lower}` must not exceed `{upper}`"),
+                expected: Some(format!("{lower} <= {upper}")),
+                found: Some(format!(
+                    "{lower} = {}, {upper} = {}",
+                    format_bytes(low),
+                    format_bytes(high)
+                )),
+                hint: Some(format!(
+                    "lower `{lower}` or raise `{upper}`; run `cowboy config explain --scope {} {lower}`",
+                    self.scope.as_str()
+                )),
+            });
+        }
     }
 
     fn check_schema(&mut self, value: &toml::Spanned<toml::de::DeValue<'_>>) {

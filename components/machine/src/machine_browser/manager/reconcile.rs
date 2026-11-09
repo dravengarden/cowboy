@@ -322,7 +322,7 @@ impl BrowserManager {
         let settings = self.settings();
         let reservation = match LEDGER
             .reserve(
-                settings.memory_max,
+                settings.memory_reserve,
                 self.headroom,
                 || false,
                 Duration::ZERO,
@@ -331,7 +331,12 @@ impl BrowserManager {
             .await
         {
             Admission::Reserved { reservation, .. } => reservation,
-            _ => bail!("no memory headroom to adopt"),
+            _ => bail!(
+                "no memory headroom to adopt: headroom {:?} bytes, reserved {} bytes, requested {} bytes, floor {FLOOR_BYTES} bytes",
+                (self.headroom)(),
+                LEDGER.reserved_bytes(),
+                settings.memory_reserve
+            ),
         };
         let readiness = Duration::from_millis(plan.contract.launch.readiness_timeout_ms);
         let mut control = Control::connect(&record.runtime_dir, Duration::from_secs(5)).await?;

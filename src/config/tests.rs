@@ -75,6 +75,7 @@ fn every_typed_key_matches_a_declared_field_of_its_kind() {
     assert_key(&schema::DEVICE_BROWSER_MAX_INSTANCES);
     assert_key(&schema::DEVICE_BROWSER_MEMORY_MAX);
     assert_key(&schema::DEVICE_BROWSER_MEMORY_HIGH);
+    assert_key(&schema::DEVICE_BROWSER_MEMORY_RESERVE);
     assert_key(&schema::DEVICE_BROWSER_CPU_QUOTA);
     assert_key(&schema::DEVICE_BROWSER_TASKS_MAX);
     assert_key(&schema::DEVICE_BROWSER_HIBERNATE_AFTER);
@@ -126,6 +127,60 @@ fn pattern_lists_replace_defaults_and_reject_bad_entries() {
         let text = format!("schema = 1\n[file_buffers]\nexcluded = {bad}\n");
         assert!(!check_text(Scope::Device, &text, None).is_valid(), "{bad}");
     }
+}
+
+#[test]
+fn browser_memory_reserve_is_bounded_by_high_and_high_by_max() {
+    let device = |body: &str| {
+        check_text(
+            Scope::Device,
+            &format!("schema = 1\n[browser]\n{body}"),
+            None,
+        )
+    };
+    let config = device("").config.unwrap();
+    assert_eq!(
+        config.get(&schema::DEVICE_BROWSER_MEMORY_RESERVE),
+        768 << 20
+    );
+    let valid =
+        device("memory_reserve = \"1GiB\"\nmemory_high = \"1GiB\"\nmemory_max = \"1GiB\"\n");
+    assert!(valid.is_valid(), "{}", valid.render_text());
+    assert_eq!(
+        valid
+            .config
+            .unwrap()
+            .get(&schema::DEVICE_BROWSER_MEMORY_RESERVE),
+        1 << 30
+    );
+    // Per-field bounds.
+    assert_eq!(
+        codes(&device("memory_reserve = \"255MiB\"\n")),
+        vec!["out-of-range"]
+    );
+    assert_eq!(
+        codes(&device("memory_reserve = \"7GiB\"\n")),
+        vec!["out-of-range"]
+    );
+    // Above the default memory_high, and above an explicit one.
+    let above_default = device("memory_reserve = \"2GiB\"\n");
+    assert_eq!(codes(&above_default), vec!["out-of-order"]);
+    assert_eq!(above_default.diagnostics[0].path, "browser.memory_reserve");
+    assert!(above_default.config.is_none());
+    assert_eq!(
+        codes(&device(
+            "memory_reserve = \"1100MiB\"\nmemory_high = \"1GiB\"\n"
+        )),
+        vec!["out-of-order"]
+    );
+    // memory_high above the default memory_max names memory_high.
+    let high = device("memory_high = \"3GiB\"\n");
+    assert_eq!(codes(&high), vec!["out-of-order"]);
+    assert_eq!(high.diagnostics[0].path, "browser.memory_high");
+    // A lowered memory_max below the default memory_high names memory_max.
+    let max = device("memory_max = \"1GiB\"\n");
+    assert_eq!(codes(&max), vec!["out-of-order"]);
+    assert_eq!(max.diagnostics[0].path, "browser.memory_max");
 }
 
 #[test]

@@ -85,7 +85,7 @@ impl BrowserManager {
             .saturating_add(i64::try_from(settings.max_runtime.as_millis()).unwrap_or(i64::MAX));
         let reservation = match LEDGER
             .reserve(
-                settings.memory_max,
+                settings.memory_reserve,
                 self.headroom,
                 || self.starts.draining(),
                 MEMORY_WAIT,
@@ -94,7 +94,18 @@ impl BrowserManager {
             .await
         {
             Admission::Reserved { reservation, .. } => reservation,
-            Admission::Exhausted | Admission::Cancelled => return hibernated(Reason::Memory),
+            Admission::Exhausted => {
+                tracing::info!(
+                    headroom_bytes = (self.headroom)(),
+                    reserved_bytes = LEDGER.reserved_bytes(),
+                    requested_bytes = settings.memory_reserve,
+                    floor_bytes = FLOOR_BYTES,
+                    waited_secs = MEMORY_WAIT.as_secs(),
+                    "browser open refused: no memory headroom"
+                );
+                return hibernated(Reason::Memory);
+            }
+            Admission::Cancelled => return hibernated(Reason::Memory),
         };
         let started = self
             .start_instance(

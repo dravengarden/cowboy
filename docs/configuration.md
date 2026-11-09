@@ -46,8 +46,10 @@ Diagnostics name the dotted key, line and column, what was expected and found,
 and a concrete fix: unknown keys get a "did you mean" suggestion, and every
 value error states the accepted range and the default. Codes are stable:
 `syntax`, `missing-schema`, `unsupported-schema`, `unknown-key`, `wrong-type`,
-`out-of-range`, `invalid-value`, `not-a-regular-file`, `file-too-large`,
-`unreadable`.
+`out-of-range`, `out-of-order`, `invalid-value`, `not-a-regular-file`, `file-too-large`,
+`unreadable`. `out-of-order` names a pair of byte settings whose effective
+values (from the file or the default) must stay ordered, such as
+`browser.memory_reserve <= browser.memory_high <= browser.memory_max`.
 
 ## Applying changes
 
@@ -192,6 +194,7 @@ as a deprecated override for one release.
 | Device | `browser.max_instances` | `1` | live |
 | Device | `browser.memory_max` | `"2GiB"` | live |
 | Device | `browser.memory_high` | `"1.5GiB"` | live |
+| Device | `browser.memory_reserve` | `"768MiB"` | live |
 | Device | `browser.cpu_quota_percent` | `200` | live |
 | Device | `browser.tasks_max` | `512` | live |
 | Device | `browser.hibernate_after` | `"2m"` | live |

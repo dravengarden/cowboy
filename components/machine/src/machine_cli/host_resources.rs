@@ -358,6 +358,28 @@ mod tests {
         );
     }
 
+    /// The OVH user slice that refused a Machine browser: a 768 MiB browser
+    /// reserve is admitted beside an in-flight cold worker, while the old
+    /// 2 GiB `MemoryMax` weight was not. Active file cache is not credited.
+    #[test]
+    fn observed_user_slice_admits_a_browser_reserve() {
+        use crate::launch_ledger::Ledger;
+        let stat = "anon 5500000000\ninactive_file 2370000000\nactive_file 1500000000\n";
+        let bytes =
+            cgroup_headroom("10200000000\n", "11270000000\n", "9590000000\n", stat).unwrap();
+        assert_eq!(bytes, 2_980_000_000);
+        let headroom = admission_headroom(
+            Headroom {
+                bytes,
+                bound: 10_200_000_000,
+            },
+            false,
+        );
+        let worker = 512 << 20;
+        assert!(Ledger::fits(headroom, worker, 768 << 20));
+        assert!(!Ledger::fits(headroom, worker, 2 << 30));
+    }
+
     #[test]
     fn a_stall_zeroes_headroom_only_when_the_tightest_scope_is_short() {
         const GIB: u64 = 1 << 30;

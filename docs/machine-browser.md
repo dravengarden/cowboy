@@ -620,9 +620,26 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
   unit's exit is confirmed. Memory admission goes through the same compare-and-swap launch
   ledger as cold workers, converted to a byte-weighted reservation with
   exact refunds and the existing floor preserved: a browser reserves
-  `browser.memory_max` bytes, a cold worker its existing reserve, so a
-  browser and a worker can never both count the same headroom. The
-  reservation is held until `ready` or failure, then refunded exactly.
+  `browser.memory_reserve` bytes (default 768 MiB, its expected resident
+  working set; a live Chromium, Xvnc and window manager measure about
+  640 MiB), a cold worker its existing reserve, so a browser and a worker
+  can never both count the same headroom. The reservation is held until
+  `ready` or failure, then refunded exactly; afterwards the running unit's
+  pages are part of `cowboy-agents.slice` usage and so of every later
+  headroom sample. An open is admitted when the Device headroom (the
+  tightest of host `MemAvailable` and every finite cgroup limit from
+  `cowboy-agents.slice` up, less usage net of `inactive_file`, and zero
+  while a stalled scope has less than a quarter of its limit left) covers
+  every in-flight reservation, the browser's reserve and the 512 MiB floor,
+  within a 15 s wait. `active_file` is not credited: it is recently
+  referenced cache whose reclaim would refault. The reserve is not the
+  hard bound: `MemoryHigh`/`MemoryMax` stay on the unit, so a browser that
+  grows past its reserve is throttled and then OOM-killed inside its own
+  cgroup, and `OOMScoreAdjust=1000` makes it the first victim if a shared
+  ancestor runs out, never a session. A refusal (`Reason::Memory`) logs
+  the measured headroom, the outstanding reservations and the requested
+  bytes at INFO. The schema rejects `memory_reserve > memory_high` and
+  `memory_high > memory_max`.
 - The unit is `systemd-run --user --collect --unit cowboy-browser-<instance>
   --slice cowboy-agents.slice -p Delegate=yes -p KillMode=control-group
   -p MemoryMax=<browser.memory_max> -p MemoryHigh=<browser.memory_high>
@@ -967,7 +984,8 @@ properties they were started with; bounds enforced by the schema):
 | Key | Default | Bounds | Meaning |
 |---|---|---|---|
 | `browser.max_instances` | 1 | 0–4 | running instances per Machine |
-| `browser.memory_max` / `browser.memory_high` | 2048 MiB / 1536 MiB | 1–6 GiB | unit limits, including every tmpfs page; also the admission weight |
+| `browser.memory_max` / `browser.memory_high` | 2048 MiB / 1536 MiB | 1–6 GiB | unit limits, including every tmpfs page; `memory_high <= memory_max` |
+| `browser.memory_reserve` | 768 MiB | 256 MiB–6 GiB, `<= memory_high` | admission weight in the launch ledger: the expected resident working set |
 | `browser.cpu_quota_percent` | 200 | 50–400 | unit CPU quota in percent of one CPU |
 | `browser.tasks_max` | 512 | 128–2048 | unit task limit |
 | `browser.hibernate_after` | 120 s | 30 s–30 min | detached grace |
@@ -1450,7 +1468,7 @@ the text above:
 
 - The launch ledger is `components/machine/src/launch_ledger.rs`: one
   byte-weighted compare-and-swap reservation shared by cold worker launches
-  (512 MiB each) and browser opens (`browser.memory_max`), with a 512 MiB
+  (512 MiB each) and browser opens (`browser.memory_reserve`), with a 512 MiB
   floor and exact refunds on drop.
 - Host pids are never taken from the launcher. The Machine enumerates the
   unit's cgroup tree and matches the launcher's namespace-local pids through

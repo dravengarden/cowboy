@@ -294,6 +294,8 @@ pub const DEVICE_CONTROLLER_PROBE_TIMEOUT: Key<Duration> =
 pub const DEVICE_BROWSER_MAX_INSTANCES: Key<i64> = Key::new(Scope::Device, "browser.max_instances");
 pub const DEVICE_BROWSER_MEMORY_MAX: Key<u64> = Key::new(Scope::Device, "browser.memory_max");
 pub const DEVICE_BROWSER_MEMORY_HIGH: Key<u64> = Key::new(Scope::Device, "browser.memory_high");
+pub const DEVICE_BROWSER_MEMORY_RESERVE: Key<u64> =
+    Key::new(Scope::Device, "browser.memory_reserve");
 pub const DEVICE_BROWSER_CPU_QUOTA: Key<i64> = Key::new(Scope::Device, "browser.cpu_quota_percent");
 pub const DEVICE_BROWSER_TASKS_MAX: Key<i64> = Key::new(Scope::Device, "browser.tasks_max");
 pub const DEVICE_BROWSER_HIBERNATE_AFTER: Key<Duration> =
@@ -347,6 +349,13 @@ const FILE_BUFFERS_EXCLUDED: &[std::borrow::Cow<'static, str>] = &[
     std::borrow::Cow::Borrowed("*.db"),
     std::borrow::Cow::Borrowed("*.sqlite"),
     std::borrow::Cow::Borrowed("*.sqlite3"),
+];
+
+/// Device byte settings ordered `(lower, upper)`: the effective value (file
+/// or default) of `lower` must not exceed that of `upper`.
+pub static DEVICE_BYTE_ORDER: &[(&str, &str)] = &[
+    ("browser.memory_reserve", "browser.memory_high"),
+    ("browser.memory_high", "browser.memory_max"),
 ];
 
 pub static DEVICE_FIELDS: &[Field] = &[
@@ -493,7 +502,7 @@ pub static DEVICE_FIELDS: &[Field] = &[
         },
         default: Value::Bytes(2 << 30),
         reload: Reload::Live,
-        doc: "MemoryMax of one browser unit, including every page of its profile,\ninstance, /tmp and /dev/shm tmpfs. Also the bytes a browser start reserves\nin the Device launch ledger beside worker starts.",
+        doc: "MemoryMax of one browser unit, including every page of its profile,\ninstance, /tmp and /dev/shm tmpfs. The kernel OOM-kills inside the unit\nalone above it; never below memory_high.",
     },
     Field {
         key: "browser.memory_high",
@@ -503,7 +512,17 @@ pub static DEVICE_FIELDS: &[Field] = &[
         },
         default: Value::Bytes(1536 << 20),
         reload: Reload::Live,
-        doc: "MemoryHigh of one browser unit; the kernel throttles the unit above it.",
+        doc: "MemoryHigh of one browser unit; the kernel throttles the unit above it.\nNever below memory_reserve nor above memory_max.",
+    },
+    Field {
+        key: "browser.memory_reserve",
+        kind: Kind::Bytes {
+            min: 256 << 20,
+            max: 6 << 30,
+        },
+        default: Value::Bytes(768 << 20),
+        reload: Reload::Live,
+        doc: "Expected resident working set of one browser (Chromium, Xvnc and the\nwindow manager): the bytes a browser start reserves in the Device launch\nledger beside worker starts. MemoryHigh/MemoryMax stay the hard bound;\nnever above memory_high.",
     },
     Field {
         key: "browser.cpu_quota_percent",

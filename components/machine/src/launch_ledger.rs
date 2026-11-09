@@ -1,6 +1,8 @@
 //! One byte-weighted memory reservation ledger for every cold start on this
 //! Device: worker launches and Machine browser instances both reserve their
-//! startup peak here, so two admissions can never count the same headroom.
+//! expected resident footprint here (a browser its `browser.memory_reserve`,
+//! not its unit's hard `MemoryMax`), so two admissions can never count the
+//! same headroom.
 //!
 //! The check and the reservation are one compare-and-swap on the reserved
 //! total. A reservation is refunded exactly when its guard drops, whether the
@@ -144,6 +146,11 @@ mod tests {
     const POLL: Duration = Duration::from_secs(1);
     const WORKER: u64 = 512 << 20;
     const BROWSER: u64 = 2048 << 20;
+    /// The default `browser.memory_reserve`.
+    const BROWSER_RESERVE: u64 = 768 << 20;
+    /// Observed on OVH: memory.high 10.2 GB less (memory.current 9.59 GB
+    /// minus inactive_file 2.37 GB), about 2.78 GiB.
+    const OBSERVED_HEADROOM: u64 = 10_200_000_000 - (9_590_000_000 - 2_370_000_000);
 
     #[test]
     fn a_start_needs_its_bytes_beside_every_reservation_plus_the_floor() {
@@ -156,6 +163,56 @@ mod tests {
             BROWSER
         ));
         assert!(!Ledger::fits(u64::MAX, u64::MAX, 1));
+    }
+
+    #[test]
+    fn a_browser_reserve_fits_the_observed_headroom_and_keeps_the_floor() {
+        assert!(Ledger::fits(OBSERVED_HEADROOM, 0, BROWSER_RESERVE));
+        // Beside two in-flight cold workers, too.
+        assert!(Ledger::fits(OBSERVED_HEADROOM, 2 * WORKER, BROWSER_RESERVE));
+        assert!(Ledger::fits(
+            BROWSER_RESERVE + FLOOR_BYTES,
+            0,
+            BROWSER_RESERVE
+        ));
+        assert!(!Ledger::fits(
+            BROWSER_RESERVE + FLOOR_BYTES - 1,
+            0,
+            BROWSER_RESERVE
+        ));
+        assert!(!Ledger::fits(
+            BROWSER_RESERVE + FLOOR_BYTES + WORKER - 1,
+            WORKER,
+            BROWSER_RESERVE
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_reserve_is_admitted_with_observed_headroom_and_refused_below_it() {
+        static LEDGER: Ledger = Ledger::new();
+        let admitted = LEDGER
+            .reserve(
+                BROWSER_RESERVE,
+                || Some(OBSERVED_HEADROOM),
+                || false,
+                WAIT,
+                POLL,
+            )
+            .await;
+        assert!(matches!(
+            admitted,
+            Admission::Reserved { waited: false, .. }
+        ));
+        assert_eq!(LEDGER.reserved_bytes(), BROWSER_RESERVE);
+        drop(admitted);
+        let short = BROWSER_RESERVE + FLOOR_BYTES - 1;
+        assert_eq!(
+            LEDGER
+                .reserve(BROWSER_RESERVE, || Some(short), || false, WAIT, POLL)
+                .await,
+            Admission::Exhausted
+        );
+        assert_eq!(LEDGER.reserved_bytes(), 0);
     }
 
     #[tokio::test(start_paused = true)]
