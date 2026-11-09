@@ -633,32 +633,37 @@ pub fn validate(document: &Value) -> Result<(), Invalid> {
 }
 
 /// The JSON Pointer of the node whose `id` is `id`.
-/// The JSON Pointer of the node with `id`. Only node edges are followed
-/// (`root`, `children`, card `actions`), so ids inside opaque data such as an
-/// app's `props` are never addressed (docs/widget-apps.md §8).
+/// The rendered child edges of a node, by its type: `children` on containers
+/// and `actions` on cards. Extra properties of any node — an app's ignored
+/// `children`, anything inside `props` — are never followed.
+pub(crate) fn node_edges(
+    map: &Map<String, Value>,
+) -> impl Iterator<Item = (&'static str, &Vec<Value>)> {
+    let kind = map.get("type").and_then(Value::as_str).unwrap_or_default();
+    let children = matches!(kind, "stack" | "section" | "card")
+        .then(|| map.get("children").and_then(Value::as_array))
+        .flatten()
+        .map(|items| ("children", items));
+    let actions = (kind == "card")
+        .then(|| map.get("actions").and_then(Value::as_array))
+        .flatten()
+        .map(|items| ("actions", items));
+    children.into_iter().chain(actions)
+}
+
+/// The JSON Pointer of the node with `id`, following rendered edges only
+/// (docs/widget-apps.md §8).
 fn node_pointer(value: &Value, id: &str, here: &str) -> Option<String> {
     let map = value.as_object()?;
     if map.get("id").and_then(Value::as_str) == Some(id) && map.contains_key("type") {
         return Some(here.to_owned());
     }
-    for key in ["root", "children", "actions"] {
-        match map.get(key) {
-            Some(child @ Value::Object(_)) => {
-                if let Some(found) = node_pointer(child, id, &format!("{here}/{key}")) {
-                    return Some(found);
-                }
-            }
-            Some(Value::Array(items)) => {
-                for (index, child) in items.iter().enumerate() {
-                    if let Some(found) = node_pointer(child, id, &format!("{here}/{key}/{index}")) {
-                        return Some(found);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+    node_edges(map).find_map(|(key, items)| {
+        items
+            .iter()
+            .enumerate()
+            .find_map(|(index, child)| node_pointer(child, id, &format!("{here}/{key}/{index}")))
+    })
 }
 
 fn split_last(pointer: &str) -> Option<(&str, String)> {
@@ -687,7 +692,7 @@ pub fn apply_patch(document: &Value, ops: &[Value]) -> Result<Value, Invalid> {
                 let (id, inner) = rest
                     .split_once('/')
                     .map_or((rest, ""), |(id, inner)| (id, inner));
-                let base = node_pointer(&next, id, "")
+                let base = node_pointer(&next["root"], id, "/root")
                     .ok_or_else(|| Invalid::at(&format!("{at}.path"), "no node has this id"))?;
                 if inner.is_empty() {
                     base
@@ -909,6 +914,18 @@ mod tests {
         assert!(
             image_sources(&document).is_empty(),
             "image-shaped props are not sources"
+        );
+        let mut smuggled = document.clone();
+        smuggled["root"]["children"][0]["children"] =
+            json!([{"type":"text","id":"note","text":"hidden"}]);
+        let patched = apply_patch(
+            &smuggled,
+            &[json!({"op":"set","path":"#note/text","value":"changed"})],
+        )
+        .unwrap();
+        assert_eq!(
+            patched["root"]["children"][1]["text"], "changed",
+            "ignored children are never addressed"
         );
         let mut two = document.clone();
         two["root"]["children"][1] =

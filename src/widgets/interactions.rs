@@ -47,30 +47,18 @@ struct Input<'v> {
 fn inputs(node: &Value) -> Vec<Input<'_>> {
     fn walk<'v>(node: &'v Value, card: Option<&'v str>, out: &mut Vec<Input<'v>>) {
         let Some(map) = node.as_object() else { return };
-        match map.get("type").and_then(Value::as_str) {
-            Some("button" | "choice") if map.get("id").and_then(Value::as_str).is_some() => {
-                out.push(Input { node: map, card });
-            }
-            Some("card") => {
-                let id = map.get("id").and_then(Value::as_str);
-                for action in map
-                    .get("actions")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                {
-                    walk(action, id, out);
-                }
-            }
-            _ => {}
-        }
-        for child in map
-            .get("children")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
+        if matches!(
+            map.get("type").and_then(Value::as_str),
+            Some("button" | "choice")
+        ) && map.get("id").and_then(Value::as_str).is_some()
         {
-            walk(child, None, out);
+            out.push(Input { node: map, card });
+        }
+        let id = map.get("id").and_then(Value::as_str);
+        for (key, items) in super::node_edges(map) {
+            for child in items {
+                walk(child, if key == "actions" { id } else { None }, out);
+            }
         }
     }
     let mut out = Vec::new();
@@ -352,15 +340,7 @@ fn app_node<'v>(node: &'v Value, id: &str) -> Option<&'v Map<String, Value>> {
     {
         return Some(map);
     }
-    ["children", "actions"]
-        .iter()
-        .flat_map(|key| {
-            map.get(*key)
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .find_map(|child| app_node(child, id))
+    super::node_edges(map).find_map(|(_, items)| items.iter().find_map(|child| app_node(child, id)))
 }
 
 /// The prompt id of one confirmation: one occurrence is one message.

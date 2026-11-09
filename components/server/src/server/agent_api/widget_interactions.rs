@@ -100,8 +100,11 @@ pub(super) async fn refresh(
     let Ok(records) = active(store, session_id, &widget.widget_id).await else {
         return Map::new();
     };
+    // App messages are delivery records, not decisions: an update never
+    // retires them, so restart recovery keeps them until their echo lands.
     let obsolete: Vec<String> = records
         .iter()
+        .filter(|record| !record.group_key.starts_with("app:"))
         .filter(|record| !interactions::still_live(&widget.document, &decided_ref(record)))
         .map(|record| record.cmid.clone())
         .collect();

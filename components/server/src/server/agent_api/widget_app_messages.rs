@@ -21,7 +21,7 @@ pub(in crate::server) struct AppMessageRequest {
     /// Host-owned id of one confirmation, kept across retries of that send.
     occurrence: String,
     text: String,
-    /// Present on the confirmed send: the digest of the previewed text.
+    /// The digest of the exact text the person confirmed; required.
     #[serde(default)]
     message_sha256: Option<String>,
 }
@@ -48,7 +48,56 @@ pub(in crate::server) async fn api_widget_app_message(
     let Some(store) = state.store.as_ref() else {
         return unavailable();
     };
+    // The text never leaves the device before the person confirms it: there
+    // is no preview round-trip, and a send must carry the digest of the text
+    // the person saw (docs/widget-apps.md §7).
+    let Some(confirmed) = request.message_sha256.as_deref() else {
+        return refusal(StatusCode::BAD_REQUEST, "confirmation_required", json!({}));
+    };
+    if confirmed != digest(&request.text) {
+        return refusal(StatusCode::CONFLICT, "changed", json!({}));
+    }
     let _order = super::widgets::WIDGET_WRITES.lock().await;
+    let cmid = interactions::app_message_cmid(
+        &session_id,
+        &widget_id,
+        &node_id,
+        &request.code_sha256,
+        &request.occurrence,
+    );
+    let queue = || {
+        state.hub.submit(
+            &session_id,
+            request.text.clone(),
+            Vec::new(),
+            Some(cmid.clone()),
+        );
+    };
+    let sent = || {
+        (
+            StatusCode::OK,
+            Json(json!({"status": "sent", "cmid": cmid, "message": request.text})),
+        )
+            .into_response()
+    };
+    // A recorded occurrence answers from its record before any eligibility
+    // check: a retry after a lost response must not turn into `closed` or
+    // `app_updated` because the widget moved on since.
+    match store.widget_interaction(&session_id, &cmid).await {
+        Ok(Some(existing)) if existing.message != request.text => {
+            return refusal(StatusCode::CONFLICT, "occurrence_reused", json!({}));
+        }
+        Ok(Some(_)) => {
+            match store.prompt_echoed(&session_id, &cmid).await {
+                Ok(true) => {}
+                Ok(false) => queue(),
+                Err(_) => return unavailable(),
+            }
+            return sent();
+        }
+        Ok(None) => {}
+        Err(_) => return unavailable(),
+    }
     let widget = match store.session_widget(&session_id, &widget_id).await {
         Ok(Some(widget)) => widget,
         Ok(None) => return refusal(StatusCode::NOT_FOUND, "unknown_widget", json!({})),
@@ -73,54 +122,6 @@ pub(in crate::server) async fn api_widget_app_message(
             return refusal(status, refused.code, json!({"message": refused.message}));
         }
     };
-    let message_sha256 = digest(&request.text);
-    let Some(confirmed) = request.message_sha256 else {
-        return (
-            StatusCode::OK,
-            Json(json!({"message": request.text, "message_sha256": message_sha256})),
-        )
-            .into_response();
-    };
-    if confirmed != message_sha256 {
-        return refusal(StatusCode::CONFLICT, "changed", json!({}));
-    }
-    let cmid = interactions::app_message_cmid(
-        &session_id,
-        &widget_id,
-        &node_id,
-        &message.signature,
-        &request.occurrence,
-    );
-    let queue = || {
-        state.hub.submit(
-            &session_id,
-            request.text.clone(),
-            Vec::new(),
-            Some(cmid.clone()),
-        );
-    };
-    let sent = || {
-        (
-            StatusCode::OK,
-            Json(json!({"status": "sent", "cmid": cmid, "message": request.text})),
-        )
-            .into_response()
-    };
-    match store.widget_interaction(&session_id, &cmid).await {
-        Ok(Some(existing)) if existing.message != request.text => {
-            return refusal(StatusCode::CONFLICT, "occurrence_reused", json!({}));
-        }
-        Ok(Some(_)) => {
-            match store.prompt_echoed(&session_id, &cmid).await {
-                Ok(true) => {}
-                Ok(false) => queue(),
-                Err(_) => return unavailable(),
-            }
-            return sent();
-        }
-        Ok(None) => {}
-        Err(_) => return unavailable(),
-    }
     let record = StoredInteraction {
         cmid: cmid.clone(),
         revision: widget.revision,

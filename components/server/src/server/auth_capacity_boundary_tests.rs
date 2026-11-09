@@ -164,6 +164,15 @@ fn automation_credentials_are_confined_to_declared_route_scopes() {
         &Method::POST,
         "/api/auth/automation/credentials"
     ));
+    for human_only in [
+        "/api/sessions/example/widgets/w/interactions",
+        "/api/sessions/example/widgets/w/apps/dash/messages",
+    ] {
+        assert!(
+            !automation_route_allowed(writer, &Method::POST, human_only),
+            "{human_only} speaks for the person"
+        );
+    }
 
     let human = device_request("user-a", "human", "cli", &[]);
     assert!(automation_route_allowed(
