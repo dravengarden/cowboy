@@ -24,6 +24,9 @@ test("an incomplete, truncated or malformed review anchors nothing", () => {
   assertEquals(reviewOutcome("c", result([finding("src/a.ts")], { review_complete: false }), files, () => "f1").complete, false);
   assertEquals(reviewOutcome("c", { ...result([finding("src/a.ts")]), truncated: true }, files, () => "f1").findings, []);
   assertEquals(reviewOutcome("c", result([finding("src/a.ts")], { verdict: "incomplete" }), files, () => "f1").complete, false);
+  // The server rejects a missing or unknown verdict; so does Review.
+  assertEquals(reviewOutcome("c", result([finding("src/a.ts")], { verdict: undefined }), files, () => "f1").complete, false);
+  assertEquals(reviewOutcome("c", result([finding("src/a.ts")], { verdict: "lgtm" }), files, () => "f1").complete, false);
   assertEquals(reviewOutcome("c", null, files, () => "f1").complete, false);
   assertEquals(reviewOutcome("c", result([{ file: "src/a.ts", severity: "weird", line_start: 1 }]), files, () => "f1").findings, []);
 });

@@ -79,8 +79,15 @@ function matches(hunk: Hunk, old: readonly string[]): boolean {
   return seen === hunk.oldCount;
 }
 
+/** Back to Git's coordinates: an empty side names the line before it. */
+function start(first: number, count: number): number {
+  return count > 0 ? first : first - 1;
+}
+
 function header(hunk: Hunk): string {
-  return `@@ -${String(hunk.oldFirst)},${String(hunk.oldCount)} +${String(hunk.newFirst)},${String(hunk.newCount)} @@${hunk.label}`;
+  const old = `${String(start(hunk.oldFirst, hunk.oldCount))},${String(hunk.oldCount)}`;
+  const next = `${String(start(hunk.newFirst, hunk.newCount))},${String(hunk.newCount)}`;
+  return `@@ -${old} +${next} @@${hunk.label}`;
 }
 
 /**

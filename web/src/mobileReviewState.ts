@@ -57,8 +57,12 @@ export const mobileReviewMutators = {
     const kept = bindings.filter((context) => context !== args.context);
     return kept.length > 0 ? { ...rest, bindings: kept } : rest;
   },
-  open: (value: MobileReviewState, args: { path: string; reveal?: boolean; line?: number }): MobileReviewState => {
-    if (args.line !== undefined && (!args.reveal || !Number.isInteger(args.line) || args.line < 1)) {
+  open: (value: MobileReviewState, args: { path: string; reveal?: boolean; line?: number | null }): MobileReviewState => {
+    // As the server (src/core/mobile_review.rs): only `reveal: true` reveals,
+    // a null line is no line, and a line is 1..u32::MAX and needs a reveal.
+    const reveal = args.reveal === true;
+    const line = args.line ?? undefined;
+    if (line !== undefined && (!reveal || !Number.isInteger(line) || line < 1 || line > 4_294_967_295)) {
       throw new Error("Invalid reveal line");
     }
     const existing = value.tabs.find((tab) => tab.path === args.path);
@@ -69,11 +73,11 @@ export const mobileReviewMutators = {
     }
     const revision = (value.reveal_revision ?? 0) + 1;
     return { ...value, mode: "files", tabs, active: args.path, open_revision: (value.open_revision ?? 0) + 1,
-      ...(args.reveal
+      ...(reveal
         ? {
           reveal_revision: revision,
           remote_selected: false,
-          reveal: { path: args.path, ...(args.line === undefined ? {} : { line: args.line }), revision },
+          reveal: { path: args.path, ...(line === undefined ? {} : { line }), revision },
         }
         : {}) };
   },

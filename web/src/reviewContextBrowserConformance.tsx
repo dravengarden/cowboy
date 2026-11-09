@@ -264,7 +264,7 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
         child_session_id: "review-child", state: "completed", created_at_ms: 1, updated_at_ms: 2, input_revision: null,
         has_result: true, runtime_machine_id: null, provider_version: null, cancel_requested: false, error: null };
       if (!delegated[1]) return json({ calls: [call] });
-      return json({ call: { ...call, result: { structured: { review_complete: true, verdict: "changes_requested", findings: [
+      return json({ call: { ...call, result: { structured: { review_complete: true, verdict: "needs-attention", findings: [
         { severity: "high", title: "Fixture AI finding", body: "The fixture's managed review.", file: "src/app.ts", line_start: 1, line_end: 1 },
       ] } } } });
     }

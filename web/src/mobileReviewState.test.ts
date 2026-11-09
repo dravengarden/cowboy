@@ -15,6 +15,9 @@ test("a reveal records its path and line at the revision it sets", () => {
 test("a line needs a reveal, and an older writer falls back to active", () => {
   expect(() => mobileReviewMutators.open(empty, { path: "a.rs", line: 3 })).toThrow();
   expect(() => mobileReviewMutators.open(empty, { path: "a.rs", reveal: true, line: 0 })).toThrow();
+  expect(() => mobileReviewMutators.open(empty, { path: "a.rs", reveal: true, line: 4_294_967_296 })).toThrow();
+  expect(mobileReviewMutators.open(empty, { path: "a.rs", reveal: true, line: 4_294_967_295 }).reveal?.line).toBe(4_294_967_295);
+  expect(mobileReviewMutators.open(empty, { path: "a.rs", reveal: true, line: null }).reveal).toEqual({ path: "a.rs", revision: 1 });
   expect(revealedFile({ ...empty, active: "a.rs", reveal_revision: 2 })).toEqual({ path: "a.rs" });
   expect(revealedFile({ ...empty, active: "a.rs", reveal_revision: 2, reveal: { path: "b.rs", revision: 1 } }))
     .toEqual({ path: "a.rs" });

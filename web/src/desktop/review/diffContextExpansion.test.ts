@@ -32,6 +32,15 @@ test("a patch that disagrees with the base, or no hunk, is refused", () => {
   expect(expandDiffContext(HEADER, BASE)).toBeUndefined();
 });
 
+test("an empty side keeps Git's coordinates", () => {
+  // Content added to an empty file: nothing to fill, and `-0,0` stays.
+  expect(expandDiffContext(`${HEADER}@@ -0,0 +1,2 @@\n+a\n+b\n`, "")).toBe(`${HEADER}@@ -0,0 +1,2 @@\n+a\n+b\n`);
+  // A deletion at the end keeps the new side's anchor after the filled lines.
+  expect(expandDiffContext(`${HEADER}@@ -3 +2,0 @@\n-c\n`, "a\nb\nc\n")).toBe(
+    `${HEADER}@@ -1,3 +1,2 @@\n a\n b\n-c\n`,
+  );
+});
+
 test("CRLF lines compare with their carriage returns", () => {
   const base = "a\r\nb\r\nc\r\n";
   const diff = `${HEADER}@@ -2 +2 @@\n-b\r\n+B\r\n`;
