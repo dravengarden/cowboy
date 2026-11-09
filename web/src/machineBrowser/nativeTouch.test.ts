@@ -12,6 +12,7 @@ import {
   attachNativeTouch,
   encodeTouch,
   framebufferPoint,
+  grantedContacts,
   hookAcknowledgement,
   hookEncodings,
 } from "./nativeTouch";
@@ -551,4 +552,52 @@ test("the pinned noVNC still has the internals native touch hooks", async () => 
   assertEquals(source.includes("if (this._FBU.rects > 0) {"), true);
   assertEquals(source.includes("this._rfbConnectionState = state;"), true);
   assertEquals(source.includes("this._sock = new Websock();"), true);
+});
+
+test("the acknowledgement's contact count bounds the connection", async () => {
+  assertEquals(
+    [grantedContacts(1, 0), grantedContacts(0, 10), grantedContacts(1, 3), grantedContacts(1, 200)],
+    [undefined, undefined, 3, MAX_CONTACTS],
+  );
+  const { rfb, surface, touch, sent } = await setup(false);
+  rfb._sock.received.push(192, 1, 2);
+  rfb._normalMsg();
+  await tick();
+  assertEquals(touch.enabled, true);
+  for (const id of [1, 2, 3]) surface.dispatchEvent(pointer("pointerdown", id, 100 + id, 100));
+  // The third finger sends nothing, now or when it moves or lifts.
+  const extra = pointer("pointermove", 3, 150, 100);
+  surface.dispatchEvent(extra);
+  surface.dispatchEvent(pointer("pointerup", 3, 150, 100));
+  assertEquals(extra.defaultPrevented, true);
+  assertEquals(
+    sent().map(({ state, id }) => [state, id]),
+    [
+      [TOUCH_BEGIN, 1],
+      [TOUCH_BEGIN, 2],
+    ],
+  );
+  // Ending one frees its place for the next finger, and nothing stays down.
+  surface.dispatchEvent(pointer("pointerup", 1, 101, 100));
+  surface.dispatchEvent(pointer("pointerdown", 4, 120, 100));
+  surface.dispatchEvent(pointer("pointerup", 4, 120, 100));
+  surface.dispatchEvent(pointer("pointerup", 2, 102, 100));
+  const states = sent().map(({ state, id }) => [state, id]);
+  assertEquals(states.slice(2), [
+    [TOUCH_END, 1],
+    [TOUCH_BEGIN, 3],
+    [TOUCH_END, 3],
+    [TOUCH_END, 2],
+  ]);
+});
+
+test("an acknowledgement granting no contacts keeps the emulated mouse", async () => {
+  const { rfb, surface, touch, sent } = await setup(false);
+  rfb._sock.received.push(192, 1, 0);
+  rfb._normalMsg();
+  await tick();
+  assertEquals(touch.enabled, false);
+  const down = pointer("pointerdown", 1, 100, 100);
+  surface.dispatchEvent(down);
+  assertEquals([down.defaultPrevented, sent()], [false, []]);
 });

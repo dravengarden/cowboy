@@ -20,8 +20,16 @@ export const TOUCH_MESSAGE = 193;
 export const TOUCH_BEGIN = 0;
 export const TOUCH_UPDATE = 1;
 export const TOUCH_END = 2;
-/** The server accepts at most this many contacts at once. */
+/** The most contacts the viewer ever sends at once; the acknowledgement
+ * may advertise fewer, which then bound the connection. */
 export const MAX_CONTACTS = 10;
+
+/** The contact bound an acknowledgement grants: `undefined` (native touch
+ * stays off) for an unknown version or no contacts, else at most ten. */
+export function grantedContacts(version: number, contacts: number): number | undefined {
+  if (version < 1 || !Number.isInteger(contacts) || contacts < 1) return undefined;
+  return Math.min(MAX_CONTACTS, contacts);
+}
 
 export type TouchState = typeof TOUCH_BEGIN | typeof TOUCH_UPDATE | typeof TOUCH_END;
 
@@ -266,11 +274,18 @@ export function attachNativeTouch(
   let closed = false;
   let nextId = 1;
   const contacts = new Map<number, Contact>();
+  /** Contacts the display server accepts at once on this connection. A
+   * finger beyond it is ignored: no BEGIN, prevented like every native
+   * touch, so it neither reaches noVNC nor leaves a contact behind. */
+  let limit = 0;
   const gate = activationGate(() => {
     enabled = !closed;
   });
   hookAcknowledgement(rfb, (version, count) => {
-    if (!closed && version >= 1 && count > 0) gate.acknowledge();
+    const granted = grantedContacts(version, count);
+    if (closed || granted === undefined) return;
+    limit = granted;
+    gate.acknowledge();
   });
   const send = (state: TouchState, contact: Contact): void => {
     if (rfb._rfbConnectionState !== "connected") return;
@@ -303,7 +318,7 @@ export function attachNativeTouch(
     const canvas = options.canvas();
     const existing = contacts.get(pointer.pointerId);
     if (event.type === "pointerdown") {
-      if (existing || contacts.size >= MAX_CONTACTS || !canvas) return;
+      if (existing || contacts.size >= limit || !canvas) return;
       const point = framebufferPoint(canvas, pointer.clientX, pointer.clientY, false);
       if (!point) return;
       const contact = { id: nextId, ...point };

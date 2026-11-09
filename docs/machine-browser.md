@@ -1323,8 +1323,11 @@ viewer speaks one RFB extension.
   in-process X devices: no `/dev/input`, `uinput` or other host interface is
   involved.
 - **Wire.** The viewer adds pseudo-encoding `-1883` to its SetEncodings. A
-  server with the feature on answers once with server message `192` (u8
-  type, u8 version 1, u8 contacts 10). Only after that may the client send
+  server with the feature on answers with server message `192` (u8 type, u8
+  version 1, u8 contacts 10) at most once per connection, even if the
+  encoding is dropped and requested again. The viewer keeps the advertised
+  count (at most 10; 0 or an unknown version leaves native touch off) and
+  ignores fingers beyond it: they send no begin and never reach noVNC. Only after that may the client send
   message `193`, the KasmVNC layout: u8 type, u8 state (0 begin, 1 update,
   2 end), u32 id, u16 x, u16 y, big endian, framebuffer pixels. A stock
   server, or the patched one without the parameter, never answers, so a
