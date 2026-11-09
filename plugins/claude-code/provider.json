@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.20.33",
+  "version": "3.20.34",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.2.0",
   "display": {
@@ -348,6 +348,7 @@
     "required_capabilities": [
       "provider.runtime.v1",
       "provider.execution-jsonrpc.v1",
+      "provider.mcp-bindings.v1",
       "provider.managed-profiles.v1"
     ]
   },

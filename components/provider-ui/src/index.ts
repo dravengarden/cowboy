@@ -388,6 +388,7 @@ export interface ProviderManifest {
       | "provider.runtime.v1"
       | "provider.gateway.v1"
       | "provider.execution-jsonrpc.v1"
+      | "provider.mcp-bindings.v1"
       | "provider.managed-profiles.v1"
       | "provider.managed-image.v1"
     >;
@@ -1284,6 +1285,7 @@ export function validateProviderManifest(input: unknown): asserts input is Provi
         value === "provider.runtime.v1" ||
         value === "provider.gateway.v1" ||
         value === "provider.execution-jsonrpc.v1" ||
+        value === "provider.mcp-bindings.v1" ||
         value === "provider.managed-profiles.v1" ||
         value === "provider.managed-image.v1",
     ) ||
