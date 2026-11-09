@@ -1,15 +1,22 @@
-// The `app` node (docs/widget-apps.md §3, §9). Only a published widget, on a
-// client where apps are enabled, runs the app; the runtime loads lazily so
-// widgets without apps never fetch it. Everywhere else the agent's
-// `fallback` text stands in.
+// The `app` node (docs/widget-apps.md §3, §7, §9). Only an open, published
+// widget, on a client where apps are enabled, runs the app; the runtime loads
+// lazily so widgets without apps never fetch it. Everywhere else the agent's
+// `fallback` text stands in. An app's send(text) becomes a product
+// confirmation of that exact text before anything leaves the device.
 
-import { lazy, Suspense, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Box, Typography } from "@mui/material";
 import WidgetsOutlined from "@mui/icons-material/WidgetsOutlined";
 import type { ParsedNode } from "./widgetDocument";
 import { useWidgetVerified } from "./widgetMode";
 import { appsEnabled } from "./apps/appsEnabled";
-import { previewAppMessage, type AppMessageReply, type AppMessageTarget } from "./apps/appMessages";
+import {
+  appMessageProblem,
+  pendingAppMessages,
+  prepareAppMessage,
+  type AppMessageTarget,
+  type PendingAppMessage,
+} from "./apps/appMessages";
 import { useWidgetInteraction } from "./widgetInteractions";
 
 const AppNode = lazy(() => import("./apps/AppNode"));
@@ -51,41 +58,47 @@ function Fallback({ node, note }: { node: AppNodeData; note: string | null }): R
   );
 }
 
-/** Turns an app's send(text) into a previewed, product-confirmed message. */
-function useAppSend(node: AppNodeData): {
-  onSend: ((text: string) => void) | undefined;
-  confirm: React.JSX.Element | null;
-} {
-  const interaction = useWidgetInteraction();
-  const [preview, setPreview] = useState<Extract<AppMessageReply, { kind: "preview" }> | null>(
-    null,
-  );
+/** Turns an app's send(text) into a confirmation; one at a time per app. */
+function useAppSend(node: AppNodeData, target: AppMessageTarget | null) {
+  const [pending, setPending] = useState<PendingAppMessage | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Reserved synchronously, so a request that arrives while one is being
+  // prepared or shown is refused instead of replacing it.
+  const slot = useRef(false);
   const last = useRef(0);
-  if (!interaction || interaction.closed) return { onSend: undefined, confirm: null };
-  const target: AppMessageTarget = {
-    sessionId: interaction.sessionId,
-    widgetId: interaction.widgetId,
-    nodeId: node.id,
-    code: node.code,
+  useEffect(() => {
+    if (!target) return;
+    const [uncertain] = pendingAppMessages(target.sessionId, target.widgetId, target.nodeId).filter(
+      (entry) => entry.state === "sending",
+    );
+    if (uncertain && !slot.current) {
+      slot.current = true;
+      setPending(uncertain);
+    }
+  }, [target?.sessionId, target?.widgetId, target?.nodeId]);
+  const onSend = target
+    ? (text: string): void => {
+        const now = Date.now();
+        if (slot.current || now - last.current < CONFIRM_INTERVAL_MS) return;
+        const problem = appMessageProblem(text);
+        if (problem) {
+          setNotice(problem);
+          return;
+        }
+        slot.current = true;
+        last.current = now;
+        void prepareAppMessage(target, text).then(setPending, () => {
+          slot.current = false;
+        });
+      }
+    : undefined;
+  const close = (): void => {
+    slot.current = false;
+    setPending(null);
   };
-  const onSend = (text: string): void => {
-    const now = Date.now();
-    if (preview || now - last.current < CONFIRM_INTERVAL_MS) return;
-    last.current = now;
-    void previewAppMessage(target, text).then((reply) => {
-      if (reply.kind === "preview") setPreview(reply);
-      else if (reply.kind === "refused") setNotice(reply.message);
-    });
-  };
-  const confirm = preview ? (
+  const confirm = pending ? (
     <Suspense fallback={null}>
-      <AppMessageConfirm
-        target={target}
-        title={node.title}
-        preview={preview}
-        onClose={(): void => setPreview(null)}
-      />
+      <AppMessageConfirm pending={pending} title={node.title} onClose={close} />
     </Suspense>
   ) : notice ? (
     <Typography variant="caption" color="warning.main" role="alert">
@@ -97,8 +110,20 @@ function useAppSend(node: AppNodeData): {
 
 export function WidgetApp({ node }: { node: AppNodeData }): React.JSX.Element {
   const verified = useWidgetVerified();
-  const send = useAppSend(node);
+  const interaction = useWidgetInteraction();
+  const target: AppMessageTarget | null =
+    interaction && !interaction.closed
+      ? {
+          sessionId: interaction.sessionId,
+          widgetId: interaction.widgetId,
+          nodeId: node.id,
+          code: node.code,
+        }
+      : null;
+  const send = useAppSend(node, target);
   if (!verified) return <Fallback node={node} note={null} />;
+  if (interaction?.closed)
+    return <Fallback node={node} note={`“${node.title}” was closed by the agent.`} />;
   if (!appsEnabled()) {
     return (
       <Fallback

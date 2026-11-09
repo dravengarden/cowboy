@@ -196,18 +196,21 @@ export async function runWidgetAppsBrowserConformance(): Promise<string[]> {
   return passed;
 }
 
-const DESKTOP: SurfaceProfile = { kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true };
+const DESKTOP: SurfaceProfile = {
+  kind: "desktop",
+  input: "keyboard-pointer",
+  touchCapable: false,
+  finePointer: true,
+  hover: true,
+};
 
 /** send(text) → product confirm showing the app's exact text → confirmed
  *  send with its digest and occurrence (docs/widget-apps.md §7). */
 async function sendChecks(container: HTMLElement): Promise<string> {
   const calls: Record<string, unknown>[] = [];
   setAppMessageTransport(async (_url, body) => {
-    const request = body as Record<string, unknown>;
-    calls.push(request);
-    return request["message_sha256"]
-      ? { status: 200, body: { status: "sent" } }
-      : { status: 200, body: { message: request["text"], message_sha256: "digest-1" } };
+    calls.push(body as Record<string, unknown>);
+    return { status: 200, body: { status: "sent" } };
   });
   const parsed = parseWidgetValue({
     schema: "cowboy.widget/1",
@@ -244,14 +247,29 @@ async function sendChecks(container: HTMLElement): Promise<string> {
       "the app's Ask button",
     );
     ask.click();
-    const quoted = await waitFor(() => document.querySelector("[data-app-message-text]"), "the confirm shows the text");
+    const quoted = await waitFor(
+      () => document.querySelector("[data-app-message-text]"),
+      "the confirm shows the text",
+    );
     check(quoted.textContent === "Please remove target/", "the exact app text is shown");
-    check(document.querySelector("[data-app-message-confirm]")?.textContent?.includes("Written by the app"), "the text is attributed to the app");
-    check(calls.length === 1 && !calls[0]?.["message_sha256"], "nothing is sent before the person confirms");
+    check(
+      document
+        .querySelector("[data-app-message-confirm]")
+        ?.textContent?.includes("Written by the app"),
+      "the text is attributed to the app",
+    );
+    check(calls.length === 0, "nothing leaves the device before the person confirms");
     document.querySelector<HTMLElement>("[data-app-message-send]")?.click();
-    await waitFor(() => calls.length === 2, "the confirmed send");
-    check(calls[1]?.["message_sha256"] === "digest-1" && calls[1]?.["occurrence"] === calls[0]?.["occurrence"], "the send carries the previewed digest and occurrence");
-    await waitFor(() => !document.querySelector("[data-app-message-confirm]"), "the confirm closes");
+    await waitFor(() => calls.length === 1, "the confirmed send");
+    check(
+      typeof calls[0]?.["message_sha256"] === "string" &&
+        calls[0]?.["text"] === "Please remove target/",
+      "the send carries the exact text and its digest",
+    );
+    await waitFor(
+      () => !document.querySelector("[data-app-message-confirm]"),
+      "the confirm closes",
+    );
     return "an app's message is sent only after the person confirms its exact text";
   } finally {
     setAppMessageTransport(null);

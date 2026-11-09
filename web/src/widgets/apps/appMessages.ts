@@ -1,7 +1,10 @@
-// Messages an app asks to send (docs/widget-apps.md §7): preview, then a
-// confirmed send carrying the previewed text's digest. One confirmation is one
-// occurrence; it survives a reload so a retried send is the same prompt.
-// Fixtures substitute the transport.
+// Messages an app asks to send (docs/widget-apps.md §7). The text never leaves
+// the device before the person confirms it: it is checked and shown locally,
+// and only the confirmed send reaches the Controller, carrying the digest of
+// the exact text and the code identity it was written under. Each
+// confirmation is one occurrence, kept in a local outbox from Send until the
+// Controller acknowledges it, so a reload retries the same prompt and never
+// sends it twice. Fixtures substitute the transport.
 
 export type AppMessageTarget = {
   sessionId: string;
@@ -10,10 +13,22 @@ export type AppMessageTarget = {
   code: string;
 };
 
-export type AppMessageReply =
-  | { kind: "preview"; message: string; messageSha256: string; occurrence: string }
+/** One confirmation: frozen when the app asked, sent unchanged. */
+export type PendingAppMessage = {
+  occurrence: string;
+  sessionId: string;
+  widgetId: string;
+  nodeId: string;
+  codeSha256: string;
+  text: string;
+  textSha256: string;
+  /** `sending` survives a reload as an uncertain send to retry or discard. */
+  state: "confirming" | "sending";
+};
+
+export type AppMessageResult =
   | { kind: "sent" }
-  | { kind: "refused"; code: string; message: string };
+  | { kind: "refused"; code: string; message: string; final: boolean };
 
 type Transport = (
   url: string,
@@ -45,12 +60,84 @@ async function sha256(text: string): Promise<string> {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-const occurrenceKey = (target: AppMessageTarget, textSha: string): string =>
-  `cowboy:app-message:${target.sessionId}:${target.widgetId}:${target.nodeId}:${textSha}`;
+const OUTBOX = "cowboy:app-outbox:";
+const MAX_CHARS = 2000;
+const MAX_BYTES = 8 * 1024;
+// Controls other than newline and tab, and every format character (bidi
+// controls, zero-width and invisible ones). The Controller refuses the same.
+const HIDDEN = /[\p{Cf}\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u;
 
-function url(target: AppMessageTarget): string {
-  const part = encodeURIComponent;
-  return `/api/sessions/${part(target.sessionId)}/widgets/${part(target.widgetId)}/apps/${part(target.nodeId)}/messages`;
+/** Why `text` cannot be sent, or null. Matches the Controller's rules. */
+export function appMessageProblem(text: string): string | null {
+  if (
+    !text.trim() ||
+    [...text].length > MAX_CHARS ||
+    new TextEncoder().encode(text).length > MAX_BYTES
+  ) {
+    return "The app's message must be 1 to 2,000 characters.";
+  }
+  if (HIDDEN.test(text)) return "The app's message contains invisible or control characters.";
+  return null;
+}
+
+/** Freezes a confirmation locally; nothing is sent. */
+export async function prepareAppMessage(
+  target: AppMessageTarget,
+  text: string,
+): Promise<PendingAppMessage> {
+  return {
+    occurrence: crypto.randomUUID(),
+    sessionId: target.sessionId,
+    widgetId: target.widgetId,
+    nodeId: target.nodeId,
+    codeSha256: await sha256(target.code),
+    text,
+    textSha256: await sha256(text),
+    state: "confirming",
+  };
+}
+
+function save(pending: PendingAppMessage): void {
+  try {
+    localStorage.setItem(OUTBOX + pending.occurrence, JSON.stringify(pending));
+  } catch {
+    // A full or blocked storage only loses reload recovery, not the send.
+  }
+}
+
+function forget(pending: PendingAppMessage): void {
+  try {
+    localStorage.removeItem(OUTBOX + pending.occurrence);
+  } catch {}
+}
+
+/** Uncertain sends of one app left by an earlier page. */
+export function pendingAppMessages(
+  sessionId: string,
+  widgetId: string,
+  nodeId: string,
+): PendingAppMessage[] {
+  const found: PendingAppMessage[] = [];
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(OUTBOX)) continue;
+      const value = JSON.parse(localStorage.getItem(key) ?? "null") as PendingAppMessage | null;
+      if (
+        value &&
+        value.sessionId === sessionId &&
+        value.widgetId === widgetId &&
+        value.nodeId === nodeId
+      ) {
+        found.push(value);
+      }
+    }
+  } catch {}
+  return found;
+}
+
+export function discardAppMessage(pending: PendingAppMessage): void {
+  forget(pending);
 }
 
 const REFUSALS: Readonly<Record<string, string>> = {
@@ -61,67 +148,41 @@ const REFUSALS: Readonly<Record<string, string>> = {
   session_unavailable: "This session cannot take messages now.",
 };
 
-function refused(status: number, body: Record<string, unknown>): AppMessageReply {
+function url(pending: PendingAppMessage): string {
+  const part = encodeURIComponent;
+  return `/api/sessions/${part(pending.sessionId)}/widgets/${part(pending.widgetId)}/apps/${part(pending.nodeId)}/messages`;
+}
+
+/** Sends a confirmed message under its own occurrence. */
+export async function sendAppMessage(pending: PendingAppMessage): Promise<AppMessageResult> {
+  const sending: PendingAppMessage = { ...pending, state: "sending" };
+  save(sending);
+  let reply: { status: number; body: Record<string, unknown> };
+  try {
+    reply = await transport(url(sending), {
+      code_sha256: sending.codeSha256,
+      occurrence: sending.occurrence,
+      text: sending.text,
+      message_sha256: sending.textSha256,
+    });
+  } catch {
+    // Uncertain: keep the outbox entry so a retry is the same prompt.
+    return {
+      kind: "refused",
+      code: "offline",
+      message: "Not confirmed: the connection failed. Try again.",
+      final: false,
+    };
+  }
+  const { status, body } = reply;
+  if (status === 200 && body["status"] === "sent") {
+    forget(sending);
+    return { kind: "sent" };
+  }
   const code =
     typeof body["code"] === "string" ? body["code"] : status >= 500 ? "unavailable" : "refused";
+  const final = status < 500;
+  if (final) forget(sending);
   const detail = typeof body["message"] === "string" ? body["message"] : "Not sent. Try again.";
-  return { kind: "refused", code, message: REFUSALS[code] ?? detail };
-}
-
-/** Asks the Controller to check and preview `text`; reuses the occurrence of
- *  an earlier unsent confirmation of the same text. */
-export async function previewAppMessage(
-  target: AppMessageTarget,
-  text: string,
-): Promise<AppMessageReply> {
-  const codeSha = await sha256(target.code);
-  const key = occurrenceKey(target, await sha256(text));
-  const occurrence = sessionStorage.getItem(key) ?? crypto.randomUUID();
-  sessionStorage.setItem(key, occurrence);
-  try {
-    const { status, body } = await transport(url(target), {
-      code_sha256: codeSha,
-      occurrence,
-      text,
-    });
-    if (status !== 200) return refused(status, body);
-    return {
-      kind: "preview",
-      message: String(body["message"] ?? ""),
-      messageSha256: String(body["message_sha256"] ?? ""),
-      occurrence,
-    };
-  } catch {
-    return {
-      kind: "refused",
-      code: "offline",
-      message: "Not sent: the connection failed. Try again.",
-    };
-  }
-}
-
-export async function sendAppMessage(
-  target: AppMessageTarget,
-  preview: Extract<AppMessageReply, { kind: "preview" }>,
-): Promise<AppMessageReply> {
-  const codeSha = await sha256(target.code);
-  try {
-    const { status, body } = await transport(url(target), {
-      code_sha256: codeSha,
-      occurrence: preview.occurrence,
-      text: preview.message,
-      message_sha256: preview.messageSha256,
-    });
-    if (status === 200 && body["status"] === "sent") {
-      sessionStorage.removeItem(occurrenceKey(target, await sha256(preview.message)));
-      return { kind: "sent" };
-    }
-    return refused(status, body);
-  } catch {
-    return {
-      kind: "refused",
-      code: "offline",
-      message: "Not sent: the connection failed. Try again.",
-    };
-  }
+  return { kind: "refused", code, message: REFUSALS[code] ?? detail, final };
 }

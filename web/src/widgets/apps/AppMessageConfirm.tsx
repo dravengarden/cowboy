@@ -1,50 +1,51 @@
 // The product confirmation for a message an app wrote (docs/widget-apps.md
-// §7): the exact text, labelled as the app's, never as Cowboy's. Sending
-// queues exactly that text as the person's own prompt.
+// §7): the exact text, labelled as the app's, shown before anything leaves the
+// device. Sending queues exactly that text as the person's own prompt.
 
 import { useState } from "react";
 import { Alert, Box, Button, Typography } from "@mui/material";
 import { ConfirmSheet } from "../../Sheet";
 import { copyText } from "../../clipboard";
-import { sendAppMessage, type AppMessageReply, type AppMessageTarget } from "./appMessages";
+import { discardAppMessage, sendAppMessage, type PendingAppMessage } from "./appMessages";
 
 export default function AppMessageConfirm({
-  target,
+  pending,
   title,
-  preview,
   onClose,
 }: {
-  target: AppMessageTarget;
+  pending: PendingAppMessage;
   title: string;
-  preview: Extract<AppMessageReply, { kind: "preview" }>;
   onClose: () => void;
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; outdated: boolean } | null>(null);
   const send = async (): Promise<void> => {
     setBusy(true);
-    const reply = await sendAppMessage(target, preview);
+    const reply = await sendAppMessage(pending);
     setBusy(false);
     if (reply.kind === "sent") onClose();
-    else if (reply.kind === "refused")
-      setNotice({ text: reply.message, outdated: reply.code === "app_updated" });
+    else setNotice({ text: reply.message, outdated: reply.code === "app_updated" });
+  };
+  const cancel = (): void => {
+    discardAppMessage(pending);
+    onClose();
   };
   return (
     <ConfirmSheet
       open
-      onClose={onClose}
-      title="Send this message?"
+      onClose={cancel}
+      title={pending.state === "sending" ? "Send this message again?" : "Send this message?"}
       actions={
         <>
-          <Button onClick={onClose} disabled={busy} sx={{ textTransform: "none" }}>
-            Cancel
+          <Button onClick={cancel} disabled={busy} sx={{ textTransform: "none" }}>
+            {pending.state === "sending" ? "Discard" : "Cancel"}
           </Button>
           {notice?.outdated ? (
             <Button
               variant="contained"
               onClick={(): void => {
-                void copyText(preview.message);
-                onClose();
+                void copyText(pending.text);
+                cancel();
               }}
               sx={{ textTransform: "none" }}
             >
@@ -66,7 +67,9 @@ export default function AppMessageConfirm({
     >
       <Box sx={{ display: "grid", gap: 1.5 }} data-app-message-confirm="">
         <Typography variant="caption" color="text.secondary">
-          {`Written by the app “${title}”. The agent receives it as your message:`}
+          {pending.state === "sending"
+            ? `This message from the app “${title}” may not have been sent. Sending again never sends it twice.`
+            : `Written by the app “${title}”. The agent receives it as your message:`}
         </Typography>
         <Box
           data-app-message-text=""
@@ -81,7 +84,7 @@ export default function AppMessageConfirm({
             overflowWrap: "anywhere",
           }}
         >
-          <Typography variant="body2">{preview.message}</Typography>
+          <Typography variant="body2">{pending.text}</Typography>
         </Box>
         {notice ? <Alert severity="warning">{notice.text}</Alert> : null}
       </Box>
