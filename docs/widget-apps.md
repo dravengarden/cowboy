@@ -26,6 +26,21 @@ status, tables and decisions.
   `apps/AppMessageConfirm.tsx`). The Controller refuses control, bidi and
   invisible format characters instead of escaping them, so the confirmation
   always shows exactly what is sent.
+- Implementation review (Astra Max, `call-75530fb67335e655127cf740`) changed
+  these details of the design: an app's text is checked and confirmed on the
+  device and only the confirmed send reaches the Controller (no preview
+  round-trip), held in a local outbox until acknowledged; automation
+  credentials cannot reach either widget endpoint; app messages are never
+  retired by updates; node lookups follow edges by node type; runtimes live
+  in a page registry (`apps/appRuntimes.ts`) so the inline row and the
+  inspector share one app, with at most four per page, credit paced by the
+  committed work and suspension of hidden pages; the Worker meters CPU over
+  a rolling second, gives compiling 1.5 s and the first render 1 s, keeps
+  deferred commands, rate-bounds `send`/`log` and tracks whole subtrees; the
+  host enforces whole-app text and chart-point budgets and contains drawing
+  failures per app; the import allowlist is `react` and `@cowboy/ui` (no
+  date-fns or lodash, keeping the VM small); enablement requires desktop
+  Chromium 140+ on Linux, macOS or Windows.
 - Deferred: `Image` inside apps shows its `alt` text until node `images`
   (§6) land; apps are enabled only on desktop Chromium outside the native
   shells until **A4** (native `isMainFrame` gates, the `appsSandbox`

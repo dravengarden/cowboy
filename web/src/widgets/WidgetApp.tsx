@@ -134,7 +134,13 @@ export function WidgetApp({ node }: { node: AppNodeData }): React.JSX.Element {
   }
   return (
     <Suspense fallback={<Fallback node={node} note="Loading the app…" />}>
-      <AppNode code={node.code} props={node.props ?? {}} title={node.title} onSend={send.onSend} />
+      <AppNode
+        code={node.code}
+        props={node.props ?? {}}
+        title={node.title}
+        identity={target ? `${target.sessionId}:${target.widgetId}:${node.id}` : null}
+        onSend={send.onSend}
+      />
       {send.confirm}
     </Suspense>
   );

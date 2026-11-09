@@ -43,6 +43,29 @@ describe("app tree", () => {
     expect(() => applyAppOps(emptyAppTree(), ops(["append", 9, 1]))).toThrow(AppBudgetError);
   });
 
+  test("text and chart points are bounded across the whole app", () => {
+    const text = "x".repeat(4000);
+    const many = Array.from({ length: 11 }, (_, i) => [
+      ["create", i + 1, "Text", {}],
+      ["text", 100 + i, text],
+      ["append", i + 1, 100 + i],
+      ["append", 0, i + 1],
+    ]).flat();
+    expect(() => applyAppOps(emptyAppTree(), JSON.stringify(many))).toThrow(
+      "the app showed too much text",
+    );
+    const data = Array.from({ length: 1500 }, (_, i) => ({ y: i }));
+    const charts = ops(
+      ["create", 1, "Chart", { data }],
+      ["create", 2, "Chart", { data }],
+      ["append", 0, 1],
+      ["append", 0, 2],
+    );
+    expect(() => applyAppOps(emptyAppTree(), charts)).toThrow(
+      "the app's charts had too many points",
+    );
+  });
+
   test("table cells count toward the expansion budget", () => {
     const rows = Array.from({ length: 200 }, () => Array.from({ length: 12 }, () => "x"));
     let tree = emptyAppTree();

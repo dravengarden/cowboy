@@ -23,7 +23,12 @@ export type AppTreeState = {
   readonly units: number;
 };
 
-export const APP_BUDGET = { units: 6000, retainedBytes: 512 * 1024 } as const;
+export const APP_BUDGET = {
+  units: 6000,
+  retainedBytes: 512 * 1024,
+  textChars: 40_000,
+  chartPoints: 2000,
+} as const;
 
 const elements = new Set(ELEMENT_NAMES);
 
@@ -43,7 +48,7 @@ export function nodeUnits(node: AppElement | AppText): number {
   switch (node.type) {
     case "Table": {
       const rows = Array.isArray(p["rows"]) ? (p["rows"] as unknown[]) : [];
-      return 1 + rows.reduce<number>((sum, row) => sum + length(row), 0);
+      return 1 + length(p["columns"]) + rows.reduce<number>((sum, row) => sum + length(row), 0);
     }
     case "List":
       return 1 + length(p["items"]);
@@ -60,6 +65,16 @@ export function nodeUnits(node: AppElement | AppText): number {
 }
 
 export class AppBudgetError extends Error {}
+
+/** Characters of text a node's props carry (labels, cells, items). */
+function textOf(value: unknown): number {
+  if (typeof value === "string") return value.length;
+  if (Array.isArray(value)) return value.reduce<number>((sum, item) => sum + textOf(item), 0);
+  if (typeof value === "object" && value !== null) {
+    return Object.values(value).reduce<number>((sum, item) => sum + textOf(item), 0);
+  }
+  return 0;
+}
 
 type Op =
   | ["create", number, string, AppProps]
@@ -153,12 +168,23 @@ export function applyAppOps(state: AppTreeState, json: string): AppTreeState {
   }
   let units = 0;
   let bytes = 0;
+  let chars = 0;
+  let points = 0;
+  const encoder = new TextEncoder();
   for (const node of nodes.values()) {
     units += nodeUnits(node);
-    bytes += isText(node) ? node.text.length : JSON.stringify(node.props).length;
+    bytes += encoder.encode(isText(node) ? node.text : JSON.stringify(node.props)).length;
+    chars += isText(node) ? node.text.length : textOf(node.props);
+    if (!isText(node) && node.type === "Chart" && Array.isArray(node.props["data"])) {
+      const series = Array.isArray(node.props["series"]) ? node.props["series"].length : 1;
+      points += node.props["data"].length * Math.max(1, series);
+    }
   }
   if (units > APP_BUDGET.units) throw new AppBudgetError("the app drew too much at once");
   if (bytes > APP_BUDGET.retainedBytes)
     throw new AppBudgetError("the app kept too much data on screen");
+  if (chars > APP_BUDGET.textChars) throw new AppBudgetError("the app showed too much text");
+  if (points > APP_BUDGET.chartPoints)
+    throw new AppBudgetError("the app's charts had too many points");
   return { nodes, root, units };
 }

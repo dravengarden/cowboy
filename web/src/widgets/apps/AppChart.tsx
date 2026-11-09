@@ -12,6 +12,17 @@ const PAD = 24;
 
 type Series = { key: string; label: string };
 
+// Props are untrusted JSON: read only primitives, never call String() or
+// Number() on an object (its own `toString` could throw on the main thread).
+const text = (value: unknown, max = 200): string =>
+  typeof value === "string" ? value.slice(0, max) : "";
+const finite = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+const field = (row: unknown, key: string): unknown =>
+  typeof row === "object" && row !== null && !Array.isArray(row)
+    ? (row as Record<string, unknown>)[key]
+    : undefined;
+
 export function AppChart({
   props,
 }: {
@@ -34,16 +45,16 @@ export function AppChart({
   )
     .slice(0, MAX_SERIES)
     .map(
-      (s) =>
-        (typeof s === "object" && s !== null ? s : { key: String(s), label: String(s) }) as Series,
-    );
+      (s): Series =>
+        typeof s === "string"
+          ? { key: s, label: s }
+          : { key: text(field(s, "key")), label: text(field(s, "label")) },
+    )
+    .filter((s) => s.key !== "");
   const perSeries = Math.max(1, Math.floor(MAX_POINTS / Math.max(1, series.length)));
-  const data = (Array.isArray(props["data"]) ? props["data"] : []).slice(0, perSeries) as Record<
-    string,
-    unknown
-  >[];
+  const data: unknown[] = (Array.isArray(props["data"]) ? props["data"] : []).slice(0, perSeries);
   const values = data.flatMap((row) =>
-    series.map((s) => Number(row?.[s.key])).filter(Number.isFinite),
+    series.map((s) => finite(field(row, s.key))).filter((v): v is number => v !== null),
   );
   const min = Math.min(0, ...values);
   const max = Math.max(1, ...values);
@@ -55,13 +66,13 @@ export function AppChart({
     <svg
       viewBox={`0 0 ${W} ${H}`}
       role="img"
-      aria-label={String(props["title"] ?? "Chart").slice(0, 200)}
+      aria-label={text(props["title"]) || "Chart"}
       style={{ width: "100%", height: "auto" }}
     >
       <line x1={PAD} y1={y(0)} x2={W - PAD} y2={y(0)} stroke={theme.palette.divider} />
       {series.map((s, si) => {
         const color = palette[si % palette.length];
-        const points = data.map((row, i) => [x(i), y(Number(row?.[s.key]) || 0)] as const);
+        const points = data.map((row, i) => [x(i), y(finite(field(row, s.key)) ?? 0)] as const);
         if (kind === "bar") {
           return points.map(([, py], i) => (
             <rect

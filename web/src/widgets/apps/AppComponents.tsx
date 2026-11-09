@@ -55,9 +55,11 @@ function AppTextField({
 }): React.JSX.Element {
   const value = str(node.props["value"], 8000);
   const [local, setLocal] = useState(value);
-  const lastSent = useRef(value);
+  // While the person types, the field's own text wins: echoes from the app
+  // can arrive late and out of order. The app's value is adopted on blur.
+  const focused = useRef(false);
   useEffect(() => {
-    if (value !== lastSent.current) setLocal(value);
+    if (!focused.current) setLocal(value);
   }, [value]);
   return (
     <TextField
@@ -68,10 +70,16 @@ function AppTextField({
       multiline={node.props["multiline"] === true}
       minRows={node.props["multiline"] === true ? 2 : undefined}
       value={local}
+      onFocus={(): void => {
+        focused.current = true;
+      }}
+      onBlur={(): void => {
+        focused.current = false;
+        setLocal(value);
+      }}
       onChange={(event): void => {
         const next = event.target.value.slice(0, 8000);
         setLocal(next);
-        lastSent.current = next;
         if (handles(node, "onChange")) dispatch(node.id, "onChange", { value: next });
       }}
     />

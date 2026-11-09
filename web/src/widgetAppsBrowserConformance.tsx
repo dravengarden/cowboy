@@ -190,10 +190,111 @@ export async function runWidgetAppsBrowserConformance(): Promise<string[]> {
     "a tree that keeps growing is stopped at the node budget",
   );
   passed.push(await sendChecks(container));
+  passed.push(...(await registryChecks(container)));
   root.unmount();
   container.remove();
   void sent;
   return passed;
+}
+
+/** Drawing failures stay inside one app; the page runs at most four apps;
+ *  the inspector shares the inline row's runtime and its typed state. */
+async function registryChecks(container: HTMLElement): Promise<string[]> {
+  const passed: string[] = [];
+  const root = createRoot(container);
+  const show = (node: React.ReactNode): void =>
+    flushSync(() =>
+      root.render(
+        <SurfaceContext.Provider value={DESKTOP}>
+          <BrowserProductTheme>
+            <CssBaseline />
+            {node}
+          </BrowserProductTheme>
+        </SurfaceContext.Provider>,
+      ),
+    );
+  try {
+    show(
+      <AppNode
+        code={app(
+          'import { Chart } from "@cowboy/ui";\nexport default function A() { return <Chart title={{ toString: null }} data={[{ y: { valueOf: null } }]} />; }',
+        )}
+        props={{}}
+        title="hostile-chart"
+      />,
+    );
+    await waitFor(
+      () =>
+        (container.textContent ?? "").includes("This app stopped") ||
+        container.querySelector("svg"),
+      "hostile chart settles",
+    );
+    check(document.body.contains(container), "the page survives a hostile chart");
+    passed.push("hostile chart props never break the page");
+
+    const many = Array.from({ length: 5 }, (_, i) => (
+      <AppNode
+        key={i}
+        code={app(`export default function A() { return <Text>app ${i}</Text>; }`)}
+        props={{}}
+        title={`quota-${i}`}
+      />
+    ));
+    show(<Box>{many}</Box>);
+    await waitFor(() => (container.textContent ?? "").includes("app 3"), "four apps run");
+    check(
+      (container.textContent ?? "").includes("Too many apps are running"),
+      "the fifth app waits",
+    );
+    passed.push("at most four apps run on a page");
+
+    show(null);
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    const parsed = parseWidgetValue({
+      schema: "cowboy.widget/1",
+      title: "Notes",
+      root: {
+        type: "app",
+        id: "notes",
+        title: "Notes app",
+        fallback: "Notes",
+        code: app(
+          'import { TextField } from "@cowboy/ui";\nexport default function A() { const [v, setV] = React.useState(""); return <Stack><TextField label="Note" value={v} onChange={(e: { value: string }) => setV(e.value)} /><Text>{"Saved: " + v}</Text></Stack>; }',
+        ),
+      },
+    });
+    check(parsed.ok, "the notes widget validates");
+    show(
+      <WidgetView
+        document={parsed.document}
+        verified
+        interaction={{ sessionId: "s", widgetId: "notes", revision: 1, closed: false, decided: {} }}
+      />,
+    );
+    const input = await waitFor(
+      () => container.querySelector<HTMLInputElement>("[data-widget-app] input"),
+      "notes app input",
+    );
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "kept");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitFor(
+      () => (container.textContent ?? "").includes("Saved: kept"),
+      "typing reaches the app",
+    );
+    container.querySelector<HTMLElement>("[data-widget-open]")?.click();
+    await waitFor(
+      () => (container.textContent ?? "").includes("is open in the app view"),
+      "the inline row yields to the inspector",
+    );
+    await waitFor(
+      () => document.querySelector("[data-widget-inspector]")?.textContent?.includes("Saved: kept"),
+      "the inspector shows the same app state",
+    );
+    passed.push("the inspector shares the inline app and its typed state");
+    return passed;
+  } finally {
+    root.unmount();
+  }
 }
 
 const DESKTOP: SurfaceProfile = {
