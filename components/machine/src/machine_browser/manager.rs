@@ -41,7 +41,7 @@ mod lifecycle;
 mod reconcile;
 mod snapshots;
 mod supervision;
-use supervision::Recheck;
+use supervision::{Recheck, claim_scan};
 mod termination;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -142,10 +142,6 @@ struct Live {
     last_scan: Instant,
     /// Consecutive periodic socket scans the ptrace access check denied.
     scan_denied: u8,
-    /// Latched once a stop must be forced (repeatedly unverified
-    /// confinement): every competing stop honours it and no further
-    /// snapshot of this instance is published.
-    forced: Option<Reason>,
     /// A navigation the launcher never answered may still land: the
     /// instance serves no further navigation and is on its way to a stop.
     /// Set under the navigation lock.
@@ -208,6 +204,14 @@ pub struct Instance {
     abandoned: parking_lot::Mutex<Option<(u64, StagingReservation)>>,
     /// The Machine-wide instance slot, released on confirmed exit.
     capacity: parking_lot::Mutex<Option<CapacityGuard>>,
+    /// Latched once a stop must be forced (repeatedly unverified
+    /// confinement): every competing stop honours it, supervision enforces
+    /// it, and no snapshot is published once it is set. A publication
+    /// holds it across its commit, so latching and committing serialize.
+    latch: parking_lot::Mutex<Option<Reason>>,
+    /// The terminal outcome of the stop that ended this instance: reason
+    /// and whether unsaved state was lost, reported to every later caller.
+    outcome: parking_lot::Mutex<Option<(Reason, bool)>>,
 }
 
 impl Instance {
@@ -243,13 +247,14 @@ impl Instance {
                 last_periodic: Instant::now(),
                 last_scan: Instant::now(),
                 scan_denied: 0,
-                forced: None,
                 navigation_unsettled: false,
             }),
             copy: parking_lot::Mutex::new(None),
             copy_holds: std::sync::atomic::AtomicUsize::new(0),
             abandoned: parking_lot::Mutex::new(None),
             capacity: parking_lot::Mutex::new(parts.capacity),
+            latch: parking_lot::Mutex::new(None),
+            outcome: parking_lot::Mutex::new(None),
         }
     }
 

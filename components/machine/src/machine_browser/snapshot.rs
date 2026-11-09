@@ -256,16 +256,18 @@ impl std::fmt::Display for PublishFailure {
 /// validate and fsync the tree, rename it into `snapshots/`, fsync, update the
 /// control record atomically, then prune every other generation. A failed
 /// prune leaves the publication standing (the record names the generation);
-/// reconciliation removes what remains.
+/// reconciliation removes what remains. After validation `admit` decides
+/// whether to commit; the guard it returns is held until the commit ends.
 ///
 /// # Errors
 /// Returns the phase a failed step was in; `record` is unchanged then.
-pub fn publish(
+pub fn publish<G>(
     account_dir: &Path,
     generation: u64,
     record: &mut ControlRecord,
     bounds: Bounds,
     now_ms: i64,
+    admit: impl FnOnce() -> Option<G>,
 ) -> Result<TreeStats, PublishFailure> {
     let staged = |error: anyhow::Error| PublishFailure {
         renamed: false,
@@ -277,6 +279,9 @@ pub fn publish(
     };
     let staging = staging_root(account_dir).join(generation_name(generation));
     let stats = validate_tree(&staging, bounds, true).map_err(staged)?;
+    let Some(_admitted) = admit() else {
+        return Err(staged(anyhow::anyhow!("snapshot publication refused")));
+    };
     let snapshots = snapshots_root(account_dir);
     let opened = (|| -> Result<(File, File)> {
         let staging_parent: File =
@@ -545,7 +550,7 @@ mod tests {
         );
 
         let mut record = ControlRecord::default();
-        let stats = publish(account, 1, &mut record, bounds, 42).unwrap();
+        let stats = publish(account, 1, &mut record, bounds, 42, || Some(())).unwrap();
         assert_eq!(stats.entries, 3);
         assert_eq!(record.current_generation, Some(1));
         assert!(
@@ -564,7 +569,7 @@ mod tests {
         // staging are reconciled against the record alone.
         let staging = create_staging(account, 2).unwrap();
         std::fs::write(staging.join("Local State"), b"{}").unwrap();
-        publish(account, 2, &mut record, bounds, 43).unwrap();
+        publish(account, 2, &mut record, bounds, 43, || Some(())).unwrap();
         assert!(!snapshots_root(account).join("gen-1").exists());
         std::fs::create_dir_all(snapshots_root(account).join("gen-9/deep")).unwrap();
         std::fs::create_dir_all(staging_root(account).join("gen-3")).unwrap();
@@ -599,12 +604,12 @@ mod tests {
         let bounds = Bounds::for_profile(1 << 20);
         let mut record = ControlRecord::default();
         create_staging(account, 1).unwrap();
-        publish(account, 1, &mut record, bounds, 1).unwrap();
+        publish(account, 1, &mut record, bounds, 1, || Some(())).unwrap();
         let staging = create_staging(account, 2).unwrap();
         std::fs::write(staging.join("Local State"), b"{}").unwrap();
         // The record beside `browser/` cannot be replaced any more.
         std::fs::set_permissions(account, std::fs::Permissions::from_mode(0o500)).unwrap();
-        let failure = publish(account, 2, &mut record, bounds, 2).unwrap_err();
+        let failure = publish(account, 2, &mut record, bounds, 2, || Some(())).unwrap_err();
         std::fs::set_permissions(account, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(failure.renamed, "{failure}");
         assert_eq!(record.current_generation, Some(1));
@@ -619,7 +624,31 @@ mod tests {
         assert!(snapshots_root(account).join("gen-1").is_dir());
         // A failure before the rename leaves the staging in place.
         let mut record = durable;
-        let failure = publish(account, 3, &mut record, bounds, 3).unwrap_err();
+        let failure = publish(account, 3, &mut record, bounds, 3, || Some(())).unwrap_err();
         assert!(!failure.renamed);
+    }
+
+    #[test]
+    fn a_refused_commit_after_validation_publishes_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let account = temp.path();
+        let bounds = Bounds::for_profile(1 << 20);
+        let mut record = ControlRecord::default();
+        create_staging(account, 1).unwrap();
+        publish(account, 1, &mut record, bounds, 1, || Some(())).unwrap();
+        let staging = create_staging(account, 2).unwrap();
+        // The forced-stop latch was set while the tree was being validated.
+        let failure = publish(account, 2, &mut record, bounds, 2, || None::<()>).unwrap_err();
+        assert!(!failure.renamed, "{failure}");
+        assert_eq!(record.current_generation, Some(1));
+        assert_eq!(
+            state_file::read_control(account)
+                .unwrap()
+                .current_generation,
+            Some(1)
+        );
+        assert!(staging.is_dir());
+        assert!(!snapshots_root(account).join("gen-2").exists());
+        assert!(snapshots_root(account).join("gen-1").is_dir());
     }
 }

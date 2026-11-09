@@ -25,7 +25,7 @@ impl BrowserManager {
     /// One supervision tick; `true` once the instance is gone.
     pub(super) async fn supervise(self: &Arc<Self>, instance: &Arc<Instance>) -> bool {
         let now = Instant::now();
-        let (phase, expired_attachment, grace_expired, scan_due, snapshot_due) = {
+        let (phase, expired_attachment, grace_expired, snapshot_due) = {
             let live = instance.live.lock();
             (
                 live.phase,
@@ -35,12 +35,19 @@ impl BrowserManager {
                     .map(|attachment| attachment.id.clone()),
                 live.detached_since
                     .filter(|since| *since + instance.settings.hibernate_after <= now),
-                live.last_scan + SOCKET_SCAN_INTERVAL <= now,
                 live.phase == Phase::Attached
                     && live.last_periodic + instance.settings.snapshot_interval <= now,
             )
         };
         if phase == Phase::Stopping {
+            return true;
+        }
+        // A latch another path set (a stop that was then abandoned, or a
+        // waiter that counted the last denial) is enforced here.
+        let latched = *instance.latch.lock();
+        if let Some(reason) = latched {
+            let event = self.stop_instance(instance, reason, false, None).await;
+            self.send_state(event);
             return true;
         }
         if now >= instance.deadline() {
@@ -92,13 +99,12 @@ impl BrowserManager {
                 }
             }
         }
-        if scan_due {
-            instance.live.lock().last_scan = now;
-            if let Err(reason) = self.recheck_periodic(instance) {
-                let event = self.stop_instance(instance, reason, false, None).await;
-                self.send_state(event);
-                return true;
-            }
+        if claim_scan(instance, now)
+            && let Err(reason) = self.recheck_periodic(instance)
+        {
+            let event = self.stop_instance(instance, reason, false, None).await;
+            self.send_state(event);
+            return true;
         }
         if let Ok(mut control) = instance.control.try_lock() {
             match control.next_event(Duration::from_millis(20)).await {
@@ -198,7 +204,7 @@ impl BrowserManager {
                     // Latched for every stop, including one already
                     // waiting for the lifecycle lock; a running copy is
                     // cancelled and no later copy is published.
-                    instance.live.lock().forced = Some(Reason::ConfinementUnverified);
+                    *instance.latch.lock() = Some(Reason::ConfinementUnverified);
                     instance.cancel_copy();
                     return Err(Reason::ConfinementUnverified);
                 }
@@ -216,6 +222,20 @@ pub(super) enum Recheck {
     /// Only the ptrace access check denied some evidence: unverified, so
     /// an operation is refused, but nothing was found.
     Unverified,
+}
+
+/// Claim the instance's next counted periodic scan: `true` (and the
+/// schedule advanced) when one is due. The supervisor and every stop
+/// waiting for a copy share this one schedule, so concurrent callers
+/// never consume denial attempts faster than the retry interval.
+pub(super) fn claim_scan(instance: &Instance, now: Instant) -> bool {
+    let mut live = instance.live.lock();
+    if live.last_scan + SOCKET_SCAN_INTERVAL <= now {
+        live.last_scan = now;
+        true
+    } else {
+        false
+    }
 }
 
 /// Consecutive denied periodic scans tolerated before the instance stops.

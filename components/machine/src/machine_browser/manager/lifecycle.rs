@@ -489,8 +489,11 @@ impl BrowserManager {
         let stop_began = Instant::now();
         let (already_stopping, before, idle_ms, forced) = {
             let mut live = instance.live.lock();
-            still(&live)?;
-            let forced = live.forced;
+            // A latched forced stop is never abandoned for renewed use.
+            let forced = *instance.latch.lock();
+            if forced.is_none() {
+                still(&live)?;
+            }
             let before = live.phase;
             let was = before == Phase::Stopping;
             let idle_ms = live
@@ -514,8 +517,10 @@ impl BrowserManager {
                 .as_ref()
                 .is_some_and(|current| Arc::ptr_eq(current, instance));
             if !registered {
-                // Another path stopped it while this one waited for the lock.
-                return Ok(self.hibernated_after(instance, reason, request_id, false));
+                // Another path stopped it while this one waited for the lock:
+                // its outcome (reason, unsaved state) is the instance's.
+                let (reason, unsaved) = instance.outcome.lock().unwrap_or((reason, false));
+                return Ok(self.hibernated_after(instance, reason, request_id, unsaved));
             }
             // Only an instance whose exit is unconfirmed stays registered
             // while stopping; its retry owns the stop.
@@ -559,6 +564,9 @@ impl BrowserManager {
         if let Some(generation) = published {
             instance.live.lock().last_snapshot = Some((generation, unix_ms()));
         }
+        // A latch set during this stop refused its copy: report it as such.
+        let reason = instance.latch.lock().unwrap_or(reason);
+        *instance.outcome.lock() = Some((reason, unsaved));
         if !self
             .units
             .terminate(

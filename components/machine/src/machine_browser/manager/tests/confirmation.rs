@@ -456,7 +456,7 @@ async fn a_latched_forced_stop_overrides_a_graceful_owner_hibernate() {
     fixture.units.make_stoppable("cowboy-browser-inst-1");
     // The supervisor reached the denial limit while the owner's Hibernate
     // was waiting: the owner's graceful stop must become the forced one.
-    fixture.instance.live.lock().forced = Some(Reason::ConfinementUnverified);
+    *fixture.instance.latch.lock() = Some(Reason::ConfinementUnverified);
     let event = fixture
         .manager
         .hibernate("h1", &fixture.instance.reference())
@@ -474,4 +474,55 @@ async fn a_latched_forced_stop_overrides_a_graceful_owner_hibernate() {
     )
     .await;
     assert!(!matches!(read, Ok(Ok(1))), "launcher received a command");
+}
+
+#[tokio::test]
+async fn a_latched_stop_ignores_renewed_use_and_later_callers_see_its_outcome() {
+    let fixture = fixture().await;
+    fixture.units.make_stoppable("cowboy-browser-inst-1");
+    *fixture.instance.latch.lock() = Some(Reason::ConfinementUnverified);
+    // A grace stop whose idle interval was renewed would be abandoned; a
+    // latched one is not.
+    let stopped = fixture
+        .manager
+        .stop_instance_when(
+            &fixture.instance,
+            Reason::Grace,
+            true,
+            None,
+            || Ok::<(), ()>(()),
+            |_| Err(()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stopped.state, State::Hibernated);
+    assert_eq!(stopped.reason, Some(Reason::ConfinementUnverified));
+    assert!(stopped.unsaved_state_lost);
+    // A competing stop that waited reports the same terminal outcome.
+    let later = fixture
+        .manager
+        .stop_instance(&fixture.instance, Reason::OwnerRequest, true, Some("h2"))
+        .await;
+    assert_eq!(later.state, State::Hibernated);
+    assert_eq!(later.reason, Some(Reason::ConfinementUnverified));
+    assert!(later.unsaved_state_lost);
+    assert_eq!(later.request_id.as_deref(), Some("h2"));
+}
+
+#[tokio::test]
+async fn counted_scans_share_one_schedule() {
+    let fixture = fixture().await;
+    let now = Instant::now();
+    fixture.instance.live.lock().last_scan = now - SOCKET_SCAN_INTERVAL;
+    assert!(super::super::claim_scan(&fixture.instance, now));
+    // A second waiter in the same interval does not get another attempt.
+    assert!(!super::super::claim_scan(&fixture.instance, now));
+    assert!(!super::super::claim_scan(
+        &fixture.instance,
+        now + SOCKET_SCAN_INTERVAL - Duration::from_millis(1)
+    ));
+    assert!(super::super::claim_scan(
+        &fixture.instance,
+        now + SOCKET_SCAN_INTERVAL
+    ));
 }

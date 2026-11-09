@@ -321,9 +321,14 @@ impl BrowserManager {
             if Instant::now() >= instance.deadline() {
                 return Err(Reason::Deadline);
             }
-            // Counts denials as the supervisor would: it may be the one
-            // waiting here, so the limit is enforced during the wait too.
-            self.recheck_periodic(instance)?;
+            // Counts denials on the supervisor's shared schedule: it may be
+            // the one waiting here, so the limit is enforced during the wait.
+            if claim_scan(instance, Instant::now()) {
+                self.recheck_periodic(instance)?;
+            }
+            if let Some(reason) = *instance.latch.lock() {
+                return Err(reason);
+            }
             let _ = tokio::time::timeout(SUPERVISOR_TICK, done.wait_for(|done| *done)).await;
         }
     }
@@ -341,7 +346,7 @@ impl BrowserManager {
         generation: u64,
         reservation: StagingReservation,
     ) -> Result<()> {
-        if instance.live.lock().forced.is_some() {
+        if instance.latch.lock().is_some() {
             self.retire_staging(account_dir, generation, reservation);
             bail!("browser confinement unverified; staging discarded");
         }
@@ -367,6 +372,12 @@ impl BrowserManager {
             &mut record,
             snapshot::Bounds::for_profile(instance.settings.profile_max_bytes),
             unix_ms(),
+            // Held across the commit: a latch set before it refuses the
+            // publication, and one set during it waits for the commit.
+            || {
+                let latch = instance.latch.lock();
+                latch.is_none().then_some(latch)
+            },
         ) {
             Ok(stats) => {
                 drop(reservation);
