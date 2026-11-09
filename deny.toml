@@ -18,9 +18,19 @@ all-features = true
 # Keep this exception limited to the existing locked 0.5.5 via the bans below.
 # Remove it and those bans when Web Push supports a stack using >=0.7.6, or
 # when the affected Web Push/signing stack is replaced with a patched backend.
+# RUSTSEC-2026-0459 (bundled SQLite < 3.54 can return stale page-cache memory
+# when a database is opened with a crafted `-wal` of another page size) is a
+# retained, time-boxed risk. SQLx 0.8.6 and 0.9.0 both cap libsqlite3-sys
+# below 0.38, while only 0.39 bundles SQLite 3.54, and rusqlite must share
+# that crate (one `links = "sqlite3"`); the pinned nixpkgs SQLite is 3.51.2.
+# Exposure needs an attacker who can already write Cowboy's own data
+# directory. Remove this entry by moving to the first SQLx that accepts
+# libsqlite3-sys >= 0.39 (with rusqlite >= 0.41); review by 2026-12-09.
+# https://rustsec.org/advisories/RUSTSEC-2026-0459.html
 ignore = [
   { id = "RUSTSEC-2026-0381", reason = "Exact 0.26.11 re-export shim uses patched webpki-roots >=1.0.10; all other affected versions are denied below" },
   { id = "RUSTSEC-2026-0387", reason = "Upstream web-push-native 0.5.0 requires p256 0.13 / crypto-bigint 0.5; no compatible fixed release. Retain only locked 0.5.5 until Web Push supports >=0.7.6 or its backend is replaced; timing risk remains." },
+  { id = "RUSTSEC-2026-0459", reason = "No SQLx release accepts libsqlite3-sys >=0.39 (SQLite 3.54); crafted -wal files require write access to Cowboy's data directory. Move to the first SQLx that does; review by 2026-12-09." },
 ]
 
 [licenses]
