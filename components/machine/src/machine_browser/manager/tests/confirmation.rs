@@ -449,3 +449,29 @@ async fn a_resize_queued_behind_the_control_connection_rechecks_its_attachment()
         assert_eq!((geometry.width, geometry.height), (1280, 800));
     }
 }
+
+#[tokio::test]
+async fn a_latched_forced_stop_overrides_a_graceful_owner_hibernate() {
+    let fixture = fixture().await;
+    fixture.units.make_stoppable("cowboy-browser-inst-1");
+    // The supervisor reached the denial limit while the owner's Hibernate
+    // was waiting: the owner's graceful stop must become the forced one.
+    fixture.instance.live.lock().forced = Some(Reason::ConfinementUnverified);
+    let event = fixture
+        .manager
+        .hibernate("h1", &fixture.instance.reference())
+        .await;
+    assert_eq!(event.state, State::Hibernated);
+    assert_eq!(event.reason, Some(Reason::ConfinementUnverified));
+    assert!(event.unsaved_state_lost);
+    assert_eq!(event.snapshot_generation, None);
+    // No stop-time copy was requested from the launcher.
+    let mut launcher = fixture.launcher;
+    let mut probe = [0_u8; 1];
+    let read = tokio::time::timeout(
+        Duration::from_millis(200),
+        tokio::io::AsyncReadExt::read(&mut launcher, &mut probe),
+    )
+    .await;
+    assert!(!matches!(read, Ok(Ok(1))), "launcher received a command");
+}

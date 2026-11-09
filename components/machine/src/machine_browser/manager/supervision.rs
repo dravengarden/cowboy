@@ -195,6 +195,11 @@ impl BrowserManager {
                     tracing::warn!(event_name = "browser.scan.unverified",
                         browser_instance = %instance.instance_id, attempt,
                         "browser socket scan denied repeatedly");
+                    // Latched for every stop, including one already
+                    // waiting for the lifecycle lock; a running copy is
+                    // cancelled and no later copy is published.
+                    instance.live.lock().forced = Some(Reason::ConfinementUnverified);
+                    instance.cancel_copy();
                     return Err(Reason::ConfinementUnverified);
                 }
                 Ok(())

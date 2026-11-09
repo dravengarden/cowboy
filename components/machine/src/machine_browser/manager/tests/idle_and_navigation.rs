@@ -32,6 +32,7 @@ fn an_idle_stop_requires_the_same_expired_detached_interval() {
         last_periodic: now,
         last_scan: now,
         scan_denied: 0,
+        forced: None,
         navigation_unsettled: false,
     };
     assert!(supervision::still_idle(

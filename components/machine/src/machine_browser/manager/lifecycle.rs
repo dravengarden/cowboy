@@ -487,9 +487,10 @@ impl BrowserManager {
         still: impl FnOnce(&Live) -> Result<(), E>,
     ) -> Result<StateEvent, E> {
         let stop_began = Instant::now();
-        let (already_stopping, before, idle_ms) = {
+        let (already_stopping, before, idle_ms, forced) = {
             let mut live = instance.live.lock();
             still(&live)?;
+            let forced = live.forced;
             let before = live.phase;
             let was = before == Phase::Stopping;
             let idle_ms = live
@@ -501,8 +502,10 @@ impl BrowserManager {
             {
                 stream.cancel();
             }
-            (was, before, idle_ms)
+            (was, before, idle_ms, forced)
         };
+        // A latched forced stop overrides a graceful one decided earlier.
+        let (reason, graceful) = forced.map_or((reason, graceful), |forced| (forced, false));
         if already_stopping {
             let registered = self
                 .slot(&instance.account_id)

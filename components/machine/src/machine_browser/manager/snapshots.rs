@@ -341,6 +341,10 @@ impl BrowserManager {
         generation: u64,
         reservation: StagingReservation,
     ) -> Result<()> {
+        if instance.live.lock().forced.is_some() {
+            self.retire_staging(account_dir, generation, reservation);
+            bail!("browser confinement unverified; staging discarded");
+        }
         let mut record = match state_file::read_control(account_dir) {
             Ok(record)
                 if record.pending.is_none()

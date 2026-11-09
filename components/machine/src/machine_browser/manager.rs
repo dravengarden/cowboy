@@ -142,6 +142,10 @@ struct Live {
     last_scan: Instant,
     /// Consecutive periodic socket scans the ptrace access check denied.
     scan_denied: u8,
+    /// Latched once a stop must be forced (repeatedly unverified
+    /// confinement): every competing stop honours it and no further
+    /// snapshot of this instance is published.
+    forced: Option<Reason>,
     /// A navigation the launcher never answered may still land: the
     /// instance serves no further navigation and is on its way to a stop.
     /// Set under the navigation lock.
@@ -239,6 +243,7 @@ impl Instance {
                 last_periodic: Instant::now(),
                 last_scan: Instant::now(),
                 scan_denied: 0,
+                forced: None,
                 navigation_unsettled: false,
             }),
             copy: parking_lot::Mutex::new(None),
