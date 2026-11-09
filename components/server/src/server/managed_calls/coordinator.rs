@@ -45,6 +45,7 @@ struct GrantEntry {
 
 mod observation;
 pub(in crate::server) use observation::touch as touch_code_observation;
+pub(in crate::server) use observation::{changes as code_changes, head as code_observation_head};
 
 impl GrantEntry {
     fn accepts_installation(

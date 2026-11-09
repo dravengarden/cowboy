@@ -980,3 +980,31 @@ test("a main-agent edit delivers its post-edit diagnostics as one untrusted row;
     assert.match(text, /src\/a\.go/);
   }
 });
+
+test("a main-agent shell command asks for watched changes; background and subagent commands do not", async () => {
+  for (const [extra, expected] of [
+    [{}, 1],
+    [{ run_in_background: true }, 0],
+    [{ agentId: "a1b2c3" }, 0],
+  ]) {
+    const { hook, api, calls } = await routingFixture();
+    api.session = { append: async () => {}, id: async () => "s" };
+    api.http.fetch = async (url, options) => {
+      if (url.endsWith("/link")) return notLink;
+      calls.push({ url, options });
+      return { ok: true, status: 200, text: JSON.stringify({ result: {} }) };
+    };
+    await hook.handler(
+      api,
+      { tool: "Bash", tool_use_id: "bash-1", command: "gofmt -w .", ...extra },
+      (event) => event,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const watched = calls.filter(
+      ({ url, options }) =>
+        url.endsWith("/hook") &&
+        JSON.parse(options.body).input?.params?.arguments?.arguments?.changed === true,
+    );
+    assert.equal(watched.length, expected, JSON.stringify(extra));
+  }
+});

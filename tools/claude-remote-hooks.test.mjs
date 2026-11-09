@@ -832,10 +832,13 @@ test("the adapter runs target tool hooks around facade tools", async (t) => {
     });
     responses.set("/tool", reply(toolResult));
     await call({ tool: "Bash", tool_use_id: "t4", command: "x" });
+    // The completed command also asks for its watched changes, separately.
+    const watched = (body) => body?.input?.params?.arguments?.action === "code.post_edit";
     assert.deepEqual(
-      posts.map(({ path }) => path).filter((path) => path !== "/link"),
+      posts.filter(({ path, body }) => path !== "/link" && !watched(body)).map(({ path }) => path),
       ["/hook", "/tool", "/hook", "abort"],
     );
+    assert.equal(posts.filter(({ body }) => watched(body)).length, 1);
   });
   await t.test("unsupported hook types refuse matching calls only", async () => {
     for (const event of ["PreToolUse", "PostToolUse"]) {

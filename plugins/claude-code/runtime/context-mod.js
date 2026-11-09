@@ -1458,7 +1458,9 @@ export function targetCompactionResult(event) {
 // supersedes an earlier result; nothing is retried.
 const EDIT_TOOLS = { Edit: "file_path", Write: "file_path", NotebookEdit: "notebook_path" };
 const POST_EDIT_PATHS = 5;
-const postEdit = { pending: new Map(), running: false, edits: 0 };
+// `changed` asks for files a shell command changed, from the target's
+// file watcher; it coalesces while an observation runs.
+const postEdit = { pending: new Map(), running: false, edits: 0, changed: false };
 
 // The worktree-relative file an edit names, if inside the target workspace.
 export function editedPath(tool, input, paths) {
@@ -1503,6 +1505,11 @@ export function postEditValue(run) {
   }
 }
 
+function scheduleShellChanges($) {
+  postEdit.changed = true;
+  if (!postEdit.running) runPostEdit($).catch(() => {});
+}
+
 function schedulePostEdit($, path) {
   if (postEdit.pending.size >= 64 && !postEdit.pending.has(path)) return;
   postEdit.pending.set(path, ++postEdit.edits);
@@ -1512,9 +1519,12 @@ function schedulePostEdit($, path) {
 async function runPostEdit($) {
   postEdit.running = true;
   try {
-    while (postEdit.pending.size) {
+    while (postEdit.pending.size || postEdit.changed) {
       const batch = [...postEdit.pending].slice(0, POST_EDIT_PATHS);
       for (const [path] of batch) postEdit.pending.delete(path);
+      // Explicit edits first; the watcher's report follows on its own.
+      const changed = !batch.length;
+      if (changed) postEdit.changed = false;
       const input = {
         jsonrpc: "2.0",
         id: 1,
@@ -1523,7 +1533,7 @@ async function runPostEdit($) {
           name: "cowboy_execute",
           arguments: {
             action: "code.post_edit",
-            arguments: { paths: batch.map(([path]) => path) },
+            arguments: changed ? { changed: true } : { paths: batch.map(([path]) => path) },
             operation: "post-edit-" + crypto.randomUUID(),
           },
         },
@@ -1754,6 +1764,12 @@ export function register(on) {
           ];
           const edited = event.agentId === undefined && editedPath(event.tool, input, context);
           if (edited) schedulePostEdit($, edited);
+          else if (
+            event.agentId === undefined &&
+            event.tool === "Bash" &&
+            !input?.run_in_background
+          )
+            scheduleShellChanges($);
           // Natively the tool still ran; continue:false then ends the turn.
           const stop = pre.stop ?? post.stop;
           if (stop !== undefined) $.turn.abort().catch(() => {});

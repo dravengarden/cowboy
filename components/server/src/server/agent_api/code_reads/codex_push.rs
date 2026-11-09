@@ -79,37 +79,62 @@ struct Pending {
     target: Option<crate::send_delivery::DeliveryTarget>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Completed {
+    Edit(Vec<String>),
+    Shell,
+}
+
 #[derive(Default)]
 struct Calls {
-    /// Tool call id -> (is edit, named paths) as earlier updates reported.
-    known: HashMap<String, (bool, Vec<String>)>,
+    /// Tool call id -> (is edit, named paths, is shell) as earlier updates
+    /// reported.
+    known: HashMap<String, (bool, Vec<String>, bool)>,
 }
 
 impl Calls {
-    /// The paths of an edit call that just completed, accumulating hints from
-    /// the call's earlier updates.
-    fn completed(&mut self, update: &Value) -> Option<Vec<String>> {
+    /// An edit (with its accumulated path hints) or shell call that just
+    /// completed.
+    fn completed(&mut self, update: &Value) -> Option<Completed> {
         let id = update["toolCallId"].as_str()?;
         if self.known.len() >= MAX_TRACKED_CALLS && !self.known.contains_key(id) {
             self.known.clear();
         }
         let entry = self.known.entry(id.to_owned()).or_default();
         entry.0 |= update["kind"] == "edit";
+        entry.2 |= update["kind"] == "execute";
         entry.1.extend(named_paths(update));
         if update["status"] != "completed" {
             return None;
         }
-        let (edit, paths) = self.known.remove(id)?;
-        (edit && !paths.is_empty()).then_some(paths)
+        let (edit, paths, shell) = self.known.remove(id)?;
+        if edit && !paths.is_empty() {
+            Some(Completed::Edit(paths))
+        } else {
+            shell.then_some(Completed::Shell)
+        }
     }
 }
+
+/// Shared between the event loop and its observation tasks.
+#[derive(Default)]
+struct Push {
+    /// Session -> edits observed while its observation runs, with the turn
+    /// of the latest of them.
+    in_flight: parking_lot::Mutex<HashMap<String, Pending>>,
+}
+
+type Cursor = crate::machine_protocol::code_observer::Cursor;
+
+/// Session -> the standing observer position already accounted for, shared
+/// by every route that reports shell-made changes.
+static CURSORS: std::sync::LazyLock<parking_lot::Mutex<HashMap<String, Cursor>>> =
+    std::sync::LazyLock::new(Default::default);
 
 pub(in crate::server) async fn run(state: Arc<AppState>) {
     let mut events = state.hub.subscribe();
     let mut calls: HashMap<String, Calls> = HashMap::new();
-    // Session -> edits observed while its observation runs, with the turn
-    // of the latest of them.
-    let in_flight: Arc<parking_lot::Mutex<HashMap<String, Pending>>> = Arc::default();
+    let push: Arc<Push> = Arc::default();
     loop {
         let frame = match events.recv().await {
             Ok(frame) => frame,
@@ -141,45 +166,153 @@ pub(in crate::server) async fn run(state: Arc<AppState>) {
         if calls.len() >= MAX_SESSIONS && !calls.contains_key(&session) {
             calls.clear();
         }
-        let Some(paths) = calls.entry(session.clone()).or_default().completed(update) else {
+        let Some(completed) = calls.entry(session.clone()).or_default().completed(update) else {
             continue;
         };
-        // The edit's own turn: a later turn refuses this steering.
+        // The tool's own turn: a later turn refuses this steering.
         let Some(target) = state.supervisor.delivery_target(&session) else {
             continue;
         };
-        // One observation per session at a time. Edits meanwhile join the
-        // next one, which observes their final text.
-        {
-            let mut running = in_flight.lock();
-            if let Some(pending) = running.get_mut(&session) {
-                pending.paths.extend(paths);
-                pending.target = Some(target);
-                continue;
+        match completed {
+            Completed::Edit(paths) => schedule(&state, &push, session, paths, target),
+            Completed::Shell => {
+                let state = Arc::clone(&state);
+                let push = Arc::clone(&push);
+                tokio::spawn(async move {
+                    let paths = shell_changes(&state, &session).await;
+                    if !paths.is_empty() {
+                        schedule(&state, &push, session, paths, target);
+                    }
+                });
             }
-            running.insert(session.clone(), Pending::default());
         }
-        let state = Arc::clone(&state);
-        let in_flight = Arc::clone(&in_flight);
-        tokio::spawn(async move {
-            let (mut paths, mut target) = (paths, target);
-            loop {
-                tokio::time::sleep(SETTLE).await;
-                deliver(&state, &session, paths, target).await;
-                let mut running = in_flight.lock();
-                let next = running
-                    .get_mut(&session)
-                    .map(std::mem::take)
-                    .unwrap_or_default();
-                let Some(next_target) = next.target.filter(|_| !next.paths.is_empty()) else {
-                    running.remove(&session);
-                    return;
-                };
-                paths = next.paths.into_iter().collect();
-                target = next_target;
-            }
-        });
     }
+}
+
+/// One observation per session at a time. Edits meanwhile join the next one,
+/// which observes their final text.
+fn schedule(
+    state: &Arc<AppState>,
+    push: &Arc<Push>,
+    session: String,
+    paths: Vec<String>,
+    target: crate::send_delivery::DeliveryTarget,
+) {
+    {
+        let mut running = push.in_flight.lock();
+        if let Some(pending) = running.get_mut(&session) {
+            pending.paths.extend(paths);
+            pending.target = Some(target);
+            return;
+        }
+        running.insert(session.clone(), Pending::default());
+    }
+    let state = Arc::clone(state);
+    let push = Arc::clone(push);
+    tokio::spawn(async move {
+        let (mut paths, mut target) = (paths, target);
+        loop {
+            tokio::time::sleep(SETTLE).await;
+            deliver(&state, &session, paths, target).await;
+            // The observer the read just started now has a position; later
+            // shell commands report only what changed after this point.
+            sync_cursor(&state, &session).await;
+            let mut running = push.in_flight.lock();
+            let next = running
+                .get_mut(&session)
+                .map(std::mem::take)
+                .unwrap_or_default();
+            let Some(next_target) = next.target.filter(|_| !next.paths.is_empty()) else {
+                running.remove(&session);
+                return;
+            };
+            paths = next.paths.into_iter().collect();
+            target = next_target;
+        }
+    });
+}
+
+fn session_scope(
+    state: &AppState,
+    session: &str,
+) -> Option<crate::machine_control::SessionReadScope> {
+    match super::session::resolve(
+        &state.hub,
+        &state.machine_control,
+        &state.service_id,
+        session,
+    )? {
+        crate::server::CodeReadScope::Session(observed) => Some(observed),
+        _ => None,
+    }
+}
+
+pub(super) async fn sync_cursor(state: &AppState, session: &str) {
+    if CURSORS.lock().contains_key(session) {
+        return;
+    }
+    let Some(scope) = session_scope(state, session) else {
+        return;
+    };
+    if let Some(head) =
+        super::super::super::managed_calls::code_observation_head(state, &scope).await
+    {
+        let mut cursors = CURSORS.lock();
+        if cursors.len() >= MAX_SESSIONS {
+            cursors.clear();
+        }
+        cursors.insert(session.to_owned(), head);
+    }
+}
+
+/// Absolute paths of source-like files a shell command changed, from the
+/// session's standing observer. Without a prior position, a gap or an ended
+/// observer it reports nothing and only records where to resume.
+pub(super) async fn shell_changes(state: &AppState, session: &str) -> Vec<String> {
+    let Some(scope) = session_scope(state, session) else {
+        return Vec::new();
+    };
+    let cursor = CURSORS.lock().get(session).cloned();
+    let Some(cursor) = cursor else {
+        sync_cursor(state, session).await;
+        return Vec::new();
+    };
+    let Some(changes) =
+        super::super::super::managed_calls::code_changes(state, &scope, Some(cursor)).await
+    else {
+        CURSORS.lock().remove(session);
+        return Vec::new();
+    };
+    CURSORS
+        .lock()
+        .insert(session.to_owned(), changes.cursor.clone());
+    if changes.gap {
+        return Vec::new();
+    }
+    let root = scope.session().cwd().trim_end_matches('/').to_owned();
+    source_files(&changes.paths)
+        .into_iter()
+        .map(|path| format!("{root}/{path}"))
+        .collect()
+}
+
+/// Changed paths worth a diagnostics read: files with an extension, outside
+/// version-control and build/dependency output, at most the read bound.
+pub(super) fn source_files(paths: &[String]) -> Vec<String> {
+    const SKIPPED: [&str; 5] = [".git", "node_modules", "target", "dist", ".cache"];
+    paths
+        .iter()
+        .filter(|path| {
+            let parts: Vec<&str> = path.split('/').collect();
+            !parts.iter().any(|part| SKIPPED.contains(part))
+                && parts.last().is_some_and(|name| {
+                    name.rfind('.')
+                        .is_some_and(|dot| dot > 0 && dot + 1 < name.len())
+                })
+        })
+        .take(super::post_edit::MAX_PATHS)
+        .cloned()
+        .collect()
 }
 
 async fn deliver(

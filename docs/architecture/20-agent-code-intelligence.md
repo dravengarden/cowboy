@@ -948,6 +948,21 @@ uniquely resolvable, otherwise candidates or `stale/ambiguous`.
 - **Coverage.** Push triggers on any tool completion with a watcher-observed
   change set since the tool started (shell, formatters), not on
   `apply_patch`/Edit only.
+
+  Implemented for shell commands with the existing protocol-42 observer, no
+  Machine change. The Controller now reads the standing observer's pages
+  (`code_observer::Read`), which it previously only started and closed. A
+  per-session cursor is set to the observer head after a post-edit read (the
+  observer starts on that read's diagnostic demand); a later completed shell
+  command reads the changes since then. A Codex `execute` tool call triggers
+  this from the Controller; Claude's Mod asks with
+  `code.post_edit {changed: true}` after a main-agent foreground Bash. Gaps
+  and resets only move the cursor. Up to five changed files with an extension,
+  outside `.git`, `node_modules`, `target`, `dist` and `.cache`, then go through
+  the same read, comparison, ledger and delivery as an edit. A session whose
+  observer never started (no earlier post-edit read, no Cowboy MCP grant, or
+  an older Machine) reports nothing. Coverage is the observer's: event stream
+  only, so absence never means unchanged.
 - **Delivery identity.** Recipient (main agent; native subagents excluded
   initially), conversation/context identity, idempotent delivery ID and states
   `queued | appended | consumed | unknown`. Only evidenced model deliveries

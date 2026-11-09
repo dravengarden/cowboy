@@ -6,8 +6,9 @@ mod runner;
 mod selection;
 
 pub(super) use coordinator::{
-    Coordinator, authorize, delete_child, dispatch_calls, dispatch_calls_from, handle,
-    image_capabilities, mcp_ready, parent_deleted, touch_code_observation,
+    Coordinator, authorize, code_changes, code_observation_head, delete_child, dispatch_calls,
+    dispatch_calls_from, handle, image_capabilities, mcp_ready, parent_deleted,
+    touch_code_observation,
 };
 
 use super::{AppState, AuthenticatedProductRequest, session_is_visible};

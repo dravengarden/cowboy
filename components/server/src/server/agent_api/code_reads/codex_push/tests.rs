@@ -10,7 +10,7 @@ fn edit_calls_report_their_paths_once_when_completed() {
         "content":[{"type":"diff","path":"/w/b.go","oldText":"","newText":"x"}]});
     assert_eq!(
         calls.completed(&done),
-        Some(vec!["/w/a.go".into(), "/w/b.go".into()])
+        Some(Completed::Edit(vec!["/w/a.go".into(), "/w/b.go".into()]))
     );
     assert_eq!(
         calls.completed(&done),
@@ -19,10 +19,16 @@ fn edit_calls_report_their_paths_once_when_completed() {
     );
     let shell = json!({"sessionUpdate":"tool_call","toolCallId":"t2","kind":"execute","status":"completed",
         "locations":[{"path":"/w/a.go"}]});
-    assert_eq!(calls.completed(&shell), None);
+    assert_eq!(calls.completed(&shell), Some(Completed::Shell));
+    let read =
+        json!({"sessionUpdate":"tool_call","toolCallId":"t4","kind":"read","status":"completed"});
+    assert_eq!(calls.completed(&read), None);
     let single = json!({"sessionUpdate":"tool_call","toolCallId":"t3","kind":"edit","status":"completed",
         "content":[{"type":"diff","path":"/w/c.go"}]});
-    assert_eq!(calls.completed(&single), Some(vec!["/w/c.go".into()]));
+    assert_eq!(
+        calls.completed(&single),
+        Some(Completed::Edit(vec!["/w/c.go".into()]))
+    );
 }
 
 #[test]
@@ -77,5 +83,31 @@ fn steered_rows_carry_the_cowboy_code_intelligence_origin() {
     assert_eq!(
         crate::prompt_origin::origin_from_cmid(Some(&format!("{CMID_PREFIX}abc"))),
         crate::prompt_origin::PromptOrigin::cowboy("code_intelligence")
+    );
+}
+
+#[test]
+fn shell_changes_read_only_source_like_files() {
+    let paths: Vec<String> = [
+        "src/a.go",
+        "src",
+        ".git/index",
+        "web/node_modules/x/y.js",
+        "target/debug/a.rs",
+        "Makefile",
+        ".env",
+        "docs/b.md",
+        "c.",
+        "pkg/d.rs",
+        "e.ts",
+        "f.py",
+        "g.go",
+    ]
+    .iter()
+    .map(|path| (*path).to_owned())
+    .collect();
+    assert_eq!(
+        source_files(&paths),
+        ["src/a.go", "docs/b.md", "pkg/d.rs", "e.ts", "f.py"]
     );
 }

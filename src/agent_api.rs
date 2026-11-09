@@ -673,7 +673,8 @@ export interface Cowboy {
 // Run one explicitly (runs project code in your execution environment; needs Project language servers on):
 // cowboy_execute({action:"code.check",operation,arguments:{check:"<id>"}}) -> {status:"accepted"|"existing",run}.
 // Then poll code.checks(). A result is evidence for the inputs the command saw, not proof of correctness.
-// cowboy_execute({action:"code.post_edit",arguments:{paths:[1..5]}}) (read-only): diagnostics reduced to
+// cowboy_execute({action:"code.post_edit",arguments:{paths:[1..5]}|{changed:true}}) (read-only; changed: files a shell
+// changed since the last post-edit read, from the session's file watcher): diagnostics reduced to
 // {deliver,files:[{path,state,comparison?,diagnostics?,write?}]}; deliver:false is not clean; suppressed:"repeat" =
 // delivered <10 min ago; write.matches_analyzed hints the analyzed text is the last seen write.
 // code.summary().deliveries: recent post-edit deliveries {id,route,files,state,reason,at_ms}.
