@@ -212,6 +212,38 @@ fetch-like and navigation channels against a public sink (the loopback
 control was refused by Local Network Access), DNS, process separation and
 flood recovery, and every engine other than desktop Chrome.
 
+### 7.2 Steps 1a and 1b (2026-11-09)
+
+Chrome 155.0.8059.86 (Mac), disposable context; the parent page carried
+Cowboy's App CSP plus `frame-src` for the app host; the child carried the §3
+headers and `sandbox="allow-scripts"`. An HTTP sink (`https://sink.invalid`,
+answered by DevTools interception, which sits after CSP and
+Connection-Allowlist and before the network, and is not subject to Local
+Network Access) and the loopback STUN/TURN sink observed egress.
+
+- **1a, full boot**: the handshake completed; the runtime (React, ReactDOM,
+  Three, Sucrase; 1.1 MB) arrived over the port; the TSX compiled into blob
+  modules linked through blob shims; React rendered; Three drew a WebGL frame
+  (sampled pixel `34,68,255`, the scene's background); a blob font and a blob
+  image loaded; a click updated state; `send` reached the parent. The child's
+  only requests were `blob:` loads: no network request, no sink hit.
+- **1b, nested documents and worklets**, with an allowing control (no
+  sandbox, no headers) in which every probe ran and reached a sink:
+
+| Probe (from the app's code) | Control | §3 policy |
+|---|---|---|
+| `fetch` to the sink | Sink hit | No hit |
+| Initial `about:blank` child running `fetch` | Executed; sink hit | `SecurityError` (cannot run in it) |
+| `document.write` child document | Sink hit | `TypeError` (cannot write) |
+| srcdoc, blob and data child documents | Sink hits | No hits |
+| AudioWorklet and PaintWorklet module importing from the sink | Both imports hit | No hits (the AudioWorklet import was initiated but never reached interception) |
+| Worker | Sink hit | No hit |
+| WebRTC STUN from every nested realm | 20 sink observations | None |
+
+Steps 1a and 1b pass on this Chrome. Step 2 repeats the egress suite
+against the real host with network sinks, DNS observation and the lifecycle
+and containment checks; admission stays empty until it passes.
+
 ## 8. Infrastructure (owner confirmation before activation)
 
 - Zone `thundersparrow.top` is registered in Columbus
