@@ -305,10 +305,7 @@ impl BrowserManager {
             Ok(instance) => instance,
             Err(event) => return Ok((*event).with_request(request_id)),
         };
-        if instance.purpose() != Purpose::Tab {
-            return Err("only tab browsers accept owner navigation".into());
-        }
-        match self.navigate_checked(&instance, &Purpose::Tab, url).await {
+        match self.navigate_checked(&instance, url).await {
             Ok(()) => Ok(instance.state(Some(request_id.to_owned()))),
             Err(Navigation::Superseded) => Ok(instance
                 .state(Some(request_id.to_owned()))
@@ -328,8 +325,8 @@ impl BrowserManager {
     /// through `stop_instance`. A navigation the launcher rejects or does
     /// not answer in time is [`Navigation::Rejected`]: the browser keeps
     /// running (still verified) but shows a blank or earlier page, so a
-    /// caller answering a command reports `failed`; the URL is remembered
-    /// until a later navigation succeeds.
+    /// caller answering a command reports `failed`; a later navigation may
+    /// succeed.
     ///
     /// A snapshot copy binds `/mnt/publish` in the instance's mount
     /// namespace, which verification rightly rejects. So no copy runs while
@@ -338,20 +335,18 @@ impl BrowserManager {
     /// lifecycle lock must quiesce copies before taking it (a running copy
     /// needs the lock to publish).
     ///
-    /// `expected` is the binding the navigation was requested under. It is
-    /// checked under the instance's navigation lock, which sign-in
-    /// rebinding also takes, so a navigation for a login (or a tab) the
-    /// instance no longer serves is [`Navigation::Superseded`] and never
+    /// Liveness is checked under the instance's navigation lock: a
+    /// navigation for an instance that began stopping, or whose earlier
+    /// navigation is unsettled, is [`Navigation::Superseded`] and never
     /// reaches the launcher.
     pub(super) async fn navigate_checked(
         &self,
         instance: &Arc<Instance>,
-        expected: &Purpose,
         url: &str,
     ) -> Result<(), Navigation> {
         let _copies = self.quiesce_copies(instance).await;
         let _navigation = instance.navigation.lock().await;
-        if instance.purpose() != *expected || !instance.live.lock().navigable() {
+        if !instance.live.lock().navigable() {
             return Err(Navigation::Superseded);
         }
         #[cfg(test)]
@@ -383,21 +378,18 @@ impl BrowserManager {
         if let Err(error) = &navigated
             && error.downcast_ref::<LauncherRefusal>().is_none()
         {
-            // No reply: the helper may still navigate later, under whatever
-            // binding the instance has by then. The instance is not reused.
+            // No reply: the helper may still navigate later. The instance is
+            // not reused.
             tracing::warn!(%error, instance = %instance.instance_id, "browser navigation outcome unknown");
             // Fenced before the navigation lock is released, so a waiting
-            // rebinding sees it; the caller then stops the instance.
+            // navigation sees it; the caller then stops the instance.
             instance.live.lock().navigation_unsettled = true;
             return Err(Navigation::Violation(Reason::Failed));
         }
-        let mut live = instance.live.lock();
         if let Err(error) = navigated {
             tracing::warn!(%error, instance = %instance.instance_id, "browser navigation failed");
-            live.failed_navigation = Some((expected.clone(), url.to_owned()));
             return Err(Navigation::Rejected);
         }
-        live.failed_navigation = None;
         Ok(())
     }
 }
@@ -411,14 +403,13 @@ pub(super) enum Navigation {
     /// The launcher answered with a refusal (its helper ended or was
     /// killed); the instance is intact and a later navigation may succeed.
     Rejected,
-    /// The instance no longer serves the binding the navigation was
-    /// requested under, or is stopping: nothing was sent.
+    /// The instance is stopping, or an earlier navigation is unsettled:
+    /// nothing was sent.
     Superseded,
 }
 
 impl Live {
-    /// Whether the instance may navigate or be rebound to a sign-in: it is
-    /// running and no earlier navigation's effect is still unsettled.
+    /// Whether the instance may navigate: it is running and no earlier navigation's effect is still unsettled.
     pub(super) fn navigable(&self) -> bool {
         matches!(self.phase, Phase::Detached | Phase::Attached) && !self.navigation_unsettled
     }

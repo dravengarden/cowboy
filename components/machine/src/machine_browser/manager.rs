@@ -24,7 +24,6 @@ use super::stream::{Stream, StreamEnd};
 use super::unit::{self, Launch, Limits};
 use super::verify::{self, Expectations, Verified};
 use crate::launch_ledger::{Admission, LEDGER};
-use crate::login_registry::{LoginSession, LoginSessions};
 use crate::machine_plugins::{MachineBrowserRuntimePlan, MachinePluginStore};
 use crate::machine_protocol::MachineEvent;
 use crate::machine_protocol::machine_browser::{
@@ -39,16 +38,14 @@ mod drain;
 mod generations;
 mod launch;
 mod lifecycle;
-mod login_binding;
 mod reconcile;
 mod snapshots;
 mod supervision;
 mod termination;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod units;
 
-use attachments::Navigation;
 use capacity::{CapacityGuard, CapacityLedger};
 use drain::StartGate;
 use generations::GenerationPins;
@@ -86,12 +83,11 @@ const CAPABILITY_WATCH_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_RECEIPTS: usize = 256;
 
 /// The Controller connection events travel on, with the endpoint streams
-/// are opened against and the native logins it dispatched.
+/// are opened against.
 struct Uplink {
     id: u64,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     endpoint: reqwest::Url,
-    logins: Weak<parking_lot::Mutex<HashMap<String, LoginSession>>>,
 }
 
 /// Dropping it detaches the connection it was created for (and no later one).
@@ -143,40 +139,10 @@ struct Live {
     last_snapshot: Option<(u64, i64)>,
     last_periodic: Instant,
     last_scan: Instant,
-    /// A navigation that arrived before the instance was ready, with the
-    /// binding it was requested under.
-    pending_navigation: Option<(Purpose, String)>,
-    /// The URL whose navigation the launcher last rejected or did not
-    /// answer in time, with the binding it was requested under; cleared by
-    /// the next successful navigation and by a sign-in rebinding. A
-    /// repeated sign-in open retries it only for that same login.
-    failed_navigation: Option<(Purpose, String)>,
     /// A navigation the launcher never answered may still land: the
-    /// instance serves no further navigation or sign-in rebinding and is
-    /// on its way to a stop. Set under the navigation lock.
+    /// instance serves no further navigation and is on its way to a stop.
+    /// Set under the navigation lock.
     navigation_unsettled: bool,
-}
-
-/// What an instance runs for and until when. A `Tab` instance reused for a
-/// sign-in is rebound to the login and adopts its earlier deadline.
-#[derive(Debug, Clone)]
-struct Binding {
-    purpose: Purpose,
-    deadline: Instant,
-    deadline_ms: i64,
-}
-
-impl Binding {
-    fn new(purpose: Purpose, deadline_ms: i64) -> Self {
-        Self {
-            purpose,
-            deadline: Instant::now()
-                + Duration::from_millis(
-                    u64::try_from(deadline_ms.saturating_sub(unix_ms())).unwrap_or(0),
-                ),
-            deadline_ms,
-        }
-    }
 }
 
 /// Everything an [`Instance`] is built from, at start or adoption.
@@ -184,7 +150,6 @@ struct InstanceParts {
     account_id: ProviderAccountId,
     instance_id: String,
     incarnation: u64,
-    purpose: Purpose,
     deadline_ms: i64,
     unit: String,
     runtime_dir: PathBuf,
@@ -207,7 +172,9 @@ pub struct Instance {
     account_id: ProviderAccountId,
     instance_id: String,
     incarnation: u64,
-    binding: parking_lot::Mutex<Binding>,
+    /// The hard runtime cap (`browser.max_runtime` from the start).
+    deadline: Instant,
+    deadline_ms: i64,
     unit: String,
     runtime_dir: PathBuf,
     cgroup_dir: PathBuf,
@@ -218,9 +185,8 @@ pub struct Instance {
     settings: Settings,
     report: ReadyReport,
     control: tokio::sync::Mutex<Control>,
-    /// Serializes a navigation (binding check, verification, launcher
-    /// command) with sign-in rebinding, so a navigation requested under one
-    /// binding never lands after the instance was rebound to another.
+    /// Serializes navigations (liveness check, verification, launcher
+    /// command) of one instance.
     navigation: tokio::sync::Mutex<()>,
     live: parking_lot::Mutex<Live>,
     /// The running snapshot copy, if any.
@@ -241,7 +207,11 @@ impl Instance {
             account_id: parts.account_id,
             instance_id: parts.instance_id,
             incarnation: parts.incarnation,
-            binding: parking_lot::Mutex::new(Binding::new(parts.purpose, parts.deadline_ms)),
+            deadline: Instant::now()
+                + Duration::from_millis(
+                    u64::try_from(parts.deadline_ms.saturating_sub(unix_ms())).unwrap_or(0),
+                ),
+            deadline_ms: parts.deadline_ms,
             unit: parts.unit,
             runtime_dir: parts.runtime_dir,
             cgroup_dir: parts.cgroup_dir,
@@ -262,8 +232,6 @@ impl Instance {
                 last_snapshot: parts.last_snapshot,
                 last_periodic: Instant::now(),
                 last_scan: Instant::now(),
-                pending_navigation: None,
-                failed_navigation: None,
                 navigation_unsettled: false,
             }),
             copy: parking_lot::Mutex::new(None),
@@ -281,27 +249,21 @@ impl Instance {
         }
     }
 
-    fn purpose(&self) -> Purpose {
-        self.binding.lock().purpose.clone()
-    }
-
     fn deadline(&self) -> Instant {
-        self.binding.lock().deadline
+        self.deadline
     }
 
     fn deadline_ms(&self) -> i64 {
-        self.binding.lock().deadline_ms
+        self.deadline_ms
     }
 
-    /// The durable record written once an instance is verified (and again
-    /// when it is rebound to a login).
+    /// The durable record written once an instance is verified.
     fn record(&self, boot_id: &str) -> InstanceRecord {
-        let binding = self.binding.lock().clone();
         InstanceRecord {
             schema_version: 1,
             instance_id: self.instance_id.clone(),
             account_id: self.account_id.as_str().to_owned(),
-            purpose: binding.purpose,
+            purpose: Purpose::Tab,
             plugin_id: self.plan.plugin_id.clone(),
             plugin_version: self.plan.plugin_version.clone(),
             generation_digest: self.plan.generation_digest.clone(),
@@ -309,7 +271,7 @@ impl Instance {
             invocation_id: self.invocation_id.clone(),
             boot_id: boot_id.to_owned(),
             incarnation: self.incarnation,
-            deadline_ms: binding.deadline_ms,
+            deadline_ms: self.deadline_ms,
             profile_revision: self.profile_revision,
             started_at_ms: unix_ms(),
             runtime_dir: self.runtime_dir.clone(),
@@ -317,13 +279,6 @@ impl Instance {
             geometry: self.live.lock().geometry,
             scale: self.scale,
             ready: self.report.clone(),
-        }
-    }
-
-    fn login_request(&self) -> Option<String> {
-        match &self.binding.lock().purpose {
-            Purpose::SignIn { login_request_id } => Some(login_request_id.clone()),
-            Purpose::Tab => None,
         }
     }
 
@@ -399,10 +354,6 @@ pub struct BrowserManager {
     /// confinement verification could pass.
     #[cfg(test)]
     trust_confinement: std::sync::atomic::AtomicBool,
-    /// Test-only: runs between a sign-in rebinding capturing the login's
-    /// URL and publishing the binding.
-    #[cfg(test)]
-    before_rebinding_published: parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl BrowserManager {
@@ -462,8 +413,6 @@ impl BrowserManager {
             this: this.clone(),
             #[cfg(test)]
             trust_confinement: std::sync::atomic::AtomicBool::new(false),
-            #[cfg(test)]
-            before_rebinding_published: parking_lot::Mutex::new(None),
         });
         manager.register_drain();
         Ok(manager)
@@ -494,14 +443,13 @@ impl BrowserManager {
         }
     }
 
-    /// Bind the Controller connection whose events, stream endpoint and
-    /// native logins this manager uses from now on; running instances report
-    /// their state to it at once.
+    /// Bind the Controller connection whose events and stream endpoint this
+    /// manager uses from now on; running instances report their state to it
+    /// at once.
     pub(crate) fn attach(
         self: &Arc<Self>,
         events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
         endpoint: reqwest::Url,
-        logins: &LoginSessions,
     ) -> UplinkGuard {
         let id = self
             .next_uplink
@@ -510,7 +458,6 @@ impl BrowserManager {
             id,
             events: events.clone(),
             endpoint,
-            logins: Arc::downgrade(logins),
         });
         for instance in self.running() {
             let _ = events.send(MachineEvent::Browser {
@@ -738,71 +685,10 @@ impl BrowserManager {
         }
     }
 
-    /// A native login emitted its verification URL: the bound sign-in
-    /// browser navigates there once it is ready and verified.
-    pub fn login_challenge(self: &Arc<Self>, request_id: &str, url: &str) {
-        let Some(instance) = self.bound_instance(request_id) else {
-            return;
-        };
-        let expected = Purpose::SignIn {
-            login_request_id: request_id.to_owned(),
-        };
-        let ready = {
-            let mut live = instance.live.lock();
-            if matches!(live.phase, Phase::Detached | Phase::Attached) {
-                true
-            } else {
-                live.pending_navigation = Some((expected.clone(), url.to_owned()));
-                false
-            }
-        };
-        if ready {
-            let manager = Arc::clone(self);
-            let url = url.to_owned();
-            tokio::spawn(async move {
-                // A rejected navigation is recorded on the instance; the
-                // owner's repeated sign-in open retries it.
-                if let Err(Navigation::Violation(reason)) =
-                    manager.navigate_checked(&instance, &expected, &url).await
-                {
-                    let event = manager.stop_instance(&instance, reason, false, None).await;
-                    manager.send_state(event);
-                }
-            });
-        }
-    }
-
-    /// A native login ended (completed, cancelled, failed or expired): its
-    /// browser follows it into hibernation.
-    pub fn login_ended(self: &Arc<Self>, request_id: &str) {
-        let Some(instance) = self.bound_instance(request_id) else {
-            return;
-        };
-        let manager = Arc::clone(self);
-        let ended = request_id.to_owned();
-        tokio::spawn(async move {
-            // The graceful stop may wait for a copy and the lifecycle lock;
-            // a sign-in open can rebind the instance to another login
-            // meanwhile. Stop only if it is still bound to the ended login,
-            // checked under the lifecycle lock with the phase change.
-            let stopped = manager
-                .stop_instance_if(&instance, Reason::LoginEnded, true, None, || {
-                    if instance.login_request().as_deref() == Some(ended.as_str()) {
-                        Ok(())
-                    } else {
-                        Err(())
-                    }
-                })
-                .await;
-            if let Ok(event) = stopped {
-                manager.send_state(event);
-            }
-        });
-    }
-
     /// Reconcile persisted instance records and live units at Machine start:
-    /// clear records of another boot, stop sign-in instances and unrecorded
-    /// units, adopt `Tab` instances whose unit survived and re-verifies,
+    /// clear records of another boot, stop retired sign-in records and
+    /// unrecorded units, adopt `Tab` instances whose unit survived and
+    /// re-verifies,
     /// resume fenced operations and remove abandoned staging.
     pub async fn reconcile_at_start(self: &Arc<Self>) {
         if let Err(error) = self.reconcile_units().await {

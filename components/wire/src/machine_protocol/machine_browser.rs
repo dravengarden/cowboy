@@ -65,9 +65,10 @@ impl Viewport {
     }
 }
 
-/// Why an instance exists. A sign-in instance follows its native login's
-/// authority: it is bound to that login's account under the login lock and
-/// hibernates when the login ends.
+/// Why an instance exists. Every instance is an ordinary per-account `Tab`;
+/// logins never depend on a browser. `SignIn` is retired: it stays
+/// decodable for protocol 45 peers, and the Machine refuses an `Open` that
+/// carries it with `not_available`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Purpose {
@@ -115,8 +116,7 @@ pub enum Command {
         width: u32,
         height: u32,
     },
-    /// `Tab` instances only; sign-in instances navigate to the URL the
-    /// Machine itself emitted for the login.
+    /// An owner-supplied URL for the account's running instance.
     Navigate {
         instance: InstanceRef,
         url: String,
@@ -259,8 +259,9 @@ pub enum Reason {
     StorageExceeded,
     ProfileNewerThanRuntime,
     Superseded,
+    /// Retired with the sign-in purpose; decodable from older Machines.
     LoginEnded,
-    /// The named login is not this account's active native login.
+    /// Retired with the sign-in purpose; decodable from older Machines.
     LoginMismatch,
     Deadline,
     Grace,

@@ -236,11 +236,6 @@ fn pending_login() -> (
             cancel: cancel_tx.clone(),
             input: input_tx,
             candidate: None,
-            account: None,
-            provider: "fixture".into(),
-            expires_at_ms: i64::MAX,
-            verification_url: None,
-            browser: None,
         },
     );
     (
@@ -334,11 +329,6 @@ async fn losing_the_authenticated_connection_revokes_all_pending_logins() {
             cancel: cancel_tx,
             input: input_tx,
             candidate: None,
-            account: None,
-            provider: "fixture".into(),
-            expires_at_ms: i64::MAX,
-            verification_url: None,
-            browser: None,
         },
     );
     drop(connection);

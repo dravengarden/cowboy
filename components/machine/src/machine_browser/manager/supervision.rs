@@ -50,32 +50,6 @@ impl BrowserManager {
             self.send_state(event);
             return true;
         }
-        if let Some(reason) = self.login_binding_broken(instance) {
-            // A login that ended keeps what it signed in; a binding that no
-            // longer matches is an authority failure and stops at once. The
-            // graceful wait may let a sign-in open rebind the instance to
-            // another, active login: the stop proceeds only if the same
-            // login is still bound and still broken, under the lifecycle
-            // lock with the phase change.
-            let graceful = reason == Reason::LoginEnded;
-            let login = instance.login_request();
-            let stopped = self
-                .stop_instance_if(instance, reason, graceful, None, || {
-                    if instance.login_request() == login
-                        && self.login_binding_broken(instance) == Some(reason)
-                    {
-                        Ok(())
-                    } else {
-                        Err(())
-                    }
-                })
-                .await;
-            if let Ok(event) = stopped {
-                self.send_state(event);
-                return true;
-            }
-            return false;
-        }
         if let Some(attachment_id) = expired_attachment
             && expire_attachment(instance, &attachment_id, now)
         {
@@ -87,8 +61,8 @@ impl BrowserManager {
             // The graceful stop waits for a running copy and the lifecycle
             // lock; a viewer attaching meanwhile renews the instance, so the
             // detached interval that expired is re-checked atomically with
-            // the transition to `Stopping`. The deadline and an ended login
-            // are not idleness and stop unconditionally above.
+            // the transition to `Stopping`. The deadline is not idleness and
+            // stops unconditionally above.
             let stopped = self
                 .stop_instance_when(
                     instance,
@@ -153,15 +127,6 @@ impl BrowserManager {
             // The copy runs as its own job; a failure waits a full interval.
             instance.live.lock().last_periodic = now;
             self.spawn_snapshot(instance);
-        }
-        let pending = instance.live.lock().pending_navigation.take();
-        if let Some((expected, url)) = pending
-            && let Err(Navigation::Violation(reason)) =
-                self.navigate_checked(instance, &expected, &url).await
-        {
-            let event = self.stop_instance(instance, reason, false, None).await;
-            self.send_state(event);
-            return true;
         }
         false
     }

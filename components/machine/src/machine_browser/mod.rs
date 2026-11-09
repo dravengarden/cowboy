@@ -5,7 +5,8 @@
 //! The Plugin ships the bytes; everything that decides whether and how they
 //! run is here: admission, the systemd unit, confinement verification from
 //! outside the instance, attachment leases, profile snapshots, reset and
-//! revocation fences, restart reconciliation and sign-in binding.
+//! revocation fences and restart reconciliation. Native logins never touch
+//! a browser instance, and a browser never touches a login.
 
 pub mod host;
 pub mod launcher;

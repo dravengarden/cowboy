@@ -87,8 +87,9 @@ struct ControllerConfig {
 
 impl ControllerConfig {
     /// Open this connection's login registry and point the browser manager at
-    /// the connection. Browser state events and display streams follow it; a
-    /// replaced connection re-announces every running instance.
+    /// the connection. The two are independent: logins never reach the
+    /// browser manager. Browser state events and display streams follow the
+    /// connection; a replaced connection re-announces every running instance.
     fn attach_browsers(
         &self,
         events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
@@ -100,9 +101,7 @@ impl ControllerConfig {
     ) {
         let login_sessions: LoginSessions = Arc::default();
         let login_connection = LoginConnection(Arc::clone(&login_sessions));
-        let uplink = self
-            .browsers
-            .attach(events.clone(), endpoint.clone(), &login_sessions);
+        let uplink = self.browsers.attach(events.clone(), endpoint.clone());
         (login_sessions, login_connection, uplink)
     }
 
@@ -3942,6 +3941,83 @@ mod tests {
         let other = uuid::Uuid::new_v4().to_string().try_into().unwrap();
         assert!(super::login_account_store(&scoped, &other, protocol).is_err());
         assert!(store.account_id().is_default());
+    }
+
+    /// Logins are independent of the Machine browser: a login that starts,
+    /// publishes its challenge (verification URL included) and ends never
+    /// reaches a running browser instance, nor emits any browser event on
+    /// the connection both share.
+    #[tokio::test]
+    async fn a_login_lifecycle_never_touches_a_browser_instance() {
+        use crate::machine_protocol::MachineEvent;
+        let mut browser = crate::machine_browser::manager::tests::RunningBrowser::start().await;
+        let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let _uplink = browser.attach(events.clone());
+        // Attaching announces the running instance once; nothing after.
+        while received.try_recv().is_ok() {}
+
+        let state = tempfile::tempdir().unwrap();
+        let components = std::sync::Arc::new(
+            super::ComponentStore::new(state.path().join("components"), None, "fixture".into())
+                .unwrap(),
+        );
+        let providers = std::sync::Arc::new(
+            crate::machine_plugins::MachinePluginStore::new(
+                &state.path().join("plugins"),
+                crate::machine_protocol::Platform::Linux,
+                "x86_64".into(),
+            )
+            .unwrap(),
+        );
+        let sessions: super::LoginSessions = std::sync::Arc::default();
+        let (cancel_tx, cancel) = tokio::sync::watch::channel(false);
+        let (input_tx, input) = tokio::sync::mpsc::channel(1);
+        sessions.lock().insert(
+            "login-1".into(),
+            super::LoginSession::new(cancel_tx, input_tx),
+        );
+        let login = tokio::spawn(super::run_secret_input_login(
+            "login-1".into(),
+            "grok".into(),
+            "api-key".into(),
+            "API key".into(),
+            "https://console.x.ai/".into(),
+            events,
+            components,
+            providers,
+            None,
+            super::LoginIo {
+                cancel,
+                input,
+                sessions: std::sync::Arc::clone(&sessions),
+            },
+        ));
+        let mut challenged = false;
+        while !challenged {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(5), received.recv())
+                .await
+                .expect("the login published no challenge")
+                .unwrap();
+            assert!(
+                !matches!(event, MachineEvent::Browser { .. }),
+                "a login emitted a browser event: {event:?}"
+            );
+            challenged = matches!(event, MachineEvent::LoginChallenge { .. });
+        }
+        browser.assert_untouched().await;
+        assert!(super::request_login_cancel(&sessions, "login-1"));
+        tokio::time::timeout(std::time::Duration::from_secs(5), login)
+            .await
+            .expect("the cancelled login did not end")
+            .unwrap();
+        assert!(!sessions.lock().contains_key("login-1"));
+        while let Ok(event) = received.try_recv() {
+            assert!(
+                !matches!(event, MachineEvent::Browser { .. }),
+                "a login emitted a browser event: {event:?}"
+            );
+        }
+        browser.assert_untouched().await;
     }
     use std::collections::BTreeMap;
 

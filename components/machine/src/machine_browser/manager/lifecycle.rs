@@ -12,21 +12,22 @@ impl BrowserManager {
         purpose: Purpose,
         viewport: Viewport,
     ) -> StateEvent {
-        let slot = self.slot(&account_id);
         let hibernated =
             |reason: Reason| hibernated_event(request_id, &account_id, &instance_id, reason, None);
+        // Browser instances are plain per-account tabs, independent of any
+        // native login. The retired sign-in purpose stays decodable on the
+        // wire for protocol 45 peers but is refused.
+        if purpose != Purpose::Tab {
+            tracing::warn!(account = %account_id.as_str(), "browser open with a retired sign-in purpose refused");
+            return hibernated(Reason::NotAvailable);
+        }
+        let slot = self.slot(&account_id);
         let existing = slot.instance.lock().clone();
         if let Some(existing) = existing {
             if existing.instance_id != instance_id {
                 return hibernated(Reason::Busy);
             }
-            return match &purpose {
-                Purpose::Tab => existing.state(Some(request_id.to_owned())),
-                Purpose::SignIn { login_request_id } => {
-                    self.reuse_for_sign_in(request_id, &existing, login_request_id)
-                        .await
-                }
-            };
+            return existing.state(Some(request_id.to_owned()));
         }
         let _lifecycle = slot.lifecycle.lock().await;
         if slot.instance.lock().is_some() {
@@ -80,18 +81,8 @@ impl BrowserManager {
             Err(reason) => return hibernated(reason),
         };
         let incarnation = u64::try_from(unix_ms()).unwrap_or(1).max(1);
-        let mut deadline_ms = unix_ms()
+        let deadline_ms = unix_ms()
             .saturating_add(i64::try_from(settings.max_runtime.as_millis()).unwrap_or(i64::MAX));
-        let mut pending_navigation = None;
-        if let Purpose::SignIn { login_request_id } = &purpose {
-            match self.bind_login(login_request_id, &account_id, &instance_id, incarnation) {
-                Ok((url, expires_at_ms)) => {
-                    pending_navigation = url;
-                    deadline_ms = deadline_ms.min(expires_at_ms);
-                }
-                Err(reason) => return hibernated(reason),
-            }
-        }
         let reservation = match LEDGER
             .reserve(
                 settings.memory_max,
@@ -103,10 +94,7 @@ impl BrowserManager {
             .await
         {
             Admission::Reserved { reservation, .. } => reservation,
-            Admission::Exhausted | Admission::Cancelled => {
-                self.unbind_login(&purpose, &instance_id);
-                return hibernated(Reason::Memory);
-            }
+            Admission::Exhausted | Admission::Cancelled => return hibernated(Reason::Memory),
         };
         let started = self
             .start_instance(
@@ -117,7 +105,6 @@ impl BrowserManager {
                 &account_id,
                 &instance_id,
                 incarnation,
-                purpose.clone(),
                 viewport,
                 deadline_ms,
                 capacity,
@@ -127,200 +114,13 @@ impl BrowserManager {
         let instance = match started {
             Ok(instance) => instance,
             Err(failure) => {
-                self.unbind_login(&purpose, &instance_id);
                 tracing::warn!(detail = %failure.detail, reason = ?failure.reason, "browser open failed");
                 return hibernated(failure.reason);
             }
         };
         *slot.instance.lock() = Some(Arc::clone(&instance));
-        self.finish_open(&instance, pending_navigation, request_id)
-            .await
-    }
-
-    /// Supervise a newly registered instance and, for a sign-in, show the
-    /// login. The caller holds the account lifecycle lock: a violation stops
-    /// through `stop_locked`, never through a path that takes the lock again.
-    async fn finish_open(
-        self: &Arc<Self>,
-        instance: &Arc<Instance>,
-        pending_navigation: Option<String>,
-        request_id: &str,
-    ) -> StateEvent {
-        if let Some(request) = instance.login_request() {
-            // The login may have ended while the unit started.
-            if let Some(reason) = self.login_binding_broken(instance) {
-                return self
-                    .stop_locked(instance, reason, false, Some(request_id))
-                    .await;
-            }
-            let url = pending_navigation.or_else(|| self.login_url(&request));
-            if let Some(url) = url {
-                match self
-                    .navigate_checked(instance, &instance.purpose(), &url)
-                    .await
-                {
-                    Ok(()) | Err(Navigation::Superseded) => {}
-                    Err(Navigation::Violation(reason)) => {
-                        return self
-                            .stop_locked(instance, reason, false, Some(request_id))
-                            .await;
-                    }
-                    // The browser runs, bound to the login, but does not show
-                    // it: the open fails and a repeated open retries.
-                    Err(Navigation::Rejected) => {
-                        self.spawn_supervisor(instance);
-                        return instance
-                            .state(Some(request_id.to_owned()))
-                            .with_reason(Reason::Failed);
-                    }
-                }
-            }
-        }
-        self.spawn_supervisor(instance);
+        self.spawn_supervisor(&instance);
         instance.state(Some(request_id.to_owned()))
-    }
-
-    /// A sign-in open against the account's running browser: the login must
-    /// belong to this account, it is bound to the running instance (whose
-    /// deadline becomes the earlier of its own and the login's expiry, and
-    /// which from now on follows the login), and the browser navigates to
-    /// the login's verification URL once it is known. A repeated open for
-    /// the login already bound retries a navigation the launcher rejected;
-    /// a rejected navigation answers `failed`, so the open is refused rather
-    /// than showing a blank or earlier page as the sign-in.
-    async fn reuse_for_sign_in(
-        &self,
-        request_id: &str,
-        existing: &Arc<Instance>,
-        login_request_id: &str,
-    ) -> StateEvent {
-        let slot = self.slot(&existing.account_id);
-        // Outside the lifecycle lock: a running copy publishes under it.
-        let _copies = self.quiesce_copies(existing).await;
-        let _lifecycle = slot.lifecycle.lock().await;
-        let current = slot.instance.lock().clone();
-        if !current
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, existing))
-        {
-            return hibernated_event(
-                request_id,
-                &existing.account_id,
-                &existing.instance_id,
-                Reason::Superseded,
-                None,
-            );
-        }
-        if !matches!(
-            existing.live.lock().phase,
-            Phase::Detached | Phase::Attached
-        ) {
-            return existing
-                .state(Some(request_id.to_owned()))
-                .with_reason(Reason::Busy);
-        }
-        // Rebinding is serialized with navigations: one requested under the
-        // previous binding either landed before this or is superseded.
-        let rebinding = existing.navigation.lock().await;
-        // Recheck after the wait: a navigation may have begun stopping the
-        // instance, or left an unsettled effect, while this open waited.
-        if !existing.live.lock().navigable() {
-            return existing
-                .state(Some(request_id.to_owned()))
-                .with_reason(Reason::Busy);
-        }
-        let previous = existing.binding.lock().clone();
-        let url = if existing.login_request().as_deref() == Some(login_request_id) {
-            // Only a failure recorded under this same login is retried; a
-            // URL that failed under an earlier binding is never reused.
-            let bound = Purpose::SignIn {
-                login_request_id: login_request_id.to_owned(),
-            };
-            let failed = existing
-                .live
-                .lock()
-                .failed_navigation
-                .clone()
-                .filter(|(purpose, _)| *purpose == bound);
-            failed.map(|(_, failed)| self.login_url(login_request_id).unwrap_or(failed))
-        } else {
-            let (url, expires_at_ms) = match self.bind_login(
-                login_request_id,
-                &existing.account_id,
-                &existing.instance_id,
-                existing.incarnation,
-            ) {
-                Ok(bound) => bound,
-                Err(reason) => {
-                    return existing
-                        .state(Some(request_id.to_owned()))
-                        .with_reason(reason);
-                }
-            };
-            let purpose = Purpose::SignIn {
-                login_request_id: login_request_id.to_owned(),
-            };
-            #[cfg(test)]
-            if let Some(hook) = self.before_rebinding_published.lock().take() {
-                hook();
-            }
-            *existing.binding.lock() =
-                Binding::new(purpose.clone(), previous.deadline_ms.min(expires_at_ms));
-            // Restart reconciliation must see a sign-in instance and stop it.
-            if let Err(error) =
-                state_file::write_instance(&self.state_dir, &existing.record(&self.boot_id))
-            {
-                tracing::warn!(%error, "browser sign-in rebinding not recorded");
-                *existing.binding.lock() = previous;
-                self.unbind_login(&purpose, &existing.instance_id);
-                return existing
-                    .state(Some(request_id.to_owned()))
-                    .with_reason(Reason::Failed);
-            }
-            self.unbind_login(&previous.purpose, &existing.instance_id);
-            // A navigation that failed under the previous binding is not
-            // this login's to retry.
-            existing.live.lock().failed_navigation = None;
-            url
-        };
-        drop(rebinding);
-        // The login's challenge may have been published between capturing
-        // its URL and publishing this binding; `login_challenge` then found
-        // no bound instance and dropped it. The login keeps its URL, so read
-        // it again now that the binding is visible.
-        let rebound = previous.purpose != existing.purpose();
-        let url = url.or_else(|| {
-            if rebound {
-                self.login_url(login_request_id)
-            } else {
-                None
-            }
-        });
-        let bound = Purpose::SignIn {
-            login_request_id: login_request_id.to_owned(),
-        };
-        if let Some(url) = url {
-            match self.navigate_checked(existing, &bound, &url).await {
-                Ok(()) => {}
-                Err(Navigation::Violation(reason)) => {
-                    return self
-                        .stop_locked(existing, reason, false, Some(request_id))
-                        .await;
-                }
-                Err(Navigation::Rejected) => {
-                    return existing
-                        .state(Some(request_id.to_owned()))
-                        .with_reason(Reason::Failed);
-                }
-                // The instance began stopping meanwhile: not a sign-in browser.
-                Err(Navigation::Superseded) => {
-                    return existing
-                        .state(Some(request_id.to_owned()))
-                        .with_reason(Reason::Superseded);
-                }
-            }
-        }
-        existing.state(Some(request_id.to_owned()))
     }
 
     /// Resolve the account directory and its control record for a start:
@@ -381,7 +181,6 @@ impl BrowserManager {
         account_id: &ProviderAccountId,
         instance_id: &str,
         incarnation: u64,
-        purpose: Purpose,
         viewport: Viewport,
         deadline_ms: i64,
         capacity: CapacityGuard,
@@ -439,7 +238,6 @@ impl BrowserManager {
                 account_id: account_id.clone(),
                 instance_id: instance_id.to_owned(),
                 incarnation,
-                purpose,
                 deadline_ms,
                 unit: unit_name.clone(),
                 runtime_dir: runtime_dir.clone(),

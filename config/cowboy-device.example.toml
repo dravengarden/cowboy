@@ -101,7 +101,7 @@ schema = 1
 # duration string such as "6h", from 30s to 30m; applies live.
 # hibernate_after = "2m"
 # Hard cap on one browser run (RuntimeMaxSec of the unit and the Machine's
-# own deadline). A sign-in browser ends with its login if that is sooner.
+# own deadline).
 # duration string such as "6h", from 5m to 4h; applies live.
 # max_runtime = "30m"
 # Size of the profile tmpfs and of /dev/shm inside one browser instance, and

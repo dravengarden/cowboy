@@ -310,8 +310,8 @@ impl BrowserManager {
     }
 
     /// A graceful stop first lets a running copy finish, so the stop-time
-    /// copy can be admitted, while still enforcing the deadline, the login
-    /// binding and the confinement checks. `Err` is the reason the stop
+    /// copy can be admitted, while still enforcing the deadline and the
+    /// confinement checks. `Err` is the reason the stop
     /// must become forced (cancelling the copy).
     pub(super) async fn await_copy_idle(&self, instance: &Arc<Instance>) -> Result<(), Reason> {
         loop {
@@ -320,9 +320,6 @@ impl BrowserManager {
             };
             if Instant::now() >= instance.deadline() {
                 return Err(Reason::Deadline);
-            }
-            if let Some(Reason::LoginMismatch) = self.login_binding_broken(instance) {
-                return Err(Reason::LoginMismatch);
             }
             self.recheck(instance)?;
             let _ = tokio::time::timeout(SUPERVISOR_TICK, done.wait_for(|done| *done)).await;

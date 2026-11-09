@@ -95,7 +95,6 @@ async fn fixture() -> Fixture {
         account_id: account.clone(),
         instance_id: "inst-1".into(),
         incarnation: 7,
-        purpose: Purpose::Tab,
         deadline_ms: unix_ms() + 600_000,
         unit: "cowboy-browser-inst-1".into(),
         runtime_dir,
@@ -124,6 +123,52 @@ async fn fixture() -> Fixture {
         launcher: accepted.unwrap().0,
         cgroup,
         instance,
+    }
+}
+
+/// A manager with one running synthetic instance, for tests outside the
+/// manager proving that what they exercise never reaches a browser.
+pub(crate) struct RunningBrowser(Fixture);
+
+impl RunningBrowser {
+    pub(crate) async fn start() -> Self {
+        Self(fixture().await)
+    }
+
+    pub(crate) fn attach(
+        &self,
+        events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    ) -> UplinkGuard {
+        self.0.manager.attach(
+            events,
+            reqwest::Url::parse("https://controller.invalid/").unwrap(),
+        )
+    }
+
+    /// The instance still runs exactly as started: registered, detached,
+    /// never stopped, and its launcher received no command.
+    pub(crate) async fn assert_untouched(&mut self) {
+        let fixture = &mut self.0;
+        assert_eq!(fixture.instance.live.lock().phase, Phase::Detached);
+        assert!(fixture.instance.live.lock().navigable());
+        assert!(
+            fixture
+                .manager
+                .slot(&fixture.account)
+                .instance
+                .lock()
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &fixture.instance))
+        );
+        assert!(fixture.units.terminations().is_empty());
+        let mut reader = tokio::io::BufReader::new(&mut fixture.launcher);
+        let mut line = String::new();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), reader.read_line(&mut line))
+                .await
+                .is_err(),
+            "the launcher received {line:?}"
+        );
     }
 }
 
@@ -316,100 +361,50 @@ fn completing_a_fence_deletes_the_profile_and_lifts_the_writer_version() {
     }
 }
 
-fn login(account: &ProviderAccountId, expires_at_ms: i64) -> LoginSession {
-    let (cancel, _) = tokio::sync::watch::channel(false);
-    let (input, _) = tokio::sync::mpsc::channel(1);
-    LoginSession {
-        cancel,
-        input,
-        candidate: None,
-        account: Some(account.clone()),
-        provider: "claude-code".into(),
-        expires_at_ms,
-        verification_url: None,
-        browser: None,
-    }
-}
-
 #[tokio::test]
-async fn a_sign_in_open_binds_the_running_browser_or_refuses() {
+async fn a_retired_sign_in_open_is_refused_and_touches_no_instance() {
     let fixture = fixture().await;
-    let logins: LoginSessions = Arc::default();
-    let (events, _received) = tokio::sync::mpsc::unbounded_channel();
-    let _uplink = fixture.manager.attach(
-        events,
-        reqwest::Url::parse("https://controller.invalid/").unwrap(),
-        &logins,
-    );
-    let expiry = unix_ms() + 60_000;
-    logins
-        .lock()
-        .insert("login-1".into(), login(&fixture.account, expiry));
-    let other: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
-    logins
-        .lock()
-        .insert("login-2".into(), login(&other, expiry));
-    let open = |login: &str| Command::Open {
-        account_id: fixture.account.clone(),
-        instance_id: "inst-1".into(),
-        purpose: Purpose::SignIn {
-            login_request_id: login.into(),
-        },
-        viewport: Viewport {
-            width: 1280,
-            height: 800,
-            scale: 1,
-        },
+    let viewport = Viewport {
+        width: 1280,
+        height: 800,
+        scale: 1,
     };
-    let Command::Open {
-        account_id,
-        instance_id,
-        purpose,
-        viewport,
-    } = open("login-2")
-    else {
-        unreachable!()
+    let sign_in = || Purpose::SignIn {
+        login_request_id: "login-1".into(),
     };
+    // Against the account's running tab: refused, the tab is unchanged.
     let refused = fixture
         .manager
-        .open("o1", account_id, instance_id, purpose, viewport)
+        .open(
+            "o1",
+            fixture.account.clone(),
+            "inst-1".into(),
+            sign_in(),
+            viewport,
+        )
         .await;
-    assert_eq!(refused.reason, Some(Reason::LoginMismatch));
-    assert_eq!(fixture.instance.purpose(), Purpose::Tab);
-    assert!(logins.lock()["login-2"].browser.is_none());
-
-    let Command::Open {
-        account_id,
-        instance_id,
-        purpose,
-        viewport,
-    } = open("login-1")
-    else {
-        unreachable!()
-    };
-    let bound = fixture
-        .manager
-        .open("o2", account_id, instance_id, purpose, viewport)
-        .await;
-    assert_eq!(bound.reason, None);
-    assert_eq!(bound.deadline_ms, Some(expiry));
-    assert_eq!(fixture.instance.login_request().as_deref(), Some("login-1"));
-    assert_eq!(
-        logins.lock()["login-1"].browser,
-        Some(("inst-1".into(), fixture.instance.incarnation))
-    );
+    assert_eq!(refused.state, State::Hibernated);
+    assert_eq!(refused.reason, Some(Reason::NotAvailable));
+    assert_eq!(fixture.instance.live.lock().phase, Phase::Detached);
     assert!(
         fixture
             .manager
-            .login_binding_broken(&fixture.instance)
-            .is_none()
+            .slot(&fixture.account)
+            .instance
+            .lock()
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &fixture.instance))
     );
-    // The durable record now says sign-in, so a restart stops it.
-    let records = state_file::read_instances(&fixture.manager.state_dir).unwrap();
-    assert!(matches!(
-        records.first().map(|record| &record.purpose),
-        Some(Purpose::SignIn { .. })
-    ));
+    assert!(fixture.units.terminations().is_empty());
+    // With no instance: refused before any admission or start.
+    let other: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+    let refused = fixture
+        .manager
+        .open("o2", other.clone(), "inst-2".into(), sign_in(), viewport)
+        .await;
+    assert_eq!(refused.reason, Some(Reason::NotAvailable));
+    assert!(fixture.manager.slot(&other).instance.lock().is_none());
+    assert!(fixture.manager.capacity.try_reserve(4).is_some());
 }
 
 #[tokio::test]
@@ -436,12 +431,10 @@ async fn an_uninstall_drain_holds_opens_and_refuses_unconfirmed_exits() {
 async fn an_account_s_lifecycle_commands_run_in_arrival_order() {
     let fixture = fixture().await;
     *fixture.manager.slot(&fixture.account).instance.lock() = None;
-    let logins: LoginSessions = Arc::default();
     let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
     let _uplink = fixture.manager.attach(
         events,
         reqwest::Url::parse("https://controller.invalid/").unwrap(),
-        &logins,
     );
     for index in 0..24 {
         let command = if index % 3 == 0 {

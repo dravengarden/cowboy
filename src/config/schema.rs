@@ -540,7 +540,7 @@ pub static DEVICE_FIELDS: &[Field] = &[
         },
         default: Value::Duration(Duration::from_mins(30)),
         reload: Reload::Live,
-        doc: "Hard cap on one browser run (RuntimeMaxSec of the unit and the Machine's\nown deadline). A sign-in browser ends with its login if that is sooner.",
+        doc: "Hard cap on one browser run (RuntimeMaxSec of the unit and the Machine's\nown deadline).",
     },
     Field {
         key: "browser.profile_max_bytes",

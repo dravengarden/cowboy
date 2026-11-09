@@ -5,27 +5,29 @@
 use anyhow::Result;
 
 use super::login_process;
-pub(crate) use crate::login_registry::{LoginSession, LoginSessions};
+
+/// One login this connection may still cancel or feed a code. Logins are
+/// independent of the Machine browser: nothing here names a browser
+/// instance, and no browser state changes a login.
+pub(crate) struct LoginSession {
+    pub(crate) cancel: tokio::sync::watch::Sender<bool>,
+    pub(crate) input: tokio::sync::mpsc::Sender<String>,
+    pub(crate) candidate: Option<crate::machine_plugins::AuthCandidateCleanup>,
+}
+
+pub(crate) type LoginSessions =
+    std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, LoginSession>>>;
 
 impl LoginSession {
-    /// A login that begins now and expires after `login_process::TIMEOUT`,
-    /// with no candidate credential, verification URL or browser bound yet.
+    /// A login with no candidate credential yet.
     pub(super) fn new(
         cancel: tokio::sync::watch::Sender<bool>,
         input: tokio::sync::mpsc::Sender<String>,
-        account: Option<crate::provider_account::ProviderAccountId>,
-        provider: String,
     ) -> Self {
         Self {
             cancel,
             input,
             candidate: None,
-            account,
-            provider,
-            expires_at_ms: super::unix_ms()
-                .saturating_add(login_process::TIMEOUT.as_millis() as i64),
-            verification_url: None,
-            browser: None,
         }
     }
 }

@@ -213,14 +213,11 @@ impl BrowserManager {
                 .stop_recorded(&record, "unit ending", Reason::Failed)
                 .await;
         }
-        // A sign-in instance's login did not survive the restart.
+        // An instance recorded by an earlier Machine under the retired
+        // sign-in purpose is not adopted.
         if record.purpose != Purpose::Tab {
             return self
-                .stop_recorded(
-                    &record,
-                    "sign-in login ended with the Machine restart",
-                    Reason::LoginEnded,
-                )
+                .stop_recorded(&record, "retired sign-in browser", Reason::NotAvailable)
                 .await;
         }
         match self.adopt(&record, &status).await {
@@ -356,7 +353,6 @@ impl BrowserManager {
             account_id,
             instance_id: record.instance_id.clone(),
             incarnation: record.incarnation,
-            purpose: record.purpose.clone(),
             deadline_ms: record.deadline_ms,
             unit: record.unit.clone(),
             runtime_dir: record.runtime_dir.clone(),

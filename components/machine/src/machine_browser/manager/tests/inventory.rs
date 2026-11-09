@@ -32,7 +32,9 @@ fn record(
     record
 }
 
-fn sign_in() -> Purpose {
+/// A record an earlier Machine wrote under the retired sign-in purpose; the
+/// restart stops it instead of adopting it.
+fn retired_sign_in() -> Purpose {
     Purpose::SignIn {
         login_request_id: "login-1".into(),
     }
@@ -132,7 +134,7 @@ async fn the_inventory_fence_holds_every_account_until_the_whole_inventory_is_ac
     unregistered(&fixture);
     let other = other_account();
     revoke_pending(&fixture.manager, &other, "op-b");
-    let survivor = record(&fixture, &other, "inst-b", "ib", sign_in());
+    let survivor = record(&fixture, &other, "inst-b", "ib", retired_sign_in());
     state_file::write_instance(&fixture.manager.state_dir, &survivor).unwrap();
     fixture.units.set(&survivor.unit, FakeUnit::live("ib"));
     fixture.units.list(Some(&[survivor.unit.as_str()]));
@@ -174,7 +176,7 @@ async fn the_inventory_fence_holds_every_account_until_the_whole_inventory_is_ac
         .await
         .expect("startup reconciliation did not finish")
         .unwrap();
-    // The sign-in survivor was stopped (confirmed), then the fence lowered
+    // The retired sign-in survivor was stopped (confirmed), then the fence lowered
     // and the revocation completed.
     assert!(!fixture.units.exists(&survivor.unit));
     assert!(!fixture.manager.inventory_unresolved());
@@ -204,14 +206,14 @@ async fn records_recovered_by_a_retried_inventory_are_reconciled_not_exempted() 
     assert_eq!(query.state, State::Stopping);
     assert_eq!(query.reason, Some(Reason::Busy));
     assert_eq!(query.instance.instance_id, "");
-    // Both recover: a sign-in survivor whose exit cannot be confirmed.
+    // Both recover: a retired sign-in survivor whose exit cannot be confirmed.
     std::fs::remove_file(&records_root).unwrap();
     let survivor = record(
         &fixture,
         &fixture.account,
         "inst-1",
         "invocation",
-        sign_in(),
+        retired_sign_in(),
     );
     state_file::write_instance(&fixture.manager.state_dir, &survivor).unwrap();
     fixture.units.list(Some(&[UNIT]));
@@ -244,7 +246,7 @@ async fn records_recovered_by_a_retried_inventory_are_reconciled_not_exempted() 
     let query = fixture.manager.query("q2", &fixture.account);
     assert_eq!(query.state, State::Stopping);
     assert_eq!(query.instance, reference);
-    assert_eq!(query.reason, Some(Reason::LoginEnded));
+    assert_eq!(query.reason, Some(Reason::NotAvailable));
     assert_eq!(query.request_id.as_deref(), Some("q2"));
     // So does a command naming it.
     let hibernate = fixture.manager.hibernate("h1", &reference).await;
@@ -252,7 +254,7 @@ async fn records_recovered_by_a_retried_inventory_are_reconciled_not_exempted() 
     assert_eq!(hibernate.instance, reference);
     // A retried listing never re-exempts it: the next pass skips only the
     // retained record, and its confirmed exit reports the terminal state.
-    let (_uplink, mut received, _logins) = super::confirmation::uplink(&fixture.manager);
+    let (_uplink, mut received) = super::confirmation::uplink(&fixture.manager);
     super::confirmation::states(&mut received);
     fixture.units.make_stoppable(UNIT);
     eventually("the survivor's exit is confirmed", || {

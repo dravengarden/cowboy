@@ -59,16 +59,13 @@ pub(super) fn uplink(
 ) -> (
     UplinkGuard,
     tokio::sync::mpsc::UnboundedReceiver<MachineEvent>,
-    LoginSessions,
 ) {
-    let logins: LoginSessions = Arc::default();
     let (events, received) = tokio::sync::mpsc::unbounded_channel();
     let guard = manager.attach(
         events,
         reqwest::Url::parse("https://controller.invalid/").unwrap(),
-        &logins,
     );
-    (guard, received, logins)
+    (guard, received)
 }
 
 pub(super) fn states(
@@ -195,7 +192,7 @@ async fn an_open_is_refused_while_a_unit_of_the_same_name_is_unconfirmed() {
 #[tokio::test]
 async fn a_confirmed_retry_reports_the_terminal_state_and_the_fence_completion() {
     let fixture = fixture().await;
-    let (_uplink, mut received, _logins) = uplink(&fixture.manager);
+    let (_uplink, mut received) = uplink(&fixture.manager);
     states(&mut received);
     fixture.instance.live.lock().phase = Phase::Stopping;
     let account_dir = pend_revocation(&fixture, "op-7");
@@ -289,7 +286,7 @@ async fn a_drain_waits_for_admitted_starts_and_stops_when_its_authority_ends() {
 async fn an_attach_that_raced_a_stop_does_not_revive_the_instance() {
     let mut fixture = fixture().await;
     let _rfb = recheck_passes(&fixture);
-    let (_uplink, _received, _logins) = uplink(&fixture.manager);
+    let (_uplink, _received) = uplink(&fixture.manager);
     let attach = {
         let manager = Arc::clone(&fixture.manager);
         let reference = fixture.instance.reference();
