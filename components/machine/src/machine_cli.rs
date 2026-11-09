@@ -582,7 +582,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         None
     };
     let mut broker = MachineBrokerArgs {
-        socket: args.socket,
+        socket: args.socket.clone(),
         worker_command,
         desired_generation,
         spawn_mode: match args.spawn_mode {
@@ -699,7 +699,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         machine_id: machine_id.clone(),
         display_name,
         identity,
-        runtime_socket: args.socket.clone(),
+        runtime_socket: args.socket,
         workspaces: Arc::clone(&workspaces),
         components: Arc::clone(&components),
         providers,
