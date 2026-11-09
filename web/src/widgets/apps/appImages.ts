@@ -20,6 +20,11 @@ export function useAppImage(key: string): string | null {
 async function load(source: ImageSource): Promise<Blob | null> {
   const url = pictureUrl(source, true);
   if (!url || (source.kind === "artifact" && !url.endsWith(".png"))) return null;
+  if (source.kind === "data") {
+    // Decoded here: the App CSP admits no fetch of a data: URL.
+    const bytes = Uint8Array.from(atob(source.base64), (char) => char.charCodeAt(0));
+    return bytes.length > 0 ? new Blob([bytes], { type: "image/png" }) : null;
+  }
   const response = await fetch(url, { credentials: "same-origin" });
   if (!response.ok) return null;
   const blob = await response.blob();

@@ -132,25 +132,34 @@ export async function runWidgetAppsBrowserConformance(): Promise<string[]> {
 
   const stops = async (code: string, reason: string, label: string): Promise<void> => {
     let worstLag = 0;
-    let last = performance.now();
+    let worstAt = 0;
+    const started = performance.now();
+    let last = started;
     const ticker = setInterval(() => {
       const now = performance.now();
-      worstLag = Math.max(worstLag, now - last - 50);
+      if (now - last - 50 > worstLag) {
+        worstLag = now - last - 50;
+        worstAt = last - started;
+      }
       last = now;
     }, 50);
     render(code);
+    let stoppedAt = 0;
     try {
       await waitFor(() => text().includes(reason), label, 10_000).catch((error: Error) => {
         throw new Error(
           `${error.message} — page shows: ${text().slice(0, 300)} — errors: ${errors.join(" | ").slice(0, 600)}`,
         );
       });
+      stoppedAt = performance.now() - started;
+      // Teardown of the stopped runtime counts too.
+      await new Promise((resolve) => setTimeout(resolve, 300));
     } finally {
       clearInterval(ticker);
     }
     check(
       worstLag < 250,
-      `${label}: the page stayed responsive (worst lag ${Math.round(worstLag)} ms)`,
+      `${label}: the page stayed responsive (worst lag ${Math.round(worstLag)} ms at ${Math.round(worstAt)} ms; stop shown at ${Math.round(stoppedAt)} ms)`,
     );
     passed.push(label);
   };

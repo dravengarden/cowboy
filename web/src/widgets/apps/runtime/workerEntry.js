@@ -48,15 +48,24 @@ const childrenOf = new Map([[0, new Set()]]);
 const depthOf = new Map([[0, 0]]);
 
 const post = (message) => port && port.postMessage(message);
-function stop(reason) {
-  if (stopped) return;
-  stopped = true;
-  post({ t: "stopped", reason });
+// VM calls on the stack. A stop from inside one (a host function refusing a
+// render batch) must not free the VM under that call: teardown waits until
+// the outermost call returns, and the interrupt handler ends it at once.
+let inVm = 0;
+
+function teardown() {
   try {
     vm?.dispose();
     runtime?.dispose();
   } catch {}
   self.close();
+}
+
+function stop(reason) {
+  if (stopped) return;
+  stopped = true;
+  post({ t: "stopped", reason });
+  if (inVm === 0) teardown();
 }
 
 /** Ends the app with a person-readable reason for a VM error message. */
@@ -167,6 +176,7 @@ function usedLastSecond(now) {
  *  toward the minute, not the rolling second. Returns `{ ok, value, busy }`;
  *  `busy` means the call did not run because the second is spent. */
 function run(code, deadlineMs, startup = false) {
+  if (stopped) return { ok: false };
   const now = Date.now();
   if (now - cpu.minuteStart >= 60_000) {
     cpu.minuteStart = now;
@@ -178,22 +188,36 @@ function run(code, deadlineMs, startup = false) {
     if (cpu.throttled >= LIMITS.throttledTurns) stop("it kept the processor busy");
     return { ok: false, busy: true };
   }
-  const until = now + (startup ? deadlineMs : Math.min(deadlineMs, left));
-  runtime.setInterruptHandler(() => Date.now() > until);
-  const result = vm.evalCode(code);
-  let error = result.error ? vm.dump(result.error) : null;
-  result.error?.dispose();
-  const value = result.value ? vm.dump(result.value) : undefined;
-  result.value?.dispose();
+  // The rolling second decides only whether a turn starts (a spent second
+  // throttles, and only persistent throttling stops the app); a started turn
+  // always gets its full deadline, so a nearly spent second never turns an
+  // ordinary render into "ran too long".
+  const until = now + deadlineMs;
+  runtime.setInterruptHandler(() => stopped || Date.now() > until);
+  let error = null;
+  let value;
   let jobs = 0;
-  while (!error && jobs < LIMITS.jobsPerTurn && runtime.hasPendingJob()) {
-    const job = runtime.executePendingJobs(1);
-    if (job.error) {
-      error = vm.dump(job.error);
-      job.error.dispose();
+  inVm += 1;
+  try {
+    const result = vm.evalCode(code);
+    error = result.error ? vm.dump(result.error) : null;
+    result.error?.dispose();
+    value = result.value ? vm.dump(result.value) : undefined;
+    result.value?.dispose();
+    while (!error && !stopped && jobs < LIMITS.jobsPerTurn && runtime.hasPendingJob()) {
+      const job = runtime.executePendingJobs(1);
+      if (job.error) {
+        error = vm.dump(job.error);
+        job.error.dispose();
+      }
+      jobs += 1;
     }
-    jobs += 1;
+  } finally {
+    inVm -= 1;
+    if (stopped && inVm === 0) teardown();
   }
+  // Stopped from inside the call: its own reason was already reported.
+  if (stopped) return { ok: false };
   const spent = Date.now() - now;
   if (!startup) cpu.spans.push({ at: now, ms: spent });
   cpu.minuteUsed += spent;
@@ -228,6 +252,7 @@ function scheduleJobs(delay) {
 
 function hostFunctions() {
   const emit = vm.newFunction("__emit", (handle) => {
+    if (stopped) return;
     try {
       admit(vm.getString(handle));
     } catch (error) {
@@ -237,6 +262,7 @@ function hostFunctions() {
   // One message request per interval reaches the host; more are dropped,
   // and an app that keeps asking is stopped.
   const send = vm.newFunction("__send", (handle) => {
+    if (stopped) return;
     const now = Date.now();
     const text = vm.getString(handle);
     if (text.length > LIMITS.messageChars * 2 || now - rate.sendAt < LIMITS.sendIntervalMs) {
@@ -248,6 +274,7 @@ function hostFunctions() {
     post({ t: "send", text });
   });
   const log = vm.newFunction("__log", (handle) => {
+    if (stopped) return;
     const now = Date.now();
     if (now - rate.logStart >= 1000) {
       rate.logStart = now;

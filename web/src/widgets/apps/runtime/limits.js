@@ -33,7 +33,9 @@ export const LIMITS = {
   loadMs: 3000,
   compileMs: 1500,
   firstRenderMs: 1000,
-  eventMs: 100,
+  // One later update. The VM runs in a Worker, so this never blocks the
+  // page; iOS WebKit needs more than 100 ms to re-render ~2,000 nodes.
+  eventMs: 250,
   cpuPerSecondMs: 200,
   cpuPerMinuteMs: 20_000,
   jobsPerTurn: 256,

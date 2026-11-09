@@ -72,10 +72,30 @@ status, tables and decisions.
   ≤ 16 Mpx per app) and loaded into local blobs before the app starts
   (`apps/appImages.ts`); `Image{source,alt,height}` draws by key, and an
   unknown or failed key shows its `alt`.
-- Deferred: apps are enabled only on desktop Chromium outside the native
-  shells until the rest of **A4** (native `isMainFrame` gates, the
-  `appsSandbox` capability, WebKit and iPhone acceptance with the egress
-  sink).
+- **A4.2 (native gates)**: every WKWebView script handler of the iOS shell
+  answers only the main frame; the Passkey bridge gained that check (its
+  request handler checked only the relying party, and the Passkey browser's
+  `close` nothing). Android's message listeners already required the main
+  frame and the Cowboy origin; Tauri grants permissions only to the Cowboy
+  origin. The iOS shell reports `__cowboyAppsSandbox = {v: 1, os}` from its
+  main-frame-only user script; older shells do not, so they keep the
+  fallback.
+- **A4.3 (WebKit)**: `tools/ios-simulator-conformance.ts` runs the
+  `widget-apps` suite in iOS Safari on a disposable Simulator of the Mac,
+  optionally under the Controller's App CSP with the runtime wasm served as a
+  file (`--production-csp`). All 14 checks pass under the App CSP on iPhone
+  17 / iOS 27.2, iPhone 16 / iOS 26.5 and iPad Air / iPadOS 27.2. The runs
+  found and fixed: a VM freed under a host callback that stopped the app
+  (use after free), a nearly spent CPU second shortening a turn's deadline
+  into "ran too long", the 100 ms update deadline (now 250 ms), inline app
+  images fetched as `data:` URLs (refused by the App CSP), and Safari's
+  frozen OS version in its user agent. Enablement (`appsEnabled.ts`): iOS
+  and iPadOS 26+ Safari by `Version/` (iPadOS's Mac user agent by touch
+  points), the iOS shell by its capability and OS version; macOS WebKit,
+  Tauri desktop shells and PWAs without `Version/` keep the fallback.
+- Not yet covered: a physical iPhone (four maximum-budget apps under 200 ms
+  interaction latency) and the egress sink observed outside the page; the
+  Simulator runs prove engine behaviour, not device performance.
 
 ## 1. Goals and non-goals
 
@@ -221,9 +241,12 @@ third-party MCP Apps through a spec-conformant proxy there (§10).
 
 - Per app VM: memory 32 MiB, stack 512 KiB.
 - Compile (Sucrase inside the VM): deadline 1.5 s; failure shows an error card.
-- First render: 500 ms deadline; each later event dispatch or state update:
-  100 ms. An interrupted evaluation terminates the app ("This app stopped:
-  it ran too long" or "used too much memory") with Reload.
+- First render: 1 s deadline; each later event dispatch or state update:
+  250 ms (iOS WebKit needs more than 100 ms to re-render ~2,000 nodes; the
+  VM runs in a Worker, so the deadline bounds the app, not the page). An
+  interrupted evaluation terminates the app ("This app stopped: it ran too
+  long" or "used too much memory") with Reload. The rolling second decides
+  only whether a turn starts; a started turn always gets its full deadline.
 - Cumulative CPU: VM execution (evaluations, pending-job drains, scheduled
   React work) is metered per app: ≤ 200 ms in any 1 s window and ≤ 20 s per
   minute. Over the window the runtime stops draining jobs until the next
