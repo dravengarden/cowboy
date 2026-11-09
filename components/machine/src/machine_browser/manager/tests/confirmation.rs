@@ -560,3 +560,34 @@ async fn a_latch_set_while_termination_is_pending_is_the_reported_reason() {
     assert_eq!(later.reason, Some(Reason::ConfinementUnverified));
     assert!(later.unsaved_state_lost);
 }
+
+#[tokio::test]
+async fn a_definite_recheck_finding_is_latched_against_renewal() {
+    let fixture = fixture().await;
+    let _rfb = recheck_passes(&fixture);
+    // An unexpected entry in the runtime directory is a definite violation.
+    std::fs::write(fixture.instance.runtime_dir.join("stray"), b"").unwrap();
+    assert_eq!(
+        fixture.manager.recheck(&fixture.instance),
+        Err(Recheck::Stop(Reason::ConfinementUnverified))
+    );
+    assert_eq!(
+        *fixture.instance.latch.lock(),
+        Some(Reason::ConfinementUnverified)
+    );
+    // A grace stop renewed by a viewer would be abandoned; this one is not.
+    fixture.units.make_stoppable("cowboy-browser-inst-1");
+    let stopped = fixture
+        .manager
+        .stop_instance_when(
+            &fixture.instance,
+            Reason::Grace,
+            true,
+            None,
+            || Ok::<(), ()>(()),
+            |_| Err(()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stopped.reason, Some(Reason::ConfinementUnverified));
+}

@@ -144,6 +144,17 @@ impl BrowserManager {
     /// A scan the ptrace access check denied is [`Recheck::Unverified`]:
     /// operations refuse it, and only periodic supervision may wait for it.
     pub(super) fn recheck(&self, instance: &Arc<Instance>) -> Result<(), Recheck> {
+        let checked = self.recheck_unlatched(instance);
+        if let Err(Recheck::Stop(reason)) = checked {
+            // A definite finding is latched like the denial limit, so no
+            // renewed use can abandon the stop it requires and nothing is
+            // published meanwhile, whichever caller found it.
+            latch_forced(instance, reason);
+        }
+        checked
+    }
+
+    fn recheck_unlatched(&self, instance: &Arc<Instance>) -> Result<(), Recheck> {
         if !instance.live.lock().verified.pins_hold() {
             return Err(Recheck::Stop(Reason::ConfinementUnverified));
         }
@@ -204,8 +215,7 @@ impl BrowserManager {
                     // Latched for every stop, including one already
                     // waiting for the lifecycle lock; a running copy is
                     // cancelled and no later copy is published.
-                    *instance.latch.lock() = Some(Reason::ConfinementUnverified);
-                    instance.cancel_copy();
+                    latch_forced(instance, Reason::ConfinementUnverified);
                     return Err(Reason::ConfinementUnverified);
                 }
                 Ok(())
@@ -222,6 +232,13 @@ pub(super) enum Recheck {
     /// Only the ptrace access check denied some evidence: unverified, so
     /// an operation is refused, but nothing was found.
     Unverified,
+}
+
+/// Latch a stop that must be forced (the first reason wins) and cancel any
+/// running copy.
+pub(super) fn latch_forced(instance: &Instance, reason: Reason) {
+    instance.latch.lock().get_or_insert(reason);
+    instance.cancel_copy();
 }
 
 /// Claim the instance's next counted periodic scan: `true` (and the
