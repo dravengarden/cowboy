@@ -12,6 +12,18 @@ use sha2::{Digest as _, Sha256};
 
 static ARTIFACT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// Orders a new reference against collection (docs/widgets.md §6.3): a pin
+/// refreshes the artifact's age under this lock, and the collector re-reads
+/// the age under it immediately before unlinking. A sweep that inspected an
+/// old modification time therefore sees the refreshed one and keeps the file.
+static PIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn pin_guard() -> std::sync::MutexGuard<'static, ()> {
+    PIN_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Inline image payloads below this encoded size stay in the event row.
 const INLINE_IMAGE_LIMIT_BYTES: usize = 32 * 1024;
 
@@ -192,6 +204,26 @@ impl ArtifactStore {
         Ok(format!("/api/artifacts/{name}"))
     }
 
+    /// Keep an existing artifact for a reference about to be committed.
+    /// Returns false when no such artifact exists.
+    pub fn pin(&self, name: &str) -> Result<bool> {
+        let Some(path) = self.path(name) else {
+            return Ok(false);
+        };
+        let _guard = pin_guard();
+        if !path.is_file() {
+            return Ok(false);
+        }
+        refresh_age(&path)?;
+        Ok(true)
+    }
+
+    /// `put_bytes` ordered against collection like [`Self::pin`].
+    pub fn put_pinned(&self, bytes: &[u8], mime: &str) -> Result<String> {
+        let _guard = pin_guard();
+        self.put_bytes(bytes, mime)
+    }
+
     pub fn path(&self, name: &str) -> Option<PathBuf> {
         valid_artifact_name(name)
             .then(|| self.root.join(name))
@@ -225,6 +257,17 @@ impl ArtifactStore {
             {
                 continue;
             }
+            // Re-read the age under the pin lock: a reference pinned since
+            // the scan refreshed it, and must survive this sweep.
+            let _guard = pin_guard();
+            let fresh = std::fs::metadata(entry.path())
+                .and_then(|metadata| metadata.modified())
+                .map_or(true, |modified| {
+                    now.duration_since(modified).unwrap_or_default() < minimum_age
+                });
+            if fresh {
+                continue;
+            }
             std::fs::remove_file(entry.path())
                 .with_context(|| format!("removing unreferenced artifact {name}"))?;
             removed = removed.saturating_add(1);
@@ -256,7 +299,7 @@ pub fn collect_references(value: &serde_json::Value, output: &mut HashSet<String
     }
 }
 
-fn valid_artifact_name(name: &str) -> bool {
+pub fn valid_artifact_name(name: &str) -> bool {
     let Some((hash, extension)) = name.split_once('.') else {
         return false;
     };
@@ -419,6 +462,37 @@ mod tests {
             missing.get("url").is_none(),
             "an unknown digest is never resolved"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_pin_refreshes_an_old_artifact_past_the_grace_period() {
+        let root = std::env::temp_dir().join(format!("cowboy-artifact-pin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = ArtifactStore::new(root.clone()).unwrap();
+        let name = format!("{}.png", "c".repeat(64));
+        let old = SystemTime::now() - Duration::from_hours(48);
+        for pinned in [true, false] {
+            std::fs::write(root.join(&name), b"image").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(root.join(&name))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            if pinned {
+                assert!(store.pin(&name).unwrap());
+            }
+            let removed = store
+                .prune_unreferenced(&HashSet::new(), Duration::from_hours(24))
+                .unwrap();
+            assert_eq!(removed, u64::from(!pinned), "pinned={pinned}");
+        }
+        assert!(
+            !store.pin(&name).unwrap(),
+            "a missing artifact cannot be pinned"
+        );
+        assert!(!store.pin("../etc/passwd").unwrap());
         std::fs::remove_dir_all(root).unwrap();
     }
 

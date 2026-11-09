@@ -240,6 +240,125 @@ pub(in crate::server) async fn touch(state: &AppState, scope: &SessionReadScope)
     }
 }
 
+/// What a standing observer recorded after a cursor.
+pub(in crate::server) struct Changes {
+    /// Resume here next time.
+    pub cursor: code_observer::Cursor,
+    /// Worktree-relative paths changed after the given cursor; empty after a
+    /// reset or gap, which never means "unchanged".
+    pub paths: Vec<String>,
+    /// A reset or gap: earlier comparisons cannot be trusted.
+    pub gap: bool,
+}
+
+const MAX_PAGES: usize = 4;
+
+/// Read an already started observer of this exact scope; never starts one.
+/// `None` without a cursor, after a lost reply or for an ended scope.
+pub(in crate::server) async fn changes(
+    state: &AppState,
+    scope: &SessionReadScope,
+    cursor: Option<code_observer::Cursor>,
+) -> Option<Changes> {
+    let context = Context::from(state);
+    let entry = context
+        .managed_calls
+        .observations
+        .0
+        .lock()
+        .values()
+        .find(|entry| entry.scope == *scope && entry.current(&context))
+        .cloned()?;
+    let continuation = entry.operation.lock().await.clone()?;
+    let connection = scope.connection()?;
+    let mut changes = Changes {
+        cursor: cursor.clone()?,
+        paths: Vec::new(),
+        gap: false,
+    };
+    let mut cursor = cursor;
+    for _ in 0..MAX_PAGES {
+        let reply = tokio::time::timeout(
+            REQUEST_WAIT,
+            request_on(
+                &context,
+                connection,
+                code_observer::Request::Read {
+                    continuation: continuation.clone(),
+                    cursor: cursor.clone(),
+                },
+            ),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        if !entry.current(&context) {
+            return None;
+        }
+        let through: code_observer::Cursor =
+            serde_json::from_value(reply["through"].clone()).ok()?;
+        if !through.valid() {
+            return None;
+        }
+        match reply["state"].as_str()? {
+            "changes" => {
+                for event in reply["events"].as_array()? {
+                    for path in event["paths"].as_array()? {
+                        changes.paths.push(path.as_str()?.to_owned());
+                    }
+                }
+            }
+            "gap" | "reset" => {
+                changes.gap = true;
+                changes.paths.clear();
+            }
+            _ => return None,
+        }
+        changes.cursor = through.clone();
+        cursor = Some(through);
+        if reply["more"] != true || changes.gap {
+            break;
+        }
+    }
+    changes.paths.sort();
+    changes.paths.dedup();
+    Some(changes)
+}
+
+/// The observer's current head, to start reading from; the first page of a
+/// read without a cursor is always a reset.
+pub(in crate::server) async fn head(
+    state: &AppState,
+    scope: &SessionReadScope,
+) -> Option<code_observer::Cursor> {
+    let context = Context::from(state);
+    let entry = context
+        .managed_calls
+        .observations
+        .0
+        .lock()
+        .values()
+        .find(|entry| entry.scope == *scope && entry.current(&context))
+        .cloned()?;
+    let continuation = entry.operation.lock().await.clone()?;
+    let reply = tokio::time::timeout(
+        REQUEST_WAIT,
+        request_on(
+            &context,
+            scope.connection()?,
+            code_observer::Request::Read {
+                continuation,
+                cursor: None,
+            },
+        ),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let head: code_observer::Cursor = serde_json::from_value(reply["head"].clone()).ok()?;
+    (entry.current(&context) && head.valid()).then_some(head)
+}
+
 async fn retire(state: &Context<'_>, entry: &Entry) -> bool {
     let Some(connection) = entry.scope.connection() else {
         return true;

@@ -13,7 +13,7 @@ import { shortcutKey } from "../desktop/commands/imeShortcut";
 import { SurfaceContext } from "../surface/SurfaceProfile";
 import type { ParsedDocument } from "./widgetDocument";
 import { WidgetNode } from "./WidgetNodes";
-import { useWidgetSorts, WidgetSortContext } from "./widgetMode";
+import { useWidgetSorts, WidgetSortContext, WidgetVerifiedContext } from "./widgetMode";
 
 const WidgetInspector = lazy(() => import("./WidgetInspector"));
 
@@ -26,6 +26,8 @@ export type WidgetViewProps = {
   closed?: boolean | undefined;
   /** When the published widget last changed. */
   updatedAtMs?: number | undefined;
+  /** Published through the Controller, which verified its image sources. */
+  verified?: boolean | undefined;
 };
 
 function Header({
@@ -43,21 +45,21 @@ function Header({
   const desktop = useContext(SurfaceContext)?.kind === "desktop";
   const toggle = desktop
     ? {
-      role: "button",
-      tabIndex: -1,
-      "data-desktop-widget-toggle": "widget",
-      "aria-expanded": open,
-      "aria-haspopup": "dialog" as const,
-      "aria-label": `${document.title}. Open widget`,
-      onClick: onOpen,
-      onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
-        const key = shortcutKey(event.nativeEvent);
-        if (key === "Enter" || key === " ") {
-          event.preventDefault();
-          onOpen();
-        }
-      },
-    }
+        role: "button",
+        tabIndex: -1,
+        "data-desktop-widget-toggle": "widget",
+        "aria-expanded": open,
+        "aria-haspopup": "dialog" as const,
+        "aria-label": `${document.title}. Open widget`,
+        onClick: onOpen,
+        onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
+          const key = shortcutKey(event.nativeEvent);
+          if (key === "Enter" || key === " ") {
+            event.preventDefault();
+            onOpen();
+          }
+        },
+      }
     : {};
   const mono = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" } as const;
   return (
@@ -70,13 +72,13 @@ function Header({
           flex: "1 1 auto",
           ...(desktop
             ? {
-              cursor: "pointer",
-              borderRadius: 1,
-              mx: -0.5,
-              px: 0.5,
-              outline: "none",
-              "&:focus-visible": { bgcolor: "action.focus" },
-            }
+                cursor: "pointer",
+                borderRadius: 1,
+                mx: -0.5,
+                px: 0.5,
+                outline: "none",
+                "&:focus-visible": { bgcolor: "action.focus" },
+              }
             : {}),
         }}
       >
@@ -147,33 +149,37 @@ export default function WidgetView(props: WidgetViewProps): React.JSX.Element {
     </Box>
   );
   return (
-    <WidgetSortContext.Provider value={sorts}>
-    <Paper
-      variant="outlined"
-      data-cowboy-widget=""
-      sx={{
-        my: 1,
-        px: 1.5,
-        py: 1.25,
-        display: "grid",
-        gap: 1,
-        minWidth: 0,
-        bgcolor: "background.paper",
-        contain: "layout paint",
-      }}
-    >
-      <Header {...props} open={open} onOpen={(): void => setOpen(true)} />
-      {document.presentation?.inline === false ? (
-        body
-      ) : (
-        <Collapsible maxHeight={HEIGHT[document.presentation?.height ?? "md"]}>{body}</Collapsible>
-      )}
-      {open ? (
-        <Suspense fallback={null}>
-          <WidgetInspector {...props} onClose={(): void => setOpen(false)} />
-        </Suspense>
-      ) : null}
-    </Paper>
-    </WidgetSortContext.Provider>
+    <WidgetVerifiedContext.Provider value={props.verified === true}>
+      <WidgetSortContext.Provider value={sorts}>
+        <Paper
+          variant="outlined"
+          data-cowboy-widget=""
+          sx={{
+            my: 1,
+            px: 1.5,
+            py: 1.25,
+            display: "grid",
+            gap: 1,
+            minWidth: 0,
+            bgcolor: "background.paper",
+            contain: "layout paint",
+          }}
+        >
+          <Header {...props} open={open} onOpen={(): void => setOpen(true)} />
+          {document.presentation?.inline === false ? (
+            body
+          ) : (
+            <Collapsible maxHeight={HEIGHT[document.presentation?.height ?? "md"]}>
+              {body}
+            </Collapsible>
+          )}
+          {open ? (
+            <Suspense fallback={null}>
+              <WidgetInspector {...props} onClose={(): void => setOpen(false)} />
+            </Suspense>
+          ) : null}
+        </Paper>
+      </WidgetSortContext.Provider>
+    </WidgetVerifiedContext.Provider>
   );
 }

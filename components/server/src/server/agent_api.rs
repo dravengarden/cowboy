@@ -36,6 +36,7 @@ mod observations;
 mod review_defaults;
 mod session_reads;
 mod usage_reads;
+mod widget_images;
 mod widgets;
 pub(super) use actions::{invoke, read_parent};
 /// Concurrent programs across the Controller; excess is refused, not queued.

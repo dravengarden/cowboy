@@ -28,7 +28,11 @@ describe("widget table sort", () => {
   });
 
   test("equal keys keep source order", () => {
-    const rows = [["x", 1], ["x", 2], ["x", 3]];
+    const rows = [
+      ["x", 1],
+      ["x", 2],
+      ["x", 3],
+    ];
     expect(sortedRowIndexes(rows, { column: 0, direction: "desc" }, undefined)).toEqual([0, 1, 2]);
     expect(sortedRowIndexes(rows, null, undefined)).toEqual([0, 1, 2]);
   });

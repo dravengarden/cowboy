@@ -6,6 +6,8 @@ import { Box, CssBaseline } from "@mui/material";
 import { approval, comparison, statusTable } from "../../contracts/widget-v1.examples.ts";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { Markdown } from "./Markdown";
+import { parseWidgetValue } from "./widgets/widgetDocument";
+import WidgetView from "./widgets/WidgetView";
 import { SurfaceContext, type SurfaceProfile } from "./surface/SurfaceProfile";
 import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
 import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
@@ -105,9 +107,74 @@ export async function runWidgetsBrowserConformance(): Promise<string[]> {
   passed.push(...(await inspectorChecks(render, container)));
   root.unmount();
   passed.push(await desktopKeyChecks(container));
+  passed.push(await imageChecks(container));
 
   container.remove();
   return passed;
+}
+
+const pictureWidget = {
+  schema: "cowboy.widget/1",
+  title: "Screenshots",
+  root: {
+    type: "stack",
+    children: [
+      {
+        type: "image",
+        alt: "Build dashboard",
+        caption: "after the fix",
+        src: { kind: "artifact", url: `/api/artifacts/${"a".repeat(64)}.png` },
+      },
+      {
+        type: "image",
+        alt: "Status glyph",
+        src: {
+          kind: "data",
+          mime: "image/png",
+          base64: "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGN4VqFBEmIY1TCqYfhqAAAUGoYQFRF6QAAAAABJRU5ErkJggg==",
+        },
+      },
+    ],
+  },
+};
+
+/** A published widget draws its verified images and opens them in the
+ *  lightbox; the same document as an inline fence shows only `alt` text. */
+async function imageChecks(container: HTMLElement): Promise<string> {
+  const root = createRoot(container);
+  const parsed = parseWidgetValue(pictureWidget);
+  check(parsed.ok, "the picture widget validates");
+  try {
+    flushSync(() =>
+      root.render(
+        <BrowserProductTheme>
+          <CssBaseline />
+          <Box sx={{ width: 760, p: 1 }}>
+            <WidgetView document={parsed.document} verified />
+            <Markdown text={fence(pictureWidget)} />
+          </Box>
+        </BrowserProductTheme>,
+      ),
+    );
+    const images = await waitFor(() => {
+      const found = [...container.querySelectorAll<HTMLImageElement>("[data-widget-image] img")];
+      return found.length === 2 && found.every((image) => image.complete && image.naturalWidth > 0)
+        ? found
+        : null;
+    }, "published images load");
+    check(images[0]!.naturalWidth === 48, "the artifact loads through ProtectedImage");
+    check(images[1]!.getBoundingClientRect().width <= 128, "a data image stays within 128 px");
+    const placeholders = container.querySelectorAll("[data-widget-image-placeholder]");
+    check(placeholders.length === 2, "an inline fence shows alt text, never pixels");
+    container.querySelector<HTMLElement>("[data-widget-image]")!.click();
+    await waitFor(
+      () => document.querySelector("[role='dialog'] img[alt='Build dashboard']"),
+      "the lightbox opens the image",
+    );
+    return "published images load and open; inline images stay text";
+  } finally {
+    root.unmount();
+  }
 }
 
 const DESKTOP: SurfaceProfile = {
@@ -322,6 +389,24 @@ export function showLongWidget(kind: "desktop" | "mobile" = "desktop"): void {
             <Markdown text={fence(longWidget)} />
           </Box>
         </SurfaceContext.Provider>
+      </BrowserProductTheme>,
+    ),
+  );
+}
+
+/** Leaves a published picture widget mounted for screenshots. */
+export function showPictureWidget(): void {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const parsed = parseWidgetValue(pictureWidget);
+  if (!parsed.ok) throw new Error(parsed.error);
+  flushSync(() =>
+    createRoot(container).render(
+      <BrowserProductTheme>
+        <CssBaseline />
+        <Box sx={{ p: 1.5, maxWidth: 760 }}>
+          <WidgetView document={parsed.document} verified handle="w3" updatedAtMs={Date.now()} />
+        </Box>
       </BrowserProductTheme>,
     ),
   );

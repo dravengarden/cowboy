@@ -259,6 +259,20 @@ pub(super) async fn post_edit(
     Ok(value)
 }
 
+fn session_cwd(state: &AppState, session: &str) -> Option<String> {
+    match session::resolve(
+        &state.hub,
+        &state.machine_control,
+        &state.service_id,
+        session,
+    )? {
+        CodeReadScope::Session(observed) => {
+            Some(observed.session().cwd().trim_end_matches('/').to_owned())
+        }
+        _ => None,
+    }
+}
+
 /// Files whose entry a delivery would show.
 fn changed_files(value: &Value) -> Vec<String> {
     value["files"]
@@ -276,8 +290,23 @@ async fn post_edit_value(
     meta: &SessionMeta,
     args: &Value,
 ) -> Result<Value, &'static str> {
-    only_keys(args, &["paths"]).map_err(|_| "invalid_argument")?;
-    let paths = paths(args).map_err(|_| "invalid_argument")?;
+    only_keys(args, &["paths", "changed"]).map_err(|_| "invalid_argument")?;
+    let paths = if args.get("changed") == Some(&Value::Bool(true)) && args.get("paths").is_none() {
+        // Files a shell command changed since the last read, from the
+        // standing observer; a session without one reports nothing.
+        let root = format!("{}/", session_cwd(state, &meta.id).ok_or("unavailable")?);
+        let changed: Vec<String> = codex_push::shell_changes(state, &meta.id)
+            .await
+            .into_iter()
+            .filter_map(|path| path.strip_prefix(&root).map(str::to_owned))
+            .collect();
+        if changed.is_empty() {
+            return Ok(serde_json::json!({"deliver":false,"files":[],"truncated":false}));
+        }
+        changed
+    } else {
+        paths(args).map_err(|_| "invalid_argument")?
+    };
     if paths.len() > post_edit::MAX_PATHS {
         return Err("invalid_argument");
     }
@@ -296,6 +325,8 @@ async fn post_edit_value(
     if !session::current(&state.hub, &state.machine_control, observed) {
         return Err("code_context_changed");
     }
+    // Later shell-made changes are reported from this position on.
+    codex_push::sync_cursor(state, &meta.id).await;
     let mut projected = post_edit::project(&value);
     post_edit::attach_writes(&mut projected, &value, |path| {
         let target = format!("{}/{path}", observed.session().cwd().trim_end_matches('/'));

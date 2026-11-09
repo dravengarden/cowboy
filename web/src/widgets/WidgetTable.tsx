@@ -227,7 +227,8 @@ export function WidgetTable({ node }: { node: TableNode }): React.JSX.Element {
   const perPage = WIDGET_LIMITS.inspectorPageRows;
   const paged = mode === "inspector" && order.length > perPage;
   const start = paged ? page * perPage : 0;
-  const end = mode === "inspector" ? (paged ? start + perPage : order.length) : WIDGET_LIMITS.previewRows;
+  const end =
+    mode === "inspector" ? (paged ? start + perPage : order.length) : WIDGET_LIMITS.previewRows;
   const rows = order.slice(start, end).map((index) => node.rows[index]!);
   const hidden = mode === "preview" ? order.length - rows.length : 0;
   const cards =

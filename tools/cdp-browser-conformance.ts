@@ -38,7 +38,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "session-maintenance": ["runSessionMaintenanceBrowserConformance", 8],
   "dormant-session": ["runDormantSessionBrowserConformance", 29],
   elicitation: ["runElicitationBrowserConformance", 6],
-  widgets: ["runWidgetsBrowserConformance", 13],
+  widgets: ["runWidgetsBrowserConformance", 14],
   subagents: ["runSubagentsBrowserConformance", 7],
   "background-tasks": ["runBackgroundTasksBrowserConformance", 12],
 };
@@ -52,6 +52,16 @@ const [entry, expectedTests] = selected;
 // The Draft suite installs the example editor plugin packed by the same tool
 // authors use (see idb-browser-conformance.ts).
 const files: Record<string, { type: string; body: Uint8Array }> = {};
+// The widgets suite loads a published image the way the Controller serves it.
+if (suite === "widgets") {
+  files[`/api/artifacts/${"a".repeat(64)}.png`] = {
+    type: "image/png",
+    body: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAN0lEQVR4nO3OQQ0AMAgEMEQhDrETMxccjyYV0Op5p1R8ICQkJJQeCAkJCaUHQkJCQumBkJDQsg8DHDCIME5CwwAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  };
+}
 if (suite === "draft-documents") {
   const packed = join(tmpdir(), `cowboy-${randomUUID()}.cowboy-plugin`);
   await writeFile(packed, "", { flag: "wx", mode: 0o600 });

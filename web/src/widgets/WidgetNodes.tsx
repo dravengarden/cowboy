@@ -1,7 +1,7 @@
 // Renders validated widget nodes with product MUI components
 // (docs/widgets.md §5.2, §7). Content is data: nothing here evaluates it.
-// Inline-carrier constraints (§6.4): images show their `alt`, inputs render
-// inert with their labels.
+// Inputs render inert with their labels; images draw only when the widget
+// was published and so verified by the Controller (WidgetImages.tsx).
 
 import {
   Alert,
@@ -16,7 +16,6 @@ import {
 } from "@mui/material";
 import CheckRounded from "@mui/icons-material/CheckRounded";
 import CloseRounded from "@mui/icons-material/CloseRounded";
-import ImageOutlined from "@mui/icons-material/ImageOutlined";
 import InsertDriveFileOutlined from "@mui/icons-material/InsertDriveFileOutlined";
 import RadioButtonUncheckedRounded from "@mui/icons-material/RadioButtonUncheckedRounded";
 import RemoveRounded from "@mui/icons-material/RemoveRounded";
@@ -27,6 +26,7 @@ import { cellParts, toneColor } from "./widgetFormat";
 import type { ParsedNode } from "./widgetDocument";
 import { WidgetLinkText } from "./WidgetLinkText";
 import { WidgetTable } from "./WidgetTable";
+import { GalleryNode, ImageNode } from "./WidgetImages";
 import { moreLabel, previewSlice, useWidgetMode } from "./widgetMode";
 import { WIDGET_LIMITS } from "../../../contracts/widget-v1.ts";
 
@@ -76,39 +76,6 @@ function StepIcon({ state }: { state: Step["state"] }): React.JSX.Element {
     default:
       return <RadioButtonUncheckedRounded color="disabled" sx={sx} />;
   }
-}
-
-function ImagePlaceholder({
-  alt,
-  caption,
-}: {
-  alt: string;
-  caption?: string | undefined;
-}): React.JSX.Element {
-  return (
-    <Box
-      role="img"
-      aria-label={alt}
-      data-widget-image-placeholder=""
-      sx={{
-        display: "flex",
-        gap: 1,
-        alignItems: "center",
-        border: 1,
-        borderColor: "divider",
-        borderRadius: 1,
-        px: 1.5,
-        py: 1,
-        color: "text.secondary",
-      }}
-    >
-      <ImageOutlined fontSize="small" />
-      <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-        {alt}
-        {caption ? ` — ${caption}` : ""}
-      </Typography>
-    </Box>
-  );
 }
 
 type Of<T extends ParsedNode["type"]> = Extract<ParsedNode, { type: T }>;
@@ -255,48 +222,48 @@ function KvNode({ node }: { node: Of<"kv"> }): React.JSX.Element {
   const { shown, hidden } = previewSlice(node.items, WIDGET_LIMITS.previewItems, useWidgetMode());
   return (
     <Box>
-    <Box
-      component="dl"
-      data-widget-kv=""
-      sx={{
-        m: 0,
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(min(260px, 100%), 1fr))",
-        gap: 1,
-      }}
-    >
-      {shown.map((item, index) => {
-        const parts = cellParts(
-          { v: item.v, ...(item.tone ? { tone: item.tone } : {}) },
-          undefined,
-        );
-        const color = toneColor(theme, parts.tone);
-        return (
-          <Box key={index} sx={{ minWidth: 0 }}>
-            <Typography component="dt" variant="caption" color="text.secondary">
-              {item.k}
-            </Typography>
-            <Typography
-              component="dd"
-              variant="body2"
-              sx={{
-                m: 0,
-                fontWeight: 600,
-                overflowWrap: "anywhere",
-                ...(color ? { color } : {}),
-              }}
-            >
-              {item.to?.kind === "url" ? (
-                <WidgetLinkText url={item.to.url}>{parts.text}</WidgetLinkText>
-              ) : (
-                parts.text
-              )}
-            </Typography>
-          </Box>
-        );
-      })}
-    </Box>
-    <MoreCaption hidden={hidden} noun="item" />
+      <Box
+        component="dl"
+        data-widget-kv=""
+        sx={{
+          m: 0,
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(260px, 100%), 1fr))",
+          gap: 1,
+        }}
+      >
+        {shown.map((item, index) => {
+          const parts = cellParts(
+            { v: item.v, ...(item.tone ? { tone: item.tone } : {}) },
+            undefined,
+          );
+          const color = toneColor(theme, parts.tone);
+          return (
+            <Box key={index} sx={{ minWidth: 0 }}>
+              <Typography component="dt" variant="caption" color="text.secondary">
+                {item.k}
+              </Typography>
+              <Typography
+                component="dd"
+                variant="body2"
+                sx={{
+                  m: 0,
+                  fontWeight: 600,
+                  overflowWrap: "anywhere",
+                  ...(color ? { color } : {}),
+                }}
+              >
+                {item.to?.kind === "url" ? (
+                  <WidgetLinkText url={item.to.url}>{parts.text}</WidgetLinkText>
+                ) : (
+                  parts.text
+                )}
+              </Typography>
+            </Box>
+          );
+        })}
+      </Box>
+      <MoreCaption hidden={hidden} noun="item" />
     </Box>
   );
 }
@@ -425,22 +392,6 @@ function AlertNode({ node }: { node: Of<"alert"> }): React.JSX.Element {
   );
 }
 
-function GalleryNode({ node }: { node: Of<"gallery"> }): React.JSX.Element {
-  return (
-    <Box
-      sx={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fill, minmax(min(200px, 100%), 1fr))",
-        gap: 1,
-      }}
-    >
-      {node.images.map((image, index) => (
-        <ImagePlaceholder key={index} alt={image.alt} caption={image.caption} />
-      ))}
-    </Box>
-  );
-}
-
 function ButtonNode({ node }: { node: Of<"button"> }): React.JSX.Element {
   return (
     <Box>
@@ -499,7 +450,7 @@ function WidgetLeaf({ node }: { node: Leaf }): React.JSX.Element {
     case "alert":
       return <AlertNode node={node} />;
     case "image":
-      return <ImagePlaceholder alt={node.alt} caption={node.caption} />;
+      return <ImageNode node={node} />;
     case "gallery":
       return <GalleryNode node={node} />;
     case "button":

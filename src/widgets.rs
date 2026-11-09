@@ -5,6 +5,10 @@
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 
+mod images;
+use images::image_source;
+pub use images::{ARTIFACT_PREFIX, SourceAt, artifact_name, image_sources};
+
 pub const SCHEMA: &str = "cowboy.widget/1";
 pub const DOCUMENT_BYTES: usize = 24 * 1024;
 const NODES: usize = 400;
@@ -202,16 +206,6 @@ fn list_items(value: Option<&Value>, path: &str, depth: usize) -> Result<usize, 
         }
     }
     Ok(count)
-}
-
-fn image_source(value: Option<&Value>, path: &str) -> Checked {
-    let map = object(value.ok_or_else(|| Invalid::at(path, "required"))?, path)?;
-    one_of(
-        map.get("kind"),
-        &format!("{path}.kind"),
-        &["artifact", "event", "data"],
-        false,
-    )
 }
 
 fn table(node: &Map<String, Value>, path: &str, budget: &mut Budget) -> Checked {

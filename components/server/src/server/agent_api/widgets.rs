@@ -86,6 +86,55 @@ fn generated_id(operation: &str) -> String {
     )
 }
 
+async fn publish(
+    state: &Arc<AppState>,
+    meta: &SessionMeta,
+    args: &Value,
+    operation: &str,
+    now: i64,
+) -> Result<Value, &'static str> {
+    let store = state.store.as_ref().ok_or("unavailable")?;
+    only_keys(args, &["widget_id", "document"]).map_err(|_| "invalid_argument")?;
+    let widget_id = match args.get("widget_id") {
+        None => generated_id(operation),
+        Some(Value::String(id)) if widgets::valid_id(id) => id.clone(),
+        Some(_) => {
+            return Ok(outcome(
+                "invalid_argument",
+                json!({"message":"widget_id must match [A-Za-z0-9_-]{1,64}"}),
+            ));
+        }
+    };
+    let mut document = args.get("document").cloned().unwrap_or(Value::Null);
+    if let Err(error) = widgets::validate(&document) {
+        return Ok(invalid(&error));
+    }
+    if let Some(refusal) = super::widget_images::resolve(state, meta, &mut document).await? {
+        return Ok(refusal);
+    }
+    let _order = WIDGET_WRITES.lock().await;
+    match store
+        .publish_session_widget(&meta.id, &widget_id, &document, now)
+        .await
+        .map_err(|error| unknown(&meta.id, error))?
+    {
+        PublishOutcome::Committed(widget) => {
+            push(state, &meta.id, &widget, operation);
+            Ok(success(
+                json!({"status":"committed","widget_id":widget.widget_id,"handle":widget.handle,
+                "revision":widget.revision,"state_version":widget.state_version}),
+            ))
+        }
+        PublishOutcome::Exists(widget) => {
+            Ok(outcome("exists", json!({"widget":meta_view(&widget)})))
+        }
+        PublishOutcome::Limit => Ok(outcome(
+            "widget_limit",
+            json!({"message":"at most 200 open and 500 total widgets per session"}),
+        )),
+    }
+}
+
 async fn effect(
     state: &Arc<AppState>,
     meta: &SessionMeta,
@@ -96,44 +145,7 @@ async fn effect(
     let store = state.store.as_ref().ok_or("unavailable")?;
     let now = chrono::Utc::now().timestamp_millis();
     match action {
-        "widgets.publish" => {
-            only_keys(args, &["widget_id", "document"]).map_err(|_| "invalid_argument")?;
-            let widget_id = match args.get("widget_id") {
-                None => generated_id(operation),
-                Some(Value::String(id)) if widgets::valid_id(id) => id.clone(),
-                Some(_) => {
-                    return Ok(outcome(
-                        "invalid_argument",
-                        json!({"message":"widget_id must match [A-Za-z0-9_-]{1,64}"}),
-                    ));
-                }
-            };
-            let document = args.get("document").cloned().unwrap_or(Value::Null);
-            if let Err(error) = widgets::validate(&document) {
-                return Ok(invalid(&error));
-            }
-            let _order = WIDGET_WRITES.lock().await;
-            match store
-                .publish_session_widget(&meta.id, &widget_id, &document, now)
-                .await
-                .map_err(|error| unknown(&meta.id, error))?
-            {
-                PublishOutcome::Committed(widget) => {
-                    push(state, &meta.id, &widget, operation);
-                    Ok(success(
-                        json!({"status":"committed","widget_id":widget.widget_id,"handle":widget.handle,
-                        "revision":widget.revision,"state_version":widget.state_version}),
-                    ))
-                }
-                PublishOutcome::Exists(widget) => {
-                    Ok(outcome("exists", json!({"widget":meta_view(&widget)})))
-                }
-                PublishOutcome::Limit => Ok(outcome(
-                    "widget_limit",
-                    json!({"message":"at most 200 open and 500 total widgets per session"}),
-                )),
-            }
-        }
+        "widgets.publish" => publish(state, meta, args, operation, now).await,
         "widgets.update" => {
             only_keys(args, &["widget_id", "expected_revision", "change"])
                 .map_err(|_| "invalid_argument")?;
@@ -151,7 +163,7 @@ async fn effect(
                 .and_then(Value::as_object)
                 .ok_or("invalid_argument")?;
             let _order = WIDGET_WRITES.lock().await;
-            let write = match change.get("type").and_then(Value::as_str) {
+            let mut write = match change.get("type").and_then(Value::as_str) {
                 Some("replace") => {
                     let document = change.get("document").cloned().unwrap_or(Value::Null);
                     if let Err(error) = widgets::validate(&document) {
@@ -197,6 +209,11 @@ async fn effect(
                     ));
                 }
             };
+            if let WidgetWrite::Document(document) = &mut write
+                && let Some(refusal) = super::widget_images::resolve(state, meta, document).await?
+            {
+                return Ok(refusal);
+            }
             if let WidgetWrite::Close(Some(summary)) = &write {
                 let current = store
                     .session_widget(&meta.id, widget_id)

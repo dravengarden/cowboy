@@ -13,6 +13,14 @@ export function useWidgetMode(): WidgetMode {
   return useContext(WidgetModeContext);
 }
 
+/** True for a published widget, whose image sources the Controller verified;
+ *  an inline fence is not verified and shows image `alt` text only. */
+export const WidgetVerifiedContext = createContext(false);
+
+export function useWidgetVerified(): boolean {
+  return useContext(WidgetVerifiedContext);
+}
+
 /** Table sort shared by one widget's row and its inspector, keyed by the
  *  parsed table node (both views draw the same document object). */
 export type WidgetSorts = {
@@ -26,8 +34,7 @@ export function useWidgetSorts(): WidgetSorts {
   const [sorts, setSorts] = useState<ReadonlyMap<object, SortState>>(() => new Map());
   return {
     get: (node) => sorts.get(node) ?? null,
-    set: (node, sort) =>
-      setSorts((current) => new Map(current).set(node, sort)),
+    set: (node, sort) => setSorts((current) => new Map(current).set(node, sort)),
   };
 }
 
