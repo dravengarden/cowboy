@@ -1621,8 +1621,19 @@ shared: every card keeps its own browser exactly as above.
   and resolution, which recomputes every member's family before a share key
   is used and refuses to open, read or attach (rather than share) when two
   members would have one family or a member's family changed or is unknown.
+  A member, even one leaving or not in any share, must be the owner's own
+  identity (`account_not_found` otherwise).
   So Claude · Lark can never be linked with Claude · Lynx, and two OpenAI
   accounts never share.
+- **Family binding (hard).** The profile may keep a member's cookies after it
+  leaves, so each family of a share's profile stays bound to the first member
+  of that family that joined (`provider_browser_share_bindings`, recorded at
+  join). Leaving and revocation keep the binding; another account of that
+  family is refused (`browser_share_family_bound`) until the profile is fresh:
+  a reset of the share that its Machine confirmed (`owner_request`) while the
+  share has no placement on another Machine renews the bindings to the current
+  members, and deleting the share removes them (a new share is a new key with
+  an empty profile). The bound member itself may rejoin.
 - **Key.** `browser_shares::share_key(owner, share_id)`: the first 16 bytes
   of `sha256("cowboy-browser-share-v1\0" ‖ owner ‖ "\0" ‖ share_id)` as a
   version 8 UUID. Its domain differs from the card keys', so it never equals
@@ -1654,6 +1665,9 @@ shared: every card keeps its own browser exactly as above.
   share, or whose share was deleted, ends at its next check.
 - **Placement.** A share has one placement, like an account: once its
   browser lives on a Machine it opens only there, whichever member opens it.
+  The admission re-reads the share's placements under the owner lock, so of
+  two concurrent first opens on different Machines only one is placed (the
+  other gets `browser_not_placed`).
   Its first Machine follows the opening member's credential Machines (else the
   first-Machine chooser). Members' own placements are never reused.
 - **Profiles.** A new share starts with a fresh empty profile under its key.
@@ -1671,7 +1685,16 @@ shared: every card keeps its own browser exactly as above.
   share's browser.
 - **Reset** from a member resets the share's profile, the one the member uses;
   the state read lists the affected members and the viewer's reset
-  confirmation names them. Because other members depend on that profile, a
+  confirmation names them. Every state read and lifecycle answer carries
+  `browser_identity` (`own`, or `share:<share_id>:<membership revision>`), and
+  a reset must send it back as `expected_browser`: under a per-owner fence
+  that also serializes membership changes, the reset is refused
+  (`browser_identity_changed`) when the card joined, left or moved since, so
+  it never deletes a profile other than the one its caller saw. The web
+  confirmation captures the identity with the target and closes when it
+  changes; every panel (account card, account settings, sign-in link) takes
+  the sharing metadata from one source and starts over when the card's
+  browser identity changes. Because other members depend on that profile, a
   reset also needs the member's own browser access (available and enabled);
   stopping the share's browser stays possible for any member, as for every
   browser.
@@ -1681,9 +1704,15 @@ shared: every card keeps its own browser exactly as above.
   ordinary `revoke_browser` (stable operation id per owner and share, after
   any in-flight open of that key). Each Machine's confirmation removes that
   placement under the owner lock; after the last one the share is forgotten.
-  A Machine that is offline is retried when it reconnects, so a reboot
-  converges without a human step. A deleting share admits no member and no
-  open.
+  A pending deletion is retried with backoff (5 s doubling to 5 min, the same
+  Machine operation id) while its Machine stays connected, immediately when
+  the Machine reconnects, and after a Controller restart (the deleting share
+  is durable), so a timed-out revoke or a reboot converges without a human
+  step. A deleting share admits no member and no open.
+- **Effects.** Viewer endings are owner-scoped (owner and member). A replayed
+  `accounts.update` receipt reruns no browser effect, and a deferred
+  hibernate runs only while the change that caused it still holds (the member
+  is still in that share, the browser still disabled).
 - **API.** Through `accounts.update`, with the registry revision and receipt:
   `{type: "create_browser_share", label}` (the answer carries `share_id`),
   `{type: "rename_browser_share", share_id, label}`,
@@ -1691,7 +1720,9 @@ shared: every card keeps its own browser exactly as above.
   `{type: "set_browser_share", member: {account_id} | {card}, share_id}`
   (`null` leaves). Joining a card needs a card the Service collects.
   `accounts.list` reports `browser_shares: [{share_id, label, created_ms,
-  revision, deleting, members: [{member, family, account_id}]}]`,
+  revision, deleting, members: [{member, family, account_id}],
+  bound: [{family, account_id}]}]` (renaming does not change the membership
+  revision),
   `browser_share_families` (Provider id → family) and each legacy card's
   `share_id`; a named account's share is the one listing it as a member.
 - **Web.** Account settings has a "Shared browser" section to create, rename
