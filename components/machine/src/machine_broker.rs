@@ -3272,17 +3272,7 @@ impl Broker {
         );
         worker_launch::validate_launch_placement(session, &provider, &behavior)?;
         let session_environment = self.launch_session_environment(session, &provider, &behavior)?;
-        let worker_command = self
-            .generation_commands
-            .lock()
-            .get(&session.generation)
-            .cloned()
-            .with_context(|| {
-                format!(
-                    "no worker executable registered for generation {}",
-                    session.generation
-                )
-            })?;
+        let worker_command = self.launch_worker_command(session).await?;
         if self.args.spawn_mode == SpawnMode::Direct {
             self.await_previous_direct_worker(session).await?;
         }

@@ -28,6 +28,37 @@ impl Broker {
     }
 }
 
+/// Workers record `--mcp-plan` in their CLI; probe each executable once.
+pub(super) async fn ensure_worker_accepts_plan(worker: &std::path::Path) -> Result<()> {
+    static ACCEPTED: std::sync::LazyLock<
+        parking_lot::Mutex<std::collections::HashMap<std::path::PathBuf, bool>>,
+    > = std::sync::LazyLock::new(Default::default);
+    let cached = ACCEPTED.lock().get(worker).copied();
+    let accepted = if let Some(accepted) = cached {
+        accepted
+    } else {
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::process::Command::new(worker)
+                .arg("--help")
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .context("worker capability probe timed out")??;
+        let accepted = output.status.success()
+            && String::from_utf8_lossy(&output.stdout).contains("--mcp-plan");
+        ACCEPTED.lock().insert(worker.to_path_buf(), accepted);
+        accepted
+    };
+    ensure!(
+        accepted,
+        "this Machine's worker generation does not support MCP launch plans"
+    );
+    Ok(())
+}
+
 pub(super) fn same_placement(old: &StartSession, session: &StartSession) -> bool {
     old.cwd == session.cwd && old.mcp_plan == session.mcp_plan
 }
@@ -115,4 +146,36 @@ pub(super) fn binding_matches(previous: &StartSession, incoming: &StartSession) 
                 && previous.provider_version == incoming.provider_version
                 && previous.provider_generation_digest == incoming.provider_generation_digest
                 && previous.provider_auth_generation == incoming.provider_auth_generation))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fn worker(root: &std::path::Path, name: &str, help: &str) -> std::path::PathBuf {
+        let path = root.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\necho '{help}'\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn a_retained_worker_without_mcp_plan_is_refused_before_launch() {
+        let root = tempfile::tempdir().unwrap();
+        let current = worker(
+            root.path(),
+            "current",
+            "--execution-binding <B>\n--mcp-plan <P>",
+        );
+        let retained = worker(root.path(), "retained", "--execution-binding <B>");
+        super::ensure_worker_accepts_plan(&current).await.unwrap();
+        let error = super::ensure_worker_accepts_plan(&retained)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not support MCP launch plans")
+        );
+    }
 }

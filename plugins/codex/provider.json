@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.5.26",
+  "version": "3.5.27",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.2.0",
   "display": {
@@ -299,6 +299,7 @@
     "required_capabilities": [
       "provider.runtime.v1",
       "provider.execution-jsonrpc.v1",
+      "provider.mcp-bindings.v1",
       "provider.managed-profiles.v1",
       "provider.managed-image.v1"
     ]
