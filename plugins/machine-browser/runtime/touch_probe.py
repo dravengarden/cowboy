@@ -100,6 +100,9 @@ class Client:
         self.max = struct.unpack(">HHH", fmt[4:10])
         self.shift = fmt[10:13]
         self.exact(struct.unpack(">I", self.exact(4))[0])
+        self.set_encodings(encodings)
+
+    def set_encodings(self, encodings):
         self.sock.sendall(struct.pack(">BxH", 2, len(encodings)) + b"".join(struct.pack(">i", e) for e in encodings))
 
     def exact(self, count):
@@ -197,6 +200,11 @@ def protocol_checks(path, record, accept=True):
         stock.close()
         return
     record("touch_ack", bool(ack) and ack["version"] == 1 and ack["contacts"] == 10, ack=ack)
+    # Dropping the encoding and requesting it again sends no second 192.
+    asking.set_encodings([0])
+    asking.set_encodings([0, TOUCH_ENCODING])
+    again = wait_ack(asking, 1.5)
+    record("touch_ack_at_most_once_per_connection", again is None and asking.alive(), second=again)
     # A client that was never acknowledged gets the stock answer to 193.
     rogue = Client(path, [0])
     rogue.touch(BEGIN, 1, 10, 10)
