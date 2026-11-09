@@ -101,7 +101,9 @@ pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &
         json!({"registry":registry,"display_preferences":display,"revoked_accounts":revoked,"session_admission":if enabled {"enabled"} else {"not_enabled"},
         "session_providers":if enabled {vec!["claude-code"]} else {vec![]},
         // The Service gate of the optional Machine browser (`accounts.machine_browser`).
-        "machine_browser":if browser::gate_open(state) {"enabled"} else {"not_enabled"}}),
+        "machine_browser":if browser::gate_open(state) {"enabled"} else {"not_enabled"},
+        // Each legacy default usage card's own browser key and enablement.
+        "legacy_browsers":browser::legacy::list_value(state, owner).await?}),
     )
 }
 
@@ -122,6 +124,21 @@ pub(super) async fn update_value(
     input: &Mutation,
 ) -> Result<Value, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
+    // A legacy card's browser is enabled only for a card the Service collects;
+    // disabling is always accepted.
+    if let Change::SetLegacyBrowserEnabled {
+        card,
+        enabled: true,
+    } = &input.change
+        && !browser::legacy::bound_cards(state).contains_key(card)
+        && store
+            .provider_account_receipt(owner, operation)
+            .await
+            .map_err(|_| "unavailable")?
+            .is_none()
+    {
+        return Err("account_unavailable");
+    }
     // Metadata writes share one authority and receipt; no native login, usage
     // probe, credential access or worker activation happens here.
     match store
@@ -140,12 +157,18 @@ pub(super) async fn update_value(
             }
             // Disabling the account or its browser ends the owner's viewer at
             // once and hibernates the instance; the snapshot is kept.
-            if let Change::SetBrowserEnabled { id, enabled: false }
-            | Change::SetEnabled { id, enabled: false } = &input.change
-            {
-                state.browsers.cancel_account_viewers(id.as_str());
+            let disabled = match &input.change {
+                Change::SetBrowserEnabled { id, enabled: false }
+                | Change::SetEnabled { id, enabled: false } => Some(id.clone()),
+                // Only this card's browser: its own key, never another card's.
+                Change::SetLegacyBrowserEnabled { enabled: false, .. } => {
+                    Some(receipt.account_id.clone())
+                }
+                _ => None,
+            };
+            if let Some(account) = disabled {
+                state.browsers.cancel_account_viewers(account.as_str());
                 let state = Arc::clone(state);
-                let account = id.clone();
                 tokio::spawn(async move {
                     if let Err(error) = browser::hibernate_running(&state, &account).await {
                         tracing::info!(%error, "browser hibernate after disable did not complete");

@@ -48,7 +48,7 @@ impl Store {
     pub async fn admit_browser_placement(
         &self,
         owner: &str,
-        account: &ProviderAccountId,
+        (account, card): (&ProviderAccountId, Option<&str>),
         machine_id: &str,
         instance_id: &str,
         now_ms: i64,
@@ -58,19 +58,26 @@ impl Store {
             let locked = sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")
                 .bind(owner).execute(&mut *tx).await?;
             if locked.rows_affected() != 1 {
-                return Ok(Err(Refusal::AccountUnavailable));
+                return Ok(Err(if card.is_some() { Refusal::BrowserNotEnabled } else { Refusal::AccountUnavailable }));
             }
             let value: String = sqlx::query_scalar("SELECT value FROM provider_account_registries WHERE owner_user_id=$1")
                 .bind(owner).fetch_one(&mut *tx).await?;
             let registry: Registry = serde_json::from_str(&value)?;
-            let Some(entry) = registry.accounts.iter().find(|entry| &entry.id == account) else {
-                return Ok(Err(Refusal::AccountUnavailable));
-            };
-            if !entry.available() {
-                return Ok(Err(Refusal::AccountUnavailable));
-            }
-            if !entry.browser_enabled {
-                return Ok(Err(Refusal::BrowserNotEnabled));
+            let entry = registry.accounts.iter().find(|entry| &entry.id == account);
+            match (card, entry) {
+                // A legacy card's browser: its own key and its own enablement,
+                // never a registry account's.
+                (Some(card), None) if super::legacy_browsers::account(owner, card) == *account => {
+                    let enabled: Option<String> = sqlx::query_scalar("SELECT card_id FROM provider_legacy_browsers WHERE owner_user_id=$1 AND card_id=$2")
+                        .bind(owner).bind(card).fetch_optional(&mut *tx).await?;
+                    if enabled.is_none() {
+                        return Ok(Err(Refusal::BrowserNotEnabled));
+                    }
+                }
+                (None, Some(entry)) if !entry.available() => return Ok(Err(Refusal::AccountUnavailable)),
+                (None, Some(entry)) if !entry.browser_enabled => return Ok(Err(Refusal::BrowserNotEnabled)),
+                (None, Some(_)) => {}
+                _ => return Ok(Err(Refusal::AccountUnavailable)),
             }
             sqlx::query("INSERT INTO browser_placements (owner_user_id,account_id,machine_id,instance_id,profile_revision,last_open_ms) VALUES ($1,$2,$3,$4,0,$5) ON CONFLICT (owner_user_id,account_id,machine_id) DO UPDATE SET instance_id=excluded.instance_id,last_open_ms=excluded.last_open_ms")
                 .bind(owner).bind(account.as_str()).bind(machine_id).bind(instance_id).bind(now_ms)
@@ -347,7 +354,7 @@ mod tests {
         let missing: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
         assert_eq!(
             store
-                .admit_browser_placement(owner, &missing, "ovh", "b-1", 1)
+                .admit_browser_placement(owner, (&missing, None), "ovh", "b-1", 1)
                 .await
                 .unwrap(),
             Err(Refusal::AccountUnavailable)
@@ -356,7 +363,7 @@ mod tests {
         // The account exists, but its browser is off: nothing is placed.
         assert_eq!(
             store
-                .admit_browser_placement(owner, &account, "ovh", "b-1", 1)
+                .admit_browser_placement(owner, (&account, None), "ovh", "b-1", 1)
                 .await
                 .unwrap(),
             Err(Refusal::BrowserNotEnabled)
@@ -370,7 +377,7 @@ mod tests {
         );
         enable_browser(&store, owner, &account).await;
         store
-            .admit_browser_placement(owner, &account, "ovh", "b-1", 10)
+            .admit_browser_placement(owner, (&account, None), "ovh", "b-1", 10)
             .await
             .unwrap()
             .unwrap();
@@ -385,7 +392,7 @@ mod tests {
             .unwrap();
         // A later admission keeps the reported revision.
         store
-            .admit_browser_placement(owner, &account, "ovh", "b-1", 20)
+            .admit_browser_placement(owner, (&account, None), "ovh", "b-1", 20)
             .await
             .unwrap()
             .unwrap();
@@ -410,7 +417,7 @@ mod tests {
         // Committed before dispatch: an open that never answered still
         // leaves its placement for the revocation plan.
         store
-            .admit_browser_placement(owner, &account, "ovh", "b-1", 10)
+            .admit_browser_placement(owner, (&account, None), "ovh", "b-1", 10)
             .await
             .unwrap()
             .unwrap();
@@ -426,7 +433,7 @@ mod tests {
         assert_eq!(receipt.revocation.unwrap().browsers.len(), 1);
         assert_eq!(
             store
-                .admit_browser_placement(owner, &account, "hawk", "b-2", 30)
+                .admit_browser_placement(owner, (&account, None), "hawk", "b-2", 30)
                 .await
                 .unwrap(),
             Err(Refusal::AccountUnavailable)
@@ -454,6 +461,163 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    async fn set_legacy(store: &Store, owner: &str, operation: &str, card: &str, enabled: bool) {
+        apply(
+            store,
+            owner,
+            operation,
+            super::super::Change::SetLegacyBrowserEnabled {
+                card: card.into(),
+                enabled,
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_legacy_card_browser_is_off_until_its_owner_enables_that_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = sqlite_store(&dir).await;
+        let owner = "owner";
+        let lynx = super::super::legacy_browsers::account(owner, "anthropic");
+        let mole = super::super::legacy_browsers::account(owner, "deepseek");
+        // Off by default, also before the owner has any registry.
+        assert!(store.legacy_browser_cards(owner).await.unwrap().is_empty());
+        assert_eq!(
+            store
+                .admit_browser_placement(owner, (&lynx, Some("anthropic")), "ovh", "b-1", 1)
+                .await
+                .unwrap(),
+            Err(Refusal::BrowserNotEnabled)
+        );
+        // Enabling one card enables only that card.
+        set_legacy(&store, owner, "mole-on", "deepseek", true).await;
+        assert_eq!(
+            store.legacy_browser_cards(owner).await.unwrap(),
+            vec!["deepseek".to_owned()]
+        );
+        assert_eq!(
+            store
+                .admit_browser_placement(owner, (&lynx, Some("anthropic")), "ovh", "b-1", 1)
+                .await
+                .unwrap(),
+            Err(Refusal::BrowserNotEnabled)
+        );
+        // A card key never borrows another card's enablement, nor another owner's.
+        assert_eq!(
+            store
+                .admit_browser_placement(owner, (&lynx, Some("deepseek")), "ovh", "b-1", 1)
+                .await
+                .unwrap(),
+            Err(Refusal::AccountUnavailable)
+        );
+        assert!(
+            store
+                .legacy_browser_cards("other")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .admit_browser_placement(owner, (&mole, Some("deepseek")), "ovh", "b-2", 2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            store.browser_placements(owner, &mole).await.unwrap().len(),
+            1
+        );
+        assert!(
+            store
+                .browser_placements(owner, &lynx)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        // Disabling withdraws admission; the placement (retained profile) stays.
+        set_legacy(&store, owner, "mole-off", "deepseek", false).await;
+        assert!(store.legacy_browser_cards(owner).await.unwrap().is_empty());
+        assert_eq!(
+            store
+                .admit_browser_placement(owner, (&mole, Some("deepseek")), "ovh", "b-2", 3)
+                .await
+                .unwrap(),
+            Err(Refusal::BrowserNotEnabled)
+        );
+        assert_eq!(
+            store.browser_placements(owner, &mole).await.unwrap().len(),
+            1
+        );
+        // The registry account list is untouched by card enablement.
+        assert!(
+            store
+                .provider_accounts(owner)
+                .await
+                .unwrap()
+                .accounts
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn named_and_legacy_browsers_never_share_admission_or_revocation() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = sqlite_store(&dir).await;
+        let owner = "owner";
+        let named = created_account(&store, owner).await;
+        enable_browser(&store, owner, &named).await;
+        set_legacy(&store, owner, "lynx-on", "anthropic", true).await;
+        let lynx = super::super::legacy_browsers::account(owner, "anthropic");
+        assert_ne!(lynx, named);
+        // A named account cannot be admitted as a card, nor a card key as a
+        // named account.
+        assert_eq!(
+            store
+                .admit_browser_placement(owner, (&named, Some("anthropic")), "ovh", "b-n", 1)
+                .await
+                .unwrap(),
+            Err(Refusal::AccountUnavailable)
+        );
+        assert_eq!(
+            store
+                .admit_browser_placement(owner, (&lynx, None), "ovh", "b-l", 1)
+                .await
+                .unwrap(),
+            Err(Refusal::AccountUnavailable)
+        );
+        store
+            .admit_browser_placement(owner, (&named, None), "ovh", "b-n", 1)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .admit_browser_placement(owner, (&lynx, Some("anthropic")), "ovh", "b-l", 1)
+            .await
+            .unwrap()
+            .unwrap();
+        // Revoking the named account captures only its own browser.
+        let receipt = apply(
+            &store,
+            owner,
+            "revoke",
+            super::super::Change::BeginRevocation { id: named.clone() },
+        )
+        .await;
+        let plan = receipt.revocation.unwrap();
+        assert_eq!(plan.browsers.len(), 1);
+        assert_eq!(plan.browsers[0].instance_id, "b-n");
+        // The card's browser stays admitted and placed.
+        store
+            .admit_browser_placement(owner, (&lynx, Some("anthropic")), "ovh", "b-l", 2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            store.browser_placements(owner, &lynx).await.unwrap().len(),
+            1
         );
     }
 }

@@ -1,7 +1,8 @@
-//! Owner-operated Machine browsers for named accounts: admission (Service
-//! gate, account enablement), Machine selection, the lifecycle commands the
-//! owner may issue, durable placements and the state read shared by HTTP and
-//! MCP. The display stream itself is `viewer` and `machine_stream`.
+//! Owner-operated Machine browsers for named accounts and for the legacy
+//! default usage cards (`legacy`): admission (Service gate, enablement),
+//! Machine selection, the lifecycle commands the owner may issue, durable
+//! placements and the state read shared by HTTP and MCP. The display stream
+//! itself is `viewer` and `machine_stream`.
 //! See `docs/machine-browser.md`.
 
 use super::*;
@@ -17,6 +18,7 @@ use coordinator::Observed;
 use serde_json::{Value, json};
 
 pub(in crate::server) mod coordinator;
+pub(in crate::server) mod legacy;
 pub(in crate::server) mod machine_stream;
 pub(in crate::server) mod revocation;
 pub(in crate::server) mod viewer;
@@ -73,26 +75,92 @@ pub(in crate::server) enum Authority {
     Reset,
 }
 
-/// The owner's named account. Resolved before any gate or Machine is
-/// consulted, so another owner's account is indistinguishable from none.
+/// Whose browser a key names: a named registry account, or a legacy
+/// default usage card through its own derived key. The two never overlap.
+#[derive(Clone, Debug)]
+pub(in crate::server) enum BrowserAccount {
+    Named(Account),
+    Legacy(legacy::LegacyCard),
+}
+
+impl BrowserAccount {
+    fn available(&self) -> bool {
+        match self {
+            Self::Named(account) => account.available(),
+            Self::Legacy(card) => card.bound && card.card.is_some(),
+        }
+    }
+
+    fn browser_enabled(&self) -> bool {
+        match self {
+            Self::Named(account) => account.browser_enabled,
+            Self::Legacy(card) => card.enabled,
+        }
+    }
+
+    /// Legacy cards are not revocable through the account registry.
+    fn revoking(&self) -> bool {
+        matches!(self, Self::Named(account) if account.revoking)
+    }
+
+    /// The legacy card a placement admission checks, `None` for a named account.
+    fn card(&self) -> Option<&str> {
+        match self {
+            Self::Named(_) => None,
+            Self::Legacy(card) => card.card.as_deref(),
+        }
+    }
+}
+
+/// The owner's browser account. Resolved before any gate or Machine is
+/// consulted, so another owner's account or card is indistinguishable from
+/// none. The shared `default` identity names no single card and is refused.
 async fn owned_account(
     state: &AppState,
     owner: &str,
     account_id: &ProviderAccountId,
-) -> Result<Account, &'static str> {
+) -> Result<BrowserAccount, &'static str> {
     if account_id.is_default() {
-        return Err("named_account_required");
+        return Err("browser_key_required");
     }
     let store = state.store.as_ref().ok_or("unavailable")?;
     let registry = store
         .provider_accounts(owner)
         .await
         .map_err(|_| "unavailable")?;
-    registry
+    if let Some(account) = registry
         .accounts
         .into_iter()
         .find(|account| &account.id == account_id)
+    {
+        return Ok(BrowserAccount::Named(account));
+    }
+    legacy::resolve(state, owner, account_id)
+        .await?
+        .map(BrowserAccount::Legacy)
         .ok_or("account_unavailable")
+}
+
+/// Machines holding the account's credentials: a named account's native
+/// generations, or the Machines with a legacy card's default credentials.
+async fn credential_machines(
+    state: &AppState,
+    owner: &str,
+    (account_id, account): (&ProviderAccountId, &BrowserAccount),
+) -> Result<Vec<String>, &'static str> {
+    match account {
+        BrowserAccount::Named(_) => state
+            .store
+            .as_ref()
+            .ok_or("unavailable")?
+            .native_generation_machines(owner, account_id)
+            .await
+            .map_err(|_| "unavailable"),
+        BrowserAccount::Legacy(card) => Ok(match &card.card {
+            Some(card) => legacy::credential_machines(state, card).await,
+            None => Vec::new(),
+        }),
+    }
 }
 
 pub(in crate::server) fn gate_open(state: &AppState) -> bool {
@@ -105,7 +173,7 @@ pub(in crate::server) fn gate_open(state: &AppState) -> bool {
 fn authorize_account(
     authority: Authority,
     gate_open: bool,
-    account: &Account,
+    account: &BrowserAccount,
 ) -> Result<(), &'static str> {
     match authority {
         Authority::Launch => {
@@ -115,13 +183,13 @@ fn authorize_account(
             if !account.available() {
                 return Err("account_unavailable");
             }
-            if !account.browser_enabled {
+            if !account.browser_enabled() {
                 return Err("browser_not_enabled");
             }
             Ok(())
         }
         Authority::Stop => Ok(()),
-        Authority::Reset if account.revoking => Err("account_revoking"),
+        Authority::Reset if account.revoking() => Err("account_revoking"),
         Authority::Reset => Ok(()),
     }
 }
@@ -218,7 +286,7 @@ pub(in crate::server) fn named_instance(
 async fn machine_for(
     state: &AppState,
     owner: &str,
-    account_id: &ProviderAccountId,
+    (account_id, account): (&ProviderAccountId, &BrowserAccount),
     pinned: Option<&str>,
 ) -> Result<(String, ConnectionToken), &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
@@ -228,10 +296,7 @@ async fn machine_for(
         .map_err(|_| "unavailable")?;
     if let Some(machine) = pinned {
         if placed_on(&placements, machine).is_err() {
-            let native = store
-                .native_generation_machines(owner, account_id)
-                .await
-                .map_err(|_| "unavailable")?;
+            let native = credential_machines(state, owner, (account_id, account)).await?;
             if !first_machine_allowed(&placements, &native, machine) {
                 return Err("browser_not_placed");
             }
@@ -250,11 +315,7 @@ async fn machine_for(
         .into_iter()
         .map(|placement| placement.machine_id)
         .collect();
-    for machine in store
-        .native_generation_machines(owner, account_id)
-        .await
-        .map_err(|_| "unavailable")?
-    {
+    for machine in credential_machines(state, owner, (account_id, account)).await? {
         if !candidates.contains(&machine) {
             candidates.push(machine);
         }
@@ -419,10 +480,7 @@ pub(in crate::server) async fn state_value(
         &placements,
         machine,
     );
-    let native = store
-        .native_generation_machines(owner, account_id)
-        .await
-        .map_err(|_| "unavailable")?;
+    let native = credential_machines(state, owner, (account_id, &account)).await?;
     let mut value = json!({"machine_id": Value::Null, "state": Value::Null, "placements": placements, "admission": gate,
         "choose_machine": owner_chooses_machine(&placements, &native),
         "capable_machines": capable_machines(&state.browsers, &state.machine_control)});
@@ -509,7 +567,7 @@ pub(in crate::server) async fn refresh_placements(
 async fn dispatch_open(
     state: &AppState,
     owner: &str,
-    account_id: &ProviderAccountId,
+    (account_id, card): (&ProviderAccountId, Option<&str>),
     (machine_id, connection): (&str, &ConnectionToken),
     purpose: Purpose,
     viewport: Viewport,
@@ -519,7 +577,7 @@ async fn dispatch_open(
     let lifecycle = state.browsers.lifecycle_lock(account_id.as_str());
     let dispatch = lifecycle.lock().await;
     store
-        .admit_browser_placement(owner, account_id, machine_id, &instance, now_ms())
+        .admit_browser_placement(owner, (account_id, card), machine_id, &instance, now_ms())
         .await
         .map_err(|error| {
             tracing::warn!(%error, "browser placement not committed; open refused");
@@ -586,13 +644,15 @@ pub(in crate::server) async fn open_tab(
     viewport: Viewport,
     machine: Option<&str>,
 ) -> Result<Value, &'static str> {
-    admit(state, owner, account_id).await?;
+    let account = owned_account(state, owner, account_id).await?;
+    authorize_account(Authority::Launch, gate_open(state), &account)?;
     viewport.validate().map_err(|_| "invalid_viewport")?;
-    let (machine_id, connection) = machine_for(state, owner, account_id, machine).await?;
+    let (machine_id, connection) =
+        machine_for(state, owner, (account_id, &account), machine).await?;
     let event = dispatch_open(
         state,
         owner,
-        account_id,
+        (account_id, account.card()),
         (&machine_id, &connection),
         Purpose::Tab,
         viewport,
@@ -767,9 +827,7 @@ fn error_status(code: &str) -> StatusCode {
     match code {
         "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
         "account_unavailable" | "browser_not_placed" => StatusCode::NOT_FOUND,
-        "invalid_argument" | "invalid_viewport" | "named_account_required" => {
-            StatusCode::BAD_REQUEST
-        }
+        "invalid_argument" | "invalid_viewport" | "browser_key_required" => StatusCode::BAD_REQUEST,
         _ => StatusCode::CONFLICT,
     }
 }
@@ -1023,8 +1081,8 @@ mod tests {
         );
     }
 
-    fn account(enabled: bool, revoking: bool, browser_enabled: bool) -> Account {
-        Account {
+    fn account(enabled: bool, revoking: bool, browser_enabled: bool) -> BrowserAccount {
+        BrowserAccount::Named(Account {
             id: uuid::Uuid::new_v4().to_string().try_into().unwrap(),
             provider_id: "claude-code".into(),
             label: "Test".into(),
@@ -1033,7 +1091,69 @@ mod tests {
             identity_fingerprint: None,
             admission_revision: None,
             browser_enabled,
+        })
+    }
+
+    fn card(card: Option<&str>, bound: bool, enabled: bool) -> BrowserAccount {
+        BrowserAccount::Legacy(legacy::LegacyCard {
+            card: card.map(str::to_owned),
+            bound,
+            enabled,
+        })
+    }
+
+    #[test]
+    fn a_legacy_card_browser_launches_only_once_its_owner_enabled_it() {
+        // Off by default, like Lynx: the card is shown, its browser is not
+        // enabled, so nothing launches until the owner enables that card.
+        let lynx = card(Some("anthropic"), true, false);
+        assert_eq!(
+            authorize_account(Authority::Launch, true, &lynx),
+            Err("browser_not_enabled")
+        );
+        let enabled = card(Some("anthropic"), true, true);
+        assert_eq!(authorize_account(Authority::Launch, true, &enabled), Ok(()));
+        assert_eq!(enabled.card(), Some("anthropic"));
+        assert_eq!(
+            authorize_account(Authority::Launch, false, &enabled),
+            Err("machine_browser_not_enabled")
+        );
+        // A card the Service no longer collects, or a key known only from a
+        // retained placement, can be stopped and reset but never opened.
+        for retained in [card(Some("xai"), false, true), card(None, false, false)] {
+            assert_eq!(
+                authorize_account(Authority::Launch, true, &retained),
+                Err("account_unavailable")
+            );
+            assert_eq!(authorize_account(Authority::Stop, false, &retained), Ok(()));
+            assert_eq!(
+                authorize_account(Authority::Reset, false, &retained),
+                Ok(())
+            );
         }
+        // Legacy cards are never revoked through the registry.
+        assert!(!enabled.revoking());
+        assert_eq!(
+            error_status("browser_key_required"),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn every_card_and_named_account_has_its_own_instance_on_a_machine() {
+        use crate::store::provider_accounts::legacy_browsers;
+        let named: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let mut keys = vec![named];
+        for card in ["anthropic", "deepseek", "openai", "xai"] {
+            keys.push(legacy_browsers::account("owner", card));
+        }
+        let instances: std::collections::BTreeSet<String> = keys
+            .iter()
+            .map(|key| instance_id("owner", key, "ovh"))
+            .collect();
+        assert_eq!(instances.len(), keys.len());
+        let distinct: std::collections::BTreeSet<&ProviderAccountId> = keys.iter().collect();
+        assert_eq!(distinct.len(), keys.len());
     }
 
     #[test]

@@ -23,6 +23,7 @@ const TABLES: &[&str] = &[
     "provider_login_operations",
     "provider_native_generations",
     "browser_placements",
+    "provider_legacy_browsers",
     "provider_session_transitions",
     "provider_session_transition_stops",
     "provider_session_transition_commits",

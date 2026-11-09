@@ -17,6 +17,10 @@ other) to be fully independent of the browser: the sign-in binding was
 removed, and a login's verification link may only be shown in the account's
 ordinary tab browser as an optional convenience; see
 [Login independence](#login-independence).
+The same day the owner required every Provider usage card to offer a
+browser, including the legacy default cards (Claude · Lynx, DeepSeek · Mole,
+OpenAI · Pika, Grok · Fox, ...), each with its own strictly isolated
+identity; see [Legacy default cards](#legacy-default-cards).
 
 ## Problem
 
@@ -543,7 +547,9 @@ The Controller keeps a durable browser placement
 `(owner, account, machine, profile_revision, last_open)`. It is committed
 before the open is dispatched, in one transaction under the owner lock that
 also re-checks that the account exists, is available and has its browser
-enabled; a failed write fails the open. The account revocation plan gains
+enabled (for a [legacy default card](#legacy-default-cards): that the key is
+the owner's key of that card and the card's enablement row exists); a failed
+write fails the open. The account revocation plan gains
 `browsers` beside `logins`, `grants` and `sessions`, captured from these
 placements under the same lock, so a `Tab`-only placement is revoked like any
 other target: a revocation that begins after the commit captures the
@@ -945,7 +951,10 @@ Enablement has two layers, both default off: the Service setting
 per-account `browser_enabled` flag in the account registry, changed through
 `accounts.update` with `{type: "set_browser_enabled"}`. Existing accounts stay
 disabled until the owner enables each one; the first enablement is the test
-account only. `GET /api/provider-accounts` reports the gate as
+account only. A legacy default card has its own per-card enablement instead
+(`{type: "set_legacy_browser_enabled", card, enabled}` through the same
+`accounts.update` writer, also off by default); see
+[Legacy default cards](#legacy-default-cards). `GET /api/provider-accounts` reports the gate as
 `machine_browser: "enabled" | "not_enabled"` so account cards can explain a
 closed gate without a per-account read. Cowboy MCP exposes the state read (`accounts.browser`) and the
 lifecycle actions through `control.apply` with the same receipts as other
@@ -1137,17 +1146,18 @@ displays.
   so and opens nothing. The chosen Machine becomes the placement, so later
   opens need no choice. A panel pinned to one Machine (the verification-link
   entry below) never offers the chooser.
-- **Entries.** Every named-account card offers the panel: the account
-  management card ("Browser…", beside the enable toggle) and every usage
-  card ("Browser", Mobile Info sheet and Desktop usage panel). A usage-card
-  entry opens only the account's ordinary tab browser and never enables
-  anything. With the gate closed, the account
+- **Entries.** Every Provider usage card offers the panel, named accounts
+  and legacy default cards alike: the account management card ("Browser…",
+  beside the enable toggle; for a legacy card on the Service-account row of
+  its first Provider) and every usage card ("Browser", Mobile Info sheet and
+  Desktop usage panel). A usage-card entry opens only that card's ordinary
+  tab browser and never enables anything. With the gate closed, the account
   disabled or its browser not enabled, the entry is disabled with a one-line
-  reason and, for the account-level cases, a link to account management.
-  Provider cards that are not named registry accounts (the Service-collected
-  legacy default account of each Provider) have no entry: the browser routes
-  refuse them (`named_account_required`, or `account_unavailable` for an id
-  outside the registry).
+  reason and, for the account-level cases, a link to account management. A
+  legacy card opens through its own browser key
+  ([Legacy default cards](#legacy-default-cards)); the shared `default`
+  identity itself is refused (`browser_key_required`), and a card the Service
+  no longer collects offers no entry.
 - **Isolation in the panel.** A panel is bound to one account: its model is
   keyed by that account, switching accounts starts from an empty model (no
   read, viewer target, pinned Machine or remote clipboard), and every
@@ -1263,6 +1273,7 @@ design, not a side effect:
 | Memory and CPU accounting | one systemd unit and cgroup per instance; `max_instances` may allow several at once, each in its own namespaces |
 | Remote clipboard | held per attachment in the viewer, never shared between accounts, dropped on attachment or incarnation change, never wired into a login; the owner's device clipboard is only ever pasted by an explicit action |
 | Runtime files (browser, fonts, policy, glibc) | shared read-only artifact; they carry no state |
+| Legacy default cards | each card has its own derived browser key, so its profile, placement, instance, unit and viewer are those of a distinct account; the key never equals a registry account, another card's key or the legacy default's native credential directory ([Legacy default cards](#legacy-default-cards)) |
 | Logins | no login is bound to a browser; a sign-in dialog's optional verification-link entry opens only the browser of the dialog's own account, on the login's Machine, through the ordinary open and navigate routes; the viewer always names the account whose browser it shows |
 
 What stays shared is what is shared for the native CLIs already: the
@@ -1275,6 +1286,67 @@ differences; separate, persistent, honestly distinct profiles are the
 isolation. It prevents automatic inheritance of one account's browser state
 by another; it cannot stop the owner from typing one account's upstream credentials into
 another account's browser, which is why the viewer always names the account.
+
+## Legacy default cards
+
+Every Provider usage card offers a Machine browser, including the cards that
+show the Service-collected legacy default account of an account-usage
+provider (Claude · Lynx for `anthropic`, DeepSeek · Mole for `deepseek`,
+OpenAI · Pika for `openai`, Grok · Fox for `xai`, and any other).
+
+- **One card, one browser.** The usage page shows one legacy card per
+  account-usage provider, so the browser identity is per card, not per
+  Provider. The `claude-deepseek`, `codex-deepseek` and `deepseek-harness`
+  defaults share one usage card (account-usage provider `deepseek`, the
+  "Mole" card), which therefore has exactly one browser; any other card, a
+  named account of the same Provider, and another owner's DeepSeek card each
+  have their own. Should the usage page ever show one card per Provider, each
+  would need its own card id and therefore its own key.
+- **Key.** `legacy_browsers::account(owner, card)`: the first 16 bytes of
+  `sha256("cowboy-legacy-browser-account-v1\0" ‖ owner ‖ "\0" ‖ card)`
+  formatted as a UUID with version 8 and the RFC variant. It is stable, a
+  valid Machine `ProviderAccountId` and a single directory name, never
+  `default`, and never a registry identity (registry identities are version 4,
+  so the key spaces are disjoint). The browser routes, the viewer stream and
+  Cowboy MCP (`accounts.browser`, `accounts.browser_*`) accept it exactly like
+  a named account id; `accounts.list` (`GET /api/provider-accounts`) reports
+  each card as `legacy_browsers: [{card, account_id, providers,
+  browser_enabled, available}]`. The literal `default` names no single card
+  and is refused (`browser_key_required`).
+- **Machine directory.** The card's browser lives under
+  `provider-auth/accounts/<key>/` (`browser-state.json`, `browser/`), the same
+  layout as a named account. The legacy default's native credentials stay
+  under `provider-auth/providers/<provider>/`; no browser path reads or writes
+  them, and the Machine prepares only the account directory, never a
+  `providers/` credential scope, so a card key never appears as a credential
+  account.
+- **Enablement.** Off by default, per owner and card, in
+  `provider_legacy_browsers (owner_user_id, card_id)` (migrations
+  `0080_provider_legacy_browsers.sql` and sqlite `0054`; a row means
+  enabled). It changes only through `accounts.update`
+  `{type: "set_legacy_browser_enabled", card, enabled}`, under the owner lock
+  with the registry's revision and operation receipt, without changing any
+  registry account. Enabling needs a card the Service collects now; disabling
+  is always accepted, ends that card's viewers and hibernates its running
+  instances (the snapshot is kept). The account management row shows the
+  "Browser…" panel and the enable toggle on the Service-account row of the
+  card's first Provider; usage cards show the disabled entry with its reason
+  and a link to account management while it is off. The Service gate
+  `accounts.machine_browser` still applies.
+- **Machine placement.** The rule of named accounts, with the card's
+  credential Machines in place of native generations: the existing
+  placement, else a Machine holding the card's default credentials (an
+  enrolled Machine with an active installation of one of the card's
+  Providers whose Service credentials are ready; the Service distributes them
+  to every enrolled Machine), else, only when the card has neither anywhere,
+  the first-Machine chooser.
+- **Reset and revocation.** Reset deletes only the card's own `browser/`
+  tree on the named Machine. Legacy cards are not revocable through the
+  account registry; a named account's revocation plan captures placements by
+  its own id and can never capture a card's key, and nothing a card does
+  touches a named account's placements. A key whose card is no longer
+  collected but still has a placement can be read, stopped and reset, never
+  opened.
 
 ## Security and privacy
 
@@ -1307,8 +1379,9 @@ another account's browser, which is why the viewer always names the account.
 
 ## Test-time prohibitions for the existing accounts
 
-During every test, `Claude · Lynx` (legacy `default`) and `Claude · Lark`
-(named) keep `browser_enabled=false`. No step opens, reads, hashes, migrates,
+During every test, `Claude · Lynx` (legacy `default`, card `anthropic`: no
+`provider_legacy_browsers` row) and `Claude · Lark` (named) keep their
+browsers disabled. No step opens, reads, hashes, migrates,
 resets or wipes their homes; changes their authentication contract; bypasses
 the named-Claude portable-credential fence; enables any credential export;
 broadens the AppArmor or userns permissions or relaxes the sysctl; adds
@@ -1438,8 +1511,9 @@ the text above:
   `GET .../browser` returns `{machine_id, state, placements, admission}`,
   where `admission` is the refusal code (`machine_browser_not_enabled`,
   `browser_not_enabled`, `account_unavailable`) or null. Opens choose the
-  account's placement Machine, else a Machine holding its native generation;
-  an open naming `machine_id` uses only that Machine.
+  account's placement Machine, else a Machine holding its native generation
+  (for a legacy card, its default credentials); an open naming `machine_id`
+  uses only that Machine.
   Authority is split: open, attach, navigate, resize and snapshot need launch
   admission; the state read and hibernate need only ownership, and reset
   needs ownership of an account that is not being revoked (`account_revoking`),

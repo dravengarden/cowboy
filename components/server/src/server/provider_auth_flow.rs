@@ -154,6 +154,28 @@ pub(super) async fn connected_provider_authentication_executors(
     state: &AppState,
     include_machine: bool,
 ) -> Vec<ProviderAuthenticationExecutorIdentity> {
+    let executors: BTreeSet<_> = provider_installations(state, true)
+        .await
+        .into_iter()
+        .map(
+            |(machine_id, installed)| ProviderAuthenticationExecutorIdentity {
+                machine_id: include_machine.then_some(machine_id),
+                provider_id: installed.plugin_id,
+                provider_version: installed.plugin_version,
+                generation_digest: installed.generation_digest,
+            },
+        )
+        .collect();
+    executors.into_iter().collect()
+}
+
+/// Active, runtime-allowed Provider installations of a catalogued release on
+/// enrolled, unrevoked Machines, as last reported in their inventory; only
+/// currently connected Machines when `connected_only`.
+pub(super) async fn provider_installations(
+    state: &AppState,
+    connected_only: bool,
+) -> Vec<(String, crate::machine_protocol::PluginInventory)> {
     let Some(store) = state.store.as_ref() else {
         return Vec::new();
     };
@@ -161,10 +183,10 @@ pub(super) async fn connected_provider_authentication_executors(
         return Vec::new();
     };
     let connected = state.machine_control.connected_machine_ids();
-    let mut executors = BTreeSet::new();
+    let mut installations = Vec::new();
     for machine in machines
         .into_iter()
-        .filter(|machine| !machine.revoked && connected.contains(&machine.id))
+        .filter(|machine| !machine.revoked && (!connected_only || connected.contains(&machine.id)))
     {
         let Ok(providers) = serde_json::from_value::<Vec<crate::machine_protocol::PluginInventory>>(
             machine
@@ -196,15 +218,10 @@ pub(super) async fn connected_provider_authentication_executors(
             {
                 continue;
             }
-            executors.insert(ProviderAuthenticationExecutorIdentity {
-                machine_id: include_machine.then(|| machine.id.clone()),
-                provider_id: installed.plugin_id,
-                provider_version: installed.plugin_version,
-                generation_digest: installed.generation_digest,
-            });
+            installations.push((machine.id.clone(), installed));
         }
     }
-    executors.into_iter().collect()
+    installations
 }
 
 pub(super) fn submit_provider_auth_code(

@@ -174,12 +174,15 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Receipts preserve cancel_requested across restart even if live status is unknown.
 // Login challenges/code use the owner-checked HTTP/CLI flow; no secrets in receipts.
 // accounts.browser(account_id,machine_id?): Machine browser state (machine_id keeps the read on that Machine); lifecycle via control.apply accounts.browser_* naming that machine_id.
+// A legacy default usage card's browser uses its own key, never "default": list().legacy_browsers is
+// {card,account_id,providers,browser_enabled,available}[]; enable per card with set_legacy_browser_enabled.
 // Write: cowboy_execute({action:"accounts.update",operation,arguments:{expected_revision,change:AccountChange}}).
 export type AccountChange =
  | {type:"create";provider_id:string;label:string}
  | {type:"rename";id:string;label:string}
  | {type:"set_enabled";id:string;enabled:boolean}
  | {type:"set_browser_enabled";id:string;enabled:boolean}
+ | {type:"set_legacy_browser_enabled";card:string;enabled:boolean}
  | {type:"set_default";provider_id:string;id:string};
 // IDs are controller-issued UUIDs; "default" selects the legacy account.
 // Legacy display names: list().display_preferences; edit via preferences.update {scope:"subscriptions",expected_revision,changes:{legacy_labels:{provider_id:label}}}.
