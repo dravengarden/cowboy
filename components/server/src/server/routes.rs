@@ -165,7 +165,8 @@ pub(super) fn provider_routes() -> Router<Arc<AppState>> {
 }
 
 /// Owner-operated Machine browsers for named accounts: state, lifecycle
-/// commands, the viewer's display stream and the sign-in browser.
+/// commands and the viewer's display stream. No route couples a browser to
+/// a Provider login.
 fn provider_browser_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
@@ -200,11 +201,6 @@ fn provider_browser_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/provider-accounts/{account_id}/browser/stream",
             get(provider_accounts::browser::viewer::upgrade),
-        )
-        .route(
-            "/api/provider-accounts/{account_id}/logins/{request}/browser",
-            post(provider_accounts::browser::http_open_sign_in)
-                .layer(DefaultBodyLimit::max(16 * 1024)),
         )
 }
 

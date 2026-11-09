@@ -156,7 +156,6 @@
     "provider_accounts::browser::http_hibernate": "accounts.browser_hibernate",
     "provider_accounts::browser::http_reset": "accounts.browser_reset",
     "provider_accounts::browser::http_resize": "exception:streams — the viewer resizes its own attachment from the display stream it holds; agents read state through accounts.browser.",
-    "provider_accounts::browser::http_open_sign_in": "exception:owner-intent — a sign-in browser binds to the owner's live native login in the Cowboy UI; agents use accounts.login_start and accounts.browser.",
     "provider_accounts::browser::viewer::upgrade": "exception:streams — transport subscription/handshake; bounded MCP reads replace agent polling of streams.",
     "provider_accounts::browser::machine_stream::upgrade": "exception:streams — transport subscription/handshake; bounded MCP reads replace agent polling of streams.",
     "session_maintenance::configure": "machines.maintenance_set",

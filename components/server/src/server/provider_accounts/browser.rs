@@ -601,94 +601,6 @@ pub(in crate::server) async fn open_tab(
     Ok(state_json(&machine_id, &event))
 }
 
-/// Open the account's browser bound to one of the owner's native logins.
-/// The Machine is the login's Machine (a `pinned` other Machine is
-/// refused); the URL comes from the Machine's own login challenge, never
-/// from the Controller.
-pub(in crate::server) async fn open_sign_in(
-    state: &Arc<AppState>,
-    owner: &str,
-    (account_id, request): (&ProviderAccountId, &str),
-    viewport: Viewport,
-    pinned: Option<&str>,
-) -> Result<Value, &'static str> {
-    admit(state, owner, account_id).await?;
-    viewport.validate().map_err(|_| "invalid_viewport")?;
-    let store = state.store.as_ref().ok_or("unavailable")?;
-    // The owner must own a login operation naming this account and request.
-    let operation = super::login::continuation::resolve(store, owner, account_id, request).await?;
-    let receipt = store
-        .provider_login_receipt(owner, &operation)
-        .await
-        .map_err(|_| "unavailable")?
-        .ok_or("login_operation_not_found")?;
-    let machine_id = receipt.input.machine_id.clone();
-    if pinned.is_some_and(|pinned| pinned != machine_id) {
-        return Err("browser_machine_unavailable");
-    }
-    let (connection, protocol) = state
-        .machine_control
-        .connection_protocol(&machine_id)
-        .ok_or("machine_unavailable")?;
-    if protocol < MACHINE_BROWSER_PROTOCOL_VERSION {
-        return Err("machine_unavailable");
-    }
-    let live = state
-        .provider_auth_executors
-        .lock()
-        .get(request)
-        .filter(|executor| {
-            executor.owner_user_id == owner
-                && executor.account_id == *account_id
-                && executor.machine_id == machine_id
-                && executor.connection.same(&connection)
-                && executor.active(&state.machine_control, now_ms())
-        })
-        .is_some();
-    if !live {
-        return Err("login_inactive");
-    }
-    if !state
-        .browsers
-        .capability(&machine_id)
-        .is_some_and(|capability| capability.available)
-    {
-        return Err("machine_unavailable");
-    }
-    let event = dispatch_open(
-        state,
-        owner,
-        account_id,
-        (&machine_id, &connection),
-        Purpose::SignIn {
-            login_request_id: request.to_owned(),
-        },
-        viewport,
-    )
-    .await?;
-    if let Some(code) = sign_in_refusal(&event) {
-        tracing::info!(state = ?event.state, reason = ?event.reason, "browser sign-in open refused");
-        return Err(code);
-    }
-    Ok(state_json(&machine_id, &event))
-}
-
-/// A sign-in open the Machine refused to bind. Reusing a running browser
-/// for a sign-in answers with that browser's own state; a reason on it
-/// (`login_mismatch`, `busy`, `failed`, ...) means the login was not bound
-/// and the browser must not be shown as the sign-in. A hibernated answer
-/// already says nothing runs and stays an ordinary result.
-fn sign_in_refusal(event: &StateEvent) -> Option<&'static str> {
-    if event.state == BrowserState::Hibernated {
-        return None;
-    }
-    match event.reason? {
-        Reason::LoginMismatch => Some("login_mismatch"),
-        Reason::LoginEnded => Some("login_inactive"),
-        _ => Some("browser_sign_in_refused"),
-    }
-}
-
 /// Forward one instance-scoped command to the named Machine, only while
 /// that Machine still reports exactly the named instance and incarnation:
 /// the command never reaches another Machine's browser of the same account
@@ -854,13 +766,10 @@ async fn send_hibernate(state: &AppState, observed: &Observed) -> Result<StateEv
 fn error_status(code: &str) -> StatusCode {
     match code {
         "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
-        "account_unavailable" | "login_operation_not_found" | "browser_not_placed" => {
-            StatusCode::NOT_FOUND
+        "account_unavailable" | "browser_not_placed" => StatusCode::NOT_FOUND,
+        "invalid_argument" | "invalid_viewport" | "named_account_required" => {
+            StatusCode::BAD_REQUEST
         }
-        "invalid_argument"
-        | "invalid_viewport"
-        | "invalid_login_reference"
-        | "named_account_required" => StatusCode::BAD_REQUEST,
         _ => StatusCode::CONFLICT,
     }
 }
@@ -883,8 +792,7 @@ pub(in crate::server) struct OpenBody {
     width: u32,
     height: u32,
     scale: u8,
-    /// Open only on this Machine; a sign-in open whose login runs on
-    /// another Machine is refused.
+    /// Open only on this Machine.
     machine_id: Option<String>,
 }
 
@@ -961,31 +869,6 @@ pub(in crate::server) async fn http_open(
             &state,
             &auth.principal.user_id,
             &account,
-            Viewport {
-                width: body.width,
-                height: body.height,
-                scale: body.scale,
-            },
-            body.machine_id.as_deref(),
-        )
-        .await,
-    )
-}
-
-pub(in crate::server) async fn http_open_sign_in(
-    State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthenticatedProductRequest>,
-    Path((account, request)): Path<(ProviderAccountId, String)>,
-    Json(body): Json<OpenBody>,
-) -> Response {
-    if !dataset_ok(&state, &auth, body.dataset.as_deref()) {
-        return respond(Err("dataset_changed"));
-    }
-    respond(
-        open_sign_in(
-            &state,
-            &auth.principal.user_id,
-            (&account, &request),
             Viewport {
                 width: body.width,
                 height: body.height,
@@ -1213,62 +1096,6 @@ mod tests {
         ] {
             assert!(!reset_confirmed(&event(reason)));
         }
-    }
-
-    #[test]
-    fn a_sign_in_open_with_a_refusal_reason_is_an_error() {
-        let event = |state, reason| StateEvent {
-            request_id: Some("r".into()),
-            instance: InstanceRef {
-                account_id: uuid::Uuid::new_v4().to_string().try_into().unwrap(),
-                instance_id: "b-1".into(),
-                incarnation: 7,
-            },
-            state,
-            reason,
-            geometry: None,
-            scale: None,
-            deadline_ms: None,
-            attachment_id: None,
-            snapshot_generation: None,
-            snapshot_at_ms: None,
-            profile_revision: Some(3),
-            unsaved_state_lost: false,
-            observed_at_ms: 1,
-        };
-        // A bound running browser and a fresh start are successes.
-        for state in [
-            BrowserState::Starting,
-            BrowserState::Detached,
-            BrowserState::Attached,
-        ] {
-            assert_eq!(sign_in_refusal(&event(state, None)), None);
-        }
-        // The running browser was answered as-is: the login was not bound.
-        assert_eq!(
-            sign_in_refusal(&event(BrowserState::Detached, Some(Reason::LoginMismatch))),
-            Some("login_mismatch")
-        );
-        assert_eq!(
-            sign_in_refusal(&event(BrowserState::Attached, Some(Reason::LoginEnded))),
-            Some("login_inactive")
-        );
-        for reason in [Reason::Failed, Reason::Busy] {
-            assert_eq!(
-                sign_in_refusal(&event(BrowserState::Attached, Some(reason))),
-                Some("browser_sign_in_refused")
-            );
-        }
-        // A hibernated answer reports its own reason as an ordinary result.
-        assert_eq!(
-            sign_in_refusal(&event(BrowserState::Hibernated, Some(Reason::Busy))),
-            None
-        );
-        assert_eq!(error_status("login_mismatch"), StatusCode::CONFLICT);
-        assert_eq!(
-            error_status("browser_sign_in_refused"),
-            StatusCode::CONFLICT
-        );
     }
 
     #[test]
