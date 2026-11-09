@@ -3475,6 +3475,30 @@ fn unattended_provider_reload_waits_for_background_work() {
 }
 
 #[test]
+fn a_controller_restart_keeps_a_crashed_update_on_hold() {
+    let behavior = crate::provider::legacy_behavior("codex");
+    let (hub, before) = provider_reload_fixture();
+    hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true, None)
+        .expect("reload");
+    hub.set_status(&before.id, Status::Crashed, None);
+
+    let restarted = Hub::new();
+    restarted.load_settings(hub.settings_snapshot().into_iter().collect());
+    assert!(restarted.automatic_update_failed_within(
+        &before.machine_id,
+        &before.provider,
+        "new-digest",
+        std::time::Duration::from_hours(1),
+    ));
+    assert!(!restarted.automatic_update_failed_within(
+        &before.machine_id,
+        &before.provider,
+        "another-digest",
+        std::time::Duration::from_hours(1),
+    ));
+}
+
+#[test]
 fn only_a_crashed_unattended_update_holds_its_release_back() {
     let hour = std::time::Duration::from_hours(1);
     let behavior = crate::provider::legacy_behavior("codex");

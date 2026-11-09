@@ -1491,7 +1491,6 @@ struct HubInner {
     provider_update_offers: Mutex<HashMap<String, ProviderUpdateOffer>>,
     /// When an unattended Provider update last left a session crashed, by
     /// (Machine, Provider, generation digest). Never held with `sessions`.
-    automatic_update_failures: Mutex<HashMap<(String, String, String), std::time::Instant>>,
     /// When an unattended Provider update last left each session crashed.
     /// Never held with `sessions`.
     automatic_update_failed_sessions: Mutex<HashMap<String, std::time::Instant>>,
@@ -1749,7 +1748,6 @@ impl Hub {
                 restart_interrupted: Mutex::new(HashSet::new()),
                 config_in_flight: Mutex::new(HashMap::new()),
                 provider_update_offers: Mutex::new(HashMap::new()),
-                automatic_update_failures: Mutex::new(HashMap::new()),
                 automatic_update_failed_sessions: Mutex::new(HashMap::new()),
                 lost_execution: Mutex::new(HashMap::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
@@ -2729,53 +2727,6 @@ impl Hub {
     pub fn settle_provider_update_offer(&self, session_id: &str) {
         self.inner.provider_update_offers.lock().remove(session_id);
         self.set_provider_update_when_idle(session_id, false);
-    }
-
-    /// Whether an unattended update to this exact release left a session on
-    /// the Machine crashed within `window`. The update pass holds further
-    /// unattended updates to it meanwhile, so one bad release cannot crash
-    /// every idle session in turn.
-    #[must_use]
-    pub fn automatic_update_failed_within(
-        &self,
-        machine_id: &str,
-        provider: &str,
-        digest: &str,
-        window: std::time::Duration,
-    ) -> bool {
-        self.inner
-            .automatic_update_failures
-            .lock()
-            .get(&(
-                machine_id.to_owned(),
-                provider.to_owned(),
-                digest.to_owned(),
-            ))
-            .is_some_and(|failed| failed.elapsed() < window)
-    }
-
-    /// Whether this session's last unattended Provider update left it crashed
-    /// and nothing has happened in it since. The idle policy leaves such a
-    /// session alone until it is used or opened, instead of retrying the same
-    /// resume on every release while nobody is there to see it fail.
-    #[must_use]
-    pub fn automatic_update_failed_since_activity(&self, session_id: &str) -> bool {
-        let failed_at = self
-            .inner
-            .automatic_update_failed_sessions
-            .lock()
-            .get(session_id)
-            .copied();
-        failed_at.is_some_and(|failed_at| {
-            // Compare the recorded instants. Two elapsed() calls observe
-            // different "now"s; a scheduling pause between them could lift
-            // this hold even though no session activity occurred.
-            self.inner
-                .sessions
-                .lock()
-                .get(session_id)
-                .is_some_and(|session| session.last_activity <= failed_at)
-        })
     }
 
     /// Whether the user asked this session to adopt the installed Provider
@@ -3874,15 +3825,7 @@ impl Hub {
                     "Provider update left the session crashed"
                 );
                 if update.automatic {
-                    let now = std::time::Instant::now();
-                    self.inner
-                        .automatic_update_failures
-                        .lock()
-                        .insert((machine, provider, digest), now);
-                    self.inner
-                        .automatic_update_failed_sessions
-                        .lock()
-                        .insert(session_id.to_owned(), now);
+                    self.record_automatic_update_failure(session_id, &machine, &provider, &digest);
                 }
             } else {
                 tracing::info!(

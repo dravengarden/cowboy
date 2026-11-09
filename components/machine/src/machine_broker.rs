@@ -465,16 +465,6 @@ fn hibernation_refusal(worker: &WorkerSnapshot) -> Option<&'static str> {
     }
 }
 
-fn should_recycle_for_explicit_revive(worker: &WorkerSnapshot, desired_generation: &str) -> bool {
-    matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
-        || (!desired_generation.is_empty()
-            && worker.generation != desired_generation
-            && worker.drain_requested
-            && worker.current_turn_id.is_none()
-            && worker.pending_permissions.is_empty()
-            && matches!(worker.state, WorkerState::Running | WorkerState::Draining))
-}
-
 impl Broker {
     fn revoke_cache_protection(
         &self,
@@ -518,6 +508,8 @@ impl Broker {
     }
 
     fn new(args: MachineBrokerArgs) -> Self {
+        args.provider_store
+            .set_worker_command(args.worker_command.clone());
         let mut generation_commands = HashMap::new();
         if !args.desired_generation.is_empty() {
             generation_commands
@@ -1958,7 +1950,7 @@ impl Broker {
             match workers.get(&session.session_id) {
                 Some(worker)
                     if !adopt_only
-                        && should_recycle_for_explicit_revive(
+                        && worker_launch::should_recycle_for_explicit_revive(
                             &worker.snapshot,
                             &desired_generation,
                         ) =>
@@ -2861,10 +2853,14 @@ impl Broker {
     }
 
     fn set_desired_generation(&self, generation: String, worker_command: Option<String>) {
-        if let Some(worker_command) = worker_command {
-            self.generation_commands
-                .lock()
-                .insert(generation.clone(), PathBuf::from(worker_command));
+        {
+            let mut commands = self.generation_commands.lock();
+            if let Some(worker_command) = worker_command {
+                commands.insert(generation.clone(), PathBuf::from(worker_command));
+            }
+            if let Some(current) = commands.get(&generation) {
+                self.args.provider_store.set_worker_command(current.clone());
+            }
         }
         let live_fallback = self
             .workers
