@@ -12050,7 +12050,7 @@
           "sources": [
             "components/provider-ui"
           ],
-          "digest": "sha256:7aeee780c82dc07a80ffb25dca0620c8d510ed911682b9fb76af473b64c22247",
+          "digest": "sha256:39c5e0e846cf13c65b005cb02420a5c36095840ac177e28eb50a12eb051f43b9",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-ui",
