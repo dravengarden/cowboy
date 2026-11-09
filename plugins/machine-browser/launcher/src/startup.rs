@@ -428,6 +428,10 @@ impl Init {
             "-SendPrimary=0".to_owned(),
             "-SendCutText=1".to_owned(),
             "-AcceptCutText=1".to_owned(),
+            // Native touch (runtime/native-touch.patch): a direct touch
+            // device beside a pointer typed as a mouse for every viewer, and
+            // touch contacts from clients that negotiate them.
+            "-AcceptTouchEvents=1".to_owned(),
             "-geometry".to_owned(),
             self.args.geometry(),
             "-depth".to_owned(),

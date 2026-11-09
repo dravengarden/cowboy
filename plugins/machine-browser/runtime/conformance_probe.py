@@ -4,11 +4,13 @@ pristine Ubuntu container `conformance.sh` prepares. It plays the Machine:
 starts the launcher as the unprivileged test user inside a delegated cgroup,
 waits for `ready`, verifies the isolation facts from outside the instance
 (listeners, uid map, capabilities, mounts, namespaces, start times), drives
-the RFB and control protocols (handshake, clipboard, navigate, resize,
-status, snapshot, stop with a snapshot), then restores the published copy in
-a second run. Standard library only; prints one JSON summary.
+the RFB and control protocols (handshake, clipboard, native touch,
+navigate, resize, status, snapshot, stop with a snapshot), then restores the
+published copy in a second run. Standard library only; prints one JSON
+summary.
 """
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -419,6 +421,32 @@ def clipboard_check(args, rfb, init_pid):
     return record("clipboard_forwarded", bool(got) and got["text"] == marker, received=got and got["text"])
 
 
+def load_touch_probe():
+    # -I keeps the probe's own directory off sys.path; load the sibling file.
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "touch_probe.py")
+    spec = importlib.util.spec_from_file_location("touch_probe", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def touch_check(args, control):
+    """Native touch through the real launcher: negotiation and stock-client
+    compatibility, then a page in the instance's Chromium that reports the
+    touch events it receives (touch_probe.py)."""
+    touch = load_touch_probe()
+    path = os.path.join(args.control, "rfb.sock")
+    touch.protocol_checks(path, record)
+    url, server = touch.serve_page()
+    try:
+        reply = control.request("navigate", url=url)
+        record("touch_page_navigated", reply.get("ok") is True, reply=reply)
+        time.sleep(5)
+        touch.page_checks(path, record)
+    finally:
+        server.shutdown()
+
+
 def phase_fresh(args):
     log_path = os.path.join(args.out, "launcher-1.log")
     process = start_launcher(args, None, log_path, args.mask)
@@ -443,6 +471,7 @@ def phase_fresh(args):
     resized = rfb.wait_for(lambda message: any(rect["encoding"] in (-223, -308) and rect["x"] == 0 and (rect["w"], rect["h"]) == (640, 480) for rect in message.get("rects", [])), 5)
     record("rfb_client_resize_refused", resized is None, size=[rfb.width, rfb.height])
     clipboard_check(args, rfb, pids["init"])
+    touch_check(args, control)
 
     reply = control.request("navigate", url="https://example.com/")
     record("navigate_accepted", reply.get("ok") is True, reply=reply)

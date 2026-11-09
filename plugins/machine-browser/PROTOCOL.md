@@ -130,7 +130,7 @@ transition failure is classified `sandbox`, every other start failure `host`.
 
 1. `xauth -q -f /mnt/instance/xauth add :N . <32 hex chars from getrandom>`
    in `display/`; the launcher pre-creates the 0600 authority file.
-2. `Xtigervnc :N -auth /mnt/instance/xauth -nolisten tcp -nolisten local -rfbport -1 -rfbunixpath /mnt/sockets/rfb.sock -rfbunixmode 0600 -SecurityTypes None -AcceptSetDesktopSize=0 -SendPrimary=0 -SendCutText=1 -AcceptCutText=1 -geometry WxH -depth 24`
+2. `Xtigervnc :N -auth /mnt/instance/xauth -nolisten tcp -nolisten local -rfbport -1 -rfbunixpath /mnt/sockets/rfb.sock -rfbunixmode 0600 -SecurityTypes None -AcceptSetDesktopSize=0 -SendPrimary=0 -SendCutText=1 -AcceptCutText=1 -AcceptTouchEvents=1 -geometry WxH -depth 24`
    in `display/`. The init waits (15 s) for both `/mnt/sockets/rfb.sock` and
    `/tmp/.X11-unix/XN`, then remounts `/mnt/sockets` read-only. The server
    compiles its keymap by running `xkbcomp` through `/bin/sh`, which the

@@ -4,7 +4,8 @@
 # verify the launcher contract from outside the instance: no listeners, the
 # self-only uid map, empty capability sets and no_new_privs on every sealed
 # process, the artifact as /usr and /opt, the read-only socket export and
-# masks, an RFB handshake with clipboard forwarding, navigate, resize,
+# masks, an RFB handshake with clipboard forwarding, native touch
+# (touch_probe.py, with and without -AcceptTouchEvents), navigate, resize,
 # status, snapshot, a graceful stop with a snapshot, and a restore from that
 # snapshot. Prints the JSON summary written by conformance_probe.py.
 #
@@ -30,7 +31,7 @@ test -x "$tree/usr/libexec/cowboy-browser-launcher"
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 # One run per output directory: the probe appends to its logs.
-rm -rf "$out"/launcher-*.log "$out"/instance-* "$out"/summary.json "$out"/xclip.log
+rm -rf "$out"/launcher-*.log "$out"/instance-* "$out"/summary.json "$out"/xclip.log "$out"/touch-off*
 
 # systempaths=unconfined lets an unprivileged user mount a fresh proc for the
 # instance's pid namespace (Docker otherwise masks /proc paths, which the
@@ -42,6 +43,7 @@ rm -rf "$out"/launcher-*.log "$out"/instance-* "$out"/summary.json "$out"/xclip.
 docker run --rm \
   -v "$tree:/runtime:ro" \
   -v "$here/conformance_probe.py:/conformance/probe.py:ro" \
+  -v "$here/touch_probe.py:/conformance/touch_probe.py:ro" \
   -v "$out:/out" \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
@@ -76,7 +78,21 @@ docker run --rm \
       --xclip-dir /conformance \
       --mask /var/lib/cowboy-state \
       --out /out || true
+    # The same display server without -AcceptTouchEvents must look stock:
+    # no acknowledgement, and message 193 is an unknown message. Its own
+    # mount namespace sees the artifact as /usr, as an instance does.
+    mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+    unshare -m sh -c "mount --bind /runtime/usr /usr && exec /usr/bin/Xtigervnc :9 -nolisten tcp -nolisten local -rfbport -1 -rfbunixpath /tmp/touch-off.sock -SecurityTypes None -geometry 800x600 -depth 24" >/out/touch-off-xvnc.log 2>&1 &
+    off=$!
+    for _ in $(seq 50); do [ -S /tmp/touch-off.sock ] && break; sleep 0.2; done
+    python3 -I /conformance/touch_probe.py /tmp/touch-off.sock --off >/out/touch-off.json || true
+    kill $off || true
     chmod -R a+rwX /out
   '
 cat "$out/summary.json"
-python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["ok"] else 1)' "$out/summary.json"
+cat "$out/touch-off.json"
+python3 -I -c '
+import json, sys
+ok = all(json.load(open(path))["ok"] for path in sys.argv[1:])
+sys.exit(0 if ok else 1)
+' "$out/summary.json" "$out/touch-off.json"
