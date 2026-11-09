@@ -314,7 +314,9 @@ nothing is configurable from outside beyond the argument vector.
    start `Xtigervnc` on a fixed display number with `-auth <cookie>
    -nolisten tcp -nolisten local -rfbport -1 -rfbunixpath /mnt/sockets/rfb.sock
    -rfbunixmode 0600 -SecurityTypes None -AcceptSetDesktopSize=0
-   -SendPrimary=0 -SendCutText=1 -AcceptCutText=1 -geometry WxH -depth 24`.
+   -SendPrimary=0 -SendCutText=1 -AcceptCutText=1 -AcceptTouchEvents=1
+   -geometry WxH -depth 24` (the last flag exists only in the runtime's
+   patched build; see [Native touch](#native-touch)).
    `-nolisten local` disables the X server's abstract socket; the only X
    endpoint is the pathname socket in the private `/tmp`; collisions are
    impossible because `/tmp` and the abstract address space are both
@@ -1207,8 +1209,10 @@ whose browser it displays and the Machine it runs on.
   4 px: 68 px plus the home indicator). Nothing overlays the framebuffer but
   transient banners. The bottom area clears the side safe areas and sits
   above the home indicator and the app shell's keyboard inset, so the
-  software keyboard never covers it. Tap clicks, two-finger drag scrolls,
-  long press is right click. Backgrounding the app suspends lease renewal,
+  software keyboard never covers it. Touches reach the remote Chromium as
+  native multi-touch contacts ([Native touch](#native-touch)); against a
+  display server without it, tap clicks, two-finger drag scrolls and long
+  press is right click. Backgrounding the app suspends lease renewal,
   which detaches within 30 s; returning shows the detached state and the
   Open browser action while the grace period keeps the instance alive.
 - **Touch keyboard.** As in neko, a transparent full-size `<textarea>`
@@ -1299,6 +1303,108 @@ whose browser it displays and the Machine it runs on.
 The cross-device route `/#subscription-sign-in/<account>/<request>` resumes
 the sign-in dialog on another device; its verification-link entry opens the
 same account's tab browser there.
+
+## Native touch
+
+A touch viewer used to reach the remote Chromium as an emulated mouse, which
+is itself a tell: Chromium on an X display without typed input devices
+reports `navigator.maxTouchPoints == 0` and matches neither `(pointer: …)`
+nor `(hover: …)`, which no real device does, and pages cannot pinch, swipe
+or long-press natively. The runtime's display server therefore carries a
+small patch (`plugins/machine-browser/runtime/native-touch.patch`) and the
+viewer speaks one RFB extension.
+
+- **Devices.** With `-AcceptTouchEvents=1` the core pointer is typed
+  `XI_MOUSE` and an XI2 direct-touch slave, "TigerVNC touch"
+  (`XI_TOUCHSCREEN`, 10 contacts, absolute MT axes), is attached beside it.
+  Chromium then reports 10 touch points, coarse and fine pointers and hover,
+  like any touchscreen laptop. The typing applies to every viewer, phone or
+  Desktop, so the page sees the same machine either way. The devices are
+  in-process X devices: no `/dev/input`, `uinput` or other host interface is
+  involved.
+- **Wire.** The viewer adds pseudo-encoding `-1883` to its SetEncodings. A
+  server with the feature on answers once with server message `192` (u8
+  type, u8 version 1, u8 contacts 10). Only after that may the client send
+  message `193`, the KasmVNC layout: u8 type, u8 state (0 begin, 1 update,
+  2 end), u32 id, u16 x, u16 y, big endian, framebuffer pixels. A stock
+  server, or the patched one without the parameter, never answers, so a
+  client never sends `193` to a server that would treat it as an unknown
+  message and disconnect. A client that never requests the encoding sees a
+  byte-for-byte stock protocol.
+- **Gating and bounds.** `AcceptTouchEvents` defaults off and is not in
+  `AllowOverride`, so no X client can turn it on; the launcher passes it for
+  every instance. Contacts are server-wide slots (at most 10); a duplicate
+  begin, an update or end of an unknown id and a begin beyond the bound are
+  ignored; coordinates are clamped to the framebuffer; any other state is a
+  protocol error for that connection. Every contact a connection leaves
+  active is ended when it closes, so a dropped viewer never leaves a finger
+  down (neko issue 719) and the next attachment starts clean.
+- **Viewer.** `web/src/machineBrowser/nativeTouch.ts` hooks noVNC 1.7's
+  SetEncodings writer (only for the viewer's own sockets) and consumes the
+  acknowledgement before noVNC's message loop, which would fail on an
+  unknown message. Until the acknowledgement nothing changes: noVNC's
+  gesture-to-mouse emulation stays the fallback. After it, Pointer Events of
+  type `touch` (one contact per `pointerId`, captured to the frame) are
+  mapped through noVNC's CSS scaling to framebuffer pixels and sent; a
+  contact may not begin in the letterbox, and moves outside it clamp. The
+  frame's capture-phase listeners prevent and stop the touch events, so
+  noVNC's gesture handler never runs and the browser synthesizes no
+  compatibility mouse events or clicks. Window blur, `pagehide` and a hidden
+  page end every active contact; a closed stream sends nothing (the server
+  ends the contacts). Mouse and pen input stay with noVNC, so Desktop
+  behaviour is unchanged. A contact focuses the canvas exactly when
+  noVNC's own tap would (the touch keyboard's focus rule holds).
+
+### Building the patched display server
+
+The artifact is otherwise Ubuntu's bytes; `Xtigervnc` becomes a rebuild of
+Ubuntu's own source with the patch added. Options considered:
+
+| Option | Verdict |
+|---|---|
+| Commit a prebuilt binary, or upload one built at lock time (Docker) and pin its URL and SHA-256 | Rejected: the bytes cannot be reviewed or reproduced from what is in Git, and the release would depend on one builder's container |
+| Build with Nix | Rejected: a different toolchain and glibc than the artifact's userland, and store paths in the binary |
+| Rebuild at artifact time from pinned sources in a pinned build root, and require the recorded output digest | **Chosen** |
+
+`display-server-lock.sh` (Docker, lock time only, metadata only) finds the
+Launchpad build of the exact `tigervnc-standalone-server` version the
+runtime lock ships and pins its `.buildinfo` by SHA-256. Its
+`Installed-Build-Depends` is the complete build root; every one of those
+packages is pinned by `snapshot.ubuntu.com` path at the build's
+`Build-Date` instant (including `-proposed`, which Launchpad builds the
+development series against), size and SHA-256, beside the `.dsc`, orig and
+debian tarballs. `display-server.ts` (also run by `build.ts`, no Docker)
+downloads those bytes, verifies the `.dsc` checksums and that the build root
+equals the `.buildinfo` exactly, unpacks every package without maintainer
+scripts (recreating only the alternatives the build calls and the dpkg
+vendor link), applies the package's quilt series with `native-touch.patch`
+appended (`--fuzz=0`), and runs `debian/rules build-arch` at the
+`.buildinfo`'s `Build-Path` in an unprivileged bubblewrap sandbox without
+network, with `SOURCE_DATE_EPOCH` from the changelog and the recorded
+build environment. It then repeats what debhelper does to the shipped file
+(`dh_dwz`'s multifile pass, `dh_strip` with a seeded build id and a
+debuglink) and installs the result only if it hashes to
+`display-server.lock.json`'s `output`. `--record` writes that digest after a
+review; nothing else accepts an unrecorded binary.
+
+`display-server.ts --verify-stock` is the build root's own proof: without
+the patch the same pipeline reproduces Ubuntu's shipped `Xtigervnc` byte for
+byte (`e59b12d2…`), so the only difference in the artifact is the reviewed
+patch. The patch carries `Cowboy-Reviewed-For: tigervnc <version>`; when
+`lock.sh` moves to another tigervnc version, the build refuses until
+`display-server-lock.sh` is rerun, the patch is reviewed against the new
+source and its line moves, and the new output is recorded. The builder
+needs `bwrap` with unprivileged user namespaces and about 300 MB of cached
+downloads; the build takes about a minute.
+
+Verification: `runtime/touch_probe.py`, run by `conformance.sh` through the
+real launcher, checks negotiation, stock-client compatibility (no
+acknowledgement, pointer unaffected, unnegotiated `193` disconnects only that
+client), an invalid state, clamping, and then, against a loopback page in
+the instance's Chromium, the device capabilities, touchstart/move/end with
+mapped coordinates, a two-finger pinch, contacts ended when their connection
+closes, no stuck contact after reconnecting, and the ten-contact bound. The
+same display server without the flag is checked to answer like stock.
 
 ## Host sandbox policy (outside Cowboy)
 
@@ -1538,6 +1644,7 @@ Each row cites the round-1 (R1-n), round-2 (R2-n), round-3 (R3-n), round-4
 | Attachment lease: a viewer that disappears without Close is detached within 30 s and the instance hibernates after the grace; unpaired streams time out; stale and post-expiry renewals cannot resurrect an attachment | R1-8, R2-8 |
 | Clipboard: PRIMARY copies never arrive; explicit action required; nothing is filled into a sign-in dialog; held text cleared on attachment change | R1-9 |
 | Resize authority and scale handoff: phone and desktop geometries, DPR 2 on touch, bounded sizes, desktop→phone handoff through "Restart for this screen", pointer mapping verified | R1-10, R2-14 |
+| Native touch: the conformance touch checks pass on the exact archive, `--verify-stock` reproduces Ubuntu's binary, and a physical iPhone pinches, scrolls and taps a page natively with no stuck contact after backgrounding and returning | native touch |
 | Physical iPhone over the overlay: verification link opened in the account browser, sign-in page completed with keyboard, IME, paste, Mail switch and return, email-code path; code copied back by hand; desktop handoff | R1-11 |
 | Enablement limited to the test account; authentication contract, worker generation, artifact, host-policy and lifecycle receipts retained; the separate native-owned lifecycle acceptance remains in force | R1-12 |
 | Exact signed archive installed through the real Machine installer on pristine Ubuntu 26.04: archive limits, link rejection, relocation, enforced AppArmor profiles, confinement verification from outside | R2-12, R2-13 |
