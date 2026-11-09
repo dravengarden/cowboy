@@ -989,7 +989,9 @@ disabled until the owner enables each one; the first enablement is the test
 account only. A legacy default card has its own per-card enablement instead
 (`{type: "set_legacy_browser_enabled", card, enabled}` through the same
 `accounts.update` writer, also off by default); see
-[Legacy default cards](#legacy-default-cards). `GET /api/provider-accounts` reports the gate as
+[Legacy default cards](#legacy-default-cards). Owner-defined
+[shared browser profiles](#shared-browser-profiles) change through the same
+writer and never replace a member's own enablement. `GET /api/provider-accounts` reports the gate as
 `machine_browser: "enabled" | "not_enabled"` so account cards can explain a
 closed gate without a per-account read. Cowboy MCP exposes the state read (`accounts.browser`) and the
 lifecycle actions through `control.apply` with the same receipts as other
@@ -1496,11 +1498,15 @@ directories and canary files, before it is installed on OVH.
 
 ## Account isolation (core requirement)
 
-The browsers of different account cards share no profile, display, temporary,
-shared-memory, IPC or socket state, and nothing a page can store in one
-account's browser can be read by another's. This is what makes several
-accounts on one Machine safe to operate, and it is a requirement of the
-design, not a side effect:
+Isolation is per **browser identity**: an account card, or an owner-defined
+[share](#shared-browser-profiles) of cards of pairwise distinct account-usage
+families. The browsers of different browser identities share no profile,
+display, temporary, shared-memory, IPC or socket state, and nothing a page
+can store in one identity's browser can be read by another's. Two accounts of
+the same family (two Claude accounts, two OpenAI accounts) are never one
+browser identity. This is what makes several accounts on one Machine safe to
+operate, and it is a requirement of the design, not a side effect. In the
+table, "account" means browser identity:
 
 | State | Isolation |
 |---|---|
@@ -1515,6 +1521,7 @@ design, not a side effect:
 | Remote clipboard | held per attachment in the viewer, never shared between accounts, dropped on attachment or incarnation change, never wired into a login; the owner's device clipboard is only ever pasted by an explicit action |
 | Runtime files (browser, fonts, policy, glibc) | shared read-only artifact; they carry no state |
 | Legacy default cards | each card has its own derived browser key, so its profile, placement, instance, unit and viewer are those of a distinct account; the key never equals a registry account, another card's key or the legacy default's native credential directory ([Legacy default cards](#legacy-default-cards)) |
+| Shared browser profiles | only by the owner's explicit choice, only between members of distinct families, and only through the share's own derived key; members' own profiles are never copied into it or deleted by it ([Shared browser profiles](#shared-browser-profiles)) |
 | Logins | no login is bound to a browser; a sign-in dialog's optional verification-link entry opens only the browser of the dialog's own account, on the login's Machine, through the ordinary open and navigate routes; the viewer always names the account whose browser it shows |
 
 What stays shared is what is shared for the native CLIs already: the
@@ -1588,6 +1595,110 @@ OpenAI · Pika for `openai`, Grok · Fox for `xai`, and any other).
   touches a named account's placements. A key whose card is no longer
   collected but still has a placement can be read, stopped and reset, never
   opened.
+
+## Shared browser profiles
+
+An owner may let several cards use one browser profile, for example Claude ·
+Lynx, OpenAI · Pika and Grok · Fox, which all sign in with the same Google
+account, so that the owner signs in to Google once. By default nothing is
+shared: every card keeps its own browser exactly as above.
+
+- **Share.** Owner-scoped: an id (UUID v4), a label, its creation time and a
+  revision, in `provider_browser_shares`; membership in
+  `provider_browser_share_members (owner, member, share_id, family)`
+  (migrations `0082_provider_browser_shares.sql` and sqlite `0056`). A member
+  is a browser identity: a named account (`{account_id}`, stored
+  `account:<id>`) or a legacy card (`{card}`, stored `card:<card>`). A member
+  belongs to at most one share (primary key `(owner, member)`).
+- **Family rule (hard).** A member's family is its account-usage provider:
+  the card id itself, or for a named account its Provider's catalog
+  `host.account_usage.provider` (`claude-code` → `anthropic`, `codex` →
+  `openai`, `grok` → `xai`, the DeepSeek Providers → `deepseek`). A Provider
+  whose catalog entries disagree, or that declares none, has no family, and
+  such a member is refused (`browser_share_family_unknown`). A share holds at
+  most one member per family. This is enforced three times: the unique key
+  `(owner, share_id, family)`, the mutation (`browser_share_family_conflict`),
+  and resolution, which recomputes every member's family before a share key
+  is used and refuses to open, read or attach (rather than share) when two
+  members would have one family or a member's family changed or is unknown.
+  So Claude · Lark can never be linked with Claude · Lynx, and two OpenAI
+  accounts never share.
+- **Key.** `browser_shares::share_key(owner, share_id)`: the first 16 bytes
+  of `sha256("cowboy-browser-share-v1\0" ‖ owner ‖ "\0" ‖ share_id)` as a
+  version 8 UUID. Its domain differs from the card keys', so it never equals
+  a registry account, a card key or `default`. The Machine keys the share's
+  profile, instance, fences and snapshots by it like any account key and
+  needs no change.
+- **Resolution.** One function (`shares::resolve_key`, used by
+  `owned_account`) maps the identity a route names to the key it uses now:
+  the share's key for a member, its own key otherwise. Every browser path
+  goes through it: open, the state read and `accounts.browser`, attach and
+  the viewer's continuing checks, resize, navigate, snapshot, hibernate,
+  reset and placements. Observations, memory reclaim, reconnect inventory and
+  revocation are keyed by the key itself. Routes are addressed by the
+  member's own id; a share key in a route is refused
+  (`browser_member_required`). Responses report the instance under the
+  member's id (the share key never reaches the owner's views), and commands
+  naming that instance are translated back to the key. A state read and a
+  reset answer carry `share: {share_id, label, members}`.
+- **Authorization** is the member's: its own enablement (the account's
+  `browser_enabled` and availability, or the card's enablement row) and the
+  Service gate. A member with its own browser disabled can neither open nor
+  attach, even while the share runs for another member. The share has no
+  admission and no credentials. The share's placement is admitted under the
+  owner lock only while the share exists, is not being deleted, the opening
+  member is still in it and that member's own browser is admitted
+  (`browser_share_changed` otherwise). All members open the same single
+  instance; the usual one-viewer takeover applies, and the viewer stays
+  recorded as the member whose card attached. A viewer whose member left the
+  share, or whose share was deleted, ends at its next check.
+- **Placement.** A share has one placement, like an account: once its
+  browser lives on a Machine it opens only there, whichever member opens it.
+  Its first Machine follows the opening member's credential Machines (else the
+  first-Machine chooser). Members' own placements are never reused.
+- **Profiles.** A new share starts with a fresh empty profile under its key.
+  Cookies are never copied between keys. Members' own profiles are retained
+  untouched and are what the member uses again after leaving the share.
+- **Leaving, disabling, revoking.** Removing a member, disabling its browser
+  or account, or revoking a named account never resets, revokes, hibernates or
+  deletes the share's profile: other members depend on it. Each ends the
+  viewers that member's card attached (to its own browser or the share's) and
+  hibernates only the member's own key. Revocation captures and revokes only
+  the account's own placements, and drops its membership in the same
+  transaction. Joining a share also ends the member's viewers and hibernates
+  its own browser, which its card no longer reaches. An open whose member
+  lost its access while the open was in flight fails without stopping the
+  share's browser.
+- **Reset** from a member resets the share's profile, the one the member uses;
+  the state read lists the affected members and the viewer's reset
+  confirmation names them. Because other members depend on that profile, a
+  reset also needs the member's own browser access (available and enabled);
+  stopping the share's browser stays possible for any member, as for every
+  browser.
+- **Deleting a share** removes its memberships at once (members fall back to
+  their own keys) and, when the share was ever placed, marks it deleting: its
+  viewers end and every placement of its key is revoked through the Machine's
+  ordinary `revoke_browser` (stable operation id per owner and share, after
+  any in-flight open of that key). Each Machine's confirmation removes that
+  placement under the owner lock; after the last one the share is forgotten.
+  A Machine that is offline is retried when it reconnects, so a reboot
+  converges without a human step. A deleting share admits no member and no
+  open.
+- **API.** Through `accounts.update`, with the registry revision and receipt:
+  `{type: "create_browser_share", label}` (the answer carries `share_id`),
+  `{type: "rename_browser_share", share_id, label}`,
+  `{type: "delete_browser_share", share_id}` and
+  `{type: "set_browser_share", member: {account_id} | {card}, share_id}`
+  (`null` leaves). Joining a card needs a card the Service collects.
+  `accounts.list` reports `browser_shares: [{share_id, label, created_ms,
+  revision, deleting, members: [{member, family, account_id}]}]`,
+  `browser_share_families` (Provider id → family) and each legacy card's
+  `share_id`; a named account's share is the one listing it as a member.
+- **Web.** Account settings has a "Shared browser" section to create, rename
+  and delete shares and add or remove members; a candidate whose family is
+  already present is shown disabled with the reason. A shared card's Browser
+  entry says "Shared · <label>", and the reset confirmation lists the members
+  it affects.
 
 ## Security and privacy
 
