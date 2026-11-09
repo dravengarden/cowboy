@@ -156,10 +156,10 @@ async fn credential_machines(
             .native_generation_machines(owner, account_id)
             .await
             .map_err(|_| "unavailable"),
-        BrowserAccount::Legacy(card) => Ok(match &card.card {
+        BrowserAccount::Legacy(card) => match &card.card {
             Some(card) => legacy::credential_machines(state, card).await,
-            None => Vec::new(),
-        }),
+            None => Ok(Vec::new()),
+        },
     }
 }
 

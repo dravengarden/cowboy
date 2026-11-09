@@ -176,12 +176,23 @@ pub(super) async fn provider_installations(
     state: &AppState,
     connected_only: bool,
 ) -> Vec<(String, crate::machine_protocol::PluginInventory)> {
-    let Some(store) = state.store.as_ref() else {
-        return Vec::new();
-    };
-    let Ok(machines) = store.list_machines().await else {
-        return Vec::new();
-    };
+    catalogued_installations(state, connected_only, true)
+        .await
+        .unwrap_or_default()
+}
+
+/// Active installations of a catalogued release on enrolled, unrevoked
+/// Machines. `runtime_policy` additionally applies the Provider execution
+/// policy (where a Provider may run); credential discovery does not, since
+/// Service credentials reach every enrolled Machine. An unreadable Machine
+/// inventory is an error, never an empty result.
+pub(in crate::server) async fn catalogued_installations(
+    state: &AppState,
+    connected_only: bool,
+    runtime_policy: bool,
+) -> Result<Vec<(String, crate::machine_protocol::PluginInventory)>, ()> {
+    let store = state.store.as_ref().ok_or(())?;
+    let machines = store.list_machines().await.map_err(|_| ())?;
     let connected = state.machine_control.connected_machine_ids();
     let mut installations = Vec::new();
     for machine in machines
@@ -201,9 +212,10 @@ pub(super) async fn provider_installations(
         for installed in providers.into_iter().filter(|provider| {
             provider.state == crate::machine_protocol::PluginInstallationState::Active
         }) {
-            if !state
-                .supervisor
-                .runtime_allowed(&installed.plugin_id, &machine.id)
+            if runtime_policy
+                && !state
+                    .supervisor
+                    .runtime_allowed(&installed.plugin_id, &machine.id)
             {
                 continue;
             }
@@ -221,7 +233,7 @@ pub(super) async fn provider_installations(
             installations.push((machine.id.clone(), installed));
         }
     }
-    installations
+    Ok(installations)
 }
 
 pub(super) fn submit_provider_auth_code(

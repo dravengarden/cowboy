@@ -90,11 +90,18 @@ pub(in crate::server) async fn resolve(
 /// Machines holding the card's default credentials: enrolled Machines with
 /// an active installation of one of its Providers whose Service credentials
 /// are ready (the Service distributes them to every enrolled Machine). This
-/// plays the role a named account's native generations play.
-pub(in crate::server) async fn credential_machines(state: &AppState, card: &str) -> Vec<String> {
+/// plays the role a named account's native generations play. The Provider
+/// execution policy does not apply: the browser runs no Provider CLI. An
+/// unreadable inventory is `unavailable`, never "no credentials anywhere"
+/// (which would admit the first-Machine chooser).
+pub(in crate::server) async fn credential_machines(
+    state: &AppState,
+    card: &str,
+) -> Result<Vec<String>, &'static str> {
     let installed: Vec<(String, String)> =
-        super::super::super::provider_auth_flow::provider_installations(state, false)
+        super::super::super::provider_auth_flow::catalogued_installations(state, false, false)
             .await
+            .map_err(|()| "unavailable")?
             .into_iter()
             .filter(|(_, installed)| {
                 state
@@ -108,12 +115,12 @@ pub(in crate::server) async fn credential_machines(state: &AppState, card: &str)
             })
             .map(|(machine, installed)| (machine, installed.plugin_id))
             .collect();
-    machines_with_ready_credentials(&installed, |provider| {
+    Ok(machines_with_ready_credentials(&installed, |provider| {
         state
             .provider_auth
             .status(provider)
             .is_some_and(|status| status.authentication_state == ServiceAuthenticationState::Ready)
-    })
+    }))
 }
 
 /// The sorted, distinct Machines among `installed` (Machine, Provider) pairs
