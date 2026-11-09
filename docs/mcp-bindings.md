@@ -1,13 +1,15 @@
 # MCP Plugin bindings
 
-Status: local implementation under construction. Installation, session policy
-the Linux Machine process primitive and versioned Machine transport are implemented.
-The parent-authorized relay is implemented behind a disabled gateway capability;
-Codex and Claude bound native launchers can consume a prepared plan and probe
-its exact target CLI. Controller plan delivery and live compatibility admission
-remain unconnected.
-The policy API reports preparation, worker readiness and installed-grant readiness
-separately. No MCP process starts from this API.
+Status: in production on Hawk. On 2026-11-09 a native Claude Code 3.20.34
+session (runtime OVH, execution Hawk) called the third-party Suger 0.1.0
+binding's `suger_status` and `suger_read` through the owner policy, Controller
+launch plan, OVH worker `--mcp-plan`, relay and Hawk Machine process, reading
+the granted `github` and `local_env` sources. Only Claude Code 3.20.34 declares
+`provider.mcp-bindings.v1`. A Machine still passes `--mcp-plan` to a retained
+worker without checking that its CLI accepts it; such a worker exits before
+readiness instead of the launch being refused. The policy API reports
+preparation, worker readiness and installed-grant readiness separately. No MCP
+process starts from this API.
 
 ## Installed server
 
