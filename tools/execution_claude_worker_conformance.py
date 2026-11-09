@@ -2004,8 +2004,10 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "steering.mjs", "native-cycle.mjs", "configuration.mjs", "connection.mjs", "tools.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs", "skills.mjs", "mcp.mjs", "mcp-proxy.mjs", "managed.mjs", "agent-calls.mjs"]:
-            shutil.copyfile(launcher.parent / name, broken / "app" / name)
+        # Every packaged module except the Mod itself, so a new module in the
+        # package cannot make this negative case fail for an unrelated reason.
+        for module in sorted(launcher.parent.glob("*.mjs")):
+            shutil.copyfile(module, broken / "app" / module.name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:
             failed = Claude(str(broken / "bin/cowboy-configured-cli"), environment, args.runtime, fixture,
