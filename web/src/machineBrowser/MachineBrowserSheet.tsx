@@ -27,13 +27,21 @@ import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { BrowserMenu, type BrowserMenuItem, MobileBrowserToolbar } from "./MachineBrowserToolbar";
 import { devicePortrait, useTouchInput } from "./inputProfile";
 import { useDevicePaste } from "./MachineBrowserPaste";
+import type { SharedBrowser } from "./shareRules";
 import { useBrowserFullscreen } from "./useBrowserFullscreen";
 import { type MachineBrowserController, useMachineBrowser } from "./useMachineBrowser";
 
 export interface MachineBrowserSheetProps {
   open: boolean;
   onClose: () => void;
-  account: { id: string; label: string; browserEnabled: boolean };
+  account: {
+    id: string;
+    label: string;
+    browserEnabled: boolean;
+    /** The shared browser profile this card uses: named in the identity
+     * line, and its members in the reset confirmation. */
+    shared?: SharedBrowser | undefined;
+  };
   owner: string;
   dataset: string;
   /** Open or attach as soon as the state is known. */
@@ -240,7 +248,7 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   useAutoEntry(props, browser, commands);
   const ui = useBrowserChrome(account.id, model);
   const paste = useDevicePaste(ui.controls);
-  const confirm = useBrowserConfirm(model, state, commands);
+  const confirm = useBrowserConfirm(model, state, commands, account.shared);
   const full = useBrowserFullscreen(desktop && open);
   const close = desktop ? full.guardClose(onClose) : onClose;
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";
@@ -275,7 +283,13 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
     onControls: ui.setPublished,
     onKeyboard: ui.setKeyboardOpen,
   };
-  const identity = { accountLabel: account.label, machineLabel, status };
+  const identity = {
+    accountLabel: account.shared
+      ? `${account.label} · Shared · ${account.shared.label}`
+      : account.label,
+    machineLabel,
+    status,
+  };
   const title = `Browser of ${account.label}`;
   if (desktop) {
     return (

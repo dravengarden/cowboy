@@ -9,6 +9,8 @@ import { providerSubscriptionEnabled } from "./SessionSubscription";
 import { SubscriptionLogins } from "./SubscriptionLogins";
 import { SubscriptionRevocation } from "./SubscriptionRevocation";
 import { LegacyBrowserActions, SubscriptionBrowserActions } from "./SubscriptionBrowserActions";
+import { type BrowserShareChange, BrowserShareSettings } from "./machineBrowser/BrowserShareSettings";
+import { sharedBrowser } from "./machineBrowser/shareRules";
 import { ProviderAccountIdentity, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { legacySubscriptionLabel, validLegacyLabels, validSubscriptionLabel } from "./subscriptionDisplay";
 import { type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot } from "./subscriptionAccounts";
@@ -21,7 +23,8 @@ type Change = { type: "create"; provider_id: string; label: string }
   | { type: "set_default"; provider_id: string; id: string }
   | { type: "set_legacy_labels"; labels: Record<string, string> }
   | { type: "set_browser_enabled"; id: string; enabled: boolean }
-  | { type: "set_legacy_browser_enabled"; card: string; enabled: boolean };
+  | { type: "set_legacy_browser_enabled"; card: string; enabled: boolean }
+  | BrowserShareChange;
 interface Pending { operation: string; dataset: string; expected_revision: number; change: Change }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -42,7 +45,11 @@ export function validPendingSubscription(value: unknown): value is Pending {
     : change.type === "set_enabled" ? ["type", "id", "enabled"]
     : change.type === "set_browser_enabled" ? ["type", "id", "enabled"]
     : change.type === "set_legacy_browser_enabled" ? ["type", "card", "enabled"]
-    : change.type === "set_default" ? ["type", "provider_id", "id"] : [];
+    : change.type === "set_default" ? ["type", "provider_id", "id"]
+    : change.type === "create_browser_share" ? ["type", "label"]
+    : change.type === "rename_browser_share" ? ["type", "share_id", "label"]
+    : change.type === "delete_browser_share" ? ["type", "share_id"]
+    : change.type === "set_browser_share" ? ["type", "member", "share_id"] : [];
   if (fields.length === 0 || Object.keys(change).some((key) => !fields.includes(key))) return false;
   switch (change.type) {
     case "set_legacy_labels": return validLegacyLabels(change.labels);
@@ -51,13 +58,23 @@ export function validPendingSubscription(value: unknown): value is Pending {
     case "set_enabled": case "set_browser_enabled": return text(change.id) && typeof change.enabled === "boolean";
     case "set_legacy_browser_enabled": return text(change.card) && typeof change.enabled === "boolean";
     case "set_default": return text(change.provider_id) && text(change.id);
+    case "create_browser_share": return typeof change.label === "string" && validSubscriptionLabel(change.label);
+    case "rename_browser_share": return text(change.share_id) && typeof change.label === "string" && validSubscriptionLabel(change.label);
+    case "delete_browser_share": return text(change.share_id);
+    case "set_browser_share": return validShareMember(change.member) && (change.share_id === null || text(change.share_id));
     default: return false;
   }
 }
 
+function validShareMember(value: unknown): boolean {
+  return record(value) && Object.keys(value).length === 1 && (text(value.account_id) || text(value.card));
+}
+
 /** Only explicit domain rejections establish that this mutation did not commit. */
 export function subscriptionWriteRejected(status: number, code: string | undefined): boolean {
-  return status === 422 && ["invalid_account", "account_capacity", "account_is_default", "invalid_provider", "account_unavailable", "invalid_preferences"].includes(code ?? "");
+  return status === 422 && ["invalid_account", "account_capacity", "account_is_default", "invalid_provider", "account_unavailable", "invalid_preferences",
+    "account_not_found", "account_revoking", "invalid_argument", "invalid_browser_share", "browser_share_capacity", "browser_share_not_found",
+    "browser_share_family_conflict", "browser_share_family_unknown"].includes(code ?? "");
 }
 
 export interface SubscriptionCards {
@@ -220,7 +237,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
             <Button disabled={disabled || account.revoking} onClick={() => save({ type: "set_enabled", id: account.id, enabled: !account.enabled })}>{account.revoking ? "Revoked access" : account.enabled ? "Disable" : "Enable"}</Button>
             <Button disabled={disabled || !account.enabled || snapshot.registry.defaults[account.provider_id] === account.id || !providerSubscriptionEnabled(snapshot, account.provider_id)} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: account.id })}>Use by default</Button>
             {snapshot.registry.defaults[account.provider_id] === account.id && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: account.provider_id, id: "default" })}>Use existing account by default</Button>}
-            {owner && <SubscriptionBrowserActions account={account} owner={owner} dataset={snapshot.dataset.dataset_id} disabled={disabled}
+            {owner && <SubscriptionBrowserActions account={account} owner={owner} dataset={snapshot.dataset.dataset_id} disabled={disabled} shared={sharedBrowser(snapshot, account.id)}
               onSetBrowserEnabled={(enabled) => save({ type: "set_browser_enabled", id: account.id, enabled })} />}
             {owner && <SubscriptionRevocation account={account.id} label={account.label} revoking={Boolean(account.revoking)} owner={owner}
               dataset={snapshot.dataset.dataset_id} revision={snapshot.registry.revision} disabled={disabled} onChange={() => void load()} />}
@@ -251,5 +268,6 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
       {legacyProviders.map((id) => <Box key={`legacy:${id}`}>{legacy(id).controls}</Box>)}
       {named.map((card) => card.content)}
     </>}
+    <BrowserShareSettings snapshot={snapshot} disabled={disabled} save={save} />
   </Stack>;
 }

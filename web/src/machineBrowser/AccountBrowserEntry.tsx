@@ -2,7 +2,8 @@
  * account management card opens, for exactly that card's ordinary tab
  * browser. A named account opens its own browser; a legacy default card
  * (the Service-collected default account of a usage provider) opens the
- * card's own browser key, never shared with another card. It never enables
+ * card's own browser key, or the owner-defined shared profile the card was
+ * put into (shown as "Shared · <group>"). It never enables
  * anything; a closed gate or a disabled browser says why and links to
  * account management. */
 import { OpenInBrowserRounded } from "@mui/icons-material";
@@ -12,6 +13,7 @@ import { openAppSettings } from "../appSettings";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import { accountBrowserEntry } from "./entryRules";
 import { MachineBrowserSheet } from "./MachineBrowserSheet";
+import { sharedBrowser } from "./shareRules";
 
 export function AccountBrowserEntry({
   snapshot,
@@ -28,6 +30,7 @@ export function AccountBrowserEntry({
   const entry = accountBrowserEntry(snapshot, id, label);
   if (entry.kind === "none" || !snapshot) return null;
   const { account } = entry;
+  const shared = sharedBrowser(snapshot, account.id);
   return (
     <Stack spacing={0.25} data-account-browser-entry={account.id}>
       <Button
@@ -39,6 +42,11 @@ export function AccountBrowserEntry({
       >
         Browser
       </Button>
+      {shared && (
+        <Typography variant="caption" color="text.secondary" data-browser-shared={shared.label}>
+          Shared · {shared.label}
+        </Typography>
+      )}
       {entry.kind === "disabled" && (
         <Typography variant="caption" color="text.secondary">
           {entry.reason}
@@ -67,6 +75,7 @@ export function AccountBrowserEntry({
             id: account.id,
             label: account.label,
             browserEnabled: account.browser_enabled,
+            shared,
           }}
         />
       )}

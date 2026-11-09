@@ -456,6 +456,13 @@ const ERROR_TEXT: Record<string, string> = {
   unavailable: "The Service is temporarily unavailable.",
   resize_failed: "The Machine did not apply the new screen size.",
   account_revoking: "This account is being revoked; its browser profile is deleted with it.",
+  browser_share_changed:
+    "This card's shared browser changed (it left the group or the group was deleted). Reopen it from the card.",
+  browser_share_family_conflict:
+    "This shared browser would hold two accounts of one kind, so it was not opened.",
+  browser_share_family_unknown:
+    "A member of this shared browser has no known account family, so it was not opened.",
+  browser_member_required: "Open a shared browser from one of its cards.",
   invalid_response: "The Service answered in an unexpected shape.",
 };
 

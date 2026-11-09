@@ -15,6 +15,7 @@ import {
 } from "./confirmation";
 import { MachineBrowserChooser } from "./MachineBrowserChooser";
 import { needsMachineChoice } from "./entryRules";
+import { type SharedBrowser, sharedResetNote } from "./shareRules";
 
 /** Commands that follow a confirmation take the target it captured. */
 export interface BrowserCommands {
@@ -139,6 +140,7 @@ export function useBrowserConfirm(
   model: BrowserModel,
   state: BrowserStateEvent | null,
   commands: BrowserCommands,
+  shared?: SharedBrowser,
 ): { ask: (kind: ConfirmKind) => void; dialog: ReactNode } {
   const [confirm, setConfirm] = useState<Confirmation | undefined>(undefined);
   const current = confirm !== undefined && confirmationCurrent(confirm, model);
@@ -170,6 +172,11 @@ export function useBrowserConfirm(
       }
     >
       <Typography variant="body2">{text.body}</Typography>
+      {confirm?.kind === "reset" && sharedResetNote(shared) && (
+        <Typography variant="body2" color="warning.main">
+          {sharedResetNote(shared)}
+        </Typography>
+      )}
       {confirm?.kind === "takeover" && (
         <Typography variant="caption" color="text.secondary">
           Current state: {browserStateLabel(state?.state)}.

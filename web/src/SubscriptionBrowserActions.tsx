@@ -2,6 +2,7 @@ import { Button, Stack, Typography } from "@mui/material";
 import { useState } from "react";
 import { legacyBrowserOfProvider } from "./machineBrowser/entryRules";
 import { MachineBrowserSheet } from "./machineBrowser/MachineBrowserSheet";
+import { type SharedBrowser, sharedBrowser } from "./machineBrowser/shareRules";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 
 /** The account whose browser the controls manage: a named account, or a
@@ -22,12 +23,15 @@ export function SubscriptionBrowserActions({
   owner,
   dataset,
   disabled,
+  shared,
   onSetBrowserEnabled,
 }: {
   account: BrowserActionsAccount;
   owner: string;
   dataset: string;
   disabled: boolean;
+  /** The shared browser profile the account uses, if any. */
+  shared?: SharedBrowser | undefined;
   onSetBrowserEnabled: (enabled: boolean) => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
@@ -50,7 +54,7 @@ export function SubscriptionBrowserActions({
           onClose={() => setOpen(false)}
           owner={owner}
           dataset={dataset}
-          account={{ id: account.id, label: account.label, browserEnabled: enabled }}
+          account={{ id: account.id, label: account.label, browserEnabled: enabled, shared }}
           onEnableBrowser={() => onSetBrowserEnabled(true)}
           enabling={disabled}
         />
@@ -88,6 +92,7 @@ export function LegacyBrowserActions({
           owner={owner}
           dataset={snapshot.dataset.dataset_id}
           disabled={disabled}
+          shared={sharedBrowser(snapshot, browser.account_id)}
           onSetBrowserEnabled={(enabled) => onSetBrowserEnabled(browser.card, enabled)}
         />
       </Stack>
@@ -95,6 +100,9 @@ export function LegacyBrowserActions({
         Machine browser of this usage card
         {browser.providers.length > 1 ? ` (shared card of ${browser.providers.join(", ")})` : ""}
         {snapshot.machine_browser !== "enabled" ? " · not enabled on this Service" : ""}
+        {sharedBrowser(snapshot, browser.account_id)
+          ? ` · Shared · ${sharedBrowser(snapshot, browser.account_id)!.label}`
+          : ""}
       </Typography>
     </Stack>
   );

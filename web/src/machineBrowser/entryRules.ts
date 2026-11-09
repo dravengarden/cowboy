@@ -19,7 +19,8 @@ export type AccountBrowserEntryState =
   | { kind: "ready"; account: BrowserEntryAccount };
 
 /** The browser of the legacy default usage card `card`, if the Service
- * reports one. Each card has its own key; none is shared. */
+ * reports one. Each card has its own key; only an owner-defined share of
+ * cards of distinct families uses one browser (`shareRules`). */
 export function legacyBrowser(
   snapshot: SubscriptionSnapshot | undefined,
   card: string,

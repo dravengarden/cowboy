@@ -27,6 +27,28 @@ export interface LegacyBrowser {
   browser_enabled: boolean;
   /** The Service collects the card now. */
   available: boolean;
+  /** The shared browser profile the card uses, if any. */
+  share_id?: string | null;
+}
+/** A browser identity that may join a shared browser profile. */
+export type BrowserShareMemberRef = { account_id: string } | { card: string };
+export interface BrowserShareMember {
+  member: BrowserShareMemberRef;
+  /** Its account-usage family; a share holds at most one per family. */
+  family: string;
+  /** The member's own browser id (named account id or card key). */
+  account_id: string;
+}
+/** An owner-defined shared browser profile (docs/machine-browser.md,
+ * "Shared browser profiles"). */
+export interface BrowserShare {
+  share_id: string;
+  label: string;
+  created_ms: number;
+  revision: number;
+  /** Deleted; its profile is still being revoked on its Machine. */
+  deleting: boolean;
+  members: BrowserShareMember[];
 }
 export interface SubscriptionSnapshot {
   dataset: { dataset_id: string; user_id: string };
@@ -39,6 +61,9 @@ export interface SubscriptionSnapshot {
   /** The Service gate of the optional Machine browser (`accounts.machine_browser`). */
   machine_browser?: "enabled" | "not_enabled";
   legacy_browsers?: LegacyBrowser[];
+  browser_shares?: BrowserShare[];
+  /** Provider id → account-usage family. */
+  browser_share_families?: Record<string, string>;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -47,7 +72,18 @@ function record(value: unknown): value is Record<string, unknown> {
 function text(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
 function validLegacyBrowser(value: unknown): value is LegacyBrowser {
   return record(value) && text(value.card) && text(value.account_id) && Array.isArray(value.providers) &&
-    value.providers.every(text) && typeof value.browser_enabled === "boolean" && typeof value.available === "boolean";
+    value.providers.every(text) && typeof value.browser_enabled === "boolean" && typeof value.available === "boolean" &&
+    (value.share_id === undefined || value.share_id === null || text(value.share_id));
+}
+function validShareMember(value: unknown): value is BrowserShareMember {
+  if (!record(value) || !record(value.member) || !text(value.family) || !text(value.account_id)) return false;
+  const keys = Object.keys(value.member);
+  return keys.length === 1 && (text(value.member.account_id) || text(value.member.card));
+}
+function validBrowserShare(value: unknown): value is BrowserShare {
+  return record(value) && text(value.share_id) && typeof value.label === "string" &&
+    typeof value.created_ms === "number" && typeof value.revision === "number" &&
+    typeof value.deleting === "boolean" && Array.isArray(value.members) && value.members.every(validShareMember);
 }
 
 export function validSubscriptionSnapshot(value: unknown, owner: string | undefined): value is SubscriptionSnapshot {
@@ -60,6 +96,8 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
     (value.revoked_accounts === undefined || (Array.isArray(value.revoked_accounts) && value.revoked_accounts.every(text))) &&
     (value.machine_browser === undefined || value.machine_browser === "enabled" || value.machine_browser === "not_enabled") &&
     (value.legacy_browsers === undefined || (Array.isArray(value.legacy_browsers) && value.legacy_browsers.every(validLegacyBrowser))) &&
+    (value.browser_shares === undefined || (Array.isArray(value.browser_shares) && value.browser_shares.every(validBrowserShare))) &&
+    (value.browser_share_families === undefined || (record(value.browser_share_families) && Object.values(value.browser_share_families).every(text))) &&
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
     Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
       text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean" &&
