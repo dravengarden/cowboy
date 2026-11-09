@@ -8,6 +8,7 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { Markdown } from "./Markdown";
 import { parseWidgetValue } from "./widgets/widgetDocument";
 import WidgetView from "./widgets/WidgetView";
+import { setInteractionTransport, type DecidedInput } from "./widgets/widgetInteractions";
 import { SurfaceContext, type SurfaceProfile } from "./surface/SurfaceProfile";
 import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
 import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
@@ -108,6 +109,7 @@ export async function runWidgetsBrowserConformance(): Promise<string[]> {
   root.unmount();
   passed.push(await desktopKeyChecks(container));
   passed.push(await imageChecks(container));
+  passed.push(await interactionChecks(container));
 
   container.remove();
   return passed;
@@ -173,6 +175,111 @@ async function imageChecks(container: HTMLElement): Promise<string> {
     );
     return "published images load and open; inline images stay text";
   } finally {
+    root.unmount();
+  }
+}
+
+const decisionWidget = {
+  schema: "cowboy.widget/1",
+  title: "Cleanup",
+  root: {
+    type: "stack",
+    children: [
+      {
+        type: "choice",
+        id: "cache",
+        label: "Which cache may be removed?",
+        options: [
+          { value: "cargo", label: "Cargo target" },
+          { value: "logs", label: "Old logs" },
+        ],
+      },
+      { type: "button", id: "yes", label: "Approve", action: { kind: "prompt" }, group: "go" },
+      { type: "button", id: "no", label: "Reject", action: { kind: "prompt" }, group: "go" },
+      { type: "button", id: "copy", label: "Copy id", action: { kind: "copy", text: "w-1" } },
+    ],
+  },
+};
+
+/** Choose, confirm the exact message, send; decided inputs are inert; a
+ *  widget that changed since the preview shows the new message instead. */
+async function interactionChecks(container: HTMLElement): Promise<string> {
+  const parsed = parseWidgetValue(decisionWidget);
+  check(parsed.ok, "the decision widget validates");
+  const calls: { node_id: string; values: string[]; message_sha256?: string }[] = [];
+  let changeNext = false;
+  setInteractionTransport(async (_session, _widget, request) => {
+    calls.push(request);
+    const message = `Widget #w9 “Cleanup” (revision 3), Which cache may be removed?: ${
+      request.values.includes("logs") ? "Old logs" : "Cargo target"
+    }`;
+    if (request.message_sha256 && changeNext) {
+      changeNext = false;
+      return { status: 409, body: { code: "changed", message: `${message}!`, message_sha256: "h2" } };
+    }
+    return request.message_sha256
+      ? { status: 200, body: { status: "sent", message } }
+      : { status: 200, body: { message, message_sha256: "h1" } };
+  });
+  const root = createRoot(container);
+  const render = (decided: Record<string, DecidedInput>): void =>
+    flushSync(() =>
+      root.render(
+        <SurfaceContext.Provider value={DESKTOP}>
+          <BrowserProductTheme>
+            <CssBaseline />
+            <Box sx={{ width: 760, p: 1 }}>
+              <WidgetView
+                document={parsed.document}
+                verified
+                handle="w9"
+                interaction={{ sessionId: "s", widgetId: "w", revision: 3, closed: false, decided }}
+              />
+            </Box>
+          </BrowserProductTheme>
+        </SurfaceContext.Provider>,
+      ),
+    );
+  try {
+    render({});
+    const send = await waitFor(
+      () => container.querySelector<HTMLButtonElement>('[data-widget-choice-send="cache"]'),
+      "choice send",
+    );
+    check(send.disabled, "Send waits for a selection");
+    const logs = [...container.querySelectorAll<HTMLInputElement>('[data-widget-choice="cache"] input')][1]!;
+    flushSync(() => logs.click());
+    check(!send.disabled, "a selection enables Send");
+    send.click();
+    const quoted = await waitFor(
+      () => document.querySelector<HTMLElement>("[data-widget-confirm-message]"),
+      "confirm shows the message",
+    );
+    check(quoted.textContent?.endsWith("Old logs"), `the exact message is shown (${quoted.textContent})`);
+    check(calls.length === 1 && !calls[0]!.message_sha256, "the first request only previews");
+    changeNext = true;
+    document.querySelector<HTMLElement>("[data-widget-confirm-send]")!.click();
+    await waitFor(
+      () => document.querySelector("[data-widget-confirm-message]")?.textContent?.endsWith("!"),
+      "a changed widget shows the new message",
+    );
+    document.querySelector<HTMLElement>("[data-widget-confirm-send]")!.click();
+    await waitFor(() => !document.querySelector("[data-widget-confirm]"), "send closes the confirm");
+    check(calls.at(-1)!.message_sha256 === "h2", "the send carries the shown message's digest");
+    await waitFor(() => container.querySelector('[data-widget-choice="cache"] [data-widget-sent]'), "sent note");
+    render({
+      yes: { labels: ["Approve"], chosen: true, atMs: 1 },
+      no: { labels: ["Approve"], chosen: false, atMs: 1 },
+    });
+    const yes = container.querySelector<HTMLButtonElement>('[data-widget-button="yes"]')!;
+    const no = container.querySelector<HTMLButtonElement>('[data-widget-button="no"]')!;
+    check(yes.disabled && no.disabled, "a decided group is inert");
+    check(yes.parentElement?.querySelector("[data-widget-sent]"), "the chosen button says it was sent");
+    const copy = container.querySelector<HTMLButtonElement>('[data-widget-button="copy"]')!;
+    check(!copy.disabled, "copy acts locally");
+    return "decisions preview, confirm and send; decided inputs are inert";
+  } finally {
+    setInteractionTransport(null);
     root.unmount();
   }
 }
@@ -408,6 +515,45 @@ export function showPictureWidget(): void {
           <WidgetView document={parsed.document} verified handle="w3" updatedAtMs={Date.now()} />
         </Box>
       </BrowserProductTheme>,
+    ),
+  );
+}
+
+/** Leaves the decision widget mounted (with a fixture Controller) for screenshots. */
+export function showDecisionWidget(): void {
+  const parsed = parseWidgetValue(decisionWidget);
+  if (!parsed.ok) throw new Error(parsed.error);
+  setInteractionTransport(async (_session, _widget, request) => ({
+    status: 200,
+    body: {
+      message: `Widget #w9 “Cleanup” (revision 3), Which cache may be removed?: ${request.values.join("; ")}`,
+      message_sha256: "h",
+    },
+  }));
+  const container = document.createElement("div");
+  document.body.append(container);
+  flushSync(() =>
+    createRoot(container).render(
+      <SurfaceContext.Provider value={DESKTOP}>
+        <BrowserProductTheme>
+          <CssBaseline />
+          <Box sx={{ p: 1.5, maxWidth: 760 }}>
+            <WidgetView
+              document={parsed.document}
+              verified
+              handle="w9"
+              updatedAtMs={Date.now()}
+              interaction={{
+                sessionId: "s",
+                widgetId: "w",
+                revision: 3,
+                closed: false,
+                decided: { yes: { labels: ["Approve"], chosen: true, atMs: 1 }, no: { labels: ["Approve"], chosen: false, atMs: 1 } },
+              }}
+            />
+          </Box>
+        </BrowserProductTheme>
+      </SurfaceContext.Provider>,
     ),
   );
 }

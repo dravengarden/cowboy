@@ -1245,7 +1245,7 @@ export const ItemView = memo(function ItemView({
       );
     }
     case "notice":
-      return <NoticeRow item={item} />;
+      return <NoticeRow item={item} sessionId={sessionId} />;
   }
 });
 

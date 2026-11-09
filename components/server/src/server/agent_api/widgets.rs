@@ -9,7 +9,7 @@ use crate::widgets;
 
 /// Orders each widget's store write before its transcript push, so a later
 /// snapshot can never be fanned out before an earlier one.
-static WIDGET_WRITES: LazyLock<tokio::sync::Mutex<()>> =
+pub(super) static WIDGET_WRITES: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// A write whose commit state is unknown: log the cause, report it opaquely.
@@ -39,7 +39,13 @@ fn meta_view(widget: &StoredWidget) -> Value {
     })
 }
 
-fn push(state: &AppState, session_id: &str, widget: &StoredWidget, operation: &str) {
+pub(super) fn push(
+    state: &AppState,
+    session_id: &str,
+    widget: &StoredWidget,
+    operation: &str,
+    decided: Map<String, Value>,
+) {
     let title = widget.document["title"]
         .as_str()
         .unwrap_or("Widget")
@@ -58,6 +64,7 @@ fn push(state: &AppState, session_id: &str, widget: &StoredWidget, operation: &s
             "updatedAtMs": widget.updated_at_ms,
             "origin": {"kind": "mcp", "operation": operation},
             "closed": widget.closed,
+            "decided": decided,
             "document": widget.document,
         }},
     });
@@ -119,7 +126,7 @@ async fn publish(
         .map_err(|error| unknown(&meta.id, error))?
     {
         PublishOutcome::Committed(widget) => {
-            push(state, &meta.id, &widget, operation);
+            push(state, &meta.id, &widget, operation, Map::new());
             Ok(success(
                 json!({"status":"committed","widget_id":widget.widget_id,"handle":widget.handle,
                 "revision":widget.revision,"state_version":widget.state_version}),
@@ -232,7 +239,9 @@ async fn effect(
                 .map_err(|error| unknown(&meta.id, error))?
             {
                 UpdateOutcome::Committed(widget) => {
-                    push(state, &meta.id, &widget, operation);
+                    let decided =
+                        super::widget_interactions::decided(store, &meta.id, &widget).await;
+                    push(state, &meta.id, &widget, operation, decided);
                     Ok(success(
                         json!({"status":"committed","widget_id":widget.widget_id,"revision":widget.revision,
                         "state_version":widget.state_version,"closed":widget.closed}),
@@ -344,6 +353,7 @@ pub(super) async fn read(
         .map_err(|_| "unavailable")?
         .ok_or("unknown_widget")?;
     let mut value = meta_view(&widget);
+    value["interactions"] = super::widget_interactions::recent(store, &meta.id, &widget).await?;
     value["document"] = json!(serde_json::to_string(&widget.document).map_err(|_| "unavailable")?);
     text_window(&mut value, "document", args)?;
     Ok(value)

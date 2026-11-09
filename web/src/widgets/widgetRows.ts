@@ -4,6 +4,8 @@
 // widget. Every later snapshot of the same widget replaces the row that the
 // first one created, and only a newer `stateVersion` wins.
 
+import type { DecidedInput } from "./widgetInteractions";
+
 export type WidgetRowData = {
   widgetId: string;
   handle: string;
@@ -12,8 +14,28 @@ export type WidgetRowData = {
   closed: boolean;
   /** When the widget last changed; absent from snapshots that predate it. */
   updatedAtMs?: number | undefined;
+  /** Inputs a decision already settled, keyed by node id. */
+  decided?: Record<string, DecidedInput> | undefined;
   document: unknown;
 };
+
+function decidedOf(value: unknown): Record<string, DecidedInput> {
+  const out: Record<string, DecidedInput> = {};
+  if (typeof value !== "object" || value === null) return out;
+  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    const labels = Array.isArray(e["labels"])
+      ? e["labels"].filter((label): label is string => typeof label === "string")
+      : [];
+    out[id] = {
+      labels,
+      chosen: e["chosen"] === true,
+      atMs: typeof e["atMs"] === "number" ? e["atMs"] : 0,
+    };
+  }
+  return out;
+}
 
 /** The snapshot a notice update carries, when it is a widget row. */
 export function widgetOfNotice(update: Record<string, unknown>): WidgetRowData | undefined {
@@ -30,6 +52,7 @@ export function widgetOfNotice(update: Record<string, unknown>): WidgetRowData |
     stateVersion: w["stateVersion"],
     closed: w["closed"] === true,
     ...(typeof w["updatedAtMs"] === "number" ? { updatedAtMs: w["updatedAtMs"] } : {}),
+    decided: decidedOf(w["decided"]),
     document: w["document"],
   };
 }

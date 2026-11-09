@@ -446,6 +446,10 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             post(notifications::acknowledge),
         )
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
+        .route(
+            "/api/sessions/{id}/widgets/{widget_id}/interactions",
+            post(agent_api::api_widget_interaction),
+        )
         .route("/api/sessions/{id}/config-revert", get(config_revert::get))
         .route(
             "/api/sessions/{id}/config-revert/restore",

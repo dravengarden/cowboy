@@ -6,6 +6,7 @@ use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 
 mod images;
+pub mod interactions;
 use images::image_source;
 pub use images::{ARTIFACT_PREFIX, SourceAt, artifact_name, image_sources};
 

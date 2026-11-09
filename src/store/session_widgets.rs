@@ -2,6 +2,8 @@
 //! transcript projection live with the Agent API writer; this module only
 //! stores, compares revisions and tombstones.
 use super::{StorageBackend, Store};
+
+pub mod interactions;
 use anyhow::Result;
 use serde_json::Value;
 

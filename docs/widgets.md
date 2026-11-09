@@ -111,7 +111,23 @@ typing-free, auditable decisions within measured bounds.
   the product lightbox (`web/src/widgets/WidgetPictures.tsx`, lazy) and keeps
   the inline fence on `alt` text; inline `event` resolution is not wired.
   The transcript preview shows the first 6 gallery images (`previewImages`).
-- Not built yet: interactions.
+- **Interactions (Controller + Web), revised delivery.** The owner chose to
+  deliver a decision as the person's ordinary prompt instead of the
+  exactly-once interaction transport of §8, which removes F1–F4 and F6 at the
+  source: Stop, Clear, rollback and retries are those of any queued prompt.
+  `POST /api/sessions/{id}/widgets/{widget_id}/interactions` validates the
+  tap against the current revision, composes the message from what the
+  person saw (`Widget #w3 “title” (revision 2): Approve`, or the question and
+  the option labels in option order) and returns it for the product confirm;
+  the confirmed send carries the message digest and is refused as `changed`
+  when the widget moved. The Controller queues it with `Hub::submit` under a
+  `cmid` derived from the decision (a retried tap is the same prompt), then
+  records it in `session_widget_interactions` and republishes the row with a
+  `decided` map. Inputs sharing a `group`, or a lone input, take one decision
+  and stay inert until a later revision changes the decided input's labels,
+  options or group (F5). `widgets.read` returns the newest interactions.
+  `copy` and `https:` `open` buttons act locally; inline fences stay inert.
+  F7 is moot with the interaction lookup pages gone.
 
 ## 1. Review findings and resolutions
 
