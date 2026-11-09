@@ -21,6 +21,7 @@ pub(in crate::server) mod coordinator;
 pub(in crate::server) mod legacy;
 pub(in crate::server) mod machine_stream;
 pub(in crate::server) mod revocation;
+pub(in crate::server) mod shares;
 pub(in crate::server) mod viewer;
 
 /// Unit start, snapshot restoration and launcher readiness.
@@ -112,14 +113,67 @@ impl BrowserAccount {
     }
 }
 
+/// A browser identity as the routes address it (`id`: a named account or
+/// a legacy card key), resolved to the browser key it uses now (`key`): the
+/// share's when the member is in one, else `id` itself. Authorization is
+/// always the member's (`account`); the Machine only ever sees `key`.
+#[derive(Clone, Debug)]
+pub(in crate::server) struct Resolved {
+    pub owner: String,
+    pub id: ProviderAccountId,
+    pub account: BrowserAccount,
+    pub key: ProviderAccountId,
+    pub share: Option<shares::ShareView>,
+}
+
+impl Resolved {
+    fn shared(&self) -> Option<&shares::ShareView> {
+        self.share.as_ref()
+    }
+
+    /// An event as the member's card is shown it: the share key is reported
+    /// as the member's own identity, so the owner's views and commands keep
+    /// naming the card they were opened from.
+    pub(in crate::server) fn present(&self, event: &StateEvent) -> StateEvent {
+        let mut event = event.clone();
+        if event.instance.account_id == self.key {
+            event.instance.account_id = self.id.clone();
+        }
+        event
+    }
+
+    /// The instance a member's command names, on the browser key.
+    pub(in crate::server) fn inbound(
+        &self,
+        instance: &InstanceRef,
+    ) -> Result<InstanceRef, &'static str> {
+        if instance.account_id != self.id {
+            return Err("invalid_argument");
+        }
+        Ok(InstanceRef {
+            account_id: self.key.clone(),
+            ..instance.clone()
+        })
+    }
+
+    fn state_json(&self, machine_id: &str, event: &StateEvent) -> Value {
+        let mut value = state_json(machine_id, &self.present(event));
+        if let Some(share) = self.shared() {
+            value["share"] = share.value(&self.owner);
+        }
+        value
+    }
+}
+
 /// The owner's browser account. Resolved before any gate or Machine is
 /// consulted, so another owner's account or card is indistinguishable from
-/// none. The shared `default` identity names no single card and is refused.
+/// none. The shared `default` identity names no single card and is refused,
+/// and so is a share key: a share is reached only through a member's card.
 async fn owned_account(
     state: &AppState,
     owner: &str,
     account_id: &ProviderAccountId,
-) -> Result<BrowserAccount, &'static str> {
+) -> Result<Resolved, &'static str> {
     if account_id.is_default() {
         return Err("browser_key_required");
     }
@@ -128,17 +182,28 @@ async fn owned_account(
         .provider_accounts(owner)
         .await
         .map_err(|_| "unavailable")?;
-    if let Some(account) = registry
+    let account = match registry
         .accounts
-        .into_iter()
+        .iter()
         .find(|account| &account.id == account_id)
     {
-        return Ok(BrowserAccount::Named(account));
-    }
-    legacy::resolve(state, owner, account_id)
-        .await?
-        .map(BrowserAccount::Legacy)
-        .ok_or("account_unavailable")
+        Some(account) => BrowserAccount::Named(account.clone()),
+        None if shares::is_share_key(state, owner, account_id).await? => {
+            return Err("browser_member_required");
+        }
+        None => legacy::resolve(state, owner, account_id)
+            .await?
+            .map(BrowserAccount::Legacy)
+            .ok_or("account_unavailable")?,
+    };
+    let (key, share) = shares::resolve(state, owner, (account_id, &account), &registry).await?;
+    Ok(Resolved {
+        owner: owner.to_owned(),
+        id: account_id.clone(),
+        account,
+        key,
+        share,
+    })
 }
 
 /// Machines holding the account's credentials: a named account's native
@@ -194,24 +259,43 @@ fn authorize_account(
     }
 }
 
+/// The member's authority over the browser its card uses now. A share has
+/// no admission of its own: each member needs its own.
 pub(in crate::server) async fn authorize(
     state: &AppState,
     owner: &str,
     account_id: &ProviderAccountId,
     authority: Authority,
-) -> Result<(), &'static str> {
-    let account = owned_account(state, owner, account_id).await?;
-    authorize_account(authority, gate_open(state), &account)
+) -> Result<Resolved, &'static str> {
+    let resolved = owned_account(state, owner, account_id).await?;
+    authorize_account(authority, gate_open(state), &resolved.account)?;
+    if resolved.shared().is_some() {
+        authorize_shared(authority, &resolved.account)?;
+    }
+    Ok(resolved)
+}
+
+/// What a member additionally needs to act on a share's browser: deleting
+/// the profile the other members use takes the member's own browser
+/// access (available, enabled); a member that was disabled lost its say.
+/// Stopping stays the owner's to do, as for every browser.
+fn authorize_shared(authority: Authority, account: &BrowserAccount) -> Result<(), &'static str> {
+    match authority {
+        Authority::Reset if !account.available() || !account.browser_enabled() => {
+            Err("browser_not_enabled")
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Whether the owner may start or drive a browser for the account:
 /// ownership, the Service gate, the account's availability and its browser
-/// enablement.
+/// enablement; with the browser key the card uses now.
 pub(in crate::server) async fn admit(
     state: &AppState,
     owner: &str,
     account_id: &ProviderAccountId,
-) -> Result<(), &'static str> {
+) -> Result<Resolved, &'static str> {
     authorize(state, owner, account_id, Authority::Launch).await
 }
 
@@ -283,21 +367,28 @@ pub(in crate::server) fn named_instance(
 /// replaced by another Machine: it needs the account's placement or native
 /// credential generation there, except for an account with neither anywhere
 /// (never signed in, no browser), whose owner chooses its first Machine.
+///
+/// A share has one placement: once its browser lives on a Machine, it opens
+/// only there, whichever member opens it; its first Machine follows the
+/// opening member's credentials. Members' own placements are never reused.
 async fn machine_for(
     state: &AppState,
     owner: &str,
-    (account_id, account): (&ProviderAccountId, &BrowserAccount),
+    resolved: &Resolved,
     pinned: Option<&str>,
 ) -> Result<(String, ConnectionToken), &'static str> {
+    let (account_id, account) = (&resolved.id, &resolved.account);
     let store = state.store.as_ref().ok_or("unavailable")?;
     let placements = store
-        .browser_placements(owner, account_id)
+        .browser_placements(owner, &resolved.key)
         .await
         .map_err(|_| "unavailable")?;
     if let Some(machine) = pinned {
         if placed_on(&placements, machine).is_err() {
             let native = credential_machines(state, owner, (account_id, account)).await?;
-            if !first_machine_allowed(&placements, &native, machine) {
+            if !first_machine_allowed(&placements, &native, machine)
+                || (resolved.shared().is_some() && !placements.is_empty())
+            {
                 return Err("browser_not_placed");
             }
         }
@@ -311,13 +402,16 @@ async fn machine_for(
             .ok_or("browser_machine_unavailable")?;
         return Ok((machine.to_owned(), connection));
     }
+    let single = resolved.shared().is_some() && !placements.is_empty();
     let mut candidates: Vec<String> = placements
         .into_iter()
         .map(|placement| placement.machine_id)
         .collect();
-    for machine in credential_machines(state, owner, (account_id, account)).await? {
-        if !candidates.contains(&machine) {
-            candidates.push(machine);
+    if !single {
+        for machine in credential_machines(state, owner, (account_id, account)).await? {
+            if !candidates.contains(&machine) {
+                candidates.push(machine);
+            }
         }
     }
     let mut seen_capable = false;
@@ -468,25 +562,26 @@ pub(in crate::server) async fn state_value(
     account_id: &ProviderAccountId,
     machine: Option<&str>,
 ) -> Result<Value, &'static str> {
-    let account = owned_account(state, owner, account_id).await?;
-    let gate = authorize_account(Authority::Launch, gate_open(state), &account).err();
+    let resolved = owned_account(state, owner, account_id).await?;
+    let gate = authorize_account(Authority::Launch, gate_open(state), &resolved.account).err();
     let store = state.store.as_ref().ok_or("unavailable")?;
-    let placements = store
-        .browser_placements(owner, account_id)
+    let key = &resolved.key;
+    let mut placements = store
+        .browser_placements(owner, key)
         .await
         .map_err(|_| "unavailable")?;
-    let (pinned, observed) = read_target(
-        current_observations(state, account_id),
-        &placements,
-        machine,
-    );
-    let native = credential_machines(state, owner, (account_id, &account)).await?;
+    let (pinned, observed) = read_target(current_observations(state, key), &placements, machine);
+    let native = credential_machines(state, owner, (account_id, &resolved.account)).await?;
+    let choose = owner_chooses_machine(&placements, &native);
+    for placement in &mut placements {
+        placement.account_id = account_id.clone();
+    }
     let mut value = json!({"machine_id": Value::Null, "state": Value::Null, "placements": placements, "admission": gate,
-        "choose_machine": owner_chooses_machine(&placements, &native),
-        "capable_machines": capable_machines(&state.browsers, &state.machine_control)});
+        "choose_machine": choose, "capable_machines": capable_machines(&state.browsers, &state.machine_control),
+        "share": resolved.shared().map(|share| share.value(owner))});
     if let Some(observed) = &observed {
         value["machine_id"] = json!(observed.machine_id);
-        value["state"] = json!(observed.event);
+        value["state"] = json!(resolved.present(&observed.event));
         if observed.running() {
             return Ok(value);
         }
@@ -499,10 +594,10 @@ pub(in crate::server) async fn state_value(
                 .map(|placement| placement.machine_id.clone())
         });
     if let Some(machine) = machine
-        && let Some(event) = query_machine(state, &machine, account_id).await
+        && let Some(event) = query_machine(state, &machine, key).await
     {
         value["machine_id"] = json!(machine);
-        value["state"] = json!(event);
+        value["state"] = json!(resolved.present(&event));
     }
     Ok(value)
 }
@@ -550,11 +645,17 @@ pub(in crate::server) async fn refresh_placements(
         &connection,
         placements.iter().map(|(_, account_id)| account_id.clone()),
     );
+    let owners: std::collections::BTreeSet<String> =
+        placements.iter().map(|(owner, _)| owner.clone()).collect();
     for (_, account_id) in placements {
         if !state.machine_control.is_current(&connection) {
             return;
         }
         let _ = query_machine(&state, &machine_id, &account_id).await;
+    }
+    // A share deleted while this Machine was away is revoked now.
+    for owner in owners {
+        shares::resume_deletions(&state, &owner).await;
     }
 }
 
@@ -563,22 +664,51 @@ pub(in crate::server) async fn refresh_placements(
 /// captures its Machine; the account's lifecycle lock keeps a revocation's
 /// command from overtaking the open on the wire. The placement stays
 /// whatever the outcome: an unanswered open may have started a browser.
-/// A disable that raced the open is honoured once the open answers.
+/// A disable that raced the open is honoured once the open answers. A
+/// share's placement is admitted for the opening member, and a member that
+/// lost its access meanwhile never stops the share's browser for the others.
 async fn dispatch_open(
     state: &AppState,
     owner: &str,
-    (account_id, card): (&ProviderAccountId, Option<&str>),
+    resolved: &Resolved,
     (machine_id, connection): (&str, &ConnectionToken),
     purpose: Purpose,
     viewport: Viewport,
 ) -> Result<StateEvent, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
+    let account_id = &resolved.key;
     let instance = instance_id(owner, account_id, machine_id);
     let lifecycle = state.browsers.lifecycle_lock(account_id.as_str());
     let dispatch = lifecycle.lock().await;
-    store
-        .admit_browser_placement(owner, (account_id, card), machine_id, &instance, now_ms())
-        .await
+    let admitted = match (
+        resolved.shared(),
+        shares::member_of(&resolved.id, &resolved.account),
+    ) {
+        (Some(share), Some(member)) => {
+            store
+                .admit_shared_browser_placement(
+                    owner,
+                    (&member, &share.share_id),
+                    machine_id,
+                    &instance,
+                    now_ms(),
+                )
+                .await
+        }
+        (Some(_), None) => return Err("browser_share_changed"),
+        (None, _) => {
+            store
+                .admit_browser_placement(
+                    owner,
+                    (account_id, resolved.account.card()),
+                    machine_id,
+                    &instance,
+                    now_ms(),
+                )
+                .await
+        }
+    };
+    admitted
         .map_err(|error| {
             tracing::warn!(%error, "browser placement not committed; open refused");
             "unavailable"
@@ -610,11 +740,20 @@ async fn dispatch_open(
     {
         tracing::warn!(%error, "browser profile revision not recorded");
     }
-    if let Err(code) = admit(state, owner, account_id).await {
-        if matches!(
-            event.state,
-            BrowserState::Starting | BrowserState::Detached | BrowserState::Attached
-        ) {
+    let still = admit(state, owner, &resolved.id).await.and_then(|now| {
+        if now.key == *account_id {
+            Ok(())
+        } else {
+            Err("browser_share_changed")
+        }
+    });
+    if let Err(code) = still {
+        if resolved.shared().is_none()
+            && matches!(
+                event.state,
+                BrowserState::Starting | BrowserState::Detached | BrowserState::Attached
+            )
+        {
             state
                 .browsers
                 .cancel_viewer(machine_id, account_id.as_str());
@@ -646,37 +785,38 @@ pub(in crate::server) async fn open_tab(
     viewport: Viewport,
     machine: Option<&str>,
 ) -> Result<Value, &'static str> {
-    let account = owned_account(state, owner, account_id).await?;
-    authorize_account(Authority::Launch, gate_open(state), &account)?;
+    let resolved = authorize(state, owner, account_id, Authority::Launch).await?;
     viewport.validate().map_err(|_| "invalid_viewport")?;
-    let (machine_id, connection) =
-        machine_for(state, owner, (account_id, &account), machine).await?;
+    let (machine_id, connection) = machine_for(state, owner, &resolved, machine).await?;
     let event = dispatch_open(
         state,
         owner,
-        (account_id, account.card()),
+        &resolved,
         (&machine_id, &connection),
         Purpose::Tab,
         viewport,
     )
     .await?;
-    Ok(state_json(&machine_id, &event))
+    Ok(resolved.state_json(&machine_id, &event))
 }
 
 /// Forward one instance-scoped command to the named Machine, only while
 /// that Machine still reports exactly the named instance and incarnation:
 /// the command never reaches another Machine's browser of the same account
-/// nor a newer incarnation the owner has not seen.
+/// nor a newer incarnation the owner has not seen. The instance is named as
+/// the member's card was shown it and commanded on the browser key.
 pub(in crate::server) async fn instance_command(
     state: &AppState,
     owner: &str,
     (account_id, authority): (&ProviderAccountId, Authority),
     (machine_id, instance): (&str, &InstanceRef),
-    command: Command,
+    command: impl FnOnce(InstanceRef) -> Command,
     timeout: std::time::Duration,
 ) -> Result<Value, &'static str> {
-    authorize(state, owner, account_id, authority).await?;
-    let observed = named_instance(state, account_id, machine_id, instance)?;
+    let resolved = authorize(state, owner, account_id, authority).await?;
+    let instance = resolved.inbound(instance)?;
+    let observed = named_instance(state, &resolved.key, machine_id, &instance)?;
+    let command = command(instance);
     let request = request_id("browser");
     if let Command::Hibernate { instance } = &command {
         hibernate_sent(&observed.machine_id, instance, &request, "owner_request");
@@ -689,7 +829,7 @@ pub(in crate::server) async fn instance_command(
             tracing::warn!(%error, "browser command failed");
             "browser_command_failed"
         })?;
-    Ok(state_json(&observed.machine_id, &event))
+    Ok(resolved.state_json(&observed.machine_id, &event))
 }
 
 /// Whether the account holds a browser placement on the named Machine.
@@ -712,7 +852,9 @@ fn placed_on(
 /// revision is only ever checked against that Machine's profile and never
 /// authorizes deleting another Machine's. The owner may do this while the
 /// gates are closed; only the Machine's confirmation (`owner_request`) is
-/// taken as "nothing runs and nothing is retained".
+/// taken as "nothing runs and nothing is retained". From a member of a
+/// share this resets the share's profile, the one the member uses; the
+/// answer names the share and every member it affects.
 pub(in crate::server) async fn reset(
     state: &AppState,
     owner: &str,
@@ -720,7 +862,8 @@ pub(in crate::server) async fn reset(
     machine_id: &str,
     expected_profile_revision: u64,
 ) -> Result<Value, &'static str> {
-    authorize(state, owner, account_id, Authority::Reset).await?;
+    let resolved = authorize(state, owner, account_id, Authority::Reset).await?;
+    let account_id = &resolved.key;
     let store = state.store.as_ref().ok_or("unavailable")?;
     placed_on(
         &store
@@ -756,7 +899,7 @@ pub(in crate::server) async fn reset(
     {
         tracing::warn!(%error, "browser profile revision not recorded");
     }
-    Ok(state_json(machine_id, &event))
+    Ok(resolved.state_json(machine_id, &event))
 }
 
 /// A reset the Machine carried out: hibernated for the owner's request.
@@ -850,7 +993,10 @@ fn error_status(code: &str) -> StatusCode {
     match code {
         "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
         "account_unavailable" | "browser_not_placed" => StatusCode::NOT_FOUND,
-        "invalid_argument" | "invalid_viewport" | "browser_key_required" => StatusCode::BAD_REQUEST,
+        "invalid_argument"
+        | "invalid_viewport"
+        | "browser_key_required"
+        | "browser_member_required" => StatusCode::BAD_REQUEST,
         _ => StatusCode::CONFLICT,
     }
 }
@@ -979,8 +1125,8 @@ pub(in crate::server) async fn http_navigate(
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
-            Command::Navigate {
-                instance: body.instance.clone(),
+            |instance| Command::Navigate {
+                instance,
                 url: body.url,
             },
             COMMAND_TIMEOUT,
@@ -1004,8 +1150,8 @@ pub(in crate::server) async fn http_resize(
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
-            Command::Resize {
-                instance: body.instance.clone(),
+            |instance| Command::Resize {
+                instance,
                 attachment_id: body.attachment_id,
                 width: body.width,
                 height: body.height,
@@ -1031,9 +1177,7 @@ pub(in crate::server) async fn http_snapshot(
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
-            Command::Snapshot {
-                instance: body.instance.clone(),
-            },
+            |instance| Command::Snapshot { instance },
             HIBERNATE_TIMEOUT,
         )
         .await,
@@ -1055,9 +1199,7 @@ pub(in crate::server) async fn http_hibernate(
             &auth.principal.user_id,
             (&account, Authority::Stop),
             (&body.machine_id, &body.instance),
-            Command::Hibernate {
-                instance: body.instance.clone(),
-            },
+            |instance| Command::Hibernate { instance },
             HIBERNATE_TIMEOUT,
         )
         .await,

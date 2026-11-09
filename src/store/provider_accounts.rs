@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub mod browser_placements;
+pub mod browser_shares;
 pub mod grants;
 pub mod legacy_browsers;
 pub mod logins;
@@ -115,9 +116,41 @@ pub enum Change {
         provider_id: String,
         id: ProviderAccountId,
     },
+    /// Create an owner-defined shared browser profile (no members yet).
+    CreateBrowserShare {
+        label: String,
+    },
+    RenameBrowserShare {
+        share_id: String,
+        label: String,
+    },
+    /// Delete a share: its members fall back to their own browsers and its
+    /// profile is revoked on every Machine that holds it.
+    DeleteBrowserShare {
+        share_id: String,
+    },
+    /// Put a member into a share (`share_id`) or take it out (`null`). A
+    /// share holds at most one member per account-usage family.
+    SetBrowserShare {
+        member: browser_shares::Member,
+        share_id: Option<String>,
+    },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+impl Change {
+    /// Share changes, written by `Store::mutate_browser_shares`.
+    pub const fn is_browser_share(&self) -> bool {
+        matches!(
+            self,
+            Self::CreateBrowserShare { .. }
+                | Self::RenameBrowserShare { .. }
+                | Self::DeleteBrowserShare { .. }
+                | Self::SetBrowserShare { .. }
+        )
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Receipt {
     /// Local lifecycle completion only; the account admission fence stays set.
     #[serde(default)]
@@ -135,6 +168,9 @@ pub struct Receipt {
     /// Machine browser revocation evidence by Machine id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub browser_revocations: BTreeMap<String, revocation::browser_revocations::Evidence>,
+    /// The share a browser share change is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_share_id: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -331,7 +367,11 @@ impl Registry {
                 id.clone()
             }
             // Written by the store beside the registry value.
-            Change::SetLegacyBrowserEnabled { .. } => return Err("invalid_change"),
+            Change::SetLegacyBrowserEnabled { .. }
+            | Change::CreateBrowserShare { .. }
+            | Change::RenameBrowserShare { .. }
+            | Change::DeleteBrowserShare { .. }
+            | Change::SetBrowserShare { .. } => return Err("invalid_change"),
         };
         self.revision = self.revision.checked_add(1).ok_or("revision_exhausted")?;
         Ok(id)
@@ -466,10 +506,14 @@ impl Store {
                 // still require vault/replica revocation, never cancellation.
                 sqlx::query($cancel_grants).bind(owner).bind(account_id.as_str())
                     .execute(&mut *tx).await?;
+                // The account leaves any shared browser; the share's profile
+                // stays with its other members.
+                sqlx::query("DELETE FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2")
+                    .bind(owner).bind(browser_shares::Member::account(account_id.clone()).encode()).execute(&mut *tx).await?;
             }
             sqlx::query("UPDATE provider_account_registries SET revision=$1,value=$2 WHERE owner_user_id=$3")
                 .bind(registry.revision).bind(serde_json::to_string(&registry)?).bind(owner).execute(&mut *tx).await?;
-            let receipt = Receipt { registry, account_id, revocation, revocation_completed: false, remote_wipes: BTreeMap::new(), local_wipes: BTreeMap::new(), login_stops: BTreeMap::new(), browser_revocations: BTreeMap::new() };
+            let receipt = Receipt { registry, account_id, revocation, revocation_completed: false, remote_wipes: BTreeMap::new(), local_wipes: BTreeMap::new(), login_stops: BTreeMap::new(), browser_revocations: BTreeMap::new(), browser_share_id: None };
             sqlx::query("INSERT INTO provider_account_operations (owner_user_id,operation_id,request_hash,result) VALUES ($1,$2,$3,$4)")
                 .bind(owner).bind(operation).bind(&hash).bind(serde_json::to_string(&receipt)?).execute(&mut *tx).await?;
             tx.commit().await?;

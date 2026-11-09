@@ -46,7 +46,11 @@ pub(super) fn receipt_value(receipt: &crate::store::provider_accounts::Receipt) 
             "planned":{"logins":plan.logins.len(),"sessions":plan.sessions.len(),"grants":plan.grants.len(),"browsers":plan.browsers.len()},
             "completion_state":if receipt.revocation_completed { "completed" } else { "unconfirmed" }});
     }
-    json!({"status":"committed","revision":receipt.registry.revision,"account_id":receipt.account_id})
+    let mut value = json!({"status":"committed","revision":receipt.registry.revision,"account_id":receipt.account_id});
+    if let Some(share) = &receipt.browser_share_id {
+        value["share_id"] = json!(share);
+    }
+    value
 }
 
 pub(super) async fn resolve_for_create(
@@ -97,13 +101,17 @@ pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &
         .completed_provider_account_revocations(owner)
         .await
         .map_err(|_| "unavailable")?;
+    let (shares, families) = browser::shares::list_value(state, owner).await?;
     Ok(
         json!({"registry":registry,"display_preferences":display,"revoked_accounts":revoked,"session_admission":if enabled {"enabled"} else {"not_enabled"},
         "session_providers":if enabled {vec!["claude-code"]} else {vec![]},
         // The Service gate of the optional Machine browser (`accounts.machine_browser`).
         "machine_browser":if browser::gate_open(state) {"enabled"} else {"not_enabled"},
         // Each legacy default usage card's own browser key and enablement.
-        "legacy_browsers":browser::legacy::list_value(state, owner).await?}),
+        "legacy_browsers":browser::legacy::list_value(state, owner).await?,
+        // Owner-defined shared browser profiles and the family of each
+        // Provider (a share holds at most one member per family).
+        "browser_shares":shares,"browser_share_families":families}),
     )
 }
 
@@ -140,43 +148,31 @@ pub(super) async fn update_value(
         return Err("account_unavailable");
     }
     // Metadata writes share one authority and receipt; no native login, usage
-    // probe, credential access or worker activation happens here.
-    match store
-        .mutate_provider_accounts(owner, operation, input)
-        .await
-        .map_err(|_| "outcome_unknown")?
-    {
+    // probe, credential access or worker activation happens here. Share
+    // changes use the same writer with the catalog's families.
+    let result = if input.change.is_browser_share() {
+        browser::shares::update(state, owner, operation, input).await?
+    } else {
+        store
+            .mutate_provider_accounts(owner, operation, input)
+            .await
+            .map_err(|_| "outcome_unknown")?
+    };
+    match result {
         MutationResult::Applied(receipt) => {
             state
                 .hub
                 .announce_preferences(owner, "provider_accounts", receipt.registry.revision);
-            // Revocation ends the viewer at once; its own reconciliation
-            // revokes every captured placement.
-            if let Change::BeginRevocation { id } = &input.change {
-                state.browsers.cancel_account_viewers(id.as_str());
-            }
-            // Disabling the account or its browser ends the owner's viewer at
-            // once and hibernates the instance; the snapshot is kept.
-            let disabled = match &input.change {
-                Change::SetBrowserEnabled { id, enabled: false }
-                | Change::SetEnabled { id, enabled: false } => Some(id.clone()),
-                // Only this card's browser: its own key, never another card's.
-                Change::SetLegacyBrowserEnabled { enabled: false, .. } => {
-                    Some(receipt.account_id.clone())
-                }
-                _ => None,
-            };
-            if let Some(account) = disabled {
-                state.browsers.cancel_account_viewers(account.as_str());
-                let state = Arc::clone(state);
-                tokio::spawn(async move {
-                    if let Err(error) =
-                        browser::hibernate_running(&state, &account, "browser_disabled").await
-                    {
-                        tracing::info!(%error, "browser hibernate after disable did not complete");
-                    }
-                });
-            }
+            // Revocation ends the member's viewers at once; its own
+            // reconciliation revokes every captured placement of its own key.
+            // Disabling the account or its browser also hibernates its own
+            // instance (the snapshot is kept). Neither touches a share's
+            // browser; only deleting the share revokes it.
+            browser::shares::run_effects(
+                state,
+                owner,
+                browser::shares::change_effects(owner, &input.change, &receipt),
+            );
             Ok(receipt_value(&receipt))
         }
         MutationResult::Conflict(current) => {
@@ -293,6 +289,7 @@ mod tests {
             local_wipes: Default::default(),
             login_stops: Default::default(),
             browser_revocations: Default::default(),
+            browser_share_id: None,
         };
         // An empty plan or a disabled account alone does not imply completion.
         assert_eq!(receipt_value(&receipt)["status"], "revoking");

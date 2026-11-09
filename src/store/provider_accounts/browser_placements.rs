@@ -26,6 +26,8 @@ pub enum Refusal {
     AccountUnavailable,
     /// The owner has not enabled the browser for the account.
     BrowserNotEnabled,
+    /// The member left the share, or the share is gone or being deleted.
+    ShareChanged,
 }
 
 impl Refusal {
@@ -33,6 +35,7 @@ impl Refusal {
         match self {
             Self::AccountUnavailable => "account_unavailable",
             Self::BrowserNotEnabled => "browser_not_enabled",
+            Self::ShareChanged => "browser_share_changed",
         }
     }
 }

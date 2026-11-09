@@ -175,7 +175,13 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Login challenges/code use the owner-checked HTTP/CLI flow; no secrets in receipts.
 // accounts.browser(account_id,machine_id?): Machine browser state (machine_id keeps the read on that Machine); lifecycle via control.apply accounts.browser_* naming that machine_id.
 // A legacy default usage card's browser uses its own key, never "default": list().legacy_browsers is
-// {card,account_id,providers,browser_enabled,available}[]; enable per card with set_legacy_browser_enabled.
+// {card,account_id,providers,browser_enabled,available,share_id}[]; enable per card with set_legacy_browser_enabled.
+// Shared browser: list().browser_shares is {share_id,label,deleting,members:{member,family,account_id}[]}[]
+// and browser_share_families maps provider_id->family. A share holds at most ONE member per family
+// (browser_share_family_conflict: two Claude or two OpenAI accounts never share). Members still need
+// their own browser enabled. Members address the share through their own account_id; reset from any
+// member resets the share's profile (accounts.browser().share lists who is affected). Deleting a
+// share revokes its profile; members fall back to their own retained browsers.
 // Write: cowboy_execute({action:"accounts.update",operation,arguments:{expected_revision,change:AccountChange}}).
 export type AccountChange =
  | {type:"create";provider_id:string;label:string}
@@ -183,6 +189,10 @@ export type AccountChange =
  | {type:"set_enabled";id:string;enabled:boolean}
  | {type:"set_browser_enabled";id:string;enabled:boolean}
  | {type:"set_legacy_browser_enabled";card:string;enabled:boolean}
+ | {type:"create_browser_share";label:string} // receipt share_id
+ | {type:"rename_browser_share";share_id:string;label:string}
+ | {type:"delete_browser_share";share_id:string}
+ | {type:"set_browser_share";member:{account_id:string}|{card:string};share_id:string|null}
  | {type:"set_default";provider_id:string;id:string};
 // IDs are controller-issued UUIDs; "default" selects the legacy account.
 // Legacy display names: list().display_preferences; edit via preferences.update {scope:"subscriptions",expected_revision,changes:{legacy_labels:{provider_id:label}}}.

@@ -149,6 +149,10 @@ pub(in crate::server) async fn list_value(
         .legacy_browser_cards(owner)
         .await
         .map_err(|_| "unavailable")?;
+    let shares = store
+        .browser_shares(owner)
+        .await
+        .map_err(|_| "unavailable")?;
     let mut cards = bound_cards(state);
     let bound: Vec<String> = cards.keys().cloned().collect();
     for card in &enabled {
@@ -163,6 +167,8 @@ pub(in crate::server) async fn list_value(
                     "providers": providers,
                     "browser_enabled": enabled.contains(&card),
                     "available": bound.contains(&card),
+                    "share_id": shares.membership(&crate::store::provider_accounts::browser_shares::Member::card(&card))
+                        .map(|row| row.share_id.clone()),
                     "card": card,
                 })
             })

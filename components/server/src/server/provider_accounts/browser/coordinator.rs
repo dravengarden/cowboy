@@ -65,6 +65,9 @@ pub(in crate::server) struct Pairing {
 }
 
 struct Viewer {
+    /// The identity whose card attached: the account itself, or a member
+    /// of the share whose browser this is.
+    member: String,
     attachment_id: String,
     incarnation: u64,
     connection: ConnectionToken,
@@ -533,7 +536,7 @@ impl Coordinator {
     /// Account disablement and revocation cancel it from this moment on.
     pub(in crate::server) fn register_viewer(
         &self,
-        account_id: &str,
+        (account_id, member): (&str, &str),
         attachment_id: &str,
         incarnation: u64,
         connection: &ConnectionToken,
@@ -542,6 +545,7 @@ impl Coordinator {
         let previous = self.viewers.lock().insert(
             key(connection.machine_id(), account_id),
             Viewer {
+                member: member.to_owned(),
                 attachment_id: attachment_id.to_owned(),
                 incarnation,
                 connection: connection.clone(),
@@ -598,6 +602,15 @@ impl Coordinator {
     /// revocation).
     pub(in crate::server) fn cancel_account_viewers(&self, account_id: &str) {
         self.cancel_viewers_where(|(_, account), _| account == account_id);
+    }
+
+    /// End every viewer a member's card attached, to its own browser or to
+    /// a share's (the member was disabled, revoked or left the share). Other
+    /// members' viewers of the same share stay.
+    pub(in crate::server) fn cancel_member_viewers(&self, member: &str) {
+        self.cancel_viewers_where(|(_, account), viewer| {
+            account == member || viewer.member == member
+        });
     }
 
     fn cancel_viewers_where(&self, ends: impl Fn(&Key, &Viewer) -> bool) {
@@ -685,7 +698,8 @@ mod tests {
         let control = MachineControl::default();
         let coordinator = Coordinator::default();
         let connection = connect(&control, &coordinator, "one");
-        let mut cancelled = coordinator.register_viewer(ACCOUNT, "att-1", 7, &connection);
+        let mut cancelled =
+            coordinator.register_viewer((ACCOUNT, ACCOUNT), "att-1", 7, &connection);
         coordinator.confirm_viewer("ovh", ACCOUNT, "att-1");
         coordinator.observe(&connection, &event(7, State::Attached, Some("att-1")));
         assert!(!*cancelled.borrow_and_update());
@@ -696,7 +710,8 @@ mod tests {
         // A takeover by another attachment ends this viewer.
         coordinator.observe(&connection, &event(7, State::Attached, Some("att-2")));
         assert!(*cancelled.borrow_and_update());
-        let mut cancelled = coordinator.register_viewer(ACCOUNT, "att-3", 7, &connection);
+        let mut cancelled =
+            coordinator.register_viewer((ACCOUNT, ACCOUNT), "att-3", 7, &connection);
         coordinator.observe(&connection, &event(7, State::Hibernated, None));
         assert!(*cancelled.borrow_and_update());
         assert!(!coordinator.state_on("ovh", ACCOUNT).unwrap().running());
@@ -709,7 +724,8 @@ mod tests {
         let coordinator = Coordinator::default();
         let connection = connect(&control, &coordinator, "one");
         coordinator.observe(&connection, &event(7, State::Detached, None));
-        let mut cancelled = coordinator.register_viewer(ACCOUNT, "att-1", 7, &connection);
+        let mut cancelled =
+            coordinator.register_viewer((ACCOUNT, ACCOUNT), "att-1", 7, &connection);
         assert!(coordinator.has_viewer("ovh", ACCOUNT));
         // The previous attachment's detach arrives while this one attaches.
         coordinator.observe(&connection, &event(7, State::Detached, None));
@@ -725,8 +741,8 @@ mod tests {
         let control = MachineControl::default();
         let coordinator = Coordinator::default();
         let connection = connect(&control, &coordinator, "one");
-        let mut first = coordinator.register_viewer(ACCOUNT, "att-1", 7, &connection);
-        let _second = coordinator.register_viewer(ACCOUNT, "att-2", 7, &connection);
+        let mut first = coordinator.register_viewer((ACCOUNT, ACCOUNT), "att-1", 7, &connection);
+        let _second = coordinator.register_viewer((ACCOUNT, ACCOUNT), "att-2", 7, &connection);
         assert!(*first.borrow_and_update());
         assert!(coordinator.is_viewer("ovh", ACCOUNT, "att-2"));
         coordinator.unregister_viewer("ovh", ACCOUNT, "att-1");
@@ -739,7 +755,7 @@ mod tests {
         let coordinator = Coordinator::default();
         let first = connect(&control, &coordinator, "one");
         coordinator.observe(&first, &event(7, State::Detached, None));
-        let mut cancelled = coordinator.register_viewer(ACCOUNT, "att-1", 7, &first);
+        let mut cancelled = coordinator.register_viewer((ACCOUNT, ACCOUNT), "att-1", 7, &first);
         // The Machine reconnects (it may have rebooted): nothing survives.
         let second = connect(&control, &coordinator, "two");
         assert!(coordinator.state_on("ovh", ACCOUNT).is_none());
@@ -770,7 +786,8 @@ mod tests {
         let coordinator = Coordinator::default();
         let connection = connect(&control, &coordinator, "one");
         coordinator.observe(&connection, &event(7, State::Detached, None));
-        let mut cancelled = coordinator.register_viewer(ACCOUNT, "att-1", 7, &connection);
+        let mut cancelled =
+            coordinator.register_viewer((ACCOUNT, ACCOUNT), "att-1", 7, &connection);
         // A refused reset names no instance and must not hide the browser.
         coordinator.observe(&connection, &event(0, State::Hibernated, None));
         assert!(coordinator.state_on("ovh", ACCOUNT).unwrap().running());
@@ -796,7 +813,7 @@ mod tests {
         let first = connect_machine(&control, &coordinator, "alpha", "one");
         let second = connect_machine(&control, &coordinator, "beta", "one");
         coordinator.observe(&first, &event(7, State::Stopping, None));
-        let mut cancelled = coordinator.register_viewer(ACCOUNT, "att-1", 7, &first);
+        let mut cancelled = coordinator.register_viewer((ACCOUNT, ACCOUNT), "att-1", 7, &first);
         // Another Machine's newer, running instance of the same account
         // neither replaces nor ends what the first Machine reported.
         coordinator.observe(&second, &event(9, State::Detached, None));
@@ -902,5 +919,32 @@ mod tests {
         assert!(coordinator.unresolved_on("ovh").is_some());
         coordinator.disconnected(&fourth);
         assert_eq!(coordinator.unresolved_on("ovh"), None);
+    }
+
+    #[test]
+    fn a_member_leaving_ends_only_its_own_viewer_of_a_share() {
+        const SHARE: &str = "99999999-8888-8777-a666-555555555555";
+        const LYNX: &str = "aaaaaaaa-bbbb-8ccc-8ddd-eeeeeeeeeeee";
+        const PIKA: &str = "0f0f0f0f-1e1e-8d2d-ac3c-4b4b4b4b4b4b";
+        let control = MachineControl::default();
+        let coordinator = Coordinator::default();
+        let connection = connect_machine(&control, &coordinator, "ovh", "one");
+        // Lynx's card attached to the share's single instance.
+        let mut lynx = coordinator.register_viewer((SHARE, LYNX), "att-1", 7, &connection);
+        // Another member (Pika) leaving or being disabled leaves it alone.
+        coordinator.cancel_member_viewers(PIKA);
+        assert!(!*lynx.borrow_and_update());
+        assert!(coordinator.has_viewer("ovh", SHARE));
+        // Pika takes the display over: Lynx's viewer is replaced.
+        let mut pika = coordinator.register_viewer((SHARE, PIKA), "att-2", 7, &connection);
+        assert!(*lynx.borrow_and_update());
+        // Pika leaving ends exactly Pika's viewer of the share.
+        coordinator.cancel_member_viewers(PIKA);
+        assert!(*pika.borrow_and_update());
+        assert!(!coordinator.has_viewer("ovh", SHARE));
+        // A member's viewer of its own key ends as before.
+        let mut own = coordinator.register_viewer((LYNX, LYNX), "att-3", 7, &connection);
+        coordinator.cancel_member_viewers(LYNX);
+        assert!(*own.borrow_and_update());
     }
 }

@@ -24,6 +24,8 @@ const TABLES: &[&str] = &[
     "provider_native_generations",
     "browser_placements",
     "provider_legacy_browsers",
+    "provider_browser_shares",
+    "provider_browser_share_members",
     "provider_session_transitions",
     "provider_session_transition_stops",
     "provider_session_transition_commits",

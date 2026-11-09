@@ -98,7 +98,7 @@ pub(in crate::server) async fn upgrade(
     if viewport.validate().is_err() {
         return refuse("invalid_viewport");
     }
-    let target = InstanceRef {
+    let shown = InstanceRef {
         account_id: account.clone(),
         instance_id: query.instance_id,
         incarnation: query.incarnation,
@@ -107,7 +107,7 @@ pub(in crate::server) async fn upgrade(
         &state,
         &principal.user_id,
         &account,
-        (&query.machine_id, &target),
+        (&query.machine_id, &shown),
         viewport,
         query.takeover,
     )
@@ -121,6 +121,7 @@ pub(in crate::server) async fn upgrade(
         && crate::product_auth::bearer_token(&headers).is_none();
     let session = ViewerSession {
         account,
+        key: attached.key,
         instance: attached.instance,
         attachment_id: attached.attachment_id,
         connection: attached.connection,
@@ -129,7 +130,7 @@ pub(in crate::server) async fn upgrade(
         cookie_token: crate::product_auth::user_cookie_token(&headers),
         bearer: crate::product_auth::bearer_token(&headers),
         device_identity: auth.device_identity,
-        initial: attached.event,
+        initial: attached.resolved.present(&attached.event),
     };
     let (delivered, cancelled) = (attached.delivered, attached.cancelled);
     ws.protocols([SUBPROTOCOL])
@@ -138,6 +139,9 @@ pub(in crate::server) async fn upgrade(
 
 /// A Machine-confirmed attachment, registered as the account's viewer.
 struct Attached {
+    resolved: super::Resolved,
+    /// The browser key attached: the member's own or its share's.
+    key: ProviderAccountId,
     instance: InstanceRef,
     attachment_id: String,
     connection: crate::machine_control::ConnectionToken,
@@ -176,19 +180,23 @@ fn attach_target(
 /// viewer is registered before the final admission check, so a disable or
 /// revocation that the check does not see yet cancels it afterwards. Only
 /// the named instance on the named Machine is ever attached; another
-/// browser of the account is never selected in its place.
+/// browser of the account is never selected in its place. A member of a
+/// share attaches to the share's single instance under the usual takeover
+/// rule; the viewer stays recorded as that member's.
 async fn attach(
     state: &Arc<AppState>,
     owner: &str,
-    account: &ProviderAccountId,
-    (machine_id, target): (&str, &InstanceRef),
+    member: &ProviderAccountId,
+    (machine_id, shown): (&str, &InstanceRef),
     viewport: Viewport,
     takeover: bool,
 ) -> Result<Attached, &'static str> {
-    super::admit(state, owner, account).await?;
+    let resolved = super::admit(state, owner, member).await?;
+    let account = &resolved.key;
+    let target = resolved.inbound(shown)?;
     let serial = state.browsers.attach_lock(account.as_str());
     let _serial = serial.lock().await;
-    let observed = attach_target(super::named_instance(state, account, machine_id, target))?;
+    let observed = attach_target(super::named_instance(state, account, machine_id, &target))?;
     let machine_id = observed.machine_id.clone();
     if occupied(
         &observed,
@@ -208,12 +216,19 @@ async fn attach(
     let instance = observed.instance();
     let connection = observed.connection.clone();
     let cancelled = state.browsers.register_viewer(
-        account.as_str(),
+        (account.as_str(), member.as_str()),
         &attachment_id,
         instance.incarnation,
         &connection,
     );
-    if let Err(code) = super::admit(state, owner, account).await {
+    let still = super::admit(state, owner, member).await.and_then(|now| {
+        if now.key == *account {
+            Ok(())
+        } else {
+            Err("browser_share_changed")
+        }
+    });
+    if let Err(code) = still {
         state
             .browsers
             .unregister_viewer(&machine_id, account.as_str(), &attachment_id);
@@ -253,6 +268,8 @@ async fn attach(
                 .browsers
                 .confirm_viewer(&machine_id, account.as_str(), &attachment_id);
             return Ok(Attached {
+                key: account.clone(),
+                resolved,
                 instance,
                 attachment_id,
                 connection,
@@ -278,7 +295,10 @@ async fn attach(
 }
 
 struct ViewerSession {
+    /// The identity the viewer was opened from (a member's card).
     account: ProviderAccountId,
+    /// The browser key it attached to.
+    key: ProviderAccountId,
     instance: InstanceRef,
     attachment_id: String,
     connection: crate::machine_control::ConnectionToken,
@@ -308,7 +328,7 @@ async fn serve(
     )
     .await;
     tracing::info!(event_name = "browser.viewer.ended",
-        browser_account = %session.account.as_str(), browser_instance = %session.instance.instance_id,
+        browser_account = %session.key.as_str(), browser_instance = %session.instance.instance_id,
         browser_attachment = %session.attachment_id, browser_end = end, "browser viewer stream ended");
     let _ = tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -317,7 +337,7 @@ async fn serve(
     .await;
     state.browsers.unregister_viewer(
         session.connection.machine_id(),
-        session.account.as_str(),
+        session.key.as_str(),
         &session.attachment_id,
     );
     // Tell the Machine this attachment is gone; a takeover's replacement
@@ -542,7 +562,7 @@ where
                 )
                 .await;
             let reply = match result {
-                Ok(event) => json!({"type":"state","state":event}),
+                Ok(event) => json!({"type":"state","state":present(session, &event)}),
                 Err(error) => {
                     tracing::info!(%error, "browser resize failed");
                     json!({"type":"error","code":"resize_failed"})
@@ -554,6 +574,15 @@ where
         }
     }
     Ok(())
+}
+
+/// A state event as the viewer's card is shown it.
+fn present(session: &ViewerSession, event: &StateEvent) -> StateEvent {
+    let mut event = event.clone();
+    if event.instance.account_id == session.key {
+        event.instance.account_id = session.account.clone();
+    }
+    event
 }
 
 async fn principal_valid(state: &Arc<AppState>, session: &ViewerSession) -> bool {
@@ -585,12 +614,23 @@ where
     }
     if !state.browsers.is_viewer(
         session.connection.machine_id(),
-        session.account.as_str(),
+        session.key.as_str(),
         &session.attachment_id,
     ) {
         return Err("replaced");
     }
-    if let Err(code) = super::admit(state, &session.principal.user_id, &session.account).await {
+    // The member must still be admitted and still use the attached browser:
+    // leaving a share, or the share's deletion, ends the viewer.
+    let still = super::admit(state, &session.principal.user_id, &session.account)
+        .await
+        .and_then(|now| {
+            if now.key == session.key {
+                Ok(())
+            } else {
+                Err("browser_share_changed")
+            }
+        });
+    if let Err(code) = still {
         let _ = send_json(viewer_sink, &json!({"type":"error","code":code})).await;
         return Err("admission_withdrawn");
     }
