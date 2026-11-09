@@ -292,10 +292,15 @@ export async function runDesktopComposerBrowserConformance(observe?: () => Promi
               button("send").getBoundingClientRect().left,
           `Idle Stop holds its slot before Send at ${width}/${font}`,
         );
+        // The context reading stays visible, inline or on the folded menu.
+        const contextHost = button("compact").getClientRects().length > 0
+          ? button("compact")
+          : button("conversation");
         check(
-          button("compact").textContent?.includes("Compact") &&
-            !button("compact").querySelector("[data-composer-action-reading], .context-gauge-track"),
-          `Compact uses the shared icon and label at ${width}/${font}`,
+          contextHost.getClientRects().length > 0 &&
+            contextHost.textContent?.includes("51%") &&
+            contextHost.querySelector(".context-gauge-track")?.getClientRects().length,
+          `Context gauge and reading stay visible at ${width}/${font}`,
         );
         for (const id of ["compact", "clear"]) {
           if (button(id).getClientRects().length === 0) continue;

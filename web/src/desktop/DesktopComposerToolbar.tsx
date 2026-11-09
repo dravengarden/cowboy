@@ -8,6 +8,7 @@ import {
 } from "react";
 import { EditorPluginToolbar } from "../editorPlugins/EditorPluginToolbar";
 import {
+  alpha,
   Box,
   Button,
   CircularProgress,
@@ -26,6 +27,7 @@ import {
   EditNoteOutlined,
   MoreHoriz,
   MoreVert,
+  KeyboardArrowUp,
   RawOn,
   Schedule,
   Send,
@@ -443,7 +445,7 @@ export function DesktopComposerToolbarView(
               />
               {session.compact && action({
                 id: "compact",
-                icon: <Compress />,
+                icon: <ContextReading {...session.compact} />,
                 label: "Compact",
                 title: session.compact.title,
                 shortcut: DESKTOP_SHORTCUTS.compact,
@@ -477,7 +479,7 @@ export function DesktopComposerToolbarView(
                   onClick={(event) => setSessionAnchor(event.currentTarget)}
                   sx={desktopToolbarActionSx}
                 >
-                  <MoreVert />
+                  <ConversationMenuGlyph compact={session.compact} />
                 </Button>
               </HintTooltip>
             </Box>
@@ -624,6 +626,104 @@ export function DesktopComposerToolbarView(
           </MenuItem>
         ))}
       </Menu>
+    </Box>
+  );
+}
+
+function contextPercent(
+  { used, size }: { used: number; size: number },
+): number | null {
+  if (!(size > 0)) return null;
+  return used > 0 ? Math.max(1, Math.round(Math.min(100, used / size * 100))) : 0;
+}
+
+/** Compact's face at every width: the gauge with its percentage beside it. */
+function ContextReading(
+  { used, size, running }: { used: number; size: number; running: boolean },
+): React.JSX.Element {
+  const pct = contextPercent({ used, size });
+  return (
+    <>
+      <ContextGauge used={used} size={size} running={running} />
+      {pct !== null && (
+        <Box
+          component="span"
+          data-context-reading
+          sx={{ fontVariantNumeric: "tabular-nums" }}
+        >
+          {pct}%
+        </Box>
+      )}
+    </>
+  );
+}
+
+/** The folded menu keeps the context reading it took over from Compact. */
+function ConversationMenuGlyph(
+  { compact }: { compact: DesktopSessionActions["compact"] },
+): React.JSX.Element {
+  if (!compact) return <MoreVert />;
+  return (
+    <>
+      <ContextReading {...compact} />
+      <KeyboardArrowUp sx={{ ml: "-0.125rem" }} />
+    </>
+  );
+}
+
+/** Context fullness at the toolbar's icon size and weight: a thin neutral
+ *  ring that turns amber at 70% and red at 90% (the auto-compaction zone).
+ *  The number sits beside it as text, not inside it. */
+function ContextGauge(
+  { used, size, running }: { used: number; size: number; running: boolean },
+): React.JSX.Element {
+  const pct = contextPercent({ used, size });
+  if (running) {
+    return <CircularProgress size="0.875rem" thickness={5} color="inherit" />;
+  }
+  if (pct === null) return <Compress />;
+  const color = pct >= 90
+    ? "error.main"
+    : pct >= 70
+    ? "warning.main"
+    : "text.secondary";
+  return (
+    <Box
+      component="svg"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      sx={(theme) => ({
+        width: "0.875rem",
+        height: "0.875rem",
+        flexShrink: 0,
+        color,
+        "& .context-gauge-track": {
+          stroke: alpha(theme.palette.text.secondary, 0.42),
+        },
+      })}
+    >
+      <circle
+        className="context-gauge-track"
+        cx="8"
+        cy="8"
+        r="6.25"
+        fill="none"
+        strokeWidth="1.75"
+      />
+      {pct > 0 && (
+        <circle
+          cx="8"
+          cy="8"
+          r="6.25"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap={pct < 100 ? "round" : undefined}
+          pathLength="100"
+          strokeDasharray={pct < 100 ? `${pct} ${100 - pct}` : undefined}
+          transform="rotate(-90 8 8)"
+        />
+      )}
     </Box>
   );
 }
