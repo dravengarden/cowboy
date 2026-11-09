@@ -92,7 +92,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", kind)
         self.send_header("Cache-Control", "no-store")
         if CSP and name == "index.html":
-            self.send_header("Content-Security-Policy", CSP)
+            self.send_header("Content-Security-Policy", CSP.replace("{HOST}", self.headers.get("Host", "")))
         self.end_headers(); self.wfile.write(body)
     def do_POST(self):
         if self.path != "/report/" + token:
@@ -138,13 +138,15 @@ catch (error) { result = { ok: false, error: String(error), userAgent: navigator
 await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) });
 `;
 const page = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><script type="module" src="/loader.js"></script>`;
-// The Controller's App CSP for this page (web_security.rs): the only inline
-// script is the app sandbox's boot, authorized by its hash.
+// The Controller's App CSP for this page, verbatim from web_security.rs
+// (`{HOST}` is this page's host): the only inline script is the app
+// sandbox's boot, authorized by its hash.
 const bootHash = createHash("sha256").update(APP_SANDBOX_BOOT).digest("base64");
 const csp =
   `default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-${bootHash}'; ` +
   "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; " +
-  "media-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; " +
+  "media-src 'self' data: blob:; connect-src 'self' wss://{HOST} ipc: http://ipc.localhost; " +
+  "worker-src 'self' blob:; " +
   "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 const remote = await ssh("mktemp -d -t cowboy-ios-conformance");

@@ -18,7 +18,8 @@ const SESSION_UNITS = 12_000;
 const MIN_CREDIT_INTERVAL_MS = 33;
 const RELEASE_GRACE_MS = 1500;
 
-export type AppStart = { code: string; props: unknown; context: unknown };
+/** One version of an app: its code, props, context and image sources. */
+export type AppStart = { code: string; props: unknown; context: unknown; images?: unknown };
 
 type Entry = {
   key: string;
@@ -224,6 +225,8 @@ export type AppView = {
   waiting: boolean;
   /** This view's code is newer than the running code the person typed into. */
   outdated: boolean;
+  /** Image sources of the running version (its images follow its code). */
+  images: unknown;
   dispatch: (id: number, name: string, payload: unknown) => void;
   reload: () => void;
   /** Keep the running version; the prompt returns for a later version. */
@@ -303,12 +306,15 @@ function useViewRegistration(key: string, scope: string, start: AppStart, view: 
 }
 
 /** A view of the app `key` (session view `scope`), starting it if needed.
- *  `start` is the version this view was given; sends report the running one. */
+ *  `start` is the version this view was given; sends report the running one.
+ *  `ready` says that version's images are loaded: only then may it replace
+ *  the running version. */
 export function useAppRuntime(
   key: string,
   scope: string,
   start: AppStart,
   onSend: ((text: string, code: string) => void) | undefined,
+  ready = true,
 ): AppView {
   const view = useMemo(() => Symbol(key), [key]);
   const waiting = useViewRegistration(key, scope, start, view);
@@ -323,10 +329,10 @@ export function useAppRuntime(
 
   // A newer version replaces an untouched or stopped app at once.
   useEffect(() => {
-    if (!entry || !primary || !offered || (entry.dirty && entry.runtime)) return;
+    if (!entry || !primary || !offered || !ready || (entry.dirty && entry.runtime)) return;
     if (entry.runtime || admit()) relaunch(entry, start);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry, primary, offered, start.code]);
+  }, [entry, primary, offered, ready, start.code]);
   // Props only reach the code they were written for.
   useEffect(() => {
     if (!entry || !primary || !current) return;
@@ -345,13 +351,14 @@ export function useAppRuntime(
     primary,
     waiting,
     outdated: offered && entry.dirty && entry.runtime !== null,
+    images: entry?.start.images ?? start.images,
     dispatch: (id, name, payload) => {
       if (!entry?.runtime) return;
       if (name === "onChange") entry.dirty = true;
       entry.runtime.event(id, name, payload);
     },
     reload: () => {
-      if (!entry) return;
+      if (!entry || !ready) return;
       if (!entry.runtime && !admit()) {
         entry.stopped = "Too many apps are running on this page. Close one, then reload.";
         changed();

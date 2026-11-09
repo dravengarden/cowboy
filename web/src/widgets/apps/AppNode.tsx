@@ -5,7 +5,7 @@
 // the person typed into with the agent's newer code (the registry holds the
 // choice, so every view of the app agrees).
 
-import { Component, Fragment, useMemo, type ReactNode } from "react";
+import { Component, Fragment, useMemo, useState, type ReactNode } from "react";
 import { Alert, Box, Button, Typography, useTheme } from "@mui/material";
 import { stopAppRuntime, useAppRuntime } from "./appRuntimes";
 import { isText, type AppTreeState } from "./appTree";
@@ -59,12 +59,12 @@ class AppBoundary extends Component<
   }
 }
 
-type AppViewProps = Omit<AppNodeProps, "identity" | "onSend" | "images"> & {
+type AppViewProps = Omit<AppNodeProps, "identity" | "onSend"> & {
   identity: string;
   onSend?: ((text: string, code: string) => void) | undefined;
 };
 
-function AppView({ code, props, title, identity, onSend }: AppViewProps): React.JSX.Element {
+function AppView({ code, props, images, title, identity, onSend }: AppViewProps): React.JSX.Element {
   const theme = useTheme();
   // A published app keeps one runtime across code versions (the registry
   // decides which version runs); a local preview is one app per exact source.
@@ -74,7 +74,11 @@ function AppView({ code, props, title, identity, onSend }: AppViewProps): React.
     () => ({ theme: theme.palette.mode, locale: navigator.language, platform: "web" }),
     [theme.palette.mode],
   );
-  const app = useAppRuntime(key, scope, { code, props, context }, onSend);
+  // This view's version may replace the running one only once its images
+  // are local; the running version draws with its own images.
+  const ready = useAppImagesLoaded(images) !== null;
+  const app = useAppRuntime(key, scope, { code, props, context, images }, onSend, ready);
+  const running = useAppImagesLoaded(app.images);
   if (app.waiting) {
     return (
       <Typography variant="caption" color="text.secondary">
@@ -124,33 +128,36 @@ function AppView({ code, props, title, identity, onSend }: AppViewProps): React.
           The agent updated this app. Reload discards what you typed.
         </Alert>
       ) : null}
-      {app.tree.root.length === 0 ? (
+      {app.tree.root.length === 0 || running === null ? (
         <Typography variant="caption" color="text.secondary">
           Starting the app…
         </Typography>
       ) : (
-        <AppBoundary
-          key={key}
-          onError={(): void => stopAppRuntime(key, "This app stopped: Cowboy could not draw it.")}
-        >
-          {app.tree.root.map((id) => (
-            <Fragment key={id}>{renderTree(app.tree, id, app.dispatch)}</Fragment>
-          ))}
-        </AppBoundary>
+        <AppImagesContext.Provider value={running}>
+          <AppBoundary
+            key={key}
+            onError={(): void => stopAppRuntime(key, "This app stopped: Cowboy could not draw it.")}
+          >
+            {app.tree.root.map((id) => (
+              <Fragment key={id}>{renderTree(app.tree, id, app.dispatch)}</Fragment>
+            ))}
+          </AppBoundary>
+        </AppImagesContext.Provider>
       )}
     </>
   );
 }
 
 export default function AppNode(props: AppNodeProps): React.JSX.Element {
-  // The app starts only once every image is local (docs/widget-apps.md §6).
+  // The app first starts only once every image is local (docs/widget-apps.md
+  // §6); later versions wait for theirs inside the view.
   const images = useAppImagesLoaded(props.images);
+  const [started, setStarted] = useState(false);
+  if (images && !started) setStarted(true);
   return (
     <Box data-widget-app={props.title} sx={{ display: "grid", gap: 1, minWidth: 0 }}>
-      {images ? (
-        <AppImagesContext.Provider value={images}>
-          <AppView {...props} identity={props.identity ?? `local:${props.title}`} />
-        </AppImagesContext.Provider>
+      {started ? (
+        <AppView {...props} identity={props.identity ?? `local:${props.title}`} />
       ) : (
         <Typography variant="caption" color="text.secondary">
           Loading the app…

@@ -972,14 +972,11 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                         // hacks. document-start, so it's set before the page's own
                         // boot script reads it. (cowboy-native-keyboard-ime)
                         @"window.__cowboyNativeShell=true;"];
-                    // Widget apps (docs/widget-apps.md §9): this build's script
-                    // handlers, the Passkey bridge included, answer only the
-                    // main frame, so the web may enable apps on a tested OS.
-                    // Main-frame-only like the rest of this script.
-                    js = [js stringByAppendingFormat:
-                        @"window.__cowboyAppsSandbox=Object.freeze({v:1,os:'%@'});",
-                        [UIDevice.currentDevice.systemVersion
-                            stringByReplacingOccurrencesOfString:@"'" withString:@""]];
+                    // Widget apps (docs/widget-apps.md §9) stay on their
+                    // fallback here: Cowboy's script handlers answer only the
+                    // main frame, but Wry's `ipc` handler forwards subframe
+                    // messages. Report `__cowboyAppsSandbox` only once that
+                    // handler is gated too.
                     WKUserScript *script =
                         [[WKUserScript alloc] initWithSource:js
                                                injectionTime:WKUserScriptInjectionTimeAtDocumentStart

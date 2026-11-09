@@ -71,15 +71,21 @@ status, tables and decisions.
   resolution, decodes completely as a still PNG ≤ 1 MiB and ≤ 2048 × 2048,
   ≤ 16 Mpx per app) and loaded into local blobs before the app starts
   (`apps/appImages.ts`); `Image{source,alt,height}` draws by key, and an
-  unknown or failed key shows its `alt`.
+  unknown or failed key shows its `alt`. The host checks each PNG header
+  again (size, sides, no animation, 16 Mpx per app), since documents stored
+  before publish-time verification are never re-verified, and an app's
+  images follow its running version: a kept version keeps its images, and a
+  new version replaces the running one only after its images are loaded.
 - **A4.2 (native gates)**: every WKWebView script handler of the iOS shell
   answers only the main frame; the Passkey bridge gained that check (its
   request handler checked only the relying party, and the Passkey browser's
   `close` nothing). Android's message listeners already required the main
   frame and the Cowboy origin; Tauri grants permissions only to the Cowboy
-  origin. The iOS shell reports `__cowboyAppsSandbox = {v: 1, os}` from its
-  main-frame-only user script; older shells do not, so they keep the
-  fallback.
+  origin. The Web enables the iOS shell only when it reports
+  `__cowboyAppsSandbox = {v: 1, os}`; no shell reports it yet, because the
+  review of A4 (`call-586b103e72ad245cedadb960`) found that Wry's `ipc`
+  handler forwards subframe messages. Native shells keep the fallback until
+  that handler is gated and verified on a device.
 - **A4.3 (WebKit)**: `tools/ios-simulator-conformance.ts` runs the
   `widget-apps` suite in iOS Safari on a disposable Simulator of the Mac,
   optionally under the Controller's App CSP with the runtime wasm served as a
@@ -91,8 +97,10 @@ status, tables and decisions.
   images fetched as `data:` URLs (refused by the App CSP), and Safari's
   frozen OS version in its user agent. Enablement (`appsEnabled.ts`): iOS
   and iPadOS 26+ Safari by `Version/` (iPadOS's Mac user agent by touch
-  points), the iOS shell by its capability and OS version; macOS WebKit,
-  Tauri desktop shells and PWAs without `Version/` keep the fallback.
+  points), and the iOS shell only by its capability and OS version (not yet
+  reported); macOS WebKit, Tauri desktop shells and PWAs without `Version/`
+  keep the fallback. The `--production-csp` policy is the Controller's
+  verbatim, its `wss://` source included.
 - Not yet covered: a physical iPhone (four maximum-budget apps under 200 ms
   interaction latency) and the egress sink observed outside the page; the
   Simulator runs prove engine behaviour, not device performance.
