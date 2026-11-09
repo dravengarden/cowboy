@@ -28,12 +28,23 @@ let port = null;
 let vm = null;
 let runtime = null;
 let stopped = false;
-const window = { start: 0, used: 0, throttled: 0, minuteStart: 0, minuteUsed: 0 };
-const tree = { parent: new Map([[0, -1]]), depth: new Map([[0, 0]]) };
+let ready = false;
+let suspended = false;
 let credits = LIMITS.creditWindow;
 const pending = [];
 let pendingBytes = 0;
-const logs = { windowStart: 0, count: 0 };
+const deferred = [];
+let latestProps = null;
+let latestContext = null;
+let nextTimerWake = null;
+let jobsQueued = false;
+const cpu = { spans: [], minuteStart: 0, minuteUsed: 0, throttled: 0 };
+const rate = { sendAt: 0, sendDrops: 0, logStart: 0, logs: 0 };
+
+// Shadow tree: parent and children of every node the app created.
+const parentOf = new Map([[0, -1]]);
+const childrenOf = new Map([[0, new Set()]]);
+const depthOf = new Map([[0, 0]]);
 
 const post = (message) => port && port.postMessage(message);
 function stop(reason) {
@@ -62,6 +73,46 @@ function within(limit, value, message) {
   if (value > limit) throw new Error(message);
 }
 
+function detach(id) {
+  const parent = parentOf.get(id);
+  if (parent !== undefined && parent >= 0) childrenOf.get(parent)?.delete(id);
+  parentOf.set(id, -1);
+}
+
+function dropSubtree(id) {
+  for (const child of childrenOf.get(id) ?? []) dropSubtree(child);
+  detach(id);
+  parentOf.delete(id);
+  childrenOf.delete(id);
+  depthOf.delete(id);
+}
+
+/** Attaches `child` under `parent` and re-derives the depth of its subtree. */
+function attach(parent, child) {
+  if (!childrenOf.has(parent) || !parentOf.has(child)) throw new Error("unknown node");
+  for (let at = parent; at > 0; at = parentOf.get(at) ?? -1) {
+    if (at === child) throw new Error("malformed render update");
+  }
+  detach(child);
+  parentOf.set(child, parent);
+  childrenOf.get(parent).add(child);
+  const stack = [[child, (depthOf.get(parent) ?? 0) + 1]];
+  while (stack.length > 0) {
+    const [id, depth] = stack.pop();
+    within(LIMITS.depth, depth, "the app nested too deeply");
+    depthOf.set(id, depth);
+    for (const next of childrenOf.get(id) ?? []) stack.push([next, depth + 1]);
+  }
+}
+
+function create(id) {
+  if (!parentOf.has(id)) {
+    parentOf.set(id, -1);
+    childrenOf.set(id, new Set());
+    depthOf.set(id, 1);
+  }
+}
+
 /** Validates one batch from the VM and updates the shadow tree. */
 function admit(json) {
   within(LIMITS.batchBytes, json.length, "a render update was too large");
@@ -71,26 +122,22 @@ function admit(json) {
     const [kind, id] = op;
     if (kind === "create") {
       if (!elements.has(op[2])) throw new Error(`unknown component ${String(op[2])}`);
-      tree.parent.set(id, -1);
+      create(id);
     } else if (kind === "text") {
       if (typeof op[2] !== "string") throw new Error("malformed text");
       within(LIMITS.textChars, op[2].length, "a text node was too long");
-      if (!tree.parent.has(id)) tree.parent.set(id, -1);
+      create(id);
     } else if (kind === "append" || kind === "before") {
-      const child = op[2];
-      if (!tree.parent.has(child) || !tree.parent.has(id)) throw new Error("unknown node");
-      tree.parent.set(child, id);
-      const depth = (tree.depth.get(id) ?? 0) + 1;
-      within(LIMITS.depth, depth, "the app nested too deeply");
-      tree.depth.set(child, depth);
+      attach(id, op[2]);
     } else if (kind === "remove") {
-      tree.parent.delete(id);
-      tree.depth.delete(id);
-    } else if (kind !== "props" && kind !== "clear") {
+      dropSubtree(id);
+    } else if (kind === "clear") {
+      for (const child of [...(childrenOf.get(0) ?? [])]) dropSubtree(child);
+    } else if (kind !== "props") {
       throw new Error("malformed render update");
     }
   }
-  within(LIMITS.nodes, tree.parent.size, "the app rendered too many components");
+  within(LIMITS.nodes, parentOf.size - 1, "the app rendered too many components");
   pending.push(json);
   pendingBytes += json.length;
   if (pending.length > LIMITS.pendingBatches || pendingBytes > LIMITS.pendingBytes) {
@@ -108,52 +155,62 @@ function pump() {
   }
 }
 
-/** Runs VM code under the per-call deadline and the rolling CPU windows.
- *  Loading the runtime and the first render (`startup`) have their own
- *  deadlines and count toward the minute, not the per-second window.
- *  Returns `{ ok, value }`; `ok` is false when throttled or stopped. */
+/** CPU used by the VM in the last second (a rolling window). */
+function usedLastSecond(now) {
+  while (cpu.spans.length > 0 && cpu.spans[0].at <= now - 1000) cpu.spans.shift();
+  return cpu.spans.reduce((sum, span) => sum + span.ms, 0);
+}
+
+/** Runs VM code under a deadline and the CPU budgets. `startup` calls
+ *  (loading, compiling, first render) have their own deadlines and count
+ *  toward the minute, not the rolling second. Returns `{ ok, value, busy }`;
+ *  `busy` means the call did not run because the second is spent. */
 function run(code, deadlineMs, startup = false) {
   const now = Date.now();
-  if (now - window.start >= 1000) {
-    window.throttled = window.used >= LIMITS.cpuPerSecondMs ? window.throttled + 1 : 0;
-    window.start = now;
-    window.used = 0;
+  if (now - cpu.minuteStart >= 60_000) {
+    cpu.minuteStart = now;
+    cpu.minuteUsed = 0;
   }
-  if (now - window.minuteStart >= 60_000) {
-    window.minuteStart = now;
-    window.minuteUsed = 0;
+  const left = LIMITS.cpuPerSecondMs - usedLastSecond(now);
+  if (!startup && left <= 0) {
+    cpu.throttled += 1;
+    if (cpu.throttled >= LIMITS.throttledTurns) stop("it kept the processor busy");
+    return { ok: false, busy: true };
   }
-  if (window.throttled >= 3) {
-    stop("it kept the processor busy");
-    return { ok: false };
-  }
-  const allowance = startup
-    ? deadlineMs
-    : Math.min(deadlineMs, LIMITS.cpuPerSecondMs - window.used);
-  if (allowance <= 0) return { ok: false };
-  const until = now + allowance;
+  const until = now + (startup ? deadlineMs : Math.min(deadlineMs, left));
   runtime.setInterruptHandler(() => Date.now() > until);
   const result = vm.evalCode(code);
+  let error = result.error ? vm.dump(result.error) : null;
+  result.error?.dispose();
+  const value = result.value ? vm.dump(result.value) : undefined;
+  result.value?.dispose();
   let jobs = 0;
-  while (!result.error && jobs < LIMITS.jobsPerTurn && runtime.hasPendingJob()) {
+  while (!error && jobs < LIMITS.jobsPerTurn && runtime.hasPendingJob()) {
     const job = runtime.executePendingJobs(1);
-    job.dispose?.();
+    if (job.error) {
+      error = vm.dump(job.error);
+      job.error.dispose();
+    }
     jobs += 1;
   }
   const spent = Date.now() - now;
-  if (!startup) window.used += spent;
-  window.minuteUsed += spent;
-  if (result.error) {
-    const error = vm.dump(result.error);
-    result.error.dispose();
+  if (!startup) cpu.spans.push({ at: now, ms: spent });
+  cpu.minuteUsed += spent;
+  if (!startup && spent < left) cpu.throttled = 0;
+  if (error) {
     fail(String(error?.message ?? error));
     return { ok: false };
   }
-  const value = vm.dump(result.value);
-  result.value.dispose();
-  if (window.minuteUsed > LIMITS.cpuPerMinuteMs) {
+  if (cpu.minuteUsed > LIMITS.cpuPerMinuteMs) {
     stop("it kept the processor busy");
     return { ok: false };
+  }
+  if (!jobsQueued && runtime.hasPendingJob()) {
+    jobsQueued = true;
+    setTimeout(() => {
+      jobsQueued = false;
+      if (!stopped && !suspended) run("undefined", LIMITS.eventMs);
+    }, 16);
   }
   return { ok: true, value };
 }
@@ -166,19 +223,27 @@ function hostFunctions() {
       stop(String(error.message ?? error));
     }
   });
+  // One message request per interval reaches the host; more are dropped,
+  // and an app that keeps asking is stopped.
   const send = vm.newFunction("__send", (handle) => {
+    const now = Date.now();
     const text = vm.getString(handle);
-    if (text.length <= LIMITS.messageChars) post({ t: "send", text });
-    else post({ t: "log", text: "send(): message too long" });
+    if (text.length > LIMITS.messageChars * 2 || now - rate.sendAt < LIMITS.sendIntervalMs) {
+      rate.sendDrops += 1;
+      if (rate.sendDrops > LIMITS.sendDrops) stop("it asked to send messages too often");
+      return;
+    }
+    rate.sendAt = now;
+    post({ t: "send", text });
   });
   const log = vm.newFunction("__log", (handle) => {
     const now = Date.now();
-    if (now - logs.windowStart >= 1000) {
-      logs.windowStart = now;
-      logs.count = 0;
+    if (now - rate.logStart >= 1000) {
+      rate.logStart = now;
+      rate.logs = 0;
     }
-    logs.count += 1;
-    if (logs.count <= LIMITS.logsPerSecond)
+    rate.logs += 1;
+    if (rate.logs <= LIMITS.logsPerSecond)
       post({ t: "log", text: vm.getString(handle).slice(0, 1024) });
   });
   const failed = vm.newFunction("__fail", (handle) => fail(vm.getString(handle)));
@@ -194,12 +259,48 @@ function hostFunctions() {
 }
 
 const literal = (value) => JSON.stringify(value);
-let timersLeft = 0;
+
+/** Runs due timers and wakes again when the next one is due. */
 function drainTimers() {
-  if (stopped || pending.length >= LIMITS.pendingBatches || timersLeft === 0) return;
+  nextTimerWake = null;
+  if (stopped || suspended || !ready) return;
+  if (pending.length >= LIMITS.pendingBatches) return;
   const result = run(`__cowboyTimersRun(${LIMITS.timersPerTurn})`, LIMITS.eventMs);
-  if (result.ok) timersLeft = Number(result.value) || 0;
-  if (timersLeft > 0) setTimeout(drainTimers, 16);
+  if (result.busy) return wakeTimers(100);
+  if (result.ok && typeof result.value === "number" && result.value >= 0) wakeTimers(result.value);
+}
+
+function wakeTimers(ms) {
+  if (nextTimerWake !== null) clearTimeout(nextTimerWake);
+  nextTimerWake = setTimeout(drainTimers, Math.max(16, ms));
+}
+
+/** Runs deferred host commands while the VM may run. */
+function drainDeferred() {
+  while (
+    !stopped &&
+    !suspended &&
+    ready &&
+    pending.length < LIMITS.pendingBatches &&
+    deferred.length > 0
+  ) {
+    const command = deferred[0];
+    const result = run(command.code, LIMITS.eventMs);
+    if (result.busy) return setTimeout(drainDeferred, 100);
+    deferred.shift();
+  }
+  wakeTimers(0);
+}
+
+function enqueue(kind, code) {
+  if (kind !== "event") {
+    // Newer props or context replace older ones still waiting.
+    const index = deferred.findIndex((command) => command.kind === kind);
+    if (index >= 0) deferred.splice(index, 1);
+  }
+  if (deferred.length >= LIMITS.deferredCommands) return stop("it fell too far behind");
+  deferred.push({ kind, code });
+  drainDeferred();
 }
 
 async function boot(data) {
@@ -213,36 +314,52 @@ async function boot(data) {
   hostFunctions();
   if (!run(data.vm, LIMITS.loadMs, true).ok) return;
   post({ t: "nonce", nonce: data.nonce });
-  run(
-    `__cowboyStart(${literal(data.code)}, ${literal(JSON.stringify(data.props))}, ${literal(JSON.stringify(data.context))})`,
-    LIMITS.firstRenderMs,
-    true,
-  );
-  timersLeft = 1;
-  drainTimers();
+  if (!run(`__cowboyCompile(${literal(data.code)})`, LIMITS.compileMs, true).ok) return;
+  const props = latestProps ?? JSON.stringify(data.props);
+  const context = latestContext ?? JSON.stringify(data.context);
+  if (!run(`__cowboyRender(${literal(props)}, ${literal(context)})`, LIMITS.firstRenderMs, true).ok)
+    return;
+  ready = true;
+  drainDeferred();
 }
 
 function onHost(event) {
   const message = event.data;
   if (stopped || !message || typeof message !== "object") return;
-  if (message.t === "ping") post({ t: "pong", n: message.n });
-  else if (message.t === "credit") {
-    credits = Math.min(LIMITS.creditWindow, credits + 1);
-    pump();
-    drainTimers();
-  } else if (message.t === "event" && pending.length < LIMITS.pendingBatches) {
-    run(
-      `__cowboyEvent(${literal(message.id)}, ${literal(message.name)}, ${literal(JSON.stringify(message.payload))})`,
-      LIMITS.eventMs,
-    );
-    timersLeft = 1;
-    drainTimers();
-  } else if (message.t === "props") {
-    run(`__cowboyProps(${literal(JSON.stringify(message.props))})`, LIMITS.eventMs);
-  } else if (message.t === "context") {
-    run(`__cowboyContext(${literal(JSON.stringify(message.context))})`, LIMITS.eventMs);
-  } else if (message.t === "stop") {
-    stop("closed");
+  switch (message.t) {
+    case "ping":
+      post({ t: "pong", n: message.n });
+      return;
+    case "credit":
+      credits = Math.min(LIMITS.creditWindow, credits + 1);
+      pump();
+      drainDeferred();
+      return;
+    case "suspend":
+      suspended = true;
+      return;
+    case "resume":
+      suspended = false;
+      drainDeferred();
+      return;
+    case "event":
+      enqueue(
+        "event",
+        `__cowboyEvent(${literal(message.id)}, ${literal(message.name)}, ${literal(JSON.stringify(message.payload))})`,
+      );
+      return;
+    case "props":
+      latestProps = JSON.stringify(message.props);
+      if (ready) enqueue("props", `__cowboyProps(${literal(latestProps)})`);
+      return;
+    case "context":
+      latestContext = JSON.stringify(message.context);
+      if (ready) enqueue("context", `__cowboyContext(${literal(latestContext)})`);
+      return;
+    case "stop":
+      stop("closed");
+      return;
+    default:
   }
 }
 

@@ -41,6 +41,9 @@ export type AppRuntime = {
   context: (context: unknown) => void;
   /** Allow one more render batch (granted per animation frame by the host). */
   credit: () => void;
+  /** Pause or continue the app's execution (hidden view, withheld credits). */
+  suspend: () => void;
+  resume: () => void;
   terminate: () => void;
 };
 
@@ -115,8 +118,11 @@ export function startAppRuntime(start: AppRuntimeStart, events: AppRuntimeEvents
     if (!message || typeof message !== "object") return end("The app sent malformed data.");
     if (!verified) {
       // The first message must prove this port belongs to this frame's boot.
-      if (message["t"] === "nonce" && message["nonce"] === nonce) verified = true;
-      else if (message["t"] === "stopped") end(`This app stopped: ${String(message["reason"])}.`);
+      if (message["t"] === "nonce" && message["nonce"] === nonce) {
+        verified = true;
+        // Updates that arrived while the runtime started are not lost.
+        for (const update of early.splice(0)) channel.port1.postMessage(update);
+      } else if (message["t"] === "stopped") end(`This app stopped: ${String(message["reason"])}.`);
       else end("The app runtime could not be verified.");
       return;
     }
@@ -152,14 +158,25 @@ export function startAppRuntime(start: AppRuntimeStart, events: AppRuntimeEvents
   globalThis.addEventListener("message", onWindowMessage);
   document.body.append(frame);
 
-  const post = (message: unknown): void => {
-    if (!closed && verified) channel.port1.postMessage(message);
+  // Latest props/context sent before the handshake completes, replayed after.
+  type Outbound = { t: string } & Record<string, unknown>;
+  const early: Outbound[] = [];
+  const post = (message: Outbound): void => {
+    if (closed) return;
+    if (verified) channel.port1.postMessage(message);
+    else if (message.t === "props" || message.t === "context") {
+      const index = early.findIndex((update) => update.t === message.t);
+      if (index >= 0) early.splice(index, 1);
+      early.push(message);
+    }
   };
   return {
     event: (id, name, payload) => post({ t: "event", id, name, payload }),
     props: (props) => post({ t: "props", props }),
     context: (context) => post({ t: "context", context }),
     credit: () => post({ t: "credit" }),
+    suspend: () => post({ t: "suspend" }),
+    resume: () => post({ t: "resume" }),
     terminate: () => {
       post({ t: "stop" });
       end("closed");

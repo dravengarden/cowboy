@@ -13,6 +13,13 @@ const SYNC = 2;
 let nextId = 1;
 let ops = [];
 const handlers = new Map();
+// Host children per instance, so a removed subtree releases every handler.
+const kids = new Map();
+const attach = (parent, child) => {
+  for (const set of kids.values()) set.delete(child);
+  if (!kids.has(parent)) kids.set(parent, new Set());
+  kids.get(parent).add(child);
+};
 const flush = () => {
   if (ops.length > 0) {
     __emit(JSON.stringify(ops));
@@ -37,6 +44,12 @@ const split = (id, props) => {
 const forget = (id) => {
   for (const key of handlers.keys()) if (key.startsWith(`${id}:`)) handlers.delete(key);
 };
+const forgetTree = (id) => {
+  for (const child of kids.get(id) ?? []) forgetTree(child);
+  kids.delete(id);
+  for (const set of kids.values()) set.delete(id);
+  forget(id);
+};
 
 const hostConfig = {
   supportsMutation: true,
@@ -60,17 +73,32 @@ const hostConfig = {
     ops.push(["text", id, String(text)]);
     return { id };
   },
-  appendInitialChild: (parent, child) => ops.push(["append", parent.id, child.id]),
-  appendChild: (parent, child) => ops.push(["append", parent.id, child.id]),
-  appendChildToContainer: (_root, child) => ops.push(["append", 0, child.id]),
-  insertBefore: (parent, child, before) => ops.push(["before", parent.id, child.id, before.id]),
-  insertInContainerBefore: (_root, child, before) => ops.push(["before", 0, child.id, before.id]),
+  appendInitialChild: (parent, child) => {
+    attach(parent.id, child.id);
+    ops.push(["append", parent.id, child.id]);
+  },
+  appendChild: (parent, child) => {
+    attach(parent.id, child.id);
+    ops.push(["append", parent.id, child.id]);
+  },
+  appendChildToContainer: (_root, child) => {
+    attach(0, child.id);
+    ops.push(["append", 0, child.id]);
+  },
+  insertBefore: (parent, child, before) => {
+    attach(parent.id, child.id);
+    ops.push(["before", parent.id, child.id, before.id]);
+  },
+  insertInContainerBefore: (_root, child, before) => {
+    attach(0, child.id);
+    ops.push(["before", 0, child.id, before.id]);
+  },
   removeChild: (_parent, child) => {
-    forget(child.id);
+    forgetTree(child.id);
     ops.push(["remove", child.id]);
   },
   removeChildFromContainer: (_root, child) => {
-    forget(child.id);
+    forgetTree(child.id);
     ops.push(["remove", child.id]);
   },
   commitTextUpdate: (instance, _old, next) => ops.push(["text", instance.id, String(next)]),
@@ -81,7 +109,10 @@ const hostConfig = {
   finalizeInitialChildren: () => false,
   prepareForCommit: () => null,
   resetAfterCommit: flush,
-  clearContainer: () => ops.push(["clear"]),
+  clearContainer: () => {
+    for (const child of kids.get(0) ?? []) forgetTree(child);
+    ops.push(["clear"]);
+  },
   getPublicInstance: (instance) => instance,
   preparePortalMount: () => undefined,
   getCurrentUpdatePriority: () => SYNC,
@@ -150,7 +181,9 @@ function Shell({ App }) {
 // linger half-drawn. The Worker turns the message into a stop reason.
 const report = (error) => __fail(String((error && error.message) || error).slice(0, 500));
 
-globalThis.__cowboyStart = (source, propsJson, contextJson) => {
+let App = null;
+/** Compiles and evaluates the app module (its own deadline). */
+globalThis.__cowboyCompile = (source) => {
   const compiled = transform(source, {
     transforms: ["typescript", "jsx", "imports"],
     jsxRuntime: "classic",
@@ -169,8 +202,11 @@ globalThis.__cowboyStart = (source, propsJson, contextJson) => {
     require,
     React,
   );
-  const App = module.exports.default;
+  App = module.exports.default;
   if (typeof App !== "function") throw new Error("the app must default-export a component");
+};
+/** The first render (its own deadline). */
+globalThis.__cowboyRender = (propsJson, contextJson) => {
   appProps.set(JSON.parse(propsJson));
   hostContext.set(JSON.parse(contextJson));
   root = renderer.createContainer({}, 0, null, false, null, "", report, report, report, null);
@@ -191,10 +227,9 @@ globalThis.__cowboyEvent = (id, name, payloadJson) => {
   renderer.batchedUpdates(() => handler(JSON.parse(payloadJson)));
   renderer.flushSyncWork();
 };
-/** Runs scheduled timers; returns how many remain for the next turn. */
+/** Runs due timers; returns ms until the next one, or -1 when none. */
 globalThis.__cowboyTimersRun = (max) => {
-  const queue = globalThis.__cowboyTimers;
-  for (let index = 0; index < max && queue.length > 0; index += 1) queue.shift()();
+  const next = globalThis.__cowboyTimersDue(max);
   renderer.flushSyncWork();
-  return queue.length;
+  return next;
 };

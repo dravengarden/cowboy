@@ -3,11 +3,16 @@ export declare const LIMITS: {
   readonly memoryBytes: number;
   readonly stackBytes: number;
   readonly loadMs: number;
+  readonly compileMs: number;
   readonly firstRenderMs: number;
   readonly eventMs: number;
   readonly cpuPerSecondMs: number;
   readonly cpuPerMinuteMs: number;
   readonly jobsPerTurn: number;
+  readonly throttledTurns: number;
+  readonly deferredCommands: number;
+  readonly sendIntervalMs: number;
+  readonly sendDrops: number;
   readonly timersPerTurn: number;
   readonly batchBytes: number;
   readonly pendingBatches: number;

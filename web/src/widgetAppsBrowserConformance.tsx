@@ -161,7 +161,7 @@ export async function runWidgetAppsBrowserConformance(): Promise<string[]> {
   );
   await stops(
     app(
-      "const keep: ArrayBuffer[] = [];\nexport default function A() { for (;;) keep.push(new ArrayBuffer(4 << 20)); }",
+      "const keep: ArrayBuffer[] = [];\nfor (;;) keep.push(new ArrayBuffer(4 << 20));\nexport default function A() { return null; }",
     ),
     "used too much memory",
     "an allocation loop is stopped by the memory limit",
@@ -173,7 +173,7 @@ export async function runWidgetAppsBrowserConformance(): Promise<string[]> {
   );
   await stops(
     app(
-      "export default function A() { return <Stack>{Array.from({ length: 3000 }, (_, i) => <Text key={i}>x</Text>)}</Stack>; }",
+      'export default function A() { return <Stack>{Array.from({ length: 100 }, (_, i) => <Text key={i}>{"x".repeat(1000)}</Text>)}</Stack>; }',
     ),
     "a render update was too large",
     "an oversized render update is refused",
