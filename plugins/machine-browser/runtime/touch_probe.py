@@ -315,7 +315,15 @@ def revoke_checks(path, display, record):
         record("revoke_pointer_input_off", x_set_param(display, "AcceptPointerEvents", "0"))
         revoked = watch.counts()
         record("contacts_end_when_pointer_input_is_revoked", revoked["TouchEnd"] == MAX_CONTACTS, events=revoked)
+        # An end for a contact that was down: every contact is already
+        # ended, so it adds nothing (and the connection survives).
         client.touch(END, 1, 40, 100)
+        after_end = watch.counts()
+        record(
+            "known_id_end_after_revocation_adds_nothing",
+            after_end == revoked and client.alive(),
+            events=after_end,
+        )
         client.touch(BEGIN, 50, 300, 300)
         client.touch(UPDATE, 2, 80, 120)
         forbidden = watch.counts()

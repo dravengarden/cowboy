@@ -19,9 +19,11 @@ Description: Native multi-touch for the Cowboy Machine browser
    bound are ignored; coordinates are clamped to the framebuffer.
  - Every contact a connection leaves active ends when the connection
    closes. Without pointer permission (access rights or AcceptPointerEvents)
-   nothing new is accepted, but active contacts still end: at once when
-   AcceptPointerEvents is turned off through the VNC extension, otherwise on
-   the client's next touch message, at their last accepted positions.
+   nothing new is accepted, but every active contact still ends at its last
+   accepted position: at once when AcceptPointerEvents is turned off through
+   the VNC extension, otherwise on the client's next touch message of any
+   kind. (Access rights are fixed at authentication in Xvnc, so the
+   extension is the only runtime revocation.)
 Author: Cowboy Machine browser
 Forwarded: not-needed
 Cowboy-Reviewed-For: tigervnc 1.15.0+dfsg-2build1
@@ -257,7 +259,7 @@ Last-Update: 2026-11-09
    delete [] fenceData;
  }
  
-@@ -477,6 +486,90 @@ void VNCSConnectionST::pointerEvent(const Point& pos, uint16_t buttonMask)
+@@ -477,6 +486,88 @@ void VNCSConnectionST::pointerEvent(const Point& pos, uint16_t buttonMask)
  }
  
  
@@ -274,17 +276,15 @@ Last-Update: 2026-11-09
 +  if (rfb::Server::idleTimeout)
 +    idleTimer.start(secsToMillis(rfb::Server::idleTimeout));
 +
-+  std::map<uint32_t, ActiveTouch>::iterator touch = activeTouches.find(id);
-+
-+  // Without pointer permission nothing new is accepted, but what is down
-+  // still ends (at its last accepted position), so no contact sticks.
++  // Without pointer permission nothing new is accepted, and every contact
++  // still down ends at its last accepted position, whatever this message
++  // is, so no contact sticks.
 +  if (!touchPermitted()) {
-+    if (state == touchEventEnd && touch != activeTouches.end())
-+      endTouch(touch);
-+    else
-+      releaseForbiddenTouches();
++    releaseForbiddenTouches();
 +    return;
 +  }
++
++  std::map<uint32_t, ActiveTouch>::iterator touch = activeTouches.find(id);
 +
 +  // Clamp to the framebuffer
 +  Point clamped(pos);
