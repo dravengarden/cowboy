@@ -1,17 +1,11 @@
-/** The command surface of the Machine browser panel: the primary action for
- * the current state, the lifecycle bar with its confirmations, and the
- * remote-clipboard row. Pure presentation over `BrowserModel`. */
+/** Lifecycle commands of the Machine browser panel: the primary action the
+ * empty page offers for the current state, and the confirmations that
+ * capture the browser they act on. Pure presentation over `BrowserModel`. */
 import { Button, CircularProgress, Stack, Typography } from "@mui/material";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { ConfirmSheet } from "../Sheet";
-import { copyText } from "../clipboard";
-import {
-  type BrowserScale,
-  type BrowserStateEvent,
-  type BrowserTarget,
-  browserStateLabel,
-} from "./api";
-import { type BrowserModel, browserRunning } from "./browserModel";
+import { type BrowserStateEvent, type BrowserTarget, browserStateLabel } from "./api";
+import type { BrowserModel } from "./browserModel";
 import {
   type ConfirmKind,
   type Confirmation,
@@ -37,10 +31,8 @@ export interface BrowserCommands {
   notice(message: string): void;
 }
 
-type Confirm = ConfirmKind;
-
 const CONFIRM_TEXT: Record<
-  Confirm,
+  ConfirmKind,
   { title: string; body: string; action: string; destructive: boolean }
 > = {
   takeover: {
@@ -69,7 +61,7 @@ const CONFIRM_TEXT: Record<
   },
 };
 
-/** The one thing to do next, shown large where the display will be. */
+/** The one thing to do next, shown on the empty page inside the frame. */
 export function BrowserPrimaryAction({
   model,
   state,
@@ -82,7 +74,7 @@ export function BrowserPrimaryAction({
   /** The panel's opens are pinned to one Machine: no choice is offered. */
   pinned?: boolean;
   commands: BrowserCommands;
-  onConfirm: (kind: Confirm) => void;
+  onConfirm: (kind: ConfirmKind) => void;
 }): React.JSX.Element | null {
   if (model.read?.admission || !model.loaded) return null;
   if (model.busy === "open" || state?.state === "starting") {
@@ -104,35 +96,20 @@ export function BrowserPrimaryAction({
       />
     );
   }
-  if (!state || state.state === "hibernated") {
-    return (
-      <Button variant="contained" disabled={Boolean(model.busy)} onClick={() => commands.open()}>
-        Open browser
-      </Button>
-    );
-  }
-  if (state.state === "detached") {
-    return (
-      <Button
-        variant="contained"
-        disabled={Boolean(model.busy)}
-        onClick={() => commands.attach(false)}
-      >
-        Attach
-      </Button>
-    );
-  }
-  if (state.state === "attached") {
-    return (
-      <Button
-        variant="contained"
-        disabled={Boolean(model.busy)}
-        onClick={() => onConfirm("takeover")}
-      >
-        Take over…
-      </Button>
-    );
-  }
+  const primary = (label: string, onClick: () => void): React.JSX.Element => (
+    <Button
+      variant="contained"
+      size="large"
+      disabled={Boolean(model.busy)}
+      onClick={onClick}
+      sx={{ minHeight: 46, minWidth: 180, borderRadius: 999 }}
+    >
+      {label}
+    </Button>
+  );
+  if (!state || state.state === "hibernated") return primary("Open browser", () => commands.open());
+  if (state.state === "detached") return primary("Open browser", () => commands.attach(false));
+  if (state.state === "attached") return primary("Take over…", () => onConfirm("takeover"));
   return <Typography variant="body2">The browser is stopping…</Typography>;
 }
 
@@ -156,137 +133,49 @@ function runConfirmed(confirm: Confirmation, commands: BrowserCommands): void {
   }
 }
 
-export function BrowserActionBar({
-  model,
-  state,
-  desktop,
-  pinned = false,
-  preferredScale,
-  commands,
-  onClose,
-}: {
-  model: BrowserModel;
-  state: BrowserStateEvent | null;
-  desktop: boolean;
-  pinned?: boolean;
-  preferredScale: BrowserScale;
-  commands: BrowserCommands;
-  onClose: () => void;
-}): React.JSX.Element {
+/** Confirmations for the panel: `ask` captures the browser shown now; the
+ * dialog closes without acting once the panel shows another one. */
+export function useBrowserConfirm(
+  model: BrowserModel,
+  state: BrowserStateEvent | null,
+  commands: BrowserCommands,
+): { ask: (kind: ConfirmKind) => void; dialog: ReactNode } {
   const [confirm, setConfirm] = useState<Confirmation | undefined>(undefined);
-  // The confirmation captures the browser shown when it opens and closes
-  // without acting once the panel shows another one.
   const current = confirm !== undefined && confirmationCurrent(confirm, model);
   useEffect(() => {
     if (confirm && !current) setConfirm(undefined);
   }, [confirm, current]);
-  const ask = (kind: Confirm): void => setConfirm(confirmationFor(kind, model));
-  const busy = Boolean(model.busy);
-  const running = browserRunning(state?.state);
-  // Deleting a retained profile stays the owner's while either gate is
-  // closed; the Service refuses it only during revocation.
-  const resettable =
-    model.loaded &&
-    !running &&
-    state?.state !== "starting" &&
-    (state !== null || (model.read?.placements.length ?? 0) > 0);
-  const scaleMismatch = running && state?.scale !== undefined && state.scale !== preferredScale;
-  const remote = model.remoteClipboard;
+  const ask = (kind: ConfirmKind): void => setConfirm(confirmationFor(kind, model));
+  const text = confirm && current ? CONFIRM_TEXT[confirm.kind] : undefined;
   const confirmed = (): void => {
     if (confirm && current) runConfirmed(confirm, commands);
     setConfirm(undefined);
   };
-  const text = confirm && current ? CONFIRM_TEXT[confirm.kind] : undefined;
-  const minHeight = desktop ? 32 : 44;
-  return (
-    <Stack spacing={1} data-machine-browser-actions sx={{ "& .MuiButton-root": { minHeight } }}>
-      {remote !== undefined && (
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          <Typography variant="caption" color="text.secondary">
-            Remote clipboard: {[...remote].length} characters
-          </Typography>
+  const dialog = text ? (
+    <ConfirmSheet
+      open
+      onClose={() => setConfirm(undefined)}
+      title={text.title}
+      actions={
+        <Stack direction="row" spacing={1}>
+          <Button onClick={() => setConfirm(undefined)}>Cancel</Button>
           <Button
-            size="small"
-            onClick={() => {
-              copyText(remote).then((copied) =>
-                commands.notice(
-                  copied
-                    ? "Remote clipboard copied to this device."
-                    : "Could not copy on this device.",
-                ),
-              );
-            }}
+            variant="contained"
+            color={text.destructive ? "error" : "primary"}
+            onClick={confirmed}
           >
-            Copy to this device
+            {text.action}
           </Button>
         </Stack>
+      }
+    >
+      <Typography variant="body2">{text.body}</Typography>
+      {confirm?.kind === "takeover" && (
+        <Typography variant="caption" color="text.secondary">
+          Current state: {browserStateLabel(state?.state)}.
+        </Typography>
       )}
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
-        {!model.viewer && (
-          <BrowserPrimaryAction
-            model={model}
-            state={state}
-            pinned={pinned}
-            commands={commands}
-            onConfirm={ask}
-          />
-        )}
-        {model.viewer && (
-          <Button disabled={busy} onClick={commands.detach}>
-            Stop viewing
-          </Button>
-        )}
-        {running && (
-          <Button disabled={busy} onClick={() => ask("hibernate")}>
-            Hibernate…
-          </Button>
-        )}
-        {running && (
-          <Button disabled={busy} onClick={commands.snapshot}>
-            Snapshot
-          </Button>
-        )}
-        {scaleMismatch && (
-          <Button disabled={busy} onClick={() => ask("restart")}>
-            Restart for this screen…
-          </Button>
-        )}
-        {resettable && (
-          <Button disabled={busy} color="error" onClick={() => ask("reset")}>
-            Reset profile…
-          </Button>
-        )}
-        <Button disabled={busy} onClick={commands.refresh}>
-          Refresh
-        </Button>
-        {!desktop && <Button onClick={onClose}>Close</Button>}
-      </Stack>
-      {text && (
-        <ConfirmSheet
-          open
-          onClose={() => setConfirm(undefined)}
-          title={text.title}
-          actions={
-            <Stack direction="row" spacing={1}>
-              <Button onClick={() => setConfirm(undefined)}>Cancel</Button>
-              <Button
-                variant="contained"
-                color={text.destructive ? "error" : "primary"}
-                onClick={confirmed}
-              >
-                {text.action}
-              </Button>
-            </Stack>
-          }
-        >
-          <Typography variant="body2">{text.body}</Typography>
-          {confirm?.kind === "takeover" && (
-            <Typography variant="caption" color="text.secondary">
-              Current state: {browserStateLabel(state?.state)}.
-            </Typography>
-          )}
-        </ConfirmSheet>
-      )}
-    </Stack>
-  );
+    </ConfirmSheet>
+  ) : null;
+  return { ask, dialog };
 }

@@ -30,6 +30,9 @@ export function Sheet(
     /** Desktop: claim the whole viewport less a 16px margin, the Tool
      * inspector's geometry, instead of sizing to the content. */
     desktopFill?: boolean;
+    /** Desktop: claim the entire viewport edge to edge (a workbench's own
+     * full-screen mode). */
+    desktopFullScreen?: boolean;
     portal?: boolean;
   },
 ): ReactNode {
@@ -38,6 +41,7 @@ export function Sheet(
   const {
     desktopMaxWidth,
     desktopFill = false,
+    desktopFullScreen = false,
     portal = false,
     ...bottomSheetProps
   } = props;
@@ -60,7 +64,17 @@ export function Sheet(
           paper: {
             sx: {
               ...desktopModalPaperSx(),
-              ...(desktopFill
+              ...(desktopFullScreen
+                ? {
+                  width: "100vw",
+                  height: "100dvh",
+                  maxWidth: "none",
+                  maxHeight: "none",
+                  m: 0,
+                  border: 0,
+                  borderRadius: 0,
+                }
+                : desktopFill
                 ? {
                   width: "calc(100vw - 32px)",
                   height: "calc(100dvh - 32px)",

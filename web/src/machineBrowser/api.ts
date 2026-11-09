@@ -389,12 +389,14 @@ const ERROR_TEXT: Record<string, string> = {
   machine_browser_not_enabled: "Machine browsers are not enabled on this Cowboy Service.",
   browser_not_enabled: "The browser is not enabled for this account.",
   account_unavailable: "This account is unavailable.",
-  browser_key_required: "Open the browser from its account card; the shared default identity has none.",
+  browser_key_required:
+    "Open the browser from its account card; the shared default identity has none.",
   machine_unavailable: "No connected Machine can run this account’s browser right now.",
   browser_host_requirements:
     "The Machine holding this account does not meet the browser host requirements.",
   browser_not_running: "The browser is not running. Open it first.",
-  browser_not_placed: "This account's browser lives on the Machine that holds its sign-in, not on this one.",
+  browser_not_placed:
+    "This account's browser lives on the Machine that holds its sign-in, not on this one.",
   browser_attached: "Another viewer is attached to this browser.",
   browser_instance_changed:
     "The browser on this Machine changed since it was shown. Check its current state and retry.",
@@ -443,7 +445,8 @@ const REASON_TEXT: Record<string, string> = {
   disabled: "The browser was disabled for this account.",
   owner_request: "Hibernated on request.",
   capacity: "The Machine already runs its maximum number of browsers.",
-  memory: "The Machine has no memory headroom for a browser right now.",
+  memory:
+    "The Machine has no memory headroom for a browser right now. It frees up as other work on that Machine finishes; retry in a moment.",
   busy: "Another browser operation for this account is still in progress.",
   failed: "The browser process failed.",
 };

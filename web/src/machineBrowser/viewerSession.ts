@@ -12,6 +12,7 @@ import {
   type StreamClose,
   createBrowserStream,
 } from "./stream";
+import { type BrowserChord, chordStrokes } from "./browserKeys";
 import type { KeyAction } from "./touchKeyboard";
 
 export type ViewerEnd =
@@ -38,6 +39,8 @@ export interface ViewerSession {
   resize(width: number, height: number): void;
   paste(text: string): void;
   sendKey(action: KeyAction): void;
+  /** Press a browser navigation chord (`chordStrokes`) on the remote. */
+  sendChord(chord: BrowserChord): void;
   /** Whether a tap or click on the screen moves keyboard focus to it. */
   setFocusOnClick(value: boolean): void;
   focus(): void;
@@ -110,6 +113,12 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
     },
     paste: (text) => rfb?.clipboardPasteFrom(text),
     sendKey: (action) => rfb?.sendKey(action.keysym, action.code),
+    sendChord: (chord) => {
+      const client = rfb;
+      if (!client) return;
+      for (const stroke of chordStrokes(chord))
+        client.sendKey(stroke.keysym, stroke.code, stroke.down);
+    },
     setFocusOnClick: (value) => {
       focusOnClick = value;
       if (rfb) rfb.focusOnClick = value;

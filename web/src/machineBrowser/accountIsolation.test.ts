@@ -4,6 +4,7 @@ import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import {
   type BrowserRead,
   type BrowserStateEvent,
+  type BrowserTarget,
   browserStreamUrl,
   createMachineBrowserApi,
   validBrowserRead,
@@ -22,6 +23,7 @@ import {
   shownTarget,
 } from "./browserModel";
 import { validSubscriptionSnapshot } from "../subscriptionAccounts";
+import { type ViewerControls, addressCommand, chromeState, controlsFor } from "./browserChrome";
 import {
   accountBrowserEntry,
   legacyBrowserOfProvider,
@@ -190,15 +192,27 @@ test("each legacy default card opens its own browser key, never another card's o
   const accounts = legacySnapshot({ anthropic: true, deepseek: true, openai: true });
   assertEquals(validSubscriptionSnapshot(accounts, "u"), true);
   const keys = new Set<string>();
-  for (const [card, key] of [["anthropic", LYNX], ["deepseek", MOLE], ["openai", PIKA]] as const) {
+  for (const [card, key] of [
+    ["anthropic", LYNX],
+    ["deepseek", MOLE],
+    ["openai", PIKA],
+  ] as const) {
     const entry = accountBrowserEntry(accounts, card, `Card ${card}`);
     assertEquals(entry.kind, "ready");
     if (entry.kind !== "ready") continue;
-    assertEquals(entry.account, { id: key, label: `Card ${card}`, browser_enabled: true, legacy: true });
+    assertEquals(entry.account, {
+      id: key,
+      label: `Card ${card}`,
+      browser_enabled: true,
+      legacy: true,
+    });
     keys.add(entry.account.id);
   }
   const named = accountBrowserEntry(accounts, A);
-  assertEquals(named.kind === "ready" && named.account.legacy === false && named.account.id === A, true);
+  assertEquals(
+    named.kind === "ready" && named.account.legacy === false && named.account.id === A,
+    true,
+  );
   keys.add(A);
   assertEquals(keys.size, 4);
   // The DeepSeek card is one card collected for three Providers: one
@@ -220,13 +234,20 @@ test("each legacy default card opens its own browser key, never another card's o
 test("a legacy card's browser stays disabled until its owner enables that card", () => {
   // Lynx is off by default: disabled with the reason and a link to account
   // management, while another card's enablement changes nothing for it.
-  const lynx = accountBrowserEntry(legacySnapshot({ deepseek: true }), "anthropic", "Claude · Lynx");
+  const lynx = accountBrowserEntry(
+    legacySnapshot({ deepseek: true }),
+    "anthropic",
+    "Claude · Lynx",
+  );
   assertEquals(lynx.kind === "disabled" && lynx.manage, true);
   assertEquals(lynx.kind === "disabled" && lynx.account.id === LYNX, true);
   assertEquals(accountBrowserEntry(legacySnapshot({ deepseek: true }), "deepseek").kind, "ready");
   assertEquals(accountBrowserEntry(legacySnapshot({ anthropic: true }), "anthropic").kind, "ready");
   // The Service gate still applies to legacy cards.
-  const gated = accountBrowserEntry(legacySnapshot({ anthropic: true }, "not_enabled"), "anthropic");
+  const gated = accountBrowserEntry(
+    legacySnapshot({ anthropic: true }, "not_enabled"),
+    "anthropic",
+  );
   assertEquals(gated.kind === "disabled" && !gated.manage, true);
 });
 
@@ -372,4 +393,134 @@ test("a link opens and navigates only this account's browser on the login's Mach
     url: "https://claude.ai/oauth/x",
   });
   assertEquals("openSignIn" in api, false);
+});
+
+function recordingControls(account: string, target: BrowserTarget) {
+  const chords: string[] = [];
+  const controls: ViewerControls = {
+    account,
+    target,
+    chord: (chord) => chords.push(chord),
+    toggleKeyboard: () => {},
+    paste: () => {},
+  };
+  return { controls, chords };
+}
+
+test("toolbar key controls act only on the viewer of the shown account, Machine and instance", () => {
+  let state: AccountBrowserModel = { account: A, model: INITIAL_BROWSER_MODEL };
+  state = reduceAccountBrowser(state, {
+    kind: "event",
+    account: A,
+    event: { type: "result", action: "open", result: openA, now: 1 },
+  });
+  const a = modelFor(state, A);
+  const aTarget = shownTarget(a)!;
+  const fromA = recordingControls(A, aTarget);
+  // A's own mounted viewer drives A's toolbar.
+  assertEquals(controlsFor(fromA.controls, A, a), fromA.controls);
+  assertEquals(chromeState(a, true, 1).navigation, true);
+  // A's late controls never drive B's panel, even before B has a viewer.
+  state = reduceAccountBrowser(state, { kind: "bind", account: B });
+  const b0 = modelFor(state, B);
+  assertEquals(controlsFor(fromA.controls, B, b0), undefined);
+  assertEquals(chromeState(b0, false, 1).navigation, false);
+  state = reduceAccountBrowser(state, {
+    kind: "event",
+    account: B,
+    event: { type: "result", action: "open", result: openB, now: 2 },
+  });
+  const b = modelFor(state, B);
+  assertEquals(controlsFor(fromA.controls, B, b), undefined);
+  // Controls claiming B but bound to A's instance, or to an older
+  // incarnation of B's browser, are refused too.
+  assertEquals(controlsFor(recordingControls(B, aTarget).controls, B, b), undefined);
+  const bTarget = shownTarget(b)!;
+  const older = { ...bTarget, instance: { ...bTarget.instance, incarnation: 1 } };
+  assertEquals(controlsFor(recordingControls(B, older).controls, B, b), undefined);
+  const otherMachine = { ...bTarget, machine_id: "hawk" };
+  assertEquals(controlsFor(recordingControls(B, otherMachine).controls, B, b), undefined);
+  const fromB = recordingControls(B, bTarget);
+  controlsFor(fromB.controls, B, b)?.chord("back");
+  assertEquals(fromB.chords, ["back"]);
+  assertEquals(fromA.chords, []);
+  // Once B's viewer is gone, its controls drive nothing.
+  const detached = reduceBrowser(b, { type: "detach" });
+  assertEquals(controlsFor(fromB.controls, B, detached), undefined);
+});
+
+test("the address bar navigates only the running browser this account's panel shows", async () => {
+  // Nothing shown or not running: no navigation, an inline reason instead.
+  assertEquals(addressCommand(INITIAL_BROWSER_MODEL, B, "example.com").kind, "error");
+  const hibernated = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "read",
+    read: {
+      machine_id: "ovh",
+      state: {
+        ...running(B, "", 0),
+        instance: { account_id: B, instance_id: "", incarnation: 0 },
+        state: "hibernated",
+      },
+      placements: [],
+      admission: null,
+    },
+    now: 1,
+  });
+  assertEquals(addressCommand(hibernated, B, "https://example.com").kind, "error");
+  assertEquals(chromeState(hibernated, false, 1).address, false);
+  // B's panel with B's viewer: the command names B's Machine and instance.
+  const b = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "result",
+    action: "open",
+    result: openB,
+    now: 2,
+  });
+  const command = addressCommand(b, B, "example.com/path");
+  assertEquals(command, {
+    kind: "navigate",
+    url: "https://example.com/path",
+    target: shownTarget(b)!,
+  });
+  // The same model offered under A's identity is refused: the instance
+  // belongs to B.
+  assertEquals(addressCommand(b, A, "https://example.com").kind, "error");
+  // A poll answering for another Machine never redirects the address bar
+  // away from the mounted viewer's browser.
+  const polled = reduceBrowser(b, {
+    type: "read",
+    read: {
+      ...openA,
+      state: running(B, "b-cccccccccccccccccccccccc", 9),
+      placements: [],
+      admission: null,
+    },
+    now: 3,
+  });
+  const after = addressCommand(polled, B, "https://example.com");
+  assertEquals(after.kind === "navigate" && after.target.machine_id, "ovh");
+  // While a command is in flight nothing else is sent.
+  assertEquals(
+    addressCommand(reduceBrowser(b, { type: "busy", action: "snapshot" }), B, "https://example.com")
+      .kind,
+    "error",
+  );
+  // The wire call names exactly B's account, Machine and instance.
+  const calls: { path: string; body: unknown }[] = [];
+  const api = createMachineBrowserApi((path, init) => {
+    calls.push({ path, body: JSON.parse(String(init.body)) });
+    return Promise.resolve(new Response(JSON.stringify(openB), { status: 200 }));
+  });
+  if (command.kind !== "navigate") throw new Error("expected a navigation");
+  await api.navigate(B, "d", command.target, command.url, new AbortController().signal);
+  assertEquals(calls, [
+    {
+      path: `/api/provider-accounts/${B}/browser/navigate`,
+      body: {
+        dataset: "d",
+        machine_id: "ovh",
+        instance: openB.state.instance,
+        url: "https://example.com/path",
+      },
+    },
+  ]);
 });

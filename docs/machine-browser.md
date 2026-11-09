@@ -1064,11 +1064,42 @@ exist.
 
 The viewer is core code in the main bundle, same origin, no iframe: a canvas,
 an RFB decoder running in a Worker (the CSP already allows `worker-src 'self'
-blob:` and `wss://<host>`), pointer and keyboard translation, and a small
-toolbar. Vendoring the noVNC RFB core (MPL-2.0) as a dependency is
-acceptable; its application UI, `resizeSession` and clipboard automation are
-not used. The viewer always shows the label of the account whose browser it
-displays.
+blob:` and `wss://<host>`), pointer and keyboard translation, and
+browser-style chrome around it. Vendoring the noVNC RFB core (MPL-2.0) as a
+dependency is acceptable; its application UI, `resizeSession` and clipboard
+automation are not used. The chrome always shows the label of the account
+whose browser it displays and the Machine it runs on.
+
+- **Browser chrome.** The panel looks like a browser: a compact top bar with
+  the account label, Machine and state (small) and an address field; the
+  remote page fills the frame below it; browser controls sit in a toolbar.
+  The address field never shows the remote page's URL (no protocol reports
+  it); its placeholder is the last address sent from this panel for this
+  account. Submitting navigates exactly the running browser the panel shows
+  (`POST .../browser/navigate` with its Machine and instance); a bare host
+  gets `https://`, any other scheme is refused with an inline message, and
+  a stopped browser must be opened first. Back, Forward and Reload send the
+  standard Chromium key chords through the attached RFB session (Alt+Left,
+  Alt+Right, F5; every pressed key is released in reverse order); they and
+  the touch keyboard are enabled only while this panel's viewer is
+  connected, and act only on the viewer mounted for the shown account,
+  Machine and instance. The "More" menu holds Hibernate, Save snapshot,
+  Restart for this screen (on a scale mismatch), Stop viewing, Reset
+  profile, Paste from this device, Copy remote clipboard to this device,
+  Refresh state and Close; inapplicable entries are disabled. Without an
+  attached display the frame shows a browser-like empty page naming the
+  state and Machine with one primary action (Open browser, the Machine
+  chooser, or Take over), or the admission reason. Errors and notices float
+  over the frame as dismissible banners, so the frame and its requested
+  framebuffer never move; a refusal that frees up by itself (no memory
+  headroom, capacity, another operation in progress) says so and offers
+  Retry.
+- **Desktop panel.** A large workbench dialog with Back, Forward, Reload,
+  the address field, identity, the menu, a full-screen toggle and Close in
+  one top row. Full screen makes the panel claim the whole viewport and,
+  where the Fullscreen API exists, takes the window full screen too (the
+  document element, so menus and confirmations stay visible); Esc leaves
+  full screen before it can close the panel.
 
 - **Resize authority.** The viewer is the only size authority: it measures
   its container in CSS pixels (a `ResizeObserver`, debounced and ignoring
@@ -1138,21 +1169,24 @@ displays.
   (for example `storage_exceeded`, `busy`). A stopped browser and every
   reset are reported without an instance (`instance_id: ""`,
   `incarnation: 0`), which is valid only as `hibernated`.
-- **Mobile sheet.** Full-height sheet with the bottom workbench: Keyboard
-  (focuses a hidden input with autocorrect, autocapitalize and smart
-  punctuation off; composition events are sent as text), Paste (local
-  clipboard to remote via `ClientCutText`), Copy remote clipboard to this
-  device, Hibernate, Close. Tap focuses the remote, two-finger drag scrolls, long
-  press is right click. The workbench sits above the app shell's keyboard
-  inset (`--kb-inset`) so the software keyboard never covers it; the
-  framebuffer keeps the geometry the sheet was opened with. Backgrounding
-  the app suspends lease renewal, which detaches within 30 s; returning
-  shows the detached state and the attach action while the grace period
-  keeps the instance alive.
+- **Mobile sheet.** An edge-to-edge full-screen cover: the top bar clears
+  the status bar and side safe areas and has Close at its leading edge; the
+  frame fills everything between the top bar and a phone-browser bottom
+  toolbar with Back, Forward, Reload, Keyboard and More. Keyboard focuses a
+  hidden input with autocorrect, autocapitalize and smart punctuation off
+  (composition events are sent as text); Paste (local clipboard to remote
+  via `ClientCutText`) and Copy remote clipboard are in More. Tap focuses
+  the remote, two-finger drag scrolls, long press is right click. The
+  toolbar sits above the home indicator and the app shell's keyboard inset
+  (`--kb-inset`) so the software keyboard never covers it; the viewer
+  requests the framebuffer size of the frame it actually has (Resize
+  authority). Backgrounding the app suspends lease renewal, which detaches
+  within 30 s; returning shows the detached state and the Open browser
+  action while the grace period keeps the instance alive.
 - **Remote clipboard.** Xvnc forwards only explicit copies (`SendPrimary=0`).
   A received cut text is held in viewer memory for the open attachment and
-  shown as "Remote clipboard: n characters" with an explicit "Copy to this
-  device" action. It is never wired into any dialog or login: a sign-in
+  offered as the explicit "Copy remote clipboard (n characters) to this
+  device" menu action. It is never wired into any dialog or login: a sign-in
   code field is filled only by the person pasting it. The held text is
   dropped on attachment or incarnation change and when the viewer closes.
 - **Passkeys** are not transported by RFB; use the email or one-time-code
