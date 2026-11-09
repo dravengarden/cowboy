@@ -1086,15 +1086,10 @@ dependency is acceptable; its application UI, `resizeSession` and clipboard
 automation are not used. The chrome always shows the label of the account
 whose browser it displays and the Machine it runs on.
 
-- **Browser chrome.** The panel looks like a browser: a compact top bar with
-  the account label, Machine and state (small) and an address field; the
-  remote page fills the frame below it; browser controls sit in a toolbar.
-  The address field never shows the remote page's URL (no protocol reports
-  it); its placeholder is the last address sent from this panel for this
-  account. Submitting navigates exactly the running browser the panel shows
-  (`POST .../browser/navigate` with its Machine and instance); a bare host
-  gets `https://`, any other scheme is refused with an inline message, and
-  a stopped browser must be opened first. Back, Forward and Reload send the
+- **Browser chrome.** The panel adds only a slim top row with Close and
+  the account label, Machine and state; the remote page fills the frame
+  below it and the remote Chromium shows its own address bar and tabs, so
+  the panel adds no address field of its own. Back, Forward and Reload send the
   standard Chromium key chords through the attached RFB session (Alt+Left,
   Alt+Right, F5; every pressed key is released in reverse order); they and
   the touch keyboard are enabled only while this panel's viewer is
@@ -1110,9 +1105,9 @@ whose browser it displays and the Machine it runs on.
   framebuffer never move; a refusal that frees up by itself (no memory
   headroom, capacity, another operation in progress) says so and offers
   Retry.
-- **Desktop panel.** A large workbench dialog with Back, Forward, Reload,
-  the address field, identity, the menu, a full-screen toggle and Close in
-  one top row. Full screen makes the panel claim the whole viewport and,
+- **Desktop panel.** A large workbench dialog with identity, the menu, a
+  full-screen toggle and Close in one top row; navigation stays in the
+  remote Chromium's own toolbar. Full screen makes the panel claim the whole viewport and,
   where the Fullscreen API exists, takes the window full screen too (the
   document element, so menus and confirmations stay visible); Esc leaves
   full screen before it can close the panel.

@@ -1,8 +1,9 @@
-/** The panel an account card opens for its Machine browser, shaped like a
- * browser: an address bar on top, the remote page filling the frame, and
- * browser controls. Mobile is an edge-to-edge cover with a bottom toolbar;
- * Desktop is a large workbench with the controls in its top bar and an
- * explicit full-screen mode. See docs/machine-browser.md, "Viewer (core web)". */
+/** The panel an account card opens for its Machine browser: a slim identity
+ * row on top and the remote page filling the frame; the remote Chromium shows
+ * its own address bar and tabs. Mobile is an edge-to-edge cover with a bottom
+ * toolbar (Back, Forward, Reload, Keyboard, menu); Desktop is a large
+ * workbench with the menu in its top row and an explicit full-screen mode.
+ * See docs/machine-browser.md, "Viewer (core web)". */
 import { Box } from "@mui/material";
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { Sheet } from "../Sheet";
@@ -13,7 +14,6 @@ import { type BrowserScale, type BrowserViewport, browserStateLabel, browserView
 import {
   type BrowserChromeState,
   type ViewerControls,
-  addressCommand,
   chromeState,
   controlsFor,
   retryOffered,
@@ -21,18 +21,9 @@ import {
 import { type BrowserModel, autoEntry, linkEntry, linkTarget } from "./browserModel";
 import type { ConfirmKind } from "./confirmation";
 import { type BrowserCommands, useBrowserConfirm } from "./MachineBrowserActions";
-import {
-  BrowserAddressField,
-  DesktopBrowserTopBar,
-  MobileBrowserTopBar,
-} from "./MachineBrowserAddressBar";
+import { DesktopBrowserTopBar, MobileBrowserTopBar } from "./MachineBrowserAddressBar";
 import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
-import {
-  BrowserMenu,
-  type BrowserMenuItem,
-  BrowserNavigationButtons,
-  MobileBrowserToolbar,
-} from "./MachineBrowserToolbar";
+import { BrowserMenu, type BrowserMenuItem, MobileBrowserToolbar } from "./MachineBrowserToolbar";
 import { useBrowserFullscreen } from "./useBrowserFullscreen";
 import { type MachineBrowserController, useMachineBrowser } from "./useMachineBrowser";
 
@@ -225,20 +216,17 @@ function browserMenuItems({
 }
 
 /** The per-account chrome state: viewer controls bound to this account's
- * shown browser, the keyboard, and the last address sent from here. */
+ * shown browser and the keyboard. */
 function useBrowserChrome(account: string, model: BrowserModel, scale: BrowserScale) {
   const [published, setPublished] = useState<ViewerControls | undefined>(undefined);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
-  const [sent, setSent] = useState<{ account: string; url: string } | undefined>(undefined);
   const controls = controlsFor(published, account, model);
   return {
     controls,
     chrome: chromeState(model, controls !== undefined, scale),
     keyboardOpen: controls !== undefined && keyboardOpen,
-    lastUrl: sent?.account === account ? sent.url : undefined,
     setPublished,
     setKeyboardOpen,
-    remember: (url: string) => setSent({ account, url }),
   };
 }
 
@@ -284,20 +272,6 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
       })}
     />
   );
-  const address = (
-    <BrowserAddressField
-      enabled={ui.chrome.address}
-      lastUrl={ui.lastUrl}
-      touch={!desktop}
-      onSubmit={(text) => {
-        const command = addressCommand(model, account.id, text);
-        if (command.kind === "error") return command.message;
-        browser.navigate(command.url, command.target);
-        ui.remember(command.url);
-        return undefined;
-      }}
-    />
-  );
   const chord = (value: Parameters<ViewerControls["chord"]>[0]): void => ui.controls?.chord(value);
   const frameProps: BrowserFrameProps = {
     areaRef,
@@ -334,10 +308,6 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
         >
           <DesktopBrowserTopBar
             {...identity}
-            navigation={
-              <BrowserNavigationButtons chrome={ui.chrome} touch={false} onChord={chord} />
-            }
-            address={address}
             menu={menu}
             fullscreen={full.fullscreen}
             onToggleFullscreen={full.toggle}
@@ -365,7 +335,7 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
         data-machine-browser-sheet={account.id}
         sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
       >
-        <MobileBrowserTopBar {...identity} address={address} onClose={onClose} />
+        <MobileBrowserTopBar {...identity} onClose={onClose} />
         <BrowserFrame {...frameProps} />
         <MobileBrowserToolbar
           chrome={ui.chrome}
