@@ -86,6 +86,40 @@ function AppTextField({
   );
 }
 
+/** A slider that keeps up with key repeat and drags while the app echoes
+ *  its value back: each step must start from the last step, not from an
+ *  echo still in flight. The app's value is adopted on blur. */
+function AppSlider({ node, dispatch }: { node: AppElement; dispatch: Dispatch }): React.JSX.Element {
+  const p = node.props;
+  const value = num(p["value"], -1e9, 1e9, 0);
+  const [local, setLocal] = useState(value);
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setLocal(value);
+  }, [value]);
+  return (
+    <Slider
+      size="small"
+      value={local}
+      min={num(p["min"], -1e9, 1e9, 0)}
+      max={num(p["max"], -1e9, 1e9, 100)}
+      step={num(p["step"], 0, 1e9, 1) || null}
+      onFocus={(): void => {
+        focused.current = true;
+      }}
+      onBlur={(): void => {
+        focused.current = false;
+        setLocal(value);
+      }}
+      onChange={(_, next): void => {
+        const single = Array.isArray(next) ? (next[0] ?? 0) : next;
+        setLocal(single);
+        if (handles(node, "onChange")) dispatch(node.id, "onChange", { value: single });
+      }}
+    />
+  );
+}
+
 function options(value: unknown): { value: string; label: string }[] {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 100).map((option) =>
@@ -295,18 +329,7 @@ function controls(node: AppElement, dispatch: Dispatch, label: string): React.JS
       );
     }
     case "Slider":
-      return (
-        <Slider
-          size="small"
-          value={num(p["value"], -1e9, 1e9, 0)}
-          min={num(p["min"], -1e9, 1e9, 0)}
-          max={num(p["max"], -1e9, 1e9, 100)}
-          step={num(p["step"], 0, 1e9, 1) || null}
-          onChange={(_, value): void =>
-            on("onChange", { value: Array.isArray(value) ? value[0] : value })
-          }
-        />
-      );
+      return <AppSlider node={node} dispatch={dispatch} />;
     case "Tabs":
       return (
         <Tabs

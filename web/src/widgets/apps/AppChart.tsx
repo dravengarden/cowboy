@@ -67,7 +67,8 @@ export function AppChart({
       viewBox={`0 0 ${W} ${H}`}
       role="img"
       aria-label={text(props["title"]) || "Chart"}
-      style={{ width: "100%", height: "auto" }}
+      // Wide rows keep the aspect ratio but never grow past a readable height.
+      style={{ width: "100%", height: "auto", maxHeight: 260, display: "block" }}
     >
       <line x1={PAD} y1={y(0)} x2={W - PAD} y2={y(0)} stroke={theme.palette.divider} />
       {series.map((s, si) => {
