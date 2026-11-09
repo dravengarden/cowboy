@@ -83,6 +83,10 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.105.0 records Codex 3.5.27, which declares
+`provider.mcp-bindings.v1` and ships the MCP binding launch and execution CLI
+probe runtime. No component changes.
+
 Component release 3.104.0 lets Providers declare `provider.mcp-bindings.v1`:
 provider-ui 3.3.1 accepts it in the Provider manifest validator, and
 provider-authoring 1.0.14 follows. Claude Code 3.20.34 declares it, so its
