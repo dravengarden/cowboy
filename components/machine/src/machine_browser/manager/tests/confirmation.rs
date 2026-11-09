@@ -591,3 +591,27 @@ async fn a_definite_recheck_finding_is_latched_against_renewal() {
         .unwrap();
     assert_eq!(stopped.reason, Some(Reason::ConfinementUnverified));
 }
+
+#[tokio::test]
+async fn pins_lost_to_a_deliberate_stop_are_not_latched() {
+    let fixture = fixture().await;
+    // The fixture's processes are unpinned: the pins never hold.
+    assert!(!fixture.instance.live.lock().verified.pins_hold());
+    // A graceful stop entered `Stopping` and is exiting the browser.
+    fixture.instance.live.lock().phase = Phase::Stopping;
+    assert_eq!(
+        fixture.manager.recheck(&fixture.instance),
+        Err(Recheck::Stop(Reason::ConfinementUnverified))
+    );
+    assert_eq!(*fixture.instance.latch.lock(), None);
+    // Outside a stop, a lost pin is a finding and is latched.
+    fixture.instance.live.lock().phase = Phase::Detached;
+    assert_eq!(
+        fixture.manager.recheck(&fixture.instance),
+        Err(Recheck::Stop(Reason::ConfinementUnverified))
+    );
+    assert_eq!(
+        *fixture.instance.latch.lock(),
+        Some(Reason::ConfinementUnverified)
+    );
+}

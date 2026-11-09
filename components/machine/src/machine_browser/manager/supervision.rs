@@ -144,6 +144,21 @@ impl BrowserManager {
     /// A scan the ptrace access check denied is [`Recheck::Unverified`]:
     /// operations refuse it, and only periodic supervision may wait for it.
     pub(super) fn recheck(&self, instance: &Arc<Instance>) -> Result<(), Recheck> {
+        {
+            let live = instance.live.lock();
+            if !live.verified.pins_hold() {
+                // Pinned processes exit during a deliberate stop (which
+                // enters `Stopping` before it stops anything): that is not a
+                // finding, and latching it would discard the stop's final
+                // snapshot. Otherwise a lost pin is latched like any other.
+                let stopping = live.phase == Phase::Stopping;
+                drop(live);
+                if !stopping {
+                    latch_forced(instance, Reason::ConfinementUnverified);
+                }
+                return Err(Recheck::Stop(Reason::ConfinementUnverified));
+            }
+        }
         let checked = self.recheck_unlatched(instance);
         if let Err(Recheck::Stop(reason)) = checked {
             // A definite finding is latched like the denial limit, so no
@@ -154,10 +169,8 @@ impl BrowserManager {
         checked
     }
 
+    /// The socket scan and runtime directory checks.
     fn recheck_unlatched(&self, instance: &Arc<Instance>) -> Result<(), Recheck> {
-        if !instance.live.lock().verified.pins_hold() {
-            return Err(Recheck::Stop(Reason::ConfinementUnverified));
-        }
         let denied = match verify::scan_sockets_periodic(&instance.cgroup_dir) {
             Ok(()) => false,
             Err(verify::ScanFailure::Violation(violation)) => {
