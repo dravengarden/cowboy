@@ -66,10 +66,16 @@ status, tables and decisions.
   postponing an earlier wake, skips timers
   cancelled earlier in the same batch, and a suspend sent during startup is
   replayed after the handshake.
-- Deferred: `Image` inside apps shows its `alt` text until node `images`
-  (§6) land; apps are enabled only on desktop Chromium outside the native
-  shells until **A4** (native `isMainFrame` gates, the `appsSandbox`
-  capability, WebKit and iPhone acceptance with the egress sink).
+- **A4.1 (images)**: the app node's `images` (≤ 8 keys) are verified at
+  publish (`agent_api/widget_images.rs`: every source, event sources after
+  resolution, decodes completely as a still PNG ≤ 1 MiB and ≤ 2048 × 2048,
+  ≤ 16 Mpx per app) and loaded into local blobs before the app starts
+  (`apps/appImages.ts`); `Image{source,alt,height}` draws by key, and an
+  unknown or failed key shows its `alt`.
+- Deferred: apps are enabled only on desktop Chromium outside the native
+  shells until the rest of **A4** (native `isMainFrame` gates, the
+  `appsSandbox` capability, WebKit and iPhone acceptance with the egress
+  sink).
 
 ## 1. Goals and non-goals
 

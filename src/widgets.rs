@@ -8,7 +8,10 @@ use std::collections::HashSet;
 mod images;
 pub mod interactions;
 use images::image_source;
-pub use images::{ARTIFACT_PREFIX, SourceAt, artifact_name, image_sources};
+pub use images::{
+    APP_IMAGE_BYTES, APP_IMAGE_PIXELS, APP_PIXELS, ARTIFACT_PREFIX, SourceAt, app_png,
+    artifact_name, image_sources,
+};
 
 pub const SCHEMA: &str = "cowboy.widget/1";
 pub const DOCUMENT_BYTES: usize = 24 * 1024;
@@ -32,6 +35,8 @@ const STEPS: usize = 50;
 const OPTIONS: usize = 50;
 const CARD_ACTIONS: usize = 6;
 const GALLERY: usize = 24;
+/// Images one app may draw, each a key of its node's `images`.
+const APP_IMAGES: usize = 8;
 const APP_CODE_BYTES: usize = 14 * 1024;
 const APP_PROPS_BYTES: usize = 6 * 1024;
 pub const PATCH_OPS: usize = 64;
@@ -385,6 +390,32 @@ fn app(node: &Map<String, Value>, path: &str, budget: &mut Budget) -> Checked {
                 "expected an object of at most 6 KiB (serialized)",
             ));
         }
+    }
+    if let Some(images) = node.get("images") {
+        let images = object(images, &field("images"))?;
+        if images.len() > APP_IMAGES {
+            return Err(Invalid::at(&field("images"), "at most 8 images"));
+        }
+        for (key, source) in images {
+            let at = format!("{}.{key}", field("images"));
+            if !valid_id(key) {
+                return Err(Invalid::at(&at, "keys are ids ([A-Za-z0-9_-]{1,64})"));
+            }
+            image_source(Some(source), &at)?;
+            // Apps draw only still PNGs (docs/widget-apps.md §6).
+            if source.get("kind").and_then(Value::as_str) == Some("artifact")
+                && !source
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .is_some_and(|url| url.ends_with(".png"))
+            {
+                return Err(Invalid::at(
+                    &format!("{at}.url"),
+                    "apps take PNG artifacts only",
+                ));
+            }
+        }
+        budget.images += images.len();
     }
     one_of(
         node.get("height"),
@@ -934,6 +965,22 @@ mod tests {
             validate(&two).unwrap_err().message,
             "at most one app per widget"
         );
+        let mut pictured = document.clone();
+        pictured["root"]["children"][0]["images"] = json!({"logo":{"kind":"event","seq":2}});
+        validate(&pictured).unwrap();
+        assert_eq!(image_sources(&pictured).len(), 1);
+        pictured["root"]["children"][0]["images"]["logo"] =
+            json!({"kind":"artifact","url":format!("/api/artifacts/{}.jpg", "a".repeat(64))});
+        assert_eq!(
+            validate(&pictured).unwrap_err().message,
+            "apps take PNG artifacts only"
+        );
+        pictured["root"]["children"][0]["images"] = Value::Object(
+            (0..9)
+                .map(|i| (format!("k{i}"), json!({"kind":"event","seq":i})))
+                .collect(),
+        );
+        assert_eq!(validate(&pictured).unwrap_err().message, "at most 8 images");
         let mut big = document.clone();
         big["root"]["children"][0]["code"] = json!("x".repeat(15 * 1024));
         assert_eq!(validate(&big).unwrap_err().path, "root.children[0].code");

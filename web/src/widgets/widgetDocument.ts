@@ -233,6 +233,16 @@ function leaf(node: Record<string, unknown>, type: string, path: string, budget:
           );
         }
       }
+      if (node["images"] !== undefined) {
+        if (!isObject(node["images"])) fail(`${path}.images`, "expected an object");
+        const entries = Object.entries(node["images"] as Record<string, unknown>);
+        if (entries.length > WIDGET_LIMITS.appImages) fail(`${path}.images`, "at most 8 images");
+        for (const [key, source] of entries) {
+          if (!/^[A-Za-z0-9_-]{1,64}$/.test(key)) fail(`${path}.images.${key}`, "expected an id");
+          if (!isObject(source)) fail(`${path}.images.${key}`, "expected an image source");
+        }
+        budget.images += entries.length;
+      }
       return;
     case "button":
       if (typeof node["id"] !== "string") fail(`${path}.id`, "required");

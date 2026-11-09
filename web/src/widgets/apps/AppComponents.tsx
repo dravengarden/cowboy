@@ -25,6 +25,7 @@ import {
   Typography,
 } from "@mui/material";
 import { AppChart } from "./AppChart";
+import { useAppImage } from "./appImages";
 import type { AppElement } from "./appTree";
 
 export type Dispatch = (id: number, name: string, payload: unknown) => void;
@@ -115,6 +116,37 @@ function AppSlider({ node, dispatch }: { node: AppElement; dispatch: Dispatch })
         const single = Array.isArray(next) ? (next[0] ?? 0) : next;
         setLocal(single);
         if (handles(node, "onChange")) dispatch(node.id, "onChange", { value: single });
+      }}
+    />
+  );
+}
+
+/** `Image{source, alt, height}`: an image of the app's node, already loaded
+ *  locally; an unknown key, or one that did not load, shows its alt text. */
+function AppImage({ node }: { node: AppElement }): React.JSX.Element {
+  const p = node.props;
+  const url = useAppImage(str(p["source"], 64));
+  const alt = str(p["alt"], 200);
+  const height = num(p["height"], 16, 1200, 0);
+  if (!url) {
+    return (
+      <Typography variant="caption" color="text.secondary">
+        {alt}
+      </Typography>
+    );
+  }
+  return (
+    <Box
+      component="img"
+      src={url}
+      alt={alt}
+      sx={{
+        display: "block",
+        maxWidth: "100%",
+        height: height || "auto",
+        maxHeight: height || 320,
+        objectFit: "contain",
+        borderRadius: 1,
       }}
     />
   );
@@ -392,6 +424,7 @@ function leaves(node: AppElement): React.JSX.Element | null {
     case "Chart":
       return <AppChart props={p} />;
     case "Image":
+      return <AppImage node={node} />;
     case "Tooltip":
       return (
         <Typography variant="caption" color="text.secondary">

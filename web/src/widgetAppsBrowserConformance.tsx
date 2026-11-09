@@ -192,6 +192,7 @@ export async function runWidgetAppsBrowserConformance(): Promise<string[]> {
   passed.push(await sendChecks(container));
   passed.push(...(await registryChecks(container)));
   passed.push(await versionChecks(container));
+  passed.push(await imageChecks(container));
   root.unmount();
   container.remove();
   void sent;
@@ -460,6 +461,43 @@ async function versionChecks(container: HTMLElement): Promise<string> {
     return "an update never replaces a typed-into app, and its sends carry the running code";
   } finally {
     setAppMessageTransport(null);
+    root.unmount();
+  }
+}
+
+const RED_DOT = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGP4z8AARwzEcQCukw/x0F8jngAAAABJRU5ErkJggg==";
+
+/** Images are loaded before the app runs and drawn by key (§6). */
+async function imageChecks(container: HTMLElement): Promise<string> {
+  const root = createRoot(container);
+  try {
+    flushSync(() =>
+      root.render(
+        <BrowserProductTheme>
+          <AppNode
+            code={app(
+              'import { Image } from "@cowboy/ui";\nexport default function A() { return <Stack><Image source="dot" alt="a red dot" height={40} /><Image source="missing" alt="no such image" /></Stack>; }',
+            )}
+            props={{}}
+            images={{ dot: { kind: "data", mime: "image/png", base64: RED_DOT } }}
+            title="pictures"
+          />
+        </BrowserProductTheme>,
+      ),
+    );
+    const image = await waitFor(
+      () => container.querySelector<HTMLImageElement>("[data-widget-app] img"),
+      "the app draws its image",
+    );
+    check(image.src.startsWith("blob:"), "the image is drawn from a local blob");
+    await waitFor(() => image.complete && image.naturalWidth === 4, "the image decodes");
+    check(image.alt === "a red dot", "the image keeps its alt text");
+    check(
+      (container.textContent ?? "").includes("no such image"),
+      "an unknown key shows its alt text",
+    );
+    return "an app draws preloaded images by key and never names a URL";
+  } finally {
     root.unmount();
   }
 }

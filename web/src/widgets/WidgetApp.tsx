@@ -123,6 +123,7 @@ export function WidgetApp({ node }: { node: AppNodeData }): React.JSX.Element {
       <AppNode
         code={node.code}
         props={node.props ?? {}}
+        images={node.images}
         title={node.title}
         identity={target ? `${target.sessionId}:${target.widgetId}:${node.id}` : null}
         onSend={send.onSend}

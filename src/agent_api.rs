@@ -733,7 +733,8 @@ type Node = {id?:Id;fallback?:string} & (
       variant?:"primary"|"secondary"|"text"|"destructive";confirm?:string;group?:string}
   | {type:"choice";id:Id;label:string;options:{value:Id;label:string;detail?:string}[];multiple?:boolean;
       max_selected?:number;value?:Id|Id[];submit?:{label?:string};group?:string}
-  | {type:"app";id:Id;title:string;fallback:string;code:string /* TSX ≤14 KiB */;props?:object /* ≤6 KiB */});
+  | {type:"app";id:Id;title:string;fallback:string;code:string /* TSX ≤14 KiB */;props?:object /* ≤6 KiB */;
+      images?:{[key:Id]:Img} /* ≤8 still PNGs, each ≤1 MiB and ≤2048², ≤16 Mpx together */});
 // Bounds: 24 KiB, 400 nodes, depth 12, table 200x12, 2000 cells/document; percent cells are 0..1, bytes integers,
 // duration seconds. Labels are one printable line; unknown node types are refused.
 // App: one per widget, a React component run in Cowboy's sandbox (no network, no DOM). Default-export it; it gets
@@ -742,7 +743,7 @@ type Node = {id?:Id;fallback?:string} & (
 // Alert{severity} Progress{value 0..1} Button{variant,disabled,onPress} TextField{label,value,multiline,onChange({value})}
 // Select{label,value,options,onChange({value})} Checkbox/Switch{label,checked,onChange({checked})}
 // Slider{value,min,max,step,onChange({value})} Tabs{value,options,onChange({value})} Table{columns,rows} List{items}
-// Chart{type:"line"|"bar"|"area",data:object[],series:{key,label}[]}. Hooks: useHostContext(), useSend() — a send
+// Chart{type:"line"|"bar"|"area",data:object[],series:{key,label}[]} Image{source:<images key>,alt,height}. Hooks: useHostContext(), useSend() — a send
 // is shown to the person to confirm. Patch `props` (by JSON Pointer through the app node) to update a running app.
 "##;
 

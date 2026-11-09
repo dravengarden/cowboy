@@ -54,6 +54,9 @@ export const WIDGET_LIMITS = {
   /** App source and props, measured as serialized JSON (docs/widget-apps.md §8). */
   appCodeBytes: 14 * 1024,
   appPropsBytes: 6 * 1024,
+  /** Images one app may draw, each a still PNG ≤ 1 MiB and ≤ 2048 × 2048,
+   *  ≤ 16 Mpx decoded across the app (docs/widget-apps.md §6). */
+  appImages: 8,
   /** Gallery images drawn in the transcript preview. */
   previewImages: 6,
   /** Table rows per inspector page. */
@@ -383,6 +386,9 @@ export type AppNode = NodeBase & {
   code: string;
   /** ≤ `appPropsBytes` serialized. */
   props?: { [key: string]: unknown };
+  /** Images the app draws with `<Image source="key">`, ≤ `appImages`. The
+   *  host loads them all before the app runs, so drawing one never fetches. */
+  images?: { [key: string]: ImageSource };
   height?: Size;
   /** Required: what every client without the app shows. */
   fallback: string;

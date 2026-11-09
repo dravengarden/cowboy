@@ -13,6 +13,12 @@ pub const INLINE_IMAGE_BYTES: usize = 8 * 1024;
 /// Largest intrinsic width and height of a `data` image.
 pub const INLINE_IMAGE_PIXELS: u32 = 256;
 pub const ARTIFACT_PREFIX: &str = "/api/artifacts/";
+/// Encoded bytes of one image an app draws (docs/widget-apps.md §6).
+pub const APP_IMAGE_BYTES: usize = 1024 * 1024;
+/// Largest intrinsic width and height of an app image.
+pub const APP_IMAGE_PIXELS: u32 = 2048;
+/// Decoded pixels across every image of one app.
+pub const APP_PIXELS: u64 = 16 * 1024 * 1024;
 /// Image blocks an `event` source may index into.
 const EVENT_IMAGES: u64 = 64;
 
@@ -72,7 +78,9 @@ pub(super) fn image_source(value: Option<&Value>, path: &str) -> Checked {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(encoded)
                 .map_err(|_| Invalid::at(&at, "expected base64 text"))?;
-            still_png(&bytes).map_err(|message| Invalid::at(&at, message))
+            still_png(&bytes, INLINE_IMAGE_BYTES, INLINE_IMAGE_PIXELS)
+                .map(|_| ())
+                .map_err(|message| Invalid::at(&at, message))
         }
         _ => Err(Invalid::at(
             &field("kind"),
@@ -81,12 +89,23 @@ pub(super) fn image_source(value: Option<&Value>, path: &str) -> Checked {
     }
 }
 
-/// Decode the whole PNG, checksums included, within a small memory bound.
-fn still_png(bytes: &[u8]) -> Result<(), &'static str> {
-    if bytes.is_empty() || bytes.len() > INLINE_IMAGE_BYTES {
-        return Err("larger than 8 KiB");
+/// An image an app draws: a still PNG of at most 1 MiB and 2048 × 2048,
+/// decoded completely. Returns its pixel count.
+pub fn app_png(bytes: &[u8]) -> Result<u64, &'static str> {
+    still_png(bytes, APP_IMAGE_BYTES, APP_IMAGE_PIXELS)
+}
+
+/// Decode the whole PNG, checksums included, within a memory bound derived
+/// from the largest accepted side. Returns the pixel count.
+fn still_png(bytes: &[u8], max_bytes: usize, max_side: u32) -> Result<u64, &'static str> {
+    if bytes.is_empty() || bytes.len() > max_bytes {
+        return Err(if max_bytes == INLINE_IMAGE_BYTES {
+            "larger than 8 KiB"
+        } else {
+            "larger than 1 MiB"
+        });
     }
-    let side = INLINE_IMAGE_PIXELS as usize;
+    let side = max_side as usize;
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_limits(png::Limits {
         bytes: side * side * 8,
@@ -96,12 +115,13 @@ fn still_png(bytes: &[u8]) -> Result<(), &'static str> {
     if info.animation_control.is_some() {
         return Err("animated PNG is not accepted");
     }
-    if info.width == 0
-        || info.height == 0
-        || info.width > INLINE_IMAGE_PIXELS
-        || info.height > INLINE_IMAGE_PIXELS
-    {
-        return Err("larger than 256 × 256");
+    let (width, height) = (info.width, info.height);
+    if width == 0 || height == 0 || width > max_side || height > max_side {
+        return Err(if max_side == INLINE_IMAGE_PIXELS {
+            "larger than 256 × 256"
+        } else {
+            "larger than 2048 × 2048"
+        });
     }
     let size = reader.output_buffer_size().ok_or("not a valid PNG")?;
     let mut buffer = vec![0; size];
@@ -109,7 +129,7 @@ fn still_png(bytes: &[u8]) -> Result<(), &'static str> {
         .next_frame(&mut buffer)
         .map_err(|_| "not a valid PNG")?;
     reader.finish().map_err(|_| "not a valid PNG")?;
-    Ok(())
+    Ok(u64::from(width) * u64::from(height))
 }
 
 /// One image source of a document.
@@ -120,6 +140,9 @@ pub struct SourceAt {
     /// The path the agent wrote (`root.children[0].src`), for refusals.
     pub path: String,
     pub source: Value,
+    /// An image of an app's `images`: it must be a still PNG within the app
+    /// bounds once resolved.
+    pub app: bool,
 }
 
 /// Every image source of a (validated) document, in document order.
@@ -148,6 +171,7 @@ fn walk(value: &Value, pointer: &str, path: &str, out: &mut Vec<SourceAt>) {
                             pointer: format!("{pointer}/src"),
                             path: join(path, "src"),
                             source: source.clone(),
+                            app: false,
                         });
                     }
                 }
@@ -164,8 +188,25 @@ fn walk(value: &Value, pointer: &str, path: &str, out: &mut Vec<SourceAt>) {
                                 pointer: format!("{pointer}/images/{index}/src"),
                                 path: format!("{}[{index}].src", join(path, "images")),
                                 source: source.clone(),
+                                app: false,
                             });
                         }
+                    }
+                }
+                Some("app") => {
+                    for (key, source) in map
+                        .get("images")
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flatten()
+                    {
+                        let escaped = key.replace('~', "~0").replace('/', "~1");
+                        out.push(SourceAt {
+                            pointer: format!("{pointer}/images/{escaped}"),
+                            path: format!("{}.{key}", join(path, "images")),
+                            source: source.clone(),
+                            app: true,
+                        });
                     }
                 }
                 _ => {}
@@ -269,6 +310,38 @@ mod tests {
         assert_eq!(
             document.pointer(&sources[1].pointer),
             Some(&sources[1].source)
+        );
+    }
+
+    #[test]
+    fn app_images_are_listed_by_key_and_bounded() {
+        let document = json!({"root":{"type":"app","id":"a","images":{
+            "logo":{"kind":"event","seq":5},"a/b":{"kind":"event","seq":6}},
+            "props":{"type":"image","src":{"kind":"event","seq":7}}}});
+        let sources = image_sources(&document);
+        assert_eq!(sources.len(), 2, "props stay opaque");
+        assert!(sources.iter().all(|source| source.app));
+        let escaped = sources
+            .iter()
+            .find(|s| s.path == "root.images.a/b")
+            .unwrap();
+        assert_eq!(escaped.pointer, "/root/images/a~1b");
+        assert_eq!(document.pointer(&escaped.pointer), Some(&escaped.source));
+
+        let decode = |text: String| {
+            base64::engine::general_purpose::STANDARD
+                .decode(text)
+                .unwrap()
+        };
+        assert_eq!(app_png(&decode(png(300, 200))), Ok(60_000));
+        assert_eq!(
+            app_png(&decode(png(2049, 1))),
+            Err("larger than 2048 × 2048")
+        );
+        assert_eq!(app_png(b"not a png"), Err("not a valid PNG"));
+        assert_eq!(
+            app_png(&vec![0; APP_IMAGE_BYTES + 1]),
+            Err("larger than 1 MiB")
         );
     }
 }

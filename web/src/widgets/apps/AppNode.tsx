@@ -10,11 +10,15 @@ import { Alert, Box, Button, Typography, useTheme } from "@mui/material";
 import { stopAppRuntime, useAppRuntime } from "./appRuntimes";
 import { isText, type AppTreeState } from "./appTree";
 import { renderAppElement, type Dispatch } from "./AppComponents";
+import { AppImagesContext, useAppImagesLoaded } from "./appImages";
+import type { ImageSource } from "../../../../contracts/widget-v1.ts";
 
 export type AppNodeProps = {
   code: string;
   props: unknown;
   title: string;
+  /** Images the app draws, by key; all are loaded before the app runs. */
+  images?: Readonly<Record<string, ImageSource>> | undefined;
   /** Session, widget and node of the app; null outside a published widget. */
   identity?: string | null | undefined;
   /** Asked to send a message from the running `code`: the host must confirm
@@ -55,7 +59,7 @@ class AppBoundary extends Component<
   }
 }
 
-type AppViewProps = Omit<AppNodeProps, "identity" | "onSend"> & {
+type AppViewProps = Omit<AppNodeProps, "identity" | "onSend" | "images"> & {
   identity: string;
   onSend?: ((text: string, code: string) => void) | undefined;
 };
@@ -139,9 +143,19 @@ function AppView({ code, props, title, identity, onSend }: AppViewProps): React.
 }
 
 export default function AppNode(props: AppNodeProps): React.JSX.Element {
+  // The app starts only once every image is local (docs/widget-apps.md §6).
+  const images = useAppImagesLoaded(props.images);
   return (
     <Box data-widget-app={props.title} sx={{ display: "grid", gap: 1, minWidth: 0 }}>
-      <AppView {...props} identity={props.identity ?? `local:${props.title}`} />
+      {images ? (
+        <AppImagesContext.Provider value={images}>
+          <AppView {...props} identity={props.identity ?? `local:${props.title}`} />
+        </AppImagesContext.Provider>
+      ) : (
+        <Typography variant="caption" color="text.secondary">
+          Loading the app…
+        </Typography>
+      )}
     </Box>
   );
 }
