@@ -106,7 +106,7 @@ graph; it has no UI, URLs, credentials or network targets.
 {
   "schema_version": 1,
   "id": "machine-browser",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "display_name": "Machine browser",
   "description": "Owner-operated Chromium on the Machine for account sign-in.",
   "supported_platforms": [{"os": "linux", "architecture": "x86_64"}],
