@@ -46,6 +46,7 @@ fn google(share_id: &str) -> Shares {
             deleting_ms: None,
         }],
         members: vec![row("anthropic"), row("openai"), row("xai")],
+        bindings: Vec::new(),
     }
 }
 
@@ -394,4 +395,141 @@ fn only_deleting_a_share_revokes_its_browser() {
         machine_operation_id(OWNER, &share_id),
         machine_operation_id("other", &share_id)
     );
+}
+
+#[test]
+fn a_reset_names_the_browser_identity_its_caller_observed() {
+    let share_id = uuid::Uuid::new_v4().to_string();
+    let pika = resolved("openai", true, &share_id);
+    assert_eq!(pika.identity(), format!("share:{share_id}:4"));
+    // A membership change moves the identity: a reset captured before it
+    // no longer matches and is refused.
+    let mut moved = google(&share_id);
+    moved
+        .members
+        .retain(|row| row.member != Member::card("xai"));
+    moved.shares[0].revision = 5;
+    let (key, share) = resolve_card(&moved, "openai", &Registry::default()).unwrap();
+    let after = Resolved {
+        key,
+        share,
+        ..pika.clone()
+    };
+    assert_ne!(after.identity(), pika.identity());
+    // Outside any share the identity is the card's own browser.
+    let (own, none) = resolve_card(&moved, "deepseek", &Registry::default()).unwrap();
+    let mole = Resolved {
+        owner: OWNER.into(),
+        id: own.clone(),
+        account: card_account("deepseek", true),
+        key: own,
+        share: none,
+    };
+    assert_eq!(mole.identity(), "own");
+    assert_eq!(
+        pika.state_json("ovh", &event_of(&pika))["browser_identity"],
+        json!(pika.identity())
+    );
+}
+
+fn event_of(resolved: &Resolved) -> StateEvent {
+    StateEvent {
+        request_id: None,
+        instance: InstanceRef {
+            account_id: resolved.key.clone(),
+            instance_id: "b-1".into(),
+            incarnation: 1,
+        },
+        state: BrowserState::Hibernated,
+        reason: None,
+        geometry: None,
+        scale: None,
+        deadline_ms: None,
+        attachment_id: None,
+        snapshot_generation: None,
+        snapshot_at_ms: None,
+        profile_revision: Some(1),
+        unsaved_state_lost: false,
+        observed_at_ms: 1,
+    }
+}
+
+#[test]
+fn replayed_or_outdated_changes_touch_no_browser() {
+    let share_id = uuid::Uuid::new_v4().to_string();
+    let lynx = Member::card("anthropic");
+    let join = Change::SetBrowserShare {
+        member: lynx.clone(),
+        share_id: Some(share_id.clone()),
+    };
+    let own = receipt(lynx.own_key(OWNER));
+    assert!(!fresh_effects(OWNER, &join, &own, false).is_empty());
+    // A replay of the committed join never cancels or hibernates anything.
+    assert!(fresh_effects(OWNER, &join, &own, true).is_empty());
+    // A deferred effect acts only while the change still holds.
+    let shares = google(&share_id);
+    assert!(change_holds_in(&join, &Registry::default(), &[], &shares));
+    let mut left = shares.clone();
+    left.members.retain(|row| row.member != lynx);
+    assert!(!change_holds_in(&join, &Registry::default(), &[], &left));
+    let off = Change::SetLegacyBrowserEnabled {
+        card: "anthropic".into(),
+        enabled: false,
+    };
+    assert!(change_holds_in(&off, &Registry::default(), &[], &shares));
+    assert!(!change_holds_in(
+        &off,
+        &Registry::default(),
+        &["anthropic".to_owned()],
+        &shares
+    ));
+    let lark = named("claude-code", "Lark", true);
+    let registry = Registry {
+        revision: 1,
+        accounts: vec![lark.clone()],
+        defaults: BTreeMap::new(),
+    };
+    let disable = Change::SetBrowserEnabled {
+        id: lark.id.clone(),
+        enabled: false,
+    };
+    // Re-enabled since: the old disable's hibernate does not run.
+    assert!(!change_holds_in(&disable, &registry, &[], &shares));
+}
+
+#[test]
+fn pending_deletions_retry_with_backoff_until_confirmed() {
+    let now = std::time::Instant::now();
+    let mut retries = DeletionRetries::default();
+    let key = (OWNER.to_owned(), uuid::Uuid::new_v4().to_string());
+    let pending = vec![key.clone()];
+    // New (or found after a restart): due at once.
+    assert_eq!(retries.due(&pending, now), pending);
+    retries.failed(&key, now);
+    assert!(retries.due(&pending, now).is_empty());
+    assert_eq!(
+        retries.due(&pending, now + std::time::Duration::from_secs(5)),
+        pending
+    );
+    // The delay doubles after each unconfirmed attempt, up to its bound.
+    retries.failed(&key, now);
+    assert!(
+        retries
+            .due(&pending, now + std::time::Duration::from_secs(9))
+            .is_empty()
+    );
+    assert_eq!(
+        retries.due(&pending, now + std::time::Duration::from_secs(10)),
+        pending
+    );
+    for _ in 0..20 {
+        retries.failed(&key, now);
+    }
+    assert_eq!(
+        retries.due(&pending, now + std::time::Duration::from_secs(300)),
+        pending
+    );
+    // A confirmed deletion is no longer pending and is forgotten.
+    assert!(retries.due(&[], now).is_empty());
+    assert!(retries.due.is_empty());
 }

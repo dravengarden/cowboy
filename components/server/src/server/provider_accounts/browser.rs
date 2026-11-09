@@ -59,6 +59,7 @@ pub(in crate::server) fn install_observer(state: &Arc<AppState>) {
                 state.browsers.observe(connection, event);
             }
         }));
+    shares::start_deletion_reconciler(state);
 }
 
 /// What a browser operation needs beyond ownership of the account.
@@ -156,8 +157,18 @@ impl Resolved {
         })
     }
 
+    /// The browser identity a member's card uses now: its own browser, or
+    /// a share at a membership revision. A reset names the one observed.
+    pub(in crate::server) fn identity(&self) -> String {
+        self.shared().map_or_else(
+            || "own".to_owned(),
+            |share| format!("share:{}:{}", share.share_id, share.revision),
+        )
+    }
+
     fn state_json(&self, machine_id: &str, event: &StateEvent) -> Value {
         let mut value = state_json(machine_id, &self.present(event));
+        value["browser_identity"] = json!(self.identity());
         if let Some(share) = self.shared() {
             value["share"] = share.value(&self.owner);
         }
@@ -578,7 +589,7 @@ pub(in crate::server) async fn state_value(
     }
     let mut value = json!({"machine_id": Value::Null, "state": Value::Null, "placements": placements, "admission": gate,
         "choose_machine": choose, "capable_machines": capable_machines(&state.browsers, &state.machine_control),
-        "share": resolved.shared().map(|share| share.value(owner))});
+        "share": resolved.shared().map(|share| share.value(owner)), "browser_identity": resolved.identity()});
     if let Some(observed) = &observed {
         value["machine_id"] = json!(observed.machine_id);
         value["state"] = json!(resolved.present(&observed.event));
@@ -859,10 +870,17 @@ pub(in crate::server) async fn reset(
     state: &AppState,
     owner: &str,
     account_id: &ProviderAccountId,
-    machine_id: &str,
-    expected_profile_revision: u64,
+    (machine_id, expected_profile_revision): (&str, u64),
+    expected_browser: &str,
 ) -> Result<Value, &'static str> {
+    // No membership change of this owner lands between the identity check
+    // and the Machine's answer: the reset deletes the profile observed.
+    let fence = state.browsers.share_lock(owner);
+    let _fence = fence.lock().await;
     let resolved = authorize(state, owner, account_id, Authority::Reset).await?;
+    if resolved.identity() != expected_browser {
+        return Err("browser_identity_changed");
+    }
     let account_id = &resolved.key;
     let store = state.store.as_ref().ok_or("unavailable")?;
     placed_on(
@@ -891,6 +909,15 @@ pub(in crate::server) async fn reset(
         })?;
     if reset_confirmed(&event) {
         state.browsers.record_authoritative(&connection, &event);
+        // The share's profile is fresh: members that left no longer hold a
+        // family of it.
+        if let Some(share) = resolved.shared()
+            && let Err(error) = store
+                .renew_browser_share_bindings(owner, &share.share_id, machine_id)
+                .await
+        {
+            tracing::warn!(%error, "browser share bindings not renewed after reset");
+        }
     }
     if let Some(revision) = event.profile_revision
         && let Err(error) = store
@@ -1057,6 +1084,8 @@ pub(in crate::server) struct ResetBody {
     dataset: Option<String>,
     machine_id: String,
     expected_profile_revision: u64,
+    /// The browser identity the caller observed (`browser_identity`).
+    expected_browser: String,
 }
 
 #[derive(Deserialize)]
@@ -1220,8 +1249,8 @@ pub(in crate::server) async fn http_reset(
             &state,
             &auth.principal.user_id,
             &account,
-            &body.machine_id,
-            body.expected_profile_revision,
+            (&body.machine_id, body.expected_profile_revision),
+            &body.expected_browser,
         )
         .await,
     )

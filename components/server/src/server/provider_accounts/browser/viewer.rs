@@ -216,7 +216,7 @@ async fn attach(
     let instance = observed.instance();
     let connection = observed.connection.clone();
     let cancelled = state.browsers.register_viewer(
-        (account.as_str(), member.as_str()),
+        (account.as_str(), owner, member.as_str()),
         &attachment_id,
         instance.incarnation,
         &connection,

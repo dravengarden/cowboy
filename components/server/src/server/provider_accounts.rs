@@ -149,7 +149,16 @@ pub(super) async fn update_value(
     }
     // Metadata writes share one authority and receipt; no native login, usage
     // probe, credential access or worker activation happens here. Share
-    // changes use the same writer with the catalog's families.
+    // changes use the same writer with the catalog's families. Membership
+    // changes are fenced against share resets, and a replayed receipt
+    // (the operation already committed) reruns no browser effect.
+    let fence = state.browsers.share_lock(owner);
+    let _fence = fence.lock().await;
+    let replay = store
+        .provider_account_receipt(owner, operation)
+        .await
+        .map_err(|_| "unavailable")?
+        .is_some();
     let result = if input.change.is_browser_share() {
         browser::shares::update(state, owner, operation, input).await?
     } else {
@@ -171,7 +180,8 @@ pub(super) async fn update_value(
             browser::shares::run_effects(
                 state,
                 owner,
-                browser::shares::change_effects(owner, &input.change, &receipt),
+                &input.change,
+                browser::shares::fresh_effects(owner, &input.change, &receipt, replay),
             );
             Ok(receipt_value(&receipt))
         }

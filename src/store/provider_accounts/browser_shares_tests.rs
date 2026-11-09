@@ -677,13 +677,25 @@ async fn share_deletion(store: &Store) {
         .unwrap();
     let key = share_key(OWNER, &share);
     applied(store, "join", join(lynx.clone(), &share)).await;
-    for machine in ["ovh", "hawk"] {
-        store
-            .admit_shared_browser_placement(OWNER, (&lynx, &share), machine, "b-share", 2)
-            .await
-            .unwrap()
-            .unwrap();
-    }
+    store
+        .admit_shared_browser_placement(OWNER, (&lynx, &share), "ovh", "b-share", 2)
+        .await
+        .unwrap()
+        .unwrap();
+    // A second placement from before the one-Machine rule is revoked too.
+    store
+        .upsert_browser_placement(
+            OWNER,
+            &super::super::browser_placements::Placement {
+                account_id: key.clone(),
+                machine_id: "hawk".into(),
+                instance_id: "b-share".into(),
+                profile_revision: 0,
+                last_open_ms: 2,
+            },
+        )
+        .await
+        .unwrap();
     let receipt = applied(
         store,
         "delete",
@@ -740,4 +752,200 @@ async fn share_deletion(store: &Store) {
         store.browser_placements(OWNER, &own).await.unwrap().len(),
         1
     );
+}
+
+#[test]
+fn a_family_stays_bound_to_its_first_member_until_the_profile_is_fresh() {
+    let lark = named("claude-code", "Lark");
+    let fixture = Fixture {
+        registry: Registry {
+            revision: 1,
+            accounts: vec![lark.clone()],
+            defaults: BTreeMap::new(),
+        },
+        families: families(),
+        placed: BTreeSet::new(),
+    };
+    let mut shares = Shares::default();
+    let google = fixture.create(&mut shares, "Google");
+    let lynx = Member::card("anthropic");
+    fixture
+        .set(&mut shares, lynx.clone(), Some(&google))
+        .unwrap();
+    // Lynx leaves; the profile may still hold Lynx's Claude cookies.
+    fixture.set(&mut shares, lynx.clone(), None).unwrap();
+    assert_eq!(
+        fixture.set(&mut shares, Member::account(lark.id.clone()), Some(&google)),
+        Err("browser_share_family_bound")
+    );
+    // Lynx itself may come back.
+    fixture
+        .set(&mut shares, lynx.clone(), Some(&google))
+        .unwrap();
+    fixture.set(&mut shares, lynx.clone(), None).unwrap();
+    // A fresh profile (confirmed reset) forgets the members that left.
+    shares.rebind_current(&google);
+    fixture
+        .set(&mut shares, Member::account(lark.id.clone()), Some(&google))
+        .unwrap();
+    // Renaming is no membership change.
+    let revision = shares.share(&google).unwrap().revision;
+    apply(
+        &mut shares,
+        &Change::RenameBrowserShare {
+            share_id: google.clone(),
+            label: "G".into(),
+        },
+        &fixture.context("unused"),
+    )
+    .unwrap();
+    assert_eq!(shares.share(&google).unwrap().revision, revision);
+}
+
+#[test]
+fn a_member_must_be_the_owners_even_to_leave() {
+    let fixture = Fixture {
+        registry: Registry::default(),
+        families: families(),
+        placed: BTreeSet::new(),
+    };
+    let mut shares = Shares::default();
+    let foreign: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+    assert_eq!(
+        fixture.set(&mut shares, Member::account(foreign), None),
+        Err("account_not_found")
+    );
+    // A card is always the owner's own (its key derives from the owner).
+    fixture
+        .set(&mut shares, Member::card("openai"), None)
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_left_or_revoked_members_family_stays_bound_until_a_confirmed_reset() {
+    let dir = tempfile::tempdir().unwrap();
+    family_binding(&sqlite_store(&dir).await).await;
+}
+
+#[allow(clippy::too_many_lines)] // One scenario: a family binding across leave, revoke, reset and delete.
+async fn family_binding(store: &Store) {
+    let lark = named_account(store, "bind-lark", "claude-code").await;
+    let share = applied(
+        store,
+        "bind-create",
+        Change::CreateBrowserShare {
+            label: "Google".into(),
+        },
+    )
+    .await
+    .browser_share_id
+    .unwrap();
+    let lynx = Member::card("anthropic");
+    applied(store, "bind-lynx-join", join(lynx.clone(), &share)).await;
+    applied(
+        store,
+        "bind-lynx-leave",
+        Change::SetBrowserShare {
+            member: lynx.clone(),
+            share_id: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        invalid(
+            store,
+            "bind-lark-join",
+            join(Member::account(lark.clone()), &share)
+        )
+        .await,
+        "browser_share_family_bound"
+    );
+    // A reset is renewed only when the share's profile lives on that Machine alone.
+    let pika = Member::card("openai");
+    applied(
+        store,
+        "bind-pika-on",
+        Change::SetLegacyBrowserEnabled {
+            card: "openai".into(),
+            enabled: true,
+        },
+    )
+    .await;
+    applied(store, "bind-pika-join", join(pika.clone(), &share)).await;
+    store
+        .admit_shared_browser_placement(OWNER, (&pika, &share), "ovh", "b-share", 1)
+        .await
+        .unwrap()
+        .unwrap();
+    // A concurrent first open on another Machine is refused.
+    assert_eq!(
+        store
+            .admit_shared_browser_placement(OWNER, (&pika, &share), "hawk", "b-share", 1)
+            .await
+            .unwrap(),
+        Err(Refusal::ShareElsewhere)
+    );
+    assert!(
+        store
+            .renew_browser_share_bindings(OWNER, &share, "ovh")
+            .await
+            .unwrap()
+    );
+    applied(
+        store,
+        "bind-lark-join-2",
+        join(Member::account(lark.clone()), &share),
+    )
+    .await;
+    // Lark is revoked: its membership goes, its family binding stays.
+    applied(
+        store,
+        "bind-lark-revoke",
+        Change::BeginRevocation { id: lark.clone() },
+    )
+    .await;
+    let shares = store.browser_shares(OWNER).await.unwrap();
+    assert!(shares.membership(&Member::account(lark.clone())).is_none());
+    assert_eq!(
+        invalid(store, "bind-lynx-join-2", join(lynx.clone(), &share)).await,
+        "browser_share_family_bound"
+    );
+    // A reset confirmed on a Machine other than the share's is no renewal.
+    assert!(
+        !store
+            .renew_browser_share_bindings(OWNER, &share, "hawk")
+            .await
+            .unwrap()
+    );
+    // Delete and recreate: a new share, a new profile, no binding.
+    applied(
+        store,
+        "bind-delete",
+        Change::DeleteBrowserShare {
+            share_id: share.clone(),
+        },
+    )
+    .await;
+    assert_eq!(
+        store.deleting_browser_shares().await.unwrap(),
+        vec![(OWNER.to_owned(), share.clone())]
+    );
+    let fresh = applied(
+        store,
+        "bind-recreate",
+        Change::CreateBrowserShare {
+            label: "Google".into(),
+        },
+    )
+    .await
+    .browser_share_id
+    .unwrap();
+    applied(store, "bind-lynx-fresh", join(lynx, &fresh)).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_browser_share_families_stay_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    family_binding(&postgres_store(&dir).await).await;
 }

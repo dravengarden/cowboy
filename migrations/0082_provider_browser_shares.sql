@@ -24,3 +24,14 @@ CREATE TABLE provider_browser_share_members (
     PRIMARY KEY (owner_user_id, member),
     UNIQUE (owner_user_id, share_id, family)
 );
+-- Which member each family of a share's profile belongs to: recorded when
+-- the member joins and kept after it leaves or is revoked, so another
+-- account of that family can never inherit the profile's cookies. Cleared
+-- only with a fresh profile (a Machine-confirmed reset, or deletion).
+CREATE TABLE provider_browser_share_bindings (
+    owner_user_id TEXT NOT NULL,
+    share_id TEXT NOT NULL,
+    family TEXT NOT NULL,
+    member TEXT NOT NULL,
+    PRIMARY KEY (owner_user_id, share_id, family)
+);

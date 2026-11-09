@@ -57,12 +57,14 @@ fn family_map(
 pub(in crate::server) struct ShareView {
     pub share_id: String,
     pub label: String,
+    /// Membership revision: part of the browser identity a reset names.
+    pub revision: i64,
     pub members: Vec<browser_shares::ShareMember>,
 }
 
 impl ShareView {
     pub(in crate::server) fn value(&self, owner: &str) -> Value {
-        json!({"share_id": self.share_id, "label": self.label,
+        json!({"share_id": self.share_id, "label": self.label, "revision": self.revision,
             "members": self.members.iter().map(|row| member_value(owner, row)).collect::<Vec<_>>()})
     }
 }
@@ -126,6 +128,7 @@ pub(in crate::server) fn resolve_key(
         Some(ShareView {
             share_id: share.share_id.clone(),
             label: share.label.clone(),
+            revision: share.revision,
             members: members.into_iter().cloned().collect(),
         }),
     ))
@@ -185,7 +188,11 @@ pub(in crate::server) async fn list_value(
             json!({"share_id": share.share_id, "label": share.label, "created_ms": share.created_ms,
                 "revision": share.revision, "deleting": share.deleting_ms.is_some(),
                 "members": shares.members_of(&share.share_id).into_iter()
-                    .map(|row| member_value(owner, row)).collect::<Vec<_>>()})
+                    .map(|row| member_value(owner, row)).collect::<Vec<_>>(),
+                // Families the profile belongs to (kept after a member left).
+                "bound": shares.bindings.iter().filter(|row| row.share_id == share.share_id)
+                    .map(|row| json!({"family": row.family, "account_id": row.member.own_key(owner)}))
+                    .collect::<Vec<_>>()})
         })
         .collect();
     Ok((Value::Array(listed), json!(families(state))))
@@ -242,17 +249,88 @@ pub(in crate::server) fn change_effects(
     }
 }
 
-/// Carry out the effects of an applied change.
-pub(in crate::server) fn run_effects(state: &Arc<AppState>, owner: &str, effects: Vec<Effect>) {
+/// Whether the state an applied change produced still holds: a deferred
+/// effect acts only while it does, so a later change (re-enabling, leaving
+/// again) is never undone by an earlier change's effect.
+pub(in crate::server) async fn change_holds(
+    state: &AppState,
+    owner: &str,
+    change: &Change,
+) -> bool {
+    let Some(store) = state.store.as_ref() else {
+        return false;
+    };
+    let (Ok(registry), Ok(cards), Ok(shares)) = (
+        store.provider_accounts(owner).await,
+        store.legacy_browser_cards(owner).await,
+        store.browser_shares(owner).await,
+    ) else {
+        return false;
+    };
+    change_holds_in(change, &registry, &cards, &shares)
+}
+
+/// `change_holds` against one read of the owner's state.
+pub(in crate::server) fn change_holds_in(
+    change: &Change,
+    registry: &Registry,
+    enabled_cards: &[String],
+    shares: &Shares,
+) -> bool {
+    let account =
+        |id: &ProviderAccountId| registry.accounts.iter().find(|account| &account.id == id);
+    match change {
+        Change::SetBrowserShare { member, share_id } => {
+            shares.membership(member).map(|row| &row.share_id) == share_id.as_ref()
+        }
+        Change::SetBrowserEnabled { id, enabled: false } => {
+            account(id).is_some_and(|account| !account.browser_enabled)
+        }
+        Change::SetEnabled { id, enabled: false } => {
+            account(id).is_some_and(|account| !account.enabled)
+        }
+        Change::SetLegacyBrowserEnabled {
+            card,
+            enabled: false,
+        } => !enabled_cards.contains(card),
+        _ => true,
+    }
+}
+
+/// The effects to run for an applied change: none for a replayed receipt,
+/// whose operation already committed (and ran its effects) earlier.
+pub(in crate::server) fn fresh_effects(
+    owner: &str,
+    change: &Change,
+    receipt: &Receipt,
+    replay: bool,
+) -> Vec<Effect> {
+    if replay {
+        return Vec::new();
+    }
+    change_effects(owner, change, receipt)
+}
+
+/// Carry out the effects of a freshly applied change (never a replayed
+/// receipt). Deferred effects first check that the change still holds.
+pub(in crate::server) fn run_effects(
+    state: &Arc<AppState>,
+    owner: &str,
+    change: &Change,
+    effects: Vec<Effect>,
+) {
     for effect in effects {
         match effect {
             Effect::EndMemberViewers(member) => {
-                state.browsers.cancel_member_viewers(member.as_str())
+                state.browsers.cancel_member_viewers(owner, member.as_str());
             }
             Effect::EndKeyViewers(key) => state.browsers.cancel_account_viewers(key.as_str()),
             Effect::HibernateOwn(account, cause) => {
-                let state = Arc::clone(state);
+                let (state, owner, change) = (Arc::clone(state), owner.to_owned(), change.clone());
                 tokio::spawn(async move {
+                    if !change_holds(&state, &owner, &change).await {
+                        return;
+                    }
                     if let Err(error) = super::hibernate_running(&state, &account, cause).await {
                         tracing::info!(%error, "browser hibernate after an account change did not complete");
                     }
@@ -379,6 +457,82 @@ async fn revoke_on(
             state.machine_control.is_current(&connection)
         })
         .await
+}
+
+/// Retry backoff of a pending share deletion while its Machine stays
+/// connected; the reconciler also resumes every pending deletion after a
+/// Controller restart (the deleting share is durable).
+const DELETION_RETRY_INITIAL: std::time::Duration = std::time::Duration::from_secs(5);
+const DELETION_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(300);
+const DELETION_TICK: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The next attempt of each pending deletion, doubling its delay after each
+/// unconfirmed attempt. Deletions no longer pending are forgotten.
+#[derive(Default)]
+pub(in crate::server) struct DeletionRetries {
+    due: BTreeMap<(String, String), (std::time::Instant, std::time::Duration)>,
+}
+
+impl DeletionRetries {
+    /// The pending deletions due at `now`, keeping only `pending` ones.
+    pub(in crate::server) fn due(
+        &mut self,
+        pending: &[(String, String)],
+        now: std::time::Instant,
+    ) -> Vec<(String, String)> {
+        self.due.retain(|key, _| pending.contains(key));
+        pending
+            .iter()
+            .filter(|key| {
+                self.due
+                    .entry((*key).clone())
+                    .or_insert((now, DELETION_RETRY_INITIAL))
+                    .0
+                    <= now
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// An attempt did not confirm every placement: retry later.
+    pub(in crate::server) fn failed(&mut self, key: &(String, String), now: std::time::Instant) {
+        let entry = self
+            .due
+            .entry(key.clone())
+            .or_insert((now, DELETION_RETRY_INITIAL));
+        *entry = (now + entry.1, (entry.1 * 2).min(DELETION_RETRY_MAX));
+    }
+}
+
+/// Retry every pending share deletion, with the same Machine operation id,
+/// until each is confirmed: started with the Controller, so a restart or a
+/// timed-out revoke (an open holding the lifecycle lock) converges without
+/// a human step.
+pub(in crate::server) fn start_deletion_reconciler(state: &Arc<AppState>) {
+    let weak = Arc::downgrade(state);
+    tokio::spawn(async move {
+        let mut retries = DeletionRetries::default();
+        loop {
+            tokio::time::sleep(DELETION_TICK).await;
+            let Some(state) = weak.upgrade() else { return };
+            let Some(store) = state.store.as_ref() else {
+                return;
+            };
+            let pending = match store.deleting_browser_shares().await {
+                Ok(pending) => pending,
+                Err(error) => {
+                    tracing::info!(%error, "pending browser share deletions not read");
+                    continue;
+                }
+            };
+            for key in retries.due(&pending, std::time::Instant::now()) {
+                let results = revoke_deleted(&state, &key.0, &key.1).await;
+                if results.iter().any(|result| result["state"] != "revoked") {
+                    retries.failed(&key, std::time::Instant::now());
+                }
+            }
+        }
+    });
 }
 
 /// Retry every pending share deletion of `owner` (after a Machine

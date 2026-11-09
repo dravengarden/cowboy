@@ -135,11 +135,23 @@ pub struct ShareMember {
     pub family: String,
 }
 
-/// One owner's shares and memberships.
+/// The member a family of a share's profile belongs to. Recorded at join
+/// and kept after that member leaves or is revoked: the profile may hold its
+/// cookies, so no other account of the family may use it until the profile
+/// is fresh again (a Machine-confirmed reset) or the share is deleted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Binding {
+    pub share_id: String,
+    pub family: String,
+    pub member: Member,
+}
+
+/// One owner's shares, memberships and family bindings.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Shares {
     pub shares: Vec<Share>,
     pub members: Vec<ShareMember>,
+    pub bindings: Vec<Binding>,
 }
 
 impl Shares {
@@ -160,6 +172,25 @@ impl Shares {
 
     pub fn membership(&self, member: &Member) -> Option<&ShareMember> {
         self.members.iter().find(|row| &row.member == member)
+    }
+
+    /// The member `family` of the share's profile belongs to, if any.
+    pub fn binding(&self, share_id: &str, family: &str) -> Option<&Binding> {
+        self.bindings
+            .iter()
+            .find(|row| row.share_id == share_id && row.family == family)
+    }
+
+    /// Forget a share's family bindings except those of its current
+    /// members: its profile is fresh.
+    pub fn rebind_current(&mut self, share_id: &str) {
+        let current: Vec<Member> = self
+            .members_of(share_id)
+            .into_iter()
+            .map(|row| row.member.clone())
+            .collect();
+        self.bindings
+            .retain(|row| row.share_id != share_id || current.contains(&row.member));
     }
 
     fn live(&self, share_id: &str) -> Result<&Share, &'static str> {
@@ -255,7 +286,21 @@ fn join(
     {
         return Err("browser_share_family_conflict");
     }
+    // The profile may still hold an earlier member's cookies of this family.
+    if shares
+        .binding(share_id, &family)
+        .is_some_and(|row| &row.member != member)
+    {
+        return Err("browser_share_family_bound");
+    }
     leave(shares, member);
+    if shares.binding(share_id, &family).is_none() {
+        shares.bindings.push(Binding {
+            share_id: share_id.to_owned(),
+            family: family.clone(),
+            member: member.clone(),
+        });
+    }
     shares.members.push(ShareMember {
         member: member.clone(),
         share_id: share_id.to_owned(),
@@ -318,7 +363,7 @@ pub fn apply(
             {
                 label.trim().clone_into(&mut share.label);
             }
-            shares.bump(share_id);
+            // A label is no membership change: the browser identity stays.
             Ok(Applied {
                 subject: key,
                 share_id: Some(share_id.clone()),
@@ -327,6 +372,7 @@ pub fn apply(
         Change::DeleteBrowserShare { share_id } => {
             let key = shares.live(share_id)?.browser_key.clone();
             shares.members.retain(|row| &row.share_id != share_id);
+            shares.bindings.retain(|row| &row.share_id != share_id);
             if ctx.placed.contains(&key) {
                 // Its profile lives on a Machine: revoked, then forgotten.
                 shares.bump(share_id);
@@ -349,6 +395,16 @@ pub fn apply(
             if !member.valid() {
                 return Err("invalid_argument");
             }
+            // Only the owner's own identities, even to leave (a no-op too).
+            if let Member::Account(account) = member
+                && !ctx
+                    .registry
+                    .accounts
+                    .iter()
+                    .any(|entry| entry.id == account.account_id)
+            {
+                return Err("account_not_found");
+            }
             match share_id {
                 Some(share_id) => join(shares, member, share_id, ctx)?,
                 None => leave(shares, member),
@@ -364,7 +420,12 @@ pub fn apply(
 
 type ShareRow = (String, String, String, i64, i64, Option<i64>);
 
-fn decode(owner: &str, rows: Vec<ShareRow>, members: Vec<(String, String, String)>) -> Shares {
+fn decode(
+    owner: &str,
+    rows: Vec<ShareRow>,
+    members: Vec<(String, String, String)>,
+    bindings: Vec<(String, String, String)>,
+) -> Shares {
     Shares {
         shares: rows
             .into_iter()
@@ -391,6 +452,16 @@ fn decode(owner: &str, rows: Vec<ShareRow>, members: Vec<(String, String, String
                 })
             })
             .collect(),
+        bindings: bindings
+            .into_iter()
+            .filter_map(|(share_id, family, member)| {
+                Member::decode(&member).map(|member| Binding {
+                    share_id,
+                    family,
+                    member,
+                })
+            })
+            .collect(),
     }
 }
 
@@ -399,6 +470,24 @@ macro_rules! load_shares {
         let rows: Vec<ShareRow> = sqlx::query_as("SELECT share_id,browser_key,label,created_ms,revision,deleting_ms FROM provider_browser_shares WHERE owner_user_id=$1 ORDER BY created_ms,share_id")
             .bind($owner).fetch_all($exec).await?;
         rows
+    }};
+}
+
+macro_rules! load_bindings {
+    ($exec:expr, $owner:expr) => {{
+        let rows: Vec<(String, String, String)> = sqlx::query_as("SELECT share_id,family,member FROM provider_browser_share_bindings WHERE owner_user_id=$1 ORDER BY share_id,family")
+            .bind($owner).fetch_all($exec).await?;
+        rows
+    }};
+}
+
+macro_rules! write_bindings {
+    ($tx:expr, $owner:expr, $shares:expr) => {{
+        sqlx::query("DELETE FROM provider_browser_share_bindings WHERE owner_user_id=$1").bind($owner).execute(&mut *$tx).await?;
+        for row in &$shares.bindings {
+            sqlx::query("INSERT INTO provider_browser_share_bindings (owner_user_id,share_id,family,member) VALUES ($1,$2,$3,$4)")
+                .bind($owner).bind(&row.share_id).bind(&row.family).bind(row.member.encode()).execute(&mut *$tx).await?;
+        }
     }};
 }
 
@@ -411,7 +500,7 @@ macro_rules! load_members {
 }
 
 impl Store {
-    /// The owner's shares and memberships.
+    /// The owner's shares, memberships and family bindings.
     pub async fn browser_shares(&self, owner: &str) -> Result<Shares> {
         macro_rules! read {
             ($db:expr) => {
@@ -419,6 +508,7 @@ impl Store {
                     owner,
                     load_shares!(&$db.pool, owner),
                     load_members!(&$db.pool, owner),
+                    load_bindings!(&$db.pool, owner),
                 )
             };
         }
@@ -460,7 +550,7 @@ impl Store {
                 .bind(owner).fetch_one(&mut *tx).await?;
             let mut registry: Registry = serde_json::from_str(&value)?;
             if registry.revision != input.expected_revision { return Ok(MutationResult::Conflict(registry)); }
-            let mut shares = decode(owner, load_shares!(&mut *tx, owner), load_members!(&mut *tx, owner));
+            let mut shares = decode(owner, load_shares!(&mut *tx, owner), load_members!(&mut *tx, owner), load_bindings!(&mut *tx, owner));
             let placed: Vec<String> = sqlx::query_scalar("SELECT DISTINCT account_id FROM browser_placements WHERE owner_user_id=$1")
                 .bind(owner).fetch_all(&mut *tx).await?;
             let placed: BTreeSet<ProviderAccountId> = placed.into_iter().filter_map(|key| key.try_into().ok()).collect();
@@ -485,6 +575,7 @@ impl Store {
                 sqlx::query("INSERT INTO provider_browser_share_members (owner_user_id,member,share_id,family) VALUES ($1,$2,$3,$4)")
                     .bind(owner).bind(row.member.encode()).bind(&row.share_id).bind(&row.family).execute(&mut *tx).await?;
             }
+            write_bindings!(tx, owner, shares);
             sqlx::query("UPDATE provider_account_registries SET revision=$1,value=$2 WHERE owner_user_id=$3")
                 .bind(registry.revision).bind(serde_json::to_string(&registry)?).bind(owner).execute(&mut *tx).await?;
             let receipt = Receipt { registry, account_id: applied.subject, browser_share_id: applied.share_id, ..Receipt::default() };
@@ -520,11 +611,17 @@ impl Store {
             if locked.rows_affected() != 1 {
                 return Ok(Err(Refusal::ShareChanged));
             }
-            let shares = decode(owner, load_shares!(&mut *tx, owner), load_members!(&mut *tx, owner));
+            let shares = decode(owner, load_shares!(&mut *tx, owner), load_members!(&mut *tx, owner), load_bindings!(&mut *tx, owner));
             let current = shares.share(share_id).is_some_and(|share| share.deleting_ms.is_none())
                 && shares.membership(member).is_some_and(|row| row.share_id == share_id);
             if !current || !families_distinct(&shares.members_of(share_id)) {
                 return Ok(Err(Refusal::ShareChanged));
+            }
+            // One placement per share: a concurrent first open elsewhere won.
+            let elsewhere: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 AND machine_id<>$3")
+                .bind(owner).bind(key.as_str()).bind(machine_id).fetch_one(&mut *tx).await?;
+            if elsewhere > 0 {
+                return Ok(Err(Refusal::ShareElsewhere));
             }
             match member {
                 Member::Account(member) => {
@@ -589,6 +686,8 @@ impl Store {
             if remaining == 0 {
                 sqlx::query("DELETE FROM provider_browser_shares WHERE owner_user_id=$1 AND share_id=$2")
                     .bind(owner).bind(share_id).execute(&mut *tx).await?;
+                sqlx::query("DELETE FROM provider_browser_share_bindings WHERE owner_user_id=$1 AND share_id=$2")
+                    .bind(owner).bind(share_id).execute(&mut *tx).await?;
             }
             tx.commit().await?;
             remaining == 0
@@ -596,6 +695,55 @@ impl Store {
         Ok(match &self.backend {
             StorageBackend::Postgres(db) => record!(db),
             StorageBackend::Sqlite(db) => record!(db),
+        })
+    }
+}
+
+impl Store {
+    /// The Machine confirmed a reset of the share's profile on `machine_id`,
+    /// its only placement: the profile is fresh, so the family bindings of
+    /// members that left are forgotten (current members stay bound). Nothing
+    /// changes while the share has a placement on another Machine or is
+    /// being deleted. Returns whether the bindings were renewed.
+    pub async fn renew_browser_share_bindings(
+        &self,
+        owner: &str,
+        share_id: &str,
+        machine_id: &str,
+    ) -> Result<bool> {
+        let key = share_key(owner, share_id);
+        macro_rules! renew { ($db:expr) => {{
+            let mut tx = $db.pool.begin().await?;
+            sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")
+                .bind(owner).execute(&mut *tx).await?;
+            let mut shares = decode(owner, load_shares!(&mut *tx, owner), load_members!(&mut *tx, owner), load_bindings!(&mut *tx, owner));
+            let live = shares.share(share_id).is_some_and(|share| share.deleting_ms.is_none());
+            let elsewhere: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 AND machine_id<>$3")
+                .bind(owner).bind(key.as_str()).bind(machine_id).fetch_one(&mut *tx).await?;
+            if !live || elsewhere > 0 {
+                return Ok(false);
+            }
+            shares.rebind_current(share_id);
+            write_bindings!(tx, owner, shares);
+            tx.commit().await?;
+            true
+        }} }
+        Ok(match &self.backend {
+            StorageBackend::Postgres(db) => renew!(db),
+            StorageBackend::Sqlite(db) => renew!(db),
+        })
+    }
+
+    /// Every share being deleted, across owners: the deletion reconciler's
+    /// work after a Controller restart.
+    pub async fn deleting_browser_shares(&self) -> Result<Vec<(String, String)>> {
+        macro_rules! read { ($db:expr) => {
+            sqlx::query_as::<_, (String, String)>("SELECT owner_user_id,share_id FROM provider_browser_shares WHERE deleting_ms IS NOT NULL ORDER BY owner_user_id,share_id")
+                .fetch_all(&$db.pool).await?
+        }; }
+        Ok(match &self.backend {
+            StorageBackend::Postgres(db) => read!(db),
+            StorageBackend::Sqlite(db) => read!(db),
         })
     }
 }

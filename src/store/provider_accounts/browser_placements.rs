@@ -28,6 +28,8 @@ pub enum Refusal {
     BrowserNotEnabled,
     /// The member left the share, or the share is gone or being deleted.
     ShareChanged,
+    /// The share's browser already lives on another Machine.
+    ShareElsewhere,
 }
 
 impl Refusal {
@@ -36,6 +38,7 @@ impl Refusal {
             Self::AccountUnavailable => "account_unavailable",
             Self::BrowserNotEnabled => "browser_not_enabled",
             Self::ShareChanged => "browser_share_changed",
+            Self::ShareElsewhere => "browser_not_placed",
         }
     }
 }
