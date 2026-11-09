@@ -343,6 +343,17 @@ fn tracing_evidence_survives_disabled_stderr_filter_and_excludes_bodies() {
     assert!(!serialized.contains("secret-body"));
     assert!(!serialized.contains("secret-token"));
     assert_eq!(page.items[0].attributes["error.type"], "cursor_expired");
+    // Machine browser lifecycle identifiers and outcomes are retained.
+    assert_eq!(
+        page.items[0].attributes["cowboy.browser.instance.id"],
+        "b-fixture"
+    );
+    assert_eq!(
+        page.items[0].attributes["cowboy.browser.cause"],
+        "lease_expired"
+    );
+    assert_eq!(page.items[0].attributes["cowboy.graceful"], "true");
+    assert_eq!(page.items[0].attributes["cowboy.idle_ms"], 1200);
     let status = store.status().unwrap();
     assert_eq!(status["writers"][0]["stopped"], true);
     assert_eq!(status["writers"][0]["failures"], 0);
@@ -357,7 +368,7 @@ fn capture_child() {
     let guard = super::init(dir.into(), context).unwrap();
     #[cfg(any(feature = "full", feature = "machine-host"))]
     assert!(!super::forward_runtime());
-    tracing::error!(target:"cowboy::fixture",event_name="cowboy.execution.fixture_failure",reason="cursor_expired",token="secret-token","secret-body");
+    tracing::error!(target:"cowboy::fixture",event_name="cowboy.execution.fixture_failure",reason="cursor_expired",token="secret-token",browser_instance="b-fixture",browser_cause="lease_expired",graceful=true,idle_ms=1200_u64,"secret-body");
     match std::env::var("COWBOY_TEST_LOG_FAULT").as_deref() {
         Ok("initialization") => {
             let dir =

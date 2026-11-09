@@ -139,6 +139,8 @@ struct Live {
     last_snapshot: Option<(u64, i64)>,
     last_periodic: Instant,
     last_scan: Instant,
+    /// Consecutive periodic socket scans the ptrace access check denied.
+    scan_denied: u8,
     /// A navigation the launcher never answered may still land: the
     /// instance serves no further navigation and is on its way to a stop.
     /// Set under the navigation lock.
@@ -172,6 +174,8 @@ pub struct Instance {
     account_id: ProviderAccountId,
     instance_id: String,
     incarnation: u64,
+    /// When this Machine started (or adopted) the instance.
+    started: Instant,
     /// The hard runtime cap (`browser.max_runtime` from the start).
     deadline: Instant,
     deadline_ms: i64,
@@ -207,6 +211,7 @@ impl Instance {
             account_id: parts.account_id,
             instance_id: parts.instance_id,
             incarnation: parts.incarnation,
+            started: Instant::now(),
             deadline: Instant::now()
                 + Duration::from_millis(
                     u64::try_from(parts.deadline_ms.saturating_sub(unix_ms())).unwrap_or(0),
@@ -232,6 +237,7 @@ impl Instance {
                 last_snapshot: parts.last_snapshot,
                 last_periodic: Instant::now(),
                 last_scan: Instant::now(),
+                scan_denied: 0,
                 navigation_unsettled: false,
             }),
             copy: parking_lot::Mutex::new(None),

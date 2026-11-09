@@ -170,7 +170,9 @@ pub(super) async fn update_value(
                 state.browsers.cancel_account_viewers(account.as_str());
                 let state = Arc::clone(state);
                 tokio::spawn(async move {
-                    if let Err(error) = browser::hibernate_running(&state, &account).await {
+                    if let Err(error) =
+                        browser::hibernate_running(&state, &account, "browser_disabled").await
+                    {
                         tracing::info!(%error, "browser hibernate after disable did not complete");
                     }
                 });

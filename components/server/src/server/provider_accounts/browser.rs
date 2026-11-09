@@ -618,11 +618,13 @@ async fn dispatch_open(
             state
                 .browsers
                 .cancel_viewer(machine_id, account_id.as_str());
+            let request = request_id("browser-hibernate");
+            hibernate_sent(machine_id, &event.instance, &request, code);
             let _ = state
                 .machine_control
                 .browser_command(
                     connection,
-                    request_id("browser-hibernate"),
+                    request,
                     Command::Hibernate {
                         instance: event.instance.clone(),
                     },
@@ -770,6 +772,7 @@ fn reset_confirmed(event: &StateEvent) -> bool {
 pub(in crate::server) async fn hibernate_running(
     state: &AppState,
     account_id: &ProviderAccountId,
+    cause: &'static str,
 ) -> Result<Vec<StateEvent>, String> {
     let mut events = Vec::new();
     let mut failure = None;
@@ -777,7 +780,7 @@ pub(in crate::server) async fn hibernate_running(
         if !observed.running() {
             continue;
         }
-        match send_hibernate(state, &observed).await {
+        match send_hibernate(state, &observed, cause).await {
             Ok(event) => events.push(event),
             Err(error) => failure = Some(error),
         }
@@ -806,21 +809,42 @@ pub(in crate::server) async fn hibernate_instance(
     if !still {
         return Ok(None);
     }
-    send_hibernate(state, captured).await.map(Some)
+    send_hibernate(state, captured, "memory_reclaim")
+        .await
+        .map(Some)
 }
 
-async fn send_hibernate(state: &AppState, observed: &Observed) -> Result<StateEvent, String> {
+async fn send_hibernate(
+    state: &AppState,
+    observed: &Observed,
+    cause: &'static str,
+) -> Result<StateEvent, String> {
+    let request = request_id("browser-hibernate");
+    hibernate_sent(
+        &observed.machine_id,
+        &observed.event.instance,
+        &request,
+        cause,
+    );
     state
         .machine_control
         .browser_command(
             &observed.connection,
-            request_id("browser-hibernate"),
+            request,
             Command::Hibernate {
                 instance: observed.instance(),
             },
             HIBERNATE_TIMEOUT,
         )
         .await
+}
+
+/// Why the Controller asked a Machine to hibernate a browser; the Machine
+/// logs the same request id with the stop it carried out.
+fn hibernate_sent(machine_id: &str, instance: &InstanceRef, request: &str, cause: &str) {
+    tracing::info!(event_name = "browser.hibernate.requested", machine = %machine_id,
+        browser_account = %instance.account_id.as_str(), browser_instance = %instance.instance_id,
+        browser_request = %request, browser_cause = %cause, "browser hibernate requested");
 }
 
 fn error_status(code: &str) -> StatusCode {
@@ -1026,6 +1050,7 @@ pub(in crate::server) async fn http_hibernate(
     if !dataset_ok(&state, &auth, body.dataset.as_deref()) {
         return respond(Err("dataset_changed"));
     }
+    hibernate_sent(&body.machine_id, &body.instance, "", "owner_request");
     respond(
         instance_command(
             &state,

@@ -53,6 +53,9 @@ impl BrowserManager {
         if let Some(attachment_id) = expired_attachment
             && expire_attachment(instance, &attachment_id, now)
         {
+            tracing::info!(event_name = "browser.viewer.detached",
+                browser_instance = %instance.instance_id, browser_attachment = %attachment_id,
+                browser_cause = "lease_expired", "browser viewer lease expired");
             self.send_state(instance.state(None));
         }
         if let Some(since) = grace_expired
@@ -85,7 +88,7 @@ impl BrowserManager {
                     return true;
                 }
                 Err(IdleRenewed) => {
-                    tracing::debug!(instance = %instance.instance_id, "browser grace stop abandoned: the instance was attached meanwhile");
+                    tracing::info!(event_name = "browser.grace.renewed", browser_instance = %instance.instance_id, "browser grace stop abandoned: the instance was attached meanwhile");
                 }
             }
         }
@@ -101,7 +104,7 @@ impl BrowserManager {
             match control.next_event(Duration::from_millis(20)).await {
                 Ok(Some(LauncherEvent::Exited { process, code })) => {
                     drop(control);
-                    tracing::warn!(instance = %instance.instance_id, %process, ?code, "browser process exited");
+                    tracing::warn!(event_name = "browser.process.exited", browser_instance = %instance.instance_id, browser_cause = %process, exit_code = ?code, "browser process exited");
                     let event = self
                         .stop_instance(instance, Reason::Failed, false, None)
                         .await;
@@ -109,12 +112,12 @@ impl BrowserManager {
                     return true;
                 }
                 Ok(Some(LauncherEvent::Error { kind, message })) => {
-                    tracing::warn!(instance = %instance.instance_id, ?kind, %message, "launcher reported an error");
+                    tracing::warn!(event_name = "browser.launcher.error", browser_instance = %instance.instance_id, browser_cause = ?kind, %message, "launcher reported an error");
                 }
                 Ok(_) => {}
                 Err(error) => {
                     drop(control);
-                    tracing::warn!(%error, instance = %instance.instance_id, "launcher control socket failed");
+                    tracing::warn!(event_name = "browser.control.failed", %error, browser_instance = %instance.instance_id, "launcher control socket failed");
                     let event = self
                         .stop_instance(instance, Reason::Failed, false, None)
                         .await;
@@ -136,17 +139,53 @@ impl BrowserManager {
         if !instance.live.lock().verified.pins_hold() {
             return Err(Reason::ConfinementUnverified);
         }
-        if let Err(violation) = verify::scan_sockets(&instance.cgroup_dir) {
-            tracing::warn!(detail = %violation, "browser socket scan violation");
-            return Err(Reason::ListenerDetected);
+        match verify::scan_sockets_periodic(&instance.cgroup_dir) {
+            Ok(()) => instance.live.lock().scan_denied = 0,
+            Err(verify::ScanFailure::Violation(violation)) => {
+                tracing::warn!(event_name = "browser.scan.violation",
+                    browser_instance = %instance.instance_id, browser_violation = %violation,
+                    "browser socket scan violation");
+                return Err(Reason::ListenerDetected);
+            }
+            Err(verify::ScanFailure::Denied(violation)) => {
+                let attempt = {
+                    let mut live = instance.live.lock();
+                    live.scan_denied = live.scan_denied.saturating_add(1);
+                    // Rescan on the next tick but one instead of a full
+                    // interval later: a denial outlasting a few seconds is
+                    // treated as unverified confinement.
+                    if let Some(soon) = Instant::now()
+                        .checked_sub(SOCKET_SCAN_INTERVAL.saturating_sub(SCAN_DENIED_RETRY))
+                    {
+                        live.last_scan = soon;
+                    }
+                    live.scan_denied
+                };
+                if attempt >= SCAN_DENIED_LIMIT {
+                    tracing::warn!(event_name = "browser.scan.unverified",
+                        browser_instance = %instance.instance_id, browser_violation = %violation,
+                        attempt, "browser socket scan denied repeatedly");
+                    return Err(Reason::ConfinementUnverified);
+                }
+                tracing::info!(event_name = "browser.scan.denied",
+                    browser_instance = %instance.instance_id, browser_violation = %violation,
+                    attempt, "browser socket scan denied; rescanning shortly");
+            }
         }
         if let Err(violation) = verify::runtime_directory_clean(&instance.runtime_dir) {
-            tracing::warn!(detail = %violation, "browser runtime directory violation");
+            tracing::warn!(event_name = "browser.runtime_dir.violation",
+                browser_instance = %instance.instance_id, browser_violation = %violation,
+                "browser runtime directory violation");
             return Err(Reason::ConfinementUnverified);
         }
         Ok(())
     }
 }
+
+/// Consecutive denied periodic scans tolerated before the instance stops.
+const SCAN_DENIED_LIMIT: u8 = 3;
+/// How soon a denied scan is repeated.
+const SCAN_DENIED_RETRY: Duration = Duration::from_secs(1);
 
 /// An idle stop abandoned because the instance was used while it waited.
 #[derive(Debug)]

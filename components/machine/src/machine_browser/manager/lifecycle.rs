@@ -83,44 +83,10 @@ impl BrowserManager {
         let incarnation = u64::try_from(unix_ms()).unwrap_or(1).max(1);
         let deadline_ms = unix_ms()
             .saturating_add(i64::try_from(settings.max_runtime.as_millis()).unwrap_or(i64::MAX));
-        // The admitted budget: at most `memory_max`, at least
-        // `memory_reserve`, never more than the headroom left beside every
-        // outstanding reservation and the floor. It becomes the unit's
-        // MemoryMax and is held with the capacity slot until the unit's exit
-        // is confirmed, so the browser can never take shared memory beyond
-        // what was admitted.
-        let budget = match self
-            .ledger
-            .reserve_within(
-                settings.memory_reserve,
-                settings.memory_max,
-                self.headroom,
-                || self.starts.draining(),
-                MEMORY_WAIT,
-                MEMORY_POLL,
-            )
-            .await
-        {
-            Admission::Reserved { reservation, .. } => reservation,
-            Admission::Exhausted => {
-                tracing::info!(
-                    headroom_bytes = (self.headroom)(),
-                    reserved_bytes = self.ledger.reserved_bytes(),
-                    requested_min_bytes = settings.memory_reserve,
-                    requested_max_bytes = settings.memory_max,
-                    floor_bytes = FLOOR_BYTES,
-                    waited_secs = MEMORY_WAIT.as_secs(),
-                    "browser open refused: no memory headroom"
-                );
-                return hibernated(Reason::Memory);
-            }
-            Admission::Cancelled => return hibernated(Reason::Memory),
+        let Some(budget) = self.admit_memory(&account_id, &settings).await else {
+            return hibernated(Reason::Memory);
         };
-        tracing::info!(
-            budget_bytes = budget.bytes(),
-            headroom_bytes = (self.headroom)(),
-            "browser open admitted"
-        );
+        let launch_began = Instant::now();
         let started = self
             .start_instance(
                 &account_dir,
@@ -138,13 +104,72 @@ impl BrowserManager {
         let instance = match started {
             Ok(instance) => instance,
             Err(failure) => {
-                tracing::warn!(detail = %failure.detail, reason = ?failure.reason, "browser open failed");
+                tracing::warn!(event_name = "browser.open.failed",
+                    browser_account = %account_id.as_str(), browser_violation = %failure.detail,
+                    reason = ?failure.reason, "browser open failed");
                 return hibernated(failure.reason);
             }
         };
         *slot.instance.lock() = Some(Arc::clone(&instance));
+        tracing::info!(event_name = "browser.instance.ready",
+            browser_instance = %instance.instance_id,
+            browser_account = %account_id.as_str(),
+            browser_request = %request_id,
+            duration_ms = u64::try_from(launch_began.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "browser instance ready");
         self.spawn_supervisor(&instance);
         instance.state(Some(request_id.to_owned()))
+    }
+
+    /// The admitted budget: at most `memory_max`, at least
+    /// `memory_reserve`, never more than the headroom left beside every
+    /// outstanding reservation and the floor. It becomes the unit's
+    /// MemoryMax and is held with the capacity slot until the unit's exit
+    /// is confirmed, so the browser can never take shared memory beyond
+    /// what was admitted. `None` when no headroom appeared in time.
+    async fn admit_memory(
+        &self,
+        account_id: &ProviderAccountId,
+        settings: &Settings,
+    ) -> Option<crate::launch_ledger::Reservation> {
+        let budget = match self
+            .ledger
+            .reserve_within(
+                settings.memory_reserve,
+                settings.memory_max,
+                self.headroom,
+                || self.starts.draining(),
+                MEMORY_WAIT,
+                MEMORY_POLL,
+            )
+            .await
+        {
+            Admission::Reserved { reservation, .. } => reservation,
+            Admission::Exhausted => {
+                tracing::info!(
+                    event_name = "browser.open.refused",
+                    browser_account = %account_id.as_str(),
+                    reason = "Memory",
+                    headroom_bytes = (self.headroom)(),
+                    reserved_bytes = self.ledger.reserved_bytes(),
+                    requested_min_bytes = settings.memory_reserve,
+                    requested_max_bytes = settings.memory_max,
+                    floor_bytes = FLOOR_BYTES,
+                    waited_secs = MEMORY_WAIT.as_secs(),
+                    "browser open refused: no memory headroom"
+                );
+                return None;
+            }
+            Admission::Cancelled => return None,
+        };
+        tracing::info!(
+            event_name = "browser.open.admitted",
+            browser_account = %account_id.as_str(),
+            budget_bytes = budget.bytes(),
+            headroom_bytes = (self.headroom)(),
+            "browser open admitted"
+        );
+        Some(budget)
     }
 
     /// Resolve the account directory and its control record for a start:
@@ -461,17 +486,22 @@ impl BrowserManager {
         request_id: Option<&str>,
         still: impl FnOnce(&Live) -> Result<(), E>,
     ) -> Result<StateEvent, E> {
-        let already_stopping = {
+        let stop_began = Instant::now();
+        let (already_stopping, before, idle_ms) = {
             let mut live = instance.live.lock();
             still(&live)?;
-            let was = live.phase == Phase::Stopping;
+            let before = live.phase;
+            let was = before == Phase::Stopping;
+            let idle_ms = live
+                .detached_since
+                .map(|since| u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX));
             live.phase = Phase::Stopping;
             if let Some(attachment) = live.attachment.take()
                 && let Some(stream) = attachment.stream
             {
                 stream.cancel();
             }
-            was
+            (was, before, idle_ms)
         };
         if already_stopping {
             let registered = self
@@ -490,6 +520,15 @@ impl BrowserManager {
                 .state(request_id.map(ToOwned::to_owned))
                 .with_reason(reason));
         }
+        tracing::info!(event_name = "browser.stop.begin",
+            browser_instance = %instance.instance_id,
+            browser_account = %instance.account_id.as_str(),
+            browser_request = request_id.unwrap_or(""),
+            reason = ?reason, graceful, browser_phase = ?before,
+            age_ms = u64::try_from(instance.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            idle_ms = idle_ms.unwrap_or(0),
+            memory_bytes = unit::memory_current(&instance.cgroup_dir).unwrap_or(0),
+            "browser stopping");
         instance.cancel_copy();
         if let Err(error) = unit::set_frozen(&instance.cgroup_dir.join("browser"), false) {
             tracing::warn!(%error, "browser cgroup not thawed before its stop");
@@ -526,7 +565,9 @@ impl BrowserManager {
             )
             .await
         {
-            tracing::error!(unit = %instance.unit, "browser unit exit unconfirmed; instance retained");
+            tracing::error!(event_name = "browser.stop.unconfirmed",
+                browser_instance = %instance.instance_id, unit = %instance.unit,
+                "browser unit exit unconfirmed; instance retained");
             self.retain_unconfirmed(Retained {
                 unit: instance.unit.clone(),
                 cgroup_dir: Some(instance.cgroup_dir.clone()),
@@ -548,6 +589,12 @@ impl BrowserManager {
                 .with_reason(Reason::Failed));
         }
         self.finish_stopped(instance);
+        tracing::info!(event_name = "browser.stop.done",
+            browser_instance = %instance.instance_id,
+            browser_account = %instance.account_id.as_str(),
+            reason = ?reason, unsaved, generation = published.unwrap_or(0),
+            duration_ms = u64::try_from(stop_began.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "browser hibernated");
         Ok(self.hibernated_after(instance, reason, request_id, unsaved))
     }
 

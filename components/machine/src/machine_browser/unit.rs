@@ -547,6 +547,16 @@ pub fn populated(dir: &Path) -> Result<bool> {
     Ok(events.lines().any(|line| line.trim() == "populated 1"))
 }
 
+/// A cgroup's `memory.current`, for diagnostics.
+#[must_use]
+pub fn memory_current(dir: &Path) -> Option<u64> {
+    std::fs::read_to_string(dir.join("memory.current"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// Freeze (`true`) or thaw (`false`) a cgroup. Thawing a missing cgroup is
 /// not an error: the unit already ended.
 ///

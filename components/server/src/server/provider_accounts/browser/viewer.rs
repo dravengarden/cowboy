@@ -307,7 +307,9 @@ async fn serve(
         &mut cancelled,
     )
     .await;
-    tracing::info!(end, "browser viewer stream ended");
+    tracing::info!(event_name = "browser.viewer.ended",
+        browser_account = %session.account.as_str(), browser_instance = %session.instance.instance_id,
+        browser_attachment = %session.attachment_id, browser_end = end, "browser viewer stream ended");
     let _ = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         viewer_sink.send(Message::Close(None)),

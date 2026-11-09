@@ -266,3 +266,39 @@ No persistent analysis scheduler was installed. Initial analysis correctly
 reported an incomplete comparison window while retaining reconnect and worker
 handoff warnings with queryable evidence IDs. External Collector interoperability
 and physical production disk/power fault experiments remain unverified.
+
+## Machine browser lifecycle evidence
+
+Machine browser events carry `event_name` and the `browser_*`, `reason`,
+`graceful`, `unsaved`, `age_ms`, `idle_ms`, `duration_ms`, `*_bytes` and
+`generation` fields only: identifiers and outcomes, never a page, URL, title,
+clipboard or input. Each instance produces a few dozen records over its life
+(open, ready, viewer attach/detach, periodic snapshots, stop), so they go to the
+ordinary INFO lane and the journal; nothing is logged per frame or per tick.
+Retention and rotation are the store's policy above.
+
+| Event | Where | Meaning |
+| --- | --- | --- |
+| `browser.open.admitted` / `.refused` / `.failed` | Machine | Memory admission and start outcome |
+| `browser.instance.ready` | Machine | Instance verified; `duration_ms` is the launch time |
+| `browser.viewer.attached` | Machine | `browser_cause` `attach` or `takeover` |
+| `browser.viewer.detached` | Machine | `browser_cause` `stream_ended` (with `browser_end`), `detach` or `lease_expired` |
+| `browser.viewer.ended` | Controller | The viewer WebSocket ended (`browser_end`, e.g. `replaced`) |
+| `browser.hibernate.requested` | Controller | Why a Hibernate was sent: `owner_request`, `memory_reclaim`, `browser_disabled` or an admission refusal code |
+| `browser.stop.begin` / `.done` | Machine | `reason`, `graceful`, phase, age, idle time, `memory.current`; then `unsaved`, published `generation`, stop `duration_ms` |
+| `browser.grace.renewed` | Machine | An idle stop was abandoned because a viewer attached |
+| `browser.scan.denied` / `.unverified` / `.violation` | Machine | Periodic socket scan outcomes, see below |
+
+The Controller's `browser_request` equals the Machine's on the matching
+`browser.stop.begin`, so one query on each store explains a hibernation:
+
+```sh
+cowboy logs --sources ~/.config/cowboy/log-sources.json query --from 6h --event browser.stop.begin
+```
+
+The periodic socket scan fails closed. A process whose `/proc` evidence the
+kernel's ptrace access check denies (EACCES/EPERM, e.g. while a Chromium helper
+execs or changes dumpability) is unverified, not clean: the scan is repeated
+about a second later and the instance stops as `confinement_unverified` after
+three consecutive denials. A found listener or datagram socket still stops it
+immediately, and the startup verification remains strict.

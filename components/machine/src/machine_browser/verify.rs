@@ -193,8 +193,37 @@ pub fn verify(expect: &Expectations<'_>, report: &ReadyReport) -> Result<Verifie
 /// # Errors
 /// Returns the violation, or an unreadable observation as a violation.
 pub fn scan_sockets(cgroup_dir: &Path) -> Result<(), Violation> {
+    scan_sockets_periodic(cgroup_dir).map_err(ScanFailure::into_violation)
+}
+
+/// Why a periodic socket scan did not pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScanFailure {
+    /// A listener, datagram socket or unreadable socket table was found.
+    Violation(Violation),
+    /// Only the kernel's ptrace access check refused some live process's
+    /// descriptors or namespace (EACCES/EPERM, as while Chromium's sandbox
+    /// helpers exec or change dumpability); every other process passed.
+    /// Still unverified: the caller may rescan shortly, never accept it.
+    Denied(Violation),
+}
+
+impl ScanFailure {
+    #[must_use]
+    pub fn into_violation(self) -> Violation {
+        match self {
+            Self::Violation(violation) | Self::Denied(violation) => violation,
+        }
+    }
+}
+
+/// [`scan_sockets`] that tells access-denied processes apart from findings.
+///
+/// # Errors
+/// Returns the violation, or the processes whose evidence was denied.
+pub fn scan_sockets_periodic(cgroup_dir: &Path) -> Result<(), ScanFailure> {
     let pids: Vec<u32> = unit::procs_recursive(cgroup_dir)
-        .map_err(|error| Violation(format!("cgroup unreadable: {error}")))?
+        .map_err(|error| ScanFailure::Violation(Violation(format!("cgroup unreadable: {error}"))))?
         .into_iter()
         .map(|(_, pid)| pid)
         .collect();
@@ -206,6 +235,8 @@ pub fn scan_sockets(cgroup_dir: &Path) -> Result<(), Violation> {
 enum Missing {
     /// The process is confirmed gone: it owns nothing any more.
     Exited,
+    /// The kernel's ptrace access check refused the read of a live process.
+    Denied(String),
     /// The process may be alive but its evidence could not be read.
     Unreadable(String),
 }
@@ -221,6 +252,10 @@ trait ProcView {
     /// `/proc/<pid>/net/<table>`; `Ok(None)` when the process is alive and
     /// the kernel has no such table (IPv6 disabled).
     fn table(&self, pid: u32, table: &str) -> Result<Option<String>, Missing>;
+    /// The command name of `pid`, when readable.
+    fn name(&self, _pid: u32) -> Option<String> {
+        None
+    }
 }
 
 struct HostProc;
@@ -233,8 +268,13 @@ impl HostProc {
         );
         let exit_shaped = error.kind() == std::io::ErrorKind::NotFound
             || error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error());
+        let denied = [rustix::io::Errno::ACCESS, rustix::io::Errno::PERM]
+            .iter()
+            .any(|errno| error.raw_os_error() == Some(errno.raw_os_error()));
         if exit_shaped && vanished {
             Missing::Exited
+        } else if denied && !vanished {
+            Missing::Denied(error.to_string())
         } else {
             Missing::Unreadable(error.to_string())
         }
@@ -277,6 +317,20 @@ impl ProcView for HostProc {
             },
         }
     }
+
+    fn name(&self, pid: u32) -> Option<String> {
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+        let comm = comm.trim_end();
+        comm.chars()
+            .all(|c| c.is_ascii_graphic() || c == ' ')
+            .then(|| comm.to_owned())
+    }
+}
+
+/// `pid` with its command name when readable, for diagnostics.
+fn described(proc: &impl ProcView, pid: u32) -> String {
+    proc.name(pid)
+        .map_or_else(|| pid.to_string(), |name| format!("{pid} ({name})"))
 }
 
 /// Tables every network namespace is scanned through: `(name, listening
@@ -288,16 +342,39 @@ const SOCKET_TABLES: [(&str, bool, bool); 4] = [
     ("udp6", false, true),
 ];
 
-fn scan_with(proc: &impl ProcView, pids: &[u32]) -> Result<(), Violation> {
+fn scan_with(proc: &impl ProcView, pids: &[u32]) -> Result<(), ScanFailure> {
+    let mut denied = Vec::new();
+    scan_readable(proc, pids, &mut denied).map_err(ScanFailure::Violation)?;
+    if denied.is_empty() {
+        return Ok(());
+    }
+    Err(ScanFailure::Denied(Violation(format!(
+        "descriptors denied: {}",
+        denied.join(", ")
+    ))))
+}
+
+/// The scan over every process whose evidence is readable; processes the
+/// ptrace access check refused are listed in `denied` instead.
+fn scan_readable(
+    proc: &impl ProcView,
+    pids: &[u32],
+    denied: &mut Vec<String>,
+) -> Result<(), Violation> {
     let mut owned: BTreeMap<u64, u32> = BTreeMap::new();
     let mut by_net: BTreeMap<String, Vec<u32>> = BTreeMap::new();
     for &pid in pids {
         let targets = match proc.fd_targets(pid) {
             Ok(targets) => targets,
             Err(Missing::Exited) => continue,
+            Err(Missing::Denied(why)) => {
+                denied.push(format!("process {}: {why}", described(proc, pid)));
+                continue;
+            }
             Err(Missing::Unreadable(why)) => {
                 return Err(Violation(format!(
-                    "process {pid} descriptors unreadable: {why}"
+                    "process {} descriptors unreadable: {why}",
+                    described(proc, pid)
                 )));
             }
         };
@@ -313,6 +390,9 @@ fn scan_with(proc: &impl ProcView, pids: &[u32]) -> Result<(), Violation> {
         match proc.net_namespace(pid) {
             Ok(net) => by_net.entry(net).or_default().push(pid),
             Err(Missing::Exited) => {}
+            Err(Missing::Denied(why)) => {
+                denied.push(format!("process {} namespace: {why}", described(proc, pid)));
+            }
             Err(Missing::Unreadable(why)) => {
                 return Err(Violation(format!(
                     "process {pid} network namespace unreadable: {why}"
@@ -357,7 +437,7 @@ fn read_table(
                 last = Some(format!("process {pid} has no {table} table"));
             }
             Err(Missing::Exited) => {}
-            Err(Missing::Unreadable(why)) => {
+            Err(Missing::Unreadable(why) | Missing::Denied(why)) => {
                 live = true;
                 last = Some(format!("process {pid}: {why}"));
             }
@@ -1336,6 +1416,40 @@ mod tests {
         let mut gone = one_socket_tree();
         gone.tables.insert((1, "unix"), Err(Missing::Exited));
         scan_with(&gone, &[1, 2]).unwrap();
+    }
+
+    #[test]
+    fn denied_processes_are_unverified_and_never_mask_a_finding() {
+        let mut denied = one_socket_tree();
+        denied.fds.insert(3, Err(Missing::Denied("EACCES".into())));
+        assert!(matches!(
+            scan_with(&denied, &[1, 2, 3]),
+            Err(ScanFailure::Denied(_))
+        ));
+        // The strict scan still refuses it.
+        assert!(
+            scan_with(&denied, &[1, 2, 3])
+                .map_err(ScanFailure::into_violation)
+                .is_err()
+        );
+        // A listener elsewhere is a violation, not merely denied.
+        denied.tables.insert(
+            (1, "tcp"),
+            Ok(Some(format!(
+                "{TCP_HEADER}   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 77\n"
+            ))),
+        );
+        assert!(matches!(
+            scan_with(&denied, &[1, 2, 3]),
+            Err(ScanFailure::Violation(_))
+        ));
+        // A denied namespace link is likewise only unverified.
+        let mut no_net = one_socket_tree();
+        no_net.nets.insert(2, Err(Missing::Denied("EACCES".into())));
+        assert!(matches!(
+            scan_with(&no_net, &[1, 2]),
+            Err(ScanFailure::Denied(_))
+        ));
     }
 
     fn mask_line(id: u32, point: &str) -> String {

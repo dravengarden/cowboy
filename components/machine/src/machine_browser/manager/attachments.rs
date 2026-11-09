@@ -96,11 +96,18 @@ impl BrowserManager {
         let refused = {
             let mut live = instance.live.lock();
             if matches!(live.phase, Phase::Detached | Phase::Attached) {
-                if let Some(previous) = live.attachment.take()
-                    && let Some(previous_stream) = previous.stream
-                {
-                    previous_stream.cancel();
-                }
+                let replaced = live.attachment.take().map(|previous| {
+                    if let Some(previous_stream) = previous.stream {
+                        previous_stream.cancel();
+                    }
+                    previous.id
+                });
+                tracing::info!(event_name = "browser.viewer.attached",
+                    browser_instance = %instance.instance_id, browser_attachment = %attachment_id,
+                    browser_request = %request_id,
+                    browser_cause = if replaced.is_some() { "takeover" } else { "attach" },
+                    width = viewport.width, height = viewport.height,
+                    "browser viewer attached");
                 live.attachment = Some(Attachment {
                     id: attachment_id.clone(),
                     lease_expires: Instant::now()
@@ -156,7 +163,9 @@ impl BrowserManager {
             }
         };
         if detached {
-            tracing::info!(?end, instance = %instance.instance_id, "browser viewer detached");
+            tracing::info!(event_name = "browser.viewer.detached",
+                browser_instance = %instance.instance_id, browser_attachment = %attachment_id,
+                browser_cause = "stream_ended", browser_end = ?end, "browser viewer detached");
             self.send_state(instance.state(None));
         }
     }
@@ -224,6 +233,9 @@ impl BrowserManager {
             live.phase = Phase::Detached;
             live.detached_since = Some(Instant::now());
             drop(live);
+            tracing::info!(event_name = "browser.viewer.detached",
+                browser_instance = %instance.instance_id, browser_attachment = %attachment_id,
+                browser_request = %request_id, browser_cause = "detach", "browser viewer detached");
             return instance.state(Some(request_id.to_owned()));
         }
         drop(live);

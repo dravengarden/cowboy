@@ -384,7 +384,8 @@ impl BrowserManager {
         live.last_snapshot = Some((generation, unix_ms()));
         live.last_periodic = Instant::now();
         tracing::info!(
-            instance = %instance.instance_id,
+            event_name = "browser.snapshot.published",
+            browser_instance = %instance.instance_id,
             generation,
             bytes = stats.bytes,
             entries = stats.entries,

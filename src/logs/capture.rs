@@ -699,6 +699,24 @@ fn field_name(name: &str) -> Option<&'static str> {
         "method" => "rpc.method",
         "total_ms" => "cowboy.total_ms",
         "executed_ms" => "cowboy.executed_ms",
+        // Machine browser lifecycle: identifiers and outcomes only, never a
+        // page, URL, title or input.
+        "browser_instance" => "cowboy.browser.instance.id",
+        "browser_account" => "cowboy.provider.account.id",
+        "browser_attachment" => "cowboy.browser.attachment.id",
+        "browser_request" => "cowboy.browser.request.id",
+        "browser_cause" => "cowboy.browser.cause",
+        "browser_phase" => "cowboy.browser.phase",
+        "browser_end" => "cowboy.browser.stream.end",
+        "browser_violation" => "cowboy.browser.violation",
+        "graceful" => "cowboy.graceful",
+        "unsaved" => "cowboy.unsaved",
+        "age_ms" => "cowboy.age_ms",
+        "idle_ms" => "cowboy.idle_ms",
+        "budget_bytes" => "cowboy.budget_bytes",
+        "headroom_bytes" => "cowboy.headroom_bytes",
+        "memory_bytes" => "cowboy.memory_bytes",
+        "attempt" => "cowboy.attempt",
         _ => return None,
     })
 }
