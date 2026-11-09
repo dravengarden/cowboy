@@ -9,6 +9,7 @@ mod confirmation;
 mod fake_units;
 mod idle_and_navigation;
 mod inventory;
+mod legacy_keys;
 mod retention;
 
 use fake_units::{FakeUnit, FakeUnits};

@@ -758,10 +758,22 @@ impl BrowserManager {
         }
     }
 
+    /// `provider-auth/accounts/<key>`: a named account's directory or a
+    /// legacy default card's browser-only directory. Only the directory is
+    /// prepared, never a Provider credential scope (`providers/`), so a card
+    /// key never appears as a credential account, and the legacy default's
+    /// native credentials under `provider-auth/` are never touched.
     fn account_dir(&self, account_id: &ProviderAccountId) -> Result<PathBuf> {
-        ensure!(!account_id.is_default(), "browser requires a named account");
-        self.providers.for_account(account_id)?;
-        Ok(self.providers.accounts_root().join(account_id.as_str()))
+        ensure!(
+            !account_id.is_default(),
+            "browser requires a browser account key"
+        );
+        let root = self.providers.accounts_root();
+        let dir = root.join(account_id.as_str());
+        for directory in [&root, &dir] {
+            crate::provider_account::prepare_private_directory(directory)?;
+        }
+        Ok(dir)
     }
 
     fn send_state(&self, event: StateEvent) {
