@@ -1,11 +1,12 @@
-/** The top of the Machine browser panel: whose browser on which Machine, in
- * one slim row. The remote Chromium shows its own address bar and tabs, so
- * the panel adds none. */
+/** Whose browser on which Machine: the Desktop panel's slim top row and the
+ * identity line the phone shows above its bottom toolbar (a phone has no top
+ * row, so the framebuffer starts right below the status bar). The remote
+ * Chromium shows its own address bar and tabs, so the panel adds none. */
 import { CloseFullscreenRounded, CloseRounded, OpenInFullRounded } from "@mui/icons-material";
 import { Box, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import type { ReactNode } from "react";
 
-function Identity({
+export function Identity({
   accountLabel,
   machineLabel,
   status,
@@ -22,58 +23,13 @@ function Identity({
       color="text.secondary"
       noWrap
       title={`${accountLabel} · ${machineLabel} · ${status}`}
-      sx={{ display: "block", minWidth: 0, textAlign: align, lineHeight: 1.4 }}
+      sx={{ display: "block", minWidth: 0, textAlign: align, lineHeight: "16px" }}
     >
       <Box component="strong" sx={{ color: "text.primary", fontWeight: 600 }}>
         {accountLabel}
       </Box>
       {` · ${machineLabel} · ${status}`}
     </Typography>
-  );
-}
-
-/** Phone: Close and the identity line in one slim row, clearing the status
- * bar and side safe areas. */
-export function MobileBrowserTopBar({
-  accountLabel,
-  machineLabel,
-  status,
-  onClose,
-}: {
-  accountLabel: string;
-  machineLabel: string;
-  status: string;
-  onClose: () => void;
-}): React.JSX.Element {
-  return (
-    <Stack
-      direction="row"
-      alignItems="center"
-      data-machine-browser-topbar
-      sx={{
-        flexShrink: 0,
-        position: "relative",
-        zIndex: 2,
-        borderBottom: 1,
-        borderColor: "divider",
-        bgcolor: "background.paper",
-        pt: "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
-        pl: "max(4px, env(safe-area-inset-left, 0px))",
-        pr: "max(12px, env(safe-area-inset-right, 0px))",
-      }}
-    >
-      <IconButton aria-label="Close browser" onClick={onClose} sx={{ width: 40, height: 40 }}>
-        <CloseRounded fontSize="small" />
-      </IconButton>
-      <Box sx={{ flex: 1, minWidth: 0, pr: 5 }}>
-        <Identity
-          accountLabel={accountLabel}
-          machineLabel={machineLabel}
-          status={status}
-          align="center"
-        />
-      </Box>
-    </Stack>
   );
 }
 

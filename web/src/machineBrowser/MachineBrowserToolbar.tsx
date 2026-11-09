@@ -1,11 +1,12 @@
-/** Browser-style controls of the Machine browser panel: Back, Forward and
- * Reload (key chords on the attached session), the touch keyboard and the
- * "More" menu with the lifecycle and clipboard commands. Mobile places them
- * in a bottom toolbar like a phone browser; Desktop puts the navigation
- * buttons beside the address field. */
+/** Browser-style controls of the Machine browser panel: Close, Back, Forward
+ * and Reload (key chords on the attached session), the touch keyboard and
+ * the "More" menu with the lifecycle and clipboard commands. Mobile places
+ * them, under a one-line identity caption, in a bottom toolbar like a phone
+ * browser; Desktop keeps its top row. */
 import {
   ArrowBackRounded,
   ArrowForwardRounded,
+  CloseRounded,
   KeyboardHideOutlined,
   KeyboardOutlined,
   MoreHorizRounded,
@@ -132,19 +133,28 @@ export function BrowserMenu({
   );
 }
 
-/** The phone browser's bottom bar: five equal targets above the home
- * indicator and the software keyboard. */
+/** Height of the phone toolbar's targets (CSS px). */
+const MOBILE_TARGET = 46;
+
+/** The phone browser's bottom area: the identity caption (16 px line) over
+ * one row of six equal 46 px targets, above the home indicator and the
+ * software keyboard. The phone has no top row. */
 export function MobileBrowserToolbar({
   chrome,
   keyboardOpen,
+  identity,
   onChord,
   onKeyboard,
+  onClose,
   menu,
 }: {
   chrome: BrowserChromeState;
   keyboardOpen: boolean;
+  /** Account, Machine and state on one ellipsized line. */
+  identity: ReactNode;
   onChord: (chord: BrowserChord) => void;
   onKeyboard: () => void;
+  onClose: () => void;
   menu: ReactNode;
 }): React.JSX.Element {
   return (
@@ -157,23 +167,31 @@ export function MobileBrowserToolbar({
         borderTop: 1,
         borderColor: "divider",
         bgcolor: "background.paper",
-        pt: 0.25,
+        pt: "2px",
         pb: "max(4px, calc(env(safe-area-inset-bottom, 0px) - var(--kb-inset, 0px)))",
         pl: "max(8px, env(safe-area-inset-left, 0px))",
         pr: "max(8px, env(safe-area-inset-right, 0px))",
       }}
     >
+      <Box sx={{ px: 1 }}>{identity}</Box>
       <Stack direction="row" justifyContent="space-around" alignItems="center">
+        <IconButton
+          aria-label="Close browser"
+          onClick={onClose}
+          sx={{ width: MOBILE_TARGET, height: MOBILE_TARGET }}
+        >
+          <CloseRounded />
+        </IconButton>
         <BrowserNavigationButtons chrome={chrome} touch onChord={onChord} />
         <IconButton
           aria-label={keyboardOpen ? "Hide keyboard" : "Show keyboard"}
           aria-pressed={keyboardOpen}
           disabled={!chrome.keyboard}
-          // Keep focus in the hidden input so a tap toggles, not reopens.
+          // Keep focus in the keyboard overlay so a tap toggles, not reopens.
           onPointerDown={(event) => event.preventDefault()}
           onMouseDown={(event) => event.preventDefault()}
           onClick={onKeyboard}
-          sx={{ width: 46, height: 46 }}
+          sx={{ width: MOBILE_TARGET, height: MOBILE_TARGET }}
         >
           {keyboardOpen ? <KeyboardHideOutlined /> : <KeyboardOutlined />}
         </IconButton>

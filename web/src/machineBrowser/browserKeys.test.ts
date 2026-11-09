@@ -24,8 +24,17 @@ test("reload presses and releases F5", () => {
   ]);
 });
 
+test("paste presses Ctrl+V and releases V before Ctrl", () => {
+  assertEquals(chordStrokes("paste"), [
+    { keysym: 0xffe3, code: "ControlLeft", down: true },
+    { keysym: 0x76, code: "KeyV", down: true },
+    { keysym: 0x76, code: "KeyV", down: false },
+    { keysym: 0xffe3, code: "ControlLeft", down: false },
+  ]);
+});
+
 test("every chord releases each key it pressed", () => {
-  for (const chord of ["back", "forward", "reload"] as const) {
+  for (const chord of ["back", "forward", "reload", "paste"] as const) {
     const strokes = chordStrokes(chord);
     const held = new Set<number>();
     for (const stroke of strokes) {

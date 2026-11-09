@@ -1086,17 +1086,18 @@ dependency is acceptable; its application UI, `resizeSession` and clipboard
 automation are not used. The chrome always shows the label of the account
 whose browser it displays and the Machine it runs on.
 
-- **Browser chrome.** The panel adds only a slim top row with Close and
-  the account label, Machine and state; the remote page fills the frame
-  below it and the remote Chromium shows its own address bar and tabs, so
-  the panel adds no address field of its own. Back, Forward and Reload send the
+- **Browser chrome.** The panel adds only Close and one identity line
+  (account label, Machine and state): a slim top row on Desktop, the bottom
+  area on a phone. The remote page fills the frame and the remote Chromium
+  shows its own address bar and tabs, so the panel adds no address field of
+  its own. Back, Forward and Reload send the
   standard Chromium key chords through the attached RFB session (Alt+Left,
   Alt+Right, F5; every pressed key is released in reverse order); they and
   the touch keyboard are enabled only while this panel's viewer is
   connected, and act only on the viewer mounted for the shown account,
   Machine and instance. The "More" menu holds Hibernate, Save snapshot,
   Restart for this screen (on a scale mismatch), Stop viewing, Reset
-  profile, Paste from this device, Copy remote clipboard to this device,
+  profile, Paste from this device…, Copy remote clipboard to this device,
   Refresh state and Close; inapplicable entries are disabled. Without an
   attached display the frame shows a browser-like empty page naming the
   state and Machine with one primary action (Open browser, the Machine
@@ -1112,20 +1113,35 @@ whose browser it displays and the Machine it runs on.
   document element, so menus and confirmations stay visible); Esc leaves
   full screen before it can close the panel.
 
-- **Resize authority.** The viewer is the only size authority: it measures
-  its container in CSS pixels (a `ResizeObserver`, debounced and ignoring
-  sub-threshold jitter), requests `width = css × scale` and
-  `height = css × scale` as a `{type:"resize"}` text frame on the attached
-  stream, bounded to the wire limits, and renders the framebuffer scaled to
-  fit. The server never resizes on its own and `AcceptSetDesktopSize` is off,
-  so the noVNC CSS-pixel resize race cannot occur. `POST .../browser/resize`
-  stays for callers without a stream (the MCP operation).
-- **Scale and device handoff.** `scale` is chosen at open (1 on pointer
-  devices, 2 on touch devices) and is immutable for the incarnation because
-  it is a Chromium launch flag. A device that attaches with a different
-  preferred scale sees the framebuffer scaled to fit and an explicit
-  "Restart for this screen" action, which hibernates (snapshotting) and
-  reopens with the new scale (new incarnation). The restart stays on the
+- **Screen modes and resize authority.** The remote screen is never sized
+  to the device. As in neko, it runs one of a few fixed, ordinary modes at
+  scale 1 and the viewer scales the framebuffer to fit and letterboxes it
+  (noVNC `scaleViewport`). Pointer devices get the largest of 1280x800,
+  1440x900 and 1920x1080 that fits the frame at DPR 1 (never less than
+  1280x800). Touch devices get 720x1280 held upright and 1280x720 on their
+  side: 720 px is below the common 768 px tablet breakpoint, so sites lay
+  out for a phone, a 9:16 screen nearly matches a phone's frame (about 393
+  by 690 CSS px between the status bar and the toolbar), so little of it is
+  letterbox, and the narrower mode keeps text larger than neko's 800x1600.
+  Touch versus mouse follows neko's rule (touch points, and neither
+  `(pointer: fine)` nor `(hover: hover)`), with the surface profile as the
+  fallback where media queries are missing; orientation comes from the
+  Screen Orientation API (else `window.orientation`, else the window's
+  shape), never from the frame. The viewer is the only size authority: it
+  re-requests a mode, debounced, only when the mode changes (a rotation, or
+  a Desktop window resize crossing into another mode) as a
+  `{type:"resize"}` text frame on the attached stream; the soft keyboard
+  and the panel chrome never resize the remote. Every mode lies within the
+  wire bounds (320x480 to 4096x4096). The server never resizes on its own
+  and `AcceptSetDesktopSize` is off, so the noVNC CSS-pixel resize race
+  cannot occur. `POST .../browser/resize` stays for callers without a
+  stream (the MCP operation).
+- **Scale and device handoff.** `scale` is chosen at open and is immutable
+  for the incarnation because it is a Chromium launch flag. Every viewer now
+  opens at scale 1, so the remote looks like an ordinary screen; an
+  incarnation an older client opened at scale 2 is still scaled to fit and
+  offers an explicit "Restart for this screen" action, which hibernates
+  (snapshotting) and reopens at scale 1 (new incarnation). The restart stays on the
   captured Machine: it reopens only after that Machine confirms the
   captured instance stopped (the hibernate's answer, else reads pinned to
   that Machine, about 30 s at most: `hibernated` for that instance and
@@ -1180,20 +1196,46 @@ whose browser it displays and the Machine it runs on.
   (for example `storage_exceeded`, `busy`). A stopped browser and every
   reset are reported without an instance (`instance_id: ""`,
   `incarnation: 0`), which is valid only as `hibernated`.
-- **Mobile sheet.** An edge-to-edge full-screen cover: the top bar clears
-  the status bar and side safe areas and has Close at its leading edge; the
-  frame fills everything between the top bar and a phone-browser bottom
-  toolbar with Back, Forward, Reload, Keyboard and More. Keyboard focuses a
-  hidden input with autocorrect, autocapitalize and smart punctuation off
-  (composition events are sent as text); Paste (local clipboard to remote
-  via `ClientCutText`) and Copy remote clipboard are in More. Tap focuses
-  the remote, two-finger drag scrolls, long press is right click. The
-  toolbar sits above the home indicator and the app shell's keyboard inset
-  (`--kb-inset`) so the software keyboard never covers it; the viewer
-  requests the framebuffer size of the frame it actually has (Resize
-  authority). Backgrounding the app suspends lease renewal, which detaches
-  within 30 s; returning shows the detached state and the Open browser
-  action while the grace period keeps the instance alive.
+- **Mobile sheet.** An edge-to-edge full-screen cover with no top row:
+  the frame starts right below the status bar (safe-area top inset) and
+  fills everything down to the bottom area, which holds one ellipsized
+  16 px identity line (account, Machine, state) over one row of six 46 px
+  targets, Close, Back, Forward, Reload, Keyboard and More (2 px top
+  padding, then the safe-area bottom inset less `--kb-inset`, at least
+  4 px: 68 px plus the home indicator). Nothing overlays the framebuffer but
+  transient banners. The bottom area clears the side safe areas and sits
+  above the home indicator and the app shell's keyboard inset, so the
+  software keyboard never covers it. Tap clicks, two-finger drag scrolls,
+  long press is right click. Backgrounding the app suspends lease renewal,
+  which detaches within 30 s; returning shows the detached state and the
+  Open browser action while the grace period keeps the instance alive.
+- **Touch keyboard.** As in neko, a transparent full-size `<textarea>`
+  lies over the framebuffer (16 px so iOS never zooms; autocapitalize,
+  autocomplete and autocorrect off, no spellcheck, `inputmode="text"`). It
+  ignores pointers, so taps, long presses and scrolls still reach noVNC
+  below, and it is never focused by default: the toolbar Keyboard button
+  focuses or blurs it synchronously inside the tap and prevents the
+  button's pointer and mouse down so focus stays. While it is focused, taps
+  on the page do not move focus. Text is the text the OS committed, never
+  inferred from key events: it is sent on `input` when no composition is
+  running and on `compositionend`, never during a composition, and the field
+  is emptied after every send. Short printable ASCII (at most 32
+  characters) is pressed as keysyms (Xvnc adds the Shift a capital or
+  shifted symbol needs); non-ASCII text such as an IME result, emoji and
+  longer insertions go through the remote clipboard and Ctrl+V. Backspace,
+  Enter, Tab, Escape, Delete, Home, End and the arrows come from `keydown`
+  (prevented; IME key code 229 and composing keys are ignored). This avoids
+  neko #724, where guacamole.js guesses characters from key events and
+  loses capitals, shifted symbols and text after a composition on iOS. The
+  overlay feeds only the session of the viewer that owns it, which is
+  mounted for exactly one account, Machine and instance.
+- **Paste from this device.** Safari and Firefox cannot sync a clipboard by
+  themselves, so the menu entry opens a small sheet with a text field,
+  prefilled from `navigator.clipboard.readText()` only when the browser
+  allows it inside the tap and empty for a manual paste otherwise. Send
+  sets the remote clipboard (`ClientCutText`) and presses Ctrl+V on exactly
+  the viewer that was bound when the sheet opened; the sheet closes without
+  sending once another viewer is shown.
 - **Remote clipboard.** Xvnc forwards only explicit copies (`SendPrimary=0`).
   A received cut text is held in viewer memory for the open attachment and
   offered as the explicit "Copy remote clipboard (n characters) to this

@@ -24,6 +24,8 @@ import {
 } from "./browserModel";
 import { validSubscriptionSnapshot } from "../subscriptionAccounts";
 import { type ViewerControls, addressCommand, chromeState, controlsFor } from "./browserChrome";
+import type { KeyboardSink } from "./touchKeyboard";
+import { bindTouchKeyboard } from "./touchKeyboardBridge";
 import {
   accountBrowserEntry,
   legacyBrowserOfProvider,
@@ -397,14 +399,18 @@ test("a link opens and navigates only this account's browser on the login's Mach
 
 function recordingControls(account: string, target: BrowserTarget) {
   const chords: string[] = [];
+  const pastes: string[] = [];
+  let keyboard = 0;
   const controls: ViewerControls = {
     account,
     target,
     chord: (chord) => chords.push(chord),
-    toggleKeyboard: () => {},
-    paste: () => {},
+    toggleKeyboard: () => {
+      keyboard += 1;
+    },
+    paste: (text) => pastes.push(text),
   };
-  return { controls, chords };
+  return { controls, chords, pastes, keyboard: () => keyboard };
 }
 
 test("toolbar key controls act only on the viewer of the shown account, Machine and instance", () => {
@@ -523,4 +529,81 @@ test("the address bar navigates only the running browser this account's panel sh
       },
     },
   ]);
+});
+
+/** One mounted viewer's keyboard path: its overlay and its session. */
+function mountedKeyboard() {
+  const area = Object.assign(new EventTarget(), { value: "" });
+  const sent: string[] = [];
+  const sink: KeyboardSink = {
+    sendKey: (action) => sent.push(String.fromCodePoint(action.keysym)),
+    pasteText: (text) => sent.push(`paste:${text}`),
+    setFocusOnClick: () => {},
+  };
+  // The viewer's session ref: cleared when the viewer unmounts.
+  let session: KeyboardSink | undefined = sink;
+  const unbind = bindTouchKeyboard(
+    area,
+    () => session,
+    () => {},
+  );
+  const type = (text: string): void => {
+    area.value = text;
+    area.dispatchEvent(Object.assign(new Event("input"), { isComposing: false }));
+  };
+  const unmount = (): void => {
+    session = undefined;
+    unbind();
+  };
+  return { type, sent, unmount };
+}
+
+test("keyboard overlay input and pastes reach only the viewer of the shown account, Machine and instance", () => {
+  let state: AccountBrowserModel = { account: A, model: INITIAL_BROWSER_MODEL };
+  state = reduceAccountBrowser(state, {
+    kind: "event",
+    account: A,
+    event: { type: "result", action: "open", result: openA, now: 1 },
+  });
+  const a = modelFor(state, A);
+  const fromA = recordingControls(A, shownTarget(a)!);
+  const keyboardA = mountedKeyboard();
+  // Each overlay feeds only the session of the viewer that owns it.
+  keyboardA.type("Hi");
+  keyboardA.type("你好");
+  assertEquals(keyboardA.sent, ["H", "i", "paste:你好"]);
+  // B's panel replaces A's: A's viewer unmounts and its overlay goes quiet.
+  keyboardA.unmount();
+  keyboardA.type("late");
+  assertEquals(keyboardA.sent, ["H", "i", "paste:你好"]);
+  state = reduceAccountBrowser(state, { kind: "bind", account: B });
+  state = reduceAccountBrowser(state, {
+    kind: "event",
+    account: B,
+    event: { type: "result", action: "open", result: openB, now: 2 },
+  });
+  const b = modelFor(state, B);
+  // A's controls never toggle B's keyboard nor paste into B's browser.
+  assertEquals(controlsFor(fromA.controls, B, b), undefined);
+  controlsFor(fromA.controls, B, b)?.paste("secret");
+  controlsFor(fromA.controls, B, b)?.toggleKeyboard();
+  assertEquals(fromA.pastes, []);
+  assertEquals(fromA.keyboard(), 0);
+  assertEquals(chromeState(b, false, 1).keyboard, false);
+  assertEquals(chromeState(b, false, 1).paste, false);
+  // B's own viewer, bound to B's Machine and instance, receives them.
+  const fromB = recordingControls(B, shownTarget(b)!);
+  const keyboardB = mountedKeyboard();
+  controlsFor(fromB.controls, B, b)?.paste("code 123");
+  controlsFor(fromB.controls, B, b)?.toggleKeyboard();
+  keyboardB.type("ok");
+  assertEquals(fromB.pastes, ["code 123"]);
+  assertEquals(fromB.keyboard(), 1);
+  assertEquals(keyboardB.sent, ["o", "k"]);
+  assertEquals(keyboardA.sent, ["H", "i", "paste:你好"]);
+  // An older incarnation's viewer of B is refused the paste too.
+  const older = shownTarget(b)!;
+  const stale = recordingControls(B, { ...older, instance: { ...older.instance, incarnation: 1 } });
+  controlsFor(stale.controls, B, b)?.paste("secret");
+  assertEquals(stale.pastes, []);
 });

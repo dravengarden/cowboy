@@ -21,6 +21,7 @@ export interface ViewerControls {
   target: BrowserTarget;
   chord(chord: BrowserChord): void;
   toggleKeyboard(): void;
+  /** Set the remote clipboard to `text` and press Ctrl+V. */
   paste(text: string): void;
 }
 

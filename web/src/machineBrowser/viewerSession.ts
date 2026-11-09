@@ -13,7 +13,7 @@ import {
   createBrowserStream,
 } from "./stream";
 import { type BrowserChord, chordStrokes } from "./browserKeys";
-import type { KeyAction } from "./touchKeyboard";
+import type { KeyAction, KeyboardSink } from "./touchKeyboard";
 
 export type ViewerEnd =
   | { kind: "closed"; close: StreamClose }
@@ -35,16 +35,18 @@ export interface ViewerSessionOptions {
   onEnded(end: ViewerEnd): void;
 }
 
-export interface ViewerSession {
+export interface ViewerSession extends KeyboardSink {
   resize(width: number, height: number): void;
-  paste(text: string): void;
   sendKey(action: KeyAction): void;
-  /** Press a browser navigation chord (`chordStrokes`) on the remote. */
+  /** Press a browser chord (`chordStrokes`) on the remote. */
   sendChord(chord: BrowserChord): void;
-  /** Whether a tap or click on the screen moves keyboard focus to it. */
-  setFocusOnClick(value: boolean): void;
   focus(): void;
   close(): void;
+}
+
+function sendChord(client: RFB | undefined, chord: BrowserChord): void {
+  if (!client) return;
+  for (const stroke of chordStrokes(chord)) client.sendKey(stroke.keysym, stroke.code, stroke.down);
 }
 
 export function startViewerSession(options: ViewerSessionOptions): ViewerSession {
@@ -111,13 +113,15 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
     resize: (width, height) => {
       stream?.sendResize(width, height);
     },
-    paste: (text) => rfb?.clipboardPasteFrom(text),
     sendKey: (action) => rfb?.sendKey(action.keysym, action.code),
-    sendChord: (chord) => {
+    sendChord: (chord) => sendChord(rfb, chord),
+    // ClientCutText and the key events travel in order on one RFB stream,
+    // so the remote clipboard holds `text` before Ctrl+V is pressed.
+    pasteText: (text) => {
       const client = rfb;
       if (!client) return;
-      for (const stroke of chordStrokes(chord))
-        client.sendKey(stroke.keysym, stroke.code, stroke.down);
+      client.clipboardPasteFrom(text);
+      sendChord(client, "paste");
     },
     setFocusOnClick: (value) => {
       focusOnClick = value;

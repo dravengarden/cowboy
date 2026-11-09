@@ -14,9 +14,13 @@ import {
   browserViewport,
   createMachineBrowserApi,
   namesInstance,
-  sizeChanged,
+  viewportChanged,
   validBrowserRead,
   validBrowserState,
+  DESKTOP_MODES,
+  LANDSCAPE_MODE,
+  PORTRAIT_MODE,
+  VIEWPORT_LIMITS,
 } from "./api";
 
 const account = "11111111-2222-4333-8444-555555555555";
@@ -97,19 +101,42 @@ test("lifecycle reasons have text and absent reasons have none", () => {
   assertEquals(browserStateLabel(null), "Never opened");
 });
 
-test("viewports scale the CSS size and stay within the wire bounds", () => {
-  assertEquals(browserViewport(390, 700, 2), { width: 780, height: 1400, scale: 2 });
-  assertEquals(browserViewport(100, 100, 1), { width: 320, height: 480, scale: 1 });
-  assertEquals(browserViewport(5000, 3000, 2), { width: 4096, height: 4096, scale: 2 });
-  assertEquals(browserViewport(Number.NaN, Number.POSITIVE_INFINITY, 1), {
-    width: 320,
-    height: 480,
+test("pointer screens get the largest fixed mode that fits the frame at scale 1", () => {
+  const pointer = { touch: false, portrait: false };
+  assertEquals(browserViewport(1240, 760, pointer), { width: 1280, height: 800, scale: 1 });
+  assertEquals(browserViewport(1500, 950, pointer), { width: 1440, height: 900, scale: 1 });
+  assertEquals(browserViewport(1920, 1080, pointer), { width: 1920, height: 1080, scale: 1 });
+  assertEquals(browserViewport(2560, 1400, pointer), { width: 1920, height: 1080, scale: 1 });
+  // A wide but short window keeps the smallest mode rather than a sliver.
+  assertEquals(browserViewport(1900, 600, pointer), { width: 1280, height: 800, scale: 1 });
+  // A desktop held "portrait" is still measured by its frame.
+  assertEquals(browserViewport(1500, 950, { touch: false, portrait: true }).width, 1440);
+  assertEquals(browserViewport(Number.NaN, Number.POSITIVE_INFINITY, pointer), {
+    width: 1280,
+    height: 800,
     scale: 1,
   });
-  assertEquals(browserViewport(1280.4, 799.6, 1), { width: 1280, height: 800, scale: 1 });
-  assertEquals(sizeChanged({ width: 800, height: 600 }, { width: 815, height: 600 }, 16), false);
-  assertEquals(sizeChanged({ width: 800, height: 600 }, { width: 816, height: 600 }, 16), true);
-  assertEquals(sizeChanged({ width: 800, height: 600 }, { width: 800, height: 584 }, 16), true);
+});
+
+test("touch screens get one mode per orientation whatever the frame measures", () => {
+  const upright = { touch: true, portrait: true };
+  const sideways = { touch: true, portrait: false };
+  assertEquals(browserViewport(390, 670, upright), { width: 720, height: 1280, scale: 1 });
+  // The soft keyboard halves the frame: the mode stays, nothing is resized.
+  assertEquals(browserViewport(390, 300, upright), { width: 720, height: 1280, scale: 1 });
+  assertEquals(browserViewport(820, 1100, upright), { width: 720, height: 1280, scale: 1 });
+  assertEquals(browserViewport(844, 300, sideways), { width: 1280, height: 720, scale: 1 });
+  assertEquals(browserViewport(1180, 700, sideways), { width: 1280, height: 720, scale: 1 });
+});
+
+test("every mode lies within the wire bounds and only a mode change resizes", () => {
+  for (const mode of [...DESKTOP_MODES, PORTRAIT_MODE, LANDSCAPE_MODE]) {
+    assert(mode.width >= VIEWPORT_LIMITS.minWidth && mode.width <= VIEWPORT_LIMITS.maxDimension);
+    assert(mode.height >= VIEWPORT_LIMITS.minHeight && mode.height <= VIEWPORT_LIMITS.maxDimension);
+  }
+  assertEquals(viewportChanged(PORTRAIT_MODE, { width: 720, height: 1280 }), false);
+  assertEquals(viewportChanged(PORTRAIT_MODE, LANDSCAPE_MODE), true);
+  assertEquals(viewportChanged({ width: 1280, height: 800 }, { width: 1440, height: 900 }), true);
 });
 
 test("the stream URL names the shown instance, the viewport and only an explicit takeover", () => {

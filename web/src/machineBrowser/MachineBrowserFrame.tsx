@@ -5,7 +5,7 @@
 import { PublicOutlined } from "@mui/icons-material";
 import { Alert, Box, Button, Stack, Typography } from "@mui/material";
 import { type RefObject, Suspense, lazy } from "react";
-import { type BrowserScale, type BrowserStateEvent, browserErrorText } from "./api";
+import { type BrowserStateEvent, browserErrorText } from "./api";
 import { type ViewerControls, browserStateSummary } from "./browserChrome";
 import { type BrowserModel, browserRunning } from "./browserModel";
 import type { ConfirmKind } from "./confirmation";
@@ -149,7 +149,7 @@ export interface BrowserFrameProps {
   browser: MachineBrowserController;
   account: { id: string; label: string };
   machineLabel: string;
-  scale: BrowserScale;
+  /** Touch input (`useTouchInput`), not the panel layout. */
   touch: boolean;
   link: boolean;
   pinned: boolean;
@@ -162,10 +162,10 @@ export interface BrowserFrameProps {
   onKeyboard: (open: boolean) => void;
 }
 
-/** The frame is the measured area: opens request a framebuffer of its size
- * and the mounted viewer keeps it in step with every resize. */
+/** The frame is the measured area: opens request the screen mode for it and
+ * the mounted viewer re-requests only when that mode changes. */
 export function BrowserFrame(props: BrowserFrameProps): React.JSX.Element {
-  const { areaRef, browser, account, scale, touch, commands } = props;
+  const { areaRef, browser, account, touch, commands } = props;
   const { model, dispatch } = browser;
   const state = model.read?.state ?? null;
   return (
@@ -193,7 +193,6 @@ export function BrowserFrame(props: BrowserFrameProps): React.JSX.Element {
             key={model.viewer.generation}
             account={account.id}
             target={model.viewer.target}
-            scale={scale}
             takeover={model.viewer.takeover}
             touch={touch}
             onState={(next) => dispatch({ type: "stream_state", state: next })}

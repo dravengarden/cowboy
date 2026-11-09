@@ -1,20 +1,22 @@
-/** React binding of one viewer session: opens the stream for the measured
- * container, keeps the latest callbacks without resubscribing, and turns
- * settled container resizes into bounded resize requests. The viewer is the
- * only size authority (docs/machine-browser.md, "Viewer (core web)"). */
+/** React binding of one viewer session: opens the stream at the screen mode
+ * for this device, keeps the latest callbacks without resubscribing, and
+ * re-requests the mode only when it changes (a rotation, or a desktop window
+ * resize crossing into another mode); the soft keyboard and the panel chrome
+ * never resize the remote. The viewer is the only size authority
+ * (docs/machine-browser.md, "Viewer (core web)"). */
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { announceProductAuthSession } from "../productAuthEvents";
 import {
-  type BrowserScale,
   type BrowserStateEvent,
   type BrowserTarget,
   browserErrorText,
   browserReasonText,
   browserStreamUrl,
   browserViewport,
-  sizeChanged,
+  viewportChanged,
 } from "./api";
 import { viewerEnds } from "./browserModel";
+import { devicePortrait, onOrientationChange } from "./inputProfile";
 import { type ViewerEnd, type ViewerSession, startViewerSession } from "./viewerSession";
 
 export interface ViewerCallbacks {
@@ -26,7 +28,6 @@ export interface ViewerCallbacks {
 }
 
 const RESIZE_DEBOUNCE_MS = 250;
-const RESIZE_THRESHOLD_PX = 16;
 
 export function viewerEndMessage(end: ViewerEnd): string {
   switch (end.kind) {
@@ -59,7 +60,7 @@ export function useViewerSession({
   screenRef,
   account,
   target,
-  scale,
+  touch,
   takeover,
   callbacks,
 }: {
@@ -69,7 +70,8 @@ export function useViewerSession({
   /** The exact Machine and instance to attach to (an open's answer or the
    * state shown); the Controller never substitutes another browser. */
   target: BrowserTarget;
-  scale: BrowserScale;
+  /** Touch input: the mode follows the device's orientation. */
+  touch: boolean;
   takeover: boolean;
   callbacks: ViewerCallbacks;
 }): { sessionRef: RefObject<ViewerSession | undefined>; connected: boolean } {
@@ -83,14 +85,17 @@ export function useViewerSession({
     const container = containerRef.current;
     const target = screenRef.current;
     if (!container || !target) return undefined;
-    const rect = container.getBoundingClientRect();
-    let sent = { width: rect.width, height: rect.height };
+    const viewportNow = () => {
+      const rect = container.getBoundingClientRect();
+      return browserViewport(rect.width, rect.height, { touch, portrait: devicePortrait() });
+    };
+    let sent = viewportNow();
     const session = startViewerSession({
       target,
       url: browserStreamUrl(
         account,
         { machine_id: machineId, instance: { account_id: account, instance_id, incarnation } },
-        browserViewport(rect.width, rect.height, scale),
+        sent,
         takeover,
       ),
       onState: (state) => {
@@ -105,24 +110,26 @@ export function useViewerSession({
     });
     sessionRef.current = session;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const observer = new ResizeObserver(() => {
+    const settle = (): void => {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        const next = container.getBoundingClientRect();
-        if (!sizeChanged(sent, next, RESIZE_THRESHOLD_PX)) return;
-        sent = { width: next.width, height: next.height };
-        const viewport = browserViewport(next.width, next.height, scale);
-        session.resize(viewport.width, viewport.height);
+        const next = viewportNow();
+        if (!viewportChanged(sent, next)) return;
+        sent = next;
+        session.resize(next.width, next.height);
       }, RESIZE_DEBOUNCE_MS);
-    });
+    };
+    const observer = new ResizeObserver(settle);
     observer.observe(container);
+    const stopOrientation = onOrientationChange(settle);
     return () => {
       clearTimeout(timer);
       observer.disconnect();
+      stopOrientation();
       session.close();
       sessionRef.current = undefined;
       latest.current.onRemoteClipboard(undefined);
     };
-  }, [account, containerRef, incarnation, instance_id, machineId, scale, screenRef, takeover]);
+  }, [account, containerRef, incarnation, instance_id, machineId, screenRef, takeover, touch]);
   return { sessionRef, connected };
 }
