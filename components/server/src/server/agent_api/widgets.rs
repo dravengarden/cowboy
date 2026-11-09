@@ -240,7 +240,7 @@ async fn effect(
             {
                 UpdateOutcome::Committed(widget) => {
                     let decided =
-                        super::widget_interactions::decided(store, &meta.id, &widget).await;
+                        super::widget_interactions::refresh(store, &meta.id, &widget).await;
                     push(state, &meta.id, &widget, operation, decided);
                     Ok(success(
                         json!({"status":"committed","widget_id":widget.widget_id,"revision":widget.revision,

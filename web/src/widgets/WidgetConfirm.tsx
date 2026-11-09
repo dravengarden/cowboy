@@ -51,7 +51,11 @@ export default function WidgetConfirm({
       title="Send this reply?"
       actions={
         <>
-          <Button onClick={(): void => onClose(false)} disabled={busy} sx={{ textTransform: "none" }}>
+          <Button
+            onClick={(): void => onClose(false)}
+            disabled={busy}
+            sx={{ textTransform: "none" }}
+          >
             Cancel
           </Button>
           <Button

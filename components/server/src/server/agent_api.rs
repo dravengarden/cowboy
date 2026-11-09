@@ -40,7 +40,7 @@ mod widget_images;
 mod widget_interactions;
 mod widgets;
 pub(super) use actions::{invoke, read_parent};
-pub(super) use widget_interactions::api_widget_interaction;
+pub(super) use widget_interactions::{api_widget_interaction, recover_decisions};
 /// Concurrent programs across the Controller; excess is refused, not queued.
 static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
 /// Raw hot-log events one `session.events` call may coalesce.

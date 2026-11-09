@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import { assert, assertEquals } from "../../../tools/test-assert.ts";
 import { approval, comparison, statusTable } from "../../../contracts/widget-v1.examples.ts";
-import { parseWidgetSource } from "./widgetDocument";
+import { parseWidgetSource, parseWidgetValue } from "./widgetDocument";
 
 test("the contract examples parse", () => {
   for (const document of [statusTable, comparison, approval]) {
@@ -87,4 +87,15 @@ test("the aggregate cell budget is enforced across tables", () => {
     }),
   );
   assert(!result.ok, "2,400 cells accepted");
+});
+
+test("a button's action fields are checked before any renderer reads them", () => {
+  for (const action of [{ kind: "open" }, { kind: "open", to: { kind: "url" } }, { kind: "copy" }]) {
+    const parsed = parseWidgetValue({
+      schema: "cowboy.widget/1",
+      title: "x",
+      root: { type: "button", id: "b", label: "Go", action },
+    });
+    assert(!parsed.ok, JSON.stringify(action));
+  }
 });

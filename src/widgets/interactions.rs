@@ -35,57 +35,66 @@ fn refuse(code: &'static str, message: impl Into<String>) -> Refusal {
     }
 }
 
-/// The interactive node `id` of a document.
-fn find<'v>(value: &'v Value, id: &str) -> Option<&'v Map<String, Value>> {
-    match value {
-        Value::Object(map) => {
-            if map.get("id").and_then(Value::as_str) == Some(id)
-                && matches!(
-                    map.get("type").and_then(Value::as_str),
-                    Some("button" | "choice")
-                )
-            {
-                return Some(map);
-            }
-            map.values().find_map(|child| find(child, id))
-        }
-        Value::Array(items) => items.iter().find_map(|item| find(item, id)),
-        _ => None,
-    }
+/// One input of the rendered tree and the implicit group of its card.
+struct Input<'v> {
+    node: &'v Map<String, Value>,
+    card: Option<&'v str>,
 }
 
-fn each_input<'v>(value: &'v Value, out: &mut Vec<&'v Map<String, Value>>) {
-    match value {
-        Value::Object(map) => {
-            if matches!(
-                map.get("type").and_then(Value::as_str),
-                Some("button" | "choice")
-            ) && map.get("id").and_then(Value::as_str).is_some()
-            {
-                out.push(map);
+/// The inputs a person can see, in document order. Only rendered edges are
+/// followed (`children`, and a card's `actions`), so a node hidden in an
+/// ignored property can neither be addressed nor shadow a visible one.
+fn inputs(node: &Value) -> Vec<Input<'_>> {
+    fn walk<'v>(node: &'v Value, card: Option<&'v str>, out: &mut Vec<Input<'v>>) {
+        let Some(map) = node.as_object() else { return };
+        match map.get("type").and_then(Value::as_str) {
+            Some("button" | "choice") if map.get("id").and_then(Value::as_str).is_some() => {
+                out.push(Input { node: map, card });
             }
-            for child in map.values() {
-                each_input(child, out);
+            Some("card") => {
+                let id = map.get("id").and_then(Value::as_str);
+                for action in map
+                    .get("actions")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    walk(action, id, out);
+                }
             }
+            _ => {}
         }
-        Value::Array(items) => {
-            for item in items {
-                each_input(item, out);
-            }
+        for child in map
+            .get("children")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            walk(child, None, out);
         }
-        _ => {}
     }
+    let mut out = Vec::new();
+    walk(node, None, &mut out);
+    out
+}
+
+fn find<'v>(root: &'v Value, id: &str) -> Option<Input<'v>> {
+    inputs(root)
+        .into_iter()
+        .find(|input| input.node.get("id").and_then(Value::as_str) == Some(id))
 }
 
 fn text<'v>(node: &'v Map<String, Value>, key: &str) -> &'v str {
     node.get(key).and_then(Value::as_str).unwrap_or_default()
 }
 
-fn group_key(node: &Map<String, Value>) -> String {
-    node.get("group").and_then(Value::as_str).map_or_else(
-        || format!("node:{}", text(node, "id")),
-        |group| format!("group:{group}"),
-    )
+/// Explicit `group` first; card actions without one share their card.
+fn group_key(input: &Input<'_>) -> String {
+    match (input.node.get("group").and_then(Value::as_str), input.card) {
+        (Some(group), _) => format!("group:{group}"),
+        (None, Some(card)) => format!("card:{card}"),
+        (None, None) => format!("node:{}", text(input.node, "id")),
+    }
 }
 
 /// Digest of what the person reads and chooses from on this input.
@@ -127,8 +136,9 @@ pub fn decide(
     node_id: &str,
     values: &[String],
 ) -> Result<Decision, Refusal> {
-    let node = find(&document["root"], node_id)
+    let input = find(&document["root"], node_id)
         .ok_or_else(|| refuse("unknown_input", "this widget has no such input"))?;
+    let node = input.node;
     let labels = match text(node, "type") {
         "button" => {
             if node
@@ -202,7 +212,7 @@ pub fn decide(
     };
     Ok(Decision {
         node_id: node_id.to_owned(),
-        group_key: group_key(node),
+        group_key: group_key(&input),
         signature: signature(node),
         labels,
         message,
@@ -223,34 +233,43 @@ pub struct Decided<'a> {
 /// counts while its input still exists unchanged; `decided` is newest first.
 #[must_use]
 pub fn decided_inputs(document: &Value, decided: &[Decided<'_>]) -> Map<String, Value> {
-    let mut inputs = Vec::new();
-    each_input(&document["root"], &mut inputs);
-    let live = |record: &&Decided<'_>| {
-        inputs.iter().any(|node| {
-            text(node, "id") == record.node_id
-                && group_key(node) == record.group_key
-                && signature(node) == record.signature
-        })
-    };
+    let inputs = inputs(&document["root"]);
     let mut out = Map::new();
-    for node in &inputs {
-        let key = group_key(node);
+    for input in &inputs {
+        let key = group_key(input);
         if let Some(record) = decided
             .iter()
-            .filter(live)
+            .filter(|record| live(&inputs, record))
             .find(|record| record.group_key == key)
         {
+            let id = text(input.node, "id");
             out.insert(
-                text(node, "id").to_owned(),
+                id.to_owned(),
                 json!({
                     "labels": record.labels,
-                    "chosen": record.node_id == text(node, "id"),
+                    "chosen": record.node_id == id,
                     "atMs": record.created_at_ms,
                 }),
             );
         }
     }
     out
+}
+
+/// A decision counts while its input still exists unchanged, in its group.
+fn live(inputs: &[Input<'_>], record: &Decided<'_>) -> bool {
+    inputs.iter().any(|input| {
+        text(input.node, "id") == record.node_id
+            && group_key(input) == record.group_key
+            && signature(input.node) == record.signature
+    })
+}
+
+/// Whether a recorded decision still settles an input of `document`; an
+/// update that changes the decided input retires it for good.
+#[must_use]
+pub fn still_live(document: &Value, record: &Decided<'_>) -> bool {
+    live(&inputs(&document["root"]), record)
 }
 
 /// The prompt id of a decision: the same tap retried is the same prompt.
@@ -324,6 +343,31 @@ mod tests {
                 &decide(&doc, "w4", 2, "cache", &["cargo".into(), "logs".into()]).unwrap()
             ),
             "the same selection is the same prompt"
+        );
+    }
+
+    #[test]
+    fn only_rendered_inputs_count_and_card_actions_share_a_group() {
+        let doc = json!({"title":"T","root":{"type":"card","id":"plan","children":[],
+            "hidden":{"type":"button","id":"ok","label":"\u{202E}evil","action":{"kind":"prompt"}},
+            "actions":[{"type":"button","id":"ok","label":"Approve","action":{"kind":"prompt"}},
+                       {"type":"button","id":"no","label":"Reject","action":{"kind":"prompt"}}]}});
+        let ok = decide(&doc, "w1", 1, "ok", &[]).unwrap();
+        assert_eq!(ok.message, "Widget #w1 “T” (revision 1): Approve");
+        assert_eq!(ok.group_key, "card:plan");
+        let record = Decided {
+            node_id: &ok.node_id,
+            group_key: &ok.group_key,
+            signature: &ok.signature,
+            labels: &ok.labels,
+            created_at_ms: 1,
+        };
+        assert_eq!(decided_inputs(&doc, &[record])["no"]["chosen"], false);
+        let mut only_hidden = doc.clone();
+        only_hidden["root"]["actions"] = json!([]);
+        assert_eq!(
+            decide(&only_hidden, "w1", 1, "ok", &[]).unwrap_err().code,
+            "unknown_input"
         );
     }
 

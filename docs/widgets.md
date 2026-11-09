@@ -127,7 +127,20 @@ typing-free, auditable decisions within measured bounds.
   and stay inert until a later revision changes the decided input's labels,
   options or group (F5). `widgets.read` returns the newest interactions.
   `copy` and `https:` `open` buttons act locally; inline fences stay inert.
-  F7 is moot with the interaction lookup pages gone.
+  F7 is moot with the interaction lookup pages gone. Astra Max review of the
+  slice (`call-5c0e2191cd5250e295a1fbf2`) shaped the delivery rules: inputs
+  are addressed only through rendered edges (`children`, card `actions`), so
+  a node hidden in an ignored property can neither be sent nor shadow a
+  visible one; card actions without a `group` share their card; the decision
+  row is written before the prompt is queued, a retried tap resubmits only
+  while no stored user echo carries its `cmid`, and Controller start re-queues
+  recorded decisions of the last 24 h whose echo never landed (the browser
+  outbox guarantee for typed messages); every widget update retires
+  decisions whose input changed, so a later revision restoring it asks again;
+  the decided state reads every active decision, never a bounded page. A
+  Clear in the instant between the record and the queue still delivers the
+  decision into the cleared conversation, as it would a message typed at the
+  same moment; a Clear before the record makes the send refuse as `cleared`.
 
 ## 1. Review findings and resolutions
 

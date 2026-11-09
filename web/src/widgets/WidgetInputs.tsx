@@ -84,13 +84,18 @@ function ErrorNote({ text }: { text: string | null }): React.JSX.Element | null 
   ) : null;
 }
 
-export function ButtonNode({ node }: { node: Of<"button"> }): React.JSX.Element {
+function ButtonInput({ node }: { node: Of<"button"> }): React.JSX.Element {
   const flow = useDecision(node.id, node.confirm, node.variant === "destructive");
   const [copied, setCopied] = useState(false);
   const action = node.action;
+  // Defensive: the validator checks `to`, and a bad target must not crash.
+  const target =
+    action.kind === "open" ? (action.to as unknown as Record<string, unknown> | null) : null;
   const openUrl =
-    action.kind === "open" && action.to.kind === "url" && action.to.url.startsWith("https:")
-      ? safeExternalUrl(action.to.url)
+    target?.["kind"] === "url" &&
+    typeof target["url"] === "string" &&
+    target["url"].startsWith("https:")
+      ? safeExternalUrl(target["url"])
       : null;
   const local = action.kind === "copy" || openUrl !== null;
   const enabled = !node.disabled && (local || (action.kind === "prompt" && flow.live));
@@ -133,7 +138,7 @@ export function ButtonNode({ node }: { node: Of<"button"> }): React.JSX.Element 
   );
 }
 
-export function ChoiceNode({ node }: { node: Of<"choice"> }): React.JSX.Element {
+function ChoiceInput({ node }: { node: Of<"choice"> }): React.JSX.Element {
   const multiple = node.multiple === true;
   const max = multiple ? (node.max_selected ?? WIDGET_LIMITS.maxSelected) : 1;
   const initial =
@@ -216,4 +221,30 @@ export function ChoiceNode({ node }: { node: Of<"choice"> }): React.JSX.Element 
       {flow.confirm}
     </Box>
   );
+}
+
+/** What the person sees and chooses from on an input. Local state (sent,
+ *  selection, errors, a pending confirm) belongs to one signature: when the
+ *  agent changes the input, it starts fresh. */
+function inputSignature(node: Of<"button"> | Of<"choice">): string {
+  return JSON.stringify(
+    node.type === "choice"
+      ? [
+          node.type,
+          node.label,
+          node.options.map((o) => [o.value, o.label]),
+          node.multiple,
+          node.max_selected,
+          node.group,
+        ]
+      : [node.type, node.label, node.action.kind, node.group],
+  );
+}
+
+export function ButtonNode({ node }: { node: Of<"button"> }): React.JSX.Element {
+  return <ButtonInput key={inputSignature(node)} node={node} />;
+}
+
+export function ChoiceNode({ node }: { node: Of<"choice"> }): React.JSX.Element {
+  return <ChoiceInput key={inputSignature(node)} node={node} />;
 }

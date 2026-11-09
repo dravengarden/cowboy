@@ -2,6 +2,8 @@
 -- from a widget input. The decision itself travels as an ordinary user prompt
 -- whose client message id is `cmid`; this row records which input, revision
 -- and option labels it answered so the input turns inert on every device.
+-- `retired` marks a decision whose input a later revision changed; it never
+-- settles that input again, even if a later revision restores it.
 -- Older Controllers ignore this table.
 CREATE TABLE IF NOT EXISTS session_widget_interactions (
     session_id TEXT NOT NULL,
@@ -13,6 +15,7 @@ CREATE TABLE IF NOT EXISTS session_widget_interactions (
     signature TEXT NOT NULL,
     labels TEXT NOT NULL,
     message TEXT NOT NULL,
+    retired BOOLEAN NOT NULL DEFAULT FALSE,
     created_at_ms BIGINT NOT NULL,
     PRIMARY KEY (session_id, cmid),
     FOREIGN KEY (session_id, widget_id) REFERENCES session_widgets (session_id, widget_id) ON DELETE CASCADE

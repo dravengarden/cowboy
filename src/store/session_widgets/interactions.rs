@@ -5,9 +5,6 @@ use super::super::{StorageBackend, Store};
 use super::StoredWidget;
 use anyhow::Result;
 
-/// Records kept and returned per widget, newest first.
-pub const INTERACTIONS_PER_WIDGET: i64 = 200;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredInteraction {
     pub cmid: String,
@@ -43,22 +40,28 @@ const COLUMNS: &str =
     "cmid, revision, node_id, group_key, signature, labels, message, created_at_ms";
 
 impl Store {
-    /// The widget's interactions, newest first.
+    /// The widget's decisions, newest first: `active` keeps only those no
+    /// update retired (the authoritative decided state, unbounded because at
+    /// most one per input group stays active); otherwise the newest `limit`.
     pub async fn widget_interactions(
         &self,
         session_id: &str,
         widget_id: &str,
+        active: bool,
+        limit: i64,
     ) -> Result<Vec<StoredInteraction>> {
         let sql = format!(
             "SELECT {COLUMNS} FROM session_widget_interactions \
-             WHERE session_id = $1 AND widget_id = $2 ORDER BY created_at_ms DESC, cmid LIMIT $3"
+             WHERE session_id = $1 AND widget_id = $2 AND ($3 = FALSE OR retired = FALSE) \
+             ORDER BY created_at_ms DESC, cmid LIMIT $4"
         );
         macro_rules! read {
             ($db:expr) => {
                 sqlx::query_as::<_, Row>(&sql)
                     .bind(session_id)
                     .bind(widget_id)
-                    .bind(INTERACTIONS_PER_WIDGET)
+                    .bind(active)
+                    .bind(limit)
                     .fetch_all(&$db.pool)
                     .await?
             };
@@ -68,6 +71,112 @@ impl Store {
             StorageBackend::Sqlite(db) => read!(db),
         };
         rows.into_iter().map(interaction).collect()
+    }
+
+    /// The decision recorded under `cmid`, whatever its widget.
+    pub async fn widget_interaction(
+        &self,
+        session_id: &str,
+        cmid: &str,
+    ) -> Result<Option<StoredInteraction>> {
+        let sql = format!(
+            "SELECT {COLUMNS} FROM session_widget_interactions WHERE session_id = $1 AND cmid = $2"
+        );
+        macro_rules! read {
+            ($db:expr) => {
+                sqlx::query_as::<_, Row>(&sql)
+                    .bind(session_id)
+                    .bind(cmid)
+                    .fetch_optional(&$db.pool)
+                    .await?
+            };
+        }
+        let row = match &self.backend {
+            StorageBackend::Postgres(db) => read!(db),
+            StorageBackend::Sqlite(db) => read!(db),
+        };
+        row.map(interaction).transpose()
+    }
+
+    /// Retire decisions an update made obsolete; they never settle again.
+    pub async fn retire_widget_interactions(
+        &self,
+        session_id: &str,
+        widget_id: &str,
+        cmids: &[String],
+    ) -> Result<()> {
+        for cmid in cmids {
+            let sql = "UPDATE session_widget_interactions SET retired = TRUE \
+                       WHERE session_id = $1 AND widget_id = $2 AND cmid = $3";
+            macro_rules! retire {
+                ($db:expr) => {
+                    sqlx::query(sql)
+                        .bind(session_id)
+                        .bind(widget_id)
+                        .bind(cmid)
+                        .execute(&$db.pool)
+                        .await?
+                        .rows_affected()
+                };
+            }
+            match &self.backend {
+                StorageBackend::Postgres(db) => retire!(db),
+                StorageBackend::Sqlite(db) => retire!(db),
+            };
+        }
+        Ok(())
+    }
+
+    /// Whether the session's stored transcript holds the user echo of
+    /// `cmid`: the durable proof that the prompt reached the conversation.
+    pub async fn prompt_echoed(&self, session_id: &str, cmid: &str) -> Result<bool> {
+        Ok(match &self.backend {
+            StorageBackend::Postgres(db) => sqlx::query_scalar::<_, i32>(
+                "SELECT 1 FROM events WHERE session_id = $1 AND payload->>'cmid' = $2 LIMIT 1",
+            )
+            .bind(session_id)
+            .bind(cmid)
+            .fetch_optional(&db.pool)
+            .await?
+            .is_some(),
+            StorageBackend::Sqlite(db) => sqlx::query_scalar::<_, i32>(
+                "SELECT 1 FROM events WHERE session_id = $1 AND instr(payload, $2) > 0 \
+                 AND json_extract(payload, '$.cmid') = $2 LIMIT 1",
+            )
+            .bind(session_id)
+            .bind(cmid)
+            .fetch_optional(&db.pool)
+            .await?
+            .is_some(),
+        })
+    }
+
+    /// Active decisions since `since_ms` on live widgets whose prompt has no
+    /// stored echo: `(session_id, cmid, message)`, oldest first.
+    pub async fn undelivered_widget_decisions(
+        &self,
+        since_ms: i64,
+    ) -> Result<Vec<(String, String, String)>> {
+        let select = "SELECT i.session_id, i.cmid, i.message FROM session_widget_interactions i \
+             JOIN session_widgets w ON w.session_id = i.session_id AND w.widget_id = i.widget_id \
+             WHERE i.retired = FALSE AND w.cleared = FALSE AND i.created_at_ms >= $1 ";
+        Ok(match &self.backend {
+            StorageBackend::Postgres(db) => sqlx::query_as(&format!(
+                "{select} AND NOT EXISTS (SELECT 1 FROM events e WHERE e.session_id = i.session_id \
+                 AND e.payload->>'cmid' = i.cmid) ORDER BY i.created_at_ms"
+            ))
+            .bind(since_ms)
+            .fetch_all(&db.pool)
+            .await?,
+            StorageBackend::Sqlite(db) => sqlx::query_as(&format!(
+                "{select} AND NOT EXISTS (SELECT 1 FROM events e WHERE e.session_id = i.session_id \
+                 AND instr(e.payload, i.cmid) > 0 AND json_extract(e.payload, '$.cmid') = i.cmid) \
+                 ORDER BY i.created_at_ms"
+            ))
+            .bind(since_ms)
+            .fetch_all(&db.pool)
+            .await?,
+        })
     }
 
     /// Record a decision once per `cmid` and advance the widget's state
@@ -178,8 +287,11 @@ mod tests {
             "a retried decision records nothing new"
         );
         assert_eq!(
-            store.widget_interactions("s1", "w").await.unwrap(),
-            vec![record]
+            store
+                .widget_interactions("s1", "w", true, i64::MAX)
+                .await
+                .unwrap(),
+            vec![record.clone()]
         );
         assert!(
             store
@@ -188,7 +300,7 @@ mod tests {
                     "missing",
                     &StoredInteraction {
                         cmid: "widget-other".into(),
-                        ..store.widget_interactions("s1", "w").await.unwrap()[0].clone()
+                        ..record.clone()
                     }
                 )
                 .await
