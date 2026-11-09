@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import { callActive, fetchCall, fetchCalls, type ManagedCallResult } from "../../managedCalls";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { callActive, fetchCall, fetchCalls, type ManagedCallDetail, type ManagedCallResult } from "../../managedCalls";
+import { CodeApiError, fetchCodeFileBlob } from "../../review/codeApi";
 import type { GitReviewEntry } from "../../review/gitReviewModel";
 import { type ReviewDelegation, useDelegations } from "./reviewDelegations";
 import { type ReviewFinding, reviewOutcome } from "./reviewFindingsModel";
@@ -16,6 +17,46 @@ interface Observed {
   readonly callId?: string | undefined;
   readonly state: "pending" | "done" | "failed";
   readonly result?: ManagedCallResult | null | undefined;
+  /** Per reviewed file: its blob in the snapshot and now (`null`: gone),
+   *  read while the file had `fingerprint`. */
+  readonly blobs?: ReadonlyMap<string, FileBlobs> | undefined;
+}
+
+interface FileBlobs {
+  readonly snapshot: string;
+  readonly current: string | null | undefined;
+  readonly fingerprint: string | undefined;
+}
+
+/** The reviewed files' blobs now, beside the ones the review captured. A
+ *  context or Machine that cannot answer leaves `current` unknown. */
+async function readBlobs(
+  context: string,
+  detail: ManagedCallDetail,
+  delegation: ReviewDelegation,
+  fingerprintOf: (path: string) => string | undefined,
+  signal: AbortSignal,
+): Promise<ReadonlyMap<string, FileBlobs>> {
+  const captured = new Map((detail.input_files ?? []).map((file) => [file.path, file.blob]));
+  const blobs = new Map<string, FileBlobs>();
+  for (const { path } of delegation.files) {
+    const snapshot = captured.get(path);
+    if (!snapshot) continue;
+    const fingerprint = fingerprintOf(path);
+    const current = await fetchCodeFileBlob(context, path, signal).then(
+      (blob) => blob.oid,
+      (reason: unknown) => reason instanceof CodeApiError && reason.status === 404 ? null : undefined,
+    );
+    blobs.set(path, { snapshot, current, fingerprint });
+  }
+  return blobs;
+}
+
+/** Whether the file still is the reviewed blob: unknown when either side is,
+ *  and false once the file changed after its blob was read. */
+function sameBlob(blobs: FileBlobs | undefined, fingerprint: string | undefined): boolean | undefined {
+  if (!blobs || blobs.current === undefined) return undefined;
+  return blobs.fingerprint === fingerprint && blobs.current === blobs.snapshot;
 }
 
 export interface ReviewFindings {
@@ -43,6 +84,11 @@ export function useReviewFindings(
     () => delegations.filter((delegation) => delegation.kind === "review").slice(-READ_LIMIT),
     [delegations],
   );
+  const fingerprints = useRef(new Map<string, string | undefined>());
+  fingerprints.current = new Map(queue.map((entry) => [entry.change.path, entry.change.fingerprint]));
+  const reviewedKey = reviews
+    .flatMap((delegation) => delegation.files.map((file) => `${file.path}\0${fingerprints.current.get(file.path) ?? ""}`))
+    .join("\n");
   const [observed, setObserved] = useState<readonly Observed[]>([]);
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -63,7 +109,9 @@ export function useReviewFindings(
         // carry the rejected output.
         if (call.state !== "completed" || !call.has_result) return { delegation, callId: call.call_id, state: "failed" };
         const detail = await fetchCall(delegation.fork, call.call_id, controller.signal);
-        return { delegation, callId: call.call_id, state: "done", result: detail.result };
+        const fingerprintOf = (path: string) => fingerprints.current.get(path);
+        const blobs = await readBlobs(delegation.context ?? source ?? "", detail, delegation, fingerprintOf, controller.signal);
+        return { delegation, callId: call.call_id, state: "done", result: detail.result, blobs };
       } catch {
         return { delegation, state: "pending" };
       }
@@ -78,7 +126,8 @@ export function useReviewFindings(
       controller.abort();
       globalThis.clearTimeout(timer);
     };
-  }, [active, reviews, tick]);
+    // A reviewed file's change reads its blob again.
+  }, [active, reviews, tick, reviewedKey]);
   return useMemo((): ReviewFindings => {
     const fingerprints = new Map(queue.map((entry) => [entry.change.path, entry.change.fingerprint]));
     let incomplete = 0;
@@ -87,7 +136,13 @@ export function useReviewFindings(
         if (item.state === "failed") incomplete++;
         return [];
       }
-      const outcome = reviewOutcome(item.callId, item.result ?? null, item.delegation.files, (path) => fingerprints.get(path));
+      const outcome = reviewOutcome(
+        item.callId,
+        item.result ?? null,
+        item.delegation.files,
+        (path) => fingerprints.get(path),
+        (path) => sameBlob(item.blobs?.get(path), fingerprints.get(path)),
+      );
       if (!outcome.complete) incomplete++;
       return outcome.findings;
     });

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "codex-deepseek",
-  "version": "3.1.56",
-  "component_release": "3.102.0",
+  "version": "3.1.57",
+  "component_release": "3.104.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",
@@ -25,7 +25,7 @@
     },
     {
       "id": "cowboy.provider-ui",
-      "version": "3.3.0"
+      "version": "3.3.1"
     },
     {
       "id": "cowboy.provider-runtime",

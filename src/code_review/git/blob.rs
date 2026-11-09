@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::git_output;
-use crate::code_review::{LocalCodeProvider, ensure_git_worktree, safe_oid};
+use crate::code_review::{LocalCodeProvider, ensure_git_worktree, safe_oid, safe_relative};
 
 /// The bytes one side of a diff may carry to expand its context.
 const MAX_BLOB_BYTES: usize = 4 * 1024 * 1024;
@@ -19,7 +19,30 @@ pub struct BlobDocument {
     pub text: String,
 }
 
+/// A worktree file's Git blob id as `git add` would store it now, so a
+/// reader can compare it with the blob a review captured.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileBlob {
+    pub path: String,
+    pub oid: String,
+}
+
 impl LocalCodeProvider {
+    pub fn file_blob(&self, relative: &str) -> Result<FileBlob, String> {
+        let relative = safe_relative(relative)?;
+        ensure_git_worktree(&self.root)?;
+        let file = self.resolved_file(&relative)?;
+        if !file.is_file() {
+            return Err("file not found".to_owned());
+        }
+        let path = relative.to_string_lossy().replace('\\', "/");
+        let output = git_output(&self.root, &["hash-object", "--", &path], 128)
+            .map_err(|_| "file not found".to_owned())?;
+        let oid = String::from_utf8_lossy(&output).trim().to_owned();
+        safe_oid(&oid).map_err(|_| "file not found".to_owned())?;
+        Ok(FileBlob { path, oid })
+    }
+
     /// A text blob from the repository's object store by its (possibly
     /// abbreviated) id. The prefix is resolved among objects only (never a
     /// ref of the same name), must name exactly one blob, and replacement

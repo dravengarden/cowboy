@@ -215,6 +215,16 @@ fn a_diff_index_line_reads_back_its_exact_base_side() {
     git(root, &["replace", base, &other]);
     git(root, &["tag", base, &other]);
     assert_eq!(provider.blob(base).unwrap().text, "one\ntwo\nthree\n");
+    // A worktree file's current blob is what `git add` would store.
+    assert_eq!(
+        provider.file_blob("side.txt").unwrap().oid,
+        git(root, &["hash-object", "--", "side.txt"])
+    );
+    assert_eq!(
+        provider.file_blob("missing.txt").unwrap_err(),
+        "file not found"
+    );
+    assert!(provider.file_blob("../outside").is_err());
 }
 
 #[test]

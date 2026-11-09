@@ -170,6 +170,9 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
   for binary text. Desktop Review fills a diff's gaps from it
   ([desktop-code-review](../desktop-code-review.md) D2d); a Machine that
   predates the operation answers `502`.
+- `GET /file-blob?path=<relative>` returns the worktree file's Git blob id as
+  `git add` would store it now (`404` when it is not a file), for comparing
+  with the blob a managed review captured.
 
 Every response carries `apiVersion: 1`. Paths are resolved from the session and
 validated. For a Columbus aggregate worktree, the read-only tree additionally

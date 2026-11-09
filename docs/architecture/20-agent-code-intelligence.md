@@ -957,12 +957,29 @@ uniquely resolvable, otherwise candidates or `stale/ambiguous`.
   command reads the changes since then. A Codex `execute` tool call triggers
   this from the Controller; Claude's Mod asks with
   `code.post_edit {changed: true}` after a main-agent foreground Bash. Gaps
-  and resets only move the cursor. Up to five changed files with an extension,
+  and resets move the cursor and fall back to the files the session already
+  holds (their reads reload a changed mirror; identical results are
+  suppressed). The protocol-42 observer turns any create, delete or rename
+  (for example `sed -i`'s temporary file) into a coverage gap that drops the
+  changes before it, so this fallback is the common shell path. Otherwise up
+  to five changed files with an extension,
   outside `.git`, `node_modules`, `target`, `dist` and `.cache`, then go through
   the same read, comparison, ledger and delivery as an edit. A session whose
   observer never started (no earlier post-edit read, no Cowboy MCP grant, or
   an older Machine) reports nothing. Coverage is the observer's: event stream
   only, so absence never means unchanged.
+
+  Production acceptance (2026-11-09, Controller `ff70b1145`, Claude Plugin
+  3.20.33 installed on OVH by `ovh-claude-code-3-20-33-shell-push`, `applied`,
+  after packaged worker 97/97 and managed 7/7 conformance): in a new Codex
+  3.5.21 session and a new Claude 3.20.33 session, each created a clean Go
+  file, slept, then changed it only with `sed -i`. The observer reported a gap
+  for `sed -i`; the held-file fallback read the file, and each model received
+  `introduced: 1` with the new `UndeclaredName` message (Codex in the same
+  turn before its next shell call; Claude as its row). The Codex row also
+  showed `write.matches_analyzed: false`, correctly, because the analyzed
+  text was the shell's, not the edit tool's last write. A later identical
+  result was `suppressed` by the ledger. Both sessions were trashed.
 - **Delivery identity.** Recipient (main agent; native subagents excluded
   initially), conversation/context identity, idempotent delivery ID and states
   `queued | appended | consumed | unknown`. Only evidenced model deliveries

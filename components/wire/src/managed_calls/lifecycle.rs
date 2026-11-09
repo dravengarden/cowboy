@@ -123,6 +123,9 @@ pub struct Record {
     pub provider_account_id: Option<crate::provider_account::ProviderAccountId>,
     /// An immutable snapshot lease from the target, never the live cwd alone.
     pub input_revision: Option<String>,
+    /// The requested files' blobs in that snapshot (`ChildPrepared::files`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_files: Vec<super::protocol::PreparedFile>,
     /// Retained structured result, not a shell exit code or review verdict.
     pub result: Option<serde_json::Value>,
     /// The parent's runtime Machine at admission; placement is the target.
@@ -318,6 +321,11 @@ impl Record {
                 .input_revision
                 .as_ref()
                 .is_none_or(|digest| valid_digest(digest))
+            && self.input_files.len() <= super::protocol::PreparedFile::MAX
+            && self
+                .input_files
+                .iter()
+                .all(super::protocol::PreparedFile::validate)
             && (self.state != State::Completed
                 || (self.result.is_some() && self.input_revision.is_some()))
             && self.result.as_ref().is_none_or(|result| {
@@ -451,6 +459,7 @@ mod tests {
             provider_version: None,
             provider_generation_digest: None,
             child_cursor: None,
+            input_files: Vec::new(),
             cancel_requested_at_ms: None,
             error: None,
             preset: None,

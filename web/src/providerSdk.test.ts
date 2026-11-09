@@ -154,6 +154,15 @@ test("managed profiles require signed capability and validate every argument bin
   }
 });
 
+test("a Provider may declare signed MCP bindings but not an unknown capability", () => {
+  const candidate = manifest();
+  candidate.runtime.required_capabilities.push("provider.mcp-bindings.v1");
+  validateProviderManifest(candidate);
+  const unknown = structuredClone(candidate);
+  (unknown.runtime.required_capabilities as string[]).push("provider.unknown.v1");
+  assertThrows(() => validateProviderManifest(unknown));
+});
+
 test("execution contracts require an exact executor and a capable signed Provider", () => {
   const candidate = manifest();
   candidate.sdk_version = PROVIDER_SDK_VERSION;

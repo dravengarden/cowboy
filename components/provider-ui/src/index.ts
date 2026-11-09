@@ -4,6 +4,7 @@ import {
   machinePluginKinds,
   pluginKinds,
 } from "./pluginKinds.ts";
+import { type ProviderCapability, providerCapabilities } from "./providerCapabilities.ts";
 
 /**
  * Cowboy Provider UI SDK v2.
@@ -384,13 +385,7 @@ export interface ProviderManifest {
         command: string;
       }>;
     }>;
-    required_capabilities: Array<
-      | "provider.runtime.v1"
-      | "provider.gateway.v1"
-      | "provider.execution-jsonrpc.v1"
-      | "provider.managed-profiles.v1"
-      | "provider.managed-image.v1"
-    >;
+    required_capabilities: ProviderCapability[];
   };
   authentication: {
     schema_version: number;
@@ -1279,14 +1274,7 @@ export function validateProviderManifest(input: unknown): asserts input is Provi
   );
   const declaresGateway = runtime.sidecars.length > 0;
   if (
-    !runtime.required_capabilities.every(
-      (value) =>
-        value === "provider.runtime.v1" ||
-        value === "provider.gateway.v1" ||
-        value === "provider.execution-jsonrpc.v1" ||
-        value === "provider.managed-profiles.v1" ||
-        value === "provider.managed-image.v1",
-    ) ||
+    !runtime.required_capabilities.every((value) => providerCapabilities.has(value)) ||
     !capabilities.has("provider.runtime.v1") ||
     usesGateway !== declaresGateway ||
     capabilities.has("provider.gateway.v1") !== declaresGateway

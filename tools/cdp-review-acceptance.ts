@@ -287,6 +287,10 @@ try {
   await keys(" ", "v", "r");
   await until(`globalThis.__reviewFixture.submits.some((data) => data.includes('"session_id":"explain-fork"') && data.includes("review.start") && data.includes('src/app.ts'))`, "␣VR sends the delegation contract to the fork");
   await until(`document.querySelector("[data-review-change='src/app.ts'] [data-review-finding-badge='1']")`, "the review's finding badges its file");
+  check(
+    await page.evaluate<boolean>(`globalThis.__reviewFixture.requests.some((request) => request.includes("/file-blob?path=src%2Fapp.ts"))`),
+    "the finding is anchored by comparing the captured blob with the file's blob now",
+  );
   await page.evaluate(`document.querySelector("[data-review-change='src/app.ts']").focus()`);
   await key("l");
   await until(`${activeTab} === "src/app.ts"`, "L opens the reviewed file");

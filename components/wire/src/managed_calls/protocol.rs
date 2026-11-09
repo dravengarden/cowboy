@@ -297,6 +297,37 @@ pub struct ChildPrepared {
     pub head: String,
     pub index_tree: String,
     pub worktree_tree: String,
+    /// The requested files' blobs in the captured working tree, so a reader
+    /// can tell whether a finding still describes today's file. Machines
+    /// that predate it send none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<PreparedFile>,
+}
+
+/// One requested file as captured: its path and its blob in the snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedFile {
+    pub path: String,
+    pub blob: String,
+}
+
+impl PreparedFile {
+    /// The bound a call record keeps: as many files as a request may name.
+    pub const MAX: usize = 32;
+
+    #[must_use]
+    pub fn validate(&self) -> bool {
+        !self.path.is_empty()
+            && self.path.len() <= 4096
+            && !self.path.contains('\0')
+            && !self.path.starts_with('/')
+            && matches!(self.blob.len(), 40 | 64)
+            && self
+                .blob
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    }
 }
 
 // Never derive Debug: this envelope contains a private local capability.

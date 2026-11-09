@@ -78,6 +78,12 @@ fn closed_requests_preserve_every_existing_wire_operation() {
             },
             json!({ "type": "blob", "oid": "abc1234" }),
         ),
+        (
+            CodeOperation::FileBlob {
+                path: "src/lib.rs".into(),
+            },
+            json!({ "type": "file_blob", "path": "src/lib.rs" }),
+        ),
     ];
     for (scope, wire_scope) in [
         (DiffScope::Combined, "combined"),

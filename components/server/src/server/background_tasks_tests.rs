@@ -599,6 +599,7 @@ async fn call_anchor_repair_contract(url: &str, root: &FsPath) {
         provider_version: None,
         provider_generation_digest: None,
         child_cursor: None,
+        input_files: Vec::new(),
         cancel_requested_at_ms: None,
         error: None,
         preset: None,

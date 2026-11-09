@@ -17,6 +17,9 @@ export interface ReviewDelegation {
   readonly kind: "explain" | "review";
   readonly files: readonly DelegatedFile[];
   readonly atMs: number;
+  /** The code context the review read (its files' current blobs come from
+   *  there); absent on delegations recorded before it. */
+  readonly context?: string | undefined;
 }
 
 const STORAGE_KEY = "cowboy.desktop.reviewDelegations.v1";

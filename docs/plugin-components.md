@@ -83,6 +83,12 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.104.0 lets Providers declare `provider.mcp-bindings.v1`:
+provider-ui 3.3.1 accepts it in the Provider manifest validator, and
+provider-authoring 1.0.14 follows. Claude Code 3.20.34 declares it, so its
+sessions can receive an owner-granted signed MCP binding; the other Providers
+advance one patch for the changed component. Native pins are unchanged.
+
 Component release 3.102.0 adds the `machine_browser` Plugin kind (Plugin SDK
 1.14.0, plugin-contract 1.13.0 with `machine-browser.schema.json`, release
 schema 7, component kind `machine_browser_runtime`): a signed Linux browser

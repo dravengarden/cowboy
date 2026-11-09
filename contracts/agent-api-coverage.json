@@ -18,6 +18,7 @@
     "api_code_commit_diff": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_code_diff": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_code_file": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
+    "api_code_file_blob": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_code_file_raw": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_code_hover": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_code_language": "exception:native — filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",

@@ -264,7 +264,8 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
         child_session_id: "review-child", state: "completed", created_at_ms: 1, updated_at_ms: 2, input_revision: null,
         has_result: true, runtime_machine_id: null, provider_version: null, cancel_requested: false, error: null };
       if (!delegated[1]) return json({ calls: [call] });
-      return json({ call: { ...call, result: { structured: { review_complete: true, verdict: "needs-attention", findings: [
+      // The snapshot captured src/app.ts as the blob the worktree still holds.
+      return json({ call: { ...call, input_files: [{ path: "src/app.ts", blob: "a".repeat(40) }], result: { structured: { review_complete: true, verdict: "needs-attention", findings: [
         { severity: "high", title: "Fixture AI finding", body: "The fixture's managed review.", file: "src/app.ts", line_start: 1, line_end: 1 },
       ] } } } });
     }
@@ -449,6 +450,9 @@ export function renderReviewContextPreview(dense = false, deferDefaults = false,
       if (desktopReview && url.pathname.endsWith("/blob") && url.searchParams.get("oid") === "1111111") {
         return json({ apiVersion: 1, oid: "1111111", text: Array.from({ length: 45 }, (_, index) =>
           index === 0 ? "a" : index === 39 ? "c" : `line ${String(index + 1)}`).join("\n") + "\n" });
+      }
+      if (desktopReview && url.pathname.endsWith("/file-blob")) {
+        return path === "src/app.ts" ? json({ apiVersion: 1, path, oid: "a".repeat(40) }) : new Response("missing", { status: 404 });
       }
       if (url.pathname.endsWith("/diff")) {
         return json({

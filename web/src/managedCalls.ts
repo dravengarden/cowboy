@@ -83,6 +83,9 @@ export interface ManagedCallDetail extends
   result: ManagedCallResult | null;
   cancel_requested_at_ms?: number | null;
   provider_generation_digest?: string | null;
+  /** The requested files' blobs in the reviewed snapshot; absent before
+   *  the Machine records them. */
+  input_files?: readonly { readonly path: string; readonly blob: string }[];
 }
 
 const ACTIVE: ReadonlySet<ManagedCallState> = new Set([

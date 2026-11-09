@@ -20,6 +20,16 @@ test("a finding is current only while its file is unchanged since the review was
   assertEquals(changed.findings[0]!.anchor, "stale");
 });
 
+test("a captured blob decides over the fingerprint when both sides are known", () => {
+  // The file was edited back to the reviewed content: the fingerprint moved, the blob did not.
+  const same = reviewOutcome("c", result([finding("src/b.ts")]), files, () => "moved", () => true);
+  assertEquals(same.findings[0]!.anchor, "current");
+  const differs = reviewOutcome("c", result([finding("src/a.ts")]), files, () => "f1", () => false);
+  assertEquals(differs.findings[0]!.anchor, "stale");
+  const unknown = reviewOutcome("c", result([finding("src/a.ts")]), files, () => "f1", () => undefined);
+  assertEquals(unknown.findings[0]!.anchor, "current");
+});
+
 test("an incomplete, truncated or malformed review anchors nothing", () => {
   assertEquals(reviewOutcome("c", result([finding("src/a.ts")], { review_complete: false }), files, () => "f1").complete, false);
   assertEquals(reviewOutcome("c", { ...result([finding("src/a.ts")]), truncated: true }, files, () => "f1").findings, []);

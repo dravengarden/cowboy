@@ -491,13 +491,13 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     let Some(cursor) = state.hub.last_event_seq(child) else {
         return Step::Wait(Duration::from_secs(1));
     };
-    let revision = prepared.input_revision.clone();
     // Record the cursor before the prompt: recovery then either observes the
     // prompt or resubmits it under the same idempotent message id.
     if advance(state, store, record, |next| {
         next.state = State::Running;
         next.child_cursor = Some(cursor);
-        next.input_revision = Some(revision);
+        next.input_revision = Some(prepared.input_revision.clone());
+        next.input_files.clone_from(&prepared.files);
     })
     .await
     {
@@ -584,6 +584,7 @@ async fn reuse_source(state: &AppState, store: &Store, record: &Record, original
     }
     advance(state, store, record, |next| {
         next.input_revision.clone_from(&original.input_revision);
+        next.input_files.clone_from(&original.input_files);
         next.result = Some(result);
         next.configuration.clone_from(&original.configuration);
         next.provider_account_id
