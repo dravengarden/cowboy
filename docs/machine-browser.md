@@ -12,6 +12,11 @@ policy boundary the same day; see the
 amendment. The owner also stated strict isolation between the browsers of
 different account cards as a core requirement; see
 [Account isolation](#account-isolation-core-requirement).
+On 2026-11-09 the owner required Provider logins (Claude, Codex, Grok and any
+other) to be fully independent of the browser: the sign-in binding was
+removed, and a login's verification link may only be shown in the account's
+ordinary tab browser as an optional convenience; see
+[Login independence](#login-independence).
 
 ## Problem
 
@@ -34,9 +39,11 @@ browsers of different accounts.
 Goal: an optional Plugin gives a Linux Machine a real, unmodified Chromium on
 its own X display, owned per Provider account, started on demand, streamed
 into the Cowboy web UI (phone and desktop) over the existing Machine
-connection, and stopped when idle. The named-account sign-in flow can open the
-challenge URL in that browser. Its network identity, timezone, locale and DNS
-are the Machine's, because the browser is a process on the Machine.
+connection, and stopped when idle. A named-account sign-in dialog may offer
+to show its verification link in that account's browser; the person completes
+the page and copies anything it shows back into the dialog. Its network
+identity, timezone, locale and DNS are the Machine's, because the browser is
+a process on the Machine.
 
 Non-goals:
 
@@ -47,6 +54,9 @@ Non-goals:
 - spoofing platform, user agent, GPU or screen facts. A GPU-less Linux VPS
   reports itself as one; the native login already uses that address, and a
   consistent true fingerprint is the safe one;
+- any coupling of a Provider login to the browser: no login waits for,
+  binds to, reads from or is stopped by a browser, and no browser state
+  changes how a login behaves;
 - any change to how the Claude CLI is launched or to the signed
   `authentication` section of `plugins/claude-code/provider.json`.
   `native_release_compatible` requires that section byte-identical for
@@ -70,7 +80,7 @@ precedent: the engine is a Plugin, the product is core.
 | Display stream, backpressure, binding, continuing authorization | Core wire protocol + Machine + Controller |
 | Routes, owner/device/Origin checks, per-account enablement | Core Controller |
 | Viewer (canvas, decoder, input, clipboard action, mobile sheet) | Core web |
-| Sign-in integration | Core (Machine login session + Controller + web) |
+| Optional "open the verification link in the account's browser" entry | Core web (ordinary open and navigate routes only) |
 | Resource settings | Core Device/Service configuration |
 | Host sandbox policy (AppArmor bootstrap and sealed profiles) | Host configuration (Columbus `machines/ovh`), outside Cowboy |
 
@@ -504,11 +514,10 @@ refused, never queued.
 
 Periodic and explicit snapshots run as a cancellable copy job: the account
 lifecycle lock is held only to admit the generation and to publish it, so
-supervision (leases, socket scans, deadlines, login authority) and resets or
-revocations never wait for a copy. Every stop cancels a running job; a
-graceful stop first lets it finish while still enforcing the deadline, the
-login binding and the confinement checks, and becomes a forced stop if one of
-them fails meanwhile. A staging generation stays reserved in the ledger as
+supervision (leases, socket scans, deadlines) and resets or revocations
+never wait for a copy. Every stop cancels a running job; a graceful stop
+first lets it finish while still enforcing the deadline and the confinement
+checks, and becomes a forced stop if one of them fails meanwhile. A staging generation stays reserved in the ledger as
 long as a copier may write it: a copy the launcher refused or finished is
 removed (scoped, no-follow) before its budget is released; a cancelled or
 timed-out copy keeps its reservation until the unit's exit is confirmed. A
@@ -518,13 +527,11 @@ namespace, which [confinement verification](#confinement-verification)
 rejects; so no copy runs while a navigation verifies and navigates: new copies
 are refused while it does, and a running copy is awaited within its own bound
 (the browser is frozen meanwhile) and cancelled if it overruns. The verifier
-stays strict instead of tolerating a transient publish mount. A sign-in rebind
-quiesces copies before it takes the lifecycle lock, because a copy publishes
-under that lock.
+stays strict instead of tolerating a transient publish mount.
 
 Snapshot failure is subordinate to mandatory stops: a graceful stop attempts
-the snapshot at most twice within the stop deadline; a stop forced by login
-termination, deadline, reclaim, revocation or `RuntimeMaxSec` proceeds
+the snapshot at most twice within the stop deadline; a stop forced by a
+confinement failure, deadline, reclaim, revocation or `RuntimeMaxSec` proceeds
 without a snapshot, keeps the last published generation, and reports
 `unsaved_state_lost`. An explicit `hibernate` whose snapshot fails reports
 the failure rather than success. Pending persistence never extends an
@@ -627,13 +634,13 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
   lock and atomically with the change to `stopping`, that the instance is
   still `detached` in the same detached interval and that interval still
   exceeds the grace; an attach meanwhile abandons the idle stop. The
-  deadline and an ended login are not idleness and stop unconditionally.
+  deadline is not idleness and stops unconditionally.
   Lease expiry detaches only after
   re-checking, under the instance's state lock, that the instance is still
   `attached` with the same attachment still expired: a stop, renewal or
   takeover that happened meanwhile wins, and `stopping` never returns to
-  `detached`. A sign-in-bound instance's deadline is
-  `min(login expiry, browser.max_runtime)`.
+  `detached`. An instance's deadline is `browser.max_runtime` from its
+  start; nothing outside the browser shortens or extends it.
 - Every mutation (`hibernate`, `resize`, `navigate`, `snapshot`, `stop`)
   carries the expected incarnation; attach, detach, resize and stream cleanup
   carry the `attachment_id`; reset carries the expected `profile_revision`.
@@ -748,8 +755,8 @@ record and readiness.
 ### Restart reconciliation
 
 The persisted instance record (`browsers/<instance>.json` under the Machine
-state directory) holds account, Provider, generation digest, purpose and
-login request, unit name and systemd invocation ID, boot ID, incarnation,
+state directory) holds account, Provider, generation digest, purpose
+(always `tab`), unit name and systemd invocation ID, boot ID, incarnation,
 deadline, `profile_revision`, and the launcher's reported pids, start times
 and namespace identities. At Machine start:
 
@@ -797,57 +804,54 @@ and namespace identities. At Machine start:
   still be copying into a generation the restarted ledger does not know. The
   reconciliation that follows the inventory's completion or the confirmed
   exit removes it;
-- a sign-in-bound record is stopped at reconciliation, because the Machine's
-  native logins do not survive a restart: a lost Controller connection
-  cancels registered logins (`LoginConnection` drop) and native recovery
-  terminates abandoned login trees. The browser follows its login's
-  authority; it does not restore it.
+- a record an earlier Machine wrote under the retired sign-in purpose is
+  stopped (reason `not_available`) instead of adopted.
 
-### Sign-in binding
+### Login independence
 
-The Machine's `LoginSession` gains the login's account, Provider, native
-generation and the `ConnectionToken` that dispatched it. When an open request
-names a native login request, the Machine:
+Provider logins (native Claude, Codex, Grok and every other Provider, native
+or Service-owned) have no dependency on the Machine browser, in either
+direction:
 
-1. takes the native login lock; checks that the login is active on this
-   Machine, that its account and Provider equal the browser's account and
-   Provider, and that its dispatching connection is current; records the
-   binding `(login request, generation, browser instance, incarnation)`;
-   releases the lock;
-2. starts the unit; once the unit is registered and verified it re-checks the
-   same facts under the lock. If the login ended or the binding no longer
-   matches, the instance is hibernated at once;
-3. navigates to the `verification_url` the Machine itself emitted for that
-   login (kept in `LoginSession`; the Controller never sends a URL to the
-   Machine), after the pre-navigation verification. A navigation the
-   launcher rejects or does not answer in time fails the open: the answer is
-   the running instance's state with reason `failed` (the Controller refuses
-   the sign-in with `browser_sign_in_refused`), the instance stays bound and
-   running, and a repeated open for the same login retries the navigation.
-   A failed pre-navigation verification still stops the instance;
-4. hibernates the instance when the login completes, is cancelled, fails or
-   expires, from the exit path that records the native login's outcome.
+- the Machine's login registry (`machine_cli/login_sessions.rs`) holds only
+  what a login itself needs (cancellation, code input, candidate cleanup); it
+  names no browser instance, and the browser manager has no access to it;
+- no login path calls into the browser manager: starting a login, emitting
+  its challenge (with its verification URL) and ending it leave every browser
+  instance untouched, and the presence, absence or state of the browser
+  Plugin never changes how a login behaves;
+- browser failures, stops, hibernation, OOM kills and storage stops never
+  cancel, restart, clean up or otherwise touch a login process or the
+  account's credential generation;
+- the Controller admits browser opens on browser rules alone (gate,
+  per-account enablement, placement, capability), never on login state.
 
-The Controller admits the sign-in open only for the owner of the login
-operation whose receipt names that account and request, following the
-continuation check in `provider_accounts/login/continuation.rs`.
+The only meeting point is in the web UI, and it is optional: a named-account
+sign-in dialog whose challenge carries a verification URL may offer
+"Open in this account's Machine browser" (see [Viewer](#viewer-core-web)).
+It opens the account's ordinary `Tab` browser pinned to the login's Machine
+and navigates it to that URL through the ordinary routes. The person
+completes the page there and copies any code back into the dialog
+themselves; nothing reads the remote page or fills the dialog.
 
-Browser failures, stops, hibernation, OOM kills and storage stops never
-cancel, restart, clean up or otherwise touch the native login process or the
-account's credential generation. Machine restart and Controller disconnection
-end native logins by existing design, independent of the browser.
+Wire compatibility: protocol 45 keeps `Purpose::SignIn` and the reasons
+`login_ended` and `login_mismatch` decodable. A Machine refuses an `Open`
+carrying `SignIn` with `not_available` and touches no instance; the
+Controller never sends one.
 
 ## Stream channel (Machine protocol 45)
 
 Commands and events are a closed addition to `MachineCommand` /
 `MachineEvent` gated by a new minimum protocol:
 
-- `BrowserOpen{request_id, account_id, instance_id, purpose: SignIn{login_request} | Tab, viewport{width, height, scale}}`
+- `BrowserOpen{request_id, account_id, instance_id, purpose: Tab, viewport{width, height, scale}}`
+  (`SignIn{login_request}` is retired: decodable, refused with
+  `not_available`)
 - `BrowserAttach{request_id, instance_id, expected_incarnation, attachment_id, stream_token, viewport}`
 - `BrowserLease{instance_id, attachment_id, expires_at_ms}`
 - `BrowserDetach{request_id, instance_id, attachment_id}`
 - `BrowserResize{request_id, instance_id, expected_incarnation, attachment_id, width, height}`
-- `BrowserNavigate{request_id, instance_id, expected_incarnation, url}` (`Tab` only)
+- `BrowserNavigate{request_id, instance_id, expected_incarnation, url}`
 - `BrowserSnapshot{request_id, instance_id, expected_incarnation}`
 - `BrowserHibernate{request_id, instance_id, expected_incarnation}`
 - `BrowserReset{request_id, account_id, expected_profile_revision}`
@@ -859,8 +863,9 @@ Commands and events are a closed addition to `MachineCommand` /
 
 Reasons beyond the lifecycle ones: `capacity` (`browser.max_instances`
 reached), `memory` (no headroom for the reservation), `busy` (a lifecycle
-operation of that account is in progress) and `login_mismatch` (the named
-login is not that account's active native login).
+operation of that account is in progress). `login_ended` and
+`login_mismatch` belong to the retired sign-in purpose and stay decodable
+only for older Machines.
 
 The display stream is not an RPC and does not use bulk lanes: lanes carry
 idempotent execution requests, resend after loss and close on idle
@@ -918,8 +923,7 @@ framing. Counters record bytes and frames.
 |---|---|
 | `GET /api/provider-accounts/{account}/browser` | state, geometry, scale, deadline, snapshot generation and time, Machine, reasons; `machine_id=` keeps the read on that Machine; `choose_machine` (no placement and no native credentials anywhere: the first open must name a Machine) and `capable_machines` (`[{machine_id}]`, Machines whose current connection speaks the browser protocol and reported an available browser capability) |
 | `POST /api/provider-accounts/{account}/browser/open` | open as `Tab` (no URL body); an optional `machine_id` opens only on that Machine: `browser_not_placed` unless the account has a placement or native credentials there (an account with neither anywhere, never signed in, may name its first Machine), `browser_machine_unavailable` when it is not connected or cannot run browsers (never another Machine) |
-| `POST /api/provider-accounts/{account}/logins/{request}/browser` | open bound to that sign-in; no URL in the body; owner and account checked against the login receipt |
-| `POST .../browser/navigate` | `Tab` instances only, owner-supplied `https` URL, bounded; names `machine_id` and `instance` |
+| `POST .../browser/navigate` | owner-supplied `https` URL, bounded; names `machine_id` and `instance` |
 | `POST .../browser/resize` | bounded geometry; carries the attachment, `machine_id` and `instance` |
 | `POST .../browser/snapshot`, `POST .../browser/hibernate` | lifecycle of the named `machine_id` and `instance` (incarnation included) |
 | `POST .../browser/reset` | deletes the profile on the named `machine_id`, with that Machine's expected profile revision |
@@ -1059,26 +1063,18 @@ displays.
   incarnation, or no instance running), and the open names that Machine
   (`machine_id`), so it never starts on another Machine with a different
   profile. A newer instance there (`browser_instance_changed`) or no
-  confirmation (`browser_restart_unconfirmed`) reopens nothing. For a sign-in-bound instance
-  the Machine re-navigates to the stored verification URL after the restart;
-  the page state before the restart is lost, which the action says.
+  confirmation (`browser_restart_unconfirmed`) reopens nothing. The page
+  state since the last snapshot may be lost, which the action says.
 - **Attachment.** The stream socket carries the device proof as a
   subprotocol and renews the lease every 10 s while open; the Machine drops
   an attachment whose lease lapses for 30 s. Attaching while another device
   holds the display is an explicit, confirmed takeover. A refused or
   unanswered attachment ends the viewer with the stream's close code
   (`browser_attach_refused`, `browser_attach_failed`) and a notice naming
-  the state; re-attaching is a user action, never automatic. A sign-in
-  viewer never attaches directly, even to an already running browser: it
-  issues the sign-in open first, so the Machine validates and binds the
-  login, and attaches (or takes over) only after that open succeeds. When
-  the Machine refuses to bind the login to its running browser it answers
-  with that browser's own state plus a reason; the Controller turns that into
-  HTTP 409 with code `login_mismatch` (reason `login_mismatch`),
-  `login_inactive` (reason `login_ended`) or `browser_sign_in_refused` (any
-  other reason), and the
-  panel shows the failure and never mounts the viewer or takes over for an
-  open whose live answer carries a reason.
+  the state; re-attaching is a user action, never automatic. An open whose
+  answer is a live browser carrying a reason did not take effect: the panel
+  shows the failure and never mounts the viewer for it, and an open that
+  answers `attached` never takes the display over by itself.
 - **Target binding.** The viewer attaches to exactly the Machine and
   instance (`instance_id` and `incarnation`) it was given: the open's answer
   (an open answering `starting` attaches once that same instance on that
@@ -1118,8 +1114,8 @@ displays.
 - **Mobile sheet.** Full-height sheet with the bottom workbench: Keyboard
   (focuses a hidden input with autocorrect, autocapitalize and smart
   punctuation off; composition events are sent as text), Paste (local
-  clipboard to remote via `ClientCutText`), Use remote clipboard as code,
-  Hibernate, Close. Tap focuses the remote, two-finger drag scrolls, long
+  clipboard to remote via `ClientCutText`), Copy remote clipboard to this
+  device, Hibernate, Close. Tap focuses the remote, two-finger drag scrolls, long
   press is right click. The workbench sits above the app shell's keyboard
   inset (`--kb-inset`) so the software keyboard never covers it; the
   framebuffer keeps the geometry the sheet was opened with. Backgrounding
@@ -1128,24 +1124,24 @@ displays.
   keeps the instance alive.
 - **Remote clipboard.** Xvnc forwards only explicit copies (`SendPrimary=0`).
   A received cut text is held in viewer memory for the open attachment and
-  shown as "Remote clipboard: n characters". The authorization code field is
-  filled only by the explicit "Use as authorization code" action, never
-  automatically, never over an edited value; the existing code bounds apply
-  (`provider_account::login_code`); the held text is dropped on attachment,
-  incarnation or login-request change and when the viewer closes.
-- **Passkeys** are not transported by RFB; the sign-in guidance names the
-  email or one-time-code path.
+  shown as "Remote clipboard: n characters" with an explicit "Copy to this
+  device" action. It is never wired into any dialog or login: a sign-in
+  code field is filled only by the person pasting it. The held text is
+  dropped on attachment or incarnation change and when the viewer closes.
+- **Passkeys** are not transported by RFB; use the email or one-time-code
+  path inside the browser.
 - **First Machine.** When the state read reports `choose_machine` (never
   signed in, no placement), the tab panel replaces "Open browser" with a
   Machine chooser listing only `capable_machines` (display names from the
   Machine list) and opens with that `machine_id`; with none offered it says
   so and opens nothing. The chosen Machine becomes the placement, so later
-  opens need no choice. A sign-in panel never offers the chooser.
+  opens need no choice. A panel pinned to one Machine (the verification-link
+  entry below) never offers the chooser.
 - **Entries.** Every named-account card offers the panel: the account
   management card ("Browser…", beside the enable toggle) and every usage
   card ("Browser", Mobile Info sheet and Desktop usage panel). A usage-card
-  entry opens only the account's ordinary tab browser; it never uses the
-  sign-in open and never enables anything. With the gate closed, the account
+  entry opens only the account's ordinary tab browser and never enables
+  anything. With the gate closed, the account
   disabled or its browser not enabled, the entry is disabled with a one-line
   reason and, for the account-level cases, a link to account management.
   Provider cards that are not named registry accounts (the Service-collected
@@ -1158,12 +1154,24 @@ displays.
   request result and viewer callback is tagged with the account that issued
   it, so a late answer for another account is discarded. Each entry mounts
   its own sheet keyed by the account id; two cards never share a viewer.
+- **Verification link (optional).** A named-account sign-in dialog of any
+  Provider (Claude, Codex, Grok, ...) whose challenge carries an `https`
+  verification URL may offer "Open in this account's Machine browser". The
+  entry appears only when the account's browser read on the login's Machine
+  is admitted (gate on, account available, browser enabled), that Machine is
+  among `capable_machines`, and an open pinned there is the account's own
+  (its placement there, no placement yet, or a first-Machine choice). It
+  opens the account's ordinary tab panel pinned to that Machine (opening or
+  attaching as the usage card would), and once that exact instance runs on
+  that Machine it calls `POST .../browser/navigate` with the URL once. The
+  person completes the page and copies any code back themselves. The entry
+  never names the login to the Controller or the Machine, the login works
+  identically without it, and nothing flows from the browser into the
+  dialog.
 
-Desktop mounts the viewer in the account panel ("Browser") and inside the
-sign-in dialog; the cross-device route
-`/#subscription-sign-in/<account>/<request>` shows the same viewer, so a
-sign-in started on the desktop continues on the phone against the same
-running instance.
+The cross-device route `/#subscription-sign-in/<account>/<request>` resumes
+the sign-in dialog on another device; its verification-link entry opens the
+same account's tab browser there.
 
 ## Host sandbox policy (outside Cowboy)
 
@@ -1253,9 +1261,9 @@ design, not a side effect:
 | Abstract Unix sockets, UDP sockets of any kind, TCP listeners | denied by the sealed profile (DNS goes over TCP through the artifact's glibc); the Machine's recursive socket scan is the evidence |
 | Control and RFB sockets | per instance, inside the unit's 0700 `RuntimeDirectory`, read-only to every sealed process once created; reachable only through that host path (the same-user boundary below) |
 | Memory and CPU accounting | one systemd unit and cgroup per instance; `max_instances` may allow several at once, each in its own namespaces |
-| Remote clipboard | held per attachment in the viewer, never shared between accounts, dropped on attachment, incarnation or login-request change; the owner's device clipboard is only ever pasted by an explicit action |
+| Remote clipboard | held per attachment in the viewer, never shared between accounts, dropped on attachment or incarnation change, never wired into a login; the owner's device clipboard is only ever pasted by an explicit action |
 | Runtime files (browser, fonts, policy, glibc) | shared read-only artifact; they carry no state |
-| Sign-in binding | a sign-in opens only in the browser of the same account as the login, checked under the login lock; the viewer always names the account whose browser it shows |
+| Logins | no login is bound to a browser; a sign-in dialog's optional verification-link entry opens only the browser of the dialog's own account, on the login's Machine, through the ordinary open and navigate routes; the viewer always names the account whose browser it shows |
 
 What stays shared is what is shared for the native CLIs already: the
 Machine's egress address, timezone and locale, the runtime version, the
@@ -1265,8 +1273,7 @@ sockets directory and the snapshot files (the trust boundary recorded in
 `requirements.md`). The design does not manufacture per-account device
 differences; separate, persistent, honestly distinct profiles are the
 isolation. It prevents automatic inheritance of one account's browser state
-by another and binds a sign-in to the account that owns the browser; it
-cannot stop the owner from typing one account's upstream credentials into
+by another; it cannot stop the owner from typing one account's upstream credentials into
 another account's browser, which is why the viewer always names the account.
 
 ## Security and privacy
@@ -1275,8 +1282,8 @@ another account's browser, which is why the viewer always names the account.
   events and explicitly copied clipboard text to the Machine-local browser,
   and the browser's display back. The Controller and the web client handle
   that transit; they do not persist it, index it, or extract credentials from
-  it, and the only thing the viewer examines is the clipboard text the owner
-  chooses to use as the authorization code. This is the owner's
+  it, and the viewer examines nothing beyond framing and the clipboard text
+  the owner explicitly copies to the device. This is the owner's
   remote-display path to their own browser on their own Machine. The policy
   text in `requirements.md` records it as the owner's accepted interpretation,
   not as established vendor permission.
@@ -1285,8 +1292,9 @@ another account's browser, which is why the viewer always names the account.
   published snapshot on the Machine and in the instance's private tmpfs while
   it runs. No other browser instance can reach them; the trusted Machine
   supervisor and the host administrator can, as they can reach every other
-  account file (`requirements.md`, trust boundary). The authorization code
-  travels only through the existing owner-submitted path.
+  account file (`requirements.md`, trust boundary). An authorization code
+  travels only through the existing owner-submitted path: the person pastes
+  it into the sign-in dialog.
 - Same-user processes on the Machine (other workers) could reach the RFB
   socket through the host path of the sockets directory. The existing
   requirement already states that directory separation is not a security
@@ -1324,41 +1332,42 @@ Each row cites the round-1 (R1-n), round-2 (R2-n), round-3 (R3-n), round-4
 | Policy text accepted and accurate about transit, host visibility and the remaining shared channels; Controller stream path has no persistence or logging of payloads (code review + test) | R1-2, R2-7, R3-14, R4-13 |
 | Syscall-level canaries from inside a running instance (a conformance helper exec'd under the sealed profile, not the browser UI): `open`, `openat`, `stat`, `rename`, `mount`, `umount` and `pivot_root` against another synthetic account's snapshot, native credentials, the Machine state root and another instance's `RuntimeDirectory` fail, including from a freshly created descendant user+mount namespace that tries to bind one of those onto `/mnt/profile` or `/mnt/sockets`; the mount table shows only the bound aliases; AppArmor audit shows the denials; `file://` and dialog UI tests are additional, not sufficient | R1-3, R2-1, R3-1, R3-3, R4-1 |
 | Nested sandbox evidence on pristine Ubuntu 26.04 with the stock sysctl: Chromium's zygote creates its user, PID and network namespaces under the inherited sealed profile; the outer instance namespace's `uid_map` is the single self-mapping; capability sets of the display server, window manager and browser main process are empty with `NoNewPrivs`; sandboxed descendants are identified by namespace ancestry and carry the sealed label | R3-1, R4-10 |
-| Two synthetic accounts running at once (`browser.max_instances=2`): no shared path, X display, `/tmp`, `/dev/shm`, IPC object, PID visibility, signal delivery, abstract socket, UDP channel or clipboard between them; a cookie set in one is absent from the other across hibernate and reopen; a sign-in open against the other account's login is refused | core isolation, R3-5, R4-11, R4-12 |
+| Two synthetic accounts running at once (`browser.max_instances=2`): no shared path, X display, `/tmp`, `/dev/shm`, IPC object, PID visibility, signal delivery, abstract socket, UDP channel or clipboard between them; a cookie set in one is absent from the other across hibernate and reopen; a sign-in dialog's verification-link entry opens only its own account's browser | core isolation, R3-5, R4-11, R4-12 |
 | Mount sequence on a pristine host without Chrome or policy directories installed: `/mnt` aliases, `/usr` and `/opt` from the artifact, `/etc` scaffold, policy file bound at the contract's directory, `/proc` for the PID namespace, bind-before-mask ordering, `/run/user/<uid>` masked; effective-policy evidence from the browser (remote debugging flag refused, download blocked, `file://` blocked, QUIC off) in conformance | R2-12, R3-4, R3-7 |
 | Hermetic runtime: `Xtigervnc` finds `xkbcomp` and XKB data, Chromium finds fonts and GSettings, all from the artifact, with no `LD_LIBRARY_PATH`; `ldd` audit of every ELF object against the tree alone; `host_requirements` check and refusal on a host that fails it | R2-13, R3-13 |
 | Stream binding and authorization: token single-use, wrong `ConnectionToken`, wrong incarnation, wrong attachment, revoked owner, expired session or step-up during continuous traffic, revoked device, disabled account, gate closed, Origin mismatch all close both hops; takeover detaches only the old attachment; old-connection rejection after Machine reconnection | R1-4, R2-4, R2-6, R2-9, R3-8 |
-| Race and fencing tests: login completes between reservation and unit registration; Machine restart with a live unit (same and different boot) re-verifies confinement before adoption; delayed hibernate/resize/snapshot/reset/detach for a superseded incarnation, attachment or profile revision; browser OOM during login leaves the native login and generation untouched; cross-account open refused | R1-5, R2-3, R2-4, R2-5 |
+| Race and fencing tests: a login's start, challenge and end touch no browser instance (`a_login_lifecycle_never_touches_a_browser_instance`); a retired `SignIn` open is refused and touches no instance; Machine restart with a live unit (same and different boot) re-verifies confinement before adoption; delayed hibernate/resize/snapshot/reset/detach for a superseded incarnation, attachment or profile revision; browser OOM during login leaves the native login and generation untouched; cross-account open refused | R1-5, R2-3, R2-4, R2-5 |
 | Durable fences and snapshot serialization: crash injection after the fence is written, after the unit is stopped, after deletion but before completion, and during an in-flight snapshot copy and publication, for both reset and revocation; restart resumes the operation, the revision never goes backwards, a stale snapshot never publishes over a reset or replacement profile, abandoned staging is reconciled | R2-2, R3-2, R4-4, R5-1 |
 | Snapshot coherence: frozen-copy snapshots under concurrent Chromium writes recover cleanly (SQLite WAL and LevelDB open without error, cookies intact); graceful-stop snapshots capture state written just before the stop; publication is atomic (generation directory plus fsynced `state.json`), the previous generation survives a crash at every point, and the retained generation is the one `state.json` names | R4-2, R4-6 |
 | Snapshot contents as untrusted input: a profile containing absolute and relative symlinks, FIFOs, sockets, hard links, sparse files, deep trees and oversized files is copied without following, hanging or expanding beyond the bound, and restored the same way; the Machine's validation rejects the hostile staging tree | R4-3 |
 | Restoration and memory accounting: restoring a full-size snapshot charges the unit's cgroup (not the supervisor), the sum of browser plus profile, `/tmp` and `/dev/shm` tmpfs stays below `MemoryMax` under the defaults, no swap is used, and the loss window after a crash equals the state since the last published generation | R4-7 |
 | Storage: a page filling IndexedDB faster than any polling interval hits the profile tmpfs bound; a process filling `HOME` or `TMPDIR` hits the instance tmpfs bound; `/run/user/<uid>` free space and unrelated runtime-directory operations are unaffected; the Machine's own state writes keep succeeding; snapshot refused at the staging budget and at the disk low-watermark; concurrent snapshots of two accounts near the watermark never over-commit | R2-10, R3-6, R4-5, R4-9 |
-| Snapshot failure versus stops: a stop forced by login termination, deadline, reclaim or `RuntimeMaxSec` completes without a snapshot and reports `unsaved_state_lost`; an explicit hibernate whose snapshot fails reports failure; pending persistence never keeps a unit alive past its authority | R4-8 |
+| Snapshot failure versus stops: a stop forced by a confinement failure, deadline, reclaim or `RuntimeMaxSec` completes without a snapshot and reports `unsaved_state_lost`; an explicit hibernate whose snapshot fails reports failure; pending persistence never keeps a unit alive past its authority | R4-8 |
 | Mixed-load measurement on the target Machine with simultaneous worker and browser admissions: byte-weighted reservations never over-admit, exact refunds, memory peak, pressure stall, OOM events, session continuity; reclaim hibernates the browser before any session; a browser stop stalled beyond 60 s keeps the fence and blocks session selection instead of settling | R1-6, R2-11, R3-10 |
 | Abnormal-exit cleanup: SIGKILL and OOM of the unit, and a deliberately crashing child, with synthetic secrets in the instance tmpfs; no core dump, no swap (`MemorySwapMax=0`), the tmpfs is gone with the unit, the sockets directory removed; the last published generation survives; profile deleted by reset and by revocation with a running browser | R1-7 |
 | Attachment lease: a viewer that disappears without Close is detached within 30 s and the instance hibernates after the grace; unpaired streams time out; stale and post-expiry renewals cannot resurrect an attachment | R1-8, R2-8 |
-| Clipboard: PRIMARY copies never arrive; explicit action required; edited code never overwritten; held text cleared on attachment change | R1-9 |
+| Clipboard: PRIMARY copies never arrive; explicit action required; nothing is filled into a sign-in dialog; held text cleared on attachment change | R1-9 |
 | Resize authority and scale handoff: phone and desktop geometries, DPR 2 on touch, bounded sizes, desktop→phone handoff through "Restart for this screen", pointer mapping verified | R1-10, R2-14 |
-| Physical iPhone over the overlay: full sign-in flow including keyboard, IME, paste, Mail switch and return, email-code path, desktop handoff | R1-11 |
+| Physical iPhone over the overlay: verification link opened in the account browser, sign-in page completed with keyboard, IME, paste, Mail switch and return, email-code path; code copied back by hand; desktop handoff | R1-11 |
 | Enablement limited to the test account; authentication contract, worker generation, artifact, host-policy and lifecycle receipts retained; the separate native-owned lifecycle acceptance remains in force | R1-12 |
 | Exact signed archive installed through the real Machine installer on pristine Ubuntu 26.04: archive limits, link rejection, relocation, enforced AppArmor profiles, confinement verification from outside | R2-12, R2-13 |
 | Session restore: reopening a snapshot shows the new-tab page and issues no request to a previously open page (local test server) after clean hibernation and after a crash | R3-11 |
 | Plugin lifecycle: upgrade and uninstall with a running instance (drain, pinned bytes, retirement after lease release); rollback to an older build of the same major refuses and reset recovers; a crash between the writer record and readiness leaves a consistent record | R2-15, R2-16, R3-12 |
 
-Only after this matrix passes does the test account (`Claude · Test`) sign in
-through the Machine browser on OVH.
+Only after this matrix passes does the test account (`Claude · Test`) use its
+Machine browser on OVH (for example to complete a sign-in page opened through
+the verification-link entry).
 
 ## Rollout
 
 1. Core: Plugin kind, Machine instance manager, protocol 45 stream, routes,
-   viewer, sign-in hook, settings; gate off. Controller and web release.
+   viewer, settings; gate off. Controller and web release.
 2. Plugin: runtime tree built on the builder, conformance on the KVM guest
    with the AppArmor policy, signed and published to the Catalog.
 3. Host: AppArmor policy installed on OVH with a receipt.
 4. Machine: OVH Machine release through the normal maintenance transaction.
 5. Install the Plugin on OVH; enable `accounts.machine_browser`; enable the
-   browser for `Claude · Test` only; run the acceptance matrix; sign in.
+   browser for `Claude · Test` only; run the acceptance matrix.
 6. Decide per existing account whether and when to enable the browser.
 
 ## Implementation notes
@@ -1384,20 +1393,17 @@ the text above:
 - Restart adoption of a `Tab` instance reconnects to the control socket,
   asks `status`, waits for an in-progress copy, thaws `browser/`, re-takes
   the memory reservation and re-runs confinement verification against the
-  recorded unit; sign-in instances are stopped. A fenced account is never
+  recorded unit; records of the retired sign-in purpose are stopped. A
+  fenced account is never
   adopted; the fence is completed first.
 - A running browser is always treated as potentially dirty: a frozen copy
   never clears that, so a forced stop reports `unsaved_state_lost` unless a
   flushed stop-time copy was published.
-- A `SignIn` open naming the account's running instance validates the login
-  like a fresh open (`login_mismatch` otherwise), binds it to the running
-  instance, which from then on follows that login (its durable record says
-  sign-in and its deadline becomes the earlier of its own and the login's
-  expiry), and navigates to the verification URL once the Machine knows it.
-  A repeated open for the login already bound navigates again only while
-  its last navigation failed; a rejected navigation answers `failed`. An
-  owner `navigate` the launcher rejects likewise answers `failed` without
-  stopping the instance.
+- An `Open` carrying the retired `SignIn` purpose answers `hibernated` with
+  `not_available` and touches no instance. An owner `navigate` the launcher
+  rejects answers `failed` without stopping the instance; one the launcher
+  never answers may still land, so the instance stops instead of being
+  reused, and a navigation waiting behind it never reaches the launcher.
 - Browser commands are dispatched in arrival order; an account's `Open`,
   `Hibernate`, `Reset`, `Revoke` and `Query` run strictly one after another
   in that order (leases, attachments, resizes and navigation do not wait
