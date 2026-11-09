@@ -321,11 +321,9 @@ impl BrowserManager {
             if Instant::now() >= instance.deadline() {
                 return Err(Reason::Deadline);
             }
-            match self.recheck(instance) {
-                // An unverified scan is decided by periodic supervision.
-                Ok(()) | Err(Recheck::Unverified) => {}
-                Err(Recheck::Stop(reason)) => return Err(reason),
-            }
+            // Counts denials as the supervisor would: it may be the one
+            // waiting here, so the limit is enforced during the wait too.
+            self.recheck_periodic(instance)?;
             let _ = tokio::time::timeout(SUPERVISOR_TICK, done.wait_for(|done| *done)).await;
         }
     }

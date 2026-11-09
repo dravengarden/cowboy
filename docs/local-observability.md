@@ -302,7 +302,9 @@ The periodic socket scan fails closed. A process whose `/proc` evidence the
 kernel's ptrace access check denies (EACCES/EPERM, e.g. while a Chromium helper
 execs or changes dumpability) is unverified, not clean: the scan is repeated
 about a second later and the instance stops as `confinement_unverified` after
-three consecutive denied periodic scans. While a scan is denied, an attach or
-resize is refused as busy rather than allowed, and only the supervisor's own
-scans count toward the limit. A found listener or datagram socket still stops
-the instance immediately, and the startup verification remains strict.
+three consecutive denied periodic scans (a graceful stop waiting for a snapshot
+copy keeps counting them). While a scan is denied, an attach or resize is
+refused as busy rather than allowed and does not count. The runtime directory is
+still checked after a denial, and a found listener, datagram socket or runtime
+directory violation stops the instance immediately; the startup verification
+remains strict.

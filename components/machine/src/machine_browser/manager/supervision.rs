@@ -141,8 +141,8 @@ impl BrowserManager {
         if !instance.live.lock().verified.pins_hold() {
             return Err(Recheck::Stop(Reason::ConfinementUnverified));
         }
-        match verify::scan_sockets_periodic(&instance.cgroup_dir) {
-            Ok(()) => {}
+        let denied = match verify::scan_sockets_periodic(&instance.cgroup_dir) {
+            Ok(()) => false,
             Err(verify::ScanFailure::Violation(violation)) => {
                 tracing::warn!(event_name = "browser.scan.violation",
                     browser_instance = %instance.instance_id, detail = %violation,
@@ -153,22 +153,27 @@ impl BrowserManager {
                 tracing::info!(event_name = "browser.scan.denied",
                     browser_instance = %instance.instance_id, detail = %violation,
                     "browser socket scan denied");
-                return Err(Recheck::Unverified);
+                true
             }
-        }
+        };
+        // Checked even after a denial: an observable violation stops now.
         if let Err(violation) = verify::runtime_directory_clean(&instance.runtime_dir) {
             tracing::warn!(event_name = "browser.runtime_dir.violation",
                 browser_instance = %instance.instance_id, detail = %violation,
                 "browser runtime directory violation");
             return Err(Recheck::Stop(Reason::ConfinementUnverified));
         }
+        if denied {
+            return Err(Recheck::Unverified);
+        }
         Ok(())
     }
 
-    /// [`Self::recheck`] for the supervisor's periodic scan: a denial is
-    /// rescanned about a second later, and the instance stops once
-    /// [`SCAN_DENIED_LIMIT`] consecutive periodic scans were denied.
-    fn recheck_periodic(&self, instance: &Arc<Instance>) -> Result<(), Reason> {
+    /// [`Self::recheck`] for the supervisor's periodic scan, also run by a
+    /// graceful stop waiting for a copy (which blocks the supervisor): a
+    /// denial is rescanned about a second later, and the instance stops
+    /// once [`SCAN_DENIED_LIMIT`] consecutive denials were counted.
+    pub(super) fn recheck_periodic(&self, instance: &Arc<Instance>) -> Result<(), Reason> {
         match self.recheck(instance) {
             Ok(()) => {
                 instance.live.lock().scan_denied = 0;
