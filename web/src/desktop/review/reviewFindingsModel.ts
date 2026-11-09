@@ -49,8 +49,8 @@ export function reviewOutcome(
     ? result.structured as Record<string, unknown>
     : undefined;
   const verdict = typeof root?.verdict === "string" ? root.verdict : undefined;
-  const complete = root?.review_complete === true && verdict !== "incomplete" && result?.truncated !== true &&
-    Array.isArray(root?.findings);
+  const complete = root?.review_complete === true && (verdict === "approve" || verdict === "needs-attention") &&
+    result?.truncated !== true && Array.isArray(root?.findings);
   if (!complete) return { verdict, complete: false, findings: [] };
   const findings = (root!.findings as unknown[]).flatMap((value, index): ReviewFinding[] => {
     if (!value || typeof value !== "object") return [];

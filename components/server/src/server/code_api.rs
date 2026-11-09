@@ -811,7 +811,15 @@ pub(super) async fn api_code_blob(
         .await
         {
             Ok(Some(crate::code_adapter::CodeAdapterResponse::Blob(blob))) => Ok(blob),
-            Ok(Some(_)) | Err(_) => {
+            // A Machine's own refusal keeps its meaning; anything else (a
+            // Machine without the operation, a lost route) is unavailable.
+            Err(error) => match blob_error(&error.to_string()) {
+                Some(refusal) => Err(refusal.to_owned()),
+                None => {
+                    return (StatusCode::BAD_GATEWAY, "remote blob unavailable").into_response();
+                }
+            },
+            Ok(Some(_)) => {
                 return (StatusCode::BAD_GATEWAY, "remote blob unavailable").into_response();
             }
             Ok(None) => {
@@ -830,10 +838,12 @@ pub(super) async fn api_code_blob(
                 text: blob.text,
             })
             .into_response(),
-            Err(error) => match error.as_str() {
-                "blob not found" => (StatusCode::NOT_FOUND, error).into_response(),
-                "blob too large" => (StatusCode::PAYLOAD_TOO_LARGE, error).into_response(),
-                "binary file" | "file is not UTF-8" => {
+            Err(error) => match blob_error(&error) {
+                Some(error @ "blob not found") => (StatusCode::NOT_FOUND, error).into_response(),
+                Some(error @ "blob too large") => {
+                    (StatusCode::PAYLOAD_TOO_LARGE, error).into_response()
+                }
+                Some(error @ ("binary file" | "file is not UTF-8")) => {
                     (StatusCode::UNSUPPORTED_MEDIA_TYPE, error).into_response()
                 }
                 _ => (StatusCode::BAD_REQUEST, "blob unavailable").into_response(),
@@ -841,6 +851,20 @@ pub(super) async fn api_code_blob(
         }
     })
     .await
+}
+
+/// The blob read's own refusal named in `error`, local or relayed by a
+/// Machine's adapter.
+fn blob_error(error: &str) -> Option<&'static str> {
+    [
+        "invalid blob oid",
+        "blob not found",
+        "blob too large",
+        "binary file",
+        "file is not UTF-8",
+    ]
+    .into_iter()
+    .find(|known| error.contains(known))
 }
 
 pub(super) fn code_file_error_response(error: &str) -> Response {

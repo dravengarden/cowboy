@@ -88,8 +88,15 @@ typing-free, auditable decisions within measured bounds.
   (`widgetTableModel.ts`); the row and its inspector share one sort. Column
   `width: "min" | "max"` hints apply. The Controller validates `sort` and
   `width`.
-- Not built yet: interactions, the Desktop entered-region keys and inspector
-  command (§7.5), and image sources.
+- **Desktop keys (Web).** The widget title is the row's conversation toggle
+  (`[data-desktop-widget-toggle="widget"]`), like tool and task rows: `Tab`
+  selects it, `Enter` or `l` opens the inspector, whose modal grammar moves
+  between its controls (`j`/`k`) and activates them (`Enter`, e.g. a sort
+  header); `Esc` closes it and returns focus to the row. This replaces the
+  in-row entered region of §7.5 while widgets have no live inputs; revisit it
+  with interactions, when a choice must be operable without opening the
+  inspector.
+- Not built yet: interactions and image sources.
 
 ## 1. Review findings and resolutions
 

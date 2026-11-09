@@ -336,7 +336,7 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
   const inspector = useInspectorPanel(width, () => setOverlay(false));
   const language = useWorkbenchLanguage(review);
   const delegate = useDelegate(review);
-  const findings = useReviewFindings(review.context.agentSessionId, review.changes.queue);
+  const findings = useReviewFindings(review.context.agentSessionId, review.changes.queue, active);
   useReviewViewCommands(review, {
     delegate,
     inspector: inspector.commands,

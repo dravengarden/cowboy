@@ -210,6 +210,11 @@ fn a_diff_index_line_reads_back_its_exact_base_side() {
     assert_eq!(provider.blob("0000000").unwrap_err(), "blob not found");
     let tree = git(root, &["rev-parse", "HEAD^{tree}"]);
     assert_eq!(provider.blob(&tree).unwrap_err(), "blob not found");
+    // A ref named like the abbreviation, or a replacement, never redirects it.
+    let other = git(root, &["hash-object", "-w", "--stdin"]);
+    git(root, &["replace", base, &other]);
+    git(root, &["tag", base, &other]);
+    assert_eq!(provider.blob(base).unwrap().text, "one\ntwo\nthree\n");
 }
 
 #[test]

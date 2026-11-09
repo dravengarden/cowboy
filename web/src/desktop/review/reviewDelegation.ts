@@ -69,7 +69,9 @@ export function useDelegate(review: ReviewWorkbench): (kind: "explain" | "review
       }
       const prompt = kind === "explain"
         ? reviewExplainPrompt(remark, root, "explain")
-        : reviewDelegationPrompt(task, path, remark, root);
+        // A reused fork keeps the worktree it was forked with; the review
+        // must read the browsed one, whose fingerprint is recorded below.
+        : reviewDelegationPrompt(task, path, remark, review.target?.cwd ?? root);
       if (!send({ type: "submit", session_id: fork.session_id, text: prompt, cmid: `review-${crypto.randomUUID()}` })) {
         appendDraftText(fork.session_id, prompt);
       }

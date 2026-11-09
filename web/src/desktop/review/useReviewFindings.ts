@@ -31,7 +31,13 @@ export interface ReviewFindings {
  * actual parent), matched by task id, and anchored against the change list
  * as it is now.
  */
-export function useReviewFindings(source: string | undefined, queue: readonly GitReviewEntry[]): ReviewFindings {
+export function useReviewFindings(
+  source: string | undefined,
+  queue: readonly GitReviewEntry[],
+  /** Review is shown: reads run only then, and showing it again re-checks
+   *  settled reviews (a deleted fork takes its findings with it). */
+  active: boolean,
+): ReviewFindings {
   const delegations = useDelegations(source);
   const reviews = useMemo(
     () => delegations.filter((delegation) => delegation.kind === "review").slice(-READ_LIMIT),
@@ -44,6 +50,7 @@ export function useReviewFindings(source: string | undefined, queue: readonly Gi
       setObserved([]);
       return undefined;
     }
+    if (!active) return undefined;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     void Promise.all(reviews.map(async (delegation): Promise<Observed> => {
@@ -52,7 +59,9 @@ export function useReviewFindings(source: string | undefined, queue: readonly Gi
           .find((item) => item.labels?.review_task === delegation.task);
         if (!call && Date.now() - delegation.atMs > START_MS) return { delegation, state: "failed" };
         if (!call || callActive(call.state)) return { delegation, callId: call?.call_id, state: "pending" };
-        if (!call.has_result) return { delegation, callId: call.call_id, state: "failed" };
+        // Only a completed call's result is a review; a failed one may still
+        // carry the rejected output.
+        if (call.state !== "completed" || !call.has_result) return { delegation, callId: call.call_id, state: "failed" };
         const detail = await fetchCall(delegation.fork, call.call_id, controller.signal);
         return { delegation, callId: call.call_id, state: "done", result: detail.result };
       } catch {
@@ -69,7 +78,7 @@ export function useReviewFindings(source: string | undefined, queue: readonly Gi
       controller.abort();
       globalThis.clearTimeout(timer);
     };
-  }, [reviews, tick]);
+  }, [active, reviews, tick]);
   return useMemo((): ReviewFindings => {
     const fingerprints = new Map(queue.map((entry) => [entry.change.path, entry.change.fingerprint]));
     let incomplete = 0;

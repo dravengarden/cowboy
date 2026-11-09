@@ -93,8 +93,9 @@ try {
   results.push("An agent's reveal before Review was opened shows Review with the named file");
   // A reveal payload names the file and line; `active` (another file here,
   // as after the phone browsed on) is not what the agent asked for.
-  await page.evaluate(`globalThis.__reviewFixture.sync("mobile-review:worktree", {mode:"files",tabs:[{path:"README.md",pinned:false},{path:"src/app.ts",pinned:false}],active:"src/app.ts",progress:{},positions:{},open_revision:2,reveal_revision:2,reveal:{path:"README.md",line:3,revision:2}}, 1001)`);
-  await until(`${activeTab} === "README.md" && document.querySelector("[data-review-cursor-line='3']")`, "the reveal payload's line is shown");
+  await page.evaluate(`globalThis.__reviewFixture.sync("mobile-review:worktree", {mode:"files",tabs:[{path:"README.md",pinned:false},{path:"src/app.ts",pinned:false}],active:"README.md",progress:{},positions:{},open_revision:2,reveal_revision:2,reveal:{path:"src/app.ts",line:3,revision:2}}, 1001)`);
+  // The file is not open yet: its line must survive the read.
+  await until(`${activeTab} === "src/app.ts" && document.querySelector("[data-desktop-review-editor]")?.dataset.reviewDocumentKey === "source\\0src/app.ts" && document.querySelector("[data-review-cursor-line='3']")`, "the reveal payload's line is shown");
   results.push("A reveal payload opens its own file at its line, not the later active path");
   const back = await page.evaluate<{ x: number; y: number }>(`(() => {
     const r = document.querySelector("[data-desktop-work-view='conversation']").getBoundingClientRect();

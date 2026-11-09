@@ -572,7 +572,10 @@ D2d as implemented reads the old side by the blob id the diff's own
 `index` line names, `GET /api/code/sessions/{id}/blob?oid=`, instead of a
 snapshot-bound `/file?side=&diff=`. A blob id is content-addressed, so the
 answer is the exact text the patch was computed from without a snapshot
-fence or a TTL; Git refuses an ambiguous prefix and a non-blob object.
+fence or a TTL. The prefix is resolved among objects only (`rev-parse
+--disambiguate`, never a ref of the same name), must match exactly one blob,
+and replacement refs are ignored. A Machine's refusal keeps its status
+(404/413/415); only a missing operation or route is 502.
 Outside the hunks both sides are equal, so the old side alone fills every
 gap: `␣VZ` (a per-device choice, `cowboy.desktop.reviewDiffContext.v1`)
 shows working-tree and commit diffs with the whole file, each gap joined to
@@ -593,8 +596,13 @@ footer's Explain and Review) fork the Agent as the phone's Explain does;
 (`cowboy.desktop.reviewDelegations.v1`: source, fork, task, files with their
 change fingerprints). The last five are read through their forks
 (`/api/sessions/{fork}/calls`, matched by the `review_task` label), polled
-every 15 s while one runs; a fork with no matching call after 10 minutes
-counts as never started. A finding is `current` while its file's change
+every 15 s while one runs and only while Review is shown; showing Review
+again re-checks settled ones, so a deleted fork's findings go with it. A
+fork with no matching call after 10 minutes counts as never started. Only a
+`completed` call whose result is complete, untruncated and `approve` or
+`needs-attention` yields findings. The delegation always names the browsed
+worktree as `root`, because a reused fork keeps the worktree it was forked
+with. A finding is `current` while its file's change
 fingerprint equals the delegated one, `stale` after the file changed and
 `unmapped` outside the delegated files; only `current` findings are placed,
 and only where Problems already places findings (a source file, or a diff

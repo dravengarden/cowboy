@@ -953,6 +953,18 @@ uniquely resolvable, otherwise candidates or `stale/ambiguous`.
   `queued | appended | consumed | unknown`. Only evidenced model deliveries
   count against repetition limits. `context_cleared` drops pending deliveries;
   compaction and cold resume keep them as labelled historical observations.
+
+  Implemented subset: a bounded Controller-memory ledger (20 per session, 256
+  sessions; lost on restart) gives each delivery an ID, route (`adapter` for a
+  `code.post_edit` result an adapter such as Claude's Mod appends,
+  `codex_steering`), files and a digest of the shown JSON. States are
+  `computed`, `steering`, `appended`, `refused`, `unknown` and `suppressed`;
+  `consumed` is not observable yet. A result identical to the previous
+  possibly-delivered one within 10 minutes is `suppressed` (`code.post_edit`
+  returns `deliver: false, suppressed: "repeat"`); refused deliveries do not
+  count. `code.summary()` lists the ledger as `deliveries` without repository
+  text. Codex steering is bound to the edit's turn, so a cleared context
+  refuses it; the Claude Mod's own appends are not reported back.
 - **Payload.** Bounded (≤10 errors, ≤5 warnings, source lines, ≤2,000 chars),
   structured, with every repository-controlled field (messages, source lines,
   paths) escaped as untrusted data inside a fixed presentation. Injection

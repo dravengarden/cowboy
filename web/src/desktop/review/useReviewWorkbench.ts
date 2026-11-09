@@ -238,8 +238,11 @@ export function useReviewWorkbench(active: boolean) {
 
   const onCursorLine = useCallback((line: number): void => {
     setCursorLine(line);
-    if (document) positions.current.set(reviewDocumentKey(document), line);
-  }, [document]);
+    // While a document loads the editor holds no text yet; its line 1 must
+    // not replace the line the document is to open at.
+    const key = document && reviewDocumentKey(document);
+    if (key && load?.state === "ready" && load.value.key === key) positions.current.set(key, line);
+  }, [document, load]);
 
   return {
     workspace,
