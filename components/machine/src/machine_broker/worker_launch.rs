@@ -8,6 +8,27 @@ use crate::machine_plugins::ProviderLaunchContext;
 use cowboy_provider_sdk::ProviderBehaviorContract;
 
 impl Broker {
+    /// The registered worker for this generation. A retained bundle may predate
+    /// MCP launch plans, so an MCP launch is refused before it starts a worker
+    /// that would exit on the unknown argument.
+    pub(super) async fn launch_worker_command(&self, session: &StartSession) -> Result<PathBuf> {
+        let worker = self
+            .generation_commands
+            .lock()
+            .get(&session.generation)
+            .cloned()
+            .with_context(|| {
+                format!(
+                    "no worker executable registered for generation {}",
+                    session.generation
+                )
+            })?;
+        if session.mcp_plan.is_some() {
+            super::mcp_launch::ensure_worker_accepts_plan(&worker).await?;
+        }
+        Ok(worker)
+    }
+
     /// Optional worker arguments that pin the authenticated account and MCP plan.
     pub(super) fn push_launch_identity_args(
         &self,
