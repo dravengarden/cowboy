@@ -1,9 +1,9 @@
 # Widget apps: agent-written TSX in a bounded interpreter, MCP Apps later
 
-Status: design, revision 3 (2026-11-09). The owner chose the direction:
+Status: design, revision 4 (2026-11-09). The owner chose the direction:
 Cowboy provides a secure sandbox in which agent-written React runs, and
-widgets grow into an advanced, extensible surface. Revision 3 answers the
-Astra Max review of revision 2 (§12). It extends [`widgets.md`](widgets.md);
+widgets grow into an advanced, extensible surface. Revision 4 answers the
+Astra Max reviews of revisions 2 and 3 (§12). It extends [`widgets.md`](widgets.md);
 the `cowboy.widget/1` JSON nodes stay the lightweight, patchable path for
 status, tables and decisions.
 
@@ -107,10 +107,14 @@ third-party MCP Apps through a spec-conformant proxy there (§10).
   same mechanism, `web/vite.config.ts`). App source never appears in markup;
   it travels only as message data.
 - Effective policy in the frame and the Worker: the App CSP intersected with
-  `default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:`.
-  The Worker starts from a `blob:` built from the static, content-hashed
-  runtime bundle shipped with the Web release; QuickJS instantiation uses the
-  App CSP's `'wasm-unsafe-eval'`.
+  the frame's meta policy `default-src 'none'; script-src 'unsafe-inline'
+  blob: 'wasm-unsafe-eval'; worker-src blob:`. Both allow
+  `'wasm-unsafe-eval'`, which QuickJS needs; neither allows string `eval` or
+  network fetches. The Worker starts from a `blob:` built from the static,
+  content-hashed runtime bundle shipped with the Web release; the QuickJS
+  WebAssembly bytes arrive as a transferred `ArrayBuffer` in the bootstrap,
+  never fetched by the Worker. Initialization under the exact production
+  policies is part of the positive suite.
 
 ### 4.2 Handshake and channel
 
@@ -150,8 +154,18 @@ third-party MCP Apps through a spec-conformant proxy there (§10).
 - First render: 500 ms deadline; each later event dispatch or state update:
   100 ms. An interrupted evaluation terminates the app ("This app stopped:
   it ran too long" or "used too much memory") with Reload.
-- The host still pings the Worker every second; three misses terminate it
-  (covers a defect in the trusted runtime itself).
+- Cumulative CPU: VM execution (evaluations, pending-job drains, scheduled
+  React work) is metered per app: ≤ 200 ms in any 1 s window and ≤ 20 s per
+  minute. Over the window the runtime stops draining jobs until the next
+  window; three consecutive throttled windows or the minute budget terminate
+  the app. Pending jobs drained per turn are bounded, and the remaining
+  deadline propagates into each drain.
+- The trusted Worker (not the VM) answers a heartbeat every second; three
+  misses terminate it (covers a defect in the trusted runtime itself).
+- Trust assumption: these budgets hold while QuickJS holds. An escape into
+  Worker JavaScript defeats the VM heap and bridge budgets; what remains is
+  the heartbeat termination, the opaque origin and the CSP. QuickJS is pinned,
+  updated with upstream fixes, and fuzzed with hostile app fixtures in CI.
 - At most 4 live app runtimes per session view; at most 1 app per document in
   phase A.
 
@@ -173,8 +187,13 @@ evaluation.
   operations: `create(id, type)`, `props(id, props)`, `text(id, value)`,
   `insert(parent, id, index)`, `remove(id)`. The Worker validates each batch:
   types in the allowlist, props schema-valid and JSON-only, ids known, tree
-  ≤ 2,000 nodes and depth ≤ 32, batch ≤ 64 KiB, ≤ 30 batches per second; the
-  host grants credits per animation frame. Violations terminate the app.
+  ≤ 2,000 nodes and depth ≤ 32, batch ≤ 64 KiB, ≤ 30 batches per second.
+- Flow control: at most 2 batches in flight to the host; the Worker keeps at
+  most 4 pending batches and 256 KiB, coalescing successive `props`/`text`
+  operations for the same node; when the pending store is full the Worker
+  stops running the VM until credits return. The host grants credits per
+  animation frame and stops granting in a hidden tab, which suspends the VM.
+  Violations terminate the app.
 - Events: the host sends sanitized payloads (`value`, `checked`, `index`,
   `key`) for the handler a node declared; the Worker dispatches them into the
   VM under the event deadline.
@@ -188,6 +207,9 @@ evaluation.
 - A revision that changes `code`: if the app holds person-entered input since
   mount, the host keeps the current runtime and shows "The agent updated this
   app — Reload (discard what you typed) / Keep editing"; otherwise it restarts.
+  A retained runtime can no longer send (its code hash is not current); a send
+  from it opens "This app version is out of date — Put the message in the
+  composer", which copies the exact text into the person's own composer.
 - The inline row and the inspector render the same tree from one runtime; the
   inline row shows a placeholder while the inspector has it.
 - Off-screen eviction after 60 s, except pinned apps (focused, holding input,
@@ -210,10 +232,15 @@ allowlist in the message. The host renders each with Cowboy MUI, themed, with
 | `Table` | ≤ 200 rows × 12 columns, cell text ≤ 500 chars; host sort |
 | `List` | ≤ 500 items |
 | `Chart` (line, bar, area, pie, scatter) | ≤ 2,000 points per app, ≤ 8 series; host-rendered with Recharts |
-| `Image` | `source` names an entry of the node's `images`, which the Controller verified and pinned like widget images; no URLs |
+| `Image` | `source` names an entry of the node's `images` (≤ 8); no URLs. The Controller accepts only still PNG artifacts ≤ 1 MiB and ≤ 2048 × 2048, fully decoded at publish; ≤ 16 Mpx decoded per app. The host loads every image of the node into local blobs before the app runs, so which images are drawn, and when, never causes a request |
 
-Aggregate per app: ≤ 2,000 rendered components and the cost model above;
-updates exceeding it are rejected before commit. Hooks: `useHostContext()`
+Expansion cost, counted by the host before a batch commits: each component
+1 unit; each table cell, list item, select option and chart point 1 unit;
+each 200 characters of text 1 unit. Budgets: ≤ 6,000 units per app,
+≤ 12,000 per session view, ≤ 1,500 units committed per animation frame
+(excess waits for the next frame, which also withholds credits). Retained
+props and text ≤ 512 KiB per app. Updates exceeding a budget are rejected
+before commit. Hooks: `useHostContext()`
 (theme mode, density, platform, locale, container size) and
 `useSend()` → `send(text)`.
 
@@ -223,7 +250,7 @@ updates exceeding it are rejected before commit. Hooks: `useHostContext()`
 |---|---|
 | `ui/initialize` | Host context: theme, density, platform, locale, time zone, container dimensions, display mode |
 | `ui/notifications/size-changed` | Coalesced per animation frame within bounds |
-| `ui/message` (`send`) | Text only, ≤ 2,000 Unicode scalars and ≤ 8 KiB; C0/C1 controls except newline rejected; bidi and invisible format characters shown escaped (`⟨U+202E⟩`). The product confirm sheet freezes and shows the exact bytes, labelled "Written by the app". On Send, the Web calls the Controller, which re-checks that the widget is open, the app node and code hash are current and the session admits prompts, then queues exactly those bytes as the person's prompt. Each opened confirmation has a host-owned occurrence id; the `cmid` is derived from (session, widget, node, code hash, occurrence) and reused only for retries of that confirmed payload. One open confirmation per app; at most 1 new confirmation per 5 s |
+| `ui/message` (`send`) | Text only, ≤ 2,000 Unicode scalars and ≤ 8 KiB; C0/C1 controls except newline rejected; bidi and invisible format characters shown escaped (`⟨U+202E⟩`). The product confirm sheet freezes and shows the exact bytes, labelled "Written by the app". On Send, the Web calls the Controller, which re-checks that the widget is open, the app node and code hash are current and the session admits prompts, records the message durably, then queues exactly those bytes as the person's prompt; Controller start re-queues recorded messages of the last 24 h whose echo never landed (the decision pattern). Each opened confirmation has a host-owned occurrence id bound to the payload digest and kept with the pending send in the browser's durable outbox across reloads; the `cmid` is derived from (session, widget, node, code hash, occurrence); a retry with the same occurrence and digest returns the recorded receipt, a different digest under that occurrence is refused. One open confirmation per app; at most 1 new confirmation per 5 s |
 | `ui/request-display-mode` | `inline` ↔ `fullscreen` (the inspector), only after a person's gesture in the app |
 | `ui/open-link` | Not available in phase A: opening a URL would export data outside the message rule. A later phase may add it as a separate, explicitly worded data-export permission |
 | `ui/update-model-context`, `tools/call`, `resources/read` | Refused |
@@ -250,8 +277,11 @@ updates exceeding it are rejected before commit. Hooks: `useHostContext()`
 
 ## 9. Acceptance and release gates
 
-Apps are enabled per engine and shell only after its suite passes; any other
-client shows `fallback` with "Open in the Cowboy app or on Desktop".
+Apps are enabled by a fail-closed predicate: a tested engine and OS version,
+and, inside a native shell, the shell's reported `appsSandbox: 1` capability
+(present only in builds whose handlers pass the native gate). Older shells,
+untested engines and unknown clients show `fallback` with "Update the Cowboy
+app or open on Desktop".
 
 The `widget-apps` suite, on every enabled engine (hawk Chrome; the iOS/iPadOS
 native shell on a physical device per `conventions/pwa.md`; the macOS native
@@ -261,13 +291,19 @@ shell; each Tauri runtime that ships):
   compiles under the production CSP and renders at 320/375/768/1100 px, light
   and dark; events round-trip; props-only updates keep typed input; the
   inspector shares one runtime.
-- Hostile, observed outside the app (sentinel cookie and storage, CDP Network
-  log of every request the page makes, Controller request log): no sentinel
+- Hostile, observed outside the app (sentinel cookie and storage; an egress
+  sink on a Hawk overlay address that the probes target and that logs every
+  DNS-free TCP connection; the CDP Network log on Chrome; Web Inspector
+  network capture including Workers on WebKit shells; the Controller request
+  log). Guest-reported failures never count as proof: no sentinel
   visible; no request leaves the page; no Worker can be spawned; forged
   readiness, bootstrap or port messages are ignored; unknown components and
   props, oversized batches and floods terminate the app; a compile-time loop,
-  a render-time loop and an allocation loop each stop within their budgets
-  while Cowboy stays responsive and keeps unsent composer text.
+  a render-time loop, an allocation loop and an asynchronous churn loop each
+  stop within their budgets while Cowboy stays responsive and keeps unsent
+  composer text; withheld credits and a hidden tab suspend the VM; four
+  maximum-budget apps on a supported iPhone keep interaction latency under
+  200 ms.
 - Consent: `send` never queues without the confirm; bidi text shows escaped;
   two confirmed identical messages queue twice, a retried one once; a closed
   widget refuses send at the Controller.
@@ -322,3 +358,19 @@ Revision 2 (Astra Max, `call-d198afcfbf3b06d33a5fe6e9`) — resolutions:
 | Unrelated updates destroy dirty input (medium) | Identity by code hash; props-only updates keep state; code changes ask (§5.3) |
 | `openLink` exports data (medium) | Removed from phase A (§7) |
 | Coverage of engines and egress observation (medium) | Per-engine enablement, CDP network log, passkey `isMainFrame` gate (§9) |
+
+Revision 3 (Astra Max, `call-b9eed77a58345418f05da624`) — resolutions:
+
+| Finding | Resolution |
+|---|---|
+| Frame CSP blocks WebAssembly (high) | Meta policy adds `'wasm-unsafe-eval'`; WASM bytes transferred, not fetched (§4.1) |
+| Image choice is a network channel (high) | All images preloaded to local blobs before the app runs (§6) |
+| Artifact images unbounded when decoded (high) | Still PNG ≤ 1 MiB and ≤ 2048², decoded at publish; 16 Mpx per app (§6) |
+| No aggregate expansion cost or commit budget (high) | Unit cost model, per-app/session/frame budgets, iPhone latency gate (§6, §9) |
+| Pending batches unbounded without credits (high) | Bounded in-flight and pending store; VM suspended when full or hidden (§5.2) |
+| App messages lack durable retry ownership (high) | Record-then-queue, startup recovery, occurrence bound to digest in the durable outbox (§7) |
+| Cumulative async CPU unbounded (medium) | Rolling CPU windows, bounded job drains, churn fixture (§5.1, §9) |
+| Retained dirty runtime cannot send (medium) | Out-of-date sends go to the person's composer (§5.3) |
+| Older native shells would enable apps (medium) | Fail-closed predicate with the shell's `appsSandbox` capability (§9) |
+| No external egress observer on WebKit (medium) | Overlay egress sink plus Web Inspector capture (§9) |
+| QuickJS integrity is a trust assumption (summary) | Stated with the remaining layers and maintenance (§5.1) |
