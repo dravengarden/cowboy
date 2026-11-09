@@ -62,8 +62,8 @@ function sendChord(client: RFB | undefined, chord: BrowserChord): void {
 /** Native touch on this RFB client: requested in its SetEncodings, used
  * only once the display server acknowledges it (`nativeTouch.ts`). */
 function startNativeTouch(rfb: RFB, target: HTMLElement, focus: () => void): NativeTouch {
-  hookEncodings((RFB as unknown as { messages: RfbMessages }).messages);
-  return attachNativeTouch(rfb as unknown as RfbInternals, {
+  hookEncodings((RFB as unknown as { messages?: RfbMessages }).messages);
+  return attachNativeTouch(rfb as unknown as Partial<RfbInternals>, {
     surface: target,
     canvas: () => target.querySelector("canvas"),
     page: globalThis,

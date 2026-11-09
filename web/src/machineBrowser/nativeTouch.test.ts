@@ -303,3 +303,17 @@ test("a closed or disconnected session sends nothing and gives touch back", () =
   assertEquals(start.defaultPrevented, false);
   assertEquals(sent().length, 1);
 });
+
+test("a noVNC without the hooked internals keeps the emulated mouse", () => {
+  const surface = new FakeSurface();
+  const touch = attachNativeTouch(
+    { _sock: new FakeSock() },
+    { surface, canvas: () => CANVAS, page: new EventTarget(), visibility: new EventTarget() },
+  );
+  const down = pointer("pointerdown", 1, 100, 100);
+  surface.dispatchEvent(down);
+  assertEquals(touch.enabled, false);
+  assertEquals(down.defaultPrevented, false);
+  hookEncodings(undefined);
+  hookEncodings({});
+});

@@ -64,11 +64,17 @@ const hooked = new WeakSet<RfbMessages>();
 
 /** Wrap noVNC's SetEncodings writer so that opted-in sockets also request
  * native touch; every other socket's message is unchanged. Idempotent. */
-export function hookEncodings(messages: RfbMessages): void {
-  if (hooked.has(messages)) return;
-  hooked.add(messages);
+export function hookEncodings(messages: Partial<RfbMessages> | undefined): void {
+  if (
+    !messages ||
+    typeof messages.clientEncodings !== "function" ||
+    hooked.has(messages as RfbMessages)
+  ) {
+    return;
+  }
+  hooked.add(messages as RfbMessages);
   const original = messages.clientEncodings.bind(messages);
-  messages.clientEncodings = (sock, encodings) =>
+  messages.clientEncodings = (sock: RfbSocket, encodings: number[]) =>
     original(sock, requesting.has(sock) ? [...encodings, TOUCH_PSEUDO_ENCODING] : encodings);
 }
 
@@ -171,7 +177,27 @@ interface Contact {
 const POINTER_EVENTS = ["pointerdown", "pointermove", "pointerup", "pointercancel"] as const;
 const TOUCH_EVENTS = ["touchstart", "touchmove", "touchend", "touchcancel"] as const;
 
-export function attachNativeTouch(rfb: RfbInternals, options: NativeTouchOptions): NativeTouch {
+/** Whether `rfb` still has the noVNC internals this module hooks; a noVNC
+ * upgrade that renamed them leaves the viewer on the emulated mouse. */
+export function hookable(rfb: Partial<RfbInternals>): rfb is RfbInternals {
+  const sock = rfb._sock as Partial<RfbSocket> | undefined;
+  return (
+    typeof rfb._normalMsg === "function" &&
+    typeof rfb._FBU === "object" &&
+    typeof rfb._rfbConnectionState === "string" &&
+    ["rQlen", "rQpeek8", "rQshift8", "rQwait", "sQpushBytes", "flush"].every(
+      (name) => typeof sock?.[name as keyof RfbSocket] === "function",
+    )
+  );
+}
+
+const DISABLED: NativeTouch = { enabled: false, cancelAll: () => {}, close: () => {} };
+
+export function attachNativeTouch(
+  rfb: Partial<RfbInternals>,
+  options: NativeTouchOptions,
+): NativeTouch {
+  if (!hookable(rfb)) return DISABLED;
   let enabled = false;
   let closed = false;
   let nextId = 1;
