@@ -7,6 +7,30 @@ Astra Max reviews of revisions 2 and 3 (§12). It extends [`widgets.md`](widgets
 the `cowboy.widget/1` JSON nodes stay the lightweight, patchable path for
 status, tables and decisions.
 
+## 0. Implementation status
+
+- **A1 (Web runtime)**: `web/src/widgets/apps/` — the srcdoc sandbox and
+  hash-authorized boot (`appSandboxBoot.ts`, `appSandbox.ts`), the trusted
+  Worker hosting QuickJS (`runtime/workerEntry.js`), the VM bundle with React,
+  the Cowboy reconciler and Sucrase (`runtime/vmEntry.js`), budgets
+  (`runtime/limits.js`, `appTree.ts`), the host renderer (`AppNode.tsx`,
+  `AppComponents.tsx`, `AppChart.tsx`), built by `web/appRuntimePlugin.mjs`.
+  The `widget-apps` browser suite covers rendering, round-trips and the
+  hostile cases of §9 on Chrome.
+- **A2 (contract)**: the `app` node in `contracts/widget-v1.ts`, the Web and
+  Controller validators, schema-edge-only `#id` lookup and image walks
+  (`props` stays opaque), and the authoring contract in `help("widgets")`.
+- **A3 (messages)**: `POST /api/sessions/{id}/widgets/{widget_id}/apps/{node_id}/messages`
+  (`agent_api/widget_app_messages.rs`) with the decision durability pattern;
+  the Web preview, occurrence and confirmation (`apps/appMessages.ts`,
+  `apps/AppMessageConfirm.tsx`). The Controller refuses control, bidi and
+  invisible format characters instead of escaping them, so the confirmation
+  always shows exactly what is sent.
+- Deferred: `Image` inside apps shows its `alt` text until node `images`
+  (§6) land; apps are enabled only on desktop Chromium outside the native
+  shells until **A4** (native `isMainFrame` gates, the `appsSandbox`
+  capability, WebKit and iPhone acceptance with the egress sink).
+
 ## 1. Goals and non-goals
 
 Goals:

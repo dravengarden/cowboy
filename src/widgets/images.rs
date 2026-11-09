@@ -170,8 +170,14 @@ fn walk(value: &Value, pointer: &str, path: &str, out: &mut Vec<SourceAt>) {
                 }
                 _ => {}
             }
+            // An app's `props` is opaque data, never widget nodes.
+            let app = map.get("type").and_then(Value::as_str) == Some("app");
             for (key, child) in map {
-                if key != "src" && key != "images" && (child.is_object() || child.is_array()) {
+                if key != "src"
+                    && key != "images"
+                    && !(app && key == "props")
+                    && (child.is_object() || child.is_array())
+                {
                     let escaped = key.replace('~', "~0").replace('/', "~1");
                     walk(
                         child,

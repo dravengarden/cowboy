@@ -32,6 +32,8 @@ const STEPS: usize = 50;
 const OPTIONS: usize = 50;
 const CARD_ACTIONS: usize = 6;
 const GALLERY: usize = 24;
+const APP_CODE_BYTES: usize = 14 * 1024;
+const APP_PROPS_BYTES: usize = 6 * 1024;
 pub const PATCH_OPS: usize = 64;
 const DESCRIPTION_CHARS: usize = 2048;
 
@@ -172,6 +174,7 @@ fn reference(value: Option<&Value>, path: &str) -> Checked {
 
 #[derive(Default)]
 struct Budget {
+    apps: usize,
     nodes: usize,
     cells: usize,
     items: usize,
@@ -345,10 +348,57 @@ fn kv(node: &Map<String, Value>, path: &str, budget: &mut Budget) -> Checked {
 }
 
 #[allow(clippy::too_many_lines)]
+/// An agent-written app (docs/widget-apps.md §8): bounds only; the Controller
+/// never parses or runs the TSX, and `props` stays opaque JSON.
+fn app(node: &Map<String, Value>, path: &str, budget: &mut Budget) -> Checked {
+    let field = |name: &str| format!("{path}.{name}");
+    budget.apps += 1;
+    if budget.apps > 1 {
+        return Err(Invalid::at(path, "at most one app per widget"));
+    }
+    if !node.get("id").and_then(Value::as_str).is_some_and(valid_id) {
+        return Err(Invalid::at(&field("id"), "required on an app"));
+    }
+    line(node.get("title"), &field("title"), TITLE_CHARS, false)?;
+    text(
+        node.get("fallback"),
+        &field("fallback"),
+        FALLBACK_CHARS,
+        false,
+    )?;
+    let serialized = |value: &Value| serde_json::to_string(value).map_or(usize::MAX, |s| s.len());
+    match node.get("code") {
+        Some(code @ Value::String(_)) if serialized(code) <= APP_CODE_BYTES => {}
+        _ => {
+            return Err(Invalid::at(
+                &field("code"),
+                "expected TSX of at most 14 KiB (serialized)",
+            ));
+        }
+    }
+    match node.get("props") {
+        None => {}
+        Some(props @ Value::Object(_)) if serialized(props) <= APP_PROPS_BYTES => {}
+        Some(_) => {
+            return Err(Invalid::at(
+                &field("props"),
+                "expected an object of at most 6 KiB (serialized)",
+            ));
+        }
+    }
+    one_of(
+        node.get("height"),
+        &field("height"),
+        &["xs", "sm", "md", "lg"],
+        true,
+    )
+}
+
 fn leaf(node: &Map<String, Value>, kind: &str, path: &str, budget: &mut Budget) -> Checked {
     let field = |name: &str| format!("{path}.{name}");
     match kind {
         "divider" => Ok(()),
+        "app" => app(node, path, budget),
         "text" => {
             text(node.get("text"), &field("text"), TEXT_CHARS, false)?;
             one_of(
@@ -583,26 +633,32 @@ pub fn validate(document: &Value) -> Result<(), Invalid> {
 }
 
 /// The JSON Pointer of the node whose `id` is `id`.
+/// The JSON Pointer of the node with `id`. Only node edges are followed
+/// (`root`, `children`, card `actions`), so ids inside opaque data such as an
+/// app's `props` are never addressed (docs/widget-apps.md §8).
 fn node_pointer(value: &Value, id: &str, here: &str) -> Option<String> {
-    match value {
-        Value::Object(map) => {
-            if map.get("id").and_then(Value::as_str) == Some(id) && map.contains_key("type") {
-                return Some(here.to_owned());
-            }
-            map.iter().find_map(|(key, child)| {
-                node_pointer(
-                    child,
-                    id,
-                    &format!("{here}/{}", key.replace('~', "~0").replace('/', "~1")),
-                )
-            })
-        }
-        Value::Array(items) => items
-            .iter()
-            .enumerate()
-            .find_map(|(index, child)| node_pointer(child, id, &format!("{here}/{index}"))),
-        _ => None,
+    let map = value.as_object()?;
+    if map.get("id").and_then(Value::as_str) == Some(id) && map.contains_key("type") {
+        return Some(here.to_owned());
     }
+    for key in ["root", "children", "actions"] {
+        match map.get(key) {
+            Some(child @ Value::Object(_)) => {
+                if let Some(found) = node_pointer(child, id, &format!("{here}/{key}")) {
+                    return Some(found);
+                }
+            }
+            Some(Value::Array(items)) => {
+                for (index, child) in items.iter().enumerate() {
+                    if let Some(found) = node_pointer(child, id, &format!("{here}/{key}/{index}")) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn split_last(pointer: &str) -> Option<(&str, String)> {
@@ -827,6 +883,51 @@ mod tests {
         assert_eq!(
             validate(&cells).unwrap_err().message,
             "more than 2000 table cells"
+        );
+    }
+
+    #[test]
+    fn app_nodes_are_bounded_and_their_props_stay_opaque() {
+        let app = json!({"type":"app","id":"dash","title":"Dashboard","fallback":"Disk usage",
+            "code":"export default function A(){ return null }",
+            "props":{"hidden":{"type":"text","id":"note","text":"x"},
+                     "picture":{"type":"image","alt":"x","src":{"kind":"event","seq":1}}}});
+        let mut document = approval();
+        document["root"] = json!({"type":"stack","children":[app.clone(),
+            {"type":"text","id":"note","text":"visible"}]});
+        validate(&document).unwrap();
+        let patched = apply_patch(
+            &document,
+            &[json!({"op":"set","path":"#note/text","value":"changed"})],
+        )
+        .unwrap();
+        assert_eq!(patched["root"]["children"][1]["text"], "changed");
+        assert_eq!(
+            patched["root"]["children"][0]["props"]["hidden"]["text"],
+            "x"
+        );
+        assert!(
+            image_sources(&document).is_empty(),
+            "image-shaped props are not sources"
+        );
+        let mut two = document.clone();
+        two["root"]["children"][1] =
+            json!({"type":"app","id":"b","title":"B","fallback":"b","code":""});
+        assert_eq!(
+            validate(&two).unwrap_err().message,
+            "at most one app per widget"
+        );
+        let mut big = document.clone();
+        big["root"]["children"][0]["code"] = json!("x".repeat(15 * 1024));
+        assert_eq!(validate(&big).unwrap_err().path, "root.children[0].code");
+        let mut bare = document;
+        bare["root"]["children"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("fallback");
+        assert_eq!(
+            validate(&bare).unwrap_err().path,
+            "root.children[0].fallback"
         );
     }
 

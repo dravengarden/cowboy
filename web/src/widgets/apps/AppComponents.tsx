@@ -80,16 +80,14 @@ function AppTextField({
 
 function options(value: unknown): { value: string; label: string }[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .slice(0, 100)
-    .map((option) =>
-      typeof option === "object" && option !== null
-        ? {
-            value: str((option as Record<string, unknown>)["value"]),
-            label: str((option as Record<string, unknown>)["label"]),
-          }
-        : { value: str(option), label: str(option) },
-    );
+  return value.slice(0, 100).map((option) =>
+    typeof option === "object" && option !== null
+      ? {
+          value: str((option as Record<string, unknown>)["value"]),
+          label: str((option as Record<string, unknown>)["label"]),
+        }
+      : { value: str(option), label: str(option) },
+  );
 }
 
 function AppTable({ node }: { node: AppElement }): React.JSX.Element {

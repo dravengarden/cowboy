@@ -7,6 +7,10 @@ import { flushSync } from "react-dom";
 import { Box, CssBaseline } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
 import AppNode from "./widgets/apps/AppNode";
+import WidgetView from "./widgets/WidgetView";
+import { parseWidgetValue } from "./widgets/widgetDocument";
+import { setAppMessageTransport } from "./widgets/apps/appMessages";
+import { SurfaceContext, type SurfaceProfile } from "./surface/SurfaceProfile";
 
 function check(value: unknown, label: string): asserts value {
   if (!value) throw new Error(label);
@@ -185,8 +189,72 @@ export async function runWidgetAppsBrowserConformance(): Promise<string[]> {
     "too many components",
     "a tree that keeps growing is stopped at the node budget",
   );
+  passed.push(await sendChecks(container));
   root.unmount();
   container.remove();
   void sent;
   return passed;
+}
+
+const DESKTOP: SurfaceProfile = { kind: "desktop", input: "keyboard-pointer", touchCapable: false, finePointer: true, hover: true };
+
+/** send(text) → product confirm showing the app's exact text → confirmed
+ *  send with its digest and occurrence (docs/widget-apps.md §7). */
+async function sendChecks(container: HTMLElement): Promise<string> {
+  const calls: Record<string, unknown>[] = [];
+  setAppMessageTransport(async (_url, body) => {
+    const request = body as Record<string, unknown>;
+    calls.push(request);
+    return request["message_sha256"]
+      ? { status: 200, body: { status: "sent" } }
+      : { status: 200, body: { message: request["text"], message_sha256: "digest-1" } };
+  });
+  const parsed = parseWidgetValue({
+    schema: "cowboy.widget/1",
+    title: "Cleanup",
+    root: {
+      type: "app",
+      id: "cleanup",
+      title: "Cleanup app",
+      fallback: "Cleanup",
+      code: app(
+        'import { Button, useSend } from "@cowboy/ui";\nexport default function A() { const send = useSend(); return <Button onPress={() => send("Please remove target/")}>Ask</Button>; }',
+      ),
+    },
+  });
+  check(parsed.ok, "the app widget validates");
+  const root = createRoot(container);
+  flushSync(() =>
+    root.render(
+      <SurfaceContext.Provider value={DESKTOP}>
+        <BrowserProductTheme>
+          <CssBaseline />
+          <WidgetView
+            document={parsed.document}
+            verified
+            interaction={{ sessionId: "s", widgetId: "w", revision: 1, closed: false, decided: {} }}
+          />
+        </BrowserProductTheme>
+      </SurfaceContext.Provider>,
+    ),
+  );
+  try {
+    const ask = await waitFor(
+      () => [...container.querySelectorAll("button")].find((b) => b.textContent === "Ask"),
+      "the app's Ask button",
+    );
+    ask.click();
+    const quoted = await waitFor(() => document.querySelector("[data-app-message-text]"), "the confirm shows the text");
+    check(quoted.textContent === "Please remove target/", "the exact app text is shown");
+    check(document.querySelector("[data-app-message-confirm]")?.textContent?.includes("Written by the app"), "the text is attributed to the app");
+    check(calls.length === 1 && !calls[0]?.["message_sha256"], "nothing is sent before the person confirms");
+    document.querySelector<HTMLElement>("[data-app-message-send]")?.click();
+    await waitFor(() => calls.length === 2, "the confirmed send");
+    check(calls[1]?.["message_sha256"] === "digest-1" && calls[1]?.["occurrence"] === calls[0]?.["occurrence"], "the send carries the previewed digest and occurrence");
+    await waitFor(() => !document.querySelector("[data-app-message-confirm]"), "the confirm closes");
+    return "an app's message is sent only after the person confirms its exact text";
+  } finally {
+    setAppMessageTransport(null);
+    root.unmount();
+  }
 }

@@ -732,9 +732,18 @@ type Node = {id?:Id;fallback?:string} & (
   | {type:"button";id:Id;label:string;action:{kind:"prompt"}|{kind:"copy";text:string}|{kind:"open";to:Ref};
       variant?:"primary"|"secondary"|"text"|"destructive";confirm?:string;group?:string}
   | {type:"choice";id:Id;label:string;options:{value:Id;label:string;detail?:string}[];multiple?:boolean;
-      max_selected?:number;value?:Id|Id[];submit?:{label?:string};group?:string});
+      max_selected?:number;value?:Id|Id[];submit?:{label?:string};group?:string}
+  | {type:"app";id:Id;title:string;fallback:string;code:string /* TSX ≤14 KiB */;props?:object /* ≤6 KiB */});
 // Bounds: 24 KiB, 400 nodes, depth 12, table 200x12, 2000 cells/document; percent cells are 0..1, bytes integers,
 // duration seconds. Labels are one printable line; unknown node types are refused.
+// App: one per widget, a React component run in Cowboy's sandbox (no network, no DOM). Default-export it; it gets
+// `props`. Imports: react, @cowboy/ui. Elements: Stack{direction,gap,wrap,align} Box{padding} Grid{minColumn}
+// Card{title} Text{variant:"body2"|"caption",tone:"secondary",bold} Heading{level} Divider Chip/Badge{label,tone}
+// Alert{severity} Progress{value 0..1} Button{variant,disabled,onPress} TextField{label,value,multiline,onChange({value})}
+// Select{label,value,options,onChange({value})} Checkbox/Switch{label,checked,onChange({checked})}
+// Slider{value,min,max,step,onChange({value})} Tabs{value,options,onChange({value})} Table{columns,rows} List{items}
+// Chart{type:"line"|"bar"|"area",data:object[],series:{key,label}[]}. Hooks: useHostContext(), useSend() — a send
+// is shown to the person to confirm. Patch `props` (by JSON Pointer through the app node) to update a running app.
 "##;
 
 pub const STATUS_DESCRIPTION: &str = "This Cowboy session in one call: status, queue/draft counts, placement, and whether managed agent calls are enabled. No arguments.";

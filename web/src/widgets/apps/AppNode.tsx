@@ -14,7 +14,7 @@ export type AppNodeProps = {
   props: unknown;
   title: string;
   /** Asked to send a message: the host must confirm before anything is sent. */
-  onSend?: (text: string) => void;
+  onSend?: ((text: string) => void) | undefined;
 };
 
 function renderTree(tree: AppTreeState, id: number, dispatch: Dispatch): ReactNode {

@@ -1,5 +1,6 @@
 {
   "http": {
+    "agent_api::api_widget_app_message": "exception:human — sending what an app wrote needs the person to read and confirm it; an agent sending it would speak for them.",
     "agent_api::api_widget_interaction": "exception:human — a widget decision is the person answering the agent; an agent tapping it would put words in their mouth.",
     "background_tasks::lookup": "sessions.history",
     "send_delivery::receipt": "queue.delivery_receipt",
