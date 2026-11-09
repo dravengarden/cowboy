@@ -11,8 +11,12 @@ use sha2::Digest as _;
 
 const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     (
-        "0080_provider_legacy_browsers.sql",
+        "0081_provider_legacy_browsers.sql",
         "85640d642370ac2d69786f53c61956b8e6085905b49f9f3c81cbf0919e9cc34a",
+    ),
+    (
+        "0080_session_widget_interactions.sql",
+        "8a58022763ca605bbcdddeba0063cbe94f1eeca1d90e0c3e00f4ca2cb971b76c",
     ),
     (
         "0079_browser_placements.sql",
@@ -201,8 +205,12 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
-        "0054_provider_legacy_browsers.sql",
+        "0055_provider_legacy_browsers.sql",
         "85640d642370ac2d69786f53c61956b8e6085905b49f9f3c81cbf0919e9cc34a",
+    ),
+    (
+        "0054_session_widget_interactions.sql",
+        "8a58022763ca605bbcdddeba0063cbe94f1eeca1d90e0c3e00f4ca2cb971b76c",
     ),
     (
         "0053_browser_placements.sql",

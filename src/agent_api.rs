@@ -690,7 +690,10 @@ export interface Cowboy {
 const WIDGETS_TYPES: &str = r##"
 // A widget is a cowboy.widget/1 JSON document drawn as one row of this transcript; a later write
 // replaces the row in place. Prose stays Markdown: publish only a table/status you will update,
-// an image, or a decision with fixed options. Inputs render inert (not yet clickable).
+// an image, or a decision with fixed options. A person's tap arrives as their next user message,
+// composed by Cowboy: `Widget #w3 “<title>” (revision 2): <button label>` or
+// `Widget #w3 “<title>” (revision 2), <choice label>: <option labels joined "; ">`. Inputs sharing a
+// `group` (or a lone input) take one decision, then stay inert until you change that input's labels.
 // cowboy_execute({action:"widgets.publish",operation,arguments:{widget_id?:Id,document:WidgetDocument}})
 //   -> {status:"committed",widget_id,handle,revision:1,state_version} | error exists|widget_limit|invalid_widget{path,message}
 // cowboy_execute({action:"widgets.update",operation,arguments:{widget_id,expected_revision,change}})
@@ -699,7 +702,7 @@ const WIDGETS_TYPES: &str = r##"
 // PatchOp: {op:"set"|"append",path,value} | {op:"remove",path}; path = JSON Pointer "/summary" or "#<node id>/steps/1/state".
 // All ops apply or none; a missing path is invalid. Receipts: cowboy_receipt({domain:"widgets",operation}).
 // widgets.list({after?,limit?,include_closed?}) -> {widgets:{widget_id,handle,title,summary,revision,state_version,closed,updated_at_ms}[],next}
-// widgets.read(id,{offset,chars}) -> that meta + document (compact JSON text window) + range.
+// widgets.read(id,{offset,chars}) -> that meta + interactions (newest 20) + document (JSON text window) + range.
 type Id = string; // [A-Za-z0-9_-]{1,64}
 type Tone = "neutral"|"info"|"success"|"warning"|"error"|"running";
 type Ref = {kind:"url";url:string /* https: only */}|{kind:"file";path:string;line?:number};
@@ -726,7 +729,10 @@ type Node = {id?:Id;fallback?:string} & (
   | {type:"alert";severity:"info"|"success"|"warning"|"error";title?:string;text:string}
   | {type:"image";alt:string;src:Img;caption?:string;fit?:"contain"|"cover";height?:"xs"|"sm"|"md"|"lg"}
   | {type:"gallery";images:{src:Img;alt:string;caption?:string}[]} /* the row shows 6; Open shows all */
-  | {type:"button";id:Id;label:string;action:{kind:"prompt"}} | {type:"choice";id:Id;label:string;options:{value:Id;label:string}[]});
+  | {type:"button";id:Id;label:string;action:{kind:"prompt"}|{kind:"copy";text:string}|{kind:"open";to:Ref};
+      variant?:"primary"|"secondary"|"text"|"destructive";confirm?:string;group?:string}
+  | {type:"choice";id:Id;label:string;options:{value:Id;label:string;detail?:string}[];multiple?:boolean;
+      max_selected?:number;value?:Id|Id[];submit?:{label?:string};group?:string});
 // Bounds: 24 KiB, 400 nodes, depth 12, table 200x12, 2000 cells/document; percent cells are 0..1, bytes integers,
 // duration seconds. Labels are one printable line; unknown node types are refused.
 "##;

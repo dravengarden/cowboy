@@ -14,6 +14,7 @@ import { SurfaceContext } from "../surface/SurfaceProfile";
 import type { ParsedDocument } from "./widgetDocument";
 import { WidgetNode } from "./WidgetNodes";
 import { useWidgetSorts, WidgetSortContext, WidgetVerifiedContext } from "./widgetMode";
+import { WidgetInteractionContext, type WidgetInteraction } from "./widgetInteractions";
 
 const WidgetInspector = lazy(() => import("./WidgetInspector"));
 
@@ -28,6 +29,8 @@ export type WidgetViewProps = {
   updatedAtMs?: number | undefined;
   /** Published through the Controller, which verified its image sources. */
   verified?: boolean | undefined;
+  /** A published widget's inputs act through the Controller. */
+  interaction?: WidgetInteraction | undefined;
 };
 
 function Header({
@@ -150,36 +153,38 @@ export default function WidgetView(props: WidgetViewProps): React.JSX.Element {
   );
   return (
     <WidgetVerifiedContext.Provider value={props.verified === true}>
-      <WidgetSortContext.Provider value={sorts}>
-        <Paper
-          variant="outlined"
-          data-cowboy-widget=""
-          sx={{
-            my: 1,
-            px: 1.5,
-            py: 1.25,
-            display: "grid",
-            gap: 1,
-            minWidth: 0,
-            bgcolor: "background.paper",
-            contain: "layout paint",
-          }}
-        >
-          <Header {...props} open={open} onOpen={(): void => setOpen(true)} />
-          {document.presentation?.inline === false ? (
-            body
-          ) : (
-            <Collapsible maxHeight={HEIGHT[document.presentation?.height ?? "md"]}>
-              {body}
-            </Collapsible>
-          )}
-          {open ? (
-            <Suspense fallback={null}>
-              <WidgetInspector {...props} onClose={(): void => setOpen(false)} />
-            </Suspense>
-          ) : null}
-        </Paper>
-      </WidgetSortContext.Provider>
+      <WidgetInteractionContext.Provider value={props.interaction ?? null}>
+        <WidgetSortContext.Provider value={sorts}>
+          <Paper
+            variant="outlined"
+            data-cowboy-widget=""
+            sx={{
+              my: 1,
+              px: 1.5,
+              py: 1.25,
+              display: "grid",
+              gap: 1,
+              minWidth: 0,
+              bgcolor: "background.paper",
+              contain: "layout paint",
+            }}
+          >
+            <Header {...props} open={open} onOpen={(): void => setOpen(true)} />
+            {document.presentation?.inline === false ? (
+              body
+            ) : (
+              <Collapsible maxHeight={HEIGHT[document.presentation?.height ?? "md"]}>
+                {body}
+              </Collapsible>
+            )}
+            {open ? (
+              <Suspense fallback={null}>
+                <WidgetInspector {...props} onClose={(): void => setOpen(false)} />
+              </Suspense>
+            ) : null}
+          </Paper>
+        </WidgetSortContext.Provider>
+      </WidgetInteractionContext.Provider>
     </WidgetVerifiedContext.Provider>
   );
 }

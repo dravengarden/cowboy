@@ -215,6 +215,24 @@ function leaf(node: Record<string, unknown>, type: string, path: string, budget:
       if (typeof node["id"] !== "string") fail(`${path}.id`, "required");
       line(node["label"], `${path}.label`, WIDGET_LIMITS.labelChars);
       if (!isObject(node["action"])) fail(`${path}.action`, "required");
+      {
+        // Every action field a renderer reads is checked here, so a malformed
+        // published document falls back instead of breaking the transcript.
+        const action = node["action"] as Record<string, unknown>;
+        const kind = action["kind"];
+        if (kind !== "prompt" && kind !== "copy" && kind !== "open") {
+          fail(`${path}.action.kind`, "expected prompt, copy or open");
+        }
+        if (kind === "copy") text(action["text"], `${path}.action.text`, 8 * 1024);
+        if (kind === "open") {
+          const to = action["to"];
+          if (!isObject(to) || typeof to["kind"] !== "string")
+            fail(`${path}.action.to`, "required");
+          if (to["kind"] === "url" && typeof to["url"] !== "string") {
+            fail(`${path}.action.to.url`, "expected text");
+          }
+        }
+      }
       return;
     case "choice": {
       if (typeof node["id"] !== "string") fail(`${path}.id`, "required");

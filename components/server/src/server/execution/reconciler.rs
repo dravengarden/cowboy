@@ -12,6 +12,9 @@ const PASS_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_RECOVERIES_PER_PASS: usize = 4;
 
 pub(in crate::server) async fn run(state: Arc<AppState>) {
+    // Restart recovery of admitted work also covers widget decisions whose
+    // prompt never reached the transcript.
+    super::super::agent_api::recover_decisions(&state).await;
     let mut shutdown = state.shutdown.clone();
     let mut tick = tokio::time::interval(PASS_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

@@ -1,12 +1,11 @@
 // Renders validated widget nodes with product MUI components
 // (docs/widgets.md §5.2, §7). Content is data: nothing here evaluates it.
-// Inputs render inert with their labels; images draw only when the widget
-// was published and so verified by the Controller (WidgetImages.tsx).
+// Inputs act only in a published widget (WidgetInputs.tsx); images draw only
+// when the Controller verified them (WidgetImages.tsx).
 
 import {
   Alert,
   Box,
-  Button,
   CircularProgress,
   Divider,
   LinearProgress,
@@ -27,6 +26,7 @@ import type { ParsedNode } from "./widgetDocument";
 import { WidgetLinkText } from "./WidgetLinkText";
 import { WidgetTable } from "./WidgetTable";
 import { GalleryNode, ImageNode } from "./WidgetImages";
+import { ButtonNode, ChoiceNode } from "./WidgetInputs";
 import { moreLabel, previewSlice, useWidgetMode } from "./widgetMode";
 import { WIDGET_LIMITS } from "../../../contracts/widget-v1.ts";
 
@@ -389,50 +389,6 @@ function AlertNode({ node }: { node: Of<"alert"> }): React.JSX.Element {
       ) : null}
       <Markdown text={node.text} />
     </Alert>
-  );
-}
-
-function ButtonNode({ node }: { node: Of<"button"> }): React.JSX.Element {
-  return (
-    <Box>
-      <Button
-        size="small"
-        disabled
-        variant={
-          node.variant === "primary" ? "contained" : node.variant === "text" ? "text" : "outlined"
-        }
-        color={node.variant === "destructive" ? "error" : "primary"}
-        title="Read-only widget: reply in the composer"
-        sx={{ textTransform: "none" }}
-      >
-        {node.label}
-      </Button>
-    </Box>
-  );
-}
-
-function ChoiceNode({ node }: { node: Of<"choice"> }): React.JSX.Element {
-  return (
-    <Box sx={{ display: "grid", gap: 0.5 }}>
-      <Typography variant="body2" sx={{ fontWeight: 600 }}>
-        {node.label}
-      </Typography>
-      <Box component="ul" sx={{ m: 0, pl: 3 }}>
-        {node.options.map((option) => (
-          <li key={option.value}>
-            <Typography variant="body2" component="span">
-              {option.label}
-            </Typography>
-            {option.detail ? (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-              >{` — ${option.detail}`}</Typography>
-            ) : null}
-          </li>
-        ))}
-      </Box>
-    </Box>
   );
 }
 

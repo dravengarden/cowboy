@@ -6,6 +6,7 @@ use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 
 mod images;
+pub mod interactions;
 use images::image_source;
 pub use images::{ARTIFACT_PREFIX, SourceAt, artifact_name, image_sources};
 
@@ -312,6 +313,14 @@ fn button(node: &Map<String, Value>, path: &str) -> Checked {
         &["prompt", "open", "copy"],
         false,
     )?;
+    match action.get("kind").and_then(Value::as_str) {
+        Some("open") if action.get("to").is_none() => {
+            return Err(Invalid::at(&field("action.to"), "required"));
+        }
+        Some("open") => reference(action.get("to"), &field("action.to"))?,
+        Some("copy") => text(action.get("text"), &field("action.text"), TEXT_CHARS, false)?,
+        _ => {}
+    }
     one_of(
         node.get("variant"),
         &field("variant"),
@@ -786,6 +795,11 @@ mod tests {
         let mut ragged = approval();
         ragged["root"] = json!({"type":"table","columns":["a","b"],"rows":[["1"]]});
         assert_eq!(validate(&ragged).unwrap_err().path, "root.rows[0]");
+        let mut open = approval();
+        open["root"] = json!({"type":"button","id":"b","label":"Go","action":{"kind":"open"}});
+        assert_eq!(validate(&open).unwrap_err().path, "root.action.to");
+        open["root"]["action"] = json!({"kind":"copy"});
+        assert_eq!(validate(&open).unwrap_err().path, "root.action.text");
         let mut table = approval();
         table["root"] = json!({"type":"table","sort":true,
             "columns":["a",{"label":"b","width":"min","format":"bytes"}],"rows":[["1",2]]});

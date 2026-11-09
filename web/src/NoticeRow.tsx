@@ -42,7 +42,13 @@ function PlainNotice({ item }: { item: Notice }): React.JSX.Element {
   );
 }
 
-export function NoticeRow({ item }: { item: Notice }): React.JSX.Element {
+export function NoticeRow({
+  item,
+  sessionId,
+}: {
+  item: Notice;
+  sessionId: string;
+}): React.JSX.Element {
   const widget = item.widget;
   const parsed = useMemo(() => (widget ? parseWidgetValue(widget.document) : null), [widget]);
   if (!widget || !parsed?.ok) return <PlainNotice item={item} />;
@@ -55,6 +61,13 @@ export function NoticeRow({ item }: { item: Notice }): React.JSX.Element {
           closed={widget.closed}
           updatedAtMs={widget.updatedAtMs}
           verified
+          interaction={{
+            sessionId,
+            widgetId: widget.widgetId,
+            revision: widget.revision,
+            closed: widget.closed,
+            decided: widget.decided ?? {},
+          }}
         />
       </Suspense>
     </Box>

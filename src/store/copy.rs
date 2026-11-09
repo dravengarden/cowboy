@@ -63,6 +63,7 @@ const TABLES: &[&str] = &[
     "events",
     "transcript_anchors",
     "session_widgets",
+    "session_widget_interactions",
     "notification_intents",
     "notification_deliveries",
     "web_push_subscriptions",
