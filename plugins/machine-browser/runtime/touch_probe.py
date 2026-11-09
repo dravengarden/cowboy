@@ -1,7 +1,8 @@
 """Native touch checks of the runtime's display server (native-touch.patch).
 
 Imported by conformance_probe.py; also runs standalone against any RFB
-socket (`touch_probe.py SOCKET [--page] [--off]`). It speaks RFB 3.8 with
+socket (`touch_probe.py SOCKET [--page | --off | --revoke DISPLAY]`;
+`--revoke` needs `xinput` and the display's X socket). It speaks RFB 3.8 with
 security None and never requests a full framebuffer update, only 1x1 Raw
 rectangles to read the probe page's colours, so it needs no decoder.
 
@@ -11,8 +12,10 @@ once by server message 192 (u8 version 1, u8 contacts 10); client message
 """
 import http.server
 import json
+import re
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -21,6 +24,7 @@ TOUCH_ENCODING = -1883
 ACK = 192
 TOUCH = 193
 BEGIN, UPDATE, END = 0, 1, 2
+MAX_CONTACTS = 10
 
 # The probe page paints what it saw into two halves of the viewport, every
 # value a multiple of 8 so colour handling cannot blur it:
@@ -213,6 +217,129 @@ def protocol_checks(path, record, accept=True):
     stock.close()
 
 
+def x_set_param(display, name, value):
+    """VNC-extension SetParam over the X protocol (what vncconfig -set
+    does); returns whether the server accepted it."""
+    number = display.lstrip(":").split(".")[0]
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(10)
+    sock.connect(f"/tmp/.X11-unix/X{number}")
+
+    def exact(count):
+        data = b""
+        while len(data) < count:
+            chunk = sock.recv(count - len(data))
+            if not chunk:
+                raise EOFError("X connection closed")
+            data += chunk
+        return data
+
+    def padded(data):
+        return data + b"\0" * (-len(data) % 4)
+
+    try:
+        sock.sendall(struct.pack("<BxHHHHxx", 0x6C, 11, 0, 0, 0))
+        head = exact(8)
+        exact(struct.unpack("<H", head[6:8])[0] * 4)
+        if head[0] != 1:
+            raise RuntimeError("X connection refused")
+        extension = b"TIGERVNC"
+        body = struct.pack("<Hxx", len(extension)) + padded(extension)
+        sock.sendall(struct.pack("<BxH", 98, 1 + len(body) // 4) + body)
+        reply = exact(32)
+        if reply[0] != 1 or not reply[8]:
+            raise RuntimeError("no TIGERVNC extension")
+        param, setting = name.encode(), value.encode()
+        body = struct.pack("<HH", len(param), len(setting)) + padded(param) + padded(setting)
+        sock.sendall(struct.pack("<BBH", reply[9], 0, 1 + len(body) // 4) + body)
+        answer = exact(32)
+        return answer[0] == 1 and answer[1] == 1
+    finally:
+        sock.close()
+
+
+class Xi2Watch:
+    """`xinput test-xi2 --root` on the display: counts touch events."""
+
+    def __init__(self, display):
+        self.process = subprocess.Popen(
+            ["xinput", "test-xi2", "--root"],
+            env={"DISPLAY": display, "PATH": "/usr/bin:/bin"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        self.lines = []
+        threading.Thread(target=self._read, daemon=True).start()
+        time.sleep(1)
+
+    def _read(self):
+        for line in self.process.stdout:
+            self.lines.append(line)
+
+    def counts(self, settle=0.5):
+        """Touch events of the slave device only: the master repeats each
+        one (`device: 2 (8)` is the master relaying source 8)."""
+        time.sleep(settle)
+        counts = {"TouchBegin": 0, "TouchUpdate": 0, "TouchEnd": 0}
+        kind = None
+        for line in list(self.lines):
+            event = re.match(r"EVENT type \d+ \((\w+)\)", line)
+            if event:
+                kind = event.group(1) if event.group(1) in counts else None
+                continue
+            device = re.match(r"\s+device: (\d+) \((\d+)\)", line)
+            if kind and device and device.group(1) == device.group(2):
+                counts[kind] += 1
+                kind = None
+        return counts
+
+    def close(self):
+        self.process.kill()
+
+
+def revoke_checks(path, display, record):
+    """AcceptPointerEvents turned off while contacts are down ends them at
+    once, end and begin messages are then ignored, and every slot is free
+    again once pointer input is allowed back (XI2 events on the display)."""
+    watch = Xi2Watch(display)
+    client = Client(path, [0, TOUCH_ENCODING])
+    try:
+        if not wait_ack(client):
+            record("revoke_touch_ack", False)
+            return
+        for ident in range(1, MAX_CONTACTS + 1):
+            client.touch(BEGIN, ident, 40 * ident, 100)
+        down = watch.counts()
+        record("revoke_contacts_down", down["TouchBegin"] == MAX_CONTACTS and down["TouchEnd"] == 0, events=down)
+        record("revoke_pointer_input_off", x_set_param(display, "AcceptPointerEvents", "0"))
+        revoked = watch.counts()
+        record("contacts_end_when_pointer_input_is_revoked", revoked["TouchEnd"] == MAX_CONTACTS, events=revoked)
+        client.touch(END, 1, 40, 100)
+        client.touch(BEGIN, 50, 300, 300)
+        client.touch(UPDATE, 2, 80, 120)
+        forbidden = watch.counts()
+        record(
+            "nothing_new_while_pointer_input_is_off",
+            forbidden == revoked and client.alive(),
+            events=forbidden,
+        )
+        record("revoke_pointer_input_on", x_set_param(display, "AcceptPointerEvents", "1"))
+        for ident in range(100, 100 + MAX_CONTACTS):
+            client.touch(BEGIN, ident, 4 * ident, 200)
+        for ident in range(100, 100 + MAX_CONTACTS):
+            client.touch(END, ident, 4 * ident, 200)
+        again = watch.counts()
+        record(
+            "every_slot_free_after_revocation",
+            again["TouchBegin"] == 2 * MAX_CONTACTS and again["TouchEnd"] == 2 * MAX_CONTACTS,
+            events=again,
+        )
+    finally:
+        client.close()
+        watch.close()
+
+
 def page_checks(path, record, settle=0.6):
     """Chrome must already show PAGE (serve_page) on this display."""
     client = Client(path, [0, TOUCH_ENCODING])
@@ -298,6 +425,8 @@ def main():
 
     if "--off" in sys.argv:
         protocol_checks(path, record, accept=False)
+    elif "--revoke" in sys.argv:
+        revoke_checks(path, sys.argv[sys.argv.index("--revoke") + 1], record)
     else:
         protocol_checks(path, record)
         if "--page" in sys.argv:

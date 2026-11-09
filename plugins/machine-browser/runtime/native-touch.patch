@@ -13,10 +13,15 @@ Description: Native multi-touch for the Cowboy Machine browser
    Only then may the client send message 193 (KasmVNC layout: u8 type,
    u8 state 0 begin / 1 update / 2 end, u32 id, u16 x, u16 y, big endian,
    framebuffer pixels). Any other state is a protocol error.
- - Contacts are server-wide slots (at most 10); a duplicate begin, an update
-   or end of an unknown id and a begin beyond the bound are ignored;
-   coordinates are clamped to the framebuffer. Every contact a connection
-   leaves active ends when the connection closes.
+ - Contacts are slots of one pool shared by every screen of the process,
+   since all of them feed the one XI2 device (at most 10 in total); a
+   duplicate begin, an update or end of an unknown id and a begin beyond the
+   bound are ignored; coordinates are clamped to the framebuffer.
+ - Every contact a connection leaves active ends when the connection
+   closes. Without pointer permission (access rights or AcceptPointerEvents)
+   nothing new is accepted, but active contacts still end: at once when
+   AcceptPointerEvents is turned off through the VNC extension, otherwise on
+   the client's next touch message, at their last accepted positions.
 Author: Cowboy Machine browser
 Forwarded: not-needed
 Cowboy-Reviewed-For: tigervnc 1.15.0+dfsg-2build1
@@ -237,24 +242,22 @@ Last-Update: 2026-11-09
  {
    setStreams(&sock->inStream(), &sock->outStream());
    peerEndpoint = sock->getPeerEndpoint();
-@@ -98,6 +99,16 @@ VNCSConnectionST::~VNCSConnectionST()
+@@ -98,6 +99,14 @@ VNCSConnectionST::~VNCSConnectionST()
      server->keyEvent(keysym, keycode, false);
    }
  
 +  // End every touch the client left active, so no contact outlives its
 +  // connection
 +  while (!activeTouches.empty()) {
-+    ActiveTouch touch = activeTouches.begin()->second;
-+    activeTouches.erase(activeTouches.begin());
-+    vlog.debug("Ending touch slot %u on client disconnect", touch.slot);
-+    server->touchEvent(touchEventEnd, touch.slot, touch.pos);
-+    server->releaseTouchSlot(touch.slot);
++    vlog.debug("Ending touch slot %u on client disconnect",
++               activeTouches.begin()->second.slot);
++    endTouch(activeTouches.begin());
 +  }
 +
    delete [] fenceData;
  }
  
-@@ -477,6 +488,61 @@ void VNCSConnectionST::pointerEvent(const Point& pos, uint16_t buttonMask)
+@@ -477,6 +486,90 @@ void VNCSConnectionST::pointerEvent(const Point& pos, uint16_t buttonMask)
  }
  
  
@@ -270,8 +273,18 @@ Last-Update: 2026-11-09
 +{
 +  if (rfb::Server::idleTimeout)
 +    idleTimer.start(secsToMillis(rfb::Server::idleTimeout));
-+  if (!accessCheck(AccessPtrEvents)) return;
-+  if (!rfb::Server::acceptPointerEvents) return;
++
++  std::map<uint32_t, ActiveTouch>::iterator touch = activeTouches.find(id);
++
++  // Without pointer permission nothing new is accepted, but what is down
++  // still ends (at its last accepted position), so no contact sticks.
++  if (!touchPermitted()) {
++    if (state == touchEventEnd && touch != activeTouches.end())
++      endTouch(touch);
++    else
++      releaseForbiddenTouches();
++    return;
++  }
 +
 +  // Clamp to the framebuffer
 +  Point clamped(pos);
@@ -280,7 +293,6 @@ Last-Update: 2026-11-09
 +  if (clamped.y >= client.height())
 +    clamped.y = client.height() > 0 ? client.height() - 1 : 0;
 +
-+  std::map<uint32_t, ActiveTouch>::iterator touch = activeTouches.find(id);
 +  switch (state) {
 +  case touchEventBegin: {
 +    if (touch != activeTouches.end()) {
@@ -302,15 +314,35 @@ Last-Update: 2026-11-09
 +    touch->second.pos = clamped;
 +    server->touchEvent(touchEventUpdate, touch->second.slot, clamped);
 +    break;
-+  case touchEventEnd: {
++  case touchEventEnd:
 +    if (touch == activeTouches.end()) return;
-+    unsigned slot = touch->second.slot;
-+    activeTouches.erase(touch);
-+    server->touchEvent(touchEventEnd, slot, clamped);
-+    server->releaseTouchSlot(slot);
++    touch->second.pos = clamped;
++    endTouch(touch);
 +    break;
 +  }
-+  }
++}
++
++bool VNCSConnectionST::touchPermitted()
++{
++  return accessCheck(AccessPtrEvents) && rfb::Server::acceptPointerEvents;
++}
++
++void VNCSConnectionST::endTouch(std::map<uint32_t, ActiveTouch>::iterator touch)
++{
++  ActiveTouch ended = touch->second;
++  activeTouches.erase(touch);
++  server->touchEvent(touchEventEnd, ended.slot, ended.pos);
++  server->releaseTouchSlot(ended.slot);
++}
++
++void VNCSConnectionST::releaseForbiddenTouches()
++{
++  if (activeTouches.empty() || touchPermitted())
++    return;
++  vlog.debug("Ending %zu touches: pointer input is no longer accepted",
++             activeTouches.size());
++  while (!activeTouches.empty())
++    endTouch(activeTouches.begin());
 +}
 +
  class VNCSConnectionSTShiftPresser {
@@ -318,7 +350,17 @@ Last-Update: 2026-11-09
    VNCSConnectionSTShiftPresser(VNCServerST* server_)
 --- a/common/rfb/VNCSConnectionST.h
 +++ b/common/rfb/VNCSConnectionST.h
-@@ -124,6 +124,8 @@ namespace rfb {
+@@ -115,6 +115,9 @@ namespace rfb {
+ 
+     const char* getPeerEndpoint() const {return peerEndpoint.c_str();}
+ 
++    // End this client's touches if it may no longer send pointer input.
++    void releaseForbiddenTouches();
++
+   private:
+     // SConnection callbacks
+ 
+@@ -124,6 +127,8 @@ namespace rfb {
      void clientInit(bool shared) override;
      void setPixelFormat(const PixelFormat& pf) override;
      void pointerEvent(const Point& pos, uint16_t buttonMask) override;
@@ -327,7 +369,7 @@ Last-Update: 2026-11-09
      void keyEvent(uint32_t keysym, uint32_t keycode,
                    bool down) override;
      void framebufferUpdateRequest(const Rect& r,
-@@ -141,6 +143,7 @@ namespace rfb {
+@@ -141,6 +146,7 @@ namespace rfb {
      void supportsFence() override;
      void supportsContinuousUpdates() override;
      void supportsLEDState() override;
@@ -335,13 +377,15 @@ Last-Update: 2026-11-09
  
      // Timer callbacks
      void handleTimeout(Timer* t) override;
-@@ -194,6 +197,11 @@ namespace rfb {
+@@ -194,6 +200,13 @@ namespace rfb {
  
      std::map<uint32_t, uint32_t> pressedKeys;
  
 +    // Active touches of this client: its id -> server slot, last position.
 +    struct ActiveTouch { unsigned slot; Point pos; };
 +    std::map<uint32_t, ActiveTouch> activeTouches;
++    bool touchPermitted();
++    void endTouch(std::map<uint32_t, ActiveTouch>::iterator touch);
 +    bool touchEnabled;
 +
      Timer idleTimer;
@@ -349,20 +393,12 @@ Last-Update: 2026-11-09
      time_t pointerEventTime;
 --- a/common/rfb/VNCServerST.cxx
 +++ b/common/rfb/VNCServerST.cxx
-@@ -93,6 +93,9 @@ VNCServerST::VNCServerST(const char* name_, SDesktop* desktop_)
- {
-   slog.debug("Creating single-threaded server %s", name.c_str());
- 
-+  for (unsigned slot = 0; slot < maxTouchContacts; slot++)
-+    touchSlots[slot] = false;
-+
-   desktop_->init(this);
- 
-   // FIXME: Do we really want to kick off these right away?
-@@ -506,6 +509,31 @@ void VNCServerST::pointerEvent(VNCSConnectionST* client,
+@@ -506,6 +506,40 @@ void VNCServerST::pointerEvent(VNCSConnectionST* client,
    desktop->pointerEvent(pos, buttonMask);
  }
  
++bool VNCServerST::touchSlots[VNCServerST::maxTouchContacts];
++
 +int VNCServerST::claimTouchSlot()
 +{
 +  for (unsigned slot = 0; slot < maxTouchContacts; slot++) {
@@ -388,30 +424,43 @@ Last-Update: 2026-11-09
 +    desktop->touchEvent(state, slot, pos);
 +}
 +
++void VNCServerST::releaseForbiddenTouches()
++{
++  std::list<VNCSConnectionST*>::iterator ci;
++  for (ci = clients.begin(); ci != clients.end(); ci++)
++    (*ci)->releaseForbiddenTouches();
++}
++
  void VNCServerST::handleClipboardRequest(VNCSConnectionST* client)
  {
    clipboardRequestors.push_back(client);
 --- a/common/rfb/VNCServerST.h
 +++ b/common/rfb/VNCServerST.h
-@@ -119,6 +119,13 @@ namespace rfb {
+@@ -119,6 +119,19 @@ namespace rfb {
      void keyEvent(uint32_t keysym, uint32_t keycode, bool down);
      void pointerEvent(VNCSConnectionST* client, const Point& pos, uint16_t buttonMask);
  
-+    // Native touch: contacts are server-wide slots, so ids from different
-+    // clients never collide and at most maxTouchContacts are active.
++    // Native touch: contacts are slots of one pool shared by every server
++    // (screen) in the process, because they all feed the one XI2 touch
++    // device; ids from different clients or screens never collide and at
++    // most maxTouchContacts are active in total. Xvnc has a single screen;
++    // the pool is still process-wide for the Xorg module's case.
 +    static const unsigned maxTouchContacts = 10;
-+    int claimTouchSlot();
-+    void releaseTouchSlot(unsigned slot);
++    static int claimTouchSlot();
++    static void releaseTouchSlot(unsigned slot);
 +    void touchEvent(int state, unsigned slot, const Point& pos);
++    // End the touches of clients that may no longer send pointer input
++    // (AcceptPointerEvents was turned off).
++    void releaseForbiddenTouches();
 +
      void handleClipboardRequest(VNCSConnectionST* client);
      void handleClipboardAnnounce(VNCSConnectionST* client, bool available);
      void handleClipboardData(VNCSConnectionST* client, const char* data);
-@@ -187,6 +194,7 @@ namespace rfb {
+@@ -187,6 +200,7 @@ namespace rfb {
  
      std::list<VNCSConnectionST*> clients;
      VNCSConnectionST* pointerClient;
-+    bool touchSlots[maxTouchContacts];
++    static bool touchSlots[maxTouchContacts];
      VNCSConnectionST* clipboardClient;
      std::list<VNCSConnectionST*> clipboardRequestors;
      std::list<network::Socket*> closingSockets;
@@ -461,7 +510,7 @@ Last-Update: 2026-11-09
  #endif
 --- a/unix/xserver/hw/vnc/XserverDesktop.cc
 +++ b/unix/xserver/hw/vnc/XserverDesktop.cc
-@@ -469,6 +469,12 @@ void XserverDesktop::pointerEvent(const Point& pos, uint16_t buttonMask)
+@@ -469,6 +469,18 @@ void XserverDesktop::pointerEvent(const Point& pos, uint16_t buttonMask)
    vncPointerButtonAction(buttonMask);
  }
  
@@ -471,22 +520,42 @@ Last-Update: 2026-11-09
 +                pos.y + vncGetScreenY(screenIndex));
 +}
 +
++void XserverDesktop::releaseForbiddenTouches()
++{
++  // The server is always the VNCServerST created in the constructor.
++  static_cast<VNCServerST*>(server)->releaseForbiddenTouches();
++}
++
  unsigned int XserverDesktop::setScreenLayout(int fb_width, int fb_height,
                                               const rfb::ScreenSet& layout)
  {
 --- a/unix/xserver/hw/vnc/XserverDesktop.h
 +++ b/unix/xserver/hw/vnc/XserverDesktop.h
-@@ -96,6 +96,7 @@ public:
+@@ -96,6 +96,8 @@ public:
    void queryConnection(network::Socket* sock,
                         const char* userName) override;
    void pointerEvent(const rfb::Point& pos, uint16_t buttonMask) override;
 +  void touchEvent(int state, unsigned slot, const rfb::Point& pos) override;
++  void releaseForbiddenTouches();
    void keyEvent(uint32_t keysym, uint32_t keycode, bool down) override;
    unsigned int setScreenLayout(int fb_width, int fb_height,
                                 const rfb::ScreenSet& layout) override;
+--- a/unix/xserver/hw/vnc/vncExt.c
++++ b/unix/xserver/hw/vnc/vncExt.c
+@@ -147,6 +147,10 @@ static int ProcVncExtSetParam(ClientPtr client)
+   if (strcasecmp(param, "desktop") == 0)
+     vncUpdateDesktopName();
+ 
++  // End native touch contacts that pointer input may no longer drive
++  if (strcasecmp(param, "AcceptPointerEvents") == 0)
++    vncReleaseForbiddenTouches();
++
+ deny:
+   free(param);
+   free(value);
 --- a/unix/xserver/hw/vnc/vncExtInit.cc
 +++ b/unix/xserver/hw/vnc/vncExtInit.cc
-@@ -319,6 +319,11 @@ int vncGetSendPrimary(void)
+@@ -319,12 +319,23 @@ int vncGetSendPrimary(void)
    return (bool)sendPrimary;
  }
  
@@ -498,16 +567,31 @@ Last-Update: 2026-11-09
  void vncUpdateDesktopName(void)
  {
    for (int scr = 0; scr < vncGetScreenCount(); scr++)
+     desktop[scr]->setDesktopName(desktopName);
+ }
+ 
++void vncReleaseForbiddenTouches(void)
++{
++  for (int scr = 0; scr < vncGetScreenCount(); scr++)
++    desktop[scr]->releaseForbiddenTouches();
++}
++
+ void vncRequestClipboard(void)
+ {
+   for (int scr = 0; scr < vncGetScreenCount(); scr++)
 --- a/unix/xserver/hw/vnc/vncExtInit.h
 +++ b/unix/xserver/hw/vnc/vncExtInit.h
-@@ -50,6 +50,7 @@ int vncGetAvoidShiftNumLock(void);
+@@ -50,8 +50,10 @@ int vncGetAvoidShiftNumLock(void);
  
  int vncGetSetPrimary(void);
  int vncGetSendPrimary(void);
 +int vncGetAcceptTouchEvents(void);
  
  void vncUpdateDesktopName(void);
++void vncReleaseForbiddenTouches(void);
  
+ void vncRequestClipboard(void);
+ void vncAnnounceClipboard(int available);
 --- a/unix/xserver/hw/vnc/vncInput.c
 +++ b/unix/xserver/hw/vnc/vncInput.c
 @@ -36,6 +36,8 @@

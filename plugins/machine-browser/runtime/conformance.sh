@@ -5,7 +5,8 @@
 # self-only uid map, empty capability sets and no_new_privs on every sealed
 # process, the artifact as /usr and /opt, the read-only socket export and
 # masks, an RFB handshake with clipboard forwarding, native touch
-# (touch_probe.py, with and without -AcceptTouchEvents), navigate, resize,
+# (touch_probe.py, with and without -AcceptTouchEvents, and revoking pointer
+# input while contacts are down), navigate, resize,
 # status, snapshot, a graceful stop with a snapshot, and a restore from that
 # snapshot. Prints the JSON summary written by conformance_probe.py.
 #
@@ -31,7 +32,7 @@ test -x "$tree/usr/libexec/cowboy-browser-launcher"
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 # One run per output directory: the probe appends to its logs.
-rm -rf "$out"/launcher-*.log "$out"/instance-* "$out"/summary.json "$out"/xclip.log "$out"/touch-off*
+rm -rf "$out"/launcher-*.log "$out"/instance-* "$out"/summary.json "$out"/xclip.log "$out"/touch-off* "$out"/touch-revoke*
 
 # systempaths=unconfined lets an unprivileged user mount a fresh proc for the
 # instance's pid namespace (Docker otherwise masks /proc paths, which the
@@ -55,7 +56,7 @@ docker run --rm \
   "$image" bash -euo pipefail -c '
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
-    apt-get install -y -qq --no-install-recommends python3 iproute2 procps util-linux xclip >/dev/null
+    apt-get install -y -qq --no-install-recommends python3 iproute2 procps util-linux xclip xinput >/dev/null
     useradd -u 1500 -m tester
     mount -o remount,bind,rw /sys/fs/cgroup
     mkdir /sys/fs/cgroup/browser-unit
@@ -87,12 +88,20 @@ docker run --rm \
     for _ in $(seq 50); do [ -S /tmp/touch-off.sock ] && break; sleep 0.2; done
     python3 -I /conformance/touch_probe.py /tmp/touch-off.sock --off >/out/touch-off.json || true
     kill $off || true
+    # With the flag, turning AcceptPointerEvents off through the VNC
+    # extension ends active contacts and frees their slots (XI2 events seen
+    # by xinput from outside the namespace).
+    unshare -m sh -c "mount --bind /runtime/usr /usr && exec /usr/bin/Xtigervnc :10 -nolisten tcp -nolisten local -rfbport -1 -rfbunixpath /tmp/touch-revoke.sock -SecurityTypes None -geometry 800x600 -depth 24 -AcceptTouchEvents=1" >/out/touch-revoke-xvnc.log 2>&1 &
+    revoke=$!
+    for _ in $(seq 50); do [ -S /tmp/touch-revoke.sock ] && break; sleep 0.2; done
+    python3 -I /conformance/touch_probe.py /tmp/touch-revoke.sock --revoke :10 >/out/touch-revoke.json || true
+    kill $revoke || true
     chmod -R a+rwX /out
   '
 cat "$out/summary.json"
-cat "$out/touch-off.json"
+cat "$out/touch-off.json" "$out/touch-revoke.json"
 python3 -I -c '
 import json, sys
 ok = all(json.load(open(path))["ok"] for path in sys.argv[1:])
 sys.exit(0 if ok else 1)
-' "$out/summary.json" "$out/touch-off.json"
+' "$out/summary.json" "$out/touch-off.json" "$out/touch-revoke.json"

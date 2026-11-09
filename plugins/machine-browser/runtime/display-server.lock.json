@@ -34,7 +34,7 @@
   },
   "patch": {
     "file": "native-touch.patch",
-    "sha256": "48cf672f99daf4e9fe1626805b88075262d36d5145600f62cc1ac1b6fea3bc50"
+    "sha256": "c932ddc7f0aba4aabc07b208995d45995e698bb4ea0f0355c5701bfc3bad253b"
   },
   "build_root": [
     {
@@ -3896,7 +3896,7 @@
   ],
   "output": {
     "path": "usr/bin/Xtigervnc",
-    "size": 3008080,
-    "sha256": "8b37b2acceaab4ab6c76ae2411e872164177fec3fb44b57e3ff0e4badd51de48"
+    "size": 3016272,
+    "sha256": "665e44e1223eb7596d0bd1e1de470802c0aab0599b40c211ac4f9569de236311"
   }
 }
