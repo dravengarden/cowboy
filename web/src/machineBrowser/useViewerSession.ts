@@ -113,6 +113,8 @@ export function useViewerSession({
             viewport,
             takeover,
           ),
+          // `attachment` is assigned before the socket can open.
+          onStreamOpen: () => attachment.streamOpened(),
           onState: (state) => {
             latest.current.onState(state);
             if (viewerEnds(state)) latest.current.onEnded(stateEndMessage(state));

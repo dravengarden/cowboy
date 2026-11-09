@@ -17,13 +17,25 @@
  * commits the marked text and fires `compositionend` after the blur, and that
  * commit is sent once to the session the composition began in, if it is
  * still the live one. */
-import { type RefObject, useEffect, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { NATIVE_COMPOSITION_END_FALLBACK_MS } from "../composer/nativeComposition";
 import { type KeyAction, type KeyboardSink, deliverText, keyActionForKey } from "./touchKeyboard";
 
 /** The part of a `<textarea>` the bridge uses. */
 export interface KeyboardArea extends EventTarget {
   value: string;
+  blur?(): void;
+}
+
+/** A bound overlay. Calling it disposes the binding with its viewer: a
+ * running composition is dropped. */
+export interface KeyboardBinding {
+  (): void;
+  /** Touch input went away while the viewer lives on: blur the overlay, let
+   * a running composition commit (or its fallback expire), restore canvas
+   * focus and publish the closed keyboard, then call `done`. Returns the
+   * cancel. */
+  deactivate(done: () => void): () => void;
 }
 
 /** The idle field's only content: a zero-width space, never sent. */
@@ -52,15 +64,17 @@ function committedText(value: string): string {
   return value.startsWith(KEYBOARD_SENTINEL) ? value.slice(KEYBOARD_SENTINEL.length) : value;
 }
 
-/** Attach the bridge; returns its teardown. `sink` answers the session of
+/** Attach the bridge; returns its binding. `sink` answers the session of
  * the viewer that owns `area`, or nothing once it is gone. */
 export function bindTouchKeyboard(
   area: KeyboardArea,
   sink: () => KeyboardSink | undefined,
   onOpenChange: (open: boolean) => void,
   compositionEndFallbackMs = NATIVE_COMPOSITION_END_FALLBACK_MS,
-): () => void {
+): KeyboardBinding {
   let composing = false;
+  /** A pending `deactivate`'s completion. */
+  let deactivation: (() => void) | undefined;
   /** The session a running composition began in; its commit goes there. */
   let composingFor: KeyboardSink | undefined;
   let focused = false;
@@ -90,6 +104,18 @@ export function bindTouchKeyboard(
     composingFor = undefined;
     const current = sink();
     flush(current && current === target ? current : undefined);
+    settle();
+  };
+  /** Complete a deactivation once no composition runs. WebKit may refocus
+   * the field to insert a commit and leave it focused; blur it again so
+   * canvas focus is restored and the keyboard reads closed. */
+  const settle = (): void => {
+    const done = deactivation;
+    if (!done || composing) return;
+    deactivation = undefined;
+    if (focused) area.blur?.();
+    if (focused) onBlur();
+    done();
   };
   const onInput = (event: Event): void => {
     if (composing || (event as InputEvent).isComposing) return;
@@ -135,6 +161,7 @@ export function bindTouchKeyboard(
     sink()?.setFocusOnClick(true);
     if (!composing) {
       reset();
+      settle();
       return;
     }
     // Hide keyboard or More mid-composition: WebKit commits the marked text
@@ -145,7 +172,7 @@ export function bindTouchKeyboard(
     fallback = setTimeout(() => {
       fallback = undefined;
       if (!composing) return;
-      if (!focused) {
+      if (!focused || deactivation) {
         endComposition();
         return;
       }
@@ -163,27 +190,63 @@ export function bindTouchKeyboard(
   ];
   reset();
   for (const [type, listener] of listeners) area.addEventListener(type, listener);
-  return () => {
+  const dispose = (): void => {
     for (const [type, listener] of listeners) area.removeEventListener(type, listener);
     // A composition the viewer did not outlive is dropped, never sent later.
     stopFallback();
     composing = false;
     composingFor = undefined;
+    deactivation = undefined;
     area.value = "";
   };
+  const deactivate = (done: () => void): (() => void) => {
+    deactivation = done;
+    if (focused) area.blur?.();
+    if (focused) onBlur();
+    else settle();
+    return () => {
+      if (deactivation === done) deactivation = undefined;
+    };
+  };
+  return Object.assign(dispose, { deactivate });
 }
 
-/** Whether the overlay keyboard is up; binds while `touch` is set. */
+/** Whether the overlay keyboard is up (`open`) and whether the overlay is
+ * rendered (`overlay`): while `touch` is set, and after it clears until the
+ * overlay has finished deactivating, so a blur and a pending IME commit are
+ * never cut off by removing the field. */
 export function useTouchKeyboard(
   areaRef: RefObject<HTMLTextAreaElement | null>,
   sessionRef: RefObject<KeyboardSink | undefined>,
   touch: boolean,
-): boolean {
+): { open: boolean; overlay: boolean } {
   const [open, setOpen] = useState(false);
+  const [modeTouch, setModeTouch] = useState(touch);
+  const [deactivating, setDeactivating] = useState(false);
+  if (modeTouch !== touch) {
+    setModeTouch(touch);
+    setDeactivating(!touch);
+  }
+  const overlay = touch || deactivating;
+  const bindingRef = useRef<KeyboardBinding | undefined>(undefined);
   useEffect(() => {
     const area = areaRef.current;
-    if (!area || !touch) return undefined;
-    return bindTouchKeyboard(area, () => sessionRef.current, setOpen);
-  }, [areaRef, sessionRef, touch]);
-  return open;
+    if (!area || !overlay) return undefined;
+    const binding = bindTouchKeyboard(area, () => sessionRef.current, setOpen);
+    bindingRef.current = binding;
+    return () => {
+      bindingRef.current = undefined;
+      binding();
+    };
+  }, [areaRef, sessionRef, overlay]);
+  useEffect(() => {
+    if (!deactivating) return undefined;
+    const binding = bindingRef.current;
+    if (!binding) {
+      setDeactivating(false);
+      return undefined;
+    }
+    return binding.deactivate(() => setDeactivating(false));
+  }, [deactivating]);
+  return { open, overlay };
 }

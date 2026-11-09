@@ -28,6 +28,8 @@ export interface ViewerSessionOptions {
   /** The final stream URL including every query parameter. */
   url: string;
   onState(state: BrowserStateEvent): void;
+  /** The stream accepts resizes from now on. */
+  onStreamOpen(): void;
   onStreamError(code: string): void;
   onAuthSession(session: unknown): void;
   onConnected(): void;
@@ -36,7 +38,8 @@ export interface ViewerSessionOptions {
 }
 
 export interface ViewerSession extends KeyboardSink {
-  resize(width: number, height: number): void;
+  /** Whether the resize went out; it cannot before the stream opens. */
+  resize(width: number, height: number): boolean;
   sendKey(action: KeyAction): void;
   /** Press a browser chord (`chordStrokes`) on the remote. */
   sendChord(chord: BrowserChord): void;
@@ -68,6 +71,9 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
       if (closing) return;
       const socket = new WebSocket(options.url, [BROWSER_STREAM_SUBPROTOCOL, deviceProtocol]);
       stream = createBrowserStream(socket, {
+        onOpen: () => {
+          if (!closing) options.onStreamOpen();
+        },
         onControl: (message) => {
           switch (message.type) {
             case "state":
@@ -110,9 +116,7 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
     () => end({ kind: "device_proof_failed" }),
   );
   return {
-    resize: (width, height) => {
-      stream?.sendResize(width, height);
-    },
+    resize: (width, height) => stream?.sendResize(width, height) ?? false,
     sendKey: (action) => rfb?.sendKey(action.keysym, action.code),
     sendChord: (chord) => sendChord(rfb, chord),
     // ClientCutText and the key events travel in order on one RFB stream,

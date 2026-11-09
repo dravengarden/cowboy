@@ -64,7 +64,7 @@ export default function MachineBrowserViewer(props: MachineBrowserViewerProps): 
     takeover,
     callbacks: props,
   });
-  const keyboardOpen = useTouchKeyboard(inputRef, sessionRef, touch);
+  const { open: keyboardOpen, overlay } = useTouchKeyboard(inputRef, sessionRef, touch);
   // The viewer is keyed by its generation: its target never changes while
   // it is mounted, so the controls it publishes stay bound to that browser.
   useEffect(() => {
@@ -123,7 +123,7 @@ export default function MachineBrowserViewer(props: MachineBrowserViewerProps): 
           Connecting to the Machine browser…
         </Typography>
       )}
-      {touch && (
+      {overlay && (
         <textarea
           ref={inputRef}
           aria-label="Type into the Machine browser"

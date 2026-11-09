@@ -6,6 +6,12 @@ import { KEYBOARD_SENTINEL, type KeyboardArea, bindTouchKeyboard } from "./touch
 /** A textarea stand-in: the OS writes `value`, then raises the event. */
 class FakeArea extends EventTarget implements KeyboardArea {
   value = "";
+  blurs = 0;
+  /** The page blurs the field (`HTMLElement.blur`). */
+  blur(): void {
+    this.blurs += 1;
+    this.dispatchEvent(new Event("blur"));
+  }
   /** The OS inserts `text` at the caret (the end) and raises `input`. */
   input(text: string, isComposing = false, inputType = "insertText"): void {
     this.value += text;
@@ -291,4 +297,78 @@ test("teardown during a composition drops it", async () => {
   assertEquals(area.key("Enter", { keyCode: 13 }), false);
   assertEquals(sink.keys, []);
   assertEquals(sink.pastes, []);
+});
+
+/** A bound overlay that records canvas focus and the published keyboard. */
+function deactivatable(fallbackMs?: number) {
+  const view = bound(fallbackMs);
+  const focus: boolean[] = [];
+  view.sink.setFocusOnClick = (value) => focus.push(value);
+  let done = 0;
+  const deactivate = () =>
+    view.unbind.deactivate(() => {
+      done += 1;
+    });
+  return { ...view, focus, deactivate, done: () => done };
+}
+
+test("touch going away while focused blurs the overlay and restores canvas focus", () => {
+  const { area, open, focus, deactivate, done } = deactivatable();
+  area.dispatchEvent(new Event("focus"));
+  deactivate();
+  assertEquals(area.blurs, 1);
+  assertEquals(done(), 1);
+  assertEquals(open.at(-1), false);
+  assertEquals(focus.at(-1), true);
+});
+
+test("touch going away mid-composition waits for the commit, sends it, then finishes", () => {
+  const { area, sink, open, focus, deactivate, done } = deactivatable();
+  area.dispatchEvent(new Event("focus"));
+  area.compose("compositionstart");
+  area.mark("nihao", S);
+  deactivate();
+  // Blurred, the marked text kept, the overlay still bound.
+  assertEquals(area.blurs, 1);
+  assertEquals(area.value, `${S}nihao`);
+  assertEquals(done(), 0);
+  // WebKit refocuses transiently to commit and leaves the field focused.
+  area.dispatchEvent(new Event("focus"));
+  area.mark("你好", S);
+  area.compose("compositionend");
+  assertEquals(sink.pastes, ["你好"]);
+  assertEquals(done(), 1);
+  // The bridge blurred it again so the keyboard reads closed.
+  assertEquals(area.blurs, 2);
+  assertEquals(open.at(-1), false);
+  assertEquals(focus.at(-1), true);
+});
+
+test("touch going away mid-composition finishes after the fallback without a compositionend", async () => {
+  const { area, sink, focus, deactivate, done } = deactivatable(5);
+  area.dispatchEvent(new Event("focus"));
+  area.compose("compositionstart");
+  area.mark("zh", S);
+  deactivate();
+  assertEquals(done(), 0);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assertEquals(sink.keys, typed("zh"));
+  assertEquals(done(), 1);
+  assertEquals(focus.at(-1), true);
+});
+
+test("touch going away while unfocused finishes at once; a cancelled deactivation never finishes", () => {
+  const idle = deactivatable();
+  idle.deactivate();
+  assertEquals(idle.area.blurs, 0);
+  assertEquals(idle.done(), 1);
+  const cancelled = deactivatable();
+  cancelled.area.dispatchEvent(new Event("focus"));
+  cancelled.area.compose("compositionstart");
+  cancelled.area.mark("zh", S);
+  const cancel = cancelled.deactivate();
+  cancel();
+  cancelled.area.compose("compositionend");
+  assertEquals(cancelled.done(), 0);
+  assertEquals(cancelled.sink.keys, typed("zh"));
 });

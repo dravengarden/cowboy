@@ -28,6 +28,8 @@ export interface StreamClose {
 }
 
 export interface StreamHandlers {
+  /** The socket opened: text frames such as `resize` can go out now. */
+  onOpen?(): void;
   onControl(message: StreamControl): void;
   onClose(close: StreamClose): void;
   onError?(): void;
@@ -154,6 +156,7 @@ export function createBrowserStream(socket: StreamSocket, handlers: StreamHandle
   const channel = new Channel(socket);
   socket.onopen = (event) => {
     channel.onopen?.(event);
+    handlers.onOpen?.();
   };
   socket.onmessage = (event) => {
     const { data } = event as { data: unknown };
