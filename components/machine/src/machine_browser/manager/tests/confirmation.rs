@@ -526,3 +526,37 @@ async fn counted_scans_share_one_schedule() {
         now + SOCKET_SCAN_INTERVAL
     ));
 }
+
+#[tokio::test]
+async fn a_latch_set_while_termination_is_pending_is_the_reported_reason() {
+    let fixture = fixture().await;
+    let (_uplink, mut received) = uplink(&fixture.manager);
+    // The unit does not exit yet: the stop is retained for a retry.
+    let retained = fixture
+        .manager
+        .stop_instance(&fixture.instance, Reason::OwnerRequest, false, Some("h1"))
+        .await;
+    assert_eq!(retained.reason, Some(Reason::Failed));
+    // The third denial lands while termination is still pending.
+    *fixture.instance.latch.lock() = Some(Reason::ConfinementUnverified);
+    states(&mut received);
+    fixture.units.make_stoppable("cowboy-browser-inst-1");
+    super::inventory::eventually("the retained exit is confirmed", || {
+        fixture.manager.unconfirmed.lock().is_empty()
+    })
+    .await;
+    let reported = states(&mut received);
+    assert!(
+        reported.iter().any(|state| state.state == State::Hibernated
+            && state.reason == Some(Reason::ConfinementUnverified)),
+        "{reported:?}"
+    );
+    // A later caller sees the same finalized outcome.
+    let later = fixture
+        .manager
+        .stop_instance(&fixture.instance, Reason::OwnerRequest, true, Some("h2"))
+        .await;
+    assert_eq!(later.state, State::Hibernated);
+    assert_eq!(later.reason, Some(Reason::ConfinementUnverified));
+    assert!(later.unsaved_state_lost);
+}

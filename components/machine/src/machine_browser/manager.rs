@@ -258,6 +258,14 @@ impl Instance {
         }
     }
 
+    /// Record the stop's terminal outcome, with a latched forced reason
+    /// taking precedence; returns the reason to report.
+    fn finalize_outcome(&self, reason: Reason, unsaved: bool) -> Reason {
+        let reason = self.latch.lock().unwrap_or(reason);
+        *self.outcome.lock() = Some((reason, unsaved));
+        reason
+    }
+
     fn reference(&self) -> InstanceRef {
         InstanceRef {
             account_id: self.account_id.clone(),

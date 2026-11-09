@@ -285,8 +285,11 @@ impl BrowserManager {
         let terminal = if let Some(instance) = &retained.instance {
             let slot = self.slot(&instance.account_id);
             let _lifecycle = slot.lifecycle.lock().await;
+            // Finalized at the confirmed exit: a latch set meanwhile is
+            // the stop's reason, for this report and every later caller.
+            let reason = instance.finalize_outcome(outcome.reason, outcome.unsaved);
             self.finish_stopped(instance);
-            Some(self.hibernated_after(instance, outcome.reason, None, outcome.unsaved))
+            Some(self.hibernated_after(instance, reason, None, outcome.unsaved))
         } else {
             outcome.reference.map(|reference| {
                 let event = hibernated_event(

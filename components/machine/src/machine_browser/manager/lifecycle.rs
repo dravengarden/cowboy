@@ -565,8 +565,7 @@ impl BrowserManager {
             instance.live.lock().last_snapshot = Some((generation, unix_ms()));
         }
         // A latch set during this stop refused its copy: report it as such.
-        let reason = instance.latch.lock().unwrap_or(reason);
-        *instance.outcome.lock() = Some((reason, unsaved));
+        let reason = instance.finalize_outcome(reason, unsaved);
         if !self
             .units
             .terminate(
@@ -599,6 +598,9 @@ impl BrowserManager {
                 .state(request_id.map(ToOwned::to_owned))
                 .with_reason(Reason::Failed));
         }
+        // Finalized again at the confirmed exit: the latch may have been
+        // set while termination was pending.
+        let reason = instance.finalize_outcome(reason, unsaved);
         self.finish_stopped(instance);
         tracing::info!(event_name = "browser.stop.done",
             browser_instance = %instance.instance_id,
