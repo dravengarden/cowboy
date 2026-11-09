@@ -321,12 +321,13 @@ async fn post_edit_value(
         return Err("unavailable");
     };
     super::super::managed_calls::touch_code_observation(state, observed).await;
+    // Later shell-made changes are reported from this position on, set as
+    // soon as the observer runs rather than after the analysis wait.
+    codex_push::sync_cursor(state, &meta.id).await;
     let value = diagnostics::read(state, observed, paths).await;
     if !session::current(&state.hub, &state.machine_control, observed) {
         return Err("code_context_changed");
     }
-    // Later shell-made changes are reported from this position on.
-    codex_push::sync_cursor(state, &meta.id).await;
     let mut projected = post_edit::project(&value);
     post_edit::attach_writes(&mut projected, &value, |path| {
         let target = format!("{}/{path}", observed.session().cwd().trim_end_matches('/'));
