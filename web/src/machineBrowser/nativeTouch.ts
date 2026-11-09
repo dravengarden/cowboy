@@ -194,18 +194,20 @@ export function hookable(rfb: Partial<RfbInternals>): rfb is RfbInternals {
 /** Native touch turns on only between touch sequences: a sequence that
  * began while noVNC emulated the mouse must reach noVNC to its end, or its
  * emulated button stays pressed. The gate follows those sequences (touch
- * pointers down, and the touches a touch event reports still down) and,
- * once acknowledged and idle, activates after the current event has been
- * dispatched to noVNC. */
+ * pointers down, and every Touch identifier noVNC saw start until noVNC saw
+ * its own touchend or touchcancel) and, once acknowledged and idle,
+ * activates after the current event has been dispatched to noVNC. A touch
+ * whose terminal event never arrives keeps the emulated mouse for good:
+ * another gesture finishing says nothing about it. */
 export function activationGate(
   activate: () => void,
   schedule: (run: () => void) => void = (run) => setTimeout(run, 0),
 ) {
   let acknowledged = false;
   let scheduled = false;
-  let touches = 0;
   const pointers = new Set<number>();
-  const idle = () => pointers.size === 0 && touches === 0;
+  const touches = new Set<number>();
+  const idle = () => pointers.size === 0 && touches.size === 0;
   const check = (): void => {
     if (!acknowledged || scheduled || !idle()) return;
     scheduled = true;
@@ -227,20 +229,30 @@ export function activationGate(
       else if (type === "pointerup" || type === "pointercancel") pointers.delete(pointerId);
       check();
     },
-    /** A touch event reported this many touches still down. */
-    touches(remaining: number): void {
-      touches = remaining;
+    /** noVNC received this touch event for these changed identifiers. */
+    touch(type: string, changed: readonly number[]): void {
+      for (const identifier of changed) {
+        if (type === "touchstart") touches.add(identifier);
+        else if (type === "touchend" || type === "touchcancel") touches.delete(identifier);
+      }
       check();
     },
     /** The page lost focus or visibility. Pointer ids are forgotten (their
-     * up may never arrive), but a touch sequence noVNC began stays open
-     * until a touch event reports no touches: its touchend or touchcancel
-     * must still reach noVNC, or its emulated button stays pressed. */
+     * up may never arrive), but every touch noVNC saw start stays open
+     * until noVNC sees its own touchend or touchcancel, or its emulated
+     * button stays pressed. */
     reset(): void {
       pointers.clear();
       check();
     },
   };
+}
+
+/** The identifiers of a touch event's `changedTouches`. */
+export function changedIdentifiers(event: Event): number[] {
+  const changed = (event as Event & { changedTouches?: ArrayLike<{ identifier: number }> })
+    .changedTouches;
+  return changed ? Array.from(changed, (touch) => touch.identifier) : [];
 }
 
 const DISABLED: NativeTouch = { enabled: false, cancelAll: () => {}, close: () => {} };
@@ -328,7 +340,7 @@ export function attachNativeTouch(
   // mouse events and click follow an unprevented touch.
   const onTouch = (event: Event): void => {
     if (!enabled) {
-      gate.touches((event as Event & { touches?: { length: number } }).touches?.length ?? 0);
+      gate.touch(event.type, changedIdentifiers(event));
       return;
     }
     if (event.cancelable) event.preventDefault();
