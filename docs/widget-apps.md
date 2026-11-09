@@ -56,10 +56,14 @@ status, tables and decisions.
   408, 425, 429, `context_pending`) and retried in the background under the
   same occurrence after load, reconnect and page show, whatever became of
   the widget; the confirmation cannot be dismissed while a send is in
-  flight; the Controller answers a recorded occurrence before checking the
-  session (only a still-unqueued send needs an admissible one); the Worker
+  flight, and the confirmation and background recovery share one request
+  per occurrence; recovery reschedules itself instead of dropping a retry;
+  the Controller answers a recorded occurrence with its receipt before
+  checking the session (it re-queues only when the session admits prompts,
+  since the Hub or startup recovery owns the rest); the Worker
   continues promise jobs after a throttled turn, holds them while the draw
-  queue is full, recomputes the timer wake after jobs, skips timers
+  queue is full, recomputes the timer wake after jobs without ever
+  postponing an earlier wake, skips timers
   cancelled earlier in the same batch, and a suspend sent during startup is
   replayed after the handshake.
 - Deferred: `Image` inside apps shows its `alt` text until node `images`

@@ -149,9 +149,21 @@ function url(pending: PendingAppMessage): string {
 const TRANSIENT_STATUS = new Set([401, 403, 408, 425, 429]);
 const TRANSIENT_CODES = new Set(["context_pending"]);
 
+// One request per occurrence at a time: the confirmation and background
+// recovery share it, so neither reports a result the other contradicts.
+const inFlight = new Map<string, Promise<AppMessageResult>>();
+
 /** Sends a confirmed message under its own occurrence. Nothing is sent
  *  unless the outbox entry was saved first. */
-export async function sendAppMessage(pending: PendingAppMessage): Promise<AppMessageResult> {
+export function sendAppMessage(pending: PendingAppMessage): Promise<AppMessageResult> {
+  const running = inFlight.get(pending.occurrence);
+  if (running) return running;
+  const attempt = transmit(pending).finally(() => inFlight.delete(pending.occurrence));
+  inFlight.set(pending.occurrence, attempt);
+  return attempt;
+}
+
+async function transmit(pending: PendingAppMessage): Promise<AppMessageResult> {
   const sending: PendingAppMessage = {
     ...pending,
     state: "sending",
@@ -199,21 +211,38 @@ const GIVE_UP_MS = 7 * 24 * 60 * 60 * 1000;
 const RETRY_GAP_MS = 30_000;
 let retrying = false;
 let lastRetry = 0;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Retries every uncertain send once; final answers and old entries leave
- *  the outbox, the rest wait for the next attempt. */
+/** Retries every uncertain send; final answers and old entries leave the
+ *  outbox. A request that comes too soon after the last attempt, or entries
+ *  still left afterwards, schedule the next attempt instead of being lost. */
 export async function retryAppMessages(): Promise<void> {
-  if (retrying || Date.now() - lastRetry < RETRY_GAP_MS) return;
+  if (retrying) return;
+  const wait = lastRetry + RETRY_GAP_MS - Date.now();
+  if (wait > 0) return scheduleRetry(wait);
   retrying = true;
   lastRetry = Date.now();
   try {
     for (const pending of pendingAppMessages()) {
-      if (Date.now() - (pending.savedAtMs ?? 0) > GIVE_UP_MS) forget(pending);
+      if (pending.savedAtMs === undefined) {
+        // Saved before entries carried a time: start its clock now.
+        save({ ...pending, savedAtMs: Date.now() });
+        await sendAppMessage(pending);
+      } else if (Date.now() - pending.savedAtMs > GIVE_UP_MS) forget(pending);
       else await sendAppMessage(pending);
     }
   } finally {
     retrying = false;
   }
+  if (pendingAppMessages().length > 0) scheduleRetry(RETRY_GAP_MS);
+}
+
+function scheduleRetry(ms: number): void {
+  if (retryTimer !== null) return;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (document.visibilityState === "visible") void retryAppMessages();
+  }, ms);
 }
 
 /** Retries uncertain sends after load, on reconnect and when the page shows. */

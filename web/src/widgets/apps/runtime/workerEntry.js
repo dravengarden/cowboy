@@ -37,6 +37,7 @@ const deferred = [];
 let latestProps = null;
 let latestContext = null;
 let nextTimerWake = null;
+let nextTimerAt = Infinity;
 let jobsQueued = false;
 const cpu = { spans: [], minuteStart: 0, minuteUsed: 0, throttled: 0 };
 const rate = { sendAt: 0, sendDrops: 0, logStart: 0, logs: 0 };
@@ -273,6 +274,7 @@ const literal = (value) => JSON.stringify(value);
 /** Runs due timers and wakes again when the next one is due. */
 function drainTimers() {
   nextTimerWake = null;
+  nextTimerAt = Infinity;
   if (stopped || suspended || !ready) return;
   if (pending.length >= LIMITS.pendingBatches) return;
   const result = run(`__cowboyTimersRun(${LIMITS.timersPerTurn})`, LIMITS.eventMs);
@@ -283,9 +285,16 @@ function drainTimers() {
   if (typeof result.value === "number" && result.value >= 0) wakeTimers(result.value);
 }
 
+/** Wakes the timer drain within `ms`; an earlier wake is never postponed,
+ *  so a steady stream of job continuations cannot starve timers. */
 function wakeTimers(ms) {
-  if (nextTimerWake !== null) clearTimeout(nextTimerWake);
-  nextTimerWake = setTimeout(drainTimers, Math.max(16, ms));
+  const at = Date.now() + Math.max(16, ms);
+  if (nextTimerWake !== null) {
+    if (nextTimerAt <= at) return;
+    clearTimeout(nextTimerWake);
+  }
+  nextTimerAt = at;
+  nextTimerWake = setTimeout(drainTimers, at - Date.now());
 }
 
 /** Runs deferred host commands while the VM may run. */

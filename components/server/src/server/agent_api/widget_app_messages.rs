@@ -80,7 +80,9 @@ pub(in crate::server) async fn api_widget_app_message(
     // A recorded occurrence answers from its record before any eligibility
     // check: a retry after a lost response must not turn into `closed`,
     // `app_updated` or `session_unavailable` because things moved on since.
-    // Only a send that still has to be queued needs an admissible session.
+    // A recorded message is the Controller's to deliver: it is re-queued
+    // here when the session admits prompts, and otherwise stays queued in
+    // the Hub or is re-queued by startup recovery.
     match store.widget_interaction(&session_id, &cmid).await {
         Ok(Some(existing)) if existing.message != request.text => {
             return refusal(StatusCode::CONFLICT, "occurrence_reused", json!({}));
@@ -89,10 +91,9 @@ pub(in crate::server) async fn api_widget_app_message(
             match store.prompt_echoed(&session_id, &cmid).await {
                 Ok(true) => {}
                 Ok(false) => {
-                    if let Err((status, code)) = admissible(&state, &session_id) {
-                        return refusal(status, code, json!({}));
+                    if admissible(&state, &session_id).is_ok() {
+                        queue();
                     }
-                    queue();
                 }
                 Err(_) => return unavailable(),
             }
