@@ -42,7 +42,12 @@ export function parseAr(bytes: Buffer): Array<{ name: string; start: number; siz
   return members;
 }
 
-export async function extractDeb(debPath: string, tree: string, scratch: string) {
+export async function extractDeb(
+  debPath: string,
+  tree: string,
+  scratch: string,
+  tarOptions: string[] = [],
+) {
   const bytes = await readFile(debPath);
   const members = parseAr(bytes);
   if (members[0]?.name !== "debian-binary") {
@@ -61,6 +66,7 @@ export async function extractDeb(debPath: string, tree: string, scratch: string)
     "--no-same-permissions",
     "--no-overwrite-dir",
     "--warning=no-unknown-keyword",
+    ...tarOptions,
   ]);
   await rm(member, { force: true });
 }

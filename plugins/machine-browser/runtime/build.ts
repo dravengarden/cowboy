@@ -6,7 +6,10 @@
 // audited against the tree alone, and the whole packed as one tar.gz within
 // the installer's limits. It never runs anything from the tree except the
 // launcher's own `--probe`, and it needs no Docker: the lock already holds
-// what the distribution's resolver decided (`lock.sh`).
+// what the distribution's resolver decided (`lock.sh`). The display server is
+// the one exception to "Ubuntu's bytes": `display-server.ts` rebuilds it from
+// Ubuntu's source plus `native-touch.patch` in Ubuntu's recorded build root
+// and installs it only when it hashes to the locked digest.
 //
 // dpkg-deb is not part of the development shell, so the builder reads the
 // `ar` container itself (`extract.ts`) and hands the `data.tar.*` member to
@@ -27,6 +30,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { packTree } from "./archive.ts";
 import { PROBE_TIMEOUT_MS, auditTree, probeLauncher, resolveLauncher } from "./audit.ts";
+import { type DisplayServer, buildDisplayServer } from "./display-server.ts";
 import { breakHardLinks, extractDeb, measureTree, replaceSymlinks } from "./extract.ts";
 import { type Contract, type Lock, checkContract, downloadAll, run, sha256File } from "./lock.ts";
 
@@ -170,6 +174,7 @@ async function readInputs(options: Options): Promise<Inputs> {
 }
 
 interface Assembled {
+  displayServer: DisplayServer;
   launcherSource: string;
   launcherDigest: string;
   symlinksReplaced: number;
@@ -196,6 +201,19 @@ async function assembleTree(inputs: Inputs): Promise<Assembled> {
     }
   } finally {
     await rm(scratch, { recursive: true, force: true });
+  }
+  // Ubuntu's Xtigervnc is replaced by the reproducible rebuild of the same
+  // source with native-touch.patch (display-server.ts), verified against
+  // the digest display-server.lock.json records.
+  const displayServer = await buildDisplayServer(lock, { cacheDir });
+  const displayPath = join(treeRoot, contract.runtime.display_server);
+  if (!(await lstat(displayPath)).isFile()) {
+    throw new Error(`${contract.runtime.display_server} is not the packaged display server`);
+  }
+  await copyFile(displayServer.path, displayPath);
+  await chmod(displayPath, 0o755);
+  if ((await sha256File(displayPath)) !== displayServer.sha256) {
+    throw new Error("the installed display server does not match its verified build");
   }
   console.error("pruning and normalizing");
   for (const entry of await readdir(treeRoot)) {
@@ -224,6 +242,7 @@ async function assembleTree(inputs: Inputs): Promise<Assembled> {
   await chmod(policyDestination, 0o644);
   await writeFile(join(dirname(policyDestination), "nsswitch.conf"), NSSWITCH_CONF);
   return {
+    displayServer,
     launcherSource: launcher.source,
     launcherDigest: await sha256File(launcher.path),
     symlinksReplaced,
@@ -305,6 +324,15 @@ async function packAndRecord(inputs: Inputs, assembled: Assembled, verified: Ver
       packages: lock.packages.length + 1,
     },
     launcher: { source: assembled.launcherSource, sha256: assembled.launcherDigest },
+    display_server: {
+      sha256: assembled.displayServer.sha256,
+      bytes: assembled.displayServer.size,
+      rebuilt: assembled.displayServer.rebuilt,
+      source_version: assembled.displayServer.source_version,
+      patch_sha256: assembled.displayServer.patch_sha256,
+      build_root_snapshot: assembled.displayServer.snapshot,
+      buildinfo_sha256: assembled.displayServer.buildinfo_sha256,
+    },
     tree: {
       entries: verified.entries,
       bytes: verified.bytes,

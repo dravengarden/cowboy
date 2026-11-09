@@ -27,12 +27,20 @@ Machine has no browser capability.
     `dist/plugins/machine-browser/runtime-linux-x86_64.tar.gz` and writes the
     `runtime-artifacts.json` that `just plugin-bind-runtime` consumes:
     `bun plugins/machine-browser/runtime/build.ts <artifact-base-url>`.
+  - The display server is the one non-Ubuntu binary: `display-server.ts`
+    rebuilds `Xtigervnc` from Ubuntu's tigervnc source with
+    `native-touch.patch` in the build root of Ubuntu's own build (pinned by
+    `display-server.lock.json`, written by `display-server-lock.sh` from
+    the Launchpad `.buildinfo` and `snapshot.ubuntu.com`) in a bubblewrap
+    sandbox, and accepts only the recorded digest. `--record` records a
+    reviewed output, `--verify-stock` proves the unpatched rebuild equals
+    Ubuntu's binary. See "Native touch" in `docs/machine-browser.md`.
   - `default.nix` is the launcher's static musl build, exposed by the root
     flake as `cowboy-browser-launcher-portable`.
   - `conformance.sh` runs the built tree in a pristine `ubuntu:26.04`
     container as an unprivileged user (no `AppArmor`) and verifies the
     launcher contract from outside; `conformance_probe.py` is its Machine
-    stand-in.
+    stand-in and `touch_probe.py` its native touch checks.
 - `launcher/` is the static supervisor binary (`cowboy-browser-launcher`):
   namespaces, mounts, sealing, the three processes, the control protocol and
   snapshot copies. Its crate version is the Plugin version. The wire contract
