@@ -132,9 +132,11 @@ try {
 }
 const token = crypto.randomUUID();
 const loader = `globalThis.CowboyDeviceProof = { proof: async () => "fixture", resetChallenge() {}, install() {} };
+// Engine facts the enablement predicate reads (web/src/widgets/apps/appsEnabled.ts).
+const engine = { anchor: CSS.supports("anchor-name: --a"), standalone: navigator.standalone === true, touchPoints: navigator.maxTouchPoints };
 let result;
-try { const { ${entry} } = await import("/fixture.js"); result = { ok: true, tests: await ${entry}(), userAgent: navigator.userAgent }; }
-catch (error) { result = { ok: false, error: String(error), userAgent: navigator.userAgent }; }
+try { const { ${entry} } = await import("/fixture.js"); result = { ok: true, tests: await ${entry}(), userAgent: navigator.userAgent, engine }; }
+catch (error) { result = { ok: false, error: String(error), userAgent: navigator.userAgent, engine }; }
 await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) });
 `;
 const page = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><script type="module" src="/loader.js"></script>`;

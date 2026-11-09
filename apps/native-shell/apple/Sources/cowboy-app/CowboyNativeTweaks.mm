@@ -890,6 +890,48 @@ static void cowboyRepairAuthenticationBrowserBridge(WKWebView *webView) {
     });
 }
 
+// Wry's `ipc` script handler (pinned Wry 0.57) forwards every frame's message
+// with that frame's URL. Widget apps run in sandboxed subframes
+// (docs/widget-apps.md §9), so every handler registered as `ipc` is wrapped
+// at registration and hears only the main frame. Wrapping the registration,
+// not Wry's class, holds whatever order Wry creates its delegate in.
+@interface CowboyMainFrameOnlyHandler : NSObject <WKScriptMessageHandler>
+@property(nonatomic, strong) id<WKScriptMessageHandler> inner;
+@end
+
+@implementation CowboyMainFrameOnlyHandler
+- (void)userContentController:(WKUserContentController *)ucc
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (!message.frameInfo.isMainFrame) return;
+    [self.inner userContentController:ucc didReceiveScriptMessage:message];
+}
+@end
+
+static BOOL gCowboyIpcGated = NO;
+
+__attribute__((constructor)) static void cowboyGateIpcHandlers(void) {
+    @autoreleasepool {
+        Class cls = [WKUserContentController class];
+        SEL sel = @selector(addScriptMessageHandler:name:);
+        Method method = class_getInstanceMethod(cls, sel);
+        if (method == NULL) return;
+        typedef void (*Add)(id, SEL, id<WKScriptMessageHandler>, NSString *);
+        Add original = (Add)method_getImplementation(method);
+        IMP replacement = imp_implementationWithBlock(
+            ^(id controller, id<WKScriptMessageHandler> handler, NSString *name) {
+                if ([name isEqualToString:@"ipc"] &&
+                    ![handler isKindOfClass:CowboyMainFrameOnlyHandler.class]) {
+                    CowboyMainFrameOnlyHandler *gate = [[CowboyMainFrameOnlyHandler alloc] init];
+                    gate.inner = handler;
+                    handler = gate;
+                }
+                original(controller, sel, handler, name);
+            });
+        method_setImplementation(method, replacement);
+        gCowboyIpcGated = YES;
+    }
+}
+
 __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
     @autoreleasepool {
         Class cls = [WKWebView class];
@@ -972,11 +1014,16 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                         // hacks. document-start, so it's set before the page's own
                         // boot script reads it. (cowboy-native-keyboard-ime)
                         @"window.__cowboyNativeShell=true;"];
-                    // Widget apps (docs/widget-apps.md §9) stay on their
-                    // fallback here: Cowboy's script handlers answer only the
-                    // main frame, but Wry's `ipc` handler forwards subframe
-                    // messages. Report `__cowboyAppsSandbox` only once that
-                    // handler is gated too.
+                    // Widget apps (docs/widget-apps.md §9): every script
+                    // handler of this shell, Wry's `ipc` included, answers
+                    // only the main frame, so the web may enable apps on a
+                    // tested OS. Reported only when the Wry gate is in place.
+                    if (gCowboyIpcGated) {
+                        js = [js stringByAppendingFormat:
+                            @"window.__cowboyAppsSandbox=Object.freeze({v:1,os:'%@'});",
+                            [UIDevice.currentDevice.systemVersion
+                                stringByReplacingOccurrencesOfString:@"'" withString:@""]];
+                    }
                     WKUserScript *script =
                         [[WKUserScript alloc] initWithSource:js
                                                injectionTime:WKUserScriptInjectionTimeAtDocumentStart

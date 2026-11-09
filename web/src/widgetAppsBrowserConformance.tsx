@@ -191,7 +191,7 @@ export async function runWidgetAppsBrowserConformance(): Promise<string[]> {
     app(
       "export default function A() {\n" +
         "  const [n, setN] = React.useState(0);\n" +
-        "  React.useEffect(() => { setTimeout(() => setN(n + 500)); }, [n]);\n" +
+        "  React.useEffect(() => { setTimeout(() => setN(n + 500), 400); }, [n]);\n" +
         "  return <Stack>{Array.from({ length: n }, (_, i) => <Text key={i}>x</Text>)}</Stack>;\n" +
         "}",
     ),

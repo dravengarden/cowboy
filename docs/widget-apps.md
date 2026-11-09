@@ -81,11 +81,15 @@ status, tables and decisions.
   request handler checked only the relying party, and the Passkey browser's
   `close` nothing). Android's message listeners already required the main
   frame and the Cowboy origin; Tauri grants permissions only to the Cowboy
-  origin. The Web enables the iOS shell only when it reports
-  `__cowboyAppsSandbox = {v: 1, os}`; no shell reports it yet, because the
-  review of A4 (`call-586b103e72ad245cedadb960`) found that Wry's `ipc`
-  handler forwards subframe messages. Native shells keep the fallback until
-  that handler is gated and verified on a device.
+  origin. The review of A4 (`call-586b103e72ad245cedadb960`) found that
+  Wry's `ipc` handler forwards subframe messages; the shell now wraps every
+  handler registered as `ipc` at registration so it hears only the main
+  frame, and reports `__cowboyAppsSandbox = {v: 1, os}` only with that gate
+  installed. The Apple conformance app (`tools/native-plugin-conformance.sh`)
+  proves it on iOS 27.2: messages from a sandboxed and a same-origin
+  subframe reach an ungated probe handler but not `ipc`, and the capability
+  is reported frozen. The shell enables apps once a build with this change is
+  installed.
 - **A4.3 (WebKit)**: `tools/ios-simulator-conformance.ts` runs the
   `widget-apps` suite in iOS Safari on a disposable Simulator of the Mac,
   optionally under the Controller's App CSP with the runtime wasm served as a
@@ -97,9 +101,10 @@ status, tables and decisions.
   images fetched as `data:` URLs (refused by the App CSP), and Safari's
   frozen OS version in its user agent. Enablement (`appsEnabled.ts`): iOS
   and iPadOS 26+ Safari by `Version/` (iPadOS's Mac user agent by touch
-  points), and the iOS shell only by its capability and OS version (not yet
-  reported); macOS WebKit, Tauri desktop shells and PWAs without `Version/`
-  keep the fallback. The `--production-csp` policy is the Controller's
+  points), the home-screen web app (no `Version/`, frozen OS) by standalone
+  mode plus CSS anchor positioning, first shipped in iOS 26, and the iOS
+  shell by its capability and OS version; macOS WebKit and Tauri desktop
+  shells keep the fallback. The `--production-csp` policy is the Controller's
   verbatim, its `wss://` source included.
 - Not yet covered: a physical iPhone (four maximum-budget apps under 200 ms
   interaction latency) and the egress sink observed outside the page; the
