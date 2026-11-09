@@ -1,6 +1,8 @@
 // A managed review's structured findings, anchored for Desktop Review. A
-// finding is `current` only while its file is unchanged since the review was
-// asked (same change fingerprint); then its lines can be drawn. A changed
+// finding is `current` only while its file is the content the review read:
+// the snapshot's blob equals the file's blob now, or, from a Machine that
+// does not record blobs, the change fingerprint is the one at the ask. Then
+// its lines can be drawn. A changed
 // file makes it `stale` and a file outside the delegation `unmapped`: both
 // are listed, never drawn. An incomplete or truncated review yields no
 // findings to anchor at all.
@@ -44,6 +46,9 @@ export function reviewOutcome(
   result: { structured?: unknown; truncated?: unknown } | null,
   files: readonly DelegatedFile[],
   fingerprintOf: (path: string) => string | undefined,
+  /** Whether the reviewed snapshot's blob of `path` is the file's blob now;
+   *  undefined when either is unknown, and the fingerprint decides. */
+  sameBlob: (path: string) => boolean | undefined = () => undefined,
 ): ReviewOutcome {
   const root = result?.structured && typeof result.structured === "object"
     ? result.structured as Record<string, unknown>
@@ -58,8 +63,11 @@ export function reviewOutcome(
     if (typeof item.file !== "string" || typeof item.line_start !== "number" || !SEVERITIES.has(String(item.severity))) return [];
     const delegated = files.find((file) => samePath(file.path, item.file as string));
     const now = delegated ? fingerprintOf(delegated.path) : undefined;
+    const exact = delegated ? sameBlob(delegated.path) : undefined;
     const anchor: FindingAnchor = !delegated
       ? "unmapped"
+      : exact !== undefined
+      ? exact ? "current" : "stale"
       : delegated.fingerprint !== undefined && now === delegated.fingerprint
       ? "current"
       : "stale";

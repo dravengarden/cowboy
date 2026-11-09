@@ -76,7 +76,14 @@ export function useDelegate(review: ReviewWorkbench): (kind: "explain" | "review
         appendDraftText(fork.session_id, prompt);
       }
       if (kind === "review") {
-        recordDelegation(source.id, { fork: fork.session_id, task, kind, files: [{ path, fingerprint }], atMs: Date.now() });
+        recordDelegation(source.id, {
+          fork: fork.session_id,
+          task,
+          kind,
+          files: [{ path, fingerprint }],
+          atMs: Date.now(),
+          context: review.target?.sessionId,
+        });
       }
       // The fork opens as a preview tab; keep the source so it stays beside it.
       updateDesktopTabs((state) => keepDesktopTab(state, source.id));

@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-use super::protocol::{ChildPrepared, ChildRound};
+use super::protocol::{ChildPrepared, ChildRound, PreparedFile};
 #[cfg(test)]
 use super::round::read_round;
 use super::round::{MAX_ROUND_BYTES, RoundMarker, read_private};
@@ -497,13 +497,7 @@ pub async fn prepare(
         if existing.output_schema != round.output_schema {
             return Err("identity_mismatch");
         }
-        return Ok(ChildPrepared {
-            cwd: workspace.display().to_string(),
-            input_revision: existing.input_revision,
-            head: existing.head,
-            index_tree: existing.index_tree,
-            worktree_tree: existing.worktree_tree,
-        });
+        return Ok(receipt(&git, &workspace, existing, &round.files).await);
     }
     if round.profile == cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1 {
         return images::prepare(&directory, &source, round);
@@ -742,13 +736,67 @@ pub async fn prepare(
         return Err("invalid_request");
     }
     write_private(&round_path, &bytes).map_err(|_| "preparation_failed")?;
-    Ok(ChildPrepared {
+    Ok(receipt(&git, &workspace, marker, &round.files).await)
+}
+
+/// The target receipt of a round whose marker is written: the same
+/// identity a repeated call observes, plus the requested files' blobs.
+async fn receipt(
+    git: &Git,
+    workspace: &Path,
+    marker: RoundMarker,
+    files: &[String],
+) -> ChildPrepared {
+    ChildPrepared {
         cwd: workspace.display().to_string(),
-        input_revision: revision,
-        head: first.head,
-        index_tree: first.index_tree,
-        worktree_tree: first.worktree_tree,
-    })
+        input_revision: marker.input_revision,
+        head: marker.head,
+        index_tree: marker.index_tree,
+        worktree_tree: marker.worktree_tree,
+        files: prepared_files(git, workspace, files).await,
+    }
+}
+
+/// The requested files' blobs in the checked-out snapshot. A path that is
+/// not a file there is left out, and a failed listing yields none: readers
+/// then fall back to weaker evidence instead of losing the round.
+async fn prepared_files(git: &Git, workspace: &Path, files: &[String]) -> Vec<PreparedFile> {
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let mut args = vec![
+        os("-C"),
+        workspace.as_os_str(),
+        os("ls-tree"),
+        os("-z"),
+        os("--full-tree"),
+        os("HEAD"),
+        os("--"),
+    ];
+    args.extend(files.iter().map(|file| os(file)));
+    let Ok(listed) = git
+        .run(
+            &[("GIT_LITERAL_PATHSPECS", os("1"))],
+            &args,
+            "checkout_failed",
+        )
+        .await
+    else {
+        return Vec::new();
+    };
+    listed
+        .split('\0')
+        .filter_map(|entry| {
+            let (meta, path) = entry.split_once('\t')?;
+            let mut parts = meta.split(' ');
+            let (_mode, kind, blob) = (parts.next()?, parts.next()?, parts.next()?);
+            (kind == "blob" && object_id(blob)).then(|| PreparedFile {
+                path: path.to_owned(),
+                blob: blob.to_owned(),
+            })
+        })
+        .take(PreparedFile::MAX)
+        .collect()
 }
 
 /// Remove one child's owned directory. A missing directory is already closed.
@@ -873,6 +921,21 @@ mod tests {
         let marker = read_round(&workspace).unwrap();
         assert_eq!(marker.call_id, "call-1");
         assert_eq!(marker.input_revision, prepared.input_revision);
+        // The requested file's blob is the captured content's, as Git would
+        // hash it from the source worktree at that moment.
+        let captured = StdCommand::new("git")
+            .arg("-C")
+            .arg(&source)
+            .args(["hash-object", "--", "ignored/review.md"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            prepared.files,
+            [PreparedFile {
+                path: "ignored/review.md".into(),
+                blob: String::from_utf8_lossy(&captured.stdout).trim().to_owned(),
+            }]
+        );
         // A repeated call id observes the original receipt even after edits.
         std::fs::write(source.join("a.txt"), "later\n").unwrap();
         let repeated = prepare(

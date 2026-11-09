@@ -69,6 +69,10 @@ pub enum CodeOperation {
     Blob {
         oid: String,
     },
+    /// A worktree file's current blob id; Machines that predate it refuse.
+    FileBlob {
+        path: String,
+    },
     /// Syntax outline of one file; Machines that predate it refuse.
     Outline {
         path: String,
@@ -93,6 +97,7 @@ pub enum CodeAdapterResponse {
     File(crate::code_review::FileDocument),
     FileRaw(crate::code_review::RawFileDocument),
     Blob(crate::code_review::git::blob::BlobDocument),
+    FileBlob(crate::code_review::git::blob::FileBlob),
     ContentSearch(crate::code_review::content_search::ContentSearchResult),
     Outline(Vec<crate::code_review::structure::StructureSymbol>),
     WorkspaceSymbols(crate::code_review::structure::WorkspaceSymbols),
@@ -215,6 +220,9 @@ fn execute(request: CodeAdapterRequest, roots: &[PathBuf]) -> Result<CodeAdapter
         ),
         CodeOperation::FileRaw { path } => {
             CodeAdapterResponse::FileRaw(provider.file_raw(&path).map_err(anyhow::Error::msg)?)
+        }
+        CodeOperation::FileBlob { path } => {
+            CodeAdapterResponse::FileBlob(provider.file_blob(&path).map_err(anyhow::Error::msg)?)
         }
         CodeOperation::Blob { oid } => {
             CodeAdapterResponse::Blob(provider.blob(&oid).map_err(anyhow::Error::msg)?)

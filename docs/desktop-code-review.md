@@ -607,9 +607,21 @@ fingerprint equals the delegated one, `stale` after the file changed and
 `unmapped` outside the delegated files; only `current` findings are placed,
 and only where Problems already places findings (a source file, or a diff
 through the verified projection). Each is listed with its reason otherwise.
-The fingerprint is metadata, not content identity, so `current` is weaker
-than `exact`; the Controller projection (and with it `heuristic` carrying)
-replaces this when calls record their snapshot blobs. The Navigator badges a
+Calls now record their snapshot blobs: the Machine's snapshot names each
+requested file's blob in the captured tree (`ChildPrepared.files`), the
+Controller keeps it on the call record (`input_files`, at most 32), and
+`GET /api/code/sessions/{id}/file-blob?path=` returns the worktree file's
+blob as `git add` would store it. When both are known a finding is `current`
+exactly while the two blobs are equal (a file edited back to the reviewed
+content is current again) and `stale` otherwise; the blob is read again when
+the file's change fingerprint moves. Calls prepared by a Machine that
+predates `files`, and contexts whose Machine lacks `file-blob`, keep the
+fingerprint rule above, which is metadata and weaker. The recording takes
+effect with the next Machine release; until then every call uses the
+fingerprint. A Controller older than this change cannot decode a call record
+that carries `input_files`, so a Controller rollback past it must also roll
+back the Machine or accept those calls as unreadable. `heuristic` carrying
+through an edit is still not done. The Navigator badges a
 file with the count of its current findings, coloured by the highest
 severity. Delegations are device-local, so another device does not see them.
 `␣VS` has no problem-row form: `Enter` on a problem moves the Document's

@@ -115,6 +115,7 @@ pub(super) fn prepare(
         head: String::new(),
         index_tree: String::new(),
         worktree_tree: String::new(),
+        files: Vec::new(),
     })
 }
 

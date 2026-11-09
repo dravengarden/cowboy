@@ -789,6 +789,24 @@ pub(super) async fn api_code_file_raw(
     .await
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct CodeFileBlobQuery {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CodeBlobQuery {
+    oid: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CodeBlobResponse {
+    api_version: u8,
+    oid: String,
+    text: String,
+}
+
 /// One side of a diff by the blob id its `index` line names
 /// (docs/desktop-code-review.md "Server and API"). Content-addressed, so it
 /// never needs a snapshot fence; a Machine that predates it refuses.
@@ -848,6 +866,54 @@ pub(super) async fn api_code_blob(
                 }
                 _ => (StatusCode::BAD_REQUEST, "blob unavailable").into_response(),
             },
+        }
+    })
+    .await
+}
+
+/// A worktree file's current blob id (docs/desktop-code-review.md "The agent
+/// loop"): compared with the blob a review captured, it says whether a
+/// finding still describes the file. A Machine that predates it answers 502.
+pub(super) async fn api_code_file_blob(
+    State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
+    Path(session_id): Path<String>,
+    Query(query): Query<CodeFileBlobQuery>,
+) -> Response {
+    let context_id = session_id.clone();
+    code_reads::scoped(authority, &context_id, |context| async move {
+        let cwd = context.cwd;
+        let result = match remote_code_request(
+            &state,
+            &context.scope,
+            CodeOperation::FileBlob {
+                path: query.path.clone(),
+            },
+        )
+        .await
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::FileBlob(blob))) => Ok(blob),
+            Err(error) if error.to_string().contains("file not found") => {
+                Err("file not found".to_owned())
+            }
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote file blob unavailable").into_response();
+            }
+            Ok(None) => {
+                let path = query.path;
+                tokio::task::spawn_blocking(move || {
+                    crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).file_blob(&path)
+                })
+                .await
+                .unwrap_or_else(|_| Err("file unavailable".to_owned()))
+            }
+        };
+        match result {
+            Ok(blob) => {
+                Json(serde_json::json!({"apiVersion": 1, "path": blob.path, "oid": blob.oid}))
+                    .into_response()
+            }
+            Err(error) => code_file_error_response(&error),
         }
     })
     .await

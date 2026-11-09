@@ -2183,19 +2183,6 @@ struct CodeDiffResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct CodeBlobQuery {
-    oid: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodeBlobResponse {
-    api_version: u8,
-    oid: String,
-    text: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct CodeFileQuery {
     path: String,
     cursor: Option<String>,

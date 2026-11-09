@@ -630,6 +630,21 @@ export function fetchGitCommit(
   );
 }
 
+/** A worktree file's current Git blob id, to compare with a review's
+ *  captured blob. A Machine that predates the route answers 502. */
+export function fetchCodeFileBlob(
+  sessionId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ path: string; oid: string }> {
+  const query = new URLSearchParams({ path });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/file-blob?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
 /** One side of a diff by the blob id its `index` line names. A Machine that
  *  predates the route answers 502; a large or binary side 413/415. */
 export function fetchCodeBlob(
