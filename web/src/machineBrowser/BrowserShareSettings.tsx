@@ -20,6 +20,18 @@ export type BrowserShareChange =
   | { type: "delete_browser_share"; share_id: string }
   | { type: "set_browser_share"; member: BrowserShareMemberRef; share_id: string | null };
 
+/** Send a change and clear its draft only once it committed: a revision
+ * conflict or a refusal keeps the owner's text for another try. */
+export async function commitDraft(
+  save: (change: BrowserShareChange) => Promise<boolean>,
+  change: BrowserShareChange,
+  clear: () => void,
+): Promise<boolean> {
+  const committed = await save(change);
+  if (committed) clear();
+  return committed;
+}
+
 export function BrowserShareSettings({
   snapshot,
   disabled,
@@ -27,7 +39,8 @@ export function BrowserShareSettings({
 }: {
   snapshot: SubscriptionSnapshot | undefined;
   disabled: boolean;
-  save: (change: BrowserShareChange) => void;
+  /** Resolves `true` once the change is committed. */
+  save: (change: BrowserShareChange) => Promise<boolean>;
 }): React.JSX.Element | null {
   const [label, setLabel] = useState("");
   if (!snapshot || snapshot.machine_browser === undefined) return null;
@@ -64,8 +77,11 @@ export function BrowserShareSettings({
         <Button
           disabled={disabled || !validSubscriptionLabel(label)}
           onClick={() => {
-            save({ type: "create_browser_share", label: label.trim() });
-            setLabel("");
+            // The draft stays until the write is confirmed (a conflict or a
+            // refusal keeps it for another try).
+            void commitDraft(save, { type: "create_browser_share", label: label.trim() }, () =>
+              setLabel(""),
+            );
           }}
           sx={{ minHeight: 40, flexShrink: 0 }}
         >
@@ -85,7 +101,7 @@ function ShareGroup({
   snapshot: SubscriptionSnapshot;
   share: BrowserShare;
   disabled: boolean;
-  save: (change: BrowserShareChange) => void;
+  save: (change: BrowserShareChange) => Promise<boolean>;
 }): React.JSX.Element {
   const [name, setName] = useState<string | undefined>(undefined);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -99,10 +115,6 @@ function ShareGroup({
       </Paper>
     );
   }
-  const members = new Set(share.members.map((member) => member.account_id));
-  const candidates = shareCandidates(snapshot).filter(
-    (candidate) => !members.has(candidate.browserId),
-  );
   const draft = name ?? share.label;
   return (
     <Paper variant="outlined" sx={{ p: 1.5 }} data-browser-share={share.share_id}>
@@ -120,8 +132,11 @@ function ShareGroup({
           <Button
             disabled={disabled || !validSubscriptionLabel(draft) || draft.trim() === share.label}
             onClick={() => {
-              save({ type: "rename_browser_share", share_id: share.share_id, label: draft.trim() });
-              setName(undefined);
+              void commitDraft(
+                save,
+                { type: "rename_browser_share", share_id: share.share_id, label: draft.trim() },
+                () => setName(undefined),
+              );
             }}
           >
             Save
@@ -138,57 +153,14 @@ function ShareGroup({
               key={member.account_id}
               label={memberLabel(snapshot, member)}
               disabled={disabled}
+              aria-label={`${memberLabel(snapshot, member)} in ${share.label}`}
               onDelete={() =>
-                save({ type: "set_browser_share", member: member.member, share_id: null })
+                void save({ type: "set_browser_share", member: member.member, share_id: null })
               }
             />
           ))}
         </Stack>
-        {candidates.length > 0 && (
-          <Stack spacing={0.5}>
-            <Typography variant="caption" color="text.secondary">
-              Add a card
-            </Typography>
-            {candidates.map((candidate) => {
-              const blocked = joinBlocked(share, candidate);
-              const elsewhere = shareOf(snapshot, candidate.browserId);
-              return (
-                <Stack
-                  key={candidate.browserId}
-                  direction="row"
-                  spacing={1}
-                  alignItems="center"
-                  data-share-candidate={candidate.browserId}
-                >
-                  <Stack sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography variant="body2" noWrap>
-                      {candidate.label}
-                    </Typography>
-                    {(blocked || elsewhere) && (
-                      <Typography variant="caption" color="text.secondary">
-                        {blocked ?? `Moves it out of ${elsewhere!.label}.`}
-                      </Typography>
-                    )}
-                  </Stack>
-                  <Button
-                    size="small"
-                    disabled={disabled || blocked !== undefined}
-                    onClick={() =>
-                      save({
-                        type: "set_browser_share",
-                        member: candidate.member,
-                        share_id: share.share_id,
-                      })
-                    }
-                    sx={{ minHeight: 36, flexShrink: 0 }}
-                  >
-                    Add
-                  </Button>
-                </Stack>
-              );
-            })}
-          </Stack>
-        )}
+        <ShareCandidates snapshot={snapshot} share={share} disabled={disabled} save={save} />
         {confirmDelete ? (
           <Stack spacing={0.5}>
             <Typography variant="caption" color="text.secondary">
@@ -202,7 +174,7 @@ function ShareGroup({
                 disabled={disabled}
                 onClick={() => {
                   setConfirmDelete(false);
-                  save({ type: "delete_browser_share", share_id: share.share_id });
+                  void save({ type: "delete_browser_share", share_id: share.share_id });
                 }}
               >
                 Delete group
@@ -221,5 +193,73 @@ function ShareGroup({
         )}
       </Stack>
     </Paper>
+  );
+}
+
+/** The cards that may join `share`, each with its contextual action and,
+ * when it cannot join or would move, the reason. */
+function ShareCandidates({
+  snapshot,
+  share,
+  disabled,
+  save,
+}: {
+  snapshot: SubscriptionSnapshot;
+  share: BrowserShare;
+  disabled: boolean;
+  save: (change: BrowserShareChange) => Promise<boolean>;
+}): React.JSX.Element | null {
+  const members = new Set(share.members.map((member) => member.account_id));
+  const candidates = shareCandidates(snapshot).filter(
+    (candidate) => !members.has(candidate.browserId),
+  );
+  if (candidates.length === 0) return null;
+  return (
+    <Stack spacing={0.5}>
+      <Typography variant="caption" color="text.secondary">
+        Add a card
+      </Typography>
+      {candidates.map((candidate) => {
+        const blocked = joinBlocked(share, candidate);
+        const elsewhere = shareOf(snapshot, candidate.browserId);
+        const reason = `share-${share.share_id}-reason-${candidate.browserId}`;
+        return (
+          <Stack
+            key={candidate.browserId}
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            data-share-candidate={candidate.browserId}
+          >
+            <Stack sx={{ flex: 1, minWidth: 0 }}>
+              <Typography variant="body2" noWrap>
+                {candidate.label}
+              </Typography>
+              {(blocked || elsewhere) && (
+                <Typography variant="caption" color="text.secondary" id={reason}>
+                  {blocked ?? `Moves it out of ${elsewhere!.label}.`}
+                </Typography>
+              )}
+            </Stack>
+            <Button
+              size="small"
+              disabled={disabled || blocked !== undefined}
+              aria-label={`Add ${candidate.label} to ${share.label}`}
+              aria-describedby={blocked || elsewhere ? reason : undefined}
+              onClick={() =>
+                void save({
+                  type: "set_browser_share",
+                  member: candidate.member,
+                  share_id: share.share_id,
+                })
+              }
+              sx={{ minHeight: 36, flexShrink: 0 }}
+            >
+              Add
+            </Button>
+          </Stack>
+        );
+      })}
+    </Stack>
   );
 }

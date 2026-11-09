@@ -11,6 +11,7 @@ import type {
   SubscriptionSnapshot,
 } from "../subscriptionAccounts";
 import { legacySubscriptionLabel } from "../subscriptionDisplay";
+import type { BrowserReadShare } from "./api";
 
 const FAMILY_NAMES: Record<string, string> = {
   anthropic: "Claude",
@@ -85,7 +86,7 @@ export function shareOf(
 /** How a member is named: its card or account label, else its family. */
 export function memberLabel(
   snapshot: SubscriptionSnapshot | undefined,
-  member: BrowserShareMember,
+  member: Pick<BrowserShareMember, "family" | "account_id">,
 ): string {
   return (
     shareCandidates(snapshot).find((candidate) => candidate.browserId === member.account_id)
@@ -100,13 +101,20 @@ export function joinBlocked(share: BrowserShare, candidate: ShareCandidate): str
   const clash = share.members.find(
     (member) => member.family === candidate.family && member.account_id !== candidate.browserId,
   );
-  return clash
-    ? `Another ${familyName(candidate.family)} account is already in this group.`
+  if (clash) return `Another ${familyName(candidate.family)} account is already in this group.`;
+  const bound = share.bound?.find(
+    (row) => row.family === candidate.family && row.account_id !== candidate.browserId,
+  );
+  return bound
+    ? `Another ${familyName(candidate.family)} account used this group's profile. Reset the profile before adding this one.`
     : undefined;
 }
 
 /** What a shared card's Browser entry and panel say about the share. */
 export interface SharedBrowser {
+  share_id: string;
+  /** Membership revision: a change re-binds the panel. */
+  revision: number;
   label: string;
   /** Every member the share's profile serves, this card included. */
   members: string[];
@@ -119,10 +127,35 @@ export function sharedBrowser(
   const share = shareOf(snapshot, browserId);
   return (
     share && {
+      share_id: share.share_id,
+      revision: share.revision,
       label: share.label,
       members: share.members.map((member) => memberLabel(snapshot, member)),
     }
   );
+}
+
+/** The share the panel's own state read reports: the Service's answer for
+ * exactly the browser a reset would delete, whichever entry opened the
+ * panel. Members are named from the account inventory when it has them. */
+export function sharedForRead(
+  share: BrowserReadShare | null | undefined,
+  snapshot: SubscriptionSnapshot | undefined,
+): SharedBrowser | undefined {
+  if (!share) return undefined;
+  return {
+    share_id: share.share_id,
+    revision: share.revision,
+    label: share.label,
+    members: share.members.map((member) => memberLabel(snapshot, member)),
+  };
+}
+
+/** The key that re-binds a card's browser panel: its own browser, or a
+ * share at a membership revision. Moving the card between groups starts
+ * the panel over (model, viewer and confirmations). */
+export function browserIdentityKey(shared: SharedBrowser | undefined): string {
+  return shared ? `share:${shared.share_id}:${shared.revision}` : "own";
 }
 
 /** The reset confirmation's note for a shared browser. */

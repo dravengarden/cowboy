@@ -41,6 +41,16 @@ export function SubscriptionBrowserActions({
       <Button disabled={Boolean(account.revoking)} onClick={() => setOpen(true)}>
         Browser…
       </Button>
+      {shared && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          data-browser-shared={shared.label}
+          sx={{ alignSelf: "center" }}
+        >
+          Shared · {shared.label}
+        </Typography>
+      )}
       <Button
         disabled={disabled || Boolean(account.revoking)}
         onClick={() => onSetBrowserEnabled(!enabled)}
@@ -54,7 +64,7 @@ export function SubscriptionBrowserActions({
           onClose={() => setOpen(false)}
           owner={owner}
           dataset={dataset}
-          account={{ id: account.id, label: account.label, browserEnabled: enabled, shared }}
+          account={{ id: account.id, label: account.label, browserEnabled: enabled }}
           onEnableBrowser={() => onSetBrowserEnabled(true)}
           enabling={disabled}
         />
@@ -100,9 +110,6 @@ export function LegacyBrowserActions({
         Machine browser of this usage card
         {browser.providers.length > 1 ? ` (shared card of ${browser.providers.join(", ")})` : ""}
         {snapshot.machine_browser !== "enabled" ? " · not enabled on this Service" : ""}
-        {sharedBrowser(snapshot, browser.account_id)
-          ? ` · Shared · ${sharedBrowser(snapshot, browser.account_id)!.label}`
-          : ""}
       </Typography>
     </Stack>
   );

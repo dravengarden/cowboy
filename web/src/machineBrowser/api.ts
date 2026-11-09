@@ -69,6 +69,31 @@ export interface BrowserRead {
   choose_machine?: boolean;
   /** Connected Machines that can run a browser now, the choices offered. */
   capable_machines?: { machine_id: string }[];
+  /** The browser identity the card uses now (`own`, or a share at a
+   * membership revision); a reset names the one observed. */
+  browser_identity?: string;
+  /** The shared profile the card uses, with every member it serves. */
+  share?: BrowserReadShare | null;
+}
+
+export interface BrowserReadShare {
+  share_id: string;
+  label: string;
+  revision: number;
+  members: { family: string; account_id: string }[];
+}
+
+function validReadShare(value: unknown): value is BrowserReadShare {
+  return (
+    record(value) &&
+    text(value.share_id) &&
+    typeof value.label === "string" &&
+    typeof value.revision === "number" &&
+    Array.isArray(value.members) &&
+    value.members.every(
+      (member) => record(member) && text(member.family) && text(member.account_id),
+    )
+  );
 }
 
 /** Every lifecycle route answers with the Machine's observation. */
@@ -172,7 +197,9 @@ export function validBrowserRead(value: unknown): value is BrowserRead {
     (value.choose_machine === undefined || typeof value.choose_machine === "boolean") &&
     (value.capable_machines === undefined ||
       (Array.isArray(value.capable_machines) &&
-        value.capable_machines.every((machine) => record(machine) && text(machine.machine_id))))
+        value.capable_machines.every((machine) => record(machine) && text(machine.machine_id)))) &&
+    (value.browser_identity === undefined || text(value.browser_identity)) &&
+    (value.share === undefined || value.share === null || validReadShare(value.share))
   );
 }
 
@@ -333,6 +360,8 @@ export interface MachineBrowserApi {
     machine: string,
     expectedProfileRevision: number,
     signal: AbortSignal,
+    /** The browser identity the reset was confirmed for (`browser_identity`). */
+    expectedBrowser?: string,
   ): Promise<BrowserResult>;
 }
 
@@ -416,10 +445,15 @@ export function createMachineBrowserApi(
       post(`${accountPath(account)}/browser/hibernate`, { dataset, ...targetBody(target) }, signal),
     snapshot: (account, dataset, target, signal) =>
       post(`${accountPath(account)}/browser/snapshot`, { dataset, ...targetBody(target) }, signal),
-    reset: (account, dataset, machine, expectedProfileRevision, signal) =>
+    reset: (account, dataset, machine, expectedProfileRevision, signal, expectedBrowser) =>
       post(
         `${accountPath(account)}/browser/reset`,
-        { dataset, machine_id: machine, expected_profile_revision: expectedProfileRevision },
+        {
+          dataset,
+          machine_id: machine,
+          expected_profile_revision: expectedProfileRevision,
+          ...(expectedBrowser === undefined ? {} : { expected_browser: expectedBrowser }),
+        },
         signal,
       ),
   };
@@ -463,6 +497,8 @@ const ERROR_TEXT: Record<string, string> = {
   browser_share_family_unknown:
     "A member of this shared browser has no known account family, so it was not opened.",
   browser_member_required: "Open a shared browser from one of its cards.",
+  browser_identity_changed:
+    "This card's browser changed (it joined or left a shared group) since you confirmed. Check it and retry.",
   invalid_response: "The Service answered in an unexpected shape.",
 };
 

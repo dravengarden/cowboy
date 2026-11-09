@@ -2,20 +2,35 @@ import { test } from "bun:test";
 import { assertEquals } from "../../../tools/test-assert.ts";
 import { validPendingSubscription, subscriptionWriteRejected } from "../SubscriptionManagement";
 import { type SubscriptionSnapshot, validSubscriptionSnapshot } from "../subscriptionAccounts";
-import { type BrowserStateEvent, browserErrorText } from "./api";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import {
+  type BrowserRead,
+  type BrowserReadShare,
+  type BrowserStateEvent,
+  browserErrorText,
+  createMachineBrowserApi,
+  validBrowserRead,
+} from "./api";
+import { BrowserShareSettings, commitDraft } from "./BrowserShareSettings";
+import { confirmationCurrent, confirmationFor } from "./confirmation";
 import {
   type AccountBrowserModel,
   INITIAL_BROWSER_MODEL,
   modelFor,
   reduceAccountBrowser,
+  reduceBrowser,
+  resetTarget,
   shownTarget,
 } from "./browserModel";
 import { accountBrowserEntry } from "./entryRules";
 import {
+  browserIdentityKey,
   joinBlocked,
   shareCandidates,
   shareOf,
   sharedBrowser,
+  sharedForRead,
   sharedResetNote,
 } from "./shareRules";
 
@@ -135,6 +150,8 @@ test("a shared card's entry names its group and the reset names every member", (
     assertEquals(entry.kind === "ready" && entry.account.id === key, true);
     assertEquals(shareOf(accounts, key)?.share_id, SHARE);
     assertEquals(sharedBrowser(accounts, key), {
+      share_id: SHARE,
+      revision: 2,
       label: "Google",
       members: ["Claude · Lynx", "OpenAI · Pika", "Grok · Fox"],
     });
@@ -244,3 +261,152 @@ test("share changes journal exactly their fields and their refusals are final", 
     false,
   );
 });
+
+test("a family that used the group's profile stays bound until a reset", () => {
+  // Lynx joined and left; the profile may hold Lynx's Claude cookies.
+  const accounts = snapshot([]);
+  const share = {
+    ...accounts.browser_shares![0]!,
+    bound: [{ family: "anthropic", account_id: LYNX }],
+  };
+  assertEquals(validSubscriptionSnapshot({ ...accounts, browser_shares: [share] }, "u"), true);
+  const candidate = (id: string) =>
+    shareCandidates(accounts).find((entry) => entry.browserId === id)!;
+  assertEquals(
+    joinBlocked(share, candidate(LARK)),
+    "Another Claude account used this group's profile. Reset the profile before adding this one.",
+  );
+  // Lynx itself may come back; other families are unaffected.
+  assertEquals(joinBlocked(share, candidate(LYNX)), undefined);
+  assertEquals(joinBlocked(share, candidate(PIKA)), undefined);
+});
+
+test("every opener re-binds its panel when the card moves between groups", () => {
+  const before = sharedBrowser(snapshot(google), PIKA);
+  const moved = snapshot(google);
+  moved.browser_shares![0]!.revision = 3;
+  const after = sharedBrowser(moved, PIKA);
+  assertEquals(browserIdentityKey(before), `share:${SHARE}:2`);
+  assertEquals(browserIdentityKey(after) === browserIdentityKey(before), false);
+  assertEquals(browserIdentityKey(sharedBrowser(snapshot([]), PIKA)), "own");
+  // The panel's own read is the one source of what a reset deletes, named
+  // from the inventory (a sign-in link opener included).
+  const read: BrowserReadShare = {
+    share_id: SHARE,
+    label: "Google",
+    revision: 2,
+    members: google.map(({ family, account_id }) => ({ family, account_id })),
+  };
+  assertEquals(sharedForRead(read, snapshot(google))?.members, [
+    "Claude · Lynx",
+    "OpenAI · Pika",
+    "Grok · Fox",
+  ]);
+  assertEquals(sharedForRead(read, undefined)?.members, ["Claude", "OpenAI", "Grok"]);
+  assertEquals(sharedForRead(null, snapshot(google)), undefined);
+});
+
+test("a reset carries the browser identity it was confirmed for", async () => {
+  const read: BrowserRead = {
+    machine_id: "ovh",
+    state: {
+      instance: { account_id: PIKA, instance_id: "b-1", incarnation: 1 },
+      state: "hibernated",
+      profile_revision: 4,
+      observed_at_ms: 1,
+    },
+    placements: [],
+    admission: null,
+    browser_identity: `share:${SHARE}:2`,
+    share: { share_id: SHARE, label: "Google", revision: 2, members: [] },
+  };
+  assertEquals(validBrowserRead(read), true);
+  assertEquals(validBrowserRead({ ...read, share: { share_id: SHARE } }), false);
+  assertEquals(validBrowserRead({ ...read, browser_identity: 3 }), false);
+  const model = reduceBrowser(INITIAL_BROWSER_MODEL, { type: "read", read, now: 1 });
+  assertEquals(resetTarget(read), { machine_id: "ovh", revision: 4, identity: `share:${SHARE}:2` });
+  const asked = confirmationFor("reset", model)!;
+  assertEquals(confirmationCurrent(asked, model), true);
+  // The card left the group meanwhile: the open confirmation closes.
+  const left = reduceBrowser(model, {
+    type: "read",
+    read: { ...read, browser_identity: "own", share: null },
+    now: 2,
+  });
+  assertEquals(confirmationCurrent(asked, left), false);
+  // The wire call names the identity; the Service refuses a stale one.
+  const calls: unknown[] = [];
+  const api = createMachineBrowserApi((_path, init) => {
+    calls.push(JSON.parse(String(init.body)));
+    return Promise.resolve(new Response(JSON.stringify({ machine_id: "ovh", state: read.state })));
+  });
+  const signal = new AbortController().signal;
+  await api.reset(PIKA, "d", "ovh", 4, signal, `share:${SHARE}:2`);
+  await api.reset(PIKA, "d", "ovh", 4, signal);
+  assertEquals(calls, [
+    {
+      dataset: "d",
+      machine_id: "ovh",
+      expected_profile_revision: 4,
+      expected_browser: `share:${SHARE}:2`,
+    },
+    { dataset: "d", machine_id: "ovh", expected_profile_revision: 4 },
+  ]);
+  assertEquals(
+    browserErrorText("browser_identity_changed").startsWith("This card's browser changed"),
+    true,
+  );
+});
+
+test("a refused or conflicting share write keeps the owner's draft", async () => {
+  let cleared = 0;
+  const change = { type: "create_browser_share", label: "Google" } as const;
+  assertEquals(
+    await commitDraft(
+      () => Promise.resolve(false),
+      change,
+      () => cleared++,
+    ),
+    false,
+  );
+  assertEquals(cleared, 0);
+  assertEquals(
+    await commitDraft(
+      () => Promise.resolve(true),
+      change,
+      () => cleared++,
+    ),
+    true,
+  );
+  assertEquals(cleared, 1);
+});
+
+test("group candidates have contextual names and explain a disabled family", () => {
+  const html = renderSettings(snapshot(google.slice(0, 1)));
+  // Lark next to Lynx: disabled, named for the card and group, explained.
+  const lark = /<button[^>]*aria-label="Add Claude · Lark to Google"[^>]*>/.exec(html)?.[0] ?? "";
+  assertEquals(lark.includes("disabled"), true);
+  const described = /aria-describedby="([^"]+)"/.exec(lark)?.[1];
+  assertEquals(described !== undefined && html.includes(`id="${described}"`), true);
+  assertEquals(html.includes("Another Claude account is already in this group."), true);
+  const pika = /<button[^>]*aria-label="Add OpenAI · Pika to Google"[^>]*>/.exec(html)?.[0] ?? "";
+  assertEquals(pika.length > 0 && !pika.includes("disabled"), true);
+  assertEquals(html.includes('aria-label="Claude · Lynx in Google"'), true);
+});
+
+function renderSettings(accounts: SubscriptionSnapshot): string {
+  const prior = Object.getOwnPropertyDescriptor(globalThis, "React");
+  Object.defineProperty(globalThis, "React", { configurable: true, value: React });
+  try {
+    return renderToStaticMarkup(
+      React.createElement(BrowserShareSettings, {
+        snapshot: accounts,
+        disabled: false,
+        save: () => Promise.resolve(false),
+      }),
+    );
+  } finally {
+    if (prior) Object.defineProperty(globalThis, "React", prior);
+    else Reflect.deleteProperty(globalThis, "React");
+  }
+}

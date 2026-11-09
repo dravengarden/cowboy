@@ -227,15 +227,19 @@ export async function confirmStopped(
  * Machine and must never be checked against another Machine's profile. */
 export function resetTarget(
   read: BrowserRead | undefined,
-): { machine_id: string; revision: number } | undefined {
+): { machine_id: string; revision: number; identity?: string } | undefined {
+  // The browser identity (own, or a share at a membership revision) is
+  // captured with the target: a reset never deletes a profile the card
+  // moved to or away from after the owner confirmed.
+  const identity = read?.browser_identity === undefined ? {} : { identity: read.browser_identity };
   if (read?.machine_id && read.state?.profile_revision !== undefined) {
-    return { machine_id: read.machine_id, revision: read.state.profile_revision };
+    return { machine_id: read.machine_id, revision: read.state.profile_revision, ...identity };
   }
   const placement = read?.machine_id
     ? read.placements.find((candidate) => candidate.machine_id === read.machine_id)
     : read?.placements[0];
   return placement
-    ? { machine_id: placement.machine_id, revision: placement.profile_revision }
+    ? { machine_id: placement.machine_id, revision: placement.profile_revision, ...identity }
     : undefined;
 }
 

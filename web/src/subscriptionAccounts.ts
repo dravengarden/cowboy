@@ -49,6 +49,10 @@ export interface BrowserShare {
   /** Deleted; its profile is still being revoked on its Machine. */
   deleting: boolean;
   members: BrowserShareMember[];
+  /** The member each family of the group's profile belongs to, kept after
+   * it leaves until the profile is reset: no other account of that family
+   * may join meanwhile. */
+  bound?: { family: string; account_id: string }[];
 }
 export interface SubscriptionSnapshot {
   dataset: { dataset_id: string; user_id: string };
@@ -83,7 +87,9 @@ function validShareMember(value: unknown): value is BrowserShareMember {
 function validBrowserShare(value: unknown): value is BrowserShare {
   return record(value) && text(value.share_id) && typeof value.label === "string" &&
     typeof value.created_ms === "number" && typeof value.revision === "number" &&
-    typeof value.deleting === "boolean" && Array.isArray(value.members) && value.members.every(validShareMember);
+    typeof value.deleting === "boolean" && Array.isArray(value.members) && value.members.every(validShareMember) &&
+    (value.bound === undefined || (Array.isArray(value.bound) &&
+      value.bound.every((row: unknown) => record(row) && text(row.family) && text(row.account_id))));
 }
 
 export function validSubscriptionSnapshot(value: unknown, owner: string | undefined): value is SubscriptionSnapshot {

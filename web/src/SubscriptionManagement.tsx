@@ -138,11 +138,12 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
     // This panel belongs to one authenticated product mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  async function commit(input: Pending) {
-    if (lock.current || !snapshot || !journalReady || !live()) return;
+  /** Resolves `true` only once the change is committed. */
+  async function commit(input: Pending): Promise<boolean> {
+    if (lock.current || !snapshot || !journalReady || !live()) return false;
     if (input.dataset !== snapshot.dataset.dataset_id) {
       setError("This pending change belongs to another dataset. It will not be submitted.");
-      return;
+      return false;
     }
     lock.current = true;
     setBusy(true);
@@ -161,7 +162,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
         signal: productSessionSignal(), body: JSON.stringify(body),
       });
       const result = await response.json() as { status?: string; error?: { code?: string } };
-      if (!live()) return;
+      if (!live()) return false;
       if (response.ok && result.status === "committed") {
         sessionStorage.removeItem(journalKey);
         setPending(undefined); setError(""); setLabel("");
@@ -177,6 +178,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
           )));
         }
         await load();
+        return true;
       } else if (response.status === 409 && result.error?.code === "revision_conflict") {
         sessionStorage.removeItem(journalKey); setPending(undefined);
         setError("Subscriptions changed elsewhere. Review the refreshed list before applying your change again.");
@@ -190,11 +192,12 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
       }
     } catch { if (live()) setError("The change is not confirmed. Retry uses the same operation."); }
     finally { lock.current = false; if (live()) setBusy(false); }
+    return false;
   }
-  function save(change: Change) {
-    if (!snapshot || pending || busy || !journalReady) return;
-    if (change.type === "set_legacy_labels" && !snapshot.display_preferences) return;
-    void commit({ operation: crypto.randomUUID(), dataset: snapshot.dataset.dataset_id,
+  function save(change: Change): Promise<boolean> {
+    if (!snapshot || pending || busy || !journalReady) return Promise.resolve(false);
+    if (change.type === "set_legacy_labels" && !snapshot.display_preferences) return Promise.resolve(false);
+    return commit({ operation: crypto.randomUUID(), dataset: snapshot.dataset.dataset_id,
       expected_revision: change.type === "set_legacy_labels" ? snapshot.display_preferences!.revision : snapshot.registry.revision, change });
   }
   const legacyProviders = snapshot?.display_preferences ? [...new Set([

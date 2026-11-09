@@ -10,6 +10,8 @@ export type ConfirmKind = "takeover" | "hibernate" | "reset" | "restart";
 export interface ResetTarget {
   machine_id: string;
   revision: number;
+  /** The browser identity shown when the owner asked (`browser_identity`). */
+  identity?: string;
 }
 
 export type Confirmation =
@@ -36,7 +38,8 @@ export function confirmationCurrent(confirmation: Confirmation, model: BrowserMo
     return (
       now.kind === "reset" &&
       now.target.machine_id === confirmation.target.machine_id &&
-      now.target.revision === confirmation.target.revision
+      now.target.revision === confirmation.target.revision &&
+      now.target.identity === confirmation.target.identity
     );
   }
   return now.kind !== "reset" && sameTarget(confirmation.target, now.target);

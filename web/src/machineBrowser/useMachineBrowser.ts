@@ -252,7 +252,8 @@ export function useMachineBrowser({
       if (!target) return;
       run(
         "reset",
-        (abort) => api.reset(account, dataset, target.machine_id, target.revision, abort),
+        (abort) =>
+          api.reset(account, dataset, target.machine_id, target.revision, abort, target.identity),
         COMMAND_TIMEOUT_MS,
       );
     },

@@ -27,7 +27,9 @@ import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { BrowserMenu, type BrowserMenuItem, MobileBrowserToolbar } from "./MachineBrowserToolbar";
 import { devicePortrait, useTouchInput } from "./inputProfile";
 import { useDevicePaste } from "./MachineBrowserPaste";
-import type { SharedBrowser } from "./shareRules";
+import { type SharedBrowser, browserIdentityKey, sharedForRead } from "./shareRules";
+import { useSharedBrowser } from "./useSharedBrowser";
+import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import { useBrowserFullscreen } from "./useBrowserFullscreen";
 import { type MachineBrowserController, useMachineBrowser } from "./useMachineBrowser";
 
@@ -38,9 +40,6 @@ export interface MachineBrowserSheetProps {
     id: string;
     label: string;
     browserEnabled: boolean;
-    /** The shared browser profile this card uses: named in the identity
-     * line, and its members in the reset confirmation. */
-    shared?: SharedBrowser | undefined;
   };
   owner: string;
   dataset: string;
@@ -223,7 +222,28 @@ function useBrowserChrome(account: string, model: BrowserModel) {
   };
 }
 
+/** The panel of a card's browser, re-bound whenever the card's browser
+ * identity changes (it joins, leaves or moves between shared groups): the
+ * model, viewer and any open confirmation of the former browser are gone.
+ * Sharing metadata comes from one source for every opener. */
 export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.Element {
+  const { shared, snapshot } = useSharedBrowser(props.account.id);
+  return (
+    <MachineBrowserPanel
+      key={browserIdentityKey(shared)}
+      {...props}
+      shared={shared}
+      snapshot={snapshot}
+    />
+  );
+}
+
+function MachineBrowserPanel(
+  props: MachineBrowserSheetProps & {
+    shared: SharedBrowser | undefined;
+    snapshot: SubscriptionSnapshot | undefined;
+  },
+): React.JSX.Element {
   const { open, onClose, account, owner, dataset, link, enabling = false } = props;
   const surface = useSurfaceProfile();
   const desktop = surface.kind === "desktop";
@@ -248,7 +268,10 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   useAutoEntry(props, browser, commands);
   const ui = useBrowserChrome(account.id, model);
   const paste = useDevicePaste(ui.controls);
-  const confirm = useBrowserConfirm(model, state, commands, account.shared);
+  // The Service's read names the browser a reset deletes; before it
+  // arrives the inventory's view stands in.
+  const shared = model.read ? sharedForRead(model.read.share, props.snapshot) : props.shared;
+  const confirm = useBrowserConfirm(model, state, commands, shared);
   const full = useBrowserFullscreen(desktop && open);
   const close = desktop ? full.guardClose(onClose) : onClose;
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";
@@ -284,9 +307,7 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
     onKeyboard: ui.setKeyboardOpen,
   };
   const identity = {
-    accountLabel: account.shared
-      ? `${account.label} · Shared · ${account.shared.label}`
-      : account.label,
+    accountLabel: shared ? `${account.label} · Shared · ${shared.label}` : account.label,
     machineLabel,
     status,
   };

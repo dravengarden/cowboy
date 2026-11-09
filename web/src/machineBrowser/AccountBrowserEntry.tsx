@@ -75,7 +75,6 @@ export function AccountBrowserEntry({
             id: account.id,
             label: account.label,
             browserEnabled: account.browser_enabled,
-            shared,
           }}
         />
       )}
