@@ -501,6 +501,8 @@ const ERROR_TEXT: Record<string, string> = {
     "Another account of this kind used this group's browser profile. Reset the group's profile (or delete and recreate the group) before adding this one.",
   browser_share_family_drift:
     "An account of this group changed its kind since it used the profile. Reset the group's profile, or delete the group, before using it.",
+  browser_share_reset_pending:
+    "A reset of this group's browser profile has not finished yet. Membership changes wait until it does; try again shortly.",
   browser_identity_changed:
     "This card's browser changed (it joined or left a shared group) since you confirmed. Check it and retry.",
   invalid_response: "The Service answered in an unexpected shape.",

@@ -50,13 +50,16 @@ export function cardLabel(snapshot: SubscriptionSnapshot, card: LegacyBrowser): 
  * accounts that are not being revoked. */
 export function shareCandidates(snapshot: SubscriptionSnapshot | undefined): ShareCandidate[] {
   if (!snapshot) return [];
-  const families = snapshot.browser_share_families ?? {};
+  // Families come only from the Service's static table; a card or
+  // Provider outside it has none and is offered disabled.
+  const families = snapshot.browser_share_families?.providers ?? {};
+  const familyCards = snapshot.browser_share_families?.cards ?? [];
   const cards = (snapshot.legacy_browsers ?? [])
     .filter((card) => card.available)
     .map((card) => ({
       member: { card: card.card },
       label: cardLabel(snapshot, card),
-      family: card.card,
+      family: familyCards.includes(card.card) ? card.card : undefined,
       browserId: card.account_id,
     }));
   const named = snapshot.registry.accounts
@@ -161,6 +164,13 @@ export function panelShared(
   inventory: SharedBrowser | undefined,
 ): SharedBrowser | undefined {
   return read?.browser_identity !== undefined ? sharedForRead(read.share, snapshot) : inventory;
+}
+
+/** Whether resets must name a browser identity: always, unless a loaded
+ * inventory proves the Service has no shared profiles. While the inventory
+ * is loading or failed, an identity-less reset is not offered. */
+export function identityRequiredFor(snapshot: SubscriptionSnapshot | undefined): boolean {
+  return !(snapshot !== undefined && snapshot.browser_shares === undefined);
 }
 
 /** How the panel treats the browser identity of a new read: the first

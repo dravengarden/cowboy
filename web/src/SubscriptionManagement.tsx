@@ -76,7 +76,7 @@ export function subscriptionWriteRejected(status: number, code: string | undefin
   return status === 422 && ["invalid_account", "account_capacity", "account_is_default", "invalid_provider", "account_unavailable", "invalid_preferences",
     "account_not_found", "account_revoking", "invalid_argument", "invalid_browser_share", "browser_share_capacity", "browser_share_not_found",
     "browser_share_family_conflict", "browser_share_family_unknown", "browser_share_family_bound", "browser_share_family_drift",
-    "browser_share_changed"].includes(code ?? "");
+    "browser_share_changed", "browser_share_reset_pending"].includes(code ?? "");
 }
 
 /** The owner-facing explanation of a definitive refusal. */

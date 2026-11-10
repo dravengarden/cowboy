@@ -38,6 +38,11 @@ export interface BrowserModel {
    * viewer mounted or ended, an awaited open settled); a read issued before
    * the current epoch describes an earlier lifecycle and is discarded. */
   epoch?: number;
+  /** The browser identity the latest current read named, observed before
+   * any staleness filtering: a move from a share's browser to the card's
+   * own (whose incarnation may be lower) must re-bind the panel, not be
+   * dropped as an older instance. */
+  observedIdentity?: string | undefined;
 }
 
 export type BrowserEvent =
@@ -412,10 +417,15 @@ export function reduceBrowser(model: BrowserModel, event: BrowserEvent): Browser
 
 function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
   switch (event.type) {
-    case "read":
+    case "read": {
       if (issuedBefore(model, event.issued)) return model;
-      if (staleForViewer(model, event.read, event.issued)) return { ...model, loaded: true };
-      return withRead(model, event.read, event.now);
+      const observed =
+        event.read.browser_identity === undefined
+          ? model
+          : { ...model, observedIdentity: event.read.browser_identity };
+      if (staleForViewer(observed, event.read, event.issued)) return { ...observed, loaded: true };
+      return withRead(observed, event.read, event.now);
+    }
     case "read_failed":
       if (issuedBefore(model, event.issued)) return model;
       return { ...model, loaded: true, error: event.message };

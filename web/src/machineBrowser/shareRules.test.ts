@@ -16,7 +16,7 @@ import {
   createMachineBrowserApi,
   validBrowserRead,
 } from "./api";
-import { BrowserShareSettings, commitDraft } from "./BrowserShareSettings";
+import { BrowserShareSettings, commitDraft, sharesSupported } from "./BrowserShareSettings";
 import { confirmationCurrent, confirmationFor } from "./confirmation";
 import {
   type AccountBrowserModel,
@@ -31,6 +31,7 @@ import { accountBrowserEntry } from "./entryRules";
 import {
   browserIdentityKey,
   identityBinding,
+  identityRequiredFor,
   joinBlocked,
   panelShared,
   shareCandidates,
@@ -105,7 +106,11 @@ function snapshot(
         members: members as never,
       },
     ],
-    browser_share_families: { "claude-code": "anthropic", codex: "openai", grok: "xai" },
+    browser_share_families: {
+      version: 1,
+      providers: { "claude-code": "anthropic", codex: "openai", grok: "xai" },
+      cards: ["anthropic", "deepseek", "openai", "xai"],
+    },
   };
 }
 
@@ -473,6 +478,7 @@ test("a family bound to a departed member is a final, explained refusal", () => 
     "browser_share_family_bound",
     "browser_share_family_drift",
     "browser_share_changed",
+    "browser_share_reset_pending",
   ]) {
     assertEquals(subscriptionWriteRejected(422, code), true);
   }
@@ -483,5 +489,66 @@ test("a family bound to a departed member is a final, explained refusal", () => 
   assertEquals(
     subscriptionRejectionText("account_capacity"),
     "Change rejected (account_capacity). Review the list before trying again.",
+  );
+});
+
+test("identity-less resets wait for an inventory proving shares unsupported", () => {
+  // Loading or failed inventory: a reset must name the identity.
+  assertEquals(identityRequiredFor(undefined), true);
+  assertEquals(identityRequiredFor(snapshot(google)), true);
+  const older = snapshot(google);
+  delete older.browser_shares;
+  assertEquals(identityRequiredFor(older), false);
+});
+
+test("a move to the card's own browser is observed even from a lower incarnation", () => {
+  // The panel views the share's instance at incarnation 4.
+  const model = {
+    ...INITIAL_BROWSER_MODEL,
+    loaded: true,
+    viewer: {
+      takeover: false,
+      generation: 1,
+      target: {
+        machine_id: "ovh",
+        instance: { account_id: PIKA, instance_id: "b-share", incarnation: 4 },
+      },
+    },
+  };
+  const own: BrowserRead = {
+    machine_id: "ovh",
+    state: {
+      instance: { account_id: PIKA, instance_id: "b-own", incarnation: 1 },
+      state: "detached",
+      profile_revision: 1,
+      observed_at_ms: 2,
+    },
+    placements: [],
+    admission: null,
+    browser_identity: "own",
+    share: null,
+  };
+  const next = reduceBrowser(model, { type: "read", read: own, now: 2 });
+  // The read itself is stale for the viewer and is not applied ...
+  assertEquals(next.read, model.read);
+  // ... but its identity is observed, so the panel re-binds.
+  assertEquals(next.observedIdentity, "own");
+  assertEquals(identityBinding(`share:${SHARE}:2`, next.observedIdentity), "rebind");
+});
+
+test("an older Service without shared profiles offers no share mutation", () => {
+  const older = snapshot(google);
+  delete older.browser_shares;
+  assertEquals(sharesSupported(older), false);
+  assertEquals(renderSettings(older), "");
+  assertEquals(sharesSupported(snapshot([])), true);
+  // A card outside the Service's family table never joins.
+  const unknown = snapshot([]);
+  unknown.browser_share_families = { version: 1, providers: {}, cards: [] };
+  const lynx = shareCandidates(unknown).find((entry) => entry.browserId === LYNX)!;
+  assertEquals(lynx.family, undefined);
+  assertEquals(
+    joinBlocked(unknown.browser_shares![0]!, lynx),
+    "This account has no known family, so it cannot share a browser.",
   );
 });

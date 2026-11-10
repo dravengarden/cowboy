@@ -27,7 +27,13 @@ import { BrowserMenu, type BrowserMenuItem, MobileBrowserToolbar } from "./Machi
 import { devicePortrait, useTouchInput } from "./inputProfile";
 import { useDevicePaste } from "./MachineBrowserPaste";
 import { type BrowserModel, autoEntry, linkEntry, linkTarget, resetTarget } from "./browserModel";
-import { type SharedBrowser, browserIdentityKey, identityBinding, panelShared } from "./shareRules";
+import {
+  type SharedBrowser,
+  browserIdentityKey,
+  identityBinding,
+  identityRequiredFor,
+  panelShared,
+} from "./shareRules";
 import { useSharedBrowser } from "./useSharedBrowser";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import { useBrowserFullscreen } from "./useBrowserFullscreen";
@@ -242,6 +248,37 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   );
 }
 
+/** The panel's sharing state: the identity binding, what the Service says
+ * about the share, and confirmations and Reset bound to that identity. */
+function usePanelSharing(
+  props: {
+    shared: SharedBrowser | undefined;
+    snapshot: SubscriptionSnapshot | undefined;
+    onRebind: () => void;
+  },
+  model: BrowserModel,
+  commands: BrowserCommands,
+  uiChrome: BrowserChromeState,
+) {
+  useIdentityBinding(model.observedIdentity ?? model.read?.browser_identity, props.onRebind);
+  const shared = panelShared(model.read, props.snapshot, props.shared);
+  // Resets name the identity unless a loaded inventory proves the Service
+  // predates shared profiles.
+  const identityRequired = identityRequiredFor(props.snapshot);
+  const confirm = useBrowserConfirm(
+    model,
+    model.read?.state ?? null,
+    commands,
+    shared,
+    identityRequired,
+  );
+  const chrome = {
+    ...uiChrome,
+    reset: uiChrome.reset && resetTarget(model.read, identityRequired) !== undefined,
+  };
+  return { shared, confirm, chrome };
+}
+
 /** Bind the panel to the first browser identity its reads name; another
  * one re-binds it (`onRebind` remounts the panel). */
 function useIdentityBinding(identity: string | undefined, onRebind: () => void): void {
@@ -286,15 +323,7 @@ function MachineBrowserPanel(
   const paste = useDevicePaste(ui.controls);
   // The Service's read names the browser a reset deletes; before it
   // arrives the inventory's view stands in.
-  useIdentityBinding(model.read?.browser_identity, props.onRebind);
-  const shared = panelShared(model.read, props.snapshot, props.shared);
-  // A Service with shared profiles resets only an identity-bearing read.
-  const identityRequired = props.snapshot?.browser_shares !== undefined;
-  const confirm = useBrowserConfirm(model, state, commands, shared, identityRequired);
-  const chrome = {
-    ...ui.chrome,
-    reset: ui.chrome.reset && resetTarget(model.read, identityRequired) !== undefined,
-  };
+  const { shared, confirm, chrome } = usePanelSharing(props, model, commands, ui.chrome);
   const full = useBrowserFullscreen(desktop && open);
   const close = desktop ? full.guardClose(onClose) : onClose;
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";

@@ -39,6 +39,11 @@ export interface BrowserShareMember {
   /** The member's own browser id (named account id or card key). */
   account_id: string;
 }
+export interface BrowserShareFamilies {
+  version: number;
+  providers: Record<string, string>;
+  cards: string[];
+}
 /** An owner-defined shared browser profile (docs/machine-browser.md,
  * "Shared browser profiles"). */
 export interface BrowserShare {
@@ -66,8 +71,10 @@ export interface SubscriptionSnapshot {
   machine_browser?: "enabled" | "not_enabled";
   legacy_browsers?: LegacyBrowser[];
   browser_shares?: BrowserShare[];
-  /** Provider id → account-usage family. */
-  browser_share_families?: Record<string, string>;
+  /** The Service's static family table (`browser_families`): Provider id
+   * → family, and the legacy cards that have a family. Nothing else may
+   * ever share a browser. */
+  browser_share_families?: BrowserShareFamilies;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -83,6 +90,10 @@ function validShareMember(value: unknown): value is BrowserShareMember {
   if (!record(value) || !record(value.member) || !text(value.family) || !text(value.account_id)) return false;
   const keys = Object.keys(value.member);
   return keys.length === 1 && (text(value.member.account_id) || text(value.member.card));
+}
+function validShareFamilies(value: unknown): value is BrowserShareFamilies {
+  return record(value) && typeof value.version === "number" && record(value.providers) &&
+    Object.values(value.providers).every(text) && Array.isArray(value.cards) && value.cards.every(text);
 }
 function validBrowserShare(value: unknown): value is BrowserShare {
   return record(value) && text(value.share_id) && typeof value.label === "string" &&
@@ -103,7 +114,7 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
     (value.machine_browser === undefined || value.machine_browser === "enabled" || value.machine_browser === "not_enabled") &&
     (value.legacy_browsers === undefined || (Array.isArray(value.legacy_browsers) && value.legacy_browsers.every(validLegacyBrowser))) &&
     (value.browser_shares === undefined || (Array.isArray(value.browser_shares) && value.browser_shares.every(validBrowserShare))) &&
-    (value.browser_share_families === undefined || (record(value.browser_share_families) && Object.values(value.browser_share_families).every(text))) &&
+    (value.browser_share_families === undefined || validShareFamilies(value.browser_share_families)) &&
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
     Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
       text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean" &&

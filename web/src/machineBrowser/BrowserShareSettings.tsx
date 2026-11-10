@@ -20,6 +20,12 @@ export type BrowserShareChange =
   | { type: "delete_browser_share"; share_id: string }
   | { type: "set_browser_share"; member: BrowserShareMemberRef; share_id: string | null };
 
+/** Whether the Service supports shared browser profiles: its inventory
+ * lists them (possibly none). */
+export function sharesSupported(snapshot: SubscriptionSnapshot | undefined): boolean {
+  return snapshot?.browser_shares !== undefined;
+}
+
 /** Send a change and clear its draft only once it committed: a revision
  * conflict or a refusal keeps the owner's text for another try. */
 export async function commitDraft(
@@ -43,7 +49,10 @@ export function BrowserShareSettings({
   save: (change: BrowserShareChange) => Promise<boolean>;
 }): React.JSX.Element | null {
   const [label, setLabel] = useState("");
-  if (!snapshot || snapshot.machine_browser === undefined) return null;
+  // An older Service without shared profiles offers no share mutation.
+  if (!snapshot || snapshot.machine_browser === undefined || !sharesSupported(snapshot)) {
+    return null;
+  }
   const shares = snapshot.browser_shares ?? [];
   return (
     <Stack spacing={1} data-browser-shares>
