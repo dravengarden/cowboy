@@ -140,8 +140,16 @@ fn every_member_resolves_to_the_share_key_and_non_members_keep_theirs() {
     }
 }
 
+fn blocked(
+    shares: &Shares,
+    card: &str,
+    registry: &Registry,
+) -> Result<Option<&'static str>, &'static str> {
+    resolve_card(shares, card, registry).map(|(_, view)| view.and_then(|view| view.blocked))
+}
+
 #[test]
-fn resolution_refuses_a_share_that_would_mix_one_family() {
+fn resolution_blocks_a_share_that_would_mix_one_family() {
     let share_id = uuid::Uuid::new_v4().to_string();
     let lark = named("claude-code", "Lark", true);
     let registry = Registry {
@@ -149,6 +157,7 @@ fn resolution_refuses_a_share_that_would_mix_one_family() {
         accounts: vec![lark.clone()],
         defaults: BTreeMap::new(),
     };
+    assert_eq!(blocked(&google(&share_id), "openai", &registry), Ok(None));
     // Should the store ever hold Lark next to Lynx, nobody shares.
     let mut mixed = google(&share_id);
     mixed.members.push(ShareMember {
@@ -158,8 +167,8 @@ fn resolution_refuses_a_share_that_would_mix_one_family() {
     });
     for card in ["anthropic", "openai"] {
         assert_eq!(
-            resolve_card(&mixed, card, &registry).err(),
-            Some("browser_share_family_conflict")
+            blocked(&mixed, card, &registry),
+            Ok(Some("browser_share_family_conflict"))
         );
     }
     // A member recorded under another family than its Provider has now.
@@ -170,8 +179,8 @@ fn resolution_refuses_a_share_that_would_mix_one_family() {
         family: "deepseek".into(),
     });
     assert_eq!(
-        resolve_card(&drifted, "xai", &registry).err(),
-        Some("browser_share_family_conflict")
+        blocked(&drifted, "xai", &registry),
+        Ok(Some("browser_share_family_conflict"))
     );
     // A member whose family is no longer known.
     let mut unknown = google(&share_id);
@@ -181,13 +190,13 @@ fn resolution_refuses_a_share_that_would_mix_one_family() {
         share_id: share_id.clone(),
         family: "mystery".into(),
     });
-    let registry = Registry {
+    let with_stranger = Registry {
         accounts: vec![stranger],
-        ..registry
+        ..registry.clone()
     };
     assert_eq!(
-        resolve_card(&unknown, "openai", &registry).err(),
-        Some("browser_share_family_unknown")
+        blocked(&unknown, "openai", &with_stranger),
+        Ok(Some("browser_share_family_unknown"))
     );
     // A share being deleted is never resolved.
     let mut deleting = google(&share_id);
@@ -195,6 +204,62 @@ fn resolution_refuses_a_share_that_would_mix_one_family() {
     assert_eq!(
         resolve_card(&deleting, "openai", &Registry::default()).err(),
         Some("browser_share_changed")
+    );
+}
+
+#[test]
+fn a_departed_members_family_drift_blocks_every_member() {
+    let share_id = uuid::Uuid::new_v4().to_string();
+    let lark = named("claude-code", "Lark", true);
+    let registry = Registry {
+        revision: 1,
+        accounts: vec![lark.clone()],
+        defaults: BTreeMap::new(),
+    };
+    // Lark left (or was revoked) after using the profile: still bound.
+    let mut shares = google(&share_id);
+    shares
+        .members
+        .retain(|row| row.member != Member::card("anthropic"));
+    shares.bindings.push(browser_shares::Binding {
+        share_id: share_id.clone(),
+        family: "anthropic".into(),
+        member: Member::account(lark.id.clone()),
+    });
+    assert_eq!(blocked(&shares, "openai", &registry), Ok(None));
+    // The catalog moves claude-code to another family: the profile with
+    // Lark's cookies serves nobody until a confirmed reset.
+    let mut drifted = families();
+    drifted.insert("claude-code".into(), "claude".into());
+    let (key, view) = resolve_key(
+        Some(&Member::card("openai")),
+        &legacy_browsers::account(OWNER, "openai"),
+        &shares,
+        |member| family_now(member, &registry, &drifted),
+    )
+    .unwrap();
+    let view = view.unwrap();
+    assert_eq!(view.blocked, Some("browser_share_family_drift"));
+    let pika = Resolved {
+        owner: OWNER.into(),
+        id: legacy_browsers::account(OWNER, "openai"),
+        account: card_account("openai", true),
+        key,
+        share: Some(view),
+    };
+    let blocked_by = pika.share.as_ref().and_then(|share| share.blocked);
+    assert_eq!(
+        authorize_shared(Authority::Launch, &pika.account, blocked_by),
+        Err("browser_share_family_drift")
+    );
+    // Resetting (the remedy) and stopping stay possible.
+    assert_eq!(
+        authorize_shared(Authority::Reset, &pika.account, blocked_by),
+        Ok(())
+    );
+    assert_eq!(
+        authorize_shared(Authority::Stop, &pika.account, blocked_by),
+        Ok(())
     );
 }
 
@@ -240,12 +305,18 @@ fn a_member_opens_the_share_only_with_its_own_browser_enabled() {
     );
     // Resetting the share's profile also takes the member's own access;
     // stopping it stays possible.
-    assert_eq!(authorize_shared(Authority::Reset, &pika.account), Ok(()));
     assert_eq!(
-        authorize_shared(Authority::Reset, &fox.account),
+        authorize_shared(Authority::Reset, &pika.account, None),
+        Ok(())
+    );
+    assert_eq!(
+        authorize_shared(Authority::Reset, &fox.account, None),
         Err("browser_not_enabled")
     );
-    assert_eq!(authorize_shared(Authority::Stop, &fox.account), Ok(()));
+    assert_eq!(
+        authorize_shared(Authority::Stop, &fox.account, None),
+        Ok(())
+    );
 }
 
 #[test]

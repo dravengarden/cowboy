@@ -507,7 +507,10 @@ impl Store {
                 sqlx::query($cancel_grants).bind(owner).bind(account_id.as_str())
                     .execute(&mut *tx).await?;
                 // The account leaves any shared browser; the share's profile
-                // stays with its other members.
+                // stays with its other members. The membership revision
+                // moves, so a reset captured before is refused.
+                sqlx::query("UPDATE provider_browser_shares SET revision=revision+1 WHERE owner_user_id=$1 AND share_id IN (SELECT share_id FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2)")
+                    .bind(owner).bind(browser_shares::Member::account(account_id.clone()).encode()).execute(&mut *tx).await?;
                 sqlx::query("DELETE FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2")
                     .bind(owner).bind(browser_shares::Member::account(account_id.clone()).encode()).execute(&mut *tx).await?;
             }

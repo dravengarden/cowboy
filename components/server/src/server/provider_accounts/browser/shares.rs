@@ -59,12 +59,15 @@ pub(in crate::server) struct ShareView {
     pub label: String,
     /// Membership revision: part of the browser identity a reset names.
     pub revision: i64,
+    /// Why no member may open or attach to the share's browser until a
+    /// confirmed reset (or deletion): a family conflict, drift or binding.
+    pub blocked: Option<&'static str>,
     pub members: Vec<browser_shares::ShareMember>,
 }
 
 impl ShareView {
     pub(in crate::server) fn value(&self, owner: &str) -> Value {
-        json!({"share_id": self.share_id, "label": self.label, "revision": self.revision,
+        json!({"share_id": self.share_id, "label": self.label, "revision": self.revision, "blocked": self.blocked,
             "members": self.members.iter().map(|row| member_value(owner, row)).collect::<Vec<_>>()})
     }
 }
@@ -85,27 +88,33 @@ pub(in crate::server) fn member_of(
     }
 }
 
-/// The current family of a member: its card, or its Provider's family.
+/// The current family of an identity: its card, or its Provider's family
+/// (also for an account that left or was revoked).
 fn family_now(
     member: &Member,
     registry: &Registry,
     families: &BTreeMap<String, String>,
 ) -> Option<String> {
-    browser_shares::member_family(member, registry, families).ok()
+    browser_shares::current_family(member, registry, families)
 }
 
 /// The browser key `member` uses and the share behind it. A member in no
-/// share keeps `own`. Before a share key is used, every member's family is
-/// checked again against the current catalog: a share that would hold two
-/// members of one family, or a member whose family is no longer known, is
-/// refused rather than shared.
+/// share keeps `own`. Before a share key is used, every member's family and
+/// every family binding is checked again against the current catalog. A
+/// share that would hold two members of one family, a member or binding
+/// whose family drifted or is no longer known, or a family of this member
+/// bound to another identity marks the share `blocked`: its browser is not
+/// opened or attached (rather than shared) until a confirmed reset renews
+/// it or the share is deleted, while stopping and resetting stay possible.
 pub(in crate::server) fn resolve_key(
     member: Option<&Member>,
     own: &ProviderAccountId,
     shares: &Shares,
     current_family: impl Fn(&Member) -> Option<String>,
 ) -> Result<(ProviderAccountId, Option<ShareView>), &'static str> {
-    let Some(row) = member.and_then(|member| shares.membership(member)) else {
+    let Some((member, row)) =
+        member.and_then(|member| shares.membership(member).map(|row| (member, row)))
+    else {
         return Ok((own.clone(), None));
     };
     let share = shares
@@ -113,15 +122,26 @@ pub(in crate::server) fn resolve_key(
         .filter(|share| share.deleting_ms.is_none())
         .ok_or("browser_share_changed")?;
     let members = shares.members_of(&share.share_id);
-    if !families_distinct(&members) {
-        return Err("browser_share_family_conflict");
-    }
-    for member in &members {
-        match current_family(&member.member) {
-            Some(family) if family == member.family => {}
-            Some(_) => return Err("browser_share_family_conflict"),
-            None => return Err("browser_share_family_unknown"),
+    let mut blocked = (!families_distinct(&members)).then_some("browser_share_family_conflict");
+    for other in &members {
+        if blocked.is_some() {
+            break;
         }
+        blocked = match current_family(&other.member) {
+            Some(family) if family == other.family => None,
+            Some(_) => Some("browser_share_family_conflict"),
+            None => Some("browser_share_family_unknown"),
+        };
+    }
+    if blocked.is_none() {
+        blocked = current_family(member).map_or(Some("browser_share_family_unknown"), |family| {
+            browser_shares::binding_refusal(
+                shares,
+                &share.share_id,
+                (member, &family),
+                &current_family,
+            )
+        });
     }
     Ok((
         share.browser_key.clone(),
@@ -130,6 +150,7 @@ pub(in crate::server) fn resolve_key(
             label: share.label.clone(),
             revision: share.revision,
             members: members.into_iter().cloned().collect(),
+            blocked,
         }),
     ))
 }
@@ -297,6 +318,31 @@ pub(in crate::server) fn change_holds_in(
     }
 }
 
+/// Hibernate the member's own running browsers, one target at a time: for
+/// each, under the owner's share fence (which every account change takes),
+/// the change must still hold, and the fence is kept through that target's
+/// dispatch so no later change lands between the check and the command.
+async fn hibernate_while_holding(
+    state: &Arc<AppState>,
+    owner: &str,
+    change: &Change,
+    (account, cause): (&ProviderAccountId, &'static str),
+) {
+    for observed in super::current_observations(state, account) {
+        if !observed.running() {
+            continue;
+        }
+        let fence = state.browsers.share_lock(owner);
+        let _fence = fence.lock().await;
+        if !change_holds(state, owner, change).await {
+            return;
+        }
+        if let Err(error) = super::send_hibernate(state, &observed, cause).await {
+            tracing::info!(%error, "browser hibernate after an account change did not complete");
+        }
+    }
+}
+
 /// The effects to run for an applied change: none for a replayed receipt,
 /// whose operation already committed (and ran its effects) earlier.
 pub(in crate::server) fn fresh_effects(
@@ -328,12 +374,7 @@ pub(in crate::server) fn run_effects(
             Effect::HibernateOwn(account, cause) => {
                 let (state, owner, change) = (Arc::clone(state), owner.to_owned(), change.clone());
                 tokio::spawn(async move {
-                    if !change_holds(&state, &owner, &change).await {
-                        return;
-                    }
-                    if let Err(error) = super::hibernate_running(&state, &account, cause).await {
-                        tracing::info!(%error, "browser hibernate after an account change did not complete");
-                    }
+                    hibernate_while_holding(&state, &owner, &change, (&account, cause)).await;
                 });
             }
             Effect::RevokeShare(share_id) => {

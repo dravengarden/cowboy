@@ -179,7 +179,8 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // Shared browser: list().browser_shares is {share_id,label,deleting,members:{member,family,account_id}[]}[]
 // and browser_share_families maps provider_id->family. A share holds at most ONE member per family
 // (browser_share_family_conflict: two Claude or two OpenAI accounts never share; a family whose member
-// left stays bound until a confirmed reset: browser_share_family_bound). Members still need
+// left stays bound until a confirmed reset: browser_share_family_bound; catalog family drift blocks the
+// share: browser_share_family_drift). Members still need
 // their own browser enabled. Members address the share through their own account_id; reset from any
 // member resets the share's profile (accounts.browser().share lists who is affected). Deleting a
 // share revokes its profile; members fall back to their own retained browsers.

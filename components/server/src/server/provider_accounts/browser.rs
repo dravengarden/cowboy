@@ -280,18 +280,25 @@ pub(in crate::server) async fn authorize(
 ) -> Result<Resolved, &'static str> {
     let resolved = owned_account(state, owner, account_id).await?;
     authorize_account(authority, gate_open(state), &resolved.account)?;
-    if resolved.shared().is_some() {
-        authorize_shared(authority, &resolved.account)?;
+    if let Some(share) = resolved.shared() {
+        authorize_shared(authority, &resolved.account, share.blocked)?;
     }
     Ok(resolved)
 }
 
-/// What a member additionally needs to act on a share's browser: deleting
+/// What a member additionally needs to act on a share's browser: opening
+/// or attaching needs a share that is not blocked (a family conflict, drift
+/// or binding the Service refuses to share across); deleting
 /// the profile the other members use takes the member's own browser
 /// access (available, enabled); a member that was disabled lost its say.
 /// Stopping stays the owner's to do, as for every browser.
-fn authorize_shared(authority: Authority, account: &BrowserAccount) -> Result<(), &'static str> {
+fn authorize_shared(
+    authority: Authority,
+    account: &BrowserAccount,
+    blocked: Option<&'static str>,
+) -> Result<(), &'static str> {
     match authority {
+        Authority::Launch if blocked.is_some() => Err(blocked.unwrap_or_default()),
         Authority::Reset if !account.available() || !account.browser_enabled() => {
             Err("browser_not_enabled")
         }
@@ -574,7 +581,9 @@ pub(in crate::server) async fn state_value(
     machine: Option<&str>,
 ) -> Result<Value, &'static str> {
     let resolved = owned_account(state, owner, account_id).await?;
-    let gate = authorize_account(Authority::Launch, gate_open(state), &resolved.account).err();
+    let gate = authorize_account(Authority::Launch, gate_open(state), &resolved.account)
+        .err()
+        .or_else(|| resolved.shared().and_then(|share| share.blocked));
     let store = state.store.as_ref().ok_or("unavailable")?;
     let key = &resolved.key;
     let mut placements = store
@@ -913,7 +922,11 @@ pub(in crate::server) async fn reset(
         // family of it.
         if let Some(share) = resolved.shared()
             && let Err(error) = store
-                .renew_browser_share_bindings(owner, &share.share_id, machine_id)
+                .renew_browser_share_bindings(
+                    owner,
+                    (&share.share_id, machine_id),
+                    &shares::families(state),
+                )
                 .await
         {
             tracing::warn!(%error, "browser share bindings not renewed after reset");
@@ -933,28 +946,6 @@ pub(in crate::server) async fn reset(
 /// Busy, superseded and failed resets left whatever was there.
 fn reset_confirmed(event: &StateEvent) -> bool {
     event.state == BrowserState::Hibernated && event.reason == Some(Reason::OwnerRequest)
-}
-
-/// Hibernate whatever runs for the account on any Machine, without the
-/// admission checks: used when the owner disables the browser or revokes
-/// the account.
-pub(in crate::server) async fn hibernate_running(
-    state: &AppState,
-    account_id: &ProviderAccountId,
-    cause: &'static str,
-) -> Result<Vec<StateEvent>, String> {
-    let mut events = Vec::new();
-    let mut failure = None;
-    for observed in current_observations(state, account_id) {
-        if !observed.running() {
-            continue;
-        }
-        match send_hibernate(state, &observed, cause).await {
-            Ok(event) => events.push(event),
-            Err(error) => failure = Some(error),
-        }
-    }
-    failure.map_or(Ok(events), Err)
 }
 
 /// Hibernate exactly the captured instance on the captured Machine, as
