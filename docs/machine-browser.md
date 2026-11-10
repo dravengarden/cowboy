@@ -1618,9 +1618,12 @@ shared: every card keeps its own browser exactly as above.
   such a member is refused (`browser_share_family_unknown`). A share holds at
   most one member per family. This is enforced three times: the unique key
   `(owner, share_id, family)`, the mutation (`browser_share_family_conflict`),
-  and resolution, which recomputes every member's family before a share key
-  is used and refuses to open, read or attach (rather than share) when two
-  members would have one family or a member's family changed or is unknown.
+  and resolution, which recomputes every member's and binding's family before
+  a share key is used and marks the share blocked when two members would have
+  one family, a member's family changed or is unknown, or a binding refuses
+  the member: a blocked share is never opened or attached (rather than
+  shared), and its admission code is reported; stopping and resetting (the
+  remedy) stay possible.
   A member, even one leaving or not in any share, must be the owner's own
   identity (`account_not_found` otherwise).
   So Claude · Lark can never be linked with Claude · Lynx, and two OpenAI
@@ -1633,7 +1636,14 @@ shared: every card keeps its own browser exactly as above.
   a reset of the share that its Machine confirmed (`owner_request`) while the
   share has no placement on another Machine renews the bindings to the current
   members, and deleting the share removes them (a new share is a new key with
-  an empty profile). The bound member itself may rejoin.
+  an empty profile). The bound member itself may rejoin. Bindings record the
+  member's identity, and both its recorded and its current family count: a
+  member may join or use the share only if no binding of another identity has
+  its current family as recorded or current family. If a bound identity's
+  current family differs from the recorded one (catalog drift), or is no
+  longer known, the share is blocked for every member
+  (`browser_share_family_drift`) until a confirmed reset re-binds the current
+  members under their current families, or the share is deleted.
 - **Key.** `browser_shares::share_key(owner, share_id)`: the first 16 bytes
   of `sha256("cowboy-browser-share-v1\0" ‖ owner ‖ "\0" ‖ share_id)` as a
   version 8 UUID. Its domain differs from the card keys', so it never equals
@@ -1678,8 +1688,9 @@ shared: every card keeps its own browser exactly as above.
   deletes the share's profile: other members depend on it. Each ends the
   viewers that member's card attached (to its own browser or the share's) and
   hibernates only the member's own key. Revocation captures and revokes only
-  the account's own placements, and drops its membership in the same
-  transaction. Joining a share also ends the member's viewers and hibernates
+  the account's own placements, and drops its membership and advances the
+  share's membership revision in the same transaction (a reset captured
+  before is refused). Joining a share also ends the member's viewers and hibernates
   its own browser, which its card no longer reaches. An open whose member
   lost its access while the open was in flight fails without stopping the
   share's browser.
@@ -1694,7 +1705,9 @@ shared: every card keeps its own browser exactly as above.
   confirmation captures the identity with the target and closes when it
   changes; every panel (account card, account settings, sign-in link) takes
   the sharing metadata from one source and starts over when the card's
-  browser identity changes. Because other members depend on that profile, a
+  browser identity changes, in the inventory or in a state read. Against a
+  Service with shared profiles, Reset needs a successful read that names the
+  identity, and the inventory's sharing warning stays until one arrives. Because other members depend on that profile, a
   reset also needs the member's own browser access (available and enabled);
   stopping the share's browser stays possible for any member, as for every
   browser.
@@ -1711,8 +1724,9 @@ shared: every card keeps its own browser exactly as above.
   step. A deleting share admits no member and no open.
 - **Effects.** Viewer endings are owner-scoped (owner and member). A replayed
   `accounts.update` receipt reruns no browser effect, and a deferred
-  hibernate runs only while the change that caused it still holds (the member
-  is still in that share, the browser still disabled).
+  hibernate checks, for each target under the owner's share fence held
+  through that target's command, that the change that caused it still holds
+  (the member is still in that share, the browser still disabled).
 - **API.** Through `accounts.update`, with the registry revision and receipt:
   `{type: "create_browser_share", label}` (the answer carries `share_id`),
   `{type: "rename_browser_share", share_id, label}`,
