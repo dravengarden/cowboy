@@ -95,7 +95,7 @@ export function resetClient(token, deadline, fetchImpl = fetch) {
         headers: {
           Authorization: `Bearer ${token}`,
           "anthropic-beta": "oauth-2025-04-20",
-          "User-Agent": "claude-cli/2.1.314 (external, cli)",
+          "User-Agent": "claude-cli/2.1.321 (external, cli)",
           "Content-Type": "application/json",
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),

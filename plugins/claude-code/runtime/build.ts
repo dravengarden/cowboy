@@ -22,7 +22,7 @@ const matrixPath = `${output}/runtime-artifacts.json`;
 const manifest = JSON.parse(await readFile(`${root}/../provider.json`, "utf8"));
 if (
   manifest.runtime.dependencies.find((item: { id: string }) => item.id === "anthropic-claude-code")
-    ?.version !== "2.1.314"
+    ?.version !== "2.1.321"
 ) {
   throw new Error("Claude execution requires the accepted exact native version");
 }
@@ -70,6 +70,7 @@ try {
       "steering.mjs",
       "native-cycle.mjs",
       "configuration.mjs",
+      "idle-compaction.mjs",
       "connection.mjs",
       "mod-bridge.mjs",
       "tools.mjs",
@@ -159,7 +160,7 @@ try {
       JSON.stringify(
         {
           schema: "cowboy.claude-execution/v1",
-          native_version: "2.1.314",
+          native_version: "2.1.321",
           sources: digests,
         },
         null,
