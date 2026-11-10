@@ -227,7 +227,12 @@ export async function confirmStopped(
  * Machine and must never be checked against another Machine's profile. */
 export function resetTarget(
   read: BrowserRead | undefined,
+  /** The Service supports shared profiles: a reset needs a read that named
+   * the browser identity (a synthesized one, from an open or hibernate
+   * answer after a failed read, does not). */
+  identityRequired = false,
 ): { machine_id: string; revision: number; identity?: string } | undefined {
+  if (identityRequired && !read?.browser_identity) return undefined;
   // The browser identity (own, or a share at a membership revision) is
   // captured with the target: a reset never deletes a profile the card
   // moved to or away from after the owner confirmed.

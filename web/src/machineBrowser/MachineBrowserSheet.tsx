@@ -19,7 +19,6 @@ import {
   controlsFor,
   retryOffered,
 } from "./browserChrome";
-import { type BrowserModel, autoEntry, linkEntry, linkTarget } from "./browserModel";
 import type { ConfirmKind } from "./confirmation";
 import { type BrowserCommands, useBrowserConfirm } from "./MachineBrowserActions";
 import { DesktopBrowserTopBar, Identity } from "./MachineBrowserAddressBar";
@@ -27,7 +26,8 @@ import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { BrowserMenu, type BrowserMenuItem, MobileBrowserToolbar } from "./MachineBrowserToolbar";
 import { devicePortrait, useTouchInput } from "./inputProfile";
 import { useDevicePaste } from "./MachineBrowserPaste";
-import { type SharedBrowser, browserIdentityKey, sharedForRead } from "./shareRules";
+import { type BrowserModel, autoEntry, linkEntry, linkTarget, resetTarget } from "./browserModel";
+import { type SharedBrowser, browserIdentityKey, identityBinding, panelShared } from "./shareRules";
 import { useSharedBrowser } from "./useSharedBrowser";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import { useBrowserFullscreen } from "./useBrowserFullscreen";
@@ -228,20 +228,36 @@ function useBrowserChrome(account: string, model: BrowserModel) {
  * Sharing metadata comes from one source for every opener. */
 export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.Element {
   const { shared, snapshot } = useSharedBrowser(props.account.id);
+  // A read naming another browser identity than the panel bound also
+  // starts it over, whatever the inventory says yet.
+  const [epoch, setEpoch] = useState(0);
   return (
     <MachineBrowserPanel
-      key={browserIdentityKey(shared)}
+      key={`${browserIdentityKey(shared)}:${epoch}`}
       {...props}
       shared={shared}
       snapshot={snapshot}
+      onRebind={() => setEpoch((value) => value + 1)}
     />
   );
+}
+
+/** Bind the panel to the first browser identity its reads name; another
+ * one re-binds it (`onRebind` remounts the panel). */
+function useIdentityBinding(identity: string | undefined, onRebind: () => void): void {
+  const bound = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const action = identityBinding(bound.current, identity);
+    if (action === "bind") bound.current = identity;
+    if (action === "rebind") onRebind();
+  }, [identity, onRebind]);
 }
 
 function MachineBrowserPanel(
   props: MachineBrowserSheetProps & {
     shared: SharedBrowser | undefined;
     snapshot: SubscriptionSnapshot | undefined;
+    onRebind: () => void;
   },
 ): React.JSX.Element {
   const { open, onClose, account, owner, dataset, link, enabling = false } = props;
@@ -270,8 +286,15 @@ function MachineBrowserPanel(
   const paste = useDevicePaste(ui.controls);
   // The Service's read names the browser a reset deletes; before it
   // arrives the inventory's view stands in.
-  const shared = model.read ? sharedForRead(model.read.share, props.snapshot) : props.shared;
-  const confirm = useBrowserConfirm(model, state, commands, shared);
+  useIdentityBinding(model.read?.browser_identity, props.onRebind);
+  const shared = panelShared(model.read, props.snapshot, props.shared);
+  // A Service with shared profiles resets only an identity-bearing read.
+  const identityRequired = props.snapshot?.browser_shares !== undefined;
+  const confirm = useBrowserConfirm(model, state, commands, shared, identityRequired);
+  const chrome = {
+    ...ui.chrome,
+    reset: ui.chrome.reset && resetTarget(model.read, identityRequired) !== undefined,
+  };
   const full = useBrowserFullscreen(desktop && open);
   const close = desktop ? full.guardClose(onClose) : onClose;
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";
@@ -281,7 +304,7 @@ function MachineBrowserPanel(
       upward={!desktop}
       items={browserMenuItems({
         model,
-        chrome: ui.chrome,
+        chrome,
         commands,
         ask: confirm.ask,
         onPaste: paste.start,

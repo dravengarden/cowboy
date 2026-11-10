@@ -497,6 +497,10 @@ const ERROR_TEXT: Record<string, string> = {
   browser_share_family_unknown:
     "A member of this shared browser has no known account family, so it was not opened.",
   browser_member_required: "Open a shared browser from one of its cards.",
+  browser_share_family_bound:
+    "Another account of this kind used this group's browser profile. Reset the group's profile (or delete and recreate the group) before adding this one.",
+  browser_share_family_drift:
+    "An account of this group changed its kind since it used the profile. Reset the group's profile, or delete the group, before using it.",
   browser_identity_changed:
     "This card's browser changed (it joined or left a shared group) since you confirmed. Check it and retry.",
   invalid_response: "The Service answered in an unexpected shape.",

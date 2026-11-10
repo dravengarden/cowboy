@@ -1,6 +1,10 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../tools/test-assert.ts";
-import { validPendingSubscription, subscriptionWriteRejected } from "../SubscriptionManagement";
+import {
+  subscriptionRejectionText,
+  subscriptionWriteRejected,
+  validPendingSubscription,
+} from "../SubscriptionManagement";
 import { type SubscriptionSnapshot, validSubscriptionSnapshot } from "../subscriptionAccounts";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -26,7 +30,9 @@ import {
 import { accountBrowserEntry } from "./entryRules";
 import {
   browserIdentityKey,
+  identityBinding,
   joinBlocked,
+  panelShared,
   shareCandidates,
   shareOf,
   sharedBrowser,
@@ -410,3 +416,72 @@ function renderSettings(accounts: SubscriptionSnapshot): string {
     else Reflect.deleteProperty(globalThis, "React");
   }
 }
+
+test("a Service with shared profiles resets only an identity-bearing read", () => {
+  // The first read failed; an open answer was merged into a read that names
+  // no browser identity and no share.
+  const synthesized: BrowserRead = {
+    machine_id: "ovh",
+    state: {
+      instance: { account_id: PIKA, instance_id: "b-1", incarnation: 1 },
+      state: "hibernated",
+      profile_revision: 4,
+      observed_at_ms: 1,
+    },
+    placements: [],
+    admission: null,
+  };
+  assertEquals(resetTarget(synthesized, true), undefined);
+  const model = reduceBrowser(INITIAL_BROWSER_MODEL, { type: "read", read: synthesized, now: 1 });
+  assertEquals(confirmationFor("reset", model, true), undefined);
+  // An older Service without shared profiles keeps resetting as before.
+  assertEquals(resetTarget(synthesized), { machine_id: "ovh", revision: 4 });
+  // The inventory's warning stays until the Service names the identity.
+  const inventory = sharedBrowser(snapshot(google), PIKA);
+  assertEquals(panelShared(synthesized, snapshot(google), inventory), inventory);
+  assertEquals(panelShared(undefined, snapshot(google), inventory), inventory);
+  const authoritative = {
+    ...synthesized,
+    browser_identity: `share:${SHARE}:2`,
+    share: { share_id: SHARE, label: "Google", revision: 2, members: [] },
+  };
+  assertEquals(panelShared(authoritative, snapshot(google), inventory)?.members, []);
+  assertEquals(
+    panelShared(
+      { ...authoritative, browser_identity: "own", share: null },
+      snapshot(google),
+      inventory,
+    ),
+    undefined,
+  );
+  assertEquals(resetTarget(authoritative, true)?.identity, `share:${SHARE}:2`);
+});
+
+test("a read naming another browser identity re-binds the panel", () => {
+  assertEquals(identityBinding(undefined, `share:${SHARE}:2`), "bind");
+  assertEquals(identityBinding(`share:${SHARE}:2`, `share:${SHARE}:2`), "keep");
+  // A synthesized read without an identity changes nothing.
+  assertEquals(identityBinding(`share:${SHARE}:2`, undefined), "keep");
+  // The card left the group (or moved): model, viewer and every open
+  // confirmation (reset, takeover, hibernate) are dropped by a remount.
+  assertEquals(identityBinding(`share:${SHARE}:2`, "own"), "rebind");
+  assertEquals(identityBinding(`share:${SHARE}:2`, `share:${SHARE}:3`), "rebind");
+});
+
+test("a family bound to a departed member is a final, explained refusal", () => {
+  for (const code of [
+    "browser_share_family_bound",
+    "browser_share_family_drift",
+    "browser_share_changed",
+  ]) {
+    assertEquals(subscriptionWriteRejected(422, code), true);
+  }
+  assertEquals(
+    subscriptionRejectionText("browser_share_family_bound").includes("Reset the group's profile"),
+    true,
+  );
+  assertEquals(
+    subscriptionRejectionText("account_capacity"),
+    "Change rejected (account_capacity). Review the list before trying again.",
+  );
+});

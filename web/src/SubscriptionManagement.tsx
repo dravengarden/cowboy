@@ -11,6 +11,7 @@ import { SubscriptionRevocation } from "./SubscriptionRevocation";
 import { LegacyBrowserActions, SubscriptionBrowserActions } from "./SubscriptionBrowserActions";
 import { type BrowserShareChange, BrowserShareSettings } from "./machineBrowser/BrowserShareSettings";
 import { sharedBrowser } from "./machineBrowser/shareRules";
+import { browserErrorText } from "./machineBrowser/api";
 import { ProviderAccountIdentity, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { legacySubscriptionLabel, validLegacyLabels, validSubscriptionLabel } from "./subscriptionDisplay";
 import { type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot } from "./subscriptionAccounts";
@@ -74,7 +75,15 @@ function validShareMember(value: unknown): boolean {
 export function subscriptionWriteRejected(status: number, code: string | undefined): boolean {
   return status === 422 && ["invalid_account", "account_capacity", "account_is_default", "invalid_provider", "account_unavailable", "invalid_preferences",
     "account_not_found", "account_revoking", "invalid_argument", "invalid_browser_share", "browser_share_capacity", "browser_share_not_found",
-    "browser_share_family_conflict", "browser_share_family_unknown"].includes(code ?? "");
+    "browser_share_family_conflict", "browser_share_family_unknown", "browser_share_family_bound", "browser_share_family_drift",
+    "browser_share_changed"].includes(code ?? "");
+}
+
+/** The owner-facing explanation of a definitive refusal. */
+export function subscriptionRejectionText(code: string): string {
+  return code.startsWith("browser_share_")
+    ? browserErrorText(code)
+    : `Change rejected (${code}). Review the list before trying again.`;
 }
 
 export interface SubscriptionCards {
@@ -185,7 +194,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
         await load();
       } else if (subscriptionWriteRejected(response.status, result.error?.code)) {
         sessionStorage.removeItem(journalKey); setPending(undefined);
-        setError(`Change rejected (${result.error!.code}). Review the list before trying again.`);
+        setError(subscriptionRejectionText(result.error!.code!));
         await load();
       } else {
         setError("The change is not confirmed. Retry uses the same operation; no login or account rotation will run.");

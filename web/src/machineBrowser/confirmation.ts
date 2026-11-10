@@ -20,9 +20,13 @@ export type Confirmation =
 
 /** What a confirmation of `kind` would act on now, or `undefined` when the
  * panel shows nothing it applies to. */
-export function confirmationFor(kind: ConfirmKind, model: BrowserModel): Confirmation | undefined {
+export function confirmationFor(
+  kind: ConfirmKind,
+  model: BrowserModel,
+  identityRequired = false,
+): Confirmation | undefined {
   if (kind === "reset") {
-    const target = resetTarget(model.read);
+    const target = resetTarget(model.read, identityRequired);
     return target && { kind, target };
   }
   const target = shownTarget(model);
@@ -31,8 +35,12 @@ export function confirmationFor(kind: ConfirmKind, model: BrowserModel): Confirm
 
 /** Whether an open confirmation still describes what the panel shows; once
  * it does not, the confirmation closes without acting. */
-export function confirmationCurrent(confirmation: Confirmation, model: BrowserModel): boolean {
-  const now = confirmationFor(confirmation.kind, model);
+export function confirmationCurrent(
+  confirmation: Confirmation,
+  model: BrowserModel,
+  identityRequired = false,
+): boolean {
+  const now = confirmationFor(confirmation.kind, model, identityRequired);
   if (!now) return false;
   if (confirmation.kind === "reset") {
     return (

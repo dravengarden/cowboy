@@ -151,6 +151,30 @@ export function sharedForRead(
   };
 }
 
+/** What the panel says about sharing: the Service's read once it named the
+ * browser identity, else (no read yet, or one synthesized without it) the
+ * inventory's view, so the warning never drops before authoritative
+ * metadata arrives. */
+export function panelShared(
+  read: { browser_identity?: string; share?: BrowserReadShare | null } | undefined,
+  snapshot: SubscriptionSnapshot | undefined,
+  inventory: SharedBrowser | undefined,
+): SharedBrowser | undefined {
+  return read?.browser_identity !== undefined ? sharedForRead(read.share, snapshot) : inventory;
+}
+
+/** How the panel treats the browser identity of a new read: the first
+ * one binds it, an equal one keeps it, another one re-binds the panel
+ * (its model, viewer and confirmations are dropped before the new identity
+ * is accepted). A read without an identity changes nothing. */
+export function identityBinding(
+  bound: string | undefined,
+  next: string | undefined,
+): "bind" | "keep" | "rebind" {
+  if (next === undefined || next === bound) return "keep";
+  return bound === undefined ? "bind" : "rebind";
+}
+
 /** The key that re-binds a card's browser panel: its own browser, or a
  * share at a membership revision. Moving the card between groups starts
  * the panel over (model, viewer and confirmations). */

@@ -141,13 +141,15 @@ export function useBrowserConfirm(
   state: BrowserStateEvent | null,
   commands: BrowserCommands,
   shared?: SharedBrowser,
+  identityRequired = false,
 ): { ask: (kind: ConfirmKind) => void; dialog: ReactNode } {
   const [confirm, setConfirm] = useState<Confirmation | undefined>(undefined);
-  const current = confirm !== undefined && confirmationCurrent(confirm, model);
+  const current = confirm !== undefined && confirmationCurrent(confirm, model, identityRequired);
   useEffect(() => {
     if (confirm && !current) setConfirm(undefined);
   }, [confirm, current]);
-  const ask = (kind: ConfirmKind): void => setConfirm(confirmationFor(kind, model));
+  const ask = (kind: ConfirmKind): void =>
+    setConfirm(confirmationFor(kind, model, identityRequired));
   const text = confirm && current ? CONFIRM_TEXT[confirm.kind] : undefined;
   const confirmed = (): void => {
     if (confirm && current) runConfirmed(confirm, commands);
