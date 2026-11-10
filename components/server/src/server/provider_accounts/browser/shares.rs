@@ -579,13 +579,15 @@ pub(in crate::server) fn reset_due(age_ms: i64) -> bool {
 /// The Machine keys a reset by its request id and keeps a durable fence for
 /// it: `owner_request` (carried out now) and a plain `hibernated` (that
 /// operation already completed) prove it applied; `superseded` (no fence was
-/// raised: the profile revision moved) proves it will never run; `failed`
+/// raised: the profile revision moved, possibly by this very reset whose
+/// remembered completion a later operation replaced) proves it runs no
+/// further, not that it never ran; `failed`
 /// (the fence is retained until the unit's exit is confirmed), `busy`
 /// (another operation holds the fence) and anything else prove neither.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::server) enum ResetOutcome {
     Applied,
-    NotExecuted,
+    RunsNoFurther,
     Unsettled,
 }
 
@@ -597,7 +599,7 @@ pub(in crate::server) fn reset_outcome(
     }
     match event.reason {
         Some(Reason::OwnerRequest) | None => ResetOutcome::Applied,
-        Some(Reason::Superseded) => ResetOutcome::NotExecuted,
+        Some(Reason::Superseded) => ResetOutcome::RunsNoFurther,
         _ => ResetOutcome::Unsettled,
     }
 }
@@ -606,7 +608,7 @@ pub(in crate::server) fn reset_outcome(
 /// outcome: the same operation (same request id, key and expected profile
 /// revision) is sent again, so the Machine continues or reports its own
 /// fenced operation rather than starting another. Only an answer proving
-/// it applied or never runs clears the fence, and never renews the
+/// it applied or runs no further clears the fence, and never renews the
 /// bindings: only a reset's own first confirmation proves the profile
 /// fresh since it began. Returns whether the reset is settled.
 async fn reconcile_reset(

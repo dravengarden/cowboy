@@ -760,6 +760,12 @@ async fn dispatch_open(
     {
         tracing::warn!(%error, "browser profile revision not recorded");
     }
+    // The recheck and any cleanup run under the owner's share fence, as
+    // deferred hibernations do: no membership change (leaving the share
+    // and reopening the own browser) lands between them, so the cleanup
+    // never stops an instance that became authorized again.
+    let fence = state.browsers.share_lock(owner);
+    let _fence = fence.lock().await;
     let still = admit(state, owner, &resolved.id).await.and_then(|now| {
         if now.key == *account_id {
             Ok(())
@@ -768,12 +774,7 @@ async fn dispatch_open(
         }
     });
     if let Err(code) = still {
-        if resolved.shared().is_none()
-            && matches!(
-                event.state,
-                BrowserState::Starting | BrowserState::Detached | BrowserState::Attached
-            )
-        {
+        if post_open_cleanup(resolved.shared().is_some(), event.state) {
             state
                 .browsers
                 .cancel_viewer(machine_id, account_id.as_str());
@@ -794,6 +795,17 @@ async fn dispatch_open(
         return Err(code);
     }
     Ok(event)
+}
+
+/// Whether an open whose member lost its access meanwhile stops what it
+/// started: only the member's own browser, and only while it runs. A share's
+/// browser serves its other members and is never stopped here.
+fn post_open_cleanup(shared: bool, started: BrowserState) -> bool {
+    !shared
+        && matches!(
+            started,
+            BrowserState::Starting | BrowserState::Detached | BrowserState::Attached
+        )
 }
 
 /// Open the account's browser as a tab on its Machine, or only on `machine`
@@ -942,15 +954,26 @@ pub(in crate::server) async fn reset(
     if let Some(share) = resolved.shared() {
         if shares::reset_outcome(&event) == shares::ResetOutcome::Unsettled {
             tracing::info!(operation = %operation, "browser share reset unsettled; fence kept");
-        } else if let Err(error) = store
-            .finish_share_reset(
-                owner,
-                (&share.share_id, &operation),
-                reset_confirmed(&event),
-            )
-            .await
-        {
-            tracing::warn!(%error, "browser share reset fence not cleared; the reconciler retries");
+        } else {
+            match store
+                .finish_share_reset(
+                    owner,
+                    (&share.share_id, &operation),
+                    reset_confirmed(&event),
+                )
+                .await
+            {
+                // The bindings changed: every open client re-reads accounts.
+                Ok(Some(revision)) => {
+                    state
+                        .hub
+                        .announce_preferences(owner, "provider_accounts", revision);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "browser share reset fence not cleared; the reconciler retries");
+                }
+            }
         }
     }
     if let Some(revision) = event.profile_revision

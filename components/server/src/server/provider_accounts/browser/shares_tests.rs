@@ -645,10 +645,11 @@ fn only_terminal_machine_answers_settle_a_share_reset() {
         reset_outcome(&answer(BrowserState::Hibernated, None)),
         ResetOutcome::Applied
     );
-    // No fence was raised: this reset never runs.
+    // No fence was raised: this reset runs no further (it may have run
+    // already, its completion since replaced by a later operation).
     assert_eq!(
         reset_outcome(&answer(BrowserState::Hibernated, Some(Reason::Superseded))),
-        ResetOutcome::NotExecuted
+        ResetOutcome::RunsNoFurther
     );
     // The Machine retained its fence (exit unconfirmed), another operation
     // holds it, or anything else: the Controller keeps its fence too.
@@ -670,5 +671,22 @@ fn only_terminal_machine_answers_settle_a_share_reset() {
         BrowserState::Starting,
     ] {
         assert_eq!(reset_outcome(&answer(state, None)), ResetOutcome::Unsettled);
+    }
+}
+
+#[test]
+fn a_lost_open_stops_only_the_members_own_running_browser() {
+    use super::super::post_open_cleanup;
+    for state in [
+        BrowserState::Starting,
+        BrowserState::Detached,
+        BrowserState::Attached,
+    ] {
+        assert!(post_open_cleanup(false, state));
+        // A share's browser serves its other members.
+        assert!(!post_open_cleanup(true, state));
+    }
+    for state in [BrowserState::Hibernated, BrowserState::Stopping] {
+        assert!(!post_open_cleanup(false, state));
     }
 }

@@ -56,14 +56,14 @@ impl Store {
     /// also releases the bindings of identities that had left before it began
     /// and binds the current members under their family now, in the same
     /// transaction, unless the share has a placement on another Machine.
-    /// Returns whether the bindings were renewed; a stale operation changes
-    /// nothing.
+    /// A renewal advances the registry revision (the account list changed),
+    /// which it returns; a stale operation changes nothing.
     pub async fn finish_share_reset(
         &self,
         owner: &str,
         (share_id, operation_id): (&str, &str),
         fresh: bool,
-    ) -> Result<bool> {
+    ) -> Result<Option<i64>> {
         let key = super::share_key(owner, share_id);
         macro_rules! finish { ($db:expr) => {{
             let mut tx = $db.pool.begin().await?;
@@ -72,13 +72,13 @@ impl Store {
             let mut shares = decode(owner, load_shares!(&mut *tx, owner), load_members!(&mut *tx, owner), load_bindings!(&mut *tx, owner));
             let Some(pending) = shares.share(share_id).and_then(|share| share.pending_reset.clone())
                 .filter(|pending| pending.operation_id == operation_id) else {
-                return Ok(false);
+                return Ok(None);
             };
             let elsewhere: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 AND machine_id<>$3")
                 .bind(owner).bind(key.as_str()).bind(&pending.machine_id).fetch_one(&mut *tx).await?;
             let value: Option<String> = sqlx::query_scalar("SELECT value FROM provider_account_registries WHERE owner_user_id=$1")
                 .bind(owner).fetch_optional(&mut *tx).await?;
-            let registry: Registry = value.map(|value| serde_json::from_str(&value)).transpose()?.unwrap_or_default();
+            let mut registry: Registry = value.map(|value| serde_json::from_str(&value)).transpose()?.unwrap_or_default();
             let released: Vec<Member> = pending.released.iter().filter_map(|member| Member::decode(member)).collect();
             let renewed = fresh && elsewhere == 0
                 && shares.renew_current(share_id, &released, |member| family_of(member, &registry));
@@ -92,9 +92,12 @@ impl Store {
                         .bind(owner).bind(row.member.encode()).bind(&row.share_id).bind(&row.family).execute(&mut *tx).await?;
                 }
                 write_bindings!(tx, owner, shares);
+                registry.revision = registry.revision.checked_add(1).ok_or_else(|| anyhow::anyhow!("revision_exhausted"))?;
+                sqlx::query("UPDATE provider_account_registries SET revision=$1,value=$2 WHERE owner_user_id=$3")
+                    .bind(registry.revision).bind(serde_json::to_string(&registry)?).bind(owner).execute(&mut *tx).await?;
             }
             tx.commit().await?;
-            renewed
+            renewed.then_some(registry.revision)
         }} }
         Ok(match &self.backend {
             StorageBackend::Postgres(db) => finish!(db),

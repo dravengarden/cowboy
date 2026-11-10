@@ -1097,6 +1097,7 @@ async fn confirmed_reset(store: &Store, share: &str, machine: &str, operation: &
         .finish_share_reset(OWNER, (share, operation), true)
         .await
         .unwrap()
+        .is_some()
 }
 
 #[tokio::test]
@@ -1192,17 +1193,19 @@ async fn a_pending_share_reset_fences_membership_until_its_outcome() {
     // A stale operation clears nothing; the reconciled outcome (not this
     // reset's own confirmation) clears the fence without renewing.
     assert!(
-        !store
+        store
             .finish_share_reset(OWNER, (&share, "op-x"), true)
             .await
             .unwrap()
+            .is_none()
     );
     assert_eq!(store.pending_share_resets().await.unwrap().len(), 1);
     assert!(
-        !store
+        store
             .finish_share_reset(OWNER, (&share, "op-1"), false)
             .await
             .unwrap()
+            .is_none()
     );
     assert!(store.pending_share_resets().await.unwrap().is_empty());
     // Lynx's binding stays: Lark is still refused.
@@ -1215,8 +1218,14 @@ async fn a_pending_share_reset_fences_membership_until_its_outcome() {
         .await,
         "browser_share_family_bound"
     );
-    // A reset that confirmed itself releases Lynx; Lark may join.
+    // A reset that confirmed itself releases Lynx and advances the
+    // registry revision (so other clients refresh); Lark may join.
+    let before = store.provider_accounts(OWNER).await.unwrap().revision;
     assert!(confirmed_reset(&store, &share, "ovh", "op-3").await);
+    assert_eq!(
+        store.provider_accounts(OWNER).await.unwrap().revision,
+        before + 1
+    );
     applied(&store, "fence-lark-2", join(Member::account(lark), &share)).await;
     // Revocation is never fenced; deletion clears a pending reset.
     let revision = store

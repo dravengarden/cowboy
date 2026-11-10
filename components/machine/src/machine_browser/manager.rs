@@ -643,6 +643,7 @@ impl BrowserManager {
             self.send_state(receipt);
             return;
         }
+        let fenced = matches!(command, Command::Reset { .. } | Command::Revoke { .. });
         let outcome = match command {
             Command::Open {
                 account_id,
@@ -720,7 +721,13 @@ impl BrowserManager {
             Command::Query { account_id } => Some(self.query(&request_id, &account_id)),
         };
         if let Some(event) = outcome {
-            self.record_receipt(&request_id, &event);
+            // A reset or revocation that failed (its fence, if raised, is
+            // retained) or found another operation in progress is not a
+            // result: a replay of the same request id runs it again against
+            // the durable operation state instead of replaying the refusal.
+            if !(fenced && unsettled(&event)) {
+                self.record_receipt(&request_id, &event);
+            }
             self.send_state(event);
         }
     }
@@ -849,6 +856,11 @@ impl BrowserManager {
             receipts.pop_front();
         }
     }
+}
+
+/// Whether a reset or revocation answer leaves its operation unsettled.
+fn unsettled(event: &StateEvent) -> bool {
+    matches!(event.reason, Some(Reason::Failed | Reason::Busy))
 }
 
 struct Failure {

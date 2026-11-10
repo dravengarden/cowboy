@@ -11,6 +11,7 @@ mod idle_and_navigation;
 mod inventory;
 mod legacy_keys;
 mod memory_budget;
+mod reset_receipts;
 mod retention;
 
 use fake_units::{FakeUnit, FakeUnits};
