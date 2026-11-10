@@ -1724,7 +1724,9 @@ shared: every card keeps its own browser exactly as above.
   before is refused). Joining a share also ends the member's viewers and hibernates
   its own browser, which its card no longer reaches. An open whose member
   lost its access while the open was in flight fails without stopping the
-  share's browser.
+  share's browser; the recheck and the cleanup of the member's own browser
+  run under the owner's share fence, so a later leave-and-reopen never has
+  its now-authorized instance stopped.
 - **Reset fence (durable).** A share's reset is recorded on the share
   (`pending_reset`: operation id, Machine, expected profile revision, the
   bindings it may release) under the owner lock, at the membership revision
@@ -1735,17 +1737,21 @@ shared: every card keeps its own browser exactly as above.
   reset by its request id (the recorded operation id) and keeps its own
   durable fence for it, so only a terminal answer clears the Controller's:
   `owner_request` (carried out) or a plain `hibernated` (that operation
-  already completed) proves it applied, `superseded` (no fence was raised)
-  proves it never runs; `failed` (the Machine retained its fence because
+  already completed) proves it applied, `superseded` (no fence was raised:
+  the profile revision moved, possibly by this very reset after a later
+  operation replaced its remembered completion) proves it runs no further,
+  not that it never ran; `failed` (the Machine retained its fence because
   the unit's exit is unconfirmed), `busy` (another operation holds it), any
   other answer and no answer keep the fence. Only the request's own
-  `owner_request` renews the bindings, in the same transaction. An unsettled
-  reset (a timeout, for example queued behind a slow open, or a retained
-  fence) is settled by the reconciler after a grace beyond the request
-  timeout, with backoff and after a Controller restart: it sends the same
-  operation again (same request id, key and expected revision), which the
-  Machine continues or reports, and clears the fence on a terminal answer
-  without renewing.
+  `owner_request` renews the bindings, in the same transaction; any other
+  settlement clears the fence without renewing. An unsettled reset (a
+  timeout, for example queued behind a slow open, or a retained fence) is
+  settled by the reconciler after a grace beyond the request timeout, with
+  backoff and after a Controller restart: it sends the same operation again
+  (same request id, key and expected revision). The Machine caches only
+  settled reset and revocation answers by request id; a `failed` or `busy`
+  one is never replayed from its receipt cache, so the retry reaches the
+  durable operation state and settles once the Machine recovers.
 - **Reset** from a member resets the share's profile, the one the member uses;
   the state read lists the affected members and the viewer's reset
   confirmation names them. Every state read and lifecycle answer carries
@@ -1803,10 +1809,17 @@ shared: every card keeps its own browser exactly as above.
   observed before any incarnation staleness filtering, so a move from a
   share's browser to the card's own re-binds the panel; a lifecycle answer
   naming another identity re-binds it too and leaves Reset waiting for a
-  state read that names the identity. A re-bind aborts every request and
-  continuation of the former panel (a restart's reopen included), and the
-  sheet's one-shot link navigation and auto-open are consumed above the
-  re-bound panel, so they never repeat.
+  state read that names the identity. The inventory's and the reads' view
+  feed one binding per sheet: the first binds, agreement from either source
+  never remounts, another identity re-binds once. A restart is confirmed
+  for the identity shown; a hibernate answer or confirmation read naming
+  another one stops it before the reopen and re-binds. A re-bind aborts
+  every request and continuation of the former panel, and the sheet's
+  one-shot link navigation and auto-open are consumed above the re-bound
+  panel, so they never repeat. A shared reset the Machine carried out
+  renews the family bindings and advances the registry revision: the
+  Service announces `provider_accounts` to every open client, and the
+  panel's own client re-reads its inventory and settings at once.
 
 ## Security and privacy
 
