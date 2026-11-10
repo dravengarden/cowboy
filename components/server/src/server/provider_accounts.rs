@@ -149,7 +149,7 @@ pub(super) async fn update_value(
     }
     // Metadata writes share one authority and receipt; no native login, usage
     // probe, credential access or worker activation happens here. Share
-    // changes use the same writer with the catalog's families. Membership
+    // changes use the same writer, with families from the static table. Membership
     // changes are fenced against share resets, and a replayed receipt
     // (the operation already committed) reruns no browser effect.
     let fence = state.browsers.share_lock(owner);

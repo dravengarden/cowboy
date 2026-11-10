@@ -5,6 +5,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+pub mod browser_families;
 pub mod browser_placements;
 pub mod browser_shares;
 pub mod grants;

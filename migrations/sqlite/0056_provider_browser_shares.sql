@@ -2,7 +2,10 @@
 -- (named accounts or legacy default usage cards) of distinct account-usage
 -- families may use one browser key, derived from the owner and share id.
 -- A share with deleting_ms set is being revoked: it admits no member and no
--- open, and disappears once its last placement is revoked.
+-- open, and disappears once its last placement is revoked. pending_reset
+-- holds a reset of its profile dispatched but not yet answered (JSON:
+-- operation id, Machine, expected profile revision, the bindings it
+-- releases); membership changes of the share wait for its terminal outcome.
 CREATE TABLE provider_browser_shares (
     owner_user_id TEXT NOT NULL,
     share_id TEXT NOT NULL,
@@ -11,6 +14,7 @@ CREATE TABLE provider_browser_shares (
     created_ms BIGINT NOT NULL,
     revision BIGINT NOT NULL,
     deleting_ms BIGINT,
+    pending_reset TEXT,
     PRIMARY KEY (owner_user_id, share_id),
     UNIQUE (browser_key)
 );

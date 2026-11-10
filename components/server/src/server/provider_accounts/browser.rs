@@ -900,11 +900,26 @@ pub(in crate::server) async fn reset(
         machine_id,
     )?;
     let connection = connection_for(state, machine_id)?;
+    // A share's reset is fenced durably before it leaves: until its terminal
+    // outcome is known (here, or by the reconciler after a timeout or a
+    // restart) no membership change of the share commits.
+    let operation = request_id("browser-reset");
+    if let Some(share) = resolved.shared() {
+        store
+            .begin_share_reset(
+                owner,
+                (&share.share_id, share.revision),
+                (machine_id, expected_profile_revision),
+                (&operation, now_ms()),
+            )
+            .await
+            .map_err(|_| "unavailable")??;
+    }
     let event = state
         .machine_control
         .browser_command(
             &connection,
-            request_id("browser-reset"),
+            operation.clone(),
             Command::Reset {
                 account_id: account_id.clone(),
                 expected_profile_revision,
@@ -913,24 +928,24 @@ pub(in crate::server) async fn reset(
         )
         .await
         .map_err(|error| {
-            tracing::warn!(%error, "browser reset failed");
+            tracing::warn!(%error, "browser reset failed; a share's fence stays until reconciled");
             "browser_command_failed"
         })?;
     if reset_confirmed(&event) {
         state.browsers.record_authoritative(&connection, &event);
-        // The share's profile is fresh: members that left no longer hold a
-        // family of it.
-        if let Some(share) = resolved.shared()
-            && let Err(error) = store
-                .renew_browser_share_bindings(
-                    owner,
-                    (&share.share_id, machine_id),
-                    &shares::families(state),
-                )
-                .await
-        {
-            tracing::warn!(%error, "browser share bindings not renewed after reset");
-        }
+    }
+    // This reset's own confirmation makes the profile fresh: identities that
+    // had left before it began no longer hold a family of it.
+    if let Some(share) = resolved.shared()
+        && let Err(error) = store
+            .finish_share_reset(
+                owner,
+                (&share.share_id, &operation),
+                reset_confirmed(&event),
+            )
+            .await
+    {
+        tracing::warn!(%error, "browser share reset fence not cleared; the reconciler retries");
     }
     if let Some(revision) = event.profile_revision
         && let Err(error) = store

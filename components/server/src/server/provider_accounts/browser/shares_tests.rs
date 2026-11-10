@@ -20,14 +20,6 @@ fn named(provider: &str, label: &str, browser_enabled: bool) -> Account {
     }
 }
 
-fn families() -> BTreeMap<String, String> {
-    family_map([
-        ("claude-code".to_owned(), Some("anthropic".to_owned())),
-        ("codex".to_owned(), Some("openai".to_owned())),
-        ("grok".to_owned(), Some("xai".to_owned())),
-    ])
-}
-
 /// Lynx, Pika and Fox (the legacy anthropic, openai and xai cards) share
 /// "Google"; Lark (a named Claude account) and Mole keep their own.
 fn google(share_id: &str) -> Shares {
@@ -44,6 +36,7 @@ fn google(share_id: &str) -> Shares {
             created_ms: 1,
             revision: 4,
             deleting_ms: None,
+            pending_reset: None,
         }],
         members: vec![row("anthropic"), row("openai"), row("xai")],
         bindings: Vec::new(),
@@ -55,32 +48,49 @@ fn resolve_card(
     card: &str,
     registry: &Registry,
 ) -> Result<(ProviderAccountId, Option<ShareView>), &'static str> {
-    let families = families();
     resolve_key(
         Some(&Member::card(card)),
         &legacy_browsers::account(OWNER, card),
         shares,
-        |member| family_now(member, registry, &families),
+        |member| family_now(member, registry),
     )
 }
 
 #[test]
-fn provider_families_follow_the_catalog_and_drop_disagreements() {
-    let map = family_map([
-        ("claude-code".to_owned(), Some("anthropic".to_owned())),
-        ("claude-code".to_owned(), Some("anthropic".to_owned())),
-        ("codex".to_owned(), Some("openai".to_owned())),
-        ("odd".to_owned(), Some("openai".to_owned())),
-        ("odd".to_owned(), Some("xai".to_owned())),
-        ("plain".to_owned(), None),
-    ]);
+fn families_never_come_from_the_provider_catalog() {
+    // Lark (claude-code) next to Lynx (the anthropic card): refused purely
+    // by the static table, with no catalog involved.
+    let lark = named("claude-code", "Lark", true);
+    let registry = Registry {
+        revision: 1,
+        accounts: vec![lark.clone()],
+        defaults: BTreeMap::new(),
+    };
     assert_eq!(
-        map.get("claude-code").map(String::as_str),
+        family_now(&Member::account(lark.id.clone()), &registry).as_deref(),
         Some("anthropic")
     );
-    assert_eq!(map.get("codex").map(String::as_str), Some("openai"));
-    assert!(!map.contains_key("odd"));
-    assert!(!map.contains_key("plain"));
+    let mut mixed = google(&uuid::Uuid::new_v4().to_string());
+    let share_id = mixed.shares[0].share_id.clone();
+    mixed.members.push(ShareMember {
+        member: Member::account(lark.id),
+        share_id,
+        family: "anthropic".into(),
+    });
+    assert_eq!(
+        blocked(&mixed, "openai", &registry),
+        Ok(Some("browser_share_family_conflict"))
+    );
+    // A Provider outside the table has no family at all.
+    let stranger = named("future-provider", "?", true);
+    let with_stranger = Registry {
+        accounts: vec![stranger.clone()],
+        ..registry
+    };
+    assert_eq!(
+        family_now(&Member::account(stranger.id), &with_stranger),
+        None
+    );
 }
 
 #[test]
@@ -114,7 +124,7 @@ fn every_member_resolves_to_the_share_key_and_non_members_keep_theirs() {
         Some(&Member::account(lark.id.clone())),
         &lark.id,
         &shares,
-        |member| family_now(member, &registry, &families()),
+        |member| family_now(member, &registry),
     )
     .unwrap();
     assert_eq!((own, view), (lark.id.clone(), None));
@@ -171,7 +181,7 @@ fn resolution_blocks_a_share_that_would_mix_one_family() {
             Ok(Some("browser_share_family_conflict"))
         );
     }
-    // A member recorded under another family than its Provider has now.
+    // A member recorded under another family than the table gives it.
     let mut drifted = google(&share_id);
     drifted.members.push(ShareMember {
         member: Member::account(lark.id.clone()),
@@ -180,7 +190,7 @@ fn resolution_blocks_a_share_that_would_mix_one_family() {
     });
     assert_eq!(
         blocked(&drifted, "xai", &registry),
-        Ok(Some("browser_share_family_conflict"))
+        Ok(Some("browser_share_family_drift"))
     );
     // A member whose family is no longer known.
     let mut unknown = google(&share_id);
@@ -208,7 +218,7 @@ fn resolution_blocks_a_share_that_would_mix_one_family() {
 }
 
 #[test]
-fn a_departed_members_family_drift_blocks_every_member() {
+fn a_bound_identitys_family_drift_blocks_every_member() {
     let share_id = uuid::Uuid::new_v4().to_string();
     let lark = named("claude-code", "Lark", true);
     let registry = Registry {
@@ -227,15 +237,15 @@ fn a_departed_members_family_drift_blocks_every_member() {
         member: Member::account(lark.id.clone()),
     });
     assert_eq!(blocked(&shares, "openai", &registry), Ok(None));
-    // The catalog moves claude-code to another family: the profile with
-    // Lark's cookies serves nobody until a confirmed reset.
-    let mut drifted = families();
-    drifted.insert("claude-code".into(), "claude".into());
+    // Should a reviewed table change ever remap Lark's family, its binding
+    // (recorded under the old one) blocks the profile with Lark's cookies
+    // for everybody until a confirmed reset.
+    shares.bindings[0].family = "claude".into();
     let (key, view) = resolve_key(
         Some(&Member::card("openai")),
         &legacy_browsers::account(OWNER, "openai"),
         &shares,
-        |member| family_now(member, &registry, &drifted),
+        |member| family_now(member, &registry),
     )
     .unwrap();
     let view = view.unwrap();
@@ -603,4 +613,13 @@ fn pending_deletions_retry_with_backoff_until_confirmed() {
     // A confirmed deletion is no longer pending and is forgotten.
     assert!(retries.due(&[], now).is_empty());
     assert!(retries.due.is_empty());
+}
+
+#[test]
+fn a_pending_reset_is_left_to_its_own_request_first() {
+    // The original request waits up to RESET_TIMEOUT; the reconciler
+    // resends only after a grace beyond it.
+    let timeout_ms = i64::try_from(super::super::RESET_TIMEOUT.as_millis()).unwrap();
+    assert!(!reset_due(timeout_ms));
+    assert!(reset_due(90_000));
 }

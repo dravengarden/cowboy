@@ -1,19 +1,8 @@
 use super::*;
 use crate::store::provider_accounts::Account;
+use std::collections::BTreeMap;
 
 const OWNER: &str = "owner";
-
-fn families() -> BTreeMap<String, String> {
-    [
-        ("claude-code", "anthropic"),
-        ("codex", "openai"),
-        ("grok", "xai"),
-        ("claude-deepseek", "deepseek"),
-    ]
-    .into_iter()
-    .map(|(provider, family)| (provider.to_owned(), family.to_owned()))
-    .collect()
-}
 
 fn named(provider: &str, label: &str) -> Account {
     Account {
@@ -30,7 +19,6 @@ fn named(provider: &str, label: &str) -> Account {
 
 struct Fixture {
     registry: Registry,
-    families: BTreeMap<String, String>,
     placed: BTreeSet<ProviderAccountId>,
 }
 
@@ -39,7 +27,6 @@ impl Fixture {
         ShareContext {
             owner: OWNER,
             registry: &self.registry,
-            families: &self.families,
             placed: &self.placed,
             now_ms: 7,
             new_share_id: new_share_id.to_owned(),
@@ -88,7 +75,6 @@ fn a_share_holds_at_most_one_member_per_family() {
             accounts: vec![lark.clone(), codex.clone()],
             defaults: BTreeMap::new(),
         },
-        families: families(),
         placed: BTreeSet::new(),
     };
     let mut shares = Shares::default();
@@ -157,7 +143,6 @@ fn members_whose_family_is_unknown_or_revoking_are_refused() {
             accounts: vec![unknown.clone(), revoking.clone()],
             defaults: BTreeMap::new(),
         },
-        families: families(),
         placed: BTreeSet::new(),
     };
     let mut shares = Shares::default();
@@ -270,7 +255,7 @@ async fn mutate(store: &Store, operation: &str, change: Change) -> MutationResul
     };
     if input.change.is_browser_share() {
         store
-            .mutate_browser_shares(OWNER, operation, &input, &families())
+            .mutate_browser_shares(OWNER, operation, &input)
             .await
             .unwrap()
     } else {
@@ -370,14 +355,14 @@ async fn registry_writer_and_family_rule(store: &Store) {
     };
     assert_eq!(
         store
-            .mutate_browser_shares(OWNER, "create-share", &replay(" Google "), &families())
+            .mutate_browser_shares(OWNER, "create-share", &replay(" Google "))
             .await
             .unwrap(),
         MutationResult::Applied(receipt.clone())
     );
     assert_eq!(
         store
-            .mutate_browser_shares(OWNER, "create-share", &replay("X"), &families())
+            .mutate_browser_shares(OWNER, "create-share", &replay("X"))
             .await
             .unwrap(),
         MutationResult::Invalid("operation_reused")
@@ -412,7 +397,6 @@ async fn registry_writer_and_family_rule(store: &Store) {
                     label: "G".into(),
                 },
             },
-            &families(),
         )
         .await
         .unwrap();
@@ -763,7 +747,6 @@ fn a_family_stays_bound_to_its_first_member_until_the_profile_is_fresh() {
             accounts: vec![lark.clone()],
             defaults: BTreeMap::new(),
         },
-        families: families(),
         placed: BTreeSet::new(),
     };
     let mut shares = Shares::default();
@@ -784,9 +767,12 @@ fn a_family_stays_bound_to_its_first_member_until_the_profile_is_fresh() {
         .unwrap();
     fixture.set(&mut shares, lynx.clone(), None).unwrap();
     // A fresh profile (confirmed reset) forgets the members that left.
-    assert!(shares.renew_current(&google, |member| {
-        current_family(member, &fixture.registry, &fixture.families)
-    }));
+    // Lynx had left before the reset began: its binding is released.
+    assert!(
+        shares.renew_current(&google, &[Member::card("anthropic")], |member| {
+            family_of(member, &fixture.registry)
+        })
+    );
     fixture
         .set(&mut shares, Member::account(lark.id.clone()), Some(&google))
         .unwrap();
@@ -808,7 +794,6 @@ fn a_family_stays_bound_to_its_first_member_until_the_profile_is_fresh() {
 fn a_member_must_be_the_owners_even_to_leave() {
     let fixture = Fixture {
         registry: Registry::default(),
-        families: families(),
         placed: BTreeSet::new(),
     };
     let mut shares = Shares::default();
@@ -887,12 +872,8 @@ async fn family_binding(store: &Store) {
             .unwrap(),
         Err(Refusal::ShareElsewhere)
     );
-    assert!(
-        store
-            .renew_browser_share_bindings(OWNER, (&share, "ovh"), &families())
-            .await
-            .unwrap()
-    );
+    // Lynx left before this reset began; its own confirmation renews.
+    assert!(confirmed_reset(store, &share, "ovh", "bind-reset-1").await);
     applied(
         store,
         "bind-lark-join-2",
@@ -913,12 +894,7 @@ async fn family_binding(store: &Store) {
         "browser_share_family_bound"
     );
     // A reset confirmed on a Machine other than the share's is no renewal.
-    assert!(
-        !store
-            .renew_browser_share_bindings(OWNER, (&share, "hawk"), &families())
-            .await
-            .unwrap()
-    );
+    assert!(!confirmed_reset(store, &share, "hawk", "bind-reset-2").await);
     // Delete and recreate: a new share, a new profile, no binding.
     applied(
         store,
@@ -953,58 +929,78 @@ async fn postgres_browser_share_families_stay_bound() {
 }
 
 #[test]
-fn a_family_drift_of_a_bound_member_blocks_the_share_until_a_reset() {
+fn a_binding_whose_family_the_table_no_longer_gives_blocks_the_share() {
+    // Only a reviewed change of the static table can remap a family; the
+    // defensive check still blocks the share. Lark's binding is recorded
+    // under a family the table does not give claude-code.
     let lark = named("claude-code", "Lark");
     let test = named("claude-code", "Test");
-    let mut fixture = Fixture {
+    let fixture = Fixture {
         registry: Registry {
             revision: 1,
             accounts: vec![lark.clone(), test.clone()],
             defaults: BTreeMap::new(),
         },
-        families: families(),
         placed: BTreeSet::new(),
     };
     let mut shares = Shares::default();
     let google = fixture.create(&mut shares, "Google");
-    let lark_member = Member::account(lark.id.clone());
-    fixture
-        .set(&mut shares, lark_member.clone(), Some(&google))
-        .unwrap();
-    fixture.set(&mut shares, lark_member, None).unwrap();
-    // The catalog now maps claude-code to another family: Lark's binding is
-    // recorded under `anthropic`, but Lark is `claude` now. Test (also
-    // claude-code, so `claude`) must not slip in under the new family.
-    fixture
-        .families
-        .insert("claude-code".into(), "claude".into());
-    assert_eq!(
-        fixture.set(&mut shares, Member::account(test.id.clone()), Some(&google)),
-        Err("browser_share_family_drift")
+    shares.bindings.push(Binding {
+        share_id: google.clone(),
+        family: "claude".into(),
+        member: Member::account(lark.id.clone()),
+    });
+    for member in [Member::account(test.id.clone()), Member::card("openai")] {
+        assert_eq!(
+            fixture.set(&mut shares, member, Some(&google)),
+            Err("browser_share_family_drift")
+        );
+    }
+    // A confirmed reset releasing Lark (it had left) clears the drift.
+    assert!(
+        shares.renew_current(&google, &[Member::account(lark.id)], |member| {
+            family_of(member, &fixture.registry)
+        })
     );
-    // Any other card is held back too until the profile is fresh.
-    assert_eq!(
-        fixture.set(&mut shares, Member::card("openai"), Some(&google)),
-        Err("browser_share_family_drift")
-    );
-    let current = |member: &Member| current_family(member, &fixture.registry, &fixture.families);
-    assert_eq!(
-        binding_refusal(
-            &shares,
-            &google,
-            (&Member::card("openai"), "openai"),
-            current
-        ),
-        Some("browser_share_family_drift")
-    );
-    // A confirmed reset renews the bindings to the current members only.
-    assert!(shares.renew_current(&google, current));
     fixture
         .set(&mut shares, Member::account(test.id.clone()), Some(&google))
         .unwrap();
     assert_eq!(
-        shares.binding(&google, "claude").map(|row| &row.member),
+        shares.binding(&google, "anthropic").map(|row| &row.member),
         Some(&Member::account(test.id))
+    );
+}
+
+#[test]
+fn families_come_only_from_the_static_table() {
+    let registry = Registry {
+        revision: 1,
+        accounts: vec![
+            named("claude-code", "Lark"),
+            named("codex-deepseek", "Mole"),
+            named("future-provider", "New"),
+        ],
+        defaults: BTreeMap::new(),
+    };
+    let family = |member: Member| family_of(&member, &registry);
+    assert_eq!(
+        family(Member::account(registry.accounts[0].id.clone())).as_deref(),
+        Some("anthropic")
+    );
+    assert_eq!(
+        family(Member::account(registry.accounts[1].id.clone())).as_deref(),
+        Some("deepseek")
+    );
+    assert_eq!(
+        family(Member::account(registry.accounts[2].id.clone())),
+        None
+    );
+    assert_eq!(family(Member::card("xai")).as_deref(), Some("xai"));
+    // A card the table does not know has no family and never joins.
+    assert_eq!(family(Member::card("future-cloud")), None);
+    assert_eq!(
+        member_family(&Member::card("future-cloud"), &registry),
+        Err("browser_share_family_unknown")
     );
 }
 
@@ -1027,7 +1023,7 @@ fn a_bound_member_now_of_the_joining_family_blocks_it() {
         accounts: vec![lark],
         defaults: BTreeMap::new(),
     };
-    let current = |member: &Member| current_family(member, &registry, &families());
+    let current = |member: &Member| family_of(member, &registry);
     assert_eq!(
         binding_refusal(
             &shares,
@@ -1082,4 +1078,170 @@ async fn revoking_a_member_moves_the_share_identity() {
         .revision;
     // A reset captured with `share:<id>:<before>` no longer matches.
     assert!(after > before);
+}
+
+async fn confirmed_reset(store: &Store, share: &str, machine: &str, operation: &str) -> bool {
+    let revision = store
+        .browser_shares(OWNER)
+        .await
+        .unwrap()
+        .share(share)
+        .unwrap()
+        .revision;
+    store
+        .begin_share_reset(OWNER, (share, revision), (machine, 4), (operation, 1))
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .finish_share_reset(OWNER, (share, operation), true)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One scenario: a reset fence across timeout, restart and outcome.
+async fn a_pending_share_reset_fences_membership_until_its_outcome() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path().join("shares.db").display()
+    );
+    let store = sqlite_store(&dir).await;
+    let lark = named_account(&store, "fence-lark", "claude-code").await;
+    let codex = named_account(&store, "fence-codex", "codex").await;
+    let share = applied(
+        &store,
+        "fence-create",
+        Change::CreateBrowserShare {
+            label: "Google".into(),
+        },
+    )
+    .await
+    .browser_share_id
+    .unwrap();
+    let lynx = Member::card("anthropic");
+    applied(&store, "fence-lynx", join(lynx.clone(), &share)).await;
+    applied(
+        &store,
+        "fence-codex-join",
+        join(Member::account(codex.clone()), &share),
+    )
+    .await;
+    applied(
+        &store,
+        "fence-lynx-leave",
+        Change::SetBrowserShare {
+            member: lynx.clone(),
+            share_id: None,
+        },
+    )
+    .await;
+    let revision = store
+        .browser_shares(OWNER)
+        .await
+        .unwrap()
+        .share(&share)
+        .unwrap()
+        .revision;
+    // A reset captured before a membership change is refused.
+    assert_eq!(
+        store
+            .begin_share_reset(OWNER, (&share, revision - 1), ("ovh", 4), ("op-old", 1))
+            .await
+            .unwrap(),
+        Err("browser_identity_changed")
+    );
+    store
+        .begin_share_reset(OWNER, (&share, revision), ("ovh", 4), ("op-1", 1))
+        .await
+        .unwrap()
+        .unwrap();
+    // The reset timed out; the Controller restarts. The fence survives.
+    drop(store);
+    let store = Store::connect(&url, dir.path().join("artifacts"))
+        .await
+        .unwrap();
+    let pending = store.pending_share_resets().await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].2.operation_id, "op-1");
+    assert_eq!(pending[0].2.released, vec![lynx.encode()]);
+    assert_eq!(
+        store
+            .begin_share_reset(OWNER, (&share, revision), ("ovh", 4), ("op-2", 1))
+            .await
+            .unwrap(),
+        Err("browser_share_reset_pending")
+    );
+    // No membership change of the share commits meanwhile.
+    for (operation, change) in [
+        ("fence-pika", join(Member::card("openai"), &share)),
+        (
+            "fence-codex-leave",
+            Change::SetBrowserShare {
+                member: Member::account(codex.clone()),
+                share_id: None,
+            },
+        ),
+    ] {
+        assert_eq!(
+            invalid(&store, operation, change).await,
+            "browser_share_reset_pending"
+        );
+    }
+    // A stale operation clears nothing; the reconciled outcome (not this
+    // reset's own confirmation) clears the fence without renewing.
+    assert!(
+        !store
+            .finish_share_reset(OWNER, (&share, "op-x"), true)
+            .await
+            .unwrap()
+    );
+    assert_eq!(store.pending_share_resets().await.unwrap().len(), 1);
+    assert!(
+        !store
+            .finish_share_reset(OWNER, (&share, "op-1"), false)
+            .await
+            .unwrap()
+    );
+    assert!(store.pending_share_resets().await.unwrap().is_empty());
+    // Lynx's binding stays: Lark is still refused.
+    assert_eq!(
+        invalid(
+            &store,
+            "fence-lark-join",
+            join(Member::account(lark.clone()), &share)
+        )
+        .await,
+        "browser_share_family_bound"
+    );
+    // A reset that confirmed itself releases Lynx; Lark may join.
+    assert!(confirmed_reset(&store, &share, "ovh", "op-3").await);
+    applied(&store, "fence-lark-2", join(Member::account(lark), &share)).await;
+    // Revocation is never fenced; deletion clears a pending reset.
+    let revision = store
+        .browser_shares(OWNER)
+        .await
+        .unwrap()
+        .share(&share)
+        .unwrap()
+        .revision;
+    store
+        .begin_share_reset(OWNER, (&share, revision), ("ovh", 5), ("op-4", 1))
+        .await
+        .unwrap()
+        .unwrap();
+    applied(
+        &store,
+        "fence-revoke",
+        Change::BeginRevocation { id: codex },
+    )
+    .await;
+    applied(
+        &store,
+        "fence-delete",
+        Change::DeleteBrowserShare { share_id: share },
+    )
+    .await;
+    assert!(store.pending_share_resets().await.unwrap().is_empty());
 }

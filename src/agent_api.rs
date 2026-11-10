@@ -177,10 +177,11 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // A legacy default usage card's browser uses its own key, never "default": list().legacy_browsers is
 // {card,account_id,providers,browser_enabled,available,share_id}[]; enable per card with set_legacy_browser_enabled.
 // Shared browser: list().browser_shares is {share_id,label,deleting,members:{member,family,account_id}[]}[]
-// and browser_share_families maps provider_id->family. A share holds at most ONE member per family
+// and browser_share_families is Cowboy's static family table {version,providers,cards} (never the
+// catalog; anything outside it: browser_share_family_unknown). A share holds at most ONE member per family
 // (browser_share_family_conflict: two Claude or two OpenAI accounts never share; a family whose member
-// left stays bound until a confirmed reset: browser_share_family_bound; catalog family drift blocks the
-// share: browser_share_family_drift). Members still need
+// left stays bound until a confirmed reset: browser_share_family_bound). While a share reset is
+// unsettled, membership changes of it are refused: browser_share_reset_pending. Members still need
 // their own browser enabled. Members address the share through their own account_id; reset from any
 // member resets the share's profile (accounts.browser().share lists who is affected). Deleting a
 // share revokes its profile; members fall back to their own retained browsers.

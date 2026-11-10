@@ -20,7 +20,7 @@ use crate::provider_account::ProviderAccountId;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 const DOMAIN: &[u8] = b"cowboy-browser-share-v1\0";
 /// Live shares per owner.
@@ -126,6 +126,23 @@ pub struct Share {
     pub revision: i64,
     /// Set while the deleted share's profile is being revoked.
     pub deleting_ms: Option<i64>,
+    /// A reset of its profile dispatched but not yet answered.
+    pub pending_reset: Option<PendingReset>,
+}
+
+/// A reset of a share's profile whose terminal outcome is not yet known: a
+/// durable fence, so no membership change of the share lands while the
+/// Machine may still delete the profile (also across a Controller restart).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingReset {
+    pub operation_id: String,
+    pub machine_id: String,
+    pub expected_profile_revision: u64,
+    pub started_ms: i64,
+    /// Bindings of identities that had left the share when the reset began
+    /// (encoded members): a confirmed reset may release only these.
+    pub released: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -181,13 +198,16 @@ impl Shares {
             .find(|row| row.share_id == share_id && row.family == family)
     }
 
-    /// The profile is fresh: bind each family to exactly the current
-    /// members, under their current families (`current`). Refused (nothing
-    /// changes) when a member's family is unknown or two members would share
-    /// one; such a share is only ever deleted.
+    /// The profile is fresh: release the bindings of `released` identities
+    /// (they had left before the reset began, so they cannot have used the
+    /// wiped profile since) and bind each current member under its family
+    /// now (`current`). Other bindings stay. Refused (nothing changes) when a
+    /// member's family is unknown or two members would share one; such a
+    /// share is only ever deleted.
     pub fn renew_current(
         &mut self,
         share_id: &str,
+        released: &[Member],
         current: impl Fn(&Member) -> Option<String>,
     ) -> bool {
         let mut renewed = Vec::new();
@@ -208,7 +228,11 @@ impl Shares {
                 family.clone_into(&mut row.family);
             }
         }
-        self.bindings.retain(|row| row.share_id != share_id);
+        self.bindings.retain(|row| {
+            row.share_id != share_id
+                || !(released.contains(&row.member)
+                    || renewed.iter().any(|(member, _)| member == &row.member))
+        });
         self.bindings
             .extend(renewed.into_iter().map(|(member, family)| Binding {
                 share_id: share_id.to_owned(),
@@ -222,6 +246,18 @@ impl Shares {
         self.share(share_id)
             .filter(|share| share.deleting_ms.is_none())
             .ok_or("browser_share_not_found")
+    }
+
+    /// Membership of `share_id` is frozen while a reset of its profile may
+    /// still run on its Machine.
+    fn settled(&self, share_id: &str) -> Result<(), &'static str> {
+        if self
+            .share(share_id)
+            .is_some_and(|share| share.pending_reset.is_some())
+        {
+            return Err("browser_share_reset_pending");
+        }
+        Ok(())
     }
 
     fn bump(&mut self, share_id: &str) {
@@ -239,8 +275,6 @@ impl Shares {
 pub struct ShareContext<'a> {
     pub owner: &'a str,
     pub registry: &'a Registry,
-    /// Account-usage family of each Provider id (from the Provider catalog).
-    pub families: &'a BTreeMap<String, String>,
     /// Browser keys of this owner that hold a placement somewhere.
     pub placed: &'a BTreeSet<ProviderAccountId>,
     pub now_ms: i64,
@@ -256,56 +290,42 @@ pub struct Applied {
     pub share_id: Option<String>,
 }
 
-/// The family of a member: a legacy card is its own account-usage provider;
-/// a named account maps its Provider through the catalog. A member whose
-/// family cannot be resolved never joins a share.
-pub fn member_family(
-    member: &Member,
-    registry: &Registry,
-    families: &BTreeMap<String, String>,
-) -> Result<String, &'static str> {
-    match member {
-        Member::Card(card) => Ok(card.card.clone()),
-        Member::Account(member) => {
-            let account = registry
-                .accounts
-                .iter()
-                .find(|account| account.id == member.account_id)
-                .ok_or("account_not_found")?;
-            if account.revoking {
-                return Err("account_revoking");
-            }
-            families
-                .get(&account.provider_id)
-                .cloned()
-                .ok_or("browser_share_family_unknown")
+/// The family of a member that may join a share, from the static table
+/// (`browser_families`): a legacy card by its id, a named account by its
+/// Provider. A member without one, or a revoking account, never joins.
+pub fn member_family(member: &Member, registry: &Registry) -> Result<String, &'static str> {
+    if let Member::Account(member) = member {
+        let account = registry
+            .accounts
+            .iter()
+            .find(|account| account.id == member.account_id)
+            .ok_or("account_not_found")?;
+        if account.revoking {
+            return Err("account_revoking");
         }
     }
+    family_of(member, registry).ok_or("browser_share_family_unknown")
 }
 
-/// The family an identity maps to now, whatever its state (a revoked
-/// account still has one): the card itself, or its Provider's catalog
-/// family. `None` when the catalog no longer resolves it.
-pub fn current_family(
-    member: &Member,
-    registry: &Registry,
-    families: &BTreeMap<String, String>,
-) -> Option<String> {
+/// The family an identity has in the static table, whatever its state (a
+/// revoked account still has one). `None` outside the table.
+pub fn family_of(member: &Member, registry: &Registry) -> Option<String> {
     match member {
-        Member::Card(card) => Some(card.card.clone()),
+        Member::Card(card) => super::browser_families::card(&card.card),
         Member::Account(member) => registry
             .accounts
             .iter()
             .find(|account| account.id == member.account_id)
-            .and_then(|account| families.get(&account.provider_id).cloned()),
+            .and_then(|account| super::browser_families::provider(&account.provider_id)),
     }
+    .map(str::to_owned)
 }
 
-/// Why `member` (now of `family`) may not use share `share_id`'s profile
-/// because of its family bindings, if it may not: a binding whose member's
-/// family drifted from the recorded one blocks everyone until a confirmed
-/// reset, and a binding of another member whose recorded or current family
-/// is `family` blocks this member.
+/// Why `member` (of `family`) may not use share `share_id`'s profile
+/// because of its family bindings, if it may not: a binding whose recorded
+/// family no longer matches the table (only a reviewed code change can do
+/// that) blocks everyone until a confirmed reset, and a binding of another
+/// identity whose family is `family` blocks this member.
 pub fn binding_refusal(
     shares: &Shares,
     share_id: &str,
@@ -342,7 +362,11 @@ fn join(
     ctx: &ShareContext<'_>,
 ) -> Result<(), &'static str> {
     shares.live(share_id)?;
-    let family = member_family(member, ctx.registry, ctx.families)?;
+    shares.settled(share_id)?;
+    if let Some(row) = shares.membership(member) {
+        shares.settled(&row.share_id)?;
+    }
+    let family = member_family(member, ctx.registry)?;
     if shares
         .membership(member)
         .is_some_and(|row| row.share_id == share_id && row.family == family)
@@ -356,10 +380,9 @@ fn join(
     {
         return Err("browser_share_family_conflict");
     }
-    // The profile may still hold an earlier member's cookies of this family,
-    // under its recorded or (after catalog drift) its current family.
+    // The profile may still hold an earlier member's cookies of this family.
     if let Some(code) = binding_refusal(shares, share_id, (member, &family), |other| {
-        current_family(other, ctx.registry, ctx.families)
+        family_of(other, ctx.registry)
     }) {
         return Err(code);
     }
@@ -415,6 +438,7 @@ pub fn apply(
                 created_ms: ctx.now_ms,
                 revision: 1,
                 deleting_ms: None,
+                pending_reset: None,
             });
             Ok(Applied {
                 subject: browser_key,
@@ -443,6 +467,14 @@ pub fn apply(
             let key = shares.live(share_id)?.browser_key.clone();
             shares.members.retain(|row| &row.share_id != share_id);
             shares.bindings.retain(|row| &row.share_id != share_id);
+            // Deletion revokes the profile anyway; a pending reset is moot.
+            if let Some(share) = shares
+                .shares
+                .iter_mut()
+                .find(|share| &share.share_id == share_id)
+            {
+                share.pending_reset = None;
+            }
             if ctx.placed.contains(&key) {
                 // Its profile lives on a Machine: revoked, then forgotten.
                 shares.bump(share_id);
@@ -462,33 +494,55 @@ pub fn apply(
             })
         }
         Change::SetBrowserShare { member, share_id } => {
-            if !member.valid() {
-                return Err("invalid_argument");
-            }
-            // Only the owner's own identities, even to leave (a no-op too).
-            if let Member::Account(account) = member
-                && !ctx
-                    .registry
-                    .accounts
-                    .iter()
-                    .any(|entry| entry.id == account.account_id)
-            {
-                return Err("account_not_found");
-            }
-            match share_id {
-                Some(share_id) => join(shares, member, share_id, ctx)?,
-                None => leave(shares, member),
-            }
-            Ok(Applied {
-                subject: member.own_key(ctx.owner),
-                share_id: share_id.clone(),
-            })
+            set_share(shares, member, share_id.as_deref(), ctx)
         }
         _ => Err("invalid_change"),
     }
 }
 
-type ShareRow = (String, String, String, i64, i64, Option<i64>);
+/// Put `member` into share `share_id`, or take it out (`None`).
+fn set_share(
+    shares: &mut Shares,
+    member: &Member,
+    share_id: Option<&str>,
+    ctx: &ShareContext<'_>,
+) -> Result<Applied, &'static str> {
+    if !member.valid() {
+        return Err("invalid_argument");
+    }
+    // Only the owner's own identities, even to leave (a no-op too).
+    if let Member::Account(account) = member
+        && !ctx
+            .registry
+            .accounts
+            .iter()
+            .any(|entry| entry.id == account.account_id)
+    {
+        return Err("account_not_found");
+    }
+    if let Some(share_id) = share_id {
+        join(shares, member, share_id, ctx)?;
+    } else {
+        if let Some(row) = shares.membership(member) {
+            shares.settled(&row.share_id)?;
+        }
+        leave(shares, member);
+    }
+    Ok(Applied {
+        subject: member.own_key(ctx.owner),
+        share_id: share_id.map(str::to_owned),
+    })
+}
+
+type ShareRow = (
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    Option<i64>,
+    Option<String>,
+);
 
 fn decode(
     owner: &str,
@@ -501,7 +555,7 @@ fn decode(
             .into_iter()
             .filter(|(share_id, ..)| share_id_valid(share_id))
             .map(
-                |(share_id, _, label, created_ms, revision, deleting_ms)| Share {
+                |(share_id, _, label, created_ms, revision, deleting_ms, pending)| Share {
                     // Derived again: the stored key is a lookup index only.
                     browser_key: share_key(owner, &share_id),
                     share_id,
@@ -509,6 +563,16 @@ fn decode(
                     created_ms,
                     revision,
                     deleting_ms,
+                    // An unreadable fence stays a fence.
+                    pending_reset: pending.map(|value| {
+                        serde_json::from_str(&value).unwrap_or(PendingReset {
+                            operation_id: String::new(),
+                            machine_id: String::new(),
+                            expected_profile_revision: 0,
+                            started_ms: 0,
+                            released: Vec::new(),
+                        })
+                    }),
                 },
             )
             .collect(),
@@ -537,7 +601,7 @@ fn decode(
 
 macro_rules! load_shares {
     ($exec:expr, $owner:expr) => {{
-        let rows: Vec<ShareRow> = sqlx::query_as("SELECT share_id,browser_key,label,created_ms,revision,deleting_ms FROM provider_browser_shares WHERE owner_user_id=$1 ORDER BY created_ms,share_id")
+        let rows: Vec<ShareRow> = sqlx::query_as("SELECT share_id,browser_key,label,created_ms,revision,deleting_ms,pending_reset FROM provider_browser_shares WHERE owner_user_id=$1 ORDER BY created_ms,share_id")
             .bind($owner).fetch_all($exec).await?;
         rows
     }};
@@ -590,14 +654,13 @@ impl Store {
 
     /// Apply a share change through the account registry writer: the owner
     /// lock, the registry revision (compare and set) and the operation
-    /// receipt, exactly like every other account change. `families` maps
-    /// Provider ids to their account-usage family.
+    /// receipt, exactly like every other account change. Families come from
+    /// the static table (`browser_families`), never the Provider catalog.
     pub async fn mutate_browser_shares(
         &self,
         owner: &str,
         operation: &str,
         input: &Mutation,
-        families: &BTreeMap<String, String>,
     ) -> Result<MutationResult> {
         if input.expected_revision < 0
             || !crate::managed_calls::valid_id(operation)
@@ -624,7 +687,7 @@ impl Store {
             let placed: Vec<String> = sqlx::query_scalar("SELECT DISTINCT account_id FROM browser_placements WHERE owner_user_id=$1")
                 .bind(owner).fetch_all(&mut *tx).await?;
             let placed: BTreeSet<ProviderAccountId> = placed.into_iter().filter_map(|key| key.try_into().ok()).collect();
-            let context = ShareContext { owner, registry: &registry, families, placed: &placed,
+            let context = ShareContext { owner, registry: &registry, placed: &placed,
                 now_ms: now_ms(), new_share_id: uuid::Uuid::new_v4().to_string() };
             let applied = match apply(&mut shares, &input.change, &context) {
                 Ok(applied) => applied, Err(code) => return Ok(MutationResult::Invalid(code)),
@@ -635,9 +698,10 @@ impl Store {
             sqlx::query("DELETE FROM provider_browser_share_members WHERE owner_user_id=$1").bind(owner).execute(&mut *tx).await?;
             sqlx::query("DELETE FROM provider_browser_shares WHERE owner_user_id=$1").bind(owner).execute(&mut *tx).await?;
             for share in &shares.shares {
-                sqlx::query("INSERT INTO provider_browser_shares (owner_user_id,share_id,browser_key,label,created_ms,revision,deleting_ms) VALUES ($1,$2,$3,$4,$5,$6,$7)")
+                sqlx::query("INSERT INTO provider_browser_shares (owner_user_id,share_id,browser_key,label,created_ms,revision,deleting_ms,pending_reset) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
                     .bind(owner).bind(&share.share_id).bind(share.browser_key.as_str()).bind(&share.label)
-                    .bind(share.created_ms).bind(share.revision).bind(share.deleting_ms).execute(&mut *tx).await?;
+                    .bind(share.created_ms).bind(share.revision).bind(share.deleting_ms)
+                    .bind(share.pending_reset.as_ref().map(serde_json::to_string).transpose()?).execute(&mut *tx).await?;
             }
             // The unique (owner, share, family) and (owner, member) keys
             // enforce the family rule here too.
@@ -770,52 +834,6 @@ impl Store {
 }
 
 impl Store {
-    /// The Machine confirmed a reset of the share's profile on `machine_id`,
-    /// its only placement: the profile is fresh, so the family bindings of
-    /// members that left are forgotten and the current members are bound
-    /// under their current families (clearing a family drift). Nothing
-    /// changes while the share has a placement on another Machine or is
-    /// being deleted. Returns whether the bindings were renewed.
-    pub async fn renew_browser_share_bindings(
-        &self,
-        owner: &str,
-        (share_id, machine_id): (&str, &str),
-        families: &BTreeMap<String, String>,
-    ) -> Result<bool> {
-        let key = share_key(owner, share_id);
-        macro_rules! renew { ($db:expr) => {{
-            let mut tx = $db.pool.begin().await?;
-            sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")
-                .bind(owner).execute(&mut *tx).await?;
-            let mut shares = decode(owner, load_shares!(&mut *tx, owner), load_members!(&mut *tx, owner), load_bindings!(&mut *tx, owner));
-            let live = shares.share(share_id).is_some_and(|share| share.deleting_ms.is_none());
-            let elsewhere: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 AND machine_id<>$3")
-                .bind(owner).bind(key.as_str()).bind(machine_id).fetch_one(&mut *tx).await?;
-            if !live || elsewhere > 0 {
-                return Ok(false);
-            }
-            let value: String = sqlx::query_scalar("SELECT value FROM provider_account_registries WHERE owner_user_id=$1")
-                .bind(owner).fetch_one(&mut *tx).await?;
-            let registry: Registry = serde_json::from_str(&value)?;
-            if !shares.renew_current(share_id, |member| current_family(member, &registry, families)) {
-                return Ok(false);
-            }
-            sqlx::query("DELETE FROM provider_browser_share_members WHERE owner_user_id=$1 AND share_id=$2")
-                .bind(owner).bind(share_id).execute(&mut *tx).await?;
-            for row in shares.members_of(share_id) {
-                sqlx::query("INSERT INTO provider_browser_share_members (owner_user_id,member,share_id,family) VALUES ($1,$2,$3,$4)")
-                    .bind(owner).bind(row.member.encode()).bind(&row.share_id).bind(&row.family).execute(&mut *tx).await?;
-            }
-            write_bindings!(tx, owner, shares);
-            tx.commit().await?;
-            true
-        }} }
-        Ok(match &self.backend {
-            StorageBackend::Postgres(db) => renew!(db),
-            StorageBackend::Sqlite(db) => renew!(db),
-        })
-    }
-
     /// Every share being deleted, across owners: the deletion reconciler's
     /// work after a Controller restart.
     pub async fn deleting_browser_shares(&self) -> Result<Vec<(String, String)>> {
@@ -837,6 +855,9 @@ fn now_ms() -> i64 {
             i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
         })
 }
+
+#[path = "browser_share_resets.rs"]
+mod resets;
 
 #[cfg(test)]
 #[path = "browser_shares_tests.rs"]

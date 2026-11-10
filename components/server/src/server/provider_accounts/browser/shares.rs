@@ -13,44 +13,12 @@ use super::BrowserAccount;
 use crate::machine_protocol::MACHINE_BROWSER_PROTOCOL_VERSION;
 use crate::machine_protocol::machine_browser::{Command, Reason, State as BrowserState};
 use crate::provider_account::ProviderAccountId;
+use crate::store::provider_accounts::browser_families;
 use crate::store::provider_accounts::browser_shares::{self, Member, Shares, families_distinct};
 use crate::store::provider_accounts::{Change, Mutation, MutationResult, Receipt, Registry};
 use serde_json::{Value, json};
 
 const REVOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-
-/// The account-usage family of each catalogued Provider. A Provider whose
-/// catalog entries disagree has none, so it never joins a share.
-pub(in crate::server) fn families(state: &AppState) -> BTreeMap<String, String> {
-    family_map(state.provider_catalog.entries().into_iter().map(|entry| {
-        let family = entry
-            .manifest
-            .host
-            .account_usage
-            .as_ref()
-            .map(|usage| usage.provider.clone());
-        (entry.provider_id, family)
-    }))
-}
-
-fn family_map(
-    entries: impl IntoIterator<Item = (String, Option<String>)>,
-) -> BTreeMap<String, String> {
-    let mut seen: BTreeMap<String, Option<String>> = BTreeMap::new();
-    for (provider, family) in entries {
-        let Some(family) = family else { continue };
-        seen.entry(provider)
-            .and_modify(|known| {
-                if known.as_ref() != Some(&family) {
-                    *known = None;
-                }
-            })
-            .or_insert(Some(family));
-    }
-    seen.into_iter()
-        .filter_map(|(provider, family)| family.map(|family| (provider, family)))
-        .collect()
-}
 
 /// The share a member uses, as the browser routes report it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,14 +56,10 @@ pub(in crate::server) fn member_of(
     }
 }
 
-/// The current family of an identity: its card, or its Provider's family
-/// (also for an account that left or was revoked).
-fn family_now(
-    member: &Member,
-    registry: &Registry,
-    families: &BTreeMap<String, String>,
-) -> Option<String> {
-    browser_shares::current_family(member, registry, families)
+/// The family of an identity in the static table (`browser_families`),
+/// also for an account that left or was revoked. Never the catalog.
+fn family_now(member: &Member, registry: &Registry) -> Option<String> {
+    browser_shares::family_of(member, registry)
 }
 
 /// The browser key `member` uses and the share behind it. A member in no
@@ -129,7 +93,7 @@ pub(in crate::server) fn resolve_key(
         }
         blocked = match current_family(&other.member) {
             Some(family) if family == other.family => None,
-            Some(_) => Some("browser_share_family_conflict"),
+            Some(_) => Some("browser_share_family_drift"),
             None => Some("browser_share_family_unknown"),
         };
     }
@@ -167,12 +131,11 @@ pub(in crate::server) async fn resolve(
         .browser_shares(owner)
         .await
         .map_err(|_| "unavailable")?;
-    let families = families(state);
     resolve_key(
         member_of(account_id, account).as_ref(),
         account_id,
         &shares,
-        |member| family_now(member, registry, &families),
+        |member| family_now(member, registry),
     )
 }
 
@@ -216,7 +179,12 @@ pub(in crate::server) async fn list_value(
                     .collect::<Vec<_>>()})
         })
         .collect();
-    Ok((Value::Array(listed), json!(families(state))))
+    // The static family table: Provider ids and card ids with a family.
+    let providers: BTreeMap<&str, &str> = browser_families::PROVIDERS.iter().copied().collect();
+    Ok((
+        Value::Array(listed),
+        json!({"version": browser_families::VERSION, "providers": providers, "cards": browser_families::CARDS}),
+    ))
 }
 
 /// What an applied account change does to running browsers and viewers.
@@ -410,7 +378,7 @@ pub(in crate::server) async fn update(
         return Err("account_unavailable");
     }
     store
-        .mutate_browser_shares(owner, operation, input, &families(state))
+        .mutate_browser_shares(owner, operation, input)
         .await
         .map_err(|_| "outcome_unknown")
 }
@@ -559,21 +527,95 @@ pub(in crate::server) fn start_deletion_reconciler(state: &Arc<AppState>) {
             let Some(store) = state.store.as_ref() else {
                 return;
             };
-            let pending = match store.deleting_browser_shares().await {
-                Ok(pending) => pending,
-                Err(error) => {
-                    tracing::info!(%error, "pending browser share deletions not read");
-                    continue;
-                }
+            let (Ok(deletions), Ok(resets)) = (
+                store.deleting_browser_shares().await,
+                store.pending_share_resets().await,
+            ) else {
+                tracing::info!("pending browser share work not read; retrying");
+                continue;
             };
+            let mut pending = deletions;
+            pending.extend(
+                resets
+                    .iter()
+                    .map(|(owner, share, _)| (owner.clone(), format!("reset:{share}"))),
+            );
             for key in retries.due(&pending, std::time::Instant::now()) {
-                let results = revoke_deleted(&state, &key.0, &key.1).await;
-                if results.iter().any(|result| result["state"] != "revoked") {
+                let settled = match key.1.strip_prefix("reset:") {
+                    Some(share) => {
+                        let found = resets
+                            .iter()
+                            .find(|(owner, id, _)| *owner == key.0 && id == share);
+                        match found {
+                            Some((_, _, reset)) => {
+                                reconcile_reset(&state, &key.0, share, reset).await
+                            }
+                            None => true,
+                        }
+                    }
+                    None => revoke_deleted(&state, &key.0, &key.1)
+                        .await
+                        .iter()
+                        .all(|result| result["state"] == "revoked"),
+                };
+                if !settled {
                     retries.failed(&key, std::time::Instant::now());
                 }
             }
         }
     });
+}
+
+/// A pending reset younger than this is still awaited by its own request
+/// (whose timeout is shorter), so the reconciler leaves it alone.
+const RESET_GRACE_MS: i64 = 90_000;
+
+/// Whether the reconciler may settle a pending reset `age_ms` old.
+pub(in crate::server) fn reset_due(age_ms: i64) -> bool {
+    age_ms >= RESET_GRACE_MS
+}
+
+/// Settle a share reset whose own request did not learn its outcome: the
+/// same reset (same key and expected profile revision) is sent again. The
+/// Machine serializes it behind the original, so any answer means the
+/// original reached its end. Its fence is then cleared without renewing
+/// the bindings: only a reset's own confirmation proves the profile fresh
+/// since it began. Returns whether the reset is settled.
+async fn reconcile_reset(
+    state: &Arc<AppState>,
+    owner: &str,
+    share_id: &str,
+    pending: &browser_shares::PendingReset,
+) -> bool {
+    if !reset_due(super::now_ms().saturating_sub(pending.started_ms)) {
+        return false;
+    }
+    let Some(store) = state.store.as_ref() else {
+        return false;
+    };
+    let Ok(connection) = super::connection_for(state, &pending.machine_id) else {
+        return false;
+    };
+    let answer = state
+        .machine_control
+        .browser_command(
+            &connection,
+            super::request_id("browser-reset-reconcile"),
+            Command::Reset {
+                account_id: browser_shares::share_key(owner, share_id),
+                expected_profile_revision: pending.expected_profile_revision,
+            },
+            super::RESET_TIMEOUT,
+        )
+        .await;
+    if let Err(error) = answer {
+        tracing::info!(%error, operation = %pending.operation_id, "browser share reset still unsettled");
+        return false;
+    }
+    store
+        .finish_share_reset(owner, (share_id, &pending.operation_id), false)
+        .await
+        .is_ok()
 }
 
 /// Retry every pending share deletion of `owner` (after a Machine
