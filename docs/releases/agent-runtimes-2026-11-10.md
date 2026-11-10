@@ -1,6 +1,6 @@
 # Agent runtime upgrades — 2026-11-10
 
-Status: source integrated; publication and installation below.
+Status: published from `4002220c` and installed on all four Machines.
 
 ## Why
 
@@ -68,3 +68,70 @@ a filesystem-boundary line; from `/tmp` it is identical. The not-offered
 | Background notifications and TaskStop results show only the start and end of a command over 1,000 characters | Not reproduced: the target facade still shows the whole command. Display only |
 | git status refuses repository configuration that names filters it cannot switch off | Not reproduced for the target repository |
 | Bash permission, sandbox, hook, skill, MCP task and shell snapshot fixes | Re-measured by the permissions, hooks, skill, shell and lifecycle probes: unchanged |
+
+## Verification
+
+Receipts are under `/srv/storage/fast0/agent/tmp/fable52-upgrade/`. Every
+fixture used a loopback scripted API and fake credentials; no real model
+request was made.
+
+| Gate | Result |
+| --- | --- |
+| `just claude-remote-check` | 373 + 4 + 12 passed |
+| Eleven native probes against 2.1.321 | As above; one baseline update |
+| Claude worker conformance (all twelve phases, packaged adapter) | Accepted, 96 checks, 352 scripted requests |
+| Claude managed conformance | Accepted, 7 checks |
+| Claude TaskStop conformance | Accepted, four topologies |
+| `plugin-check`, `provider-check`, `check-compact` at `4002220c` | Passed |
+
+`remote_impact` also selected `codex-worker` and `session` because of
+`flake.nix` changes by other tasks since the 3.20.35 release; this change does
+not touch either path.
+
+## Publication
+
+All six releases were built, bound, signed and verified from clean source
+`4002220cb4981c22cfbc32343d490b52b4e2b6f3`.
+
+| Plugin | Artifact digest |
+| --- | --- |
+| claude-code 3.20.36 | `sha256:509fefe231b3828088b26a2da628fafde089e741c5342ba82af2d1965aa7ba1e` |
+| claude-deepseek 3.1.58 | `sha256:57d6b98020040ec61aedfb2f716f651f4c4bf80133a44b4c0aa3de1139530390` |
+| codex 3.5.28 | `sha256:8fa6d39728d632ce32115880a28657a104885f437ad1c6e6992afb5ded73d519` |
+| codex-deepseek 3.1.58 | `sha256:04f1eb3e18db1c6eb3d33febb8f9d0a981ce3c4e7d0788245885031885624fbc` |
+| grok 3.1.58 | `sha256:f67719b4696d0ee0653f01b88f8a691072853750a4141c1b882a4dee8a95ba46` |
+| deepseek-harness 1.0.16 | `sha256:840ab7b33f5e70fce0bc9b1aaca37f919573fc3eff9d6a18f59a749eebc87a7f` |
+
+| Gate | Result |
+| --- | --- |
+| Linux old/new generation coexistence with the resident worker | Passed for all six |
+| Real macOS arm64 CLI/adapter/gateway probes on macbook-air | Passed for all six |
+| Catalog readers before publication | Active (controller profile 597) and rollback (596) each read an isolated copy with all six twice: identical, 71 releases readable |
+| Public package and runtime URLs | 26 URLs resolve to their bound digests |
+| `provider-release-coverage` | Passed |
+| Live Controller Catalog | All six `ready`, component release 3.107.0 |
+
+## Installation
+
+Convergence ran Falcon (canary), macbook-air, Hawk, then OVH, bounded to the
+six Plugins.
+
+| Machine | Installed |
+| --- | --- |
+| Falcon, Hawk | claude-deepseek 3.1.58, codex 3.5.28, codex-deepseek 3.1.58, deepseek-harness 1.0.16, grok 3.1.58 |
+| macbook-air | claude-deepseek 3.1.58, codex 3.5.28, codex-deepseek 3.1.58, grok 3.1.58 |
+| OVH | claude-code 3.20.36, codex 3.5.28, grok 3.1.58 |
+
+All upgrades returned HTTP 204 and the re-read inventory reports each as
+active with its predecessor retained for rollback. Running sessions keep their
+generation; new sessions use the new one. The bounded run included
+deepseek-harness, so macbook-air's membership also planned removing its
+undeclared deepseek-harness 1.0.15; the uninstall preview refused because a
+session uses it, and nothing was removed. OVH keeps its undeclared
+deepseek-harness 1.0.15 by design.
+
+A disposable session on the new generation stayed dormant: `sessions.wake`
+does not start a session that never ran, and no prompt was sent to start it.
+The native 2.1.321 binary maps the `fable` alias to `claude-fable-5-2`
+(2.1.314 mapped it to `claude-fable-5-1`). The first prompt of a new session
+is the live acceptance of Fable 5.2 on a real account.
