@@ -93,6 +93,17 @@ export type MachineHostResources = {
   memory_headroom_bytes?: number;
   uptime_seconds: number;
   observed_at_ms: number;
+  // Absent without an active Machine browser Plugin or on older Machines.
+  browser?: MachineBrowserResources;
+};
+
+// Machine browser counts and bytes. Browser units run in the Agent worker
+// slice, so `memory_bytes` is part of `agent_memory_bytes`.
+export type MachineBrowserResources = {
+  running: number;
+  max_instances: number;
+  memory_bytes: number;
+  budget_bytes: number;
 };
 
 export type MachineComponentConvergence = {

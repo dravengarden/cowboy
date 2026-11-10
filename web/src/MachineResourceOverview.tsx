@@ -4,8 +4,15 @@ import {
   MetricDistribution,
   MetricFacts,
   type MetricSegment,
+  type MetricTone,
 } from "./InfoMetricVisuals";
-import { formatBytes, formatUptime } from "./machineResources";
+import {
+  BROWSER_MEMORY_NOTE,
+  browserSlotsDetail,
+  formatBytes,
+  formatUptime,
+} from "./machineResources";
+import type { MachineBrowserResources } from "./protocol";
 import type { MaintenanceMachine } from "./SessionMaintenancePanel";
 
 export function MachineResourceOverview({
@@ -99,6 +106,9 @@ export function MachineResourceOverview({
               tone={tone}
               emptyLabel="Not configured"
             />
+            {resources.browser && (
+              <BrowserResourceMeters browser={resources.browser} tone={tone} />
+            )}
           </>
         )}
       </Box>
@@ -137,8 +147,51 @@ export function MachineResourceOverview({
               Headroom: additional worker memory within runtime limits.
             </Typography>
           )}
+          {resources.browser && resources.agent_memory_bytes !== undefined && (
+            <Typography variant="caption" color="text.secondary">
+              {BROWSER_MEMORY_NOTE}
+            </Typography>
+          )}
         </>
       )}
     </Stack>
+  );
+}
+
+/** Browser slots and memory against the admitted budget (each unit's
+ * MemoryMax); a Machine without a browser runtime reports none. */
+function BrowserResourceMeters({
+  browser,
+  tone,
+}: {
+  browser: MachineBrowserResources;
+  tone: MetricTone;
+}): React.JSX.Element {
+  const running = browser.running > 0;
+  return (
+    <>
+      <CapacityMeter
+        label="Browsers"
+        value={browser.running}
+        total={browser.max_instances}
+        tone={
+          tone === "info" &&
+          browser.max_instances > 0 &&
+          browser.running >= browser.max_instances
+            ? "warning"
+            : tone
+        }
+        detail={browserSlotsDetail(browser)}
+      />
+      <CapacityMeter
+        label="Browser memory"
+        value={running ? browser.memory_bytes : undefined}
+        total={browser.budget_bytes}
+        format={formatBytes}
+        tone={tone}
+        emptyLabel="None running"
+        detail={running ? "of admitted budget" : undefined}
+      />
+    </>
   );
 }

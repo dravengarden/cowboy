@@ -1,4 +1,4 @@
-import type { MachineSummary } from "./protocol";
+import type { MachineBrowserResources, MachineSummary } from "./protocol";
 
 /** Resource polling does not transfer Plugin or workspace inventories. */
 export type MachineResourceSummary = Pick<MachineSummary,
@@ -105,6 +105,7 @@ export function machineResourceMetrics(
   if (resources.memory_headroom_bytes !== undefined) {
     metrics.push(["Worker budget (estimate)", formatBytes(resources.memory_headroom_bytes)]);
   }
+  if (resources.browser) metrics.push(...browserResourceMetrics(resources.browser));
   metrics.push(
     [
       "Load (1 min)",
@@ -123,3 +124,35 @@ export function machineResourceMetrics(
   );
   return metrics;
 }
+
+/** Browser instance slots: running of `browser.max_instances`. */
+export function browserSlotsDetail(browser: MachineBrowserResources): string {
+  const free = Math.max(0, browser.max_instances - browser.running);
+  if (browser.running === 0) return "None running";
+  return free > 0
+    ? `${String(browser.running)} running · ${String(free)} free`
+    : "All slots in use";
+}
+
+/** Label/value pairs for a Machine that reports browser usage. */
+export function browserResourceMetrics(
+  browser: MachineBrowserResources,
+): [string, string][] {
+  return [
+    [
+      "Browsers",
+      `${String(browser.running)} / ${String(browser.max_instances)} running`,
+    ],
+    [
+      "Browser memory",
+      browser.running === 0
+        ? "None running"
+        : `${formatBytes(browser.memory_bytes)} (budget ${formatBytes(browser.budget_bytes)})`,
+    ],
+  ];
+}
+
+/** Browser units run in the Agent worker slice; say what that means for the
+ * slice figures the card shows beside them. */
+export const BROWSER_MEMORY_NOTE =
+  "Browser memory is part of Agent memory and is already deducted from Headroom.";

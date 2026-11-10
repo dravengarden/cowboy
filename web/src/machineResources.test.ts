@@ -2,6 +2,8 @@ import { test } from "bun:test";
 import { assertEquals } from "../../tools/test-assert.ts";
 import type { MachineSummary } from "./protocol.ts";
 import {
+  browserResourceMetrics,
+  browserSlotsDetail,
   machineResourceMetrics,
   machineResourcesCaption,
   machinesForResources,
@@ -93,4 +95,44 @@ test("remote Machines list before the Controller host", () => {
     machine({ id: "falcon", display_name: "Falcon" }),
   ]);
   assertEquals(ordered.map((m) => m.id), ["falcon", "ovh", "hawk"]);
+});
+
+test("a Machine with a browser runtime shows browser slots and memory", () => {
+  const MIB = 1024 ** 2;
+  const resources = {
+    memory_total_bytes: 12 * GIB,
+    memory_available_bytes: 8 * GIB,
+    swap_total_bytes: 0,
+    swap_free_bytes: 0,
+    load_1m_milli: 0,
+    cpu_count: 1,
+    disk_total_bytes: 96 * GIB,
+    disk_available_bytes: 56 * GIB,
+    uptime_seconds: 0,
+    observed_at_ms: 0,
+  };
+  const running = {
+    running: 1,
+    max_instances: 2,
+    memory_bytes: 690 * MIB,
+    budget_bytes: 2 * GIB,
+  };
+  const metrics = machineResourceMetrics(
+    machine({ resources: { ...resources, browser: running } }),
+  );
+  assertEquals(metrics.slice(3, 5), [
+    ["Browsers", "1 / 2 running"],
+    ["Browser memory", "690.0 MB (budget 2.0 GB)"],
+  ]);
+  assertEquals(browserSlotsDetail(running), "1 running · 1 free");
+  assertEquals(browserSlotsDetail({ ...running, running: 2 }), "All slots in use");
+  const idle = { running: 0, max_instances: 1, memory_bytes: 0, budget_bytes: 0 };
+  assertEquals(browserResourceMetrics(idle), [
+    ["Browsers", "0 / 1 running"],
+    ["Browser memory", "None running"],
+  ]);
+  assertEquals(browserSlotsDetail(idle), "None running");
+  // Without the runtime, or from an older Machine, nothing browser-related shows.
+  const without = machineResourceMetrics(machine({ resources }));
+  assertEquals(without.some(([label]) => label.startsWith("Browser")), false);
 });

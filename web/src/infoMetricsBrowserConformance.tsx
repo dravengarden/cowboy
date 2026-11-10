@@ -88,6 +88,12 @@ export async function runInfoMetricsBrowserConformance(
         cpu_count: 6,
         uptime_seconds: 17 * 86_400 + 4 * 3600,
         observed_at_ms: now - 4000,
+        browser: {
+          running: 1,
+          max_instances: 2,
+          memory_bytes: 690 * 1024 ** 2,
+          budget_bytes: 2 * gb,
+        },
       },
     },
     can_configure: true,
@@ -399,6 +405,21 @@ export async function runInfoMetricsBrowserConformance(
         ?.getAttribute("aria-valuetext")
         ?.includes("<1%"),
       "small nonzero swap usage remains distinguishable from zero",
+    );
+    check(
+      machine("ovh")
+        .querySelector('[aria-label="Browsers"]')
+        ?.getAttribute("aria-valuenow") === "50" &&
+        machine("ovh")
+          .querySelector('[aria-label="Browser memory"]')
+          ?.getAttribute("aria-valuenow")
+          ?.startsWith("33.6") === true &&
+        machine("ovh").textContent?.includes("part of Agent memory") === true,
+      "browser slots and memory show against their admitted budget",
+    );
+    check(
+      !machine("older").textContent?.includes("Browser"),
+      "Machines without browser reports show no browser metrics",
     );
     check(
       machine("older").querySelectorAll('[role="meter"]').length === 1,
