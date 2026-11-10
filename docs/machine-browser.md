@@ -1631,12 +1631,16 @@ shared: every card keeps its own browser exactly as above.
   is a browser identity: a named account (`{account_id}`, stored
   `account:<id>`) or a legacy card (`{card}`, stored `card:<card>`). A member
   belongs to at most one share (primary key `(owner, member)`).
-- **Family rule (hard).** A member's family is its account-usage provider:
-  the card id itself, or for a named account its Provider's catalog
-  `host.account_usage.provider` (`claude-code` → `anthropic`, `codex` →
-  `openai`, `grok` → `xai`, the DeepSeek Providers → `deepseek`). A Provider
-  whose catalog entries disagree, or that declares none, has no family, and
-  such a member is refused (`browser_share_family_unknown`). A share holds at
+- **Family rule (hard).** Families come only from a closed, versioned table
+  in Cowboy code (`store::provider_accounts::browser_families`, version 1,
+  pinned by a test), never from the mutable Provider catalog: named-account
+  Providers `claude-code` → `anthropic`, `codex` → `openai`, `grok` → `xai`,
+  `claude-deepseek`, `codex-deepseek` and `deepseek-harness` → `deepseek`;
+  legacy cards `anthropic`, `openai`, `xai` and `deepseek` by their id. A
+  named account's Provider never changes, so neither does its family. A
+  Provider or card outside the table has no family and never joins
+  (`browser_share_family_unknown`). The table changes only with a reviewed
+  Cowboy change that bumps its version. A share holds at
   most one member per family. This is enforced three times: the unique key
   `(owner, share_id, family)`, the mutation (`browser_share_family_conflict`),
   and resolution, which recomputes every member's and binding's family before
@@ -1657,14 +1661,14 @@ shared: every card keeps its own browser exactly as above.
   a reset of the share that its Machine confirmed (`owner_request`) while the
   share has no placement on another Machine renews the bindings to the current
   members, and deleting the share removes them (a new share is a new key with
-  an empty profile). The bound member itself may rejoin. Bindings record the
-  member's identity, and both its recorded and its current family count: a
-  member may join or use the share only if no binding of another identity has
-  its current family as recorded or current family. If a bound identity's
-  current family differs from the recorded one (catalog drift), or is no
-  longer known, the share is blocked for every member
+  an empty profile). The bound member itself may rejoin. A confirmed reset
+  releases only the bindings of identities that had already left when the
+  reset began (recorded with its fence); an identity revoked meanwhile stays
+  bound. Bindings record the identity and its family from the table. As a
+  defence against a future table change, a binding or member whose recorded
+  family no longer equals the table's blocks the share for every member
   (`browser_share_family_drift`) until a confirmed reset re-binds the current
-  members under their current families, or the share is deleted.
+  members, or the share is deleted.
 - **Key.** `browser_shares::share_key(owner, share_id)`: the first 16 bytes
   of `sha256("cowboy-browser-share-v1\0" ‖ owner ‖ "\0" ‖ share_id)` as a
   version 8 UUID. Its domain differs from the card keys', so it never equals
@@ -1715,6 +1719,19 @@ shared: every card keeps its own browser exactly as above.
   its own browser, which its card no longer reaches. An open whose member
   lost its access while the open was in flight fails without stopping the
   share's browser.
+- **Reset fence (durable).** A share's reset is recorded on the share
+  (`pending_reset`: operation id, Machine, expected profile revision, the
+  bindings it may release) under the owner lock, at the membership revision
+  the caller observed, before it is dispatched. Until its terminal outcome is
+  known, joining, leaving or moving a member of that share is refused
+  (`browser_share_reset_pending`), also after a Controller restart; only
+  revocation (never refused) and deleting the share pass. The request's own
+  answer clears the fence; only its own confirmation (`owner_request`)
+  renews the bindings, in the same transaction. A reset whose request timed
+  out (for example queued behind a slow open) is settled by the reconciler
+  after a grace beyond the request timeout: it sends the same reset again
+  (same key and expected revision), which the Machine serializes behind the
+  original, and on any answer clears the fence without renewing.
 - **Reset** from a member resets the share's profile, the one the member uses;
   the state read lists the affected members and the viewer's reset
   confirmation names them. Every state read and lifecycle answer carries
@@ -1758,13 +1775,19 @@ shared: every card keeps its own browser exactly as above.
   revision, deleting, members: [{member, family, account_id}],
   bound: [{family, account_id}]}]` (renaming does not change the membership
   revision),
-  `browser_share_families` (Provider id → family) and each legacy card's
+  `browser_share_families` (the static table: `{version, providers, cards}`)
+  and each legacy card's
   `share_id`; a named account's share is the one listing it as a member.
 - **Web.** Account settings has a "Shared browser" section to create, rename
   and delete shares and add or remove members; a candidate whose family is
-  already present is shown disabled with the reason. A shared card's Browser
-  entry says "Shared · <label>", and the reset confirmation lists the members
-  it affects.
+  already present is shown disabled with the reason. The section appears only
+  when the Service's inventory lists `browser_shares` (an older Service offers
+  no share mutation). A shared card's Browser entry says "Shared · <label>",
+  and the reset confirmation lists the members it affects. Identity-less
+  resets are offered only after a loaded inventory proved the Service has no
+  shared profiles (never while it loads or failed). A read's identity is
+  observed before any incarnation staleness filtering, so a move from a
+  share's browser to the card's own re-binds the panel.
 
 ## Security and privacy
 
