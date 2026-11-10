@@ -3039,9 +3039,9 @@ export class WorkspaceTools {
         : master.exitCode === 0 && main.exitCode !== 0
           ? "master"
           : "main";
-    // A status that did not complete is not a clean tree.
-    let changes =
-      status.exitCode === 0 ? status.output.trim() : "(unavailable: git status did not complete)";
+    // As native 2.1.321: keep the first entry's leading index column (" M" is
+    // unstaged), and a status that did not complete is not a clean tree.
+    let changes = status.exitCode === 0 ? status.output.trimEnd() : "(unavailable)";
     if (changes.length > 2000) {
       changes =
         changes.slice(0, 2000) +
