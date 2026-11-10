@@ -1731,13 +1731,21 @@ shared: every card keeps its own browser exactly as above.
   the caller observed, before it is dispatched. Until its terminal outcome is
   known, joining, leaving or moving a member of that share is refused
   (`browser_share_reset_pending`), also after a Controller restart; only
-  revocation (never refused) and deleting the share pass. The request's own
-  answer clears the fence; only its own confirmation (`owner_request`)
-  renews the bindings, in the same transaction. A reset whose request timed
-  out (for example queued behind a slow open) is settled by the reconciler
-  after a grace beyond the request timeout: it sends the same reset again
-  (same key and expected revision), which the Machine serializes behind the
-  original, and on any answer clears the fence without renewing.
+  revocation (never refused) and deleting the share pass. The Machine keys a
+  reset by its request id (the recorded operation id) and keeps its own
+  durable fence for it, so only a terminal answer clears the Controller's:
+  `owner_request` (carried out) or a plain `hibernated` (that operation
+  already completed) proves it applied, `superseded` (no fence was raised)
+  proves it never runs; `failed` (the Machine retained its fence because
+  the unit's exit is unconfirmed), `busy` (another operation holds it), any
+  other answer and no answer keep the fence. Only the request's own
+  `owner_request` renews the bindings, in the same transaction. An unsettled
+  reset (a timeout, for example queued behind a slow open, or a retained
+  fence) is settled by the reconciler after a grace beyond the request
+  timeout, with backoff and after a Controller restart: it sends the same
+  operation again (same request id, key and expected revision), which the
+  Machine continues or reports, and clears the fence on a terminal answer
+  without renewing.
 - **Reset** from a member resets the share's profile, the one the member uses;
   the state read lists the affected members and the viewer's reset
   confirmation names them. Every state read and lifecycle answer carries
@@ -1793,7 +1801,12 @@ shared: every card keeps its own browser exactly as above.
   resets are offered only after a loaded inventory proved the Service has no
   shared profiles (never while it loads or failed). A read's identity is
   observed before any incarnation staleness filtering, so a move from a
-  share's browser to the card's own re-binds the panel.
+  share's browser to the card's own re-binds the panel; a lifecycle answer
+  naming another identity re-binds it too and leaves Reset waiting for a
+  state read that names the identity. A re-bind aborts every request and
+  continuation of the former panel (a restart's reopen included), and the
+  sheet's one-shot link navigation and auto-open are consumed above the
+  re-bound panel, so they never repeat.
 
 ## Security and privacy
 
