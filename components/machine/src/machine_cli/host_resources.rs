@@ -275,9 +275,23 @@ pub fn sample(state_dir: &Path) -> Option<HostResources> {
             .ok()
             .and_then(|text| parse_uptime_seconds(&text))
             .unwrap_or(0),
-        // The caller attaches the configured watermark.
+        // `report` attaches the configured watermark and browser usage.
         disk_low_watermark_bytes: None,
+        browser: None,
     })
+}
+
+/// The report sent to the Controller: this host's sample with the Device's
+/// configured disk watermark and its Machine browser usage attached.
+pub(super) fn report(config: &super::ControllerConfig) -> Option<HostResources> {
+    let mut resources = sample(&config.state_dir)?;
+    resources.disk_low_watermark_bytes = Some(
+        config
+            .device_config
+            .get(&crate::config::schema::DEVICE_DISK_LOW_WATERMARK),
+    );
+    resources.browser = config.browsers.resources();
+    Some(resources)
 }
 
 #[cfg(test)]

@@ -781,6 +781,27 @@ is the sockets directory, which may hold the two sockets and nothing else.
 Snapshots are written only through the staging budget. Nothing the browser
 does during a run can write to the shared filesystem.
 
+### Resource reporting
+
+Each periodic host resource report carries an optional `browser` object:
+`running` (registered instances, starting and stopping included),
+`max_instances`, `memory_bytes` (sum of each running instance's cgroup
+`memory.current`) and `budget_bytes` (sum of their admitted budgets, each
+unit's `MemoryMax`). It holds counts and bytes only, never an account,
+instance or URL. The Machine reads in-memory instance state and the cgroup
+files without calling systemd or waiting for any lifecycle or control lock
+a stop holds. A Machine with neither an active Machine browser Plugin nor a
+running instance omits the object, as do older Machines; an installed Plugin
+with nothing running reports `running: 0`. Units retained only until their
+exit is confirmed are not counted, although their budget stays reserved in
+the launch ledger.
+
+The About page's Machine card shows it as a **Browsers** slot meter and a
+**Browser memory** meter against the summed budget. Browser units run in
+`cowboy-agents.slice`, so their memory is already part of the card's Agent
+memory and already deducted from its Headroom estimate; the card says so
+rather than adding the two.
+
 ### Profile compatibility and rollback
 
 `browser-state.json` records the full `browser_version` of the artifact that

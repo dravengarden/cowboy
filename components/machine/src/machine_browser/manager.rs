@@ -39,6 +39,7 @@ mod generations;
 mod launch;
 mod lifecycle;
 mod reconcile;
+mod resources;
 mod snapshots;
 mod supervision;
 use supervision::{Recheck, claim_scan};

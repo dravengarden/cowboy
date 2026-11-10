@@ -56,6 +56,8 @@ pub const NATIVE_FORK_PROTOCOL_VERSION: u16 = 39;
 pub const NAMED_RELEASE_CARRY_PROTOCOL_VERSION: u16 = 38;
 /// Read-only quota collection in a verified named native profile.
 pub const NATIVE_USAGE_PROTOCOL_VERSION: u16 = 37;
+mod host_resources;
+pub use host_resources::{BrowserResources, HostResources, ObservedHostResources};
 mod native_usage;
 pub use native_usage::native_usage_error_code;
 
@@ -314,47 +316,6 @@ where
         .map_err(serde::de::Error::custom)
 }
 
-/// Host resources a Machine observes for its own runtime. Load is reported in
-/// thousandths so the type stays `Eq` like the rest of the protocol.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HostResources {
-    pub memory_total_bytes: u64,
-    pub memory_available_bytes: u64,
-    pub swap_total_bytes: u64,
-    pub swap_free_bytes: u64,
-    pub load_1m_milli: u64,
-    pub cpu_count: u32,
-    /// Filesystem holding the Machine state directory.
-    pub disk_total_bytes: u64,
-    pub disk_available_bytes: u64,
-    /// Memory charged to the Agent worker slice, when the host uses one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_memory_bytes: Option<u64>,
-    /// Memory Agent workers can still use before a cgroup limit above them
-    /// throttles them: the smallest `limit - current + inactive file cache`
-    /// over the worker slice and its ancestors. Host `memory_available_bytes`
-    /// can look ample while the enclosing user slice is at its `memory.high`.
-    /// Absent where no ancestor is limited or on older Machines.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memory_headroom_bytes: Option<u64>,
-    pub uptime_seconds: u64,
-    /// The Device's configured `disk.low_watermark`: below this much available
-    /// disk the Controller runs an extra retention pass. Absent from Devices
-    /// without the setting, and `0` disables the trigger.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disk_low_watermark_bytes: Option<u64>,
-}
-
-impl HostResources {
-    /// Whether the Device reports less available disk than it declared it
-    /// needs, so its Plugin generations should be retired now.
-    #[must_use]
-    pub fn below_disk_watermark(&self) -> bool {
-        self.disk_low_watermark_bytes
-            .is_some_and(|watermark| watermark > 0 && self.disk_available_bytes < watermark)
-    }
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MachineCapabilities {
     /// Accepts non-destructive session hibernation.
@@ -363,13 +324,6 @@ pub struct MachineCapabilities {
     /// Starts sessions with a native `session/fork` and forked worktrees.
     #[serde(default)]
     pub native_fork: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ObservedHostResources {
-    #[serde(flatten)]
-    pub resources: HostResources,
-    pub observed_at_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1599,27 +1553,6 @@ mod tests {
                 named["account_id"]
             );
         }
-    }
-
-    #[test]
-    fn disk_watermark_is_optional_compatible_and_zero_disables_it() {
-        let mut resources: HostResources = serde_json::from_value(serde_json::json!({
-            "memory_total_bytes": 1, "memory_available_bytes": 1,
-            "swap_total_bytes": 0, "swap_free_bytes": 0, "load_1m_milli": 0,
-            "cpu_count": 1, "disk_total_bytes": 100, "disk_available_bytes": 10,
-            "uptime_seconds": 1,
-        }))
-        .expect("a report from an older Device still decodes");
-        assert_eq!(resources.disk_low_watermark_bytes, None);
-        assert!(!resources.below_disk_watermark());
-        resources.disk_low_watermark_bytes = Some(0);
-        assert!(!resources.below_disk_watermark());
-        resources.disk_low_watermark_bytes = Some(10);
-        assert!(!resources.below_disk_watermark());
-        resources.disk_low_watermark_bytes = Some(11);
-        assert!(resources.below_disk_watermark());
-        let encoded = serde_json::to_value(&resources).unwrap();
-        assert_eq!(encoded["disk_low_watermark_bytes"], 11);
     }
 
     #[test]

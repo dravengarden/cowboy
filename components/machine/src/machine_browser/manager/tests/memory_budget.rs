@@ -364,3 +364,37 @@ async fn a_refused_adoption_hands_its_budget_to_the_stop_until_the_exit_is_confi
             .is_empty()
     );
 }
+
+/// The host resource report counts the running instance with its cgroup
+/// usage and admitted budget while a stop is pending, and reports nothing
+/// on a Machine with neither an active Plugin nor a running instance.
+#[tokio::test]
+async fn the_resource_report_counts_running_instances_by_cgroup_and_budget() {
+    let fixture = fixture().await;
+    hold_budget(&fixture, BUDGET);
+    std::fs::write(
+        fixture.cgroup.join("memory.current"),
+        format!("{}\n", 690 * MIB),
+    )
+    .unwrap();
+    // A stop holds the account lifecycle lock across its awaits; the
+    // report never waits for it.
+    let slot = fixture.manager.slot(&fixture.account);
+    let _stopping = slot.lifecycle.lock().await;
+    let _control = fixture.instance.control.lock().await;
+    assert_eq!(
+        fixture.manager.resources(),
+        Some(crate::machine_protocol::BrowserResources {
+            running: 1,
+            max_instances: Settings::from_config(None).max_instances,
+            memory_bytes: 690 * MIB,
+            budget_bytes: BUDGET,
+        })
+    );
+    unregistered(&fixture);
+    assert_eq!(
+        fixture.manager.resources(),
+        None,
+        "no Plugin is installed in the fixture store"
+    );
+}

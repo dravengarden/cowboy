@@ -1443,7 +1443,6 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         ));
     };
     heartbeat.tick().await;
-    let state_dir = config.state_dir.clone();
     let mut resources_due = tokio::time::Instant::now();
     let mut decoder = crate::machine_transport::Decoder::new((chunked, compressed, paced, stream));
     // Record disconnect and silence even when only one direction fails.
@@ -1476,10 +1475,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
                         && tokio::time::Instant::now() >= resources_due
                     {
                         resources_due = tokio::time::Instant::now() + HOST_RESOURCES_INTERVAL;
-                        if let Some(mut resources) = host_resources::sample(&state_dir) {
-                            resources.disk_low_watermark_bytes = Some(config.device_config.get(
-                                &crate::config::schema::DEVICE_DISK_LOW_WATERMARK,
-                            ));
+                        if let Some(resources) = host_resources::report(config) {
                             queue_controller_frame(
                                 &controller_write_tx,
                                 &MachineFrame::Event {
