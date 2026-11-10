@@ -6,7 +6,7 @@
  * identity row, the menu and an explicit full-screen mode.
  * See docs/machine-browser.md, "Viewer (core web)". */
 import { Box } from "@mui/material";
-import { type RefObject, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { Sheet } from "../Sheet";
 import { copyText } from "../clipboard";
 import { useStoreSelector } from "../store";
@@ -30,11 +30,12 @@ import { type BrowserModel, autoEntry, linkEntry, linkTarget, resetTarget } from
 import {
   type SharedBrowser,
   browserIdentityKey,
-  identityBinding,
   type EntryLatch,
+  type IdentityBinding,
   identityRequiredFor,
   newEntryLatch,
   panelShared,
+  reconcileBinding,
   takeLatch,
 } from "./shareRules";
 import { useSharedBrowser } from "./useSharedBrowser";
@@ -234,20 +235,30 @@ function useBrowserChrome(account: string, model: BrowserModel) {
  * Sharing metadata comes from one source for every opener. */
 export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.Element {
   const { shared, snapshot } = useSharedBrowser(props.account.id);
-  // A read naming another browser identity than the panel bound also
-  // starts it over, whatever the inventory says yet.
-  const [epoch, setEpoch] = useState(0);
+  // One binding for the inventory's and the reads' view of the browser
+  // identity: the first one binds, an equal one (from either source) keeps
+  // the panel, another one re-binds it.
+  const [binding, setBinding] = useState<IdentityBinding>(() => ({
+    identity: snapshot ? browserIdentityKey(shared) : undefined,
+    epoch: 0,
+  }));
+  const observe = useCallback(
+    (identity: string | undefined) => setBinding((old) => reconcileBinding(old, identity)),
+    [],
+  );
+  const inventoryIdentity = snapshot ? browserIdentityKey(shared) : undefined;
+  useEffect(() => observe(inventoryIdentity), [inventoryIdentity, observe]);
   // The link-opening action is consumed once per sheet, above the keyed
   // panel: a re-bound panel never opens or navigates the link again.
   const [entry] = useState(newEntryLatch);
   return (
     <MachineBrowserPanel
-      key={`${browserIdentityKey(shared)}:${epoch}`}
+      key={binding.epoch}
       {...props}
       entry={entry}
       shared={shared}
       snapshot={snapshot}
-      onRebind={() => setEpoch((value) => value + 1)}
+      onIdentity={observe}
     />
   );
 }
@@ -258,13 +269,15 @@ function usePanelSharing(
   props: {
     shared: SharedBrowser | undefined;
     snapshot: SubscriptionSnapshot | undefined;
-    onRebind: () => void;
+    onIdentity: (identity: string | undefined) => void;
   },
   model: BrowserModel,
   commands: BrowserCommands,
   uiChrome: BrowserChromeState,
 ) {
-  useIdentityBinding(model.observedIdentity ?? model.read?.browser_identity, props.onRebind);
+  const identity = model.observedIdentity ?? model.read?.browser_identity;
+  const { onIdentity } = props;
+  useEffect(() => onIdentity(identity), [identity, onIdentity]);
   const shared = panelShared(model.read, props.snapshot, props.shared);
   // Resets name the identity unless a loaded inventory proves the Service
   // predates shared profiles.
@@ -283,22 +296,11 @@ function usePanelSharing(
   return { shared, confirm, chrome };
 }
 
-/** Bind the panel to the first browser identity its reads name; another
- * one re-binds it (`onRebind` remounts the panel). */
-function useIdentityBinding(identity: string | undefined, onRebind: () => void): void {
-  const bound = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const action = identityBinding(bound.current, identity);
-    if (action === "bind") bound.current = identity;
-    if (action === "rebind") onRebind();
-  }, [identity, onRebind]);
-}
-
 function MachineBrowserPanel(
   props: MachineBrowserSheetProps & {
     shared: SharedBrowser | undefined;
     snapshot: SubscriptionSnapshot | undefined;
-    onRebind: () => void;
+    onIdentity: (identity: string | undefined) => void;
     entry: EntryLatch;
   },
 ): React.JSX.Element {

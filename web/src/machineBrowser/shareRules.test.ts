@@ -18,7 +18,7 @@ import {
 } from "./api";
 import { BrowserShareSettings, commitDraft, sharesSupported } from "./BrowserShareSettings";
 import { confirmationCurrent, confirmationFor } from "./confirmation";
-import { restartOn } from "./useMachineBrowser";
+import { checkRestartIdentity, resetChangesAccounts, restartOn } from "./useMachineBrowser";
 import {
   type AccountBrowserModel,
   INITIAL_BROWSER_MODEL,
@@ -35,6 +35,7 @@ import {
   identityBinding,
   identityRequiredFor,
   newEntryLatch,
+  reconcileBinding,
   takeLatch,
   joinBlocked,
   panelShared,
@@ -641,4 +642,87 @@ test("a restart continuation ends with its panel", async () => {
   }
   assertEquals(refused, true);
   assertEquals(reopened, 0);
+});
+
+test("inventory and reads feed one binding: agreement never remounts", () => {
+  const share = `share:${SHARE}:2`;
+  // The first read binds the panel without a remount.
+  let binding = reconcileBinding({ identity: undefined, epoch: 0 }, share);
+  assertEquals(binding, { identity: share, epoch: 0 });
+  // The inventory later confirms the identity the read bound: no remount.
+  assertEquals(reconcileBinding(binding, share) === binding, true);
+  assertEquals(reconcileBinding(binding, undefined) === binding, true);
+  // Either source naming another identity re-binds exactly once.
+  binding = reconcileBinding(binding, "own");
+  assertEquals(binding, { identity: "own", epoch: 1 });
+  assertEquals(reconcileBinding(binding, "own"), binding);
+});
+
+test("a restart stops at an intermediate answer naming another identity", async () => {
+  const observed: string[] = [];
+  const identity = { expected: `share:${SHARE}:2`, observe: (id: string) => observed.push(id) };
+  checkRestartIdentity(identity, { browser_identity: `share:${SHARE}:2` });
+  checkRestartIdentity(identity, {});
+  checkRestartIdentity({ ...identity, expected: undefined }, { browser_identity: "own" });
+  assertEquals(observed, []);
+  const target = {
+    machine_id: "ovh",
+    instance: { account_id: PIKA, instance_id: "b-1", incarnation: 3 },
+  };
+  const stopped: BrowserStateEvent = {
+    instance: { account_id: PIKA, instance_id: "", incarnation: 0 },
+    state: "hibernated",
+    reason: "owner_request",
+    profile_revision: 2,
+    observed_at_ms: 1,
+  };
+  let reopened = 0;
+  const api = {
+    // The hibernate answer already names the card's own browser.
+    hibernate: () =>
+      Promise.resolve({ machine_id: "ovh", state: stopped, browser_identity: "own" }),
+    read: () =>
+      Promise.resolve({ machine_id: "ovh", state: stopped, placements: [], admission: null }),
+  } as unknown as Parameters<typeof restartOn>[0];
+  let code = "";
+  try {
+    await restartOn(
+      api,
+      { account: PIKA, dataset: "d" },
+      target,
+      new AbortController().signal,
+      () => {
+        reopened += 1;
+        return Promise.resolve({ machine_id: "ovh", state: stopped });
+      },
+      identity,
+    );
+  } catch (cause) {
+    code = (cause as { code?: string }).code ?? "";
+  }
+  assertEquals(code, "browser_identity_changed");
+  assertEquals(reopened, 0);
+  assertEquals(observed, ["own"]);
+  // The panel observes it and re-binds.
+  const model = reduceBrowser(INITIAL_BROWSER_MODEL, { type: "identity", identity: "own" });
+  assertEquals(model.observedIdentity, "own");
+});
+
+test("only a carried-out shared reset re-reads the account inventory", () => {
+  const answer = (reason: BrowserStateEvent["reason"]) => ({
+    machine_id: "ovh",
+    state: {
+      instance: { account_id: PIKA, instance_id: "", incarnation: 0 },
+      state: "hibernated" as const,
+      reason,
+      profile_revision: 3,
+      observed_at_ms: 1,
+    },
+  });
+  assertEquals(resetChangesAccounts(`share:${SHARE}:2`, answer("owner_request")), true);
+  assertEquals(resetChangesAccounts("own", answer("owner_request")), false);
+  assertEquals(resetChangesAccounts(undefined, answer("owner_request")), false);
+  for (const reason of ["superseded", "busy", "failed"] as const) {
+    assertEquals(resetChangesAccounts(`share:${SHARE}:2`, answer(reason)), false);
+  }
 });

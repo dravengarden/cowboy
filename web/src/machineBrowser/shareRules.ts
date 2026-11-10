@@ -191,6 +191,30 @@ export function takeLatch(latch: EntryLatch, action: keyof EntryLatch): boolean 
   return true;
 }
 
+/** A sheet's single binding of its panel to a browser identity, fed by
+ * the inventory and by the panel's reads; `epoch` keys the panel. */
+export interface IdentityBinding {
+  identity: string | undefined;
+  epoch: number;
+}
+
+/** Fold one observed identity (inventory or read) into the binding: the
+ * first binds without a remount, an equal one changes nothing, another one
+ * re-binds (a new epoch remounts the panel). */
+export function reconcileBinding(
+  binding: IdentityBinding,
+  identity: string | undefined,
+): IdentityBinding {
+  switch (identityBinding(binding.identity, identity)) {
+    case "keep":
+      return binding;
+    case "bind":
+      return { identity, epoch: binding.epoch };
+    case "rebind":
+      return { identity, epoch: binding.epoch + 1 };
+  }
+}
+
 /** How the panel treats the browser identity of a new read: the first
  * one binds it, an equal one keeps it, another one re-binds the panel
  * (its model, viewer and confirmations are dropped before the new identity

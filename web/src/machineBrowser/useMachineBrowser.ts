@@ -2,6 +2,7 @@
  * read, status polling while nothing is attached, and the lifecycle calls.
  * Everything observable lives in the pure `browserModel`. */
 import { useCallback, useEffect, useReducer, useRef } from "react";
+import { PREFERENCES_CHANGED } from "../aboutPreferences";
 import { lowPriorityPoll } from "../network/bandwidth";
 import { productSessionSignal } from "../productSessionEnd";
 import { productSyncPrincipal } from "../productSyncIdentity";
@@ -78,23 +79,50 @@ function errorText(cause: unknown): string {
   return browserErrorText(undefined);
 }
 
+/** The browser identity a restart was confirmed for, and how to report
+ * another one an intermediate answer names. */
+export interface RestartIdentity {
+  expected: string | undefined;
+  observe: (identity: string) => void;
+}
+
+/** Throws (after reporting it) when `answer` names another browser
+ * identity than the restart was confirmed for: nothing is reopened then. */
+export function checkRestartIdentity(
+  identity: RestartIdentity | undefined,
+  answer: { browser_identity?: string | undefined },
+): void {
+  const named = answer.browser_identity;
+  if (identity?.expected === undefined || named === undefined || named === identity.expected) {
+    return;
+  }
+  identity.observe(named);
+  throw new MachineBrowserError("browser_identity_changed", 409);
+}
+
 /** Hibernate exactly `target`, confirm it stopped (`confirmStopped`, with
  * reads pinned to its Machine), then reopen only on that Machine, unless
- * the panel ended (re-bound to another browser identity) meanwhile. */
+ * the panel ended (re-bound to another browser identity) meanwhile or an
+ * intermediate answer names another identity than the confirmed one. */
 export async function restartOn(
   api: MachineBrowserApi,
   { account, dataset }: { account: string; dataset: string },
   target: BrowserTarget,
   abort: AbortSignal,
   reopen: (abort: AbortSignal, machine: string) => Promise<BrowserResult>,
+  identity?: RestartIdentity,
 ): Promise<BrowserResult> {
   const hibernated = await api.hibernate(account, dataset, target, abort);
-  const read = (signal: AbortSignal) =>
-    api.read(
+  checkRestartIdentity(identity, hibernated);
+  const read = async (signal: AbortSignal) => {
+    const answer = await api.read(
       account,
       AbortSignal.any([signal, AbortSignal.timeout(READ_TIMEOUT_MS)]),
       target.machine_id,
     );
+    checkRestartIdentity(identity, answer);
+    return answer;
+  };
   await confirmStopped(target, hibernated, read, abort);
   abort.throwIfAborted();
   return reopen(abort, target.machine_id);
@@ -124,15 +152,69 @@ function useAccountModel(account: string): {
   return { model, modelRef, dispatch };
 }
 
-/** An abort controller living exactly as long as the mounted panel. */
-function usePanelLifetime(): { current: AbortController } {
+/** Whether a reset answer changed the account inventory: a shared
+ * profile's reset the Machine carried out renews its family bindings. */
+export function resetChangesAccounts(identity: string | undefined, result: BrowserResult): boolean {
+  return (
+    identity?.startsWith("share:") === true &&
+    result.state.state === "hibernated" &&
+    result.state.reason === "owner_request"
+  );
+}
+
+/** Reset exactly `target`; a confirmed reset of a shared profile renewed
+ * its family bindings, so the account inventory and settings re-read. */
+async function resetOn(
+  api: MachineBrowserApi,
+  { account, dataset }: { account: string; dataset: string },
+  target: ResetTarget,
+  abort: AbortSignal,
+): Promise<BrowserResult> {
+  const result = await api.reset(
+    account,
+    dataset,
+    target.machine_id,
+    target.revision,
+    abort,
+    target.identity,
+  );
+  if (resetChangesAccounts(target.identity, result)) announceAccountsChanged();
+  return result;
+}
+
+/** The identity a restart is confirmed for: the one the panel shows. */
+function restartIdentity(
+  model: BrowserModel,
+  dispatch: (event: BrowserEvent) => void,
+): RestartIdentity {
+  return {
+    expected: model.observedIdentity ?? model.read?.browser_identity,
+    observe: (identity) => dispatch({ type: "identity", identity }),
+  };
+}
+
+function announceAccountsChanged(): void {
+  globalThis.dispatchEvent(
+    new CustomEvent(PREFERENCES_CHANGED, { detail: { provider_accounts: 0 } }),
+  );
+}
+
+/** Request signals bound to the product session, a timeout and the
+ * mounted panel: every request and continuation (a restart's reopen) ends
+ * with the panel, so a re-bound panel never acts on its former identity. */
+function usePanelSignal(): (timeoutMs: number) => AbortSignal {
   const lifetime = useRef(new AbortController());
   useEffect(() => {
     if (lifetime.current.signal.aborted) lifetime.current = new AbortController();
     const controller = lifetime.current;
     return () => controller.abort();
   }, []);
-  return lifetime;
+  return (timeoutMs) =>
+    AbortSignal.any([
+      productSessionSignal(),
+      lifetime.current.signal,
+      AbortSignal.timeout(timeoutMs),
+    ]);
 }
 
 /** Whether an answer may still be applied: the panel is mounted and the
@@ -161,15 +243,7 @@ export function useMachineBrowser({
 }: MachineBrowserInput): MachineBrowserController {
   const { model, modelRef, dispatch } = useAccountModel(account);
   const live = useLive(owner);
-  // Every request and continuation (a restart's reopen) ends with the
-  // panel: a re-bound panel never acts on its former browser identity.
-  const lifetime = usePanelLifetime();
-  const signal = (timeoutMs: number): AbortSignal =>
-    AbortSignal.any([
-      productSessionSignal(),
-      lifetime.current.signal,
-      AbortSignal.timeout(timeoutMs),
-    ]);
+  const signal = usePanelSignal();
 
   // Each read is tagged with its generation, pinned Machine and lifecycle
   // epoch (`readTicket`): a superseded, re-pinned or pre-transition answer
@@ -272,8 +346,7 @@ export function useMachineBrowser({
       if (!target) return;
       run(
         "reset",
-        (abort) =>
-          api.reset(account, dataset, target.machine_id, target.revision, abort, target.identity),
+        (abort) => resetOn(api, { account, dataset }, target, abort),
         COMMAND_TIMEOUT_MS,
       );
     },
@@ -287,13 +360,18 @@ export function useMachineBrowser({
       run(
         "open",
         (abort) =>
-          restartOn(api, { account, dataset }, target, abort, (signal, machine) =>
-            openCall(viewport, signal, machine),
+          restartOn(
+            api,
+            { account, dataset },
+            target,
+            abort,
+            (signal, machine) => openCall(viewport, signal, machine),
+            restartIdentity(modelRef.current, dispatch),
           ),
         RESTART_TIMEOUT_MS,
       );
     },
-    [account, api, dataset, openCall, run],
+    [account, api, dataset, dispatch, openCall, run],
   );
 
   return { model, dispatch, refresh, open, navigate, hibernate, snapshot, reset, restart };

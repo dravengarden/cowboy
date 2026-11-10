@@ -74,6 +74,9 @@ export type BrowserEvent =
   | { type: "viewer_ended"; message: string }
   | { type: "remote_clipboard"; text: string | undefined }
   | { type: "notice"; message: string }
+  /** An intermediate answer (a restart's hibernate or confirmation read)
+   * named this browser identity: the panel re-binds. */
+  | { type: "identity"; identity: string }
   | { type: "dismiss" };
 
 export const INITIAL_BROWSER_MODEL: BrowserModel = { loaded: false, error: "", notice: "" };
@@ -532,6 +535,8 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
       return { ...model, notice: event.message };
     case "dismiss":
       return { ...model, error: "", notice: "" };
+    case "identity":
+      return { ...model, observedIdentity: event.identity };
     default:
       return model;
   }
