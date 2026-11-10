@@ -934,18 +934,24 @@ pub(in crate::server) async fn reset(
     if reset_confirmed(&event) {
         state.browsers.record_authoritative(&connection, &event);
     }
-    // This reset's own confirmation makes the profile fresh: identities that
-    // had left before it began no longer hold a family of it.
-    if let Some(share) = resolved.shared()
-        && let Err(error) = store
+    // Only a terminal outcome clears a share's fence; a reset the Machine
+    // retained (failed with its fence raised) or could not start yet (busy)
+    // stays fenced and is reconciled under the same operation id. This
+    // reset's own confirmation makes the profile fresh: identities that had
+    // left before it began no longer hold a family of it.
+    if let Some(share) = resolved.shared() {
+        if shares::reset_outcome(&event) == shares::ResetOutcome::Unsettled {
+            tracing::info!(operation = %operation, "browser share reset unsettled; fence kept");
+        } else if let Err(error) = store
             .finish_share_reset(
                 owner,
                 (&share.share_id, &operation),
                 reset_confirmed(&event),
             )
             .await
-    {
-        tracing::warn!(%error, "browser share reset fence not cleared; the reconciler retries");
+        {
+            tracing::warn!(%error, "browser share reset fence not cleared; the reconciler retries");
+        }
     }
     if let Some(revision) = event.profile_revision
         && let Err(error) = store

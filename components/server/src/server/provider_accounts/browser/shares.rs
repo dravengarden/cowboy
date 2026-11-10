@@ -575,12 +575,40 @@ pub(in crate::server) fn reset_due(age_ms: i64) -> bool {
     age_ms >= RESET_GRACE_MS
 }
 
-/// Settle a share reset whose own request did not learn its outcome: the
-/// same reset (same key and expected profile revision) is sent again. The
-/// Machine serializes it behind the original, so any answer means the
-/// original reached its end. Its fence is then cleared without renewing
-/// the bindings: only a reset's own confirmation proves the profile fresh
-/// since it began. Returns whether the reset is settled.
+/// What a Machine's answer to a reset proves about that reset operation.
+/// The Machine keys a reset by its request id and keeps a durable fence for
+/// it: `owner_request` (carried out now) and a plain `hibernated` (that
+/// operation already completed) prove it applied; `superseded` (no fence was
+/// raised: the profile revision moved) proves it will never run; `failed`
+/// (the fence is retained until the unit's exit is confirmed), `busy`
+/// (another operation holds the fence) and anything else prove neither.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::server) enum ResetOutcome {
+    Applied,
+    NotExecuted,
+    Unsettled,
+}
+
+pub(in crate::server) fn reset_outcome(
+    event: &crate::machine_protocol::machine_browser::StateEvent,
+) -> ResetOutcome {
+    if event.state != BrowserState::Hibernated {
+        return ResetOutcome::Unsettled;
+    }
+    match event.reason {
+        Some(Reason::OwnerRequest) | None => ResetOutcome::Applied,
+        Some(Reason::Superseded) => ResetOutcome::NotExecuted,
+        _ => ResetOutcome::Unsettled,
+    }
+}
+
+/// Settle a share reset whose own request did not learn a terminal
+/// outcome: the same operation (same request id, key and expected profile
+/// revision) is sent again, so the Machine continues or reports its own
+/// fenced operation rather than starting another. Only an answer proving
+/// it applied or never runs clears the fence, and never renews the
+/// bindings: only a reset's own first confirmation proves the profile
+/// fresh since it began. Returns whether the reset is settled.
 async fn reconcile_reset(
     state: &Arc<AppState>,
     owner: &str,
@@ -600,7 +628,7 @@ async fn reconcile_reset(
         .machine_control
         .browser_command(
             &connection,
-            super::request_id("browser-reset-reconcile"),
+            pending.operation_id.clone(),
             Command::Reset {
                 account_id: browser_shares::share_key(owner, share_id),
                 expected_profile_revision: pending.expected_profile_revision,
@@ -608,8 +636,14 @@ async fn reconcile_reset(
             super::RESET_TIMEOUT,
         )
         .await;
-    if let Err(error) = answer {
-        tracing::info!(%error, operation = %pending.operation_id, "browser share reset still unsettled");
+    let outcome = match answer {
+        Ok(event) => reset_outcome(&event),
+        Err(error) => {
+            tracing::info!(%error, operation = %pending.operation_id, "browser share reset unanswered");
+            ResetOutcome::Unsettled
+        }
+    };
+    if outcome == ResetOutcome::Unsettled {
         return false;
     }
     store

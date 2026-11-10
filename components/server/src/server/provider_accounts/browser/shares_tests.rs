@@ -623,3 +623,52 @@ fn a_pending_reset_is_left_to_its_own_request_first() {
     assert!(!reset_due(timeout_ms));
     assert!(reset_due(90_000));
 }
+
+#[test]
+fn only_terminal_machine_answers_settle_a_share_reset() {
+    let share_id = uuid::Uuid::new_v4().to_string();
+    let pika = resolved("openai", true, &share_id);
+    let answer = |state, reason| StateEvent {
+        state,
+        reason,
+        ..event_of(&pika)
+    };
+    // Carried out now, or the same operation already completed.
+    assert_eq!(
+        reset_outcome(&answer(
+            BrowserState::Hibernated,
+            Some(Reason::OwnerRequest)
+        )),
+        ResetOutcome::Applied
+    );
+    assert_eq!(
+        reset_outcome(&answer(BrowserState::Hibernated, None)),
+        ResetOutcome::Applied
+    );
+    // No fence was raised: this reset never runs.
+    assert_eq!(
+        reset_outcome(&answer(BrowserState::Hibernated, Some(Reason::Superseded))),
+        ResetOutcome::NotExecuted
+    );
+    // The Machine retained its fence (exit unconfirmed), another operation
+    // holds it, or anything else: the Controller keeps its fence too.
+    for reason in [
+        Reason::Failed,
+        Reason::Busy,
+        Reason::Revoked,
+        Reason::Unknown,
+    ] {
+        assert_eq!(
+            reset_outcome(&answer(BrowserState::Hibernated, Some(reason))),
+            ResetOutcome::Unsettled,
+            "{reason:?}"
+        );
+    }
+    for state in [
+        BrowserState::Stopping,
+        BrowserState::Detached,
+        BrowserState::Starting,
+    ] {
+        assert_eq!(reset_outcome(&answer(state, None)), ResetOutcome::Unsettled);
+    }
+}
