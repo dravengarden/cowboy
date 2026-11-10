@@ -8,6 +8,7 @@ import {
 } from "./InfoMetricVisuals";
 import {
   BROWSER_MEMORY_NOTE,
+  browserOccupiedSlots,
   browserSlotsDetail,
   formatBytes,
   formatUptime,
@@ -177,7 +178,7 @@ function BrowserResourceMeters({
         tone={
           tone === "info" &&
           browser.max_instances > 0 &&
-          browser.running >= browser.max_instances
+          browserOccupiedSlots(browser) >= browser.max_instances
             ? "warning"
             : tone
         }

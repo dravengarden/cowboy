@@ -93,6 +93,7 @@ export async function runInfoMetricsBrowserConformance(
           max_instances: 2,
           memory_bytes: 690 * 1024 ** 2,
           budget_bytes: 2 * gb,
+          occupied_slots: 2,
         },
       },
     },
@@ -416,6 +417,12 @@ export async function runInfoMetricsBrowserConformance(
           ?.startsWith("33.6") === true &&
         machine("ovh").textContent?.includes("part of Agent memory") === true,
       "browser slots and memory show against their admitted budget",
+    );
+    check(
+      machine("ovh")
+        .querySelector('[data-capacity-metric="Browsers"]')
+        ?.textContent?.includes("All slots in use") === true,
+      "a slot held by a start or a retained unit is not offered as free",
     );
     check(
       !machine("older").textContent?.includes("Browser"),

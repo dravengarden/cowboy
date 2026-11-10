@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import { assertEquals } from "../../tools/test-assert.ts";
 import type { MachineSummary } from "./protocol.ts";
 import {
+  browserOccupiedSlots,
   browserResourceMetrics,
   browserSlotsDetail,
   machineResourceMetrics,
@@ -131,8 +132,32 @@ test("a Machine with a browser runtime shows browser slots and memory", () => {
     ["Browsers", "0 / 1 running"],
     ["Browser memory", "None running"],
   ]);
-  assertEquals(browserSlotsDetail(idle), "None running");
+  assertEquals(browserSlotsDetail(idle), "0 running · 1 free");
+  assertEquals(browserSlotsDetail({ ...idle, max_instances: 0 }), "Disabled");
   // Without the runtime, or from an older Machine, nothing browser-related shows.
   const without = machineResourceMetrics(machine({ resources }));
   assertEquals(without.some(([label]) => label.startsWith("Browser")), false);
+});
+
+test("free browser slots follow admission, not registered instances", () => {
+  const MIB = 1024 ** 2;
+  const one = {
+    running: 1,
+    max_instances: 2,
+    memory_bytes: 690 * MIB,
+    budget_bytes: 2 * GIB,
+  };
+  // A start awaiting readiness or a unit retained until its exit is
+  // confirmed holds the second slot: admission would refuse an open.
+  const held = { ...one, occupied_slots: 2 };
+  assertEquals(browserOccupiedSlots(held), 2);
+  assertEquals(browserSlotsDetail(held), "All slots in use");
+  assertEquals(browserResourceMetrics(held)[0], ["Browsers", "1 / 2 running"]);
+  assertEquals(
+    browserSlotsDetail({ ...one, running: 0, memory_bytes: 0, occupied_slots: 1 }),
+    "0 running · 1 free",
+  );
+  // Machines that predate the field fall back to the registered count.
+  assertEquals(browserOccupiedSlots(one), 1);
+  assertEquals(browserSlotsDetail(one), "1 running · 1 free");
 });

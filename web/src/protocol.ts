@@ -104,6 +104,10 @@ export type MachineBrowserResources = {
   max_instances: number;
   memory_bytes: number;
   budget_bytes: number;
+  // Slots admission counts against `max_instances`: running instances plus
+  // unregistered starts and units retained until their exit is confirmed.
+  // Absent from Machines that predate it.
+  occupied_slots?: number;
 };
 
 export type MachineComponentConvergence = {

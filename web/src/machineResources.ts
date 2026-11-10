@@ -125,13 +125,19 @@ export function machineResourceMetrics(
   return metrics;
 }
 
-/** Browser instance slots: running of `browser.max_instances`. */
+/** Slots the next open is admitted against; older Machines report only
+ * registered instances, which may undercount starts and retained units. */
+export function browserOccupiedSlots(browser: MachineBrowserResources): number {
+  return Math.max(browser.running, browser.occupied_slots ?? browser.running);
+}
+
+/** Browser instance slots: running instances, and free slots by what
+ * admission holds rather than by what is running. */
 export function browserSlotsDetail(browser: MachineBrowserResources): string {
-  const free = Math.max(0, browser.max_instances - browser.running);
-  if (browser.running === 0) return "None running";
-  return free > 0
-    ? `${String(browser.running)} running · ${String(free)} free`
-    : "All slots in use";
+  if (browser.max_instances <= 0) return "Disabled";
+  const free = Math.max(0, browser.max_instances - browserOccupiedSlots(browser));
+  if (free === 0) return "All slots in use";
+  return `${String(browser.running)} running · ${String(free)} free`;
 }
 
 /** Label/value pairs for a Machine that reports browser usage. */
