@@ -363,6 +363,10 @@ pub struct BrowserManager {
     /// unit invocation: any unit may still run for any account, so every
     /// account's fences and opens are held.
     inventory_pending: std::sync::atomic::AtomicBool,
+    /// Whether the last capability observation (the hello and every
+    /// capability watch tick) found a usable Machine browser runtime. The
+    /// host resource report reads only this, never the Plugin store.
+    runtime_installed: std::sync::atomic::AtomicBool,
     /// systemd, or a synthetic unit inventory in tests.
     units: Arc<dyn UnitControl>,
     /// Unit starts against Plugin-uninstall drains: opens are refused while
@@ -435,6 +439,7 @@ impl BrowserManager {
             unconfirmed: parking_lot::Mutex::new(HashMap::new()),
             next_retention: std::sync::atomic::AtomicU64::new(1),
             inventory_pending: std::sync::atomic::AtomicBool::new(false),
+            runtime_installed: std::sync::atomic::AtomicBool::new(false),
             units,
             starts: Arc::new(StartGate::default()),
             pins: Arc::default(),
@@ -560,12 +565,15 @@ impl BrowserManager {
     #[must_use]
     pub fn capability(&self) -> Option<Capability> {
         let plan = match self.providers.machine_browser_runtime() {
-            Ok(plan) => plan?,
+            Ok(plan) => plan,
             Err(error) => {
                 tracing::warn!(%error, "Machine browser runtime is not usable");
-                return None;
+                None
             }
         };
+        self.runtime_installed
+            .store(plan.is_some(), std::sync::atomic::Ordering::Relaxed);
+        let plan = plan?;
         let settings = self.settings();
         let (available, reason) = match host::check(&plan.contract.host_requirements) {
             Ok(()) => (true, None),

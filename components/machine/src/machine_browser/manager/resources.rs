@@ -1,22 +1,29 @@
 //! Browser usage for the Machine's periodic host resource report: counts and
 //! bytes from in-memory instance state and each instance's cgroup
-//! `memory.current`. It never calls systemd and takes only the short
-//! synchronous locks every reader takes, never an account lifecycle or
-//! control lock a stop holds across awaits.
+//! `memory.current`. It never calls systemd or reads the Plugin store, and
+//! takes only the short synchronous locks every reader takes, never an
+//! account lifecycle or control lock a stop holds across awaits.
 
 use super::{BrowserManager, Path};
-use crate::machine_protocol::{BrowserResources, PluginInstallationState};
+use crate::machine_protocol::BrowserResources;
 
 impl BrowserManager {
-    /// Running instances and their memory, or `None` on a Machine without an
-    /// active Machine browser Plugin and with no instance left running.
+    /// Running instances, held capacity slots and memory, or `None` on a
+    /// Machine whose last capability observation found no usable Machine
+    /// browser runtime and with no instance left running. Reads only memory
+    /// and cgroup files: never the Plugin store, whose installation journal
+    /// writers hold across fsync.
     #[must_use]
     pub fn resources(&self) -> Option<BrowserResources> {
         let instances = self.running();
-        if instances.is_empty() && !self.plugin_active() {
+        if instances.is_empty()
+            && !self
+                .runtime_installed
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return None;
         }
-        Some(aggregate(
+        let mut resources = aggregate(
             instances.iter().map(|instance| {
                 let budget = instance
                     .capacity
@@ -26,18 +33,9 @@ impl BrowserManager {
                 (instance.cgroup_dir.as_path(), budget)
             }),
             self.settings().max_instances,
-        ))
-    }
-
-    /// Whether a Machine browser Plugin is installed and active. Reads only
-    /// the installation records, not the verified generation contents.
-    fn plugin_active(&self) -> bool {
-        self.providers.inventory().is_ok_and(|inventory| {
-            inventory.iter().any(|installed| {
-                installed.plugin_kind == cowboy_plugin_sdk::PluginKind::MachineBrowser
-                    && installed.state == PluginInstallationState::Active
-            })
-        })
+        );
+        resources.occupied_slots = Some(u32::try_from(self.capacity.used()).unwrap_or(u32::MAX));
+        Some(resources)
     }
 }
 
@@ -95,6 +93,7 @@ mod tests {
                 max_instances: 3,
                 memory_bytes: 690 * MIB,
                 budget_bytes: 2816 * MIB,
+                occupied_slots: None,
             }
         );
         assert_eq!(

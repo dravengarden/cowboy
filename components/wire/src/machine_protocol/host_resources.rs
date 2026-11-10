@@ -64,6 +64,12 @@ pub struct BrowserResources {
     /// Sum of the running instances' admitted budgets (each unit's
     /// `MemoryMax`).
     pub budget_bytes: u64,
+    /// Instance slots held now, which admission checks against
+    /// `max_instances`: running instances plus starts not yet registered
+    /// and units retained until their exit is confirmed. Absent from
+    /// Machines that predate it; readers then fall back to `running`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupied_slots: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +120,7 @@ mod tests {
             max_instances: 2,
             memory_bytes: 690 << 20,
             budget_bytes: 2 << 30,
+            occupied_slots: Some(2),
         };
         let observed = ObservedHostResources {
             resources: HostResources {
@@ -128,11 +135,25 @@ mod tests {
             serde_json::json!({
                 "running": 1, "max_instances": 2,
                 "memory_bytes": 690u64 << 20, "budget_bytes": 2u64 << 30,
+                "occupied_slots": 2,
             })
         );
         assert_eq!(encoded["observed_at_ms"], 42);
         let decoded: ObservedHostResources = serde_json::from_value(encoded).unwrap();
         assert_eq!(decoded, observed);
+
+        // A first-release browser report without slot occupancy decodes.
+        let first: BrowserResources = serde_json::from_value(serde_json::json!({
+            "running": 1, "max_instances": 2, "memory_bytes": 0, "budget_bytes": 0,
+        }))
+        .unwrap();
+        assert_eq!(first.occupied_slots, None);
+        assert!(
+            serde_json::to_value(first)
+                .unwrap()
+                .get("occupied_slots")
+                .is_none()
+        );
 
         // A later Machine may add fields an older Controller ignores.
         let mut newer = older_report();

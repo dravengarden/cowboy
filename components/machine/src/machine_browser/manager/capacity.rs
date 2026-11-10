@@ -73,7 +73,9 @@ impl CapacityLedger {
         }
     }
 
-    #[cfg(test)]
+    /// Slots held now: what the next admission checks against
+    /// `max_instances`, including starts not yet registered and units
+    /// retained until their exit is confirmed.
     pub(super) fn used(&self) -> usize {
         *self.used.lock()
     }

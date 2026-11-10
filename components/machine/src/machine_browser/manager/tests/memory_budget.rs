@@ -366,10 +366,12 @@ async fn a_refused_adoption_hands_its_budget_to_the_stop_until_the_exit_is_confi
 }
 
 /// The host resource report counts the running instance with its cgroup
-/// usage and admitted budget while a stop is pending, and reports nothing
-/// on a Machine with neither an active Plugin nor a running instance.
+/// usage and admitted budget while a stop is pending, reports held capacity
+/// slots separately from registered instances, and decides whether the
+/// browser runtime exists from the last capability observation only.
 #[tokio::test]
 async fn the_resource_report_counts_running_instances_by_cgroup_and_budget() {
+    use std::sync::atomic::Ordering;
     let fixture = fixture().await;
     hold_budget(&fixture, BUDGET);
     std::fs::write(
@@ -377,24 +379,54 @@ async fn the_resource_report_counts_running_instances_by_cgroup_and_budget() {
         format!("{}\n", 690 * MIB),
     )
     .unwrap();
-    // A stop holds the account lifecycle lock across its awaits; the
-    // report never waits for it.
-    let slot = fixture.manager.slot(&fixture.account);
-    let _stopping = slot.lifecycle.lock().await;
-    let _control = fixture.instance.control.lock().await;
-    assert_eq!(
-        fixture.manager.resources(),
-        Some(crate::machine_protocol::BrowserResources {
-            running: 1,
-            max_instances: Settings::from_config(None).max_instances,
-            memory_bytes: 690 * MIB,
-            budget_bytes: BUDGET,
-        })
-    );
+    let max_instances = Settings::from_config(None).max_instances;
+    {
+        // A stop holds the account lifecycle lock across its awaits; the
+        // report never waits for it.
+        let slot = fixture.manager.slot(&fixture.account);
+        let _stopping = slot.lifecycle.lock().await;
+        let _control = fixture.instance.control.lock().await;
+        assert_eq!(
+            fixture.manager.resources(),
+            Some(crate::machine_protocol::BrowserResources {
+                running: 1,
+                max_instances,
+                memory_bytes: 690 * MIB,
+                budget_bytes: BUDGET,
+                occupied_slots: Some(1),
+            })
+        );
+    }
+    // The fixture store has no browser Plugin: the capability observation
+    // records that, and with nothing registered the report is absent.
+    fixture
+        .manager
+        .runtime_installed
+        .store(true, Ordering::Relaxed);
+    assert_eq!(fixture.manager.capability(), None);
+    assert!(!fixture.manager.runtime_installed.load(Ordering::Relaxed));
     unregistered(&fixture);
-    assert_eq!(
-        fixture.manager.resources(),
-        None,
-        "no Plugin is installed in the fixture store"
-    );
+    assert_eq!(fixture.manager.resources(), None);
+
+    // A unit no longer registered still holds its slot until its exit is
+    // confirmed: admission would refuse the next open, so it is occupied.
+    fixture
+        .manager
+        .runtime_installed
+        .store(true, Ordering::Relaxed);
+    let held = crate::machine_protocol::BrowserResources {
+        running: 0,
+        max_instances,
+        memory_bytes: 0,
+        budget_bytes: 0,
+        occupied_slots: Some(1),
+    };
+    assert_eq!(fixture.manager.resources(), Some(held));
+    // The report never reads the Plugin store: with its root replaced by a
+    // file every inventory read fails, and the report is unchanged.
+    let store = fixture.manager.state_dir.join("plugins");
+    std::fs::remove_dir_all(&store).unwrap();
+    std::fs::write(&store, "not a directory").unwrap();
+    assert!(fixture.manager.providers.inventory().is_err());
+    assert_eq!(fixture.manager.resources(), Some(held));
 }
