@@ -400,6 +400,31 @@ function withRead(model: BrowserModel, read: BrowserRead, now: number): BrowserM
   return next;
 }
 
+/** The read a lifecycle answer leaves: its Machine and state merged into
+ * the shown read. An answer naming another browser identity than that read
+ * drops the read's identity and share, so Reset waits for a state read
+ * that names (and matches) the identity again. */
+export function resultRead(read: BrowserRead | undefined, result: BrowserResult): BrowserRead {
+  const merged: BrowserRead = {
+    ...(read ?? EMPTY_READ),
+    machine_id: result.machine_id,
+    state: result.state,
+  };
+  if (result.browser_identity === undefined || result.browser_identity === read?.browser_identity) {
+    return merged;
+  }
+  const { browser_identity: _identity, share: _share, ...rest } = merged;
+  return rest;
+}
+
+/** A lifecycle answer's identity is observed like a read's: another one
+ * re-binds the panel. */
+function observeResultIdentity(model: BrowserModel, result: BrowserResult): BrowserModel {
+  return result.browser_identity === undefined
+    ? model
+    : { ...model, observedIdentity: result.browser_identity };
+}
+
 /** Every lifecycle transition advances the epoch; a viewer established by
  * it records that epoch. */
 export function reduceBrowser(model: BrowserModel, event: BrowserEvent): BrowserModel {
@@ -432,12 +457,9 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
     case "busy":
       return { ...model, busy: event.action, error: "", notice: "" };
     case "result": {
-      const read: BrowserRead = {
-        ...(model.read ?? EMPTY_READ),
-        machine_id: event.result.machine_id,
-        state: event.result.state,
-      };
-      const next = withRead({ ...model, busy: undefined }, read, event.now);
+      const read = resultRead(model.read, event.result);
+      const observed = observeResultIdentity(model, event.result);
+      const next = withRead({ ...observed, busy: undefined }, read, event.now);
       const state = event.result.state;
       // The viewer attaches to exactly the instance this answer names.
       const target = targetOf(read);

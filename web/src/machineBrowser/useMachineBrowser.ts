@@ -79,8 +79,9 @@ function errorText(cause: unknown): string {
 }
 
 /** Hibernate exactly `target`, confirm it stopped (`confirmStopped`, with
- * reads pinned to its Machine), then reopen only on that Machine. */
-async function restartOn(
+ * reads pinned to its Machine), then reopen only on that Machine, unless
+ * the panel ended (re-bound to another browser identity) meanwhile. */
+export async function restartOn(
   api: MachineBrowserApi,
   { account, dataset }: { account: string; dataset: string },
   target: BrowserTarget,
@@ -95,6 +96,7 @@ async function restartOn(
       target.machine_id,
     );
   await confirmStopped(target, hibernated, read, abort);
+  abort.throwIfAborted();
   return reopen(abort, target.machine_id);
 }
 
@@ -120,6 +122,17 @@ function useAccountModel(account: string): {
   );
   useEffect(() => send({ kind: "bind", account }), [account]);
   return { model, modelRef, dispatch };
+}
+
+/** An abort controller living exactly as long as the mounted panel. */
+function usePanelLifetime(): { current: AbortController } {
+  const lifetime = useRef(new AbortController());
+  useEffect(() => {
+    if (lifetime.current.signal.aborted) lifetime.current = new AbortController();
+    const controller = lifetime.current;
+    return () => controller.abort();
+  }, []);
+  return lifetime;
 }
 
 /** Whether an answer may still be applied: the panel is mounted and the
@@ -148,8 +161,15 @@ export function useMachineBrowser({
 }: MachineBrowserInput): MachineBrowserController {
   const { model, modelRef, dispatch } = useAccountModel(account);
   const live = useLive(owner);
+  // Every request and continuation (a restart's reopen) ends with the
+  // panel: a re-bound panel never acts on its former browser identity.
+  const lifetime = usePanelLifetime();
   const signal = (timeoutMs: number): AbortSignal =>
-    AbortSignal.any([productSessionSignal(), AbortSignal.timeout(timeoutMs)]);
+    AbortSignal.any([
+      productSessionSignal(),
+      lifetime.current.signal,
+      AbortSignal.timeout(timeoutMs),
+    ]);
 
   // Each read is tagged with its generation, pinned Machine and lifecycle
   // epoch (`readTicket`): a superseded, re-pinned or pre-transition answer

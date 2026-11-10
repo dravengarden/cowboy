@@ -173,6 +173,24 @@ export function identityRequiredFor(snapshot: SubscriptionSnapshot | undefined):
   return !(snapshot !== undefined && snapshot.browser_shares === undefined);
 }
 
+/** The one-shot entry actions of a sheet (auto-open, the link's
+ * navigation), held above its keyed panel so a re-bind never repeats them. */
+export interface EntryLatch {
+  autoOpened: boolean;
+  linked: boolean;
+}
+
+export function newEntryLatch(): EntryLatch {
+  return { autoOpened: false, linked: false };
+}
+
+/** Take a one-shot action: `true` exactly once per latch. */
+export function takeLatch(latch: EntryLatch, action: keyof EntryLatch): boolean {
+  if (latch[action]) return false;
+  latch[action] = true;
+  return true;
+}
+
 /** How the panel treats the browser identity of a new read: the first
  * one binds it, an equal one keeps it, another one re-binds the panel
  * (its model, viewer and confirmations are dropped before the new identity

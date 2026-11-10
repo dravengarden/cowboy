@@ -18,6 +18,7 @@ import {
 } from "./api";
 import { BrowserShareSettings, commitDraft, sharesSupported } from "./BrowserShareSettings";
 import { confirmationCurrent, confirmationFor } from "./confirmation";
+import { restartOn } from "./useMachineBrowser";
 import {
   type AccountBrowserModel,
   INITIAL_BROWSER_MODEL,
@@ -25,6 +26,7 @@ import {
   reduceAccountBrowser,
   reduceBrowser,
   resetTarget,
+  resultRead,
   shownTarget,
 } from "./browserModel";
 import { accountBrowserEntry } from "./entryRules";
@@ -32,6 +34,8 @@ import {
   browserIdentityKey,
   identityBinding,
   identityRequiredFor,
+  newEntryLatch,
+  takeLatch,
   joinBlocked,
   panelShared,
   shareCandidates,
@@ -551,4 +555,90 @@ test("an older Service without shared profiles offers no share mutation", () => 
     joinBlocked(unknown.browser_shares![0]!, lynx),
     "This account has no known family, so it cannot share a browser.",
   );
+});
+
+test("a re-bound panel never repeats the sheet's link navigation", () => {
+  // The latch lives above the keyed panel: the first panel consumes it,
+  // the one mounted after a re-bind finds it taken.
+  const latch = newEntryLatch();
+  assertEquals(takeLatch(latch, "linked"), true);
+  assertEquals(takeLatch(latch, "linked"), false);
+  assertEquals(takeLatch(latch, "autoOpened"), true);
+  assertEquals(takeLatch(latch, "autoOpened"), false);
+});
+
+test("a lifecycle answer naming another identity re-binds and holds Reset", () => {
+  const read: BrowserRead = {
+    machine_id: "ovh",
+    state: {
+      instance: { account_id: PIKA, instance_id: "b-1", incarnation: 3 },
+      state: "detached",
+      profile_revision: 2,
+      observed_at_ms: 1,
+    },
+    placements: [],
+    admission: null,
+    browser_identity: `share:${SHARE}:2`,
+    share: { share_id: SHARE, label: "Google", revision: 2, members: [] },
+  };
+  const result = {
+    machine_id: "ovh",
+    state: { ...read.state!, state: "hibernated" as const },
+    browser_identity: "own",
+  };
+  // A matching identity merges as before.
+  assertEquals(
+    resultRead(read, { ...result, browser_identity: `share:${SHARE}:2` }).browser_identity,
+    `share:${SHARE}:2`,
+  );
+  // Another identity: the merged read names none, so Reset waits for a
+  // state read that names it again ...
+  const merged = resultRead(read, result);
+  assertEquals(merged.browser_identity, undefined);
+  assertEquals(merged.share, undefined);
+  assertEquals(resetTarget(merged, true), undefined);
+  // ... and the panel observes the new identity and re-binds.
+  const model = reduceBrowser(
+    reduceBrowser(INITIAL_BROWSER_MODEL, { type: "read", read, now: 1 }),
+    { type: "result", action: "hibernate", result, now: 2 },
+  );
+  assertEquals(model.observedIdentity, "own");
+  assertEquals(identityBinding(`share:${SHARE}:2`, model.observedIdentity), "rebind");
+  assertEquals(resetTarget(model.read, true), undefined);
+});
+
+test("a restart continuation ends with its panel", async () => {
+  const lifetime = new AbortController();
+  const target = {
+    machine_id: "ovh",
+    instance: { account_id: PIKA, instance_id: "b-1", incarnation: 3 },
+  };
+  const stopped: BrowserStateEvent = {
+    instance: { account_id: PIKA, instance_id: "", incarnation: 0 },
+    state: "hibernated",
+    reason: "owner_request",
+    profile_revision: 2,
+    observed_at_ms: 1,
+  };
+  let reopened = 0;
+  const api = {
+    hibernate: () => {
+      // The card moves to another browser identity: the panel re-binds.
+      lifetime.abort();
+      return Promise.resolve({ machine_id: "ovh", state: stopped });
+    },
+    read: () =>
+      Promise.resolve({ machine_id: "ovh", state: stopped, placements: [], admission: null }),
+  } as unknown as Parameters<typeof restartOn>[0];
+  let refused = false;
+  try {
+    await restartOn(api, { account: PIKA, dataset: "d" }, target, lifetime.signal, () => {
+      reopened += 1;
+      return Promise.resolve({ machine_id: "ovh", state: stopped });
+    });
+  } catch {
+    refused = true;
+  }
+  assertEquals(refused, true);
+  assertEquals(reopened, 0);
 });

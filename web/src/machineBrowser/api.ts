@@ -100,6 +100,8 @@ function validReadShare(value: unknown): value is BrowserReadShare {
 export interface BrowserResult {
   machine_id: string;
   state: BrowserStateEvent;
+  /** The browser identity the command acted on (newer Services). */
+  browser_identity?: string;
 }
 
 export interface BrowserViewport {

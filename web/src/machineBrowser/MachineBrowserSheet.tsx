@@ -31,8 +31,11 @@ import {
   type SharedBrowser,
   browserIdentityKey,
   identityBinding,
+  type EntryLatch,
   identityRequiredFor,
+  newEntryLatch,
   panelShared,
+  takeLatch,
 } from "./shareRules";
 import { useSharedBrowser } from "./useSharedBrowser";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
@@ -97,7 +100,7 @@ function browserCommands(
 /** Open or attach once when asked to, and show a link once in the running
  * browser on its Machine only. */
 function useAutoEntry(
-  props: MachineBrowserSheetProps,
+  props: MachineBrowserSheetProps & { entry: EntryLatch },
   browser: MachineBrowserController,
   commands: BrowserCommands,
 ): void {
@@ -106,7 +109,7 @@ function useAutoEntry(
   const state = model.read?.state ?? null;
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
-  const autoOpened = useRef(false);
+  const latch = props.entry;
   const readyToAutoOpen =
     (autoOpen || link !== undefined) &&
     open &&
@@ -114,19 +117,16 @@ function useAutoEntry(
     !model.busy &&
     !model.read?.admission;
   useEffect(() => {
-    if (!readyToAutoOpen || autoOpened.current) return;
-    autoOpened.current = true;
+    if (!readyToAutoOpen || !takeLatch(latch, "autoOpened")) return;
     const entry = link ? linkEntry(model.read, link.machine) : autoEntry(state?.state);
     if (entry === "attach") commandsRef.current.attach(false);
     else if (entry === "open") commandsRef.current.open();
-  }, [readyToAutoOpen, link, model.read, state]);
-  const linked = useRef(false);
+  }, [readyToAutoOpen, latch, link, model.read, state]);
   const shownLink = link && !model.busy ? linkTarget(model, link.machine) : undefined;
   useEffect(() => {
-    if (!link || !shownLink || linked.current) return;
-    linked.current = true;
+    if (!link || !shownLink || !takeLatch(latch, "linked")) return;
     browser.navigate(link.url, shownLink);
-  }, [browser, link, shownLink]);
+  }, [browser, latch, link, shownLink]);
 }
 
 function browserMenuItems({
@@ -237,10 +237,14 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   // A read naming another browser identity than the panel bound also
   // starts it over, whatever the inventory says yet.
   const [epoch, setEpoch] = useState(0);
+  // The link-opening action is consumed once per sheet, above the keyed
+  // panel: a re-bound panel never opens or navigates the link again.
+  const [entry] = useState(newEntryLatch);
   return (
     <MachineBrowserPanel
       key={`${browserIdentityKey(shared)}:${epoch}`}
       {...props}
+      entry={entry}
       shared={shared}
       snapshot={snapshot}
       onRebind={() => setEpoch((value) => value + 1)}
@@ -295,6 +299,7 @@ function MachineBrowserPanel(
     shared: SharedBrowser | undefined;
     snapshot: SubscriptionSnapshot | undefined;
     onRebind: () => void;
+    entry: EntryLatch;
   },
 ): React.JSX.Element {
   const { open, onClose, account, owner, dataset, link, enabling = false } = props;
