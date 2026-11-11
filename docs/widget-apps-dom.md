@@ -295,6 +295,17 @@ macOS, major ≥ 157 (`domAppsEnabled.ts`). Later majors are admitted on the
 owner's direction to keep practical use; the suite is rerun on them and a
 failure removes the row. Every other engine shows the fallback.
 
+### 7.5 Product row (2026-11-11)
+
+The `policy` run now also drives the product's `dom_app` node inside
+`WidgetView` (`web/src/domAppsProductConformance.tsx`) on the same dedicated
+Chrome 157: no frame before Run; Run starts an `allow-scripts` frame whose
+WebGL app's send reaches the person's confirmation with its exact text and,
+once confirmed, carries a `dom_app:<hex>` identity; a second Run stops the
+first (one full app per page); Stop removes the frame; an app pushed out of
+view is stopped after its grace. All four passed with the run's egress,
+network-log and STUN/TURN counts still 0. The verdict requires them.
+
 ## 8. Infrastructure
 
 None in production beyond Cowboy: the shell is a Web release file and a

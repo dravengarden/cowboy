@@ -4,6 +4,7 @@
  *  outside the page (tools/dom-apps-conformance.ts); this page only starts
  *  apps and records what the host saw. */
 import { startDomApp } from "./widgets/dom/domAppHost";
+import { runDomAppsProductConformance } from "./domAppsProductConformance";
 
 const DOT =
   "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEklEQVR4nGP4z8CAB+GTG8HSALfKY52fctdcAAAAAElFTkSuQmCC";
@@ -70,7 +71,12 @@ export default function App() {
   return <p>probes</p>;
 }`;
 
-type Conformance = { log: string[]; start: (kind: "boot" | "probe", run: string) => void };
+type Conformance = {
+  log: string[];
+  start: (kind: "boot" | "probe", run: string) => void;
+  /** The `dom_app` node in the product's widget row; its passes or error. */
+  product: () => Promise<{ passed?: string[]; error?: string }>;
+};
 
 const state: Conformance = {
   log: [],
@@ -94,6 +100,11 @@ const state: Conformance = {
       },
     );
   },
+  product: () =>
+    runDomAppsProductConformance().then(
+      (passed) => ({ passed }),
+      (error: unknown) => ({ error: String(error) }),
+    ),
 };
 
 export function installDomAppsConformance(): void {

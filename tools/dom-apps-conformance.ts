@@ -314,6 +314,8 @@ try {
     report["clicked"] = log.includes("send:clicked:1");
   }
   report["isolated"] = frames.some((frame) => frame.startsWith("iframe"));
+  // The product row (§9 step 3): Run, confirmation, Stop, ownership, view.
+  if (mode === "policy") report["product"] = await evaluate("window.__domApps.product()");
   await evaluate(`window.__domApps.start("probe", ${JSON.stringify(run)})`);
   log = await until((l) => l.filter((x) => x.startsWith("send:{")).length >= 2, 40_000);
   report["probes"] = log.filter((x) => x.startsWith("send:{"))[1]?.slice(5) ?? log;
@@ -392,11 +394,18 @@ const rendered =
   boot["pixel"] === "34,68,255,255" &&
   boot["image"] === 4 &&
   report["clicked"] === true;
+const product =
+  ((report["product"] as { passed?: unknown[] } | undefined)?.passed?.length ?? 0) === 4;
 const verdict =
   !observed || !probed
     ? false
     : mode === "policy"
-      ? rendered && egress.length === 0 && netlog === 0 && stun === 0 && report["isolated"] === true
+      ? rendered &&
+        product &&
+        egress.length === 0 &&
+        netlog === 0 &&
+        stun === 0 &&
+        report["isolated"] === true
       : mode === "control"
         ? CONTROL_CHANNELS.every((channel) =>
             egress.some((url) => url.includes(`//${channel}-${run}.`)),
