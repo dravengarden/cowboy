@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 
 use super::{AppState, AuthenticatedProductRequest, session_is_visible};
 use crate::core::{Hub, SessionMeta, settings_keys::SESSION_MCP_BINDINGS_PREFIX};
-use crate::mcp_binding::{Binding, valid_epoch, validate_bindings};
+use crate::mcp_binding::{AppGrant, Binding, valid_epoch, validate_app_grants, validate_bindings};
 
 mod authority;
 pub(super) mod defaults;
@@ -104,6 +104,10 @@ struct Stored {
     epoch: String,
     placement: Placement,
     bindings: Vec<Binding>,
+    /// Owner grants for signed MCP Apps views, by binding name. Kept out of
+    /// every process profile; absent for policies without views.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    apps: std::collections::BTreeMap<String, Vec<AppGrant>>,
 }
 
 impl Stored {
@@ -115,7 +119,8 @@ impl Stored {
         let stored: Self = serde_json::from_value(value).ok()?;
         (stored.schema == 1
             && valid_epoch(&stored.epoch)
-            && validate_bindings(&stored.bindings).is_ok())
+            && validate_bindings(&stored.bindings).is_ok()
+            && validate_app_grants(&stored.bindings, &stored.apps).is_ok())
         .then_some(stored)
     }
 }
@@ -125,6 +130,8 @@ impl Stored {
 pub(super) struct Update {
     expected_epoch: Option<String>,
     bindings: Vec<Binding>,
+    #[serde(default)]
+    apps: std::collections::BTreeMap<String, Vec<AppGrant>>,
 }
 
 fn key(session: &str) -> String {
@@ -140,6 +147,7 @@ impl Policies {
         update: Update,
     ) -> Result<Stored, &'static str> {
         validate_bindings(&update.bindings).map_err(|_| "invalid_bindings")?;
+        validate_app_grants(&update.bindings, &update.apps).map_err(|_| "invalid_bindings")?;
         let _mutation = self.mutation.lock().await;
         let current = hub
             .session_info(&meta.id)
@@ -172,6 +180,7 @@ impl Policies {
             epoch: format!("{:032x}", rand::random::<u128>()),
             placement,
             bindings: update.bindings,
+            apps: update.apps,
         };
         let value = json!(stored);
         if !store
@@ -209,6 +218,7 @@ fn saved_view(
     let launch_prepared = policy_current && hub.resolve_mcp_launch(meta).is_ok();
     json!({"schema":1,"epoch":stored.as_ref().map(|s| &s.epoch),"policy_current":policy_current,"launch_prepared":launch_prepared,
         "bindings":stored.as_ref().map_or(&[][..], |s| s.bindings.as_slice()),
+        "apps":stored.as_ref().map(|s| s.apps.clone()).unwrap_or_default(),
         "worker_ready":false,"runtime_ready":false})
 }
 

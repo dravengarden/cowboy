@@ -40,7 +40,57 @@ pub(super) fn update(epoch: Option<String>, bindings: Vec<Binding>) -> Update {
     Update {
         expected_epoch: epoch,
         bindings,
+        apps: std::collections::BTreeMap::new(),
     }
+}
+
+#[tokio::test]
+async fn view_grants_are_owner_policy_with_their_own_epoch() {
+    let (hub, meta, policies, store, _root) = fixture().await;
+    let plain = policies
+        .replace(&hub, &store, &meta, update(None, vec![binding()]))
+        .await
+        .unwrap();
+    // A policy without views keeps exactly the stored shape it had before.
+    let raw = hub.setting(&key(&meta.id)).unwrap();
+    assert!(raw.get("apps").is_none());
+    let grant = || -> std::collections::BTreeMap<String, Vec<AppGrant>> {
+        serde_json::from_value(json!({"suger":[{"uri":"ui://suger/status","capabilities":{"call_tools":["suger_refresh"],"open_links":true}}]})).unwrap()
+    };
+    let mut with_view = update(Some(plain.epoch.clone()), vec![binding()]);
+    with_view.apps = grant();
+    let granted = policies
+        .replace(&hub, &store, &meta, with_view)
+        .await
+        .unwrap();
+    assert_ne!(granted.epoch, plain.epoch);
+    assert_eq!(granted.apps, grant());
+    let view = view(&policies, &hub, &meta);
+    assert_eq!(view["apps"]["suger"][0]["uri"], "ui://suger/status");
+    // The process profile's binding never carries a grant.
+    assert!(
+        serde_json::to_value(&granted.bindings[0])
+            .unwrap()
+            .get("apps")
+            .is_none()
+    );
+    // A grant for a binding that is not in the same update is refused.
+    let mut dangling = update(Some(granted.epoch.clone()), vec![]);
+    dangling.apps = grant();
+    assert_eq!(
+        policies
+            .replace(&hub, &store, &meta, dangling)
+            .await
+            .unwrap_err(),
+        "invalid_bindings"
+    );
+    // Revoking the bindings revokes the grants with them.
+    let revoked = policies
+        .replace(&hub, &store, &meta, update(Some(granted.epoch), vec![]))
+        .await
+        .unwrap();
+    assert!(revoked.apps.is_empty());
+    assert!(serde_json::from_value::<Update>(json!({"expected_epoch":null,"bindings":[],"apps":{"suger":[{"uri":"ui://suger/status","capabilities":{"connect":["https://x.invalid"]}}]}})).is_err());
 }
 
 #[tokio::test]

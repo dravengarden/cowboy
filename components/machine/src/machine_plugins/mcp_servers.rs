@@ -51,6 +51,17 @@ impl PreparedMcpBinding {
     }
 }
 
+/// The binding is the agent's grant: tools a signed MCP Apps declaration
+/// reserves for views never reach the agent (docs/widget-apps-mcp.md §3), so
+/// neither native descriptors nor the process call check can carry one.
+fn ensure_agent_tools(contract: &McpServerContract, tools: &[String]) -> Result<()> {
+    ensure!(
+        tools.iter().all(|tool| contract.model_visible(tool)),
+        "MCP binding grants an app-only tool to the agent"
+    );
+    Ok(())
+}
+
 impl MachinePluginStore {
     pub fn prepare_mcp_binding(&self, binding: &Binding) -> Result<PreparedMcpBinding> {
         binding.validate()?;
@@ -62,15 +73,7 @@ impl MachinePluginStore {
                 .all(|tool| server.contract.tools.contains(tool)),
             "MCP binding requests an unsigned tool"
         );
-        // The binding is the agent's grant: tools a signed MCP Apps declaration
-        // reserves for views never reach the agent (docs/widget-apps-mcp.md §3).
-        ensure!(
-            binding
-                .tools
-                .iter()
-                .all(|tool| server.contract.model_visible(tool)),
-            "MCP binding grants an app-only tool to the agent"
-        );
+        ensure_agent_tools(&server.contract, &binding.tools)?;
         ensure!(
             binding
                 .sources
@@ -132,3 +135,33 @@ pub use sessions::McpSessions;
 
 #[cfg(test)]
 pub(super) mod tests;
+
+#[cfg(test)]
+mod agent_tool_tests {
+    use super::*;
+
+    #[test]
+    fn app_only_tools_are_never_granted_to_the_agent() {
+        let contract: McpServerContract = serde_json::from_value(serde_json::json!({
+            "schema_version":1,"id":"fixture-mcp","version":"1.0.0","display_name":"Fixture",
+            "description":"Fixture MCP server","supported_platforms":[{"os":"linux","architecture":"x86_64"}],
+            "protocol":"stdio_session_v1","command":"fixture-mcp","arguments":[],
+            "tools":["fixture_read","fixture_refresh","fixture_both"],
+            "apps":{"tools":[
+                {"name":"fixture_refresh","visibility":["app"]},
+                {"name":"fixture_both","visibility":["model","app"]}
+            ]}
+        }))
+        .unwrap();
+        contract.validate().unwrap();
+        ensure_agent_tools(&contract, &["fixture_read".into(), "fixture_both".into()]).unwrap();
+        assert!(ensure_agent_tools(&contract, &["fixture_refresh".into()]).is_err());
+        assert!(
+            ensure_agent_tools(
+                &contract,
+                &["fixture_read".into(), "fixture_refresh".into()]
+            )
+            .is_err()
+        );
+    }
+}

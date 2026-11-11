@@ -93,24 +93,35 @@ Two projections replace "the granted tools":
 ## 4. Assignment: the owner's grant
 
 The binding policy of `PUT /api/sessions/{id}/mcp-bindings` gains an optional
-`apps` field per binding; omitted means no view renders (the default for every
-existing policy):
+top-level `apps` map from binding name to view grants; omitted means no view
+renders (the default for every existing policy, whose stored shape does not
+change):
 
 ```json
-"apps": [{
-  "uri": "ui://suger/status",
-  "capabilities": {
-    "call_tools": ["suger_refresh"],
-    "message": true,
-    "open_links": true
-  }
-}]
+"apps": {
+  "suger": [{
+    "uri": "ui://suger/status",
+    "capabilities": {
+      "call_tools": ["suger_refresh"],
+      "message": true,
+      "open_links": true
+    }
+  }]
+}
 ```
 
-- `call_tools` ⊆ the signed `"app"`-visible tools. A generation change invalidates the grant like any other policy
-  field.
-- Storage, epoch, CAS, revocation, tombstones and non-inheritance are exactly
-  the existing policy's.
+- Grants stay in the policy record and never enter a process profile, so
+  Machines never parse them (`AppGrant`, `components/wire/src/mcp_binding.rs`).
+- Written with the bindings in one CAS update and one new epoch. Every key
+  must name a binding of the same update, so `bindings: []` revokes every
+  grant; at most 8 grants per binding, unique `ui://` URIs, at most 16
+  unique tool names. Unknown capabilities, `connect` included, are refused.
+- Whether the exact generation's signed contract declares that view and
+  those `"app"`-visible tools is checked when the grant is used (step 2);
+  a grant that does not match grants nothing. A generation change replaces
+  the binding and therefore needs a new grant.
+- A Controller older than this change reads a stored policy with grants as
+  invalid; its owner repair (revoke-only) still works.
 
 | Capability | Granted | Not granted |
 |---|---|---|
@@ -295,8 +306,8 @@ requires, on that browser:
       projection enforced by Machine preparation. Done (this revision).
    b. Views inlined in the signed contract (no host bundle); one component
       release for 1a and 1b. Done (this revision).
-   c. Policy `apps` with CAS and validation against the exact generation's
-      contract. No rendering.
+   c. Policy `apps` with CAS and shape validation; contract matching at use.
+      Done (this revision). No rendering.
 2. Frame tokens, `/mcp-app/` route and headers, the lease; the suite's
    network and navigation rows.
 3. Bridge, scope-bound `tools/call`, transcript row; the SDK fixture rows.

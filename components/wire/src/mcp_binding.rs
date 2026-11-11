@@ -84,6 +84,79 @@ pub fn validate_bindings(bindings: &[Binding]) -> Result<()> {
     Ok(())
 }
 
+/// One owner grant for a signed MCP Apps view (docs/widget-apps-mcp.md §4).
+/// It names the view and what it may do; whether the exact generation's
+/// signed contract declares that view and those app-visible tools is checked
+/// when the grant is used, and a grant that does not match grants nothing.
+/// It never enters a process profile, so Machines never see it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppGrant {
+    pub uri: String,
+    pub capabilities: AppCapabilities,
+}
+
+/// Closed capability set; network access (`connect`) is deferred and refused.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppCapabilities {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub call_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub message: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub open_links: bool,
+}
+
+pub const MAX_APP_GRANTS: usize = 8;
+
+/// App grants keyed by binding name. Every key must name one of `bindings`, so
+/// revoking every binding (`[]`) also revokes every view grant.
+pub fn validate_app_grants(
+    bindings: &[Binding],
+    apps: &std::collections::BTreeMap<String, Vec<AppGrant>>,
+) -> Result<()> {
+    for (name, grants) in apps {
+        ensure!(
+            bindings.iter().any(|binding| &binding.name == name),
+            "MCP app grant names no binding"
+        );
+        ensure!(
+            (1..=MAX_APP_GRANTS).contains(&grants.len()),
+            "invalid MCP app grants"
+        );
+        let mut uris = BTreeSet::new();
+        for grant in grants {
+            ensure!(
+                valid_ui_uri(&grant.uri) && uris.insert(grant.uri.as_str()),
+                "invalid MCP app grant URI"
+            );
+            let tools = &grant.capabilities.call_tools;
+            ensure!(
+                tools.len() <= 16
+                    && tools.iter().collect::<BTreeSet<_>>().len() == tools.len()
+                    && tools.iter().all(|name| valid_name(name)),
+                "invalid MCP app grant tools"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The signed contract's `ui://` form (Plugin SDK `McpAppsContract`).
+fn valid_ui_uri(uri: &str) -> bool {
+    uri.len() <= 256
+        && uri.strip_prefix("ui://").is_some_and(|path| {
+            !path.is_empty()
+                && path.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-._/".contains(&byte)
+                })
+                && path
+                    .split('/')
+                    .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+        })
+}
+
 pub fn valid_epoch(value: &str) -> bool {
     value.len() == 32
         && value
@@ -133,6 +206,34 @@ mod tests {
                 }
                 .validate()
                 .is_err()
+            );
+        }
+        let apps = |value: serde_json::Value| {
+            serde_json::from_value::<std::collections::BTreeMap<String, Vec<AppGrant>>>(value)
+        };
+        let good = apps(json!({"fixture":[{"uri":"ui://fixture/status","capabilities":{"call_tools":["fixture_read"],"message":true}}]})).unwrap();
+        validate_app_grants(std::slice::from_ref(&binding), &good).unwrap();
+        // Revoking every binding leaves no room for a view grant.
+        assert!(validate_app_grants(&[], &good).is_err());
+        assert!(apps(json!({"fixture":[{"uri":"ui://fixture/status","capabilities":{"connect":["https://x.invalid"]}}]})).is_err());
+        assert!(
+            apps(json!({"fixture":[{"uri":"ui://fixture/status","capabilities":{},"csp":{}}]}))
+                .is_err()
+        );
+        for value in [
+            json!({"other":[{"uri":"ui://fixture/status","capabilities":{}}]}),
+            json!({"fixture":[]}),
+            json!({"fixture":[{"uri":"https://fixture.invalid/","capabilities":{}}]}),
+            json!({"fixture":[{"uri":"ui://fixture/../x","capabilities":{}}]}),
+            json!({"fixture":[{"uri":"ui://Fixture/x","capabilities":{}}]}),
+            json!({"fixture":[{"uri":"ui://fixture/a","capabilities":{}},{"uri":"ui://fixture/a","capabilities":{}}]}),
+            json!({"fixture":[{"uri":"ui://fixture/a","capabilities":{"call_tools":["x","x"]}}]}),
+            json!({"fixture":[{"uri":"ui://fixture/a","capabilities":{"call_tools":["bad name"]}}]}),
+        ] {
+            let parsed = apps(value.clone()).unwrap();
+            assert!(
+                validate_app_grants(std::slice::from_ref(&binding), &parsed).is_err(),
+                "{value}"
             );
         }
         for epoch in ["a".repeat(31), "A".repeat(32), "g".repeat(32)] {

@@ -230,6 +230,10 @@ session visibility and owner mutation checks. PUT accepts:
 }
 ```
 
+An optional top-level `apps` map grants signed MCP Apps views per binding
+name; it is stored with the policy, never enters a process profile, and is
+specified in [`widget-apps-mcp.md`](widget-apps-mcp.md) §4.
+
 The digest above is an illustrative value, not a published release. Initial
 configuration uses a null epoch. Subsequent updates must send the returned epoch;
 `bindings: []` revokes all selections. Every accepted update receives a new random
