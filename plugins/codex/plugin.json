@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "codex",
-  "version": "3.5.28",
-  "component_release": "3.107.0",
+  "version": "3.5.29",
+  "component_release": "3.108.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",
@@ -13,7 +13,7 @@
     },
     {
       "id": "cowboy.plugin-sdk",
-      "version": "1.14.0"
+      "version": "1.15.0"
     },
     {
       "id": "cowboy.plugin-api",

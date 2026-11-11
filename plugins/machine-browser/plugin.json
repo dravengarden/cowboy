@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "machine-browser",
-  "version": "1.0.3",
-  "component_release": "3.102.0",
+  "version": "1.0.4",
+  "component_release": "3.108.0",
   "publisher": "cowboy-first-party",
   "kind": "machine_browser",
   "entrypoint": "contract.json",
@@ -13,7 +13,7 @@
     },
     {
       "id": "cowboy.plugin-sdk",
-      "version": "1.14.0"
+      "version": "1.15.0"
     }
   ]
 }

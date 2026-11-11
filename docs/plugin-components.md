@@ -83,6 +83,16 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.108.0 records plugin-sdk 1.15.0: the `mcp_server`
+contract gains an optional MCP Apps declaration (signed inline views and
+per-tool visibility, [`widget-apps-mcp.md`](widget-apps-mcp.md) §3), and
+Machine preparation refuses a binding that grants an app-only tool to the
+agent. Contracts without the declaration are unchanged. Every Plugin pins the
+SDK and advances one patch version: claude-code 3.20.37, claude-deepseek
+3.1.59, codex 3.5.29, codex-deepseek 3.1.59, deepseek-harness 1.0.17, github
+0.2.10, grok 3.1.59, machine-browser 1.0.4, matrix 1.0.8, review 1.0.11 and
+zed 1.39.3. No Plugin changes behavior.
+
 Component release 3.107.0 records provider-runtime 1.2.1: Claude Code 2.1.321
 (Claude Fable 5.2) with Claude Agent ACP 0.102.0 (Agent SDK 0.3.321). Every
 Plugin that pins provider-runtime advances one patch version; only Claude Code
