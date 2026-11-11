@@ -63,7 +63,7 @@ export function SessionHandoffCancel(
         onClick={cancel}
         sx={{ flexShrink: 0, minWidth: 0, minHeight: 44, px: 1.25, textTransform: "none" }}
       >
-        {busy ? "Cancelling…" : "Cancel"}
+        {busy ? "Cancelling…" : "Cancel switch"}
       </Button>
     </Stack>
   );
