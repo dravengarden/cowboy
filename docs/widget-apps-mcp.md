@@ -1,6 +1,6 @@
 # Widget apps, phase C: MCP Apps from bound Plugin servers
 
-Status: design, revision 3 (2026-11-11). Not implemented. It replaces the
+Status: design, revision 4 (2026-11-11). Not implemented. It replaces the
 direction recorded in [`widget-apps-dom.md`](widget-apps-dom.md) §10 and the
 phase C line of [`widget-apps.md`](widget-apps.md) §10. Owner decisions are
 in §11, the review record in §12.
@@ -196,22 +196,33 @@ already serves the document, so the spec's proxy frame adds nothing).
   requests additionally count against 30 per second. Exceeding either removes
   the frame. Size notifications are then coalesced to one layout update per
   animation frame.
-- A view `tools/call` goes to the Controller with the frame token. The
-  widget records the **relay scope** that produced it (the native client's
-  relay handle with its parent grant and both connection incarnations); the
-  Controller dispatches through that scope only, rechecking the lease (§6),
-  the app grant, the confirmation (if required) and the scope at dispatch and
-  again before delivery. A closed or replaced scope refuses the call; it is
-  never reopened against current connections or another MCP process.
-- The scope is shared with the agent, whose calls must not be disturbed by a
-  view. A scope-wide scheduler admits **at most one view request in flight
-  per scope** and only when the transport has room for it beside the agent's
-  traffic (the Machine process queue holds one entry); otherwise the view
-  gets a busy error before anything reaches the transport. Once dispatched,
-  a view request is owned by the Controller until the backend answers: frame
-  teardown or a page leaving drops only the delivery, never the transport
-  request, so a view can never retire the agent's relay handle or leave a
-  write half-sent.
+- A view `tools/call` goes to the Controller with the frame token and runs
+  in a **view scope**, never in the agent's. On a view's first call the
+  Controller opens one relay handle for `(session, binding)` through the
+  existing relay: the same current policy epoch, the same parent grant
+  (`managed_calls::authorize`) and the same execution connection the agent's
+  scope uses, but its own MCP process. Every request there is rechecked like
+  any relay request, plus the lease (§6), the app grant and the confirmation
+  (if required), at dispatch and again before delivery.
+- Separate processes are what keep the agent safe: the Machine process
+  serves one request at a time, its 30 s deadline includes queue time, and a
+  failed or timed-out request closes the process and retires its relay
+  handle (`process.rs`, `relay.rs`). Sharing would let a slow view call
+  time out an agent call queued behind it and leave an agent write
+  uncertain. With its own process a view can only retire its own handle.
+- The view scope serves one request at a time; a second while one is in
+  flight gets busy before anything reaches the transport. A dispatched
+  request is owned by the Controller until the backend answers or times out:
+  frame teardown drops only the delivery. A retired view handle is reopened
+  only by a later call under a live lease, current epoch and the same parent
+  grant and connection; a changed parent grant or connection refuses view
+  calls until the agent's scope is current again. The view scope closes when
+  no frame of that binding holds a lease, after 60 s idle, and counts
+  against the relay's 32 open sessions (at most one per session and binding).
+- A server's state is per process. Views therefore get the same tools and
+  sources as the agent but not the agent's in-process state; a server that
+  needs shared state keeps it outside the process (the eligibility is part
+  of the Plugin's acceptance, not assumed).
 
 ## 8. Transcript
 
@@ -249,9 +260,10 @@ requires, on that browser:
 - a view call, message or confirmation after its lease ended (including
   with the parent page stalled) is refused by the Controller; sign-out and
   policy-epoch change remove the frame;
-- a view call while the agent uses the same scope gets busy and the agent's
-  call completes; tearing down a frame with a dispatched call leaves the
-  relay handle open;
+- view and agent calls in both arrival orders, each fitting its own
+  deadline, both complete; a view call that times out retires only the view
+  scope while the agent's handle stays open; tearing down a frame with a
+  dispatched call leaves both handles open;
 - the pinned SDK's initialize sequence, sustained auto-resize without
   removal, a size-notification flood removed, a granted read-only call without a prompt, a write call with one,
   an ungranted call refused;
@@ -311,7 +323,13 @@ Revision 2 (Astra Max design review, `call-8434093accddc29e773e8e1f`):
 |---|---|
 | The page-held lease cannot revoke direct network access on time (P1) | `connect` deferred; every effect goes through the Controller under a server-enforced lease (§1, §6) |
 | Dispatch does not require a live frame lease (P1) | Lease and run identity required at admission, dispatch and delivery; teardown cancels confirmations (§6, §7) |
-| Sharing the agent's relay handle (P1) | One view request per scope, busy before transport admission, dispatched requests owned until answered (§7) |
+| Sharing the agent's relay handle (P1) | One view request per scope, busy before transport admission, dispatched requests owned until answered (§7); superseded in revision 4 by a separate view scope |
 | Size notifications bypass flood limits (P1) | One ingress budget for every message, then coalescing (§7) |
 | Replacement-document proof relies on the parent's `frame-src` (P2) | Stated as a product invariant and tested (§7, §9) |
 | Style hashes disable `'unsafe-inline'` (P2) | `style-src-elem` hashes and `style-src-attr 'unsafe-inline'` (§5) |
+
+Revision 3 (Astra Max design review, `call-86e8a1cc8fc3de3726dcad05`):
+
+| Finding | Resolution |
+|---|---|
+| Shared-scope scheduling lets a view call time out a queued agent call and retire the shared handle (P1) | Views run in their own relay handle and MCP process under the same parent grant, epoch and connection; a view can retire only its own scope; both arrival orders tested (§7, §9) |
