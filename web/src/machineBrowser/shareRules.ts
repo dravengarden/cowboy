@@ -121,6 +121,35 @@ export interface SharedBrowser {
   label: string;
   /** Every member the share's profile serves, this card included. */
   members: string[];
+  /** The other members, when the card it is shown on is known. */
+  others?: string[];
+}
+
+/** Animal names a new group is offered, like the owner's account names:
+ * the group's short name on every card that uses its browser. */
+export const GROUP_NAMES: readonly string[] = [
+  "Otter", "Badger", "Heron", "Marten", "Ibex", "Puffin", "Wombat", "Koala",
+  "Bison", "Orca", "Panda", "Gecko", "Tapir", "Okapi", "Quokka", "Narwhal",
+];
+
+/** The first animal name no group or account already uses. */
+export function suggestGroupName(snapshot: SubscriptionSnapshot | undefined): string {
+  const used = new Set(
+    [
+      ...(snapshot?.browser_shares ?? []).map((share) => share.label),
+      ...(snapshot?.registry.accounts ?? []).map((account) => account.label),
+    ].map((name) => name.trim().toLowerCase()),
+  );
+  const free = GROUP_NAMES.find((name) => !used.has(name.toLowerCase()));
+  return free ?? `${GROUP_NAMES[0]} ${used.size + 1}`;
+}
+
+/** A shared card's caption: the group by name and who else uses it. */
+export function sharedCardLabel(shared: SharedBrowser): string {
+  const others = shared.others ?? [];
+  return others.length > 0
+    ? `Group ${shared.label} · with ${others.join(", ")}`
+    : `Group ${shared.label}`;
 }
 
 export function sharedBrowser(
@@ -134,6 +163,9 @@ export function sharedBrowser(
       revision: share.revision,
       label: share.label,
       members: share.members.map((member) => memberLabel(snapshot, member)),
+      others: share.members
+        .filter((member) => member.account_id !== browserId)
+        .map((member) => memberLabel(snapshot, member)),
     }
   );
 }

@@ -3,7 +3,7 @@
  * browser. A named account opens its own browser; a legacy default card
  * (the Service-collected default account of a usage provider) opens the
  * card's own browser key, or the owner-defined shared profile the card was
- * put into (shown as "Shared · <group>"). It never enables
+ * put into (shown as "Group <name> · with <members>"). It never enables
  * anything; a closed gate or a disabled browser says why and links to
  * account management. */
 import { GroupsRounded, OpenInBrowserRounded } from "@mui/icons-material";
@@ -13,7 +13,7 @@ import { openAppSettings } from "../appSettings";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import { accountBrowserEntry } from "./entryRules";
 import { MachineBrowserSheet } from "./MachineBrowserSheet";
-import { sharedBrowser } from "./shareRules";
+import { sharedBrowser, sharedCardLabel } from "./shareRules";
 
 export function AccountBrowserEntry({
   snapshot,
@@ -48,7 +48,7 @@ export function AccountBrowserEntry({
       </Button>
       {shared && (
         <Typography variant="caption" color="secondary.main" data-browser-shared={shared.label}>
-          Shared · {shared.label}
+          {sharedCardLabel(shared)}
         </Typography>
       )}
       {entry.kind === "disabled" && (

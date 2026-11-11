@@ -359,7 +359,8 @@ test("a shared card's browser entry has its own icon, accent and name", () => {
     );
   const shared = entry(true);
   assertEquals(shared.includes('aria-label="Shared browser: Google"'), true);
-  assertEquals(shared.includes("Shared · Google"), true);
+  // The card names its group (it is the only member, so no "with").
+  assertEquals(shared.includes("Group Google<"), true);
   const own = entry(false);
   assertEquals(own.includes('aria-label="Browser"'), true);
   assertEquals(own.includes("Shared"), false);
@@ -422,4 +423,19 @@ test("every failure shown advances the failure count, even with the same text", 
   assertEquals(again.failures, 2);
   // An event that leaves the shown error alone is not a failure.
   assertEquals(reduceBrowser(again, { type: "notice", message: "hi" }).failures, 2);
+});
+
+test("groups are offered unused animal names and cards name their group and peers", async () => {
+  const { suggestGroupName, sharedCardLabel, GROUP_NAMES } = await import("./shareRules");
+  const snapshot = {
+    browser_shares: [{ label: "Otter" }],
+    registry: { accounts: [{ label: "badger" }] },
+  } as unknown as Parameters<typeof suggestGroupName>[0];
+  assertEquals(suggestGroupName(snapshot), GROUP_NAMES[2]);
+  assertEquals(suggestGroupName(undefined), GROUP_NAMES[0]);
+  assertEquals(
+    sharedCardLabel({ share_id: "s", revision: 1, label: "Otter", members: ["A", "B"], others: ["B"] }),
+    "Group Otter · with B",
+  );
+  assertEquals(sharedCardLabel({ share_id: "s", revision: 1, label: "Otter", members: ["A"] }), "Group Otter");
 });

@@ -3,7 +3,7 @@ import { Button, Stack, Typography } from "@mui/material";
 import { useState } from "react";
 import { legacyBrowserOfProvider } from "./machineBrowser/entryRules";
 import { MachineBrowserSheet } from "./machineBrowser/MachineBrowserSheet";
-import { type SharedBrowser, sharedBrowser } from "./machineBrowser/shareRules";
+import { type SharedBrowser, sharedBrowser, sharedCardLabel } from "./machineBrowser/shareRules";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 
 /** The account whose browser the controls manage: a named account, or a
@@ -55,7 +55,7 @@ export function SubscriptionBrowserActions({
           data-browser-shared={shared.label}
           sx={{ alignSelf: "center" }}
         >
-          Shared · {shared.label}
+          {sharedCardLabel(shared)}
         </Typography>
       )}
       <Button

@@ -1855,8 +1855,10 @@ shared: every card keeps its own browser exactly as above.
   and delete shares and add or remove members; a candidate whose family is
   already present is shown disabled with the reason. The section appears only
   when the Service's inventory lists `browser_shares` (an older Service offers
-  no share mutation). A shared card's Browser entry says "Shared · <label>",
-  and the reset confirmation lists the members it affects. Identity-less
+  no share mutation). Groups are named like accounts: a new group is
+  offered the first animal name (`GROUP_NAMES`) no group or account uses,
+  taken when the name field is left empty. A shared card's Browser entry
+  says "Group <label> · with <other members>", and the reset confirmation lists the members it affects. Identity-less
   resets are offered only after a loaded inventory proved the Service has no
   shared profiles (never while it loads or failed). A read's identity is
   observed before any incarnation staleness filtering, so a move from a

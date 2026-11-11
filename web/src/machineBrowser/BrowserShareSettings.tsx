@@ -12,7 +12,7 @@ import type {
   SubscriptionSnapshot,
 } from "../subscriptionAccounts";
 import { validSubscriptionLabel } from "../subscriptionDisplay";
-import { joinBlocked, memberLabel, shareCandidates, shareOf } from "./shareRules";
+import { joinBlocked, memberLabel, shareCandidates, shareOf, suggestGroupName } from "./shareRules";
 
 export type BrowserShareChange =
   | { type: "create_browser_share"; label: string }
@@ -54,6 +54,9 @@ export function BrowserShareSettings({
     return null;
   }
   const shares = snapshot.browser_shares ?? [];
+  // An empty field creates the group under the suggested animal name.
+  const suggested = suggestGroupName(snapshot);
+  const name = label.trim() || suggested;
   return (
     <Stack spacing={1} data-browser-shares>
       <Typography variant="subtitle2" color="text.primary">
@@ -61,7 +64,7 @@ export function BrowserShareSettings({
       </Typography>
       <Typography variant="caption" color="text.secondary">
         Cards in one group use one browser profile, so you sign in to a shared identity such as
-        Google once. A group holds at most one account of each kind; each card still needs its own
+        Google once. Groups are named like accounts; an empty name takes the suggested animal. A group holds at most one account of each kind; each card still needs its own
         browser enabled.
       </Typography>
       {shares.map((share) => (
@@ -77,18 +80,18 @@ export function BrowserShareSettings({
         <TextField
           size="small"
           label="New group"
-          placeholder="Google"
+          placeholder={suggested}
           value={label}
           disabled={disabled}
           fullWidth
           onChange={(event) => setLabel(event.target.value)}
         />
         <Button
-          disabled={disabled || !validSubscriptionLabel(label)}
+          disabled={disabled || !validSubscriptionLabel(name)}
           onClick={() => {
             // The draft stays until the write is confirmed (a conflict or a
             // refusal keeps it for another try).
-            void commitDraft(save, { type: "create_browser_share", label: label.trim() }, () =>
+            void commitDraft(save, { type: "create_browser_share", label: name }, () =>
               setLabel(""),
             );
           }}

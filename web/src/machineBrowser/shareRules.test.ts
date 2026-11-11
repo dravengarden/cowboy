@@ -165,11 +165,14 @@ test("a shared card's entry names its group and the reset names every member", (
     // The card still opens through its own identity; the Service resolves it.
     assertEquals(entry.kind === "ready" && entry.account.id === key, true);
     assertEquals(shareOf(accounts, key)?.share_id, SHARE);
+    const members = ["Claude · Lynx", "OpenAI · Pika", "Grok · Fox"];
+    const own = { [LYNX]: "Claude · Lynx", [PIKA]: "OpenAI · Pika", [FOX]: "Grok · Fox" }[key];
     assertEquals(sharedBrowser(accounts, key), {
       share_id: SHARE,
       revision: 2,
       label: "Google",
-      members: ["Claude · Lynx", "OpenAI · Pika", "Grok · Fox"],
+      members,
+      others: members.filter((member) => member !== own),
     });
   }
   // Mole and Lark are not members: their own browsers, no share.
