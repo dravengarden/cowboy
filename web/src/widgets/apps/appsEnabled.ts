@@ -2,8 +2,9 @@
 // only on engines whose runtime and isolation suites have passed:
 //
 // - desktop Chromium of a tested version on a tested OS, outside the shells;
-// - iOS/iPadOS WebKit of a tested major version: Safari and the installed
-//   PWA by their user agent, and the Cowboy iOS shell only when it reports
+// - iOS/iPadOS WebKit of a tested major version: Safari by its user agent,
+//   the home-screen web app (whose user agent names no version) by a feature
+//   first shipped in that version, and the Cowboy iOS shell only when it reports
 //   the `appsSandbox` capability (its script handlers answer only the main
 //   frame) together with its exact OS version.
 //
@@ -20,7 +21,8 @@ type Client = {
   __TAURI_INTERNALS__?: unknown;
   __cowboyAppsSandbox?: unknown;
   webkit?: { messageHandlers?: unknown };
-  navigator?: Navigator & { userAgentData?: Brands };
+  navigator?: Navigator & { userAgentData?: Brands; standalone?: boolean };
+  CSS?: { supports?: (condition: string) => boolean };
 };
 
 /** Engines whose suites passed: desktop Chromium from this major version. */
@@ -70,8 +72,26 @@ export function appsEnabledFor(client: Client): boolean {
   }
   const data = client.navigator?.userAgentData;
   if (data !== undefined) return chromium(data);
-  const major = iosMajor(client.navigator?.userAgent ?? "", client.navigator?.maxTouchPoints ?? 0);
-  return major !== null && major >= TESTED_IOS_MAJOR;
+  const userAgent = client.navigator?.userAgent ?? "";
+  const touchPoints = client.navigator?.maxTouchPoints ?? 0;
+  const major = iosMajor(userAgent, touchPoints);
+  if (major !== null) return major >= TESTED_IOS_MAJOR;
+  return client.navigator?.standalone === true && homeScreenIos26(client, userAgent, touchPoints);
+}
+
+/** A home-screen web app on iOS/iPadOS 26+. Its user agent names no Safari
+ *  version and a frozen OS, so the engine is recognized by CSS anchor
+ *  positioning, which WebKit first shipped in iOS 26 (TESTED_IOS_MAJOR). */
+function homeScreenIos26(client: Client, userAgent: string, touchPoints: number): boolean {
+  const apple =
+    /\((?:iPhone|iPad|iPod);/.test(userAgent) ||
+    (/\(Macintosh;/.test(userAgent) && touchPoints > 1);
+  if (!apple || !/AppleWebKit\//.test(userAgent)) return false;
+  try {
+    return client.CSS?.supports?.("anchor-name: --a") === true;
+  } catch {
+    return false;
+  }
 }
 
 export function appsEnabled(): boolean {

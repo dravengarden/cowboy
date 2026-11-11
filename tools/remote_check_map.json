@@ -251,6 +251,7 @@
         "plugins/claude-code/runtime/steering.mjs",
         "plugins/claude-code/runtime/native-cycle.mjs",
         "plugins/claude-code/runtime/configuration.mjs",
+        "plugins/claude-code/runtime/idle-compaction.mjs",
         "plugins/claude-code/runtime/context-mod.js",
         "plugins/claude-code/runtime/tools.mjs",
         "plugins/claude-code/runtime/connection.mjs",

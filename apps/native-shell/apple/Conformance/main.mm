@@ -11,6 +11,8 @@
 @property(nonatomic) CGFloat rootMaxDrift;
 @property(nonatomic) NSUInteger rootSamples;
 @property(nonatomic, strong) NSDictionary *rootChecks;
+@property(nonatomic, strong) NSMutableArray<NSString *> *ipcFrames;
+@property(nonatomic, strong) NSMutableArray<NSString *> *probeFrames;
 @end
 
 @implementation CowboyPluginConformance
@@ -37,6 +39,12 @@
     self.window.rootViewController = controller;
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     [configuration.userContentController addScriptMessageHandler:self name:@"conformance"];
+    // `ipc` is registered as Wry registers its handler, so the shell wraps it;
+    // `frameProbe` is not, and proves the subframes reach a handler at all.
+    self.ipcFrames = [NSMutableArray array];
+    self.probeFrames = [NSMutableArray array];
+    [configuration.userContentController addScriptMessageHandler:self name:@"ipc"];
+    [configuration.userContentController addScriptMessageHandler:self name:@"frameProbe"];
     self.webView = [[WKWebView alloc] initWithFrame:self.window.bounds configuration:configuration];
     self.webView.navigationDelegate = self;
     [controller.view addSubview:self.webView];
@@ -96,6 +104,12 @@
          @"check('foreign authentication browser URL rejected',browser.ok===false&&browser.error.code==='invalid_request');"
          @"const closed=await window.__cowboyClosePasskeyBrowser();"
          @"check('closing absent browser is idempotent',closed.ok===true);"
+         @"check('widget apps sandbox capability reported',window.__cowboyAppsSandbox?.v===1&&typeof window.__cowboyAppsSandbox.os==='string'&&Object.isFrozen(window.__cowboyAppsSandbox));"
+         @"const post=n=>`<script>for(const h of ['frameProbe','ipc'])window.webkit.messageHandlers[h].postMessage('${n}')<\\/script>`;"
+         @"for(const h of ['frameProbe','ipc'])window.webkit.messageHandlers[h].postMessage('main');"
+         @"const sandboxed=document.createElement('iframe');sandboxed.setAttribute('sandbox','allow-scripts');sandboxed.srcdoc=post('sandboxed');document.body.append(sandboxed);"
+         @"const sameOrigin=document.createElement('iframe');sameOrigin.srcdoc=post('same-origin');document.body.append(sameOrigin);"
+         @"await new Promise(resolve=>setTimeout(resolve,1000));sandboxed.remove();sameOrigin.remove();"
          @"const initialHeight=innerHeight;"
          @"document.documentElement.style.cssText='height:100%;overflow:hidden';"
          @"document.body.style.cssText='height:100%;overflow:hidden;margin:0;display:flex;flex-direction:column';"
@@ -137,6 +151,13 @@
 
 - (void)userContentController:(__unused WKUserContentController *)controller
       didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"ipc"] || [message.name isEqualToString:@"frameProbe"]) {
+        if ([message.body isKindOfClass:NSString.class]) {
+            [([message.name isEqualToString:@"ipc"] ? self.ipcFrames : self.probeFrames)
+                addObject:message.body];
+        }
+        return;
+    }
     if ([message.body isKindOfClass:NSDictionary.class] &&
         [message.body[@"event"] isEqualToString:@"focus-ready"]) {
         // Initiate focus from a native main-queue evaluation, matching the
@@ -165,6 +186,20 @@
     report[@"native_root_max_drift"] = @(self.rootMaxDrift);
     report[@"native_root_samples"] = @(self.rootSamples);
     report[@"native_offset_checks"] = self.rootChecks;
+    // Subframes reached the ungated probe, yet `ipc` heard only the main frame.
+    BOOL reached = [self.probeFrames containsObject:@"sandboxed"] &&
+        [self.probeFrames containsObject:@"same-origin"];
+    BOOL gated = [self.ipcFrames isEqualToArray:@[ @"main" ]];
+    report[@"native_ipc_frames"] = self.ipcFrames;
+    report[@"native_probe_frames"] = self.probeFrames;
+    if (reached && gated) {
+        report[@"tests"] = [report[@"tests"] arrayByAddingObject:
+            @"Wry ipc handler hears only the main frame"];
+    } else if ([report[@"ok"] boolValue]) {
+        report[@"ok"] = @NO;
+        report[@"error"] = reached ? @"a subframe reached the ipc handler"
+                                   : @"subframes did not reach any handler";
+    }
     if ([report[@"ok"] boolValue] && (self.rootMaxDrift > 1 || self.rootSamples < 10)) {
         report[@"ok"] = @NO;
         report[@"error"] = @"Native root moved during keyboard animation or sampling did not run";

@@ -83,6 +83,12 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.107.0 records provider-runtime 1.2.1: Claude Code 2.1.321
+(Claude Fable 5.2) with Claude Agent ACP 0.102.0 (Agent SDK 0.3.321). Every
+Plugin that pins provider-runtime advances one patch version; only Claude Code
+3.20.36 and Claude DeepSeek 3.1.58 change behavior. See
+[the release record](releases/agent-runtimes-2026-11-10.md).
+
 Component release 3.106.0 records Claude Code 3.20.35 and Claude DeepSeek
 3.1.57, which keep the worker after the adapter's `incomplete_tool_call` turn
 failure. No component changes.

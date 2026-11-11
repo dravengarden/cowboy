@@ -861,7 +861,20 @@ test("a Git status that fails is not reported as clean", async (t) => {
         ? { exitCode: 0, output: "true\n" }
         : original(argv, ...rest);
   const git = await tools.gitStatus();
-  assert.match(git, /\n\nStatus:\n\(unavailable: git status did not complete\)\n\n/);
+  assert.match(git, /\n\nStatus:\n\(unavailable\)\n\n/);
+});
+
+test("a Git status keeps the first entry's unstaged column, as native", async (t) => {
+  const { tools } = await shellFixture(t);
+  const original = tools.command.bind(tools);
+  tools.command = async (argv, ...rest) =>
+    argv.includes("status")
+      ? { exitCode: 0, output: " M first.txt\nM  second.txt\n" }
+      : argv[0] === "git" && argv.includes("--is-inside-work-tree")
+        ? { exitCode: 0, output: "true\n" }
+        : original(argv, ...rest);
+  const git = await tools.gitStatus();
+  assert.match(git, /\n\nStatus:\n M first\.txt\nM  second\.txt\n\n/);
 });
 
 test("a nested instruction load that fails is reported", async (t) => {

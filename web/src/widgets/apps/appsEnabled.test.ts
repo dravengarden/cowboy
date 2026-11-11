@@ -37,6 +37,17 @@ describe("widget app enablement", () => {
     expect(appsEnabledFor({ navigator: navigator(mac) })).toBe(false);
   });
 
+  test("a home-screen web app by its standalone mode and an iOS 26 feature", () => {
+    const pwa = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148";
+    const standalone = (anchor: boolean, isStandalone = true) => ({
+      navigator: { userAgent: pwa, maxTouchPoints: 5, standalone: isStandalone } as unknown as Navigator,
+      CSS: { supports: () => anchor },
+    });
+    expect(appsEnabledFor(standalone(true))).toBe(true);
+    expect(appsEnabledFor(standalone(false))).toBe(false);
+    expect(appsEnabledFor(standalone(true, false))).toBe(false);
+  });
+
   test("a native shell needs the hardened capability with a tested OS", () => {
     const ua = navigator(IPHONE(27));
     expect(appsEnabledFor({ webkit: handlers, navigator: ua })).toBe(false);

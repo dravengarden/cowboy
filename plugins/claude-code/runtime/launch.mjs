@@ -2,6 +2,7 @@ import { agentCallsPrompt } from "./agent-calls.mjs";
 import { installSteeringPriority } from "./steering.mjs";
 import { installNativeCycles } from "./native-cycle.mjs";
 import { installConfigurationEquivalence } from "./configuration.mjs";
+import { disableIdleCompaction } from "./idle-compaction.mjs";
 import { spawn } from "node:child_process";
 import { constants as fsConstants, mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
@@ -1408,8 +1409,10 @@ export async function main(args) {
   );
   process.argv = [process.execPath, upstream, ...args];
   const { ClaudeAcpAgent } = await import(new URL("./acp-agent.js", pathToFileURL(upstream)));
+  const { IdleCompaction } = await import(new URL("./idle-compaction.js", pathToFileURL(upstream)));
   advertiseCurrentTurn(ClaudeAcpAgent);
   installConfigurationEquivalence(ClaudeAcpAgent);
+  disableIdleCompaction(IdleCompaction);
   await import(upstream);
 }
 
