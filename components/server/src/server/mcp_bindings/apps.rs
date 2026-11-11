@@ -78,12 +78,13 @@ pub(crate) struct Granted {
 }
 
 pub(crate) fn current_grant(
-    state: &AppState,
+    hub: &crate::core::Hub,
+    catalog: &crate::plugin_catalog::PluginCatalog,
     session: &str,
     binding: &str,
     uri: &str,
 ) -> Result<Granted, &'static str> {
-    let stored = Stored::load(&state.hub, session).ok_or("no_policy")?;
+    let stored = Stored::load(hub, session).ok_or("no_policy")?;
     let selected = stored
         .bindings
         .iter()
@@ -94,8 +95,7 @@ pub(crate) fn current_grant(
         .get(binding)
         .and_then(|grants| grants.iter().find(|grant| grant.uri == uri))
         .ok_or("no_grant")?;
-    let contract = state
-        .plugin_catalog
+    let contract = catalog
         .resolve_mcp_server(
             &selected.server.plugin_id,
             &selected.server.generation_digest,
@@ -256,7 +256,13 @@ pub(super) async fn open(
     if let Err(status) = owner_session(&state, &auth, &session) {
         return status.into_response();
     }
-    let granted = match current_grant(&state, &session, &request.binding, &request.uri) {
+    let granted = match current_grant(
+        &state.hub,
+        &state.plugin_catalog,
+        &session,
+        &request.binding,
+        &request.uri,
+    ) {
         Ok(granted) => granted,
         Err(code) => return refused(code),
     };
@@ -292,8 +298,14 @@ pub(super) async fn renew(
     let Some(scope) = frames.live(&session, &lease) else {
         return refused("lease_ended");
     };
-    let current = current_grant(&state, &session, &scope.binding, &scope.uri)
-        .is_ok_and(|granted| granted.epoch == scope.epoch);
+    let current = current_grant(
+        &state.hub,
+        &state.plugin_catalog,
+        &session,
+        &scope.binding,
+        &scope.uri,
+    )
+    .is_ok_and(|granted| granted.epoch == scope.epoch);
     if current && frames.renew(&lease, &scope) {
         Json(json!({"lease_ms": LEASE.as_millis()})).into_response()
     } else {
@@ -334,6 +346,24 @@ pub(in crate::server) fn serve(
     query: bool,
     headers: &HeaderMap,
 ) -> Response {
+    respond(
+        &state.hub,
+        &state.plugin_catalog,
+        &state.extensions.apps,
+        requested,
+        query,
+        headers,
+    )
+}
+
+fn respond(
+    hub: &crate::core::Hub,
+    catalog: &crate::plugin_catalog::PluginCatalog,
+    frames: &Frames,
+    requested: &str,
+    query: bool,
+    headers: &HeaderMap,
+) -> Response {
     let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
     let Some(token) = valid_token_path(requested) else {
         return StatusCode::NOT_FOUND.into_response();
@@ -344,10 +374,10 @@ pub(in crate::server) fn serve(
     {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Some((scope, html)) = state.extensions.apps.take(token) else {
+    let Some((scope, html)) = frames.take(token) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let current = current_grant(state, &scope.session, &scope.binding, &scope.uri)
+    let current = current_grant(hub, catalog, &scope.session, &scope.binding, &scope.uri)
         .is_ok_and(|granted| granted.epoch == scope.epoch && granted.html == html);
     if !current {
         return StatusCode::NOT_FOUND.into_response();
@@ -429,5 +459,219 @@ mod tests {
         ] {
             assert!(valid_token_path(&path).is_none(), "{path}");
         }
+    }
+
+    /// A signed MCP server release with one view, published into a disposable
+    /// Catalog the way the Controller reads it.
+    fn publish_mcp_view(root: &std::path::Path) -> cowboy_plugin_sdk::PluginRelease {
+        use cowboy_plugin_sdk::{
+            PLUGIN_RELEASE_SIGNATURE_NAMESPACE, PluginPackage, PluginPayload, PluginRelease,
+        };
+        let manifest = serde_json::from_value(json!({
+            "schema_version":1,"id":"view-mcp","version":"1.0.0",
+            "component_release":"3.108.0","publisher":"view-publisher",
+            "kind":"mcp_server","entrypoint":"contract.json",
+            "components":[{"id":"cowboy.plugin-contract","version":"1.13.0"},{"id":"cowboy.plugin-sdk","version":"1.15.0"}]
+        }))
+        .unwrap();
+        let contract = serde_json::from_value(json!({
+            "schema_version":1,"id":"view-mcp","version":"1.0.0",
+            "display_name":"View MCP","description":"Signed server with a view",
+            "supported_platforms":[{"os":"linux","architecture":"x86_64"}],
+            "protocol":"stdio_session_v1","command":"view-mcp","arguments":[],
+            "tools":["view_status","view_refresh"],
+            "apps":{
+                "ui_resources":[{"uri":"ui://view/status","html":VIEW}],
+                "tools":[
+                    {"name":"view_status","resource":"ui://view/status","visibility":["model","app"],"read_only":true},
+                    {"name":"view_refresh","visibility":["app"]}
+                ]
+            }
+        }))
+        .unwrap();
+        let package = PluginPackage::new(
+            manifest,
+            "3.108.0".into(),
+            PluginPayload::McpServer(contract),
+        )
+        .unwrap();
+        let bytes = package.canonical_bytes().unwrap();
+        let runtime = b"#!/bin/sh\n";
+        let mut release: PluginRelease = serde_json::from_value(json!({
+            "release_schema":6,"plugin_id":"view-mcp","plugin_version":"1.0.0",
+            "plugin_kind":"mcp_server","package_digest":PluginPackage::artifact_digest(&bytes),
+            "artifact_digest":"","artifact_url":"https://plugins.example/view-mcp.cowboy-plugin",
+            "publisher":"view-publisher","contract_fingerprint":package.contract_fingerprint,
+            "component_release":"3.108.0","signature":"",
+            "supported_platforms":[{"os":"linux","architecture":"x86_64"}],
+            "runtime_artifacts":[{"os":"linux","architecture":"x86_64","components":[{
+                "kind":"mcp_server","slot":"server","dependency":"view-mcp","version":"1.0.0",
+                "command":"view-mcp","artifact_url":"https://plugins.example/view-mcp",
+                "artifact_digest":PluginPackage::artifact_digest(runtime),
+                "artifact_format":"raw","probe":{"args":["--version"],"timeout_ms":1000}
+            }]}]
+        }))
+        .unwrap();
+        let identity =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.join("identity")).unwrap();
+        release.artifact_digest = release.computed_artifact_digest().unwrap();
+        release.signature = identity
+            .sign_namespaced(PLUGIN_RELEASE_SIGNATURE_NAMESPACE, &release.proof())
+            .unwrap();
+        release.validate_bytes(&bytes).unwrap();
+        let catalog = root.join("external");
+        std::fs::create_dir_all(catalog.join("trusted-publishers")).unwrap();
+        std::fs::write(
+            catalog.join("trusted-publishers/view-publisher.pub"),
+            identity.public_key(),
+        )
+        .unwrap();
+        std::fs::write(catalog.join("view-mcp.cowboy-plugin"), bytes).unwrap();
+        std::fs::write(
+            catalog.join("view-mcp.release.json"),
+            serde_json::to_vec(&release).unwrap(),
+        )
+        .unwrap();
+        release
+    }
+
+    const VIEW: &str = "<!doctype html><style>p{margin:0}</style><p>status</p><script>parent.postMessage({jsonrpc:'2.0',id:1,method:'ui/initialize'},'*')</script>";
+
+    fn frame_headers(dest: &str, site: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("sec-fetch-dest", dest.parse().unwrap());
+        headers.insert("sec-fetch-site", site.parse().unwrap());
+        headers
+    }
+
+    #[tokio::test]
+    async fn a_granted_signed_view_is_served_once_and_only_while_the_grant_holds() {
+        let fixture = tempfile::tempdir().unwrap();
+        let release = publish_mcp_view(fixture.path());
+        let catalog = crate::plugin_catalog::PluginCatalog::inspect(
+            fixture.path(),
+            Some(fixture.path().join("external")),
+        )
+        .unwrap();
+        assert!(
+            catalog
+                .resolve_mcp_server("view-mcp", &release.artifact_digest)
+                .is_ok()
+        );
+        assert!(
+            catalog
+                .resolve_mcp_server("view-mcp", &format!("sha256:{}", "0".repeat(64)))
+                .is_err()
+        );
+
+        let (hub, meta, policies, store, _root) = super::super::tests::fixture().await;
+        let binding: crate::mcp_binding::Binding = serde_json::from_value(json!({
+            "name":"view","server":{"plugin_id":"view-mcp","generation_digest":release.artifact_digest},
+            "tools":["view_status"]
+        }))
+        .unwrap();
+        let grant = |tools: serde_json::Value| -> std::collections::BTreeMap<String, Vec<crate::mcp_binding::AppGrant>> {
+            serde_json::from_value(json!({"view":[{"uri":"ui://view/status","capabilities":{"call_tools":tools}}]})).unwrap()
+        };
+        let mut update = super::super::tests::update(None, vec![binding.clone()]);
+        update.apps = grant(json!(["view_refresh"]));
+        let stored = policies.replace(&hub, &store, &meta, update).await.unwrap();
+
+        let granted = current_grant(&hub, &catalog, &meta.id, "view", "ui://view/status").unwrap();
+        assert_eq!(granted.html.as_str(), VIEW);
+        assert_eq!(granted.epoch, stored.epoch);
+        assert!(current_grant(&hub, &catalog, &meta.id, "view", "ui://view/other").is_err());
+        assert!(current_grant(&hub, &catalog, &meta.id, "other", "ui://view/status").is_err());
+
+        let frames = Frames::default();
+        let scope = Scope {
+            session: meta.id.clone(),
+            binding: "view".into(),
+            uri: "ui://view/status".into(),
+            epoch: granted.epoch.clone(),
+        };
+        let serve = |token: &str, headers: &HeaderMap, query: bool| {
+            respond(
+                &hub,
+                &catalog,
+                &frames,
+                &format!("mcp-app/{token}.html"),
+                query,
+                headers,
+            )
+        };
+        let iframe = frame_headers("iframe", "same-origin");
+        // Top-level, cross-site and query-string loads never consume the token.
+        let (token, _) = frames
+            .issue(scope.clone(), Arc::clone(&granted.html))
+            .unwrap();
+        for headers in [
+            frame_headers("document", "same-origin"),
+            frame_headers("iframe", "cross-site"),
+        ] {
+            assert_eq!(
+                serve(&token, &headers, false).status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+        assert_eq!(serve(&token, &iframe, true).status(), StatusCode::NOT_FOUND);
+        let served = serve(&token, &iframe, false);
+        assert_eq!(served.status(), StatusCode::OK);
+        let csp = served.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert!(csp.starts_with("sandbox allow-scripts;") && csp.contains("connect-src 'none'"));
+        let body = axum::body::to_bytes(served.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), VIEW.as_bytes());
+        assert_eq!(
+            serve(&token, &iframe, false).status(),
+            StatusCode::NOT_FOUND,
+            "single use"
+        );
+
+        // A token issued under an epoch that has since changed serves nothing.
+        let (stale, _) = frames
+            .issue(scope.clone(), Arc::clone(&granted.html))
+            .unwrap();
+        let mut regrant =
+            super::super::tests::update(Some(stored.epoch.clone()), vec![binding.clone()]);
+        regrant.apps = grant(json!([]));
+        let replaced = policies
+            .replace(&hub, &store, &meta, regrant)
+            .await
+            .unwrap();
+        assert_eq!(
+            serve(&stale, &iframe, false).status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // A grant naming a tool the signed contract does not offer to views grants nothing.
+        let mut model_only = super::super::tests::update(Some(replaced.epoch), vec![binding]);
+        model_only.apps = grant(json!(["view_status", "unsigned"]));
+        let revoked = policies
+            .replace(&hub, &store, &meta, model_only)
+            .await
+            .unwrap();
+        assert_eq!(
+            current_grant(&hub, &catalog, &meta.id, "view", "ui://view/status").err(),
+            Some("undeclared_tool")
+        );
+        // Revoking the binding revokes the view.
+        policies
+            .replace(
+                &hub,
+                &store,
+                &meta,
+                super::super::tests::update(Some(revoked.epoch), vec![]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            current_grant(&hub, &catalog, &meta.id, "view", "ui://view/status").err(),
+            Some("no_binding")
+        );
     }
 }

@@ -312,8 +312,12 @@ requires, on that browser:
       `components/server/src/server/mcp_bindings/apps.rs`,
       `web_security::mcp_app_headers`; views from the Catalog's exact release,
       `PluginCatalog::resolve_mcp_server`). Done (this revision).
-   b. A signed example Plugin with a view, and the suite's network and
-      navigation rows against a disposable Controller.
+   b. End-to-end Controller test with a signed MCP release in a disposable
+      Catalog: served once from a same-origin frame, top-level, cross-site
+      and query loads refused without consuming the token, a changed epoch,
+      an undeclared tool or a revoked binding grants nothing. Done (this
+      revision). The browser network and navigation rows need the bridge
+      and move to step 3, where a frame is driven by the real Web host.
 3. Bridge, scope-bound `tools/call`, transcript row; the SDK fixture rows.
 4. A real native-binding test with the retained execution executable (not a
    standalone SDK view), then the first view: a Suger status view granted on
