@@ -1121,33 +1121,13 @@ dependency is acceptable; its application UI, `resizeSession` and clipboard
 automation are not used. The chrome always shows the label of the account
 whose browser it displays and the Machine it runs on.
 
-- **Quick links.** The empty page (hibernated, never opened) offers, under
-  its primary action, Claude, ChatGPT · Codex, Grok, DeepSeek and Google
-  sign-in; the "More" menu offers them while the viewed browser runs. The
-  card's own service comes first (the opening card's, for a shared browser),
-  Google last and, for a shared browser, emphasized. A tap navigates this
-  panel's connected viewer through the ordinary navigate command, reuses an
-  attachment already connecting (never a second attach), or first opens the
-  browser (sending the identity shown as `expected_browser`; a first open
-  waits for the Machine picked in the chooser, which then opens with that
-  identity), attaches to it or asks to take it over. The waiting link is
-  bound to the browser identity it was tapped for (from reads, answers and
-  the sheet's inventory in the same render), then to exactly the first
-  attachment established after the tap (its lifecycle epoch, generation,
-  Machine and instance), and navigates once that attachment's stream is
-  open. The navigation names that attachment (`attachment_id`, from its
-  stream's first state): the Machine checks it under the control lock a
-  takeover holds while installing its attachment, so a takeover racing the
-  request refuses it as superseded. Another identity, any failure since the
-  tap (counted, not compared by text), an attachment that ends or
-  fails, one on another Machine, or a cancelled takeover drops it, so it
-  never reaches another profile or another viewer's page; a re-bind drops
-  it too. Links are disabled until the first state read answered (and,
-  against a Service with shared profiles, named the identity), while
-  admission refuses, while a command runs and while the browser starts or
-  stops. It is viewer-side only: nothing is injected into
-  the browser and its runtime and policy are unchanged, so no site can tell
-  a quick link from a typed address.
+- **Sign-in pages live in the browser.** The panel offers no quick links:
+  the browser starts on Chromium's own new-tab page, whose policy
+  `NTPShortcuts` tiles are Claude, ChatGPT · Codex, Grok, DeepSeek and Google
+  sign-in (see "Managed policy"). The navigate command still accepts an
+  `attachment_id`: the Machine checks it under the control lock a takeover
+  holds while installing its attachment, so a navigation fenced to one
+  viewer never reaches a replacement viewer's page.
 - **Shared browsers look different.** Account and usage card entries of a
   shared browser carry the group icon, the secondary accent and an
   accessible name "Shared browser: <group>"; the identity line reads
@@ -1181,9 +1161,8 @@ whose browser it displays and the Machine it runs on.
   corners) and the choice is remembered on the device. A backdrop click
   never closes it. One 40 px header row holds the identity and state (with
   the shared-browser icon and "<group> · shared with <members>"), Back,
-  Forward and Reload, the first three quick links as compact chips (the
-  rest in More), More (paste, hibernate, restart, reset, take over, the
-  overflow links), Maximize/Restore and Close; the frame fills the rest and
+  Forward and Reload, More (paste, hibernate, restart, reset, take over),
+  Maximize/Restore and Close; the frame fills the rest and
   picks its fixed screen mode as below, re-requesting it when the modal is
   resized or maximized. With focus in the remote frame every key, Esc and
   browser shortcuts included, goes to the remote browser: the global Desktop
@@ -1198,8 +1177,8 @@ whose browser it displays and the Machine it runs on.
   named in the Close tooltip. It is a dialog labelled by the identity,
   traps focus and restores it on close; its menus speak the Desktop menu
   grammar (`j`/`k`/`l`/Enter/Esc). Not running, the frame shows the same
-  page as the phone: the state (or "Shared browser · <group>"), Open
-  browser and the quick links.
+  page as the phone: the state (or "Shared browser · <group>") and Open
+  browser.
 
 - **Screen modes and resize authority.** The remote screen is never sized
   to the device. As in neko, it runs one of a few fixed, ordinary modes at
