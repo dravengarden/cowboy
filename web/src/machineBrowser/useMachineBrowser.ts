@@ -109,7 +109,7 @@ export async function restartOn(
   { account, dataset }: { account: string; dataset: string },
   target: BrowserTarget,
   abort: AbortSignal,
-  reopen: (abort: AbortSignal, machine: string) => Promise<BrowserResult>,
+  reopen: (abort: AbortSignal, machine: string, expected?: string) => Promise<BrowserResult>,
   identity?: RestartIdentity,
 ): Promise<BrowserResult> {
   const hibernated = await api.hibernate(account, dataset, target, abort);
@@ -125,7 +125,8 @@ export async function restartOn(
   };
   await confirmStopped(target, hibernated, read, abort);
   abort.throwIfAborted();
-  return reopen(abort, target.machine_id);
+  // The reopen itself is bound to the confirmed identity on the Service.
+  return reopen(abort, target.machine_id, identity?.expected);
 }
 
 /** The panel's model, bound to one account: switching accounts starts from
@@ -303,8 +304,8 @@ export function useMachineBrowser({
     [dispatch, live],
   );
   const openCall = useCallback(
-    (viewport: BrowserViewport, abort: AbortSignal, machine?: string): Promise<BrowserResult> =>
-      api.open(account, dataset, viewport, abort, machine),
+    (viewport: BrowserViewport, abort: AbortSignal, machine?: string, expected?: string) =>
+      api.open(account, dataset, viewport, abort, machine, expected),
     [account, api, dataset],
   );
   const open = useCallback(
@@ -365,7 +366,7 @@ export function useMachineBrowser({
             { account, dataset },
             target,
             abort,
-            (signal, machine) => openCall(viewport, signal, machine),
+            (signal, machine, expected) => openCall(viewport, signal, machine, expected),
             restartIdentity(modelRef.current, dispatch),
           ),
         RESTART_TIMEOUT_MS,

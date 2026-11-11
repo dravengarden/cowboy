@@ -2,7 +2,12 @@
  * identity line the phone shows above its bottom toolbar (a phone has no top
  * row, so the framebuffer starts right below the status bar). The remote
  * Chromium shows its own address bar and tabs, so the panel adds none. */
-import { CloseFullscreenRounded, CloseRounded, OpenInFullRounded } from "@mui/icons-material";
+import {
+  CloseFullscreenRounded,
+  CloseRounded,
+  GroupsRounded,
+  OpenInFullRounded,
+} from "@mui/icons-material";
 import { Box, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import type { ReactNode } from "react";
 
@@ -11,21 +16,35 @@ export function Identity({
   machineLabel,
   status,
   align,
+  shared = false,
 }: {
   accountLabel: string;
   machineLabel: string;
   status: string;
   align: "left" | "center";
+  /** A shared browser: the group icon and accent mark it. */
+  shared?: boolean;
 }): React.JSX.Element {
   return (
     <Typography
       variant="caption"
       color="text.secondary"
       noWrap
-      title={`${accountLabel} · ${machineLabel} · ${status}`}
+      title={`${shared ? "Shared browser: " : ""}${accountLabel} · ${machineLabel} · ${status}`}
+      data-machine-browser-identity={shared ? "shared" : "own"}
       sx={{ display: "block", minWidth: 0, textAlign: align, lineHeight: "16px" }}
     >
-      <Box component="strong" sx={{ color: "text.primary", fontWeight: 600 }}>
+      {shared && (
+        <GroupsRounded
+          role="img"
+          aria-label="Shared browser"
+          sx={{ fontSize: "1.2em", mr: 0.5, verticalAlign: "-0.2em", color: "secondary.main" }}
+        />
+      )}
+      <Box
+        component="strong"
+        sx={{ color: shared ? "secondary.main" : "text.primary", fontWeight: 600 }}
+      >
         {accountLabel}
       </Box>
       {` · ${machineLabel} · ${status}`}
@@ -39,6 +58,7 @@ export function DesktopBrowserTopBar({
   accountLabel,
   machineLabel,
   status,
+  shared = false,
   menu,
   fullscreen,
   onToggleFullscreen,
@@ -47,6 +67,7 @@ export function DesktopBrowserTopBar({
   accountLabel: string;
   machineLabel: string;
   status: string;
+  shared?: boolean;
   menu: ReactNode;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
@@ -67,6 +88,7 @@ export function DesktopBrowserTopBar({
           machineLabel={machineLabel}
           status={status}
           align="left"
+          shared={shared}
         />
       </Box>
       {menu}

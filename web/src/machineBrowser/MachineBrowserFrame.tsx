@@ -2,14 +2,15 @@
  * the frame, or, while there is none, a browser-like empty page with one
  * primary action. Errors and notices float over the frame as dismissible
  * banners so the frame (and the framebuffer size it requests) never moves. */
-import { PublicOutlined } from "@mui/icons-material";
+import { GroupsRounded, PublicOutlined } from "@mui/icons-material";
 import { Alert, Box, Button, Stack, Typography } from "@mui/material";
-import { type RefObject, Suspense, lazy } from "react";
+import { type ReactNode, type RefObject, Suspense, lazy } from "react";
 import { type BrowserStateEvent, browserErrorText } from "./api";
 import { type ViewerControls, browserStateSummary } from "./browserChrome";
 import { type BrowserModel, browserRunning } from "./browserModel";
 import type { ConfirmKind } from "./confirmation";
 import { type BrowserCommands, BrowserPrimaryAction } from "./MachineBrowserActions";
+import type { SharedBrowser } from "./shareRules";
 import type { MachineBrowserController } from "./useMachineBrowser";
 
 const MachineBrowserViewer = lazy(() => import("./MachineBrowserViewer"));
@@ -40,6 +41,8 @@ function BrowserEmptyPage({
   enabling,
   onEnableBrowser,
   onConfirm,
+  shared,
+  quick,
 }: {
   model: BrowserModel;
   state: BrowserStateEvent | null;
@@ -50,13 +53,16 @@ function BrowserEmptyPage({
   enabling: boolean;
   onEnableBrowser: (() => void) | undefined;
   onConfirm: (kind: ConfirmKind) => void;
+  shared: SharedBrowser | undefined;
+  quick: ReactNode;
 }): React.JSX.Element {
   const admission = model.read?.admission;
-  const title = !model.loaded
+  const stateTitle = !model.loaded
     ? "Reading the browser state…"
     : admission
       ? "The browser is not available"
       : (EMPTY_TITLE[state?.state ?? ""] ?? "This browser was never opened");
+  const title = shared ? `Shared browser · ${shared.label}` : stateTitle;
   return (
     <Stack
       spacing={1.5}
@@ -65,10 +71,29 @@ function BrowserEmptyPage({
       data-machine-browser-empty
       sx={{ flex: 1, minHeight: 0, px: 3, py: 4, textAlign: "center", overflowY: "auto" }}
     >
-      <PublicOutlined sx={{ fontSize: "3rem", color: "text.disabled" }} />
-      <Typography variant="h6" component="p" role="status" sx={{ fontWeight: 600 }}>
+      {shared ? (
+        <GroupsRounded
+          role="img"
+          aria-label="Shared browser"
+          sx={{ fontSize: "3rem", color: "secondary.main" }}
+        />
+      ) : (
+        <PublicOutlined sx={{ fontSize: "3rem", color: "text.disabled" }} />
+      )}
+      <Typography
+        variant="h6"
+        component="p"
+        role="status"
+        data-machine-browser-title={shared ? "shared" : "own"}
+        sx={{ fontWeight: 600, color: shared ? "secondary.main" : undefined }}
+      >
         {title}
       </Typography>
+      {shared && (
+        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          {stateTitle}
+        </Typography>
+      )}
       <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 420 }}>
         {admission
           ? browserErrorText(admission)
@@ -88,6 +113,7 @@ function BrowserEmptyPage({
         commands={commands}
         onConfirm={onConfirm}
       />
+      {model.loaded && !admission && quick}
       {link && (
         <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 420 }}>
           The link opens in this account’s browser once it runs. Anything the page shows you (such
@@ -160,6 +186,10 @@ export interface BrowserFrameProps {
   onConfirm: (kind: ConfirmKind) => void;
   onControls: (controls: ViewerControls | undefined) => void;
   onKeyboard: (open: boolean) => void;
+  /** The shared browser this card uses, if any. */
+  shared?: SharedBrowser | undefined;
+  /** Quick links under the primary action of the empty page. */
+  quick?: ReactNode;
 }
 
 /** The frame is the measured area: opens request the screen mode for it and
@@ -217,6 +247,8 @@ export function BrowserFrame(props: BrowserFrameProps): React.JSX.Element {
           enabling={props.enabling}
           onEnableBrowser={props.onEnableBrowser}
           onConfirm={props.onConfirm}
+          shared={props.shared}
+          quick={props.quick}
         />
       )}
       <BrowserBanners model={model} retry={props.retry} commands={commands} />

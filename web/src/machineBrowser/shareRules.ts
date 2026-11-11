@@ -234,6 +234,33 @@ export function browserIdentityKey(shared: SharedBrowser | undefined): string {
   return shared ? `share:${shared.share_id}:${shared.revision}` : "own";
 }
 
+/** The account-usage family of a card's browser identity, from the
+ * Service's static table: a legacy card by its id, a named account by its
+ * Provider. */
+export function browserFamily(
+  snapshot: SubscriptionSnapshot | undefined,
+  browserId: string,
+): string | undefined {
+  const table = snapshot?.browser_share_families;
+  const card = snapshot?.legacy_browsers?.find((entry) => entry.account_id === browserId);
+  if (card) return table?.cards.includes(card.card) ? card.card : undefined;
+  const named = snapshot?.registry.accounts.find((account) => account.id === browserId);
+  return named ? table?.providers[named.provider_id] : undefined;
+}
+
+/** The identity line of a shared browser: its group and every member. */
+export function sharedIdentityLabel(shared: SharedBrowser): string {
+  return shared.members.length > 0
+    ? `${shared.label} · shared with ${shared.members.join(", ")}`
+    : `${shared.label} · shared`;
+}
+
+/** The hibernate confirmation's note for a shared browser. */
+export function sharedHibernateNote(shared: SharedBrowser | undefined): string | undefined {
+  if (!shared) return undefined;
+  return `This browser is shared (${shared.label}). Hibernating it stops it for every member: ${shared.members.join(", ")}.`;
+}
+
 /** The reset confirmation's note for a shared browser. */
 export function sharedResetNote(shared: SharedBrowser | undefined): string | undefined {
   if (!shared) return undefined;

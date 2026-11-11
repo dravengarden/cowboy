@@ -6,7 +6,7 @@
  * put into (shown as "Shared · <group>"). It never enables
  * anything; a closed gate or a disabled browser says why and links to
  * account management. */
-import { OpenInBrowserRounded } from "@mui/icons-material";
+import { GroupsRounded, OpenInBrowserRounded } from "@mui/icons-material";
 import { Button, Link, Stack, Typography } from "@mui/material";
 import { useState } from "react";
 import { openAppSettings } from "../appSettings";
@@ -35,15 +35,19 @@ export function AccountBrowserEntry({
     <Stack spacing={0.25} data-account-browser-entry={account.id}>
       <Button
         size="small"
-        startIcon={<OpenInBrowserRounded fontSize="small" />}
+        color={shared ? "secondary" : "primary"}
+        startIcon={
+          shared ? <GroupsRounded fontSize="small" /> : <OpenInBrowserRounded fontSize="small" />
+        }
+        aria-label={shared ? `Shared browser: ${shared.label}` : "Browser"}
         disabled={entry.kind !== "ready"}
         onClick={() => setOpen(true)}
         sx={{ alignSelf: "flex-start", minHeight: 36 }}
       >
-        Browser
+        {shared ? "Shared browser" : "Browser"}
       </Button>
       {shared && (
-        <Typography variant="caption" color="text.secondary" data-browser-shared={shared.label}>
+        <Typography variant="caption" color="secondary.main" data-browser-shared={shared.label}>
           Shared · {shared.label}
         </Typography>
       )}

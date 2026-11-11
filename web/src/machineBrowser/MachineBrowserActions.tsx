@@ -15,7 +15,7 @@ import {
 } from "./confirmation";
 import { MachineBrowserChooser } from "./MachineBrowserChooser";
 import { needsMachineChoice } from "./entryRules";
-import { type SharedBrowser, sharedResetNote } from "./shareRules";
+import { type SharedBrowser, sharedHibernateNote, sharedResetNote } from "./shareRules";
 
 /** Commands that follow a confirmation take the target it captured. */
 export interface BrowserCommands {
@@ -61,6 +61,28 @@ const CONFIRM_TEXT: Record<
     destructive: false,
   },
 };
+
+/** A confirmation's text; a shared browser's reset and hibernation say so
+ * in their title, since they act on every member's browser. */
+export function confirmText(
+  kind: ConfirmKind,
+  shared: SharedBrowser | undefined,
+): { title: string; body: string; action: string; destructive: boolean } {
+  const text = CONFIRM_TEXT[kind];
+  if (!shared) return text;
+  if (kind === "reset") {
+    return {
+      ...text,
+      title: `Reset the shared browser profile (${shared.label})?`,
+      body: "Cookies, logins and site data of this shared browser are deleted on its Machine. No account's Cowboy credentials are affected.",
+      action: "Reset shared profile",
+    };
+  }
+  if (kind === "hibernate") {
+    return { ...text, title: `Hibernate the shared browser (${shared.label})?` };
+  }
+  return text;
+}
 
 /** The one thing to do next, shown on the empty page inside the frame. */
 export function BrowserPrimaryAction({
@@ -150,7 +172,7 @@ export function useBrowserConfirm(
   }, [confirm, current]);
   const ask = (kind: ConfirmKind): void =>
     setConfirm(confirmationFor(kind, model, identityRequired));
-  const text = confirm && current ? CONFIRM_TEXT[confirm.kind] : undefined;
+  const text = confirm && current ? confirmText(confirm.kind, shared) : undefined;
   const confirmed = (): void => {
     if (confirm && current) runConfirmed(confirm, commands);
     setConfirm(undefined);
@@ -175,8 +197,13 @@ export function useBrowserConfirm(
     >
       <Typography variant="body2">{text.body}</Typography>
       {confirm?.kind === "reset" && sharedResetNote(shared) && (
-        <Typography variant="body2" color="warning.main">
+        <Typography variant="body2" color="warning.main" data-shared-confirm-note>
           {sharedResetNote(shared)}
+        </Typography>
+      )}
+      {confirm?.kind === "hibernate" && sharedHibernateNote(shared) && (
+        <Typography variant="body2" color="secondary.main" data-shared-confirm-note>
+          {sharedHibernateNote(shared)}
         </Typography>
       )}
       {confirm?.kind === "takeover" && (

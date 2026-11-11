@@ -1,3 +1,4 @@
+import { GroupsRounded } from "@mui/icons-material";
 import { Button, Stack, Typography } from "@mui/material";
 import { useState } from "react";
 import { legacyBrowserOfProvider } from "./machineBrowser/entryRules";
@@ -38,13 +39,19 @@ export function SubscriptionBrowserActions({
   const enabled = account.browser_enabled === true;
   return (
     <>
-      <Button disabled={Boolean(account.revoking)} onClick={() => setOpen(true)}>
-        Browser…
+      <Button
+        disabled={Boolean(account.revoking)}
+        color={shared ? "secondary" : "primary"}
+        startIcon={shared ? <GroupsRounded fontSize="small" /> : undefined}
+        aria-label={shared ? `Shared browser: ${shared.label}` : "Browser"}
+        onClick={() => setOpen(true)}
+      >
+        {shared ? "Shared browser…" : "Browser…"}
       </Button>
       {shared && (
         <Typography
           variant="caption"
-          color="text.secondary"
+          color="secondary.main"
           data-browser-shared={shared.label}
           sx={{ alignSelf: "center" }}
         >

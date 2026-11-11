@@ -34,11 +34,15 @@ import {
   type IdentityBinding,
   identityRequiredFor,
   newEntryLatch,
+  browserFamily,
   panelShared,
   reconcileBinding,
+  sharedIdentityLabel,
   takeLatch,
 } from "./shareRules";
 import { useSharedBrowser } from "./useSharedBrowser";
+import { type QuickLink, quickLinks } from "./quickLinks";
+import { QuickLinkList, useQuickLaunch } from "./QuickLaunch";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import { useBrowserFullscreen } from "./useBrowserFullscreen";
 import { type MachineBrowserController, useMachineBrowser } from "./useMachineBrowser";
@@ -137,6 +141,7 @@ function browserMenuItems({
   ask,
   onPaste,
   onClose,
+  quick,
 }: {
   model: BrowserModel;
   chrome: BrowserChromeState;
@@ -145,9 +150,19 @@ function browserMenuItems({
   /** Opens the paste sheet; runs inside the menu tap. */
   onPaste: () => void;
   onClose: () => void;
+  /** Quick links, offered while the viewed browser runs. */
+  quick: { links: readonly QuickLink[]; launch: (url: string) => void };
 }): BrowserMenuItem[] {
   const remote = model.remoteClipboard;
   const items: (BrowserMenuItem | false)[] = [
+    ...(chrome.address
+      ? quick.links.map((link, index) => ({
+          key: `quick-${link.key}`,
+          label: `Open ${link.label}`,
+          group: index === 0,
+          onSelect: () => quick.launch(link.url),
+        }))
+      : []),
     {
       key: "hibernate",
       label: "Hibernate…",
@@ -263,6 +278,23 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   );
 }
 
+/** The panel's quick links: the card's own family first (for a shared
+ * browser, the opening card's), Google last and emphasized when shared. */
+function usePanelQuickLinks(
+  props: { account: { id: string }; snapshot: SubscriptionSnapshot | undefined },
+  browser: MachineBrowserController,
+  commands: BrowserCommands,
+  ask: (kind: ConfirmKind) => void,
+  shared: SharedBrowser | undefined,
+) {
+  const launch = useQuickLaunch(browser, commands, ask);
+  const links = quickLinks(browserFamily(props.snapshot, props.account.id), shared !== undefined);
+  const list = (
+    <QuickLinkList links={links} disabled={Boolean(browser.model.busy)} onLaunch={launch} />
+  );
+  return { links, launch, list };
+}
+
 /** The panel's sharing state: the identity binding, what the Service says
  * about the share, and confirmations and Reset bound to that identity. */
 function usePanelSharing(
@@ -331,6 +363,7 @@ function MachineBrowserPanel(
   // The Service's read names the browser a reset deletes; before it
   // arrives the inventory's view stands in.
   const { shared, confirm, chrome } = usePanelSharing(props, model, commands, ui.chrome);
+  const quick = usePanelQuickLinks(props, browser, commands, confirm.ask, shared);
   const full = useBrowserFullscreen(desktop && open);
   const close = desktop ? full.guardClose(onClose) : onClose;
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";
@@ -345,6 +378,7 @@ function MachineBrowserPanel(
         ask: confirm.ask,
         onPaste: paste.start,
         onClose,
+        quick,
       })}
     />
   );
@@ -364,11 +398,14 @@ function MachineBrowserPanel(
     onConfirm: confirm.ask,
     onControls: ui.setPublished,
     onKeyboard: ui.setKeyboardOpen,
+    shared,
+    quick: quick.list,
   };
   const identity = {
-    accountLabel: shared ? `${account.label} · Shared · ${shared.label}` : account.label,
+    accountLabel: shared ? sharedIdentityLabel(shared) : account.label,
     machineLabel,
     status,
+    shared: shared !== undefined,
   };
   const title = `Browser of ${account.label}`;
   if (desktop) {

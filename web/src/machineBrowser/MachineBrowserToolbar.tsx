@@ -1,7 +1,7 @@
 /** Browser-style controls of the Machine browser panel: Close, Back, Forward
  * and Reload (key chords on the attached session), the touch keyboard and
  * the "More" menu with the lifecycle and clipboard commands. Mobile places
- * them, under a one-line identity caption, in a bottom toolbar like a phone
+ * them, above a one-line identity caption, in a bottom toolbar like a phone
  * browser; Desktop keeps its top row. */
 import {
   ArrowBackRounded,
@@ -136,9 +136,10 @@ export function BrowserMenu({
 /** Height of the phone toolbar's targets (CSS px). */
 const MOBILE_TARGET = 46;
 
-/** The phone browser's bottom area: the identity caption (16 px line) over
- * one row of six equal 46 px targets, above the home indicator and the
- * software keyboard. The phone has no top row. */
+/** The phone browser's bottom area: one row of six equal 46 px targets with
+ * the identity caption (one 16 px line) below it, at the very bottom inside
+ * the bottom safe area, above the home indicator and the software keyboard.
+ * The phone has no top row. */
 export function MobileBrowserToolbar({
   chrome,
   keyboardOpen,
@@ -173,7 +174,6 @@ export function MobileBrowserToolbar({
         pr: "max(8px, env(safe-area-inset-right, 0px))",
       }}
     >
-      <Box sx={{ px: 1 }}>{identity}</Box>
       <Stack direction="row" justifyContent="space-around" alignItems="center">
         <IconButton
           aria-label="Close browser"
@@ -197,6 +197,7 @@ export function MobileBrowserToolbar({
         </IconButton>
         {menu}
       </Stack>
+      <Box sx={{ px: 1, minWidth: 0 }}>{identity}</Box>
     </Box>
   );
 }

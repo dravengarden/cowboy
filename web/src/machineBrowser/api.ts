@@ -333,6 +333,9 @@ export interface MachineBrowserApi {
     viewport: BrowserViewport,
     signal: AbortSignal,
     machine?: string,
+    /** Open only while the card uses this browser identity (a restart's
+     * reopen); the Service refuses another with `browser_identity_changed`. */
+    expectedBrowser?: string,
   ): Promise<BrowserResult>;
   /** Navigate exactly `target` to an owner-supplied `https` URL. */
   navigate(
@@ -431,10 +434,15 @@ export function createMachineBrowserApi(
         signal,
         validBrowserRead,
       ),
-    open: (account, dataset, viewport, signal, machine) =>
+    open: (account, dataset, viewport, signal, machine, expectedBrowser) =>
       post(
         `${accountPath(account)}/browser/open`,
-        { dataset, ...viewport, ...(machine ? { machine_id: machine } : {}) },
+        {
+          dataset,
+          ...viewport,
+          ...(machine ? { machine_id: machine } : {}),
+          ...(expectedBrowser === undefined ? {} : { expected_browser: expectedBrowser }),
+        },
         signal,
       ),
     navigate: (account, dataset, target, url, signal) =>
