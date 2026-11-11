@@ -175,9 +175,12 @@ async fn commit(
             &state.hub,
             store,
             meta,
+            // View grants are per session and never inherited from a
+            // directory default (docs/widget-apps-mcp.md §11).
             Update {
                 expected_epoch: None,
                 bindings,
+                apps: std::collections::BTreeMap::new(),
             },
         )
         .await
@@ -206,6 +209,7 @@ async fn commit(
             Update {
                 expected_epoch: Some(stored.epoch),
                 bindings: Vec::new(),
+                apps: std::collections::BTreeMap::new(),
             },
         )
         .await;
