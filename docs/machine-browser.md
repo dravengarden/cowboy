@@ -1155,12 +1155,27 @@ whose browser it displays and the Machine it runs on.
   framebuffer never move; a refusal that frees up by itself (no memory
   headroom, capacity, another operation in progress) says so and offers
   Retry.
-- **Desktop panel.** A large workbench dialog with identity, the menu, a
-  full-screen toggle and Close in one top row; navigation stays in the
-  remote Chromium's own toolbar. Full screen makes the panel claim the whole viewport and,
-  where the Fullscreen API exists, takes the window full screen too (the
-  document element, so menus and confirmations stay visible); Esc leaves
-  full screen before it can close the panel.
+- **Desktop panel.** A large centered modal (`min(96vw, 1960px)` x
+  `min(94vh, 1180px)`, rounded, over a dimmed backdrop; the page underneath
+  stays as it was). Maximize fills the whole window (100vw x 100vh, no
+  corners) and the choice is remembered on the device. A backdrop click
+  never closes it. One 40 px header row holds the identity and state (with
+  the shared-browser icon and "<group> · shared with <members>"), Back,
+  Forward and Reload, the first three quick links as compact chips (the
+  rest in More), More (paste, hibernate, restart, reset, take over, the
+  overflow links), Maximize/Restore and Close; the frame fills the rest and
+  picks its fixed screen mode as below, re-requesting it when the modal is
+  resized or maximized. With focus in the remote frame every key, Esc and
+  browser shortcuts included, goes to the remote browser; Esc closes the
+  modal only from Cowboy's chrome. The release chord, registered as
+  `DESKTOP_SHORTCUTS.browserRelease` (Command-Shift-Esc on macOS,
+  Alt-Shift-Q elsewhere, where Ctrl-Shift-Esc and Alt-Esc belong to the
+  system; IME-safe), moves focus from the frame to the header and is
+  named in the Close tooltip. It is a dialog labelled by the identity,
+  traps focus and restores it on close; its menus speak the Desktop menu
+  grammar (`j`/`k`/`l`/Enter/Esc). Not running, the frame shows the same
+  page as the phone: the state (or "Shared browser · <group>"), Open
+  browser and the quick links.
 
 - **Screen modes and resize authority.** The remote screen is never sized
   to the device. As in neko, it runs one of a few fixed, ordinary modes at

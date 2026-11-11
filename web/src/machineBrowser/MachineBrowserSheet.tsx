@@ -21,7 +21,9 @@ import {
 } from "./browserChrome";
 import type { ConfirmKind } from "./confirmation";
 import { type BrowserCommands, useBrowserConfirm } from "./MachineBrowserActions";
-import { DesktopBrowserTopBar, Identity } from "./MachineBrowserAddressBar";
+import { Identity } from "./MachineBrowserAddressBar";
+import { DesktopBrowserModal } from "./DesktopBrowserModal";
+import { headerQuickLinks } from "./desktopBrowserLayout";
 import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { BrowserMenu, type BrowserMenuItem, MobileBrowserToolbar } from "./MachineBrowserToolbar";
 import { devicePortrait, useTouchInput } from "./inputProfile";
@@ -44,7 +46,6 @@ import { useSharedBrowser } from "./useSharedBrowser";
 import { type QuickLink, quickLinks } from "./quickLinks";
 import { QuickLinkList, useQuickLaunch } from "./QuickLaunch";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
-import { useBrowserFullscreen } from "./useBrowserFullscreen";
 import { type MachineBrowserController, useMachineBrowser } from "./useMachineBrowser";
 
 export interface MachineBrowserSheetProps {
@@ -150,12 +151,13 @@ function browserMenuItems({
   /** Opens the paste sheet; runs inside the menu tap. */
   onPaste: () => void;
   onClose: () => void;
-  /** Quick links, offered while the viewed browser runs. */
-  quick: { links: readonly QuickLink[]; launch: (url: string) => void };
+  /** Quick links, offered while the viewed browser runs (`always`: in
+   * every state, as Desktop's header overflow). */
+  quick: { links: readonly QuickLink[]; launch: (url: string) => void; always?: boolean };
 }): BrowserMenuItem[] {
   const remote = model.remoteClipboard;
   const items: (BrowserMenuItem | false)[] = [
-    ...(chrome.address
+    ...(chrome.address || quick.always
       ? quick.links.map((link, index) => ({
           key: `quick-${link.key}`,
           label: `Open ${link.label}`,
@@ -364,8 +366,6 @@ function MachineBrowserPanel(
   // arrives the inventory's view stands in.
   const { shared, confirm, chrome } = usePanelSharing(props, model, commands, ui.chrome);
   const quick = usePanelQuickLinks(props, browser, commands, confirm.ask, shared);
-  const full = useBrowserFullscreen(desktop && open);
-  const close = desktop ? full.guardClose(onClose) : onClose;
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";
   const menu = (
     <BrowserMenu
@@ -378,7 +378,11 @@ function MachineBrowserPanel(
         ask: confirm.ask,
         onPaste: paste.start,
         onClose,
-        quick,
+        // Desktop shows the first quick links in its header; the rest
+        // overflow here, offered whatever the state (a tap opens first).
+        quick: desktop
+          ? { ...quick, links: headerQuickLinks(quick.links).overflow, always: true }
+          : quick,
       })}
     />
   );
@@ -410,30 +414,26 @@ function MachineBrowserPanel(
   const title = `Browser of ${account.label}`;
   if (desktop) {
     return (
-      <Sheet
+      <DesktopBrowserModal
         open={open}
-        onClose={close}
-        title={title}
-        desktopMaxWidth={1240}
-        desktopFill
-        desktopFullScreen={full.fullscreen}
+        onClose={onClose}
+        identity={identity}
+        chrome={chrome}
+        onChord={chord}
+        quickLinks={quick.links}
+        quickDisabled={Boolean(model.busy)}
+        onQuick={quick.launch}
+        menu={menu}
       >
         <Box
           data-machine-browser-sheet={account.id}
-          sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", mx: -3, mt: -2.5 }}
+          sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
         >
-          <DesktopBrowserTopBar
-            {...identity}
-            menu={menu}
-            fullscreen={full.fullscreen}
-            onToggleFullscreen={full.toggle}
-            onClose={onClose}
-          />
           <BrowserFrame {...frameProps} />
         </Box>
         {confirm.dialog}
         {paste.dialog}
-      </Sheet>
+      </DesktopBrowserModal>
     );
   }
   return (

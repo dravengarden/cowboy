@@ -209,8 +209,23 @@ export function desktopLeaderGroupSequence(group: string, key: string): string {
 }
 
 /** One source of truth for shortcut registration and every visible hint. */
+/**
+ * Leaves the Machine browser's remote frame for Cowboy's chrome. While the
+ * frame has focus every other key, Esc and browser shortcuts included,
+ * belongs to the remote browser, so this chord must be one neither browsers
+ * nor sites use: Command-Shift-Esc has no macOS meaning, while
+ * Ctrl-Shift-Esc (Task Manager) and Alt-[Shift-]Esc (window cycling) are
+ * taken by the system elsewhere, where Alt-Shift-Q is free in Chrome.
+ */
+export function desktopBrowserReleaseShortcut(
+  mac: boolean,
+): "Mod+Shift+Escape" | "Alt+Shift+Q" {
+  return mac ? "Mod+Shift+Escape" : "Alt+Shift+Q";
+}
+
 export const DESKTOP_SHORTCUTS = {
   shortcuts: "Mod+/",
+  browserRelease: desktopBrowserReleaseShortcut(isMac),
   commands: "Mod+Shift+P",
   stop: "Mod+.",
   // Conversation actions beside Stop, while the Prompt owns focus: Shift
