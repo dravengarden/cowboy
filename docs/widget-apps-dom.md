@@ -306,6 +306,11 @@ first (one full app per page); Stop removes the frame; an app pushed out of
 view is stopped after its grace. All four passed with the run's egress,
 network-log and STUN/TURN counts still 0. The verdict requires them.
 
+The shell response also carries `sandbox allow-scripts` in its CSP (from the
+phase C review, `call-7d83b8fd2f8aa9a796d359da`), so it is opaque even when
+opened top-level or framed without the attribute; `policy` and
+`no-isolation` passed again with it.
+
 ## 8. Infrastructure
 
 None in production beyond Cowboy: the shell is a Web release file and a
