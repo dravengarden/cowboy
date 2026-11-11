@@ -1,6 +1,6 @@
 # Widget apps, phase C: MCP Apps from bound Plugin servers
 
-Status: design, revision 4 (2026-11-11). Not implemented. It replaces the
+Status: design, revision 5 (2026-11-11). Not implemented. It replaces the
 direction recorded in [`widget-apps-dom.md`](widget-apps-dom.md) §10 and the
 phase C line of [`widget-apps.md`](widget-apps.md) §10. Owner decisions are
 in §11, the review record in §12.
@@ -201,7 +201,12 @@ already serves the document, so the spec's proxy frame adds nothing).
   Controller opens one relay handle for `(session, binding)` through the
   existing relay: the same current policy epoch, the same parent grant
   (`managed_calls::authorize`) and the same execution connection the agent's
-  scope uses, but its own MCP process. Every request there is rechecked like
+  scope uses, but its own MCP process. Before the first tool call on a new
+  or reopened handle the Controller completes the backend MCP handshake
+  itself (`initialize`, then `notifications/initialized`, as the native
+  bridge does for the agent) and validates the reply; a failed handshake
+  closes the new handle and the call is refused, never replayed. Every
+  request there is rechecked like
   any relay request, plus the lease (§6), the app grant and the confirmation
   (if required), at dispatch and again before delivery.
 - Separate processes are what keep the agent safe: the Machine process
@@ -216,8 +221,12 @@ already serves the document, so the spec's proxy frame adds nothing).
   frame teardown drops only the delivery. A retired view handle is reopened
   only by a later call under a live lease, current epoch and the same parent
   grant and connection; a changed parent grant or connection refuses view
-  calls until the agent's scope is current again. The view scope closes when
-  no frame of that binding holds a lease, after 60 s idle, and counts
+  calls until the agent's scope is current again. When no frame of that
+  binding holds a lease, or after 60 s idle, the scope refuses new calls at
+  once but closes its transport only after a dispatched request has answered
+  or timed out (relay close cancels in-flight requests, so closing earlier
+  could interrupt a confirmed write); authority loss still closes at once.
+  It counts
   against the relay's 32 open sessions (at most one per session and binding).
 - A server's state is per process. Views therefore get the same tools and
   sources as the agent but not the agent's in-process state; a server that
@@ -333,3 +342,12 @@ Revision 3 (Astra Max design review, `call-86e8a1cc8fc3de3726dcad05`):
 | Finding | Resolution |
 |---|---|
 | Shared-scope scheduling lets a view call time out a queued agent call and retire the shared handle (P1) | Views run in their own relay handle and MCP process under the same parent grant, epoch and connection; a view can retire only its own scope; both arrival orders tested (§7, §9) |
+
+Revision 4 (Astra Max design review, `call-76a420469c9aad458d1c8f9c`): the
+separate view scope closes the revision 3 finding, and step 1 was judged
+ready to implement.
+
+| Finding | Resolution |
+|---|---|
+| Closing the last view scope cancels a dispatched write (P1) | New calls refused at once; transport close deferred until the dispatched request answers or times out (§7) |
+| View processes are never initialized (P2) | The Controller completes and validates `initialize` before the first call on every new or reopened handle; failure refuses without replay (§7) |
