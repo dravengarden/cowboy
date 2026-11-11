@@ -308,8 +308,12 @@ requires, on that browser:
       release for 1a and 1b. Done (this revision).
    c. Policy `apps` with CAS and shape validation; contract matching at use.
       Done (this revision). No rendering.
-2. Frame tokens, `/mcp-app/` route and headers, the lease; the suite's
-   network and navigation rows.
+2. a. Frame tokens, `/mcp-app/` route and headers, the lease (Controller:
+      `components/server/src/server/mcp_bindings/apps.rs`,
+      `web_security::mcp_app_headers`; views from the Catalog's exact release,
+      `PluginCatalog::resolve_mcp_server`). Done (this revision).
+   b. A signed example Plugin with a view, and the suite's network and
+      navigation rows against a disposable Controller.
 3. Bridge, scope-bound `tools/call`, transcript row; the SDK fixture rows.
 4. A real native-binding test with the retained execution executable (not a
    standalone SDK view), then the first view: a Suger status view granted on

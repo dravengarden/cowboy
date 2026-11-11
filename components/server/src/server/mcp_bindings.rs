@@ -16,6 +16,7 @@ use super::{AppState, AuthenticatedProductRequest, session_is_visible};
 use crate::core::{Hub, SessionMeta, settings_keys::SESSION_MCP_BINDINGS_PREFIX};
 use crate::mcp_binding::{AppGrant, Binding, valid_epoch, validate_app_grants, validate_bindings};
 
+pub(super) mod apps;
 mod authority;
 pub(super) mod defaults;
 pub(super) mod launch;
@@ -228,6 +229,18 @@ pub(super) fn routes() -> axum::Router<Arc<AppState>> {
             "/api/sessions/{id}/mcp-bindings/prepare",
             axum::routing::post(launch_prepare::prepare)
                 .layer(axum::extract::DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/api/sessions/{id}/mcp-apps/frames",
+            axum::routing::post(apps::open).layer(axum::extract::DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/api/sessions/{id}/mcp-apps/frames/{lease}/renew",
+            axum::routing::post(apps::renew),
+        )
+        .route(
+            "/api/sessions/{id}/mcp-apps/frames/{lease}",
+            axum::routing::delete(apps::close),
         )
         .route(
             "/api/sessions/{id}/mcp-bindings",

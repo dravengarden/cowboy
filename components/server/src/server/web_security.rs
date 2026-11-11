@@ -42,18 +42,25 @@ pub(super) fn app_document_csp(html: &[u8], host: Option<&str>) -> String {
 /// editor plugin sandbox runs one as its own inline boot script, inside a srcdoc
 /// frame that inherits this policy.
 fn inline_script_hashes(html: &[u8]) -> Vec<String> {
+    inline_element_hashes(html, "script")
+}
+
+/// CSP hashes of every inline `<tag>` body (no `src` attribute).
+fn inline_element_hashes(html: &[u8], tag: &str) -> Vec<String> {
     let Ok(html) = std::str::from_utf8(html) else {
         return Vec::new();
     };
+    let open = format!("<{tag}");
+    let close = format!("</{tag}");
     let mut hashes = Vec::new();
     let mut rest = html;
-    while let Some(start) = rest.find("<script") {
+    while let Some(start) = rest.find(&open) {
         let element = &rest[start..];
         let Some(tag_end) = element.find('>') else {
             break;
         };
         let body = &element[tag_end + 1..];
-        let Some(body_end) = body.find("</script") else {
+        let Some(body_end) = body.find(&close) else {
             break;
         };
         if !element[..tag_end].contains(" src=") {
@@ -66,6 +73,40 @@ fn inline_script_hashes(html: &[u8]) -> Vec<String> {
         rest = &body[body_end..];
     }
     hashes
+}
+
+/// A signed MCP Apps view (docs/widget-apps-mcp.md §5): its own policy,
+/// separate from `/app-shell.html`. Only the document's own inline scripts
+/// and style blocks run (by hash), style attributes are allowed, nothing is
+/// loaded or connected, and the response sandbox keeps the document opaque
+/// however it is opened.
+pub(super) fn mcp_app_headers(html: &[u8]) -> Vec<(&'static str, String)> {
+    let join = |hashes: Vec<String>| -> String {
+        if hashes.is_empty() {
+            " 'none'".to_owned()
+        } else {
+            hashes.iter().map(|hash| format!(" '{hash}'")).collect()
+        }
+    };
+    let csp = format!(
+        "sandbox allow-scripts; default-src 'none'; script-src{}; style-src-elem{}; \
+         style-src-attr 'unsafe-inline'; img-src data: blob:; font-src data:; \
+         media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; \
+         worker-src 'none'; manifest-src 'none'; object-src 'none'; form-action 'none'; \
+         base-uri 'none'; frame-ancestors 'self'; webrtc 'block'",
+        join(inline_script_hashes(html)),
+        join(inline_element_hashes(html, "style")),
+    );
+    vec![
+        ("content-type", "text/html; charset=utf-8".to_owned()),
+        ("cache-control", "no-store".to_owned()),
+        ("content-security-policy", csp),
+        ("connection-allowlist", "()".to_owned()),
+        ("permissions-policy", disabled_features()),
+        ("referrer-policy", "no-referrer".to_owned()),
+        ("x-content-type-options", "nosniff".to_owned()),
+        ("cross-origin-resource-policy", "same-origin".to_owned()),
+    ]
 }
 
 /// The full-DOM app shell (docs/widget-apps-dom.md §3): framed only by Cowboy,
@@ -87,6 +128,20 @@ pub(super) fn app_shell_headers(html: &[u8]) -> Vec<(&'static str, String)> {
          worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'; \
          frame-ancestors 'self'; webrtc 'block'; sandbox allow-scripts"
     );
+    vec![
+        ("content-type", "text/html; charset=utf-8".to_owned()),
+        ("cache-control", "no-store".to_owned()),
+        ("content-security-policy", csp),
+        ("connection-allowlist", "()".to_owned()),
+        ("permissions-policy", disabled_features()),
+        ("referrer-policy", "no-referrer".to_owned()),
+        ("x-content-type-options", "nosniff".to_owned()),
+        ("cross-origin-resource-policy", "same-origin".to_owned()),
+    ]
+}
+
+/// `Permissions-Policy` turning every powerful feature off.
+fn disabled_features() -> String {
     let features = [
         "accelerometer",
         "ambient-light-sensor",
@@ -124,21 +179,11 @@ pub(super) fn app_shell_headers(html: &[u8]) -> Vec<(&'static str, String)> {
         "window-management",
         "xr-spatial-tracking",
     ];
-    let permissions = features
+    features
         .iter()
         .map(|feature| format!("{feature}=()"))
         .collect::<Vec<_>>()
-        .join(", ");
-    vec![
-        ("content-type", "text/html; charset=utf-8".to_owned()),
-        ("cache-control", "no-store".to_owned()),
-        ("content-security-policy", csp),
-        ("connection-allowlist", "()".to_owned()),
-        ("permissions-policy", permissions),
-        ("referrer-policy", "no-referrer".to_owned()),
-        ("x-content-type-options", "nosniff".to_owned()),
-        ("cross-origin-resource-policy", "same-origin".to_owned()),
-    ]
+        .join(", ")
 }
 
 pub(super) fn harden_static_response(headers: &mut HeaderMap, document_csp: Option<&str>) {
@@ -222,6 +267,41 @@ mod tests {
         assert!(headers["permissions-policy"].contains("camera=()"));
         assert!(!headers.contains_key("x-frame-options"));
         assert!(!headers.contains_key("set-cookie"));
+    }
+
+    #[test]
+    fn a_signed_view_runs_only_its_own_inline_code_and_reaches_nothing() {
+        let html = b"<!doctype html><style>p{color:red}</style><p style=\"margin:0\">x</p><script>boot()</script>";
+        let headers: std::collections::HashMap<_, _> = mcp_app_headers(html).into_iter().collect();
+        let csp = &headers["content-security-policy"];
+        assert!(csp.starts_with("sandbox allow-scripts;"), "{csp}");
+        assert!(
+            csp.contains(&format!("script-src {};", digest("boot()"))),
+            "{csp}"
+        );
+        assert!(
+            csp.contains(&format!("style-src-elem {};", digest("p{color:red}"))),
+            "{csp}"
+        );
+        assert!(csp.contains("style-src-attr 'unsafe-inline'"));
+        for directive in [
+            "default-src 'none'",
+            "connect-src 'none'",
+            "frame-src 'none'",
+            "worker-src 'none'",
+            "base-uri 'none'",
+            "frame-ancestors 'self'",
+        ] {
+            assert!(csp.contains(directive), "{directive}");
+        }
+        assert!(!csp.contains("'self' ") && !csp.contains("https:"), "{csp}");
+        assert_eq!(headers["connection-allowlist"], "()");
+        assert_eq!(headers["cache-control"], "no-store");
+        assert!(headers["permissions-policy"].contains("camera=()"));
+        // A document without inline code gets none, not an empty source list.
+        let bare: std::collections::HashMap<_, _> =
+            mcp_app_headers(b"<p>x</p>").into_iter().collect();
+        assert!(bare["content-security-policy"].contains("script-src 'none'"));
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub(super) struct SessionExtensions {
     pub(super) bindings: mcp_bindings::Policies,
     pub(super) launches: mcp_bindings::launch::Launches,
     pub(super) mcp: mcp_bindings::relay::Relay,
+    pub(super) apps: mcp_bindings::apps::Frames,
 }
 
 pub(super) struct AppState {

@@ -573,6 +573,30 @@ impl PluginCatalog {
         })
     }
 
+    /// The signed contract of the exact MCP server generation a session
+    /// binding names (`artifact_digest` is the generation digest). MCP Apps
+    /// views are served only from this verified package, never from what a
+    /// running server returns (docs/widget-apps-mcp.md §3).
+    pub fn resolve_mcp_server(
+        &self,
+        plugin_id: &str,
+        generation_digest: &str,
+    ) -> Result<cowboy_plugin_sdk::McpServerContract> {
+        let snapshot = self.state.read();
+        let mut found = snapshot
+            .external
+            .iter()
+            .filter(|((id, _, digest), _)| id == plugin_id && digest == generation_digest);
+        let (_, artifact) = found
+            .next()
+            .context("MCP server release is not in the Catalog")?;
+        let cowboy_plugin_sdk::PluginPayload::McpServer(contract) = &artifact.package.payload
+        else {
+            anyhow::bail!("selected Plugin is not an MCP server");
+        };
+        Ok(contract.clone())
+    }
+
     pub fn published_artifact_path(&self, digest: &str, name: &str) -> Option<PathBuf> {
         let digest = digest.strip_prefix("sha256:").unwrap_or(digest);
         if digest.len() != 64

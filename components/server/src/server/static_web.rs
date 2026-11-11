@@ -198,6 +198,14 @@ pub(super) async fn static_handler(
     if requested.starts_with("app-shell") {
         return app_shell(&state, requested, uri.query().is_some()).await;
     }
+    if requested.starts_with("mcp-app/") || requested == "mcp-app" {
+        return super::mcp_bindings::apps::serve(
+            &state,
+            requested,
+            uri.query().is_some(),
+            &headers,
+        );
+    }
 
     // Never allow a URI to escape the configured asset root. Percent-encoded
     // traversal remains a literal filename at this layer and is harmless.
