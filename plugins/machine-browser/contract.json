@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "machine-browser",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "display_name": "Machine browser",
   "description": "Owner-operated Chromium on the Machine for account sign-in, isolated per account.",
   "supported_platforms": [

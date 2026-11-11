@@ -106,7 +106,7 @@ graph; it has no UI, URLs, credentials or network targets.
 {
   "schema_version": 1,
   "id": "machine-browser",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "display_name": "Machine browser",
   "description": "Owner-operated Chromium on the Machine for account sign-in.",
   "supported_platforms": [{"os": "linux", "architecture": "x86_64"}],
@@ -357,7 +357,12 @@ nothing is configurable from outside beyond the argument vector.
    `BuiltInDnsClientEnabled=false`, `DnsOverHttpsMode=off`,
    `DefaultGeolocationSetting=2`, `DefaultNotificationsSetting=2`,
    `AudioCaptureAllowed=false`, `VideoCaptureAllowed=false`,
-   `RestoreOnStartup=5`. With the built-in resolver off, Chromium resolves
+   `RestoreOnStartup=5`. It also shows the bookmarks bar
+   (`BookmarkBarEnabled=true`, no apps shortcut) with one managed
+   "Sign in" folder (`ManagedBookmarks`): Claude, ChatGPT · Codex, Grok,
+   DeepSeek and Google sign-in, the same pages as the panel's quick links.
+   Bookmarks are browser UI only; no page can read them, and opening one is
+   an ordinary typed-address navigation. With the built-in resolver off, Chromium resolves
    names through the artifact's glibc, which the scaffolded `resolv.conf`
    forces onto TCP, so the browser needs no UDP socket at all and the sealed
    profile denies them. Session restoration is off on purpose: a reopened

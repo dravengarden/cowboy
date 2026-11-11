@@ -30,5 +30,32 @@
   "DefaultNotificationsSetting": 2,
   "AudioCaptureAllowed": false,
   "VideoCaptureAllowed": false,
-  "RestoreOnStartup": 5
+  "RestoreOnStartup": 5,
+  "BookmarkBarEnabled": true,
+  "ShowAppsShortcutInBookmarkBar": false,
+  "ManagedBookmarks": [
+    {
+      "toplevel_name": "Sign in"
+    },
+    {
+      "name": "Claude",
+      "url": "https://claude.ai/"
+    },
+    {
+      "name": "ChatGPT · Codex",
+      "url": "https://chatgpt.com/"
+    },
+    {
+      "name": "Grok",
+      "url": "https://grok.com/"
+    },
+    {
+      "name": "DeepSeek",
+      "url": "https://chat.deepseek.com/"
+    },
+    {
+      "name": "Google sign-in",
+      "url": "https://accounts.google.com/"
+    }
+  ]
 }
