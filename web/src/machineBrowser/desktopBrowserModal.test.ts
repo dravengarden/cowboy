@@ -90,7 +90,7 @@ test("the maximize choice is remembered, and a failing storage is harmless", () 
 test("Esc closes the modal only from Cowboy's chrome, never from the remote frame", () => {
   const element = (inFrame: boolean) => ({
     closest: (selector: string) =>
-      inFrame && selector === "[data-machine-browser-frame]" ? {} : null,
+      inFrame && selector === "[data-machine-browser-viewer]" ? {} : null,
   });
   assertEquals(escapeClosesModal(element(true) as unknown as Element), false);
   assertEquals(escapeClosesModal(element(false) as unknown as Element), true);

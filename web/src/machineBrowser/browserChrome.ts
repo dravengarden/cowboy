@@ -19,6 +19,8 @@ import { needsMachineChoice } from "./entryRules";
 export interface ViewerControls {
   account: string;
   target: BrowserTarget;
+  /** This viewer's attachment, from its stream's first state. */
+  attachmentId: string | undefined;
   chord(chord: BrowserChord): void;
   toggleKeyboard(): void;
   /** Set the remote clipboard to `text` and press Ctrl+V. */

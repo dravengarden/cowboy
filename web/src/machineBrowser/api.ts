@@ -337,13 +337,16 @@ export interface MachineBrowserApi {
      * reopen); the Service refuses another with `browser_identity_changed`. */
     expectedBrowser?: string,
   ): Promise<BrowserResult>;
-  /** Navigate exactly `target` to an owner-supplied `https` URL. */
+  /** Navigate exactly `target` to an owner-supplied `https` URL. With
+   * `attachmentId`, the Machine navigates only while that attachment is the
+   * instance's current one (never a replacement viewer's page). */
   navigate(
     account: string,
     dataset: string,
     target: BrowserTarget,
     url: string,
     signal: AbortSignal,
+    attachmentId?: string,
   ): Promise<BrowserResult>;
   hibernate(
     account: string,
@@ -445,10 +448,15 @@ export function createMachineBrowserApi(
         },
         signal,
       ),
-    navigate: (account, dataset, target, url, signal) =>
+    navigate: (account, dataset, target, url, signal, attachmentId) =>
       post(
         `${accountPath(account)}/browser/navigate`,
-        { dataset, ...targetBody(target), url },
+        {
+          dataset,
+          ...targetBody(target),
+          url,
+          ...(attachmentId === undefined ? {} : { attachment_id: attachmentId }),
+        },
         signal,
       ),
     hibernate: (account, dataset, target, signal) =>

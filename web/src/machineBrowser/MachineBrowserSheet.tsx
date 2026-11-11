@@ -12,7 +12,6 @@ import { copyText } from "../clipboard";
 import { useStoreSelector } from "../store";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import {
-  type BrowserTarget,
   type BrowserViewport,
   PREFERRED_SCALE,
   browserStateLabel,
@@ -304,10 +303,15 @@ function usePanelQuickLinks(
   browser: MachineBrowserController,
   commands: BrowserCommands,
   confirm: { ask: (kind: ConfirmKind) => void; showing: ConfirmKind | undefined },
-  [shared, connected]: [SharedBrowser | undefined, BrowserTarget | undefined],
+  [shared, controls]: [SharedBrowser | undefined, ViewerControls | undefined],
 ) {
   const quick = useQuickLaunch(browser, commands, confirm, {
-    connected,
+    // Connected only once its attachment is named: every quick-link
+    // navigation is fenced to that attachment on the Machine.
+    connected:
+      controls?.attachmentId === undefined
+        ? undefined
+        : { target: controls.target, attachmentId: controls.attachmentId },
     // The inventory's identity in this very render: a membership change
     // never lets an older link navigate before the panel is re-bound.
     sheetIdentity: props.snapshot ? browserIdentityKey(props.shared) : undefined,
@@ -391,7 +395,7 @@ function MachineBrowserPanel(
   const { shared, confirm, chrome } = usePanelSharing(props, model, commands, ui.chrome);
   const quick = usePanelQuickLinks(props, browser, commands, confirm, [
     shared,
-    ui.controls?.target,
+    ui.controls,
   ]);
   const uiCommands = quick.commands;
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";

@@ -43,6 +43,10 @@ export interface BrowserModel {
    * own (whose incarnation may be lower) must re-bind the panel, not be
    * dropped as an older instance. */
   observedIdentity?: string | undefined;
+  /** Advances on every failure shown (a failed command or read, a refused
+   * answer), even one repeating the text already shown: what waits for a
+   * command's outcome compares this, never the error text. */
+  failures?: number;
 }
 
 export type BrowserEvent =
@@ -431,7 +435,7 @@ function observeResultIdentity(model: BrowserModel, result: BrowserResult): Brow
 /** Every lifecycle transition advances the epoch; a viewer established by
  * it records that epoch. */
 export function reduceBrowser(model: BrowserModel, event: BrowserEvent): BrowserModel {
-  const next = reduceEvent(model, event);
+  const next = countFailure(model, event, reduceEvent(model, event));
   const transition =
     event.type === "result" ||
     next.viewer !== model.viewer ||
@@ -441,6 +445,13 @@ export function reduceBrowser(model: BrowserModel, event: BrowserEvent): Browser
   const viewer =
     next.viewer && next.viewer !== model.viewer ? { ...next.viewer, since: epoch } : next.viewer;
   return { ...next, epoch, viewer };
+}
+
+function countFailure(model: BrowserModel, event: BrowserEvent, next: BrowserModel): BrowserModel {
+  const failed =
+    next.error !== "" &&
+    (next.error !== model.error || event.type === "failed" || event.type === "read_failed");
+  return failed ? { ...next, failures: (model.failures ?? 0) + 1 } : next;
 }
 
 function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {

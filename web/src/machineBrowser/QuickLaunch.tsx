@@ -35,8 +35,9 @@ export function useQuickLaunch(
   commands: BrowserCommands,
   confirm: { ask: (kind: ConfirmKind) => void; showing: ConfirmKind | undefined },
   context: {
-    /** This panel's connected viewer's target (`controlsFor`), if any. */
-    connected: BrowserTarget | undefined;
+    /** This panel's connected viewer (`controlsFor`), if any: its target
+     * and attachment, which every navigation here is fenced to. */
+    connected: { target: BrowserTarget; attachmentId: string } | undefined;
     /** The sheet's binding (inventory) identity, known in the same render. */
     sheetIdentity: string | undefined;
     identityRequired: boolean;
@@ -44,7 +45,9 @@ export function useQuickLaunch(
 ): QuickLaunch {
   const [pending, setPending] = useState<PendingQuickLink | undefined>(undefined);
   const { model } = browser;
-  const connected = model.busy ? undefined : context.connected;
+  const viewer = model.busy ? undefined : context.connected;
+  const connected = viewer?.target;
+  const attachmentId = viewer?.attachmentId;
   const step = pending
     ? quickStep(pending, {
         identity: panelIdentity(model),
@@ -53,7 +56,7 @@ export function useQuickLaunch(
         connected,
         confirming: confirm.showing,
         takeoverViewer: model.viewer?.takeover === true,
-        error: model.error,
+        failures: model.failures ?? 0,
       })
     : undefined;
   useEffect(() => {
@@ -63,13 +66,15 @@ export function useQuickLaunch(
       return;
     }
     setPending(undefined);
-    if (step.action === "navigate" && connected) browser.navigate(pending.url, connected);
-  }, [browser, connected, pending, step]);
+    if (step.action === "navigate" && connected) {
+      browser.navigate(pending.url, connected, attachmentId);
+    }
+  }, [attachmentId, browser, connected, pending, step]);
   const launch = (url: string): void => {
     const plan = quickLaunchPlan(model, connected, context.identityRequired);
     if (plan === "none") return;
     if (plan === "navigate" && connected) {
-      browser.navigate(url, connected);
+      browser.navigate(url, connected, attachmentId);
       return;
     }
     const identity = panelIdentity(model);
@@ -78,7 +83,7 @@ export function useQuickLaunch(
       url,
       identity,
       takeover: plan === "takeover",
-      error: model.error,
+      failures: model.failures ?? 0,
       sinceEpoch: model.epoch ?? 0,
       // Reuse binds to the attachment already connecting; attaching and
       // taking over stay on the shown browser's Machine.

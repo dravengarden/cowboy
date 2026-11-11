@@ -404,6 +404,7 @@ function recordingControls(account: string, target: BrowserTarget) {
   const controls: ViewerControls = {
     account,
     target,
+    attachmentId: "att-1",
     chord: (chord) => chords.push(chord),
     toggleKeyboard: () => {
       keyboard += 1;

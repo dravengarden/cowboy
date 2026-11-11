@@ -681,8 +681,15 @@ impl BrowserManager {
                 self.resize(&request_id, &instance, &attachment_id, width, height)
                     .await,
             ),
-            Command::Navigate { instance, url } => {
-                match self.navigate(&request_id, &instance, &url).await {
+            Command::Navigate {
+                instance,
+                url,
+                attachment_id,
+            } => {
+                match self
+                    .navigate(&request_id, &instance, &url, attachment_id.as_deref())
+                    .await
+                {
                     Ok(event) => Some(event),
                     Err(detail) => {
                         self.send_result(request_id, false, Some(detail));

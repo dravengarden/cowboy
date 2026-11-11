@@ -19,7 +19,11 @@ import { workspaceCommandKey } from "./workspaceCommandKey";
 import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 import { assertChromeShortcutAllowed } from "./chromeShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
-import { desktopOverlayOwnsShortcuts, remoteViewerOwnsKey } from "./desktopShortcutScope";
+import {
+  desktopOverlayOwnsShortcuts,
+  remoteViewerOwnsKey,
+  swallowLeaderSpaceKeyUp,
+} from "./desktopShortcutScope";
 import {
   desktopShouldBlockStaleVimSink,
   desktopVimSinkShouldHandleKeys,
@@ -468,6 +472,7 @@ export function DesktopCommandProvider(
       ) return;
       if (leaderArmed.current) clearWorkspaceCommand();
       clearPendingJumpChord();
+      if (event.type === "blur") swallowSpaceKeyUp.current = false; // Released elsewhere.
     };
     globalThis.addEventListener("pointerdown", dismiss, true);
     globalThis.addEventListener("blur", dismiss);
@@ -1386,12 +1391,7 @@ export function DesktopCommandProvider(
         event.stopPropagation();
       }
     };
-    const onKeyUp = (event: KeyboardEvent): void => {
-      if (event.code !== "Space" || !swallowSpaceKeyUp.current) return;
-      swallowSpaceKeyUp.current = false;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    };
+    const onKeyUp = swallowLeaderSpaceKeyUp(swallowSpaceKeyUp);
     globalThis.addEventListener("keydown", onKeyDown, true);
     globalThis.addEventListener("keyup", onKeyUp, true);
     return () => {

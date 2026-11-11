@@ -127,7 +127,7 @@ test("a waiting quick link reaches only its own attachment of its own identity",
     url: "https://claude.ai/",
     identity: `share:${SHARE}:2`,
     takeover: false,
-    error: "",
+    failures: 0,
     sinceEpoch: 4,
   };
   const now = {
@@ -137,7 +137,7 @@ test("a waiting quick link reaches only its own attachment of its own identity",
     connected: undefined as typeof target | undefined,
     confirming: undefined as string | undefined,
     takeoverViewer: false,
-    error: "",
+    failures: 0,
   };
   const step = (p: Parameters<typeof quickStep>[0], n: Partial<typeof now>) =>
     quickStep(p, { ...now, ...n });
@@ -168,12 +168,10 @@ test("a waiting quick link reaches only its own attachment of its own identity",
     step({ ...pending, machine: "ovh" }, { viewer: { ...viewer, target: other } }).action,
     "drop",
   );
-  // A failure since the tap drops it; an error already shown does not.
-  assertEquals(
-    step(pending, { error: "Another viewer is attached to this browser." }).action,
-    "drop",
-  );
-  assertEquals(step({ ...pending, error: "old" }, { error: "old" }).action, "wait");
+  // A failure since the tap drops it, even one repeating the error already
+  // shown; failures before the tap do not.
+  assertEquals(step(pending, { failures: 1 }).action, "drop");
+  assertEquals(step({ ...pending, failures: 3 }, { failures: 3 }).action, "wait");
   // A takeover link waits while confirming, is carried by the confirmed
   // takeover, and is dropped when the confirmation is cancelled.
   const takeover = { ...pending, takeover: true };
@@ -403,4 +401,25 @@ test("a restart's reopen is bound to the confirmed identity on the Service", asy
       expected_browser: `share:${SHARE}:2`,
     },
   ]);
+});
+
+test("every failure shown advances the failure count, even with the same text", async () => {
+  const { INITIAL_BROWSER_MODEL, reduceBrowser } = await import("./browserModel");
+  const failed = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "failed",
+    action: "open",
+    message: "The Machine did not answer.",
+  });
+  assertEquals(failed.failures, 1);
+  // A new command clears the error; its failure with the same text counts.
+  const busy = reduceBrowser(failed, { type: "busy", action: "open" });
+  assertEquals(busy.failures, 1);
+  const again = reduceBrowser(busy, {
+    type: "failed",
+    action: "open",
+    message: "The Machine did not answer.",
+  });
+  assertEquals(again.failures, 2);
+  // An event that leaves the shown error alone is not a failure.
+  assertEquals(reduceBrowser(again, { type: "notice", message: "hi" }).failures, 2);
 });

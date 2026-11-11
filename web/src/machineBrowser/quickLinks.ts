@@ -93,14 +93,15 @@ function sameBrowserTarget(left: BrowserTarget, right: BrowserTarget | undefined
 /** A quick link waiting for its browser. It is bound to the browser
  * identity it was tapped for, the lifecycle epoch then (only a viewer
  * established after it, or the viewer already connecting, may carry it), the
- * Machine it opens on when known, the error shown then, and whether only a
+ * Machine it opens on when known, the failure count then, and whether only a
  * confirmed takeover may carry it. Once a viewer appears the link binds to
  * exactly that attachment. */
 export interface PendingQuickLink {
   url: string;
   identity: string | undefined;
   takeover: boolean;
-  error: string;
+  /** `BrowserModel.failures` when tapped: any later failure drops it. */
+  failures: number;
   sinceEpoch: number;
   machine?: string | undefined;
   viewer?: QuickViewer | undefined;
@@ -115,7 +116,7 @@ export interface QuickNow {
   connected: BrowserTarget | undefined;
   confirming: string | undefined;
   takeoverViewer: boolean;
-  error: string;
+  failures: number;
 }
 
 /** The next state of a waiting quick link: keep waiting (possibly newly
@@ -130,7 +131,7 @@ export function quickStep(
   const moved = (identity: string | undefined): boolean =>
     pending.identity !== undefined && identity !== undefined && identity !== pending.identity;
   if (moved(now.identity) || moved(now.sheetIdentity)) return { action: "drop" };
-  if (now.error && now.error !== pending.error) return { action: "drop" };
+  if (now.failures !== pending.failures) return { action: "drop" };
   let bound = pending;
   if (!pending.viewer) {
     if (pending.takeover && now.confirming !== "takeover" && !now.takeoverViewer) {

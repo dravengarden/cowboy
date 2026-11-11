@@ -991,7 +991,7 @@ framing. Counters record bytes and frames.
 |---|---|
 | `GET /api/provider-accounts/{account}/browser` | state, geometry, scale, deadline, snapshot generation and time, Machine, reasons; `machine_id=` keeps the read on that Machine; `choose_machine` (no placement and no native credentials anywhere: the first open must name a Machine) and `capable_machines` (`[{machine_id}]`, Machines whose current connection speaks the browser protocol and reported an available browser capability) |
 | `POST /api/provider-accounts/{account}/browser/open` | open as `Tab` (no URL body); an optional `machine_id` opens only on that Machine: `browser_not_placed` unless the account has a placement or native credentials there (an account with neither anywhere, never signed in, may name its first Machine), `browser_machine_unavailable` when it is not connected or cannot run browsers (never another Machine) |
-| `POST .../browser/navigate` | owner-supplied `https` URL, bounded; names `machine_id` and `instance` |
+| `POST .../browser/navigate` | owner-supplied `https` URL, bounded; names `machine_id` and `instance`; an optional `attachment_id` navigates only while that attachment is current |
 | `POST .../browser/resize` | bounded geometry; carries the attachment, `machine_id` and `instance` |
 | `POST .../browser/snapshot`, `POST .../browser/hibernate` | lifecycle of the named `machine_id` and `instance` (incarnation included) |
 | `POST .../browser/reset` | deletes the profile on the named `machine_id`, with that Machine's expected profile revision |
@@ -1131,7 +1131,11 @@ whose browser it displays and the Machine it runs on.
   the sheet's inventory in the same render), then to exactly the first
   attachment established after the tap (its lifecycle epoch, generation,
   Machine and instance), and navigates once that attachment's stream is
-  open. Another identity, a failed command, an attachment that ends or
+  open. The navigation names that attachment (`attachment_id`, from its
+  stream's first state): the Machine checks it under the control lock a
+  takeover holds while installing its attachment, so a takeover racing the
+  request refuses it as superseded. Another identity, any failure since the
+  tap (counted, not compared by text), an attachment that ends or
   fails, one on another Machine, or a cancelled takeover drops it, so it
   never reaches another profile or another viewer's page; a re-bind drops
   it too. Links are disabled until the first state read answered (and,
@@ -1180,8 +1184,10 @@ whose browser it displays and the Machine it runs on.
   resized or maximized. With focus in the remote frame every key, Esc and
   browser shortcuts included, goes to the remote browser: the global Desktop
   key router stands aside before any leader (Space, the workspace prefix,
-  the modal leader) can claim a key there; Esc closes the
-  modal only from Cowboy's chrome. The release chord, registered as
+  the modal leader) can claim a key there, its keyups included; surfaces
+  below the modal (Usage, Settings) stand aside while it is open. Esc closes
+  the modal from Cowboy's chrome, the empty page and Machine chooser
+  included, never from the remote viewer. The release chord, registered as
   `DESKTOP_SHORTCUTS.browserRelease` (Command-Shift-Esc on macOS,
   Alt-Shift-Q elsewhere, where Ctrl-Shift-Esc and Alt-Esc belong to the
   system; IME-safe), moves focus from the frame to the header and is

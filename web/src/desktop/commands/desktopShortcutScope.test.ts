@@ -35,3 +35,36 @@ test("the remote Machine browser viewer owns every key while focused", async () 
     assertEquals(router.indexOf(later, start) > bypass, true, later);
   }
 });
+
+test("a leader Space's keyup is swallowed, never one the remote viewer received", async () => {
+  const { swallowLeaderSpaceKeyUp, machineBrowserOwnsKeys } = await import("./desktopShortcutScope");
+  const inside = { closest: (selector: string) => (selector === "[data-machine-browser-viewer]" ? {} : null) };
+  const outside = { closest: () => null };
+  const keyUp = (target: unknown) => {
+    const event = {
+      code: "Space",
+      target,
+      prevented: false,
+      preventDefault() {
+        this.prevented = true;
+      },
+      stopImmediatePropagation() {},
+    };
+    return event;
+  };
+  const armed = { current: true };
+  const handler = swallowLeaderSpaceKeyUp(armed);
+  const remote = keyUp(inside);
+  handler(remote as unknown as KeyboardEvent);
+  assertEquals(remote.prevented, false);
+  assertEquals(armed.current, false);
+  armed.current = true;
+  const chrome = keyUp(outside);
+  handler(chrome as unknown as KeyboardEvent);
+  assertEquals(chrome.prevented, true);
+  assertEquals(armed.current, false);
+  // Surfaces below the Machine browser stand aside while it is open.
+  assertEquals(machineBrowserOwnsKeys({ target: outside as unknown as EventTarget }, root(true)), true);
+  assertEquals(machineBrowserOwnsKeys({ target: inside as unknown as EventTarget }, root(false)), true);
+  assertEquals(machineBrowserOwnsKeys({ target: outside as unknown as EventTarget }, root(false)), false);
+});

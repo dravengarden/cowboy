@@ -74,7 +74,12 @@ export function useViewerSession({
   touch: boolean;
   takeover: boolean;
   callbacks: ViewerCallbacks;
-}): { sessionRef: RefObject<ViewerSession | undefined>; connected: boolean } {
+}): {
+  sessionRef: RefObject<ViewerSession | undefined>;
+  connected: boolean;
+  /** This session's attachment, named by its stream's first state. */
+  attachmentId: string | undefined;
+} {
   const sessionRef = useRef<ViewerSession | undefined>(undefined);
   const attachmentRef = useRef<ViewerAttachment<ViewerSession> | undefined>(undefined);
   const latest = useRef(callbacks);
@@ -84,12 +89,16 @@ export function useViewerSession({
   const touchRef = useRef(touch);
   touchRef.current = touch;
   const [connected, setConnected] = useState(false);
+  const [attachmentId, setAttachmentId] = useState<string | undefined>(undefined);
   const machineId = target.machine_id;
   const { instance_id, incarnation } = target.instance;
   useEffect(() => {
     const container = containerRef.current;
     const target = screenRef.current;
     if (!container || !target) return undefined;
+    // The stream's first state names this attachment; later ones never
+    // rename it (a takeover ends this stream instead).
+    let named = false;
     const attachment = attachViewer({
       frame: () => container.getBoundingClientRect(),
       portrait: devicePortrait,
@@ -116,6 +125,10 @@ export function useViewerSession({
           // `attachment` is assigned before the socket can open.
           onStreamOpen: () => attachment.streamOpened(),
           onState: (state) => {
+            if (!named && state.attachment_id) {
+              named = true;
+              setAttachmentId(state.attachment_id);
+            }
             latest.current.onState(state);
             if (viewerEnds(state)) latest.current.onEnded(stateEndMessage(state));
           },
@@ -133,11 +146,12 @@ export function useViewerSession({
       attachmentRef.current = undefined;
       sessionRef.current = undefined;
       setConnected(false);
+      setAttachmentId(undefined);
       latest.current.onRemoteClipboard(undefined);
     };
   }, [account, containerRef, incarnation, instance_id, machineId, screenRef, takeover]);
   useEffect(() => {
     attachmentRef.current?.setTouch(touch);
   }, [touch]);
-  return { sessionRef, connected };
+  return { sessionRef, connected, attachmentId };
 }

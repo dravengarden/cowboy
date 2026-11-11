@@ -1126,6 +1126,9 @@ pub(in crate::server) struct NavigateBody {
     machine_id: String,
     instance: InstanceRef,
     url: String,
+    /// When present, the Machine navigates only while this attachment is
+    /// the instance's current one (a quick link bound to its viewer).
+    attachment_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1218,6 +1221,7 @@ pub(in crate::server) async fn http_navigate(
             |instance| Command::Navigate {
                 instance,
                 url: body.url,
+                attachment_id: body.attachment_id,
             },
             COMMAND_TIMEOUT,
         )

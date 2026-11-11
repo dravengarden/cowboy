@@ -55,7 +55,7 @@ export default function MachineBrowserViewer(props: MachineBrowserViewerProps): 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const latest = useRef(props);
   latest.current = props;
-  const { sessionRef, connected } = useViewerSession({
+  const { sessionRef, connected, attachmentId } = useViewerSession({
     containerRef,
     screenRef,
     account,
@@ -72,6 +72,7 @@ export default function MachineBrowserViewer(props: MachineBrowserViewerProps): 
     latest.current.onControls({
       account,
       target: latest.current.target,
+      attachmentId,
       chord: (chord) => sessionRef.current?.sendChord(chord),
       // Synchronous inside the Keyboard tap, or iOS shows no keyboard.
       toggleKeyboard: () => {
@@ -83,7 +84,7 @@ export default function MachineBrowserViewer(props: MachineBrowserViewerProps): 
       paste: (text) => sessionRef.current?.pasteText(text),
     });
     return () => latest.current.onControls(undefined);
-  }, [account, connected, sessionRef]);
+  }, [account, attachmentId, connected, sessionRef]);
   useEffect(() => {
     latest.current.onKeyboard(keyboardOpen);
   }, [keyboardOpen]);

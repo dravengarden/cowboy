@@ -38,7 +38,7 @@ import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
 import { UsageLogs } from "./UsageLogs";
 import { desktopFocusBoundary, type Mode as ThemeMode } from "./theme";
-import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
+import { pageBelowBrowserSkipsKey } from "./desktop/commands/desktopShortcutScope";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import { DesktopPanel } from "./desktop/DesktopPanel";
@@ -1420,7 +1420,7 @@ export function SettingsShell({
             )?.focus();
         });
         const onKeyDown = (event: KeyboardEvent): void => {
-            if (desktopImeOwnsKey(event)) return;
+            if (pageBelowBrowserSkipsKey(event)) return;
             const target = event.target;
             if (isSettingsEditableTarget(target)) {
                 if (event.key === "Escape") {

@@ -46,6 +46,7 @@ import {
 } from "react";
 import { Kbd, useConfirmEnter } from "../Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
+import { machineBrowserOwnsKeys } from "./commands/desktopShortcutScope";
 import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Status } from "../protocol";
@@ -990,10 +991,8 @@ export function DesktopTopBarControls({
   useEffect(() => {
     if (!usageOpen) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (desktopImeOwnsKey(event)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) {
-        return;
-      }
+      if (desktopImeOwnsKey(event) || machineBrowserOwnsKeys(event, document)) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
       const key = workspaceCommandKey(event).toLowerCase();
       if (key === "h" || key === "l") {
         event.preventDefault();

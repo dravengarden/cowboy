@@ -98,6 +98,10 @@ impl BrowserManager {
                 }
             }),
         );
+        // Held while the attachment is installed: a fenced navigation checks
+        // its attachment under this lock, so it completes before a takeover
+        // replaces the attachment or sees the replacement and is refused.
+        let mut control = instance.control.lock().await;
         // The phase was read before the resize was awaited; a stop (reset,
         // revocation, hibernation) may have begun meanwhile. Every stop sets
         // `Stopping` and takes the attachment under this lock, so checking
@@ -131,18 +135,13 @@ impl BrowserManager {
             }
         };
         if let Some(stream) = refused {
+            drop(control);
             stream.cancel();
             return instance
                 .state(Some(request_id.to_owned()))
                 .with_reason(Reason::Busy);
         }
-        if let Err(error) = instance
-            .control
-            .lock()
-            .await
-            .attach(&attachment_id, COMMAND_TIMEOUT)
-            .await
-        {
+        if let Err(error) = control.attach(&attachment_id, COMMAND_TIMEOUT).await {
             tracing::debug!(%error, "launcher attach bookkeeping failed");
         }
         instance.state(Some(request_id.to_owned()))
@@ -331,12 +330,13 @@ impl BrowserManager {
         request_id: &str,
         reference: &InstanceRef,
         url: &str,
+        attachment_id: Option<&str>,
     ) -> Result<StateEvent, String> {
         let instance = match self.current(reference) {
             Ok(instance) => instance,
             Err(event) => return Ok((*event).with_request(request_id)),
         };
-        match self.navigate_checked(&instance, url).await {
+        match self.navigate_checked(&instance, url, attachment_id).await {
             Ok(()) => Ok(instance.state(Some(request_id.to_owned()))),
             Err(Navigation::Superseded) => Ok(instance
                 .state(Some(request_id.to_owned()))
@@ -370,14 +370,25 @@ impl BrowserManager {
     /// navigation for an instance that began stopping, or whose earlier
     /// navigation is unsettled, is [`Navigation::Superseded`] and never
     /// reaches the launcher.
+    ///
+    /// With `attachment_id`, the navigation is also [`Navigation::Superseded`]
+    /// unless that attachment is the instance's current one. It is rechecked
+    /// under the control lock, which a takeover holds while it installs its
+    /// attachment, so the URL never reaches a replacement viewer's page.
     pub(super) async fn navigate_checked(
         &self,
         instance: &Arc<Instance>,
         url: &str,
+        attachment_id: Option<&str>,
     ) -> Result<(), Navigation> {
+        let held = |instance: &Instance| {
+            let live = instance.live.lock();
+            live.navigable()
+                && attachment_id.is_none_or(|attachment| live.holds(attachment, Instant::now()))
+        };
         let _copies = self.quiesce_copies(instance).await;
         let _navigation = instance.navigation.lock().await;
-        if !instance.live.lock().navigable() {
+        if !held(instance) {
             return Err(Navigation::Superseded);
         }
         #[cfg(test)]
@@ -400,12 +411,13 @@ impl BrowserManager {
             })?;
             instance.live.lock().verified = verified;
         }
-        let navigated = instance
-            .control
-            .lock()
-            .await
-            .navigate(url, NAVIGATE_TIMEOUT)
-            .await;
+        let navigated = {
+            let mut control = instance.control.lock().await;
+            if !held(instance) {
+                return Err(Navigation::Superseded);
+            }
+            control.navigate(url, NAVIGATE_TIMEOUT).await
+        };
         if let Err(error) = &navigated
             && error.downcast_ref::<LauncherRefusal>().is_none()
         {

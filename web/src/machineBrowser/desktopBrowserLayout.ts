@@ -59,10 +59,11 @@ export function modalBox(maximized: boolean): {
     : { width: MODAL_WIDTH, height: MODAL_HEIGHT, borderRadius: 3 };
 }
 
-/** Whether an Esc closes the modal: only from Cowboy's chrome. With focus
- * in the remote frame, Esc (like every key) belongs to the remote page. */
+/** Whether an Esc closes the modal: from Cowboy's chrome, the empty page
+ * and the Machine chooser included. With focus in the remote viewer, Esc
+ * (like every key) belongs to the remote page. */
 export function escapeClosesModal(focused: Element | null | undefined): boolean {
-  return !focused?.closest("[data-machine-browser-frame]");
+  return !focused?.closest("[data-machine-browser-viewer]");
 }
 
 /** Whether a key is the chrome-release chord (never during an IME

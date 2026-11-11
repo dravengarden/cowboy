@@ -116,10 +116,14 @@ pub enum Command {
         width: u32,
         height: u32,
     },
-    /// An owner-supplied URL for the account's running instance.
+    /// An owner-supplied URL for the account's running instance. With an
+    /// `attachment_id` it navigates only while that attachment is the
+    /// instance's current one, checked atomically with takeover.
     Navigate {
         instance: InstanceRef,
         url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachment_id: Option<String>,
     },
     Snapshot {
         instance: InstanceRef,
@@ -212,8 +216,15 @@ impl Command {
                 }
                 .validate()
             }
-            Self::Navigate { instance, url } => {
+            Self::Navigate {
+                instance,
+                url,
+                attachment_id,
+            } => {
                 validate_instance(instance)?;
+                if let Some(attachment_id) = attachment_id {
+                    validate_id(attachment_id, "browser attachment id")?;
+                }
                 validate_url(url)
             }
             Self::Snapshot { instance } | Self::Hibernate { instance } => {
@@ -397,6 +408,36 @@ mod tests {
     }
 
     #[test]
+    fn a_fenced_navigation_names_a_valid_attachment_and_omits_none() {
+        let fenced = Command::Navigate {
+            instance: instance(),
+            url: "https://example.com/path?q=1".to_owned(),
+            attachment_id: Some("att-1".to_owned()),
+        };
+        fenced.validate().unwrap();
+        assert!(
+            Command::Navigate {
+                instance: instance(),
+                url: "https://example.com/path?q=1".to_owned(),
+                attachment_id: Some(String::new()),
+            }
+            .validate()
+            .is_err()
+        );
+        // An unfenced navigation keeps the earlier wire shape.
+        let unfenced = serde_json::to_value(Command::Navigate {
+            instance: instance(),
+            url: "https://example.com/".to_owned(),
+            attachment_id: None,
+        })
+        .unwrap();
+        assert!(unfenced.get("attachment_id").is_none());
+        let round: Command =
+            serde_json::from_value(serde_json::to_value(&fenced).unwrap()).unwrap();
+        assert_eq!(round, fenced);
+    }
+
+    #[test]
     fn commands_bound_geometry_identity_and_urls() {
         let open = Command::Open {
             account_id: account(),
@@ -451,6 +492,7 @@ mod tests {
             Command::Navigate {
                 instance: instance(),
                 url: "http://example.com".to_owned(),
+                attachment_id: None,
             }
             .validate()
             .is_err()
@@ -459,6 +501,7 @@ mod tests {
             Command::Navigate {
                 instance: instance(),
                 url: "https://example.com/a b".to_owned(),
+                attachment_id: None,
             }
             .validate()
             .is_err()
@@ -466,6 +509,7 @@ mod tests {
         Command::Navigate {
             instance: instance(),
             url: "https://example.com/path?q=1".to_owned(),
+            attachment_id: None,
         }
         .validate()
         .unwrap();

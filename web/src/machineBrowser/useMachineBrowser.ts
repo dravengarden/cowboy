@@ -52,7 +52,8 @@ export interface MachineBrowserController {
   /** `expected` binds the open to a browser identity (a quick link's). */
   open(viewport: BrowserViewport, machine?: string, expected?: string): void;
   /** Navigate exactly `target` to an `https` URL. */
-  navigate(url: string, target: BrowserTarget): void;
+  /** With `attachmentId`, only while that attachment is current. */
+  navigate(url: string, target: BrowserTarget, attachmentId?: string): void;
   /** Instance commands name `target`, the browser a confirmation captured,
    * else the one shown now (`shownTarget`). */
   hibernate(target?: BrowserTarget): void;
@@ -315,10 +316,10 @@ export function useMachineBrowser({
     [openCall, run],
   );
   const navigate = useCallback(
-    (url: string, target: BrowserTarget) =>
+    (url: string, target: BrowserTarget, attachmentId?: string) =>
       run(
         "navigate",
-        (abort) => api.navigate(account, dataset, target, url, abort),
+        (abort) => api.navigate(account, dataset, target, url, abort, attachmentId),
         COMMAND_TIMEOUT_MS,
       ),
     [account, api, dataset, run],

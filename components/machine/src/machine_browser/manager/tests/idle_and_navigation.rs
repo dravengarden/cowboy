@@ -148,7 +148,7 @@ fn spawn_navigation(
     let manager = Arc::clone(&fixture.manager);
     let reference = reference(fixture);
     let (request, url) = (request.to_owned(), url.to_owned());
-    tokio::spawn(async move { manager.navigate(&request, &reference, &url).await })
+    tokio::spawn(async move { manager.navigate(&request, &reference, &url, None).await })
 }
 
 #[tokio::test]
@@ -187,7 +187,7 @@ async fn an_unanswered_navigation_stops_the_instance_instead_of_reusing_it() {
     // still navigate later, so the instance is not reused.
     let answer = fixture
         .manager
-        .navigate("n1", &reference(&fixture), "https://example.com/a")
+        .navigate("n1", &reference(&fixture), "https://example.com/a", None)
         .await
         .unwrap();
     assert_ne!(answer.reason, None);
@@ -209,7 +209,7 @@ async fn a_navigation_waiting_on_an_unanswered_one_never_reaches_the_launcher() 
         move || {
             tokio::spawn(async move {
                 manager
-                    .navigate("n2", &reference, "https://example.com/other")
+                    .navigate("n2", &reference, "https://example.com/other", None)
                     .await
             })
         }
@@ -237,4 +237,44 @@ async fn a_navigation_waiting_on_an_unanswered_one_never_reaches_the_launcher() 
     line.clear();
     let read = tokio::time::timeout(Duration::from_millis(200), reader.read_line(&mut line)).await;
     assert!(read.is_err() || !line.contains("other"));
+}
+
+#[tokio::test]
+async fn a_navigation_fenced_to_a_replaced_attachment_never_reaches_the_launcher() {
+    let mut fixture = fixture().await;
+    fixture
+        .manager
+        .trust_confinement
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    {
+        let mut live = fixture.instance.live.lock();
+        live.attachment = Some(Attachment {
+            id: "a2".into(),
+            lease_expires: Instant::now() + Duration::from_secs(30),
+            stream: None,
+        });
+        live.phase = Phase::Attached;
+        live.detached_since = None;
+    }
+    // The tapped viewer's attachment "a1" was taken over by "a2".
+    let refused = fixture
+        .manager
+        .navigate(
+            "n1",
+            &reference(&fixture),
+            "https://example.com/a",
+            Some("a1"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(refused.reason, Some(Reason::Superseded));
+    // The current attachment navigates; the launcher sees only this URL.
+    let url = "https://example.com/b";
+    let manager = Arc::clone(&fixture.manager);
+    let target = reference(&fixture);
+    let current =
+        tokio::spawn(async move { manager.navigate("n2", &target, url, Some("a2")).await });
+    answer_navigation(&mut fixture.launcher, url, true).await;
+    let answer = current.await.unwrap().unwrap();
+    assert_eq!(answer.reason, None);
 }
