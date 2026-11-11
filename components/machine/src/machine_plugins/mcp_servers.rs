@@ -62,6 +62,15 @@ impl MachinePluginStore {
                 .all(|tool| server.contract.tools.contains(tool)),
             "MCP binding requests an unsigned tool"
         );
+        // The binding is the agent's grant: tools a signed MCP Apps declaration
+        // reserves for views never reach the agent (docs/widget-apps-mcp.md §3).
+        ensure!(
+            binding
+                .tools
+                .iter()
+                .all(|tool| server.contract.model_visible(tool)),
+            "MCP binding grants an app-only tool to the agent"
+        );
         ensure!(
             binding
                 .sources

@@ -55,7 +55,55 @@ pub struct McpServerContract {
     /// Optional for transport-only servers; native startup requires this metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discovery: Option<Vec<crate::McpToolDefinition>>,
+    /// MCP Apps declarations (docs/widget-apps-mcp.md §3): signed static views
+    /// and per-tool visibility. Absent means every tool is visible to the
+    /// agent only and the server has no views.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apps: Option<McpAppsContract>,
 }
+
+/// Signed MCP Apps metadata. It names which bytes may ever run as a view and
+/// who may call each tool; it grants nothing by itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpAppsContract {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ui_resources: Vec<McpUiResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<McpAppTool>,
+}
+
+/// One static view: a file of the release's signed host bundle and its digest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpUiResource {
+    pub uri: String,
+    pub file: String,
+    pub sha256: String,
+}
+
+/// Visibility and view linkage of one signed tool. Tools without an entry are
+/// visible to the agent and to views (the MCP Apps default), are not
+/// read-only and have no view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpAppTool {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    pub visibility: Vec<McpToolVisibility>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpToolVisibility {
+    Model,
+    App,
+}
+
+pub const MAX_MCP_UI_RESOURCES: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -118,6 +166,9 @@ impl McpServerContract {
                 && self.sources.iter().collect::<BTreeSet<_>>().len() == self.sources.len(),
             "invalid MCP sources"
         );
+        if let Some(apps) = &self.apps {
+            apps.validate(&self.tools)?;
+        }
         for name in self.tools.iter().chain(&self.sources) {
             ensure!(
                 !name.is_empty()
@@ -128,6 +179,135 @@ impl McpServerContract {
         }
         Ok(())
     }
+}
+
+impl McpServerContract {
+    fn app_tool(&self, name: &str) -> Option<&McpAppTool> {
+        self.apps
+            .as_ref()
+            .and_then(|apps| apps.tools.iter().find(|tool| tool.name == name))
+    }
+
+    /// Whether the agent may list and call `name` (MCP Apps `"model"`).
+    #[must_use]
+    pub fn model_visible(&self, name: &str) -> bool {
+        self.tools.iter().any(|tool| tool == name)
+            && self
+                .app_tool(name)
+                .is_none_or(|tool| tool.visibility.contains(&McpToolVisibility::Model))
+    }
+
+    /// Whether a view may call `name` (MCP Apps `"app"`).
+    #[must_use]
+    pub fn app_visible(&self, name: &str) -> bool {
+        self.tools.iter().any(|tool| tool == name)
+            && self
+                .app_tool(name)
+                .is_none_or(|tool| tool.visibility.contains(&McpToolVisibility::App))
+    }
+
+    /// The signed `readOnlyHint`; unannotated tools are not read-only.
+    #[must_use]
+    pub fn read_only(&self, name: &str) -> bool {
+        self.app_tool(name).is_some_and(|tool| tool.read_only)
+    }
+
+    /// The signed view a tool's results are shown in, if any.
+    #[must_use]
+    pub fn ui_resource_for(&self, name: &str) -> Option<&McpUiResource> {
+        let uri = self.app_tool(name)?.resource.as_deref()?;
+        self.apps
+            .as_ref()?
+            .ui_resources
+            .iter()
+            .find(|resource| resource.uri == uri)
+    }
+}
+
+impl McpAppsContract {
+    /// # Errors
+    /// Rejects unknown tools, duplicate or malformed resources and dangling links.
+    pub fn validate(&self, signed_tools: &[String]) -> Result<()> {
+        ensure!(
+            self.ui_resources.len() <= MAX_MCP_UI_RESOURCES,
+            "too many MCP UI resources"
+        );
+        let mut uris = BTreeSet::new();
+        let mut files = BTreeSet::new();
+        for resource in &self.ui_resources {
+            validate_ui_uri(&resource.uri)?;
+            validate_ui_file(&resource.file)?;
+            crate::validate_digest(&resource.sha256, "MCP UI resource digest")?;
+            ensure!(
+                resource
+                    .sha256
+                    .bytes()
+                    .all(|byte| !byte.is_ascii_uppercase()),
+                "MCP UI resource digest must be canonical"
+            );
+            ensure!(
+                uris.insert(resource.uri.as_str()) && files.insert(resource.file.as_str()),
+                "duplicate MCP UI resource"
+            );
+        }
+        let mut names = BTreeSet::new();
+        for tool in &self.tools {
+            ensure!(
+                signed_tools.contains(&tool.name) && names.insert(tool.name.as_str()),
+                "MCP Apps tool is unsigned or duplicated"
+            );
+            ensure!(
+                !tool.visibility.is_empty()
+                    && tool.visibility.iter().collect::<BTreeSet<_>>().len()
+                        == tool.visibility.len(),
+                "invalid MCP tool visibility"
+            );
+            if let Some(uri) = &tool.resource {
+                ensure!(
+                    uris.contains(uri.as_str()),
+                    "MCP tool names an undeclared UI resource"
+                );
+            }
+        }
+        ensure!(
+            !self.ui_resources.is_empty() || !self.tools.is_empty(),
+            "empty MCP Apps declaration"
+        );
+        Ok(())
+    }
+}
+
+fn validate_ui_uri(uri: &str) -> Result<()> {
+    let path = uri.strip_prefix("ui://").unwrap_or_default();
+    ensure!(
+        !path.is_empty()
+            && uri.len() <= 256
+            && path.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-._/".contains(&byte)
+            })
+            && path
+                .split('/')
+                .all(|segment| !segment.is_empty() && segment != "." && segment != ".."),
+        "invalid MCP UI resource URI"
+    );
+    Ok(())
+}
+
+fn validate_ui_file(file: &str) -> Result<()> {
+    ensure!(
+        file.len() <= 128
+            && std::path::Path::new(file)
+                .extension()
+                .is_some_and(|extension| extension == "html")
+            && file
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-._/".contains(&byte))
+            && file
+                .split('/')
+                .all(|segment| !segment.is_empty() && segment != "." && segment != ".."),
+        "invalid MCP UI resource file"
+    );
+    Ok(())
 }
 
 pub(crate) fn validate_manifest(
@@ -325,6 +505,79 @@ mod discovery_tests {
             let mut invalid = contract();
             invalid.discovery.as_mut().unwrap()[0].input_schema = schema;
             assert!(invalid.validate().is_err());
+        }
+    }
+
+    fn with_apps(apps: serde_json::Value) -> Result<McpServerContract> {
+        let mut value = serde_json::to_value(contract())?;
+        value["apps"] = apps;
+        let contract: McpServerContract = serde_json::from_value(value)?;
+        contract.validate()?;
+        Ok(contract)
+    }
+
+    fn digest() -> String {
+        format!("sha256:{}", "b".repeat(64))
+    }
+
+    #[test]
+    fn apps_declare_signed_views_and_visibility() {
+        let contract = with_apps(json!({
+            "ui_resources":[{"uri":"ui://fixture/status","file":"ui/status.html","sha256":digest()}],
+            "tools":[
+                {"name":"fixture_status","resource":"ui://fixture/status","visibility":["model","app"],"read_only":true},
+                {"name":"fixture_read","visibility":["app"]}
+            ]
+        }))
+        .unwrap();
+        assert!(contract.model_visible("fixture_status") && contract.app_visible("fixture_status"));
+        assert!(!contract.model_visible("fixture_read") && contract.app_visible("fixture_read"));
+        assert!(!contract.model_visible("unsigned") && !contract.app_visible("unsigned"));
+        assert!(contract.read_only("fixture_status") && !contract.read_only("fixture_read"));
+        assert_eq!(
+            contract
+                .ui_resource_for("fixture_status")
+                .map(|r| r.file.as_str()),
+            Some("ui/status.html")
+        );
+        assert!(contract.ui_resource_for("fixture_read").is_none());
+        // Without a declaration every signed tool keeps today's meaning.
+        let plain = contract_without_apps();
+        assert!(plain.model_visible("fixture_read") && plain.app_visible("fixture_read"));
+        assert!(
+            !plain.read_only("fixture_read") && plain.ui_resource_for("fixture_read").is_none()
+        );
+        // Old contracts serialize exactly as before.
+        assert!(serde_json::to_value(&plain).unwrap().get("apps").is_none());
+    }
+
+    fn contract_without_apps() -> McpServerContract {
+        contract()
+    }
+
+    #[test]
+    fn apps_reject_unsafe_or_dangling_declarations() {
+        let view = |uri: &str, file: &str, sha: String| json!({"uri":uri,"file":file,"sha256":sha});
+        for apps in [
+            json!({}),
+            json!({"ui_resources":[view("https://x.invalid/a", "a.html", digest())]}),
+            json!({"ui_resources":[view("ui://fixture/../a", "a.html", digest())]}),
+            json!({"ui_resources":[view("ui://Fixture/a", "a.html", digest())]}),
+            json!({"ui_resources":[view("ui://fixture/a", "../a.html", digest())]}),
+            json!({"ui_resources":[view("ui://fixture/a", "/a.html", digest())]}),
+            json!({"ui_resources":[view("ui://fixture/a", "a.js", digest())]}),
+            json!({"ui_resources":[view("ui://fixture/a", "a.html", format!("sha256:{}", "B".repeat(64)))]}),
+            json!({"ui_resources":[view("ui://fixture/a", "a.html", digest()), view("ui://fixture/a", "b.html", digest())]}),
+            json!({"ui_resources":(0..9).map(|n| view(&format!("ui://fixture/{n}"), &format!("{n}.html"), digest())).collect::<Vec<_>>()}),
+            json!({"tools":[{"name":"unsigned","visibility":["app"]}]}),
+            json!({"tools":[{"name":"fixture_read","visibility":[]}]}),
+            json!({"tools":[{"name":"fixture_read","visibility":["app","app"]}]}),
+            json!({"tools":[{"name":"fixture_read","visibility":["app"]},{"name":"fixture_read","visibility":["model"]}]}),
+            json!({"tools":[{"name":"fixture_read","visibility":["app"],"resource":"ui://fixture/missing"}]}),
+            json!({"tools":[{"name":"fixture_read","visibility":["everyone"]}]}),
+            json!({"tools":[{"name":"fixture_read","visibility":["app"],"csp":{}}]}),
+        ] {
+            assert!(with_apps(apps.clone()).is_err(), "{apps}");
         }
     }
 }

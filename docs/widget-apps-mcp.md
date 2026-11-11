@@ -53,31 +53,40 @@ Machine transport is `stdio_tool_only_v1` (no `resources/read`). Phase C
 therefore takes everything from the signed contract and never from the
 server's live answers.
 
-The `mcp_server` contract (Plugin SDK minor bump) gains:
+The `mcp_server` contract gains an optional `apps` declaration
+(`McpAppsContract`, `components/plugin-sdk/src/mcp_server.rs`):
 
-- `ui_resources`, at most 8: `{uri, file, sha256}`. `file` is inside the
-  signed artifact, ≤ 512 KiB, one document with inline scripts and styles
-  only (no `src`/`href` subresources, checked at signing and verification).
-  A view's data arrives through tool input, tool results and its own
-  granted tool calls, never over the network.
-- Per signed discovery entry, `ui: {resource?, visibility}` where
-  `visibility` is `["model"]`, `["app"]` or both (omitted = both, as MCP
-  Apps), and `read_only` mirroring the tool's `readOnlyHint` (omitted =
-  false).
+- `ui_resources`, at most 8: `{uri, file, sha256}` with `ui://` URIs of
+  lowercase path segments. `file` names a file of the release's signed
+  **host bundle** (`*.hostbundle.json`, bound to the package digest and
+  carried to the Controller, which is where views are served), ≤ 512 KiB,
+  one document with inline scripts and styles only (no `src`/`href`
+  subresources, checked when the bundle is verified). A view's data arrives
+  through tool input, tool results and its own granted tool calls, never
+  over the network.
+- `tools`: per signed tool, `{name, resource?, visibility, read_only}` where
+  `visibility` is `["model"]`, `["app"]` or both and `read_only` mirrors the
+  tool's `readOnlyHint`. A tool without an entry is visible to both (the
+  MCP Apps default), is not read-only and has no view. Contracts without
+  `apps` serialize exactly as before; older verifiers refuse the unknown
+  field.
 
-Machine preparation verifies each digest with the rest of the generation and
-computes inline-script and style hashes once; the Controller learns
-`(plugin_id, generation_digest, uri) → {sha256, hashes}` only from
-the prepared binding.
+The Controller verifies each digest against the host bundle when the Plugin
+is installed and again when serving, and computes inline-script and style
+hashes once. MCP releases currently refuse host bundles; admitting one that
+carries only declared view files is part of step 1.
 
 Two projections replace "the granted tools":
 
-- **Agent projection**: granted tools with `"model"` visibility. Native
-  descriptors list only these; the relay refuses an agent `tools/call` to
-  any other tool. Adding a view grant never widens the agent's tools.
-- **App projection**: granted tools with `"app"` visibility that the view's
-  grant lists in `call_tools` (§4). The relay refuses a view's call to any
-  other tool, including cross-binding calls.
+- **Agent projection**: the binding's `tools` is the agent's grant and may
+  name only `"model"`-visible tools; Machine preparation refuses a binding
+  that grants an app-only tool to the agent, so native descriptors and the
+  Machine process's call check never include one. Adding a view grant never
+  widens the agent's tools.
+- **App projection**: the `"app"`-visible signed tools that the view's grant
+  lists in `call_tools` (§4), whether or not the agent also holds them. The
+  view scope's process profile carries exactly these (step 3); a view's call
+  to any other tool, including cross-binding calls, is refused.
 
 ## 4. Assignment: the owner's grant
 
@@ -96,7 +105,7 @@ existing policy):
 }]
 ```
 
-- `call_tools` ⊆ the app projection. A generation change invalidates the grant like any other policy
+- `call_tools` ⊆ the signed `"app"`-visible tools. A generation change invalidates the grant like any other policy
   field.
 - Storage, epoch, CAS, revocation, tombstones and non-inheritance are exactly
   the existing policy's.
@@ -280,9 +289,11 @@ requires, on that browser:
 
 ## 10. Order of work
 
-1. Contract `ui_resources`, discovery `ui` and `read_only`, Machine
-   verification; agent and app projections enforced in native descriptors and
-   the relay; policy `apps` with CAS and validation. No rendering.
+1. a. Contract `apps` (views, visibility, read-only) and the agent
+      projection enforced by Machine preparation. Done (this revision).
+   b. MCP releases admitting a host bundle of declared view files, Controller
+      digest verification; policy `apps` with CAS and validation. No
+      rendering.
 2. Frame tokens, `/mcp-app/` route and headers, the lease; the suite's
    network and navigation rows.
 3. Bridge, scope-bound `tools/call`, transcript row; the SDK fixture rows.
