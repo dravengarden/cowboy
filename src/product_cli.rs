@@ -57,7 +57,7 @@ enum DirCommand {
         name: String,
         #[arg(long)]
         parent: Option<String>,
-        /// Sparse defaults JSON: project, machine, runtime_machine, provider, preset, review_directory, language_servers (on|off).
+        /// Sparse defaults JSON: project, machine, runtime_machine, provider, preset, review_directory, language_servers (on|off), mcp_bindings.
         /// Omitted fields inherit; null blocks inheritance. Saved atomically.
         #[arg(long, value_parser = parse_directory_defaults)]
         defaults: Option<Value>,
@@ -66,8 +66,9 @@ enum DirCommand {
     List,
     /// Show effective defaults and the source directory for each field.
     Defaults { directory: String },
-    /// Set one field: project, machine, runtime_machine, provider, preset, review_directory, language_servers (on|off).
-    /// Presets use provider/preset. No value requires --inherit or --clear.
+    /// Set one field: project, machine, runtime_machine, provider, preset, review_directory, language_servers (on|off), mcp_bindings.
+    /// Presets use provider/preset. mcp_bindings is a JSON list of {name,plugin_id,tools,sources}.
+    /// No value requires --inherit or --clear.
     Set {
         directory: String,
         field: String,

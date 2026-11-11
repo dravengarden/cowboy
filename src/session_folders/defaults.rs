@@ -16,9 +16,55 @@ pub enum DefaultKey {
     /// `on` or `off`: whether Review may run the worktree's configured
     /// language servers. Unset inherits; the top level means on.
     LanguageServers,
+    /// JSON list of [`McpBindingDefault`] granted to each new session.
+    McpBindings,
 }
 
 pub type FolderDefaults = BTreeMap<DefaultKey, Option<String>>;
+
+/// A directory MCP default names a Plugin, never a generation: each new session
+/// pins the generation active on its execution Machine when it is created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpBindingDefault {
+    pub name: String,
+    pub plugin_id: String,
+    pub tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+}
+
+impl McpBindingDefault {
+    #[must_use]
+    pub fn binding(&self, generation_digest: String) -> crate::mcp_binding::Binding {
+        crate::mcp_binding::Binding {
+            name: self.name.clone(),
+            server: cowboy_plugin_sdk::McpServerSelection {
+                plugin_id: self.plugin_id.clone(),
+                generation_digest,
+            },
+            tools: self.tools.clone(),
+            sources: self.sources.clone(),
+        }
+    }
+}
+
+/// Parse with the session binding rules; only the generation is left open.
+pub fn mcp_bindings(value: &str) -> Result<Vec<McpBindingDefault>, String> {
+    let defaults: Vec<McpBindingDefault> = serde_json::from_str(value)
+        .map_err(|error| format!("invalid directory MCP bindings: {error}"))?;
+    if defaults.is_empty() {
+        return Err("directory MCP bindings must not be empty; clear the field instead".into());
+    }
+    let placeholder = format!("sha256:{}", "0".repeat(64));
+    let bindings: Vec<_> = defaults
+        .iter()
+        .map(|binding| binding.binding(placeholder.clone()))
+        .collect();
+    crate::mcp_binding::validate_bindings(&bindings)
+        .map_err(|error| format!("invalid directory MCP bindings: {error}"))?;
+    Ok(defaults)
+}
 
 /// Stored preferences may come from a newer Controller. Validate known fields
 /// strictly, but leave future keys opaque to this reader. Input APIs stay closed.
@@ -73,6 +119,10 @@ pub fn parse(value: &serde_json::Value) -> Result<FolderDefaults, String> {
                 if !crate::review_directory::valid(value) {
                     return Err("invalid Review directory identity".into());
                 }
+                continue;
+            }
+            if *key == DefaultKey::McpBindings {
+                mcp_bindings(value)?;
                 continue;
             }
             if *key == DefaultKey::LanguageServers {
@@ -255,6 +305,60 @@ mod tests {
             tree.resolve_defaults(&actor, "child").unwrap().values[&DefaultKey::Machine].as_deref(),
             Some("new-host")
         );
+    }
+
+    #[test]
+    fn mcp_binding_defaults_validate_inherit_and_clear() {
+        let suger = r#"[{"name":"suger","plugin_id":"suger","tools":["suger_status","suger_read"],"sources":["github","local_env"]}]"#;
+        let parsed = mcp_bindings(suger).unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        assert_eq!(
+            parsed[0].binding(digest.clone()).server.generation_digest,
+            digest
+        );
+        for invalid in [
+            "[]",
+            "{}",
+            r#"[{"name":"s","plugin_id":"suger","tools":[]}]"#,
+            r#"[{"name":"s","plugin_id":"suger","tools":["a","a"]}]"#,
+            r#"[{"name":"s","plugin_id":"suger","tools":["a"],"generation_digest":"x"}]"#,
+            r#"[{"name":"s","plugin_id":"../x","tools":["a"]}]"#,
+            r#"[{"name":"s","plugin_id":"a","tools":["a"]},{"name":"s","plugin_id":"b","tools":["a"]}]"#,
+        ] {
+            assert!(
+                parse(&json!({"mcp_bindings":invalid})).is_err(),
+                "{invalid}"
+            );
+        }
+        let mut tree = tree();
+        let actor = FolderActor::local();
+        tree.apply(
+            &actor,
+            "defaults",
+            &json!({"id":"root","values":{"mcp_bindings":suger}}),
+        )
+        .unwrap();
+        let child = tree.resolve_defaults(&actor, "child").unwrap();
+        assert_eq!(
+            child.values[&DefaultKey::McpBindings].as_deref(),
+            Some(suger)
+        );
+        assert_eq!(child.sources[&DefaultKey::McpBindings], "root");
+        tree.apply(
+            &actor,
+            "defaults",
+            &json!({"id":"child","values":{"mcp_bindings":null}}),
+        )
+        .unwrap();
+        let blocked = tree.resolve_defaults(&actor, "child").unwrap();
+        assert_eq!(blocked.values[&DefaultKey::McpBindings], None);
+        tree.apply(
+            &actor,
+            "defaults",
+            &json!({"id":"child","values":{},"inherit":["mcp_bindings"]}),
+        )
+        .unwrap();
+        assert_eq!(tree.resolve_defaults(&actor, "child").unwrap(), child);
     }
 
     #[test]

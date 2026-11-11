@@ -229,7 +229,7 @@ pub(super) fn preset_values(
         .ok_or_else(|| "Directory preset is unavailable in the installed agent version".into())
 }
 
-pub(super) fn apply_created(
+pub(super) async fn apply_created(
     state: &AppState,
     principal: &ProductPrincipal,
     session: &str,
@@ -260,6 +260,7 @@ pub(super) fn apply_created(
             result?;
         }
     }
+    mcp_bindings::defaults::resolve_at_creation(state, principal, session, folder).await;
     Ok(())
 }
 

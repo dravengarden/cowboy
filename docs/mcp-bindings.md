@@ -261,6 +261,33 @@ policy revalidation. Failed CAS does not notify. This notification is not yet
 connected to the cross-Machine relay; session placement changes and connection
 lifetimes still need their own live authority checks.
 
+### Directory defaults
+
+The inherited directory field `mcp_bindings` (see
+[Sessions and directories](sessions-folders.md)) is a JSON list of
+`{name, plugin_id, tools, sources}`, validated by the session binding rules with
+only the generation left open:
+
+```bash
+cowboy dir set <directory> mcp_bindings \
+  '[{"name":"suger","plugin_id":"suger","tools":["suger_status","suger_read"],"sources":["github","local_env"]}]'
+```
+
+It is an owner's explicit selection for new sessions, never an implicit grant
+from installation. Creating a session in that directory pins each binding to the
+`mcp_server` generation active on the session's execution Machine at that moment
+(a later Plugin release needs no directory edit) and records it under
+`session_mcp_default:<session>`. Once execution preparation commits the final
+binding, and again before the first queued prompt is dispatched, the Controller
+writes the ordinary policy above (null epoch) and prepares its launch, so the
+first worker launch carries it. Only remote-runtime sessions (separate runtime
+and execution Machines) qualify. A Plugin that is not installed, a single-Machine,
+system or managed session, an existing policy or a failed preparation never
+blocks creation or launch: the session runs without the binding (a policy that
+could not be prepared is revoked again) and `GET /api/sessions/{id}/mcp-bindings`
+reports `directory_default: {"state":"skipped","reason":...}`; success reports
+`applied` with the epoch. Existing sessions are never changed by a directory edit.
+
 ## Linux Machine process primitive
 
 `PluginExecutionScope::mcp` validates the service and execution Machine against

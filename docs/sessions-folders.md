@@ -390,7 +390,10 @@ folder state. Supported keys are `project` (registered workspace ID), `machine`
 (files and command execution), `runtime_machine` (agent process), `provider`,
 `preset` (`provider/preset-id`), `review_directory` (Review code-context identity), and `language_servers`
 (`on`/`off`, whether Review may run the worktree's configured language
-servers; unset means on).
+servers; unset means on), and `mcp_bindings` (JSON list of MCP Plugin selections
+applied to each new remote-runtime session; see
+[MCP Plugin bindings](mcp-bindings.md#directory-defaults)). `mcp_bindings` is
+CLI/MCP-only for now; the directory sheet does not edit it.
 Presets come from the signed Provider
 catalog and include its supported model/reasoning combinations; Cowboy does not
 invent model IDs or copy permission, credential, prompt or tool policies into

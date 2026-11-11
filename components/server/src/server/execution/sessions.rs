@@ -344,23 +344,14 @@ async fn create_checked(
         &session_id,
         request.folder_id.as_deref(),
         configuration,
-    )?;
-    if let Some(prompt) = request
-        .initial_prompt
-        .filter(|text| !text.trim().is_empty())
-    {
-        state.hub.requeue_prompt(
-            &session_id,
-            prompt,
-            vec![],
-            Some(format!("execution-initial:{session_id}")),
-        );
-        crate::server::session_maintenance::wait(
-            &state.hub,
-            &session_id,
-            "preparing the workspace",
-        );
-    }
+    )
+    .await?;
+    crate::server::session_maintenance::queue_initial_prompt(
+        &state.hub,
+        &session_id,
+        request.initial_prompt,
+        format!("execution-initial:{session_id}"),
+    );
     super::super::session_context::initialized(state, &session_id).await?;
     schedule(state, &session_id);
     state
@@ -496,7 +487,11 @@ fn schedule(state: &Arc<AppState>, session_id: &str) {
     let state = Arc::clone(state);
     let session_id = session_id.to_owned();
     tokio::spawn(async move {
-        if let Err(failure) = prepare(&state, &session_id).await
+        let prepared = prepare(&state, &session_id).await;
+        if prepared.is_ok() {
+            super::super::mcp_bindings::defaults::apply(&state, &session_id).await;
+        }
+        if let Err(failure) = prepared
             && !state.execution_closures.lock().contains_key(&session_id)
             && let Some(info) = state.hub.session_info(&session_id)
         {

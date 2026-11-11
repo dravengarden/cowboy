@@ -57,6 +57,14 @@ pub(super) fn policy(hub: &Hub, config: &crate::config::Handle, machine: &str) -
     }
 }
 
+/// A new session's first prompt waits durably for its workspace.
+pub(super) fn queue_initial_prompt(hub: &Hub, session: &str, prompt: Option<String>, cmid: String) {
+    if let Some(prompt) = prompt.filter(|text| !text.trim().is_empty()) {
+        hub.requeue_prompt(session, prompt, vec![], Some(cmid));
+        wait(hub, session, "preparing the workspace");
+    }
+}
+
 pub(super) fn wait(hub: &Hub, session: &str, reason: &str) {
     hub.set_resource_wait(session, Some(reason.to_owned()));
     let key = format!("{SESSION_RESOURCE_WAIT_PREFIX}{session}");

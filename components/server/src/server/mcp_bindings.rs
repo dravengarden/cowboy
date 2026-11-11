@@ -17,6 +17,7 @@ use crate::core::{Hub, SessionMeta, settings_keys::SESSION_MCP_BINDINGS_PREFIX};
 use crate::mcp_binding::{Binding, valid_epoch, validate_bindings};
 
 mod authority;
+pub(super) mod defaults;
 pub(super) mod launch;
 mod launch_prepare;
 pub(super) mod relay;
@@ -28,6 +29,8 @@ mod tests;
 /// projected before an earlier commit. No asynchronous settings write is queued.
 pub(super) struct Policies {
     mutation: Mutex<()>,
+    /// Serializes directory-default application, which spans CAS and preparation.
+    defaults: Mutex<()>,
     owner: Arc<()>,
     capacity: Arc<tokio::sync::Semaphore>,
     changes: tokio::sync::watch::Sender<()>,
@@ -37,6 +40,7 @@ impl Default for Policies {
     fn default() -> Self {
         Self {
             mutation: Mutex::new(()),
+            defaults: Mutex::new(()),
             owner: Arc::new(()),
             capacity: Arc::new(tokio::sync::Semaphore::new(16)),
             changes: tokio::sync::watch::channel(()).0,
@@ -239,6 +243,7 @@ pub(super) async fn read(
 
 pub(super) fn observation(state: &AppState, meta: &SessionMeta) -> serde_json::Value {
     let mut response = view(&state.extensions.bindings, &state.hub, meta);
+    response["directory_default"] = defaults::observation(&state.hub, &meta.id);
     state
         .extensions
         .launches

@@ -1160,6 +1160,16 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         retain_failed_dispatch(hub, session_id, text, content, cmid, &wait);
         return;
     }
+    // A directory MCP default must be part of the first launch.
+    if let Err(error) = dispatch_preflight(&mut shutdown, async {
+        mcp_bindings::defaults::apply(&state, &session_id).await;
+        Ok(())
+    })
+    .await
+    {
+        retain(session_id, text, content, cmid, &error);
+        return;
+    }
     // Links wait for a real message: a preamble would break a slash command.
     if !crate::session_context::is_command(&text)
         && let Err(error) =

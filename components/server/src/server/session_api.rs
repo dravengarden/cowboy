@@ -714,20 +714,18 @@ async fn create_machine_session(
         &session_id,
         req.folder_id.as_deref(),
         configuration,
-    ) {
+    )
+    .await
+    {
         return (StatusCode::BAD_REQUEST, error).into_response();
     }
-    let initial_prompt = req.initial_prompt;
     let eager = req.system;
-    if let Some(prompt) = initial_prompt.filter(|p| !p.trim().is_empty()) {
-        state.hub.requeue_prompt(
-            &session_id,
-            prompt,
-            vec![],
-            Some(format!("initial:{session_id}")),
-        );
-        session_maintenance::wait(&state.hub, &session_id, "preparing the workspace");
-    }
+    session_maintenance::queue_initial_prompt(
+        &state.hub,
+        &session_id,
+        req.initial_prompt,
+        format!("initial:{session_id}"),
+    );
     if let Err(error) = session_context::initialized(state, &session_id).await {
         return (StatusCode::CONFLICT, error).into_response();
     }

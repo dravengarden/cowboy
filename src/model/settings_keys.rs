@@ -56,6 +56,8 @@ pub const AGENT_TOOLS_PREFIX: &str = "agent_tools:";
 pub const SESSION_TOOLS_PREFIX: &str = "session_tools:";
 /// Explicit MCP selections are session-owned; cloning a session grants none.
 pub const SESSION_MCP_BINDINGS_PREFIX: &str = "session_mcp_bindings:";
+/// The directory MCP default resolved at creation and its visible outcome.
+pub const SESSION_MCP_DEFAULT_PREFIX: &str = "session_mcp_default:";
 /// Values an in-place agent change replaced, restorable until the next send;
 /// the session id follows.
 pub const SESSION_CONFIG_REVERT_PREFIX: &str = "session_config_revert:";
@@ -76,6 +78,7 @@ pub const SESSION_STATE_PREFIXES: &[&str] = &[
     SESSION_FORK_PREFIX,
     SESSION_CONFIG_REVERT_PREFIX,
     SESSION_MCP_BINDINGS_PREFIX,
+    SESSION_MCP_DEFAULT_PREFIX,
 ];
 
 #[must_use]
@@ -99,6 +102,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
             SESSION_MCP_BINDINGS_PREFIX,
+            SESSION_MCP_DEFAULT_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
             SESSION_CONFIG_REVERT_PREFIX,
         ]
@@ -133,6 +137,7 @@ pub fn examples() -> Vec<String> {
         format!("{AGENT_TOOLS_PREFIX}codex"),
         format!("{SESSION_TOOLS_PREFIX}sess-1"),
         format!("{SESSION_MCP_BINDINGS_PREFIX}sess-1"),
+        format!("{SESSION_MCP_DEFAULT_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX}sess-1"),
         format!("{SESSION_CONFIG_REVERT_PREFIX}sess-1"),
     ]
@@ -154,6 +159,7 @@ mod tests {
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
             SESSION_MCP_BINDINGS_PREFIX,
+            SESSION_MCP_DEFAULT_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
             SESSION_CONFIG_REVERT_PREFIX,
         ] {
