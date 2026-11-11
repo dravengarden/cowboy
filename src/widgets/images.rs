@@ -193,7 +193,7 @@ fn walk(value: &Value, pointer: &str, path: &str, out: &mut Vec<SourceAt>) {
                         }
                     }
                 }
-                Some("app") => {
+                Some("app" | "dom_app") => {
                     for (key, source) in map
                         .get("images")
                         .and_then(Value::as_object)
@@ -212,7 +212,10 @@ fn walk(value: &Value, pointer: &str, path: &str, out: &mut Vec<SourceAt>) {
                 _ => {}
             }
             // An app's `props` is opaque data, never widget nodes.
-            let app = map.get("type").and_then(Value::as_str) == Some("app");
+            let app = matches!(
+                map.get("type").and_then(Value::as_str),
+                Some("app" | "dom_app")
+            );
             for (key, child) in map {
                 if key != "src"
                     && key != "images"

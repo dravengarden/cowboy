@@ -188,7 +188,26 @@ function discard(entry: Entry): void {
   changed();
 }
 
-const live = (): number => [...entries.values()].filter((entry) => entry.runtime !== null).length;
+// Runtimes outside this registry (full-DOM apps) that hold a page slot.
+let external = 0;
+
+const live = (): number =>
+  external + [...entries.values()].filter((entry) => entry.runtime !== null).length;
+
+/** Reserves one of the page's runtime slots for a full-DOM app
+ *  (widget-apps-dom.md §5), evicting an idle off-screen app if the page is
+ *  full. Returns the release, or null when no slot can be had. */
+export function reserveExternalRuntime(): (() => void) | null {
+  if (!admit()) return null;
+  external += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    external -= 1;
+    changed();
+  };
+}
 
 /** The off-screen app that makes room for a visible one: an idle app
  *  first, else the typed-into app hidden longest. */

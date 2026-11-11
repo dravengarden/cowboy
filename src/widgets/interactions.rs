@@ -304,8 +304,7 @@ pub fn app_message(
 ) -> Result<AppMessage, Refusal> {
     let app = app_node(&document["root"], node_id)
         .ok_or_else(|| refuse("unknown_app", "this widget has no such app"))?;
-    let code = app.get("code").and_then(Value::as_str).unwrap_or_default();
-    let digest = format!("{:x}", Sha256::digest(code.as_bytes()));
+    let digest = app_code_digest(app);
     if digest != code_sha256 {
         return Err(refuse("app_updated", "the agent updated this app"));
     }
@@ -333,10 +332,28 @@ pub fn app_message(
     })
 }
 
+/// The code identity a send must carry. An `app` keeps the plain hex digest
+/// of its code (existing sends and outbox retries stay valid); a `dom_app`
+/// carries `dom_app:<hex>`, a format no plain digest can equal, so the same
+/// code changing kind refuses as `app_updated`. (Hashing a prefixed text would
+/// not separate them: any text can be an `app`'s code.)
+#[must_use]
+pub fn app_code_digest(app: &Map<String, Value>) -> String {
+    let code = app.get("code").and_then(Value::as_str).unwrap_or_default();
+    let digest = format!("{:x}", Sha256::digest(code.as_bytes()));
+    if app.get("type").and_then(Value::as_str) == Some("dom_app") {
+        format!("dom_app:{digest}")
+    } else {
+        digest
+    }
+}
+
 fn app_node<'v>(node: &'v Value, id: &str) -> Option<&'v Map<String, Value>> {
     let map = node.as_object()?;
-    if map.get("type").and_then(Value::as_str) == Some("app")
-        && map.get("id").and_then(Value::as_str) == Some(id)
+    if matches!(
+        map.get("type").and_then(Value::as_str),
+        Some("app" | "dom_app")
+    ) && map.get("id").and_then(Value::as_str) == Some(id)
     {
         return Some(map);
     }
@@ -409,6 +426,27 @@ mod tests {
                 &decide(&doc, "w4", 2, "cache", &["cargo".into(), "logs".into()]).unwrap()
             ),
             "the same selection is the same prompt"
+        );
+    }
+
+    #[test]
+    fn dom_app_messages_are_bound_to_their_node_type() {
+        let code = "export default 1";
+        let dom = json!({"title":"T","root":{"type":"dom_app","id":"d","title":"D","fallback":"f","code":code}});
+        let plain = format!("{:x}", Sha256::digest(code.as_bytes()));
+        let typed = format!("dom_app:{plain}");
+        assert!(app_message(&dom, "d", &typed, "hi").is_ok());
+        assert_eq!(
+            app_message(&dom, "d", &plain, "hi").unwrap_err().code,
+            "app_updated",
+            "the same code as a components app is another app"
+        );
+        let app = json!({"title":"T","root":{"type":"app","id":"d","title":"D","fallback":"f",
+            "code":format!("dom_app\n{code}")}});
+        assert_eq!(
+            app_message(&app, "d", &typed, "hi").unwrap_err().code,
+            "app_updated",
+            "no app code can carry a dom_app identity"
         );
     }
 

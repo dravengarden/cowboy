@@ -54,6 +54,7 @@ const KNOWN = new Set([
   "button",
   "choice",
   "app",
+  "dom_app",
 ]);
 const TONES = new Set(["neutral", "info", "success", "warning", "error", "running"]);
 const STEP_STATES = new Set(["pending", "active", "done", "failed", "skipped"]);
@@ -248,6 +249,7 @@ function leaf(node: Record<string, unknown>, type: string, path: string, budget:
       return;
     }
     case "app":
+    case "dom_app":
       app(node, path, budget);
       return;
     case "button":

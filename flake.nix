@@ -345,7 +345,7 @@
           "components/state-sync"
           "components/state-sync-idb"
         ];
-        depsHash = "sha256-EhMlyaJaT8LL9xyl4ebftJLXLS7uL+hINmq7R1oVSCU=";
+        depsHash = "sha256-NbNMuY6PUMZF1wvMbshXGEyA/zm0HU/wcKx1rCq1A7I=";
       }).overrideAttrs (previous: {
         # A Web release cannot be built from a commit that grows a structure
         # offender or breaks a web unit test (both also run in just check,

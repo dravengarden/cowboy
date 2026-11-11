@@ -1164,8 +1164,8 @@ export async function runSessionContextBrowserConformance(
       });
       await until(() => Boolean(container.querySelector('[data-session-handoff-link="trash"]')));
       await until(() => Boolean(container.querySelector("[data-handoff-cancel]")));
-      check(container.textContent!.includes("keep going"),
-        `preparing ${width}: the queued first message is shown with Cancel`);
+      check(!container.textContent!.includes("keep going"),
+        `preparing ${width}: the queued first message stays in the Queue panel, not repeated here`);
       const status = container.querySelector('[role="status"]')!.getBoundingClientRect();
       const bounds = container.getBoundingClientRect();
       check(Math.abs(status.top + status.height / 2 - (bounds.top + bounds.height / 2)) < 65 && container.scrollWidth <= width,

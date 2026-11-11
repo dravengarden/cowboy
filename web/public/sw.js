@@ -454,6 +454,10 @@ self.addEventListener("fetch", (event) => {
       event.respondWith(fetch(request));
       return;
     }
+    // The full-DOM app shell (docs/widget-apps-dom.md §3) carries its own
+    // network-denying headers; never answer it with, or cache it as, a shell.
+    // (Chromium already skips workers for its opaque sandboxed frame.)
+    if (url.pathname.startsWith("/app-shell")) return;
     // The admin console is a separate Vite entry. Never pin /admin, /admin/*,
     // or /admin.html as the PWA shell and never serve the chat shell when
     // /admin is offline. A successful admin navigation must not write SHELL_CACHE["/"].

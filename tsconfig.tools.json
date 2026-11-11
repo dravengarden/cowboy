@@ -34,6 +34,7 @@
     "tools/cdp-browser-conformance.ts",
     "tools/cdp-fixture.ts",
     "tools/ios-simulator-conformance.ts",
+    "tools/dom-apps-conformance.ts",
     "tools/review-workbench-acceptance.ts",
     "tools/cdp-keyboard-acceptance.ts",
     "tools/check-native-shell.ts",

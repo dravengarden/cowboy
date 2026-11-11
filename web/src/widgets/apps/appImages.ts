@@ -59,6 +59,25 @@ async function load(source: ImageSource): Promise<Uint8Array<ArrayBuffer> | null
   return new Uint8Array(await response.arrayBuffer());
 }
 
+/** Checked bytes of every image of an app (full-DOM apps receive bytes over
+ *  their port and make their own blobs). Images that fail to load or check,
+ *  or exceed the app's pixel total, are absent. */
+export async function loadAppImageBytes(images: unknown): Promise<Record<string, Uint8Array>> {
+  const entries = Object.entries((images ?? {}) as Record<string, ImageSource>);
+  const results = await Promise.all(
+    entries.map(async ([key, source]) => [key, await load(source).catch(() => null)] as const),
+  );
+  const out: Record<string, Uint8Array> = {};
+  let pixels = 0;
+  for (const [key, bytes] of results) {
+    const size = bytes ? pngPixels(bytes) : null;
+    if (!bytes || size === null || pixels + size > MAX_PIXELS) continue;
+    pixels += size;
+    out[key] = bytes;
+  }
+  return out;
+}
+
 type Slot = {
   refs: number;
   images: AppImages | null;

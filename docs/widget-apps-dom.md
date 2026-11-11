@@ -1,11 +1,13 @@
-# Widget apps, phase B: full-DOM apps on a separate site
+# Widget apps, phase B: full-DOM apps in an opaque sandbox
 
-Status: design, revision 3 (2026-11-09). Extends [`widget-apps.md`](widget-apps.md)
+Status: design, revision 5 (2026-11-11). Extends [`widget-apps.md`](widget-apps.md)
 (phase A, interpreter apps), whose consent broker and outbox this phase reuses.
-Owner decisions (2026-11-09): the app content site is the dedicated
-registrable domain `thundersparrow.top`, which carries nothing trusted,
-reachable only on the Stormbird overlay. Revision 2 answers the design review
-of revision 1 (§10).
+Owner decisions: 2026-11-09, apps run on a separate site, then 2026-11-11,
+after the same-origin experiment of §7.3, no separate domain for phase B: the
+shell is a Cowboy route, isolated by the opaque sandbox, its own response
+headers and Chromium's sandboxed-frame process isolation. `thundersparrow.top`
+stays registered for phase C (§10). Revisions 2-5 answer the design reviews
+(§11).
 
 ## 1. Goal, invariants and what a browser frame cannot give
 
@@ -19,13 +21,18 @@ WebGL, SVG, DOM events), drawn with its own pixels in a widget row.
   engine and proven by observation outside the page (§7); script patches the
   app could undo do not count.
 - **I3, bounded harm (best effort)**: a browser iframe offers no enforceable
-  per-app CPU, memory, GPU or IPC quota, and removing a frame does not
-  synchronously kill a renderer. Phase B therefore promises only: the app runs
-  in a renderer process separate from Cowboy's on enabled engines, Cowboy can
-  always remove it, floods of messages remove it, and at most one DOM app runs
-  per page. Removal is best effort: under memory or GPU exhaustion it may come
-  late, and a hostile app can slow the device meanwhile. This is weaker than
-  phase A and is stated to the person (§6).
+  per-app CPU, memory, GPU or IPC quota, removing a frame does not
+  synchronously kill a renderer, and page JavaScript cannot attest which
+  process a frame runs in. On admitted configurations Chromium puts the
+  sandboxed frame in its own renderer (§7 proves it for the suite's
+  configuration, including a negative test with that isolation disabled);
+  on the person's own browser it is expected, not attested. Containment
+  therefore also rests on the product: a DOM app never starts by itself, it
+  shows its title and a Run button and starts only when the person taps it
+  (after any reload nothing runs until tapped again); at most one runs per
+  page; floods and missed heartbeats remove it, best effort. A hostile app can
+  still slow or freeze the page until it is removed or the page is reloaded.
+  This is weaker than phase A and is stated to the person (§6).
 - **I4, fail closed**: only engine, OS and policy-version combinations listed
   in the phase B admission table (§7) run DOM apps; everything else shows the
   `fallback`. Phase A admission never implies phase B admission.
@@ -46,55 +53,58 @@ the app no network path at all, including to its own host.
 
 ## 3. Network-free boot
 
-The app host serves exactly one file per release: the shell document.
-Nothing the app does can make a second request that the host or any other
-server answers usefully.
+Cowboy serves exactly one document for DOM apps: the shell. Nothing the app
+does can make a second request that any server answers usefully.
 
-- `GET https://<label>.thundersparrow.top/` (exact path, no query) returns the
-  shell; every other path, any query string and every other method get an
-  empty 404. Caddy logs nothing for this site.
+- `GET /app-shell` (exact path, no query) on Cowboy's own origin returns the
+  shell, a file of the Web release; any other path below it, any query
+  string and any other method get an empty 404. The Controller answers this
+  route with the headers below instead of Cowboy's document headers, and
+  never logs its query.
 - The shell's only script is inline and authorized by its hash. It loads
   nothing over the network: the parent sends the runtime bytes (React, ReactDOM,
   Three, Sucrase, the bridge) over the verified port, and the shell creates its
   own `blob:` URLs for them and for the compiled app module.
-- Response headers:
+- Response headers of `/app-shell`, replacing (not adding to) Cowboy's:
   - `Content-Security-Policy: default-src 'none'; script-src 'sha256-<shell>'
     blob: 'wasm-unsafe-eval'; style-src 'unsafe-inline' blob:; img-src blob:
     data:; font-src blob: data:; media-src blob: data:; connect-src 'none';
     frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src
-    'none'; form-action 'none'; base-uri 'none'; frame-ancestors
-    https://cowboy.stormbird.xyz; webrtc 'block'`
+    'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self';
+    webrtc 'block'`
   - `Connection-Allowlist: ()` (empty: no destination, WebRTC included; no
     `response-origin` exception)
   - `Permissions-Policy` listing every feature the targeted engines support
-    with an empty allowlist (camera, microphone, geolocation, display-capture,
-    usb, serial, hid, bluetooth, midi, payment, publickey-credentials-*,
-    clipboard-read/write, fullscreen, screen-wake-lock, speaker-selection,
-    autoplay, idle-detection, local-fonts, …); the doc of the release lists
-    them exactly. Disabling media permissions does not disable WebRTC data
-    channels; Connection-Allowlist does.
+    with an empty allowlist; the release lists them exactly. Disabling media
+    permissions does not disable WebRTC data channels; Connection-Allowlist
+    does.
   - `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`,
-    `Cache-Control: no-store`, `Cross-Origin-Resource-Policy: cross-origin`
-    (the shell is framed cross-site; it carries no data).
+    `Cache-Control: no-store`, no `X-Frame-Options` (framing is governed by
+    `frame-ancestors 'self'`), no `Set-Cookie`.
 - Self-navigation (the frame navigating itself, possibly with data in the
   URL) is a request Connection-Allowlist must govern; §7 proves it per engine.
-  An empty 404 and disabled logging do not make such a request harmless (its
-  URL has already left the page): any request after the shell fails
-  admission.
-- Cowboy's App CSP gains `frame-src 'self' https://*.thundersparrow.top`
-  (its `default-src 'self'` otherwise forbids the frame); nothing else in the
-  Cowboy policy widens.
+  Any request after the shell fails admission, whatever the route answers.
+- Cowboy's App CSP gains `frame-src 'self'` (its `default-src 'self'` already
+  implies it; stated explicitly so a later narrowing cannot drop it); nothing
+  else in the Cowboy policy widens.
+- **The frame is never same-origin.** Because the shell shares Cowboy's
+  origin, `allow-same-origin` on this frame would hand the app Cowboy's
+  cookies, storage and API. The frame's sandbox is exactly `allow-scripts`,
+  enforced by a unit test of the frame host and by a check in the
+  conformance suite, and phase B adds no other sandbox token.
 
 ## 4. Frame, handshake and generations
 
 - The parent mounts `<iframe sandbox="allow-scripts" allow="<every feature
-  ()>" referrerpolicy="no-referrer" credentialless src="https://<label>…/">`
-  with a fresh random `<label>` per mount (process grouping on Chromium
-  follows the precursor origin; measured in §7), a fresh nonce and a fresh
-  generation. Opaque origin: no cookies, storage or service worker.
+  ()>" referrerpolicy="no-referrer" src="/app-shell">` with a fresh nonce and
+  a fresh generation per mount. Opaque origin: no cookies, storage or service
+  worker. The shell document's request carries Cowboy's cookies like any
+  same-origin navigation; the route ignores them and the document cannot read
+  them.
 - Handshake, accepted once, with a 5 s timeout:
   1. The shell posts `ready` to `parent` with target origin
-     `https://cowboy.stormbird.xyz`; the parent accepts it only from
+     its own URL's origin (Cowboy's, read from `location` before anything
+     else runs); the parent accepts it only from
      `event.source === frame.contentWindow`, `event.origin === "null"`, for the
      current generation, before any other message from that source.
   2. The parent transfers one `MessagePort` with the nonce and generation.
@@ -244,17 +254,78 @@ Steps 1a and 1b pass on this Chrome. Step 2 repeats the egress suite
 against the real host with network sinks, DNS observation and the lifecycle
 and containment checks; admission stays empty until it passes.
 
-## 8. Infrastructure (owner confirmation before activation)
+### 7.3 Same-origin shell (2026-11-11)
 
-- Zone `thundersparrow.top` is registered in Columbus
-  (`resources/cloudflare/dns/thundersparrow-top`).
-- Private DNS: `*.thundersparrow.top` → Hawk's overlay address (Stormbird
-  config project); no public records for app names.
-- TLS: Caddy wildcard certificate by DNS-01 with a token scoped to the zone
-  (Zone.DNS:Edit), stored like `/etc/cloudflare/caddy.env`.
-- Caddy vhost: the shell at `/` exactly with §3 headers, empty 404 otherwise,
-  no access log.
-- Egress sink (Hawk overlay plus a public host) for the suite only.
+The 7.2 suite with the shell served from the parent's own origin
+(`/app-shell`) instead of a separate site, same headers and sandbox:
+
+- the sandboxed frame still attached as its own `iframe` target, i.e. an
+  out-of-process frame (Chromium isolates sandboxed frames); the control
+  without `sandbox` did not;
+- the full boot passed (React, Three, blob font and image, click, `send`)
+  with no network request;
+- every nested-document, worklet, worker and WebRTC probe reached no sink,
+  while the allowing control reached every sink.
+
+### 7.4 First admission (2026-11-11)
+
+`tools/dom-apps-conformance.ts` against this tree: the real `/app-shell.html`
+of a disposable Controller (a query string answered 404), the production
+frame host, and a dedicated headless Google Chrome 157.0.8103.39 on the Mac
+(own profile, DevTools port and network log).
+
+| Mode | Rendering | Out-of-process frame | Intercepted requests | Network-log mentions of the run | STUN/TURN |
+|---|---|---|---|---|---|
+| `policy` | React, Three pixel `34,68,255`, image, click | yes | 0 | 0 | 0 |
+| `control` (shell without its security headers) | same | yes | 9 channels (fetch, image, prefetch, blob/srcdoc/data documents, both worklets, worker) | 71 | 18 |
+| `no-isolation` (`--disable-features=IsolateSandboxedIframes`) | same | **no**: detected | 0 | 0 | 0 |
+
+The app's self-navigation removed its frame. After the implementation review
+(`call-a92d7ad39b50a2475de490cc`) the verdict requires every probe to have
+reported, every control channel to be observed and both logs to exist (a
+missing log fails the run); a rerun passed all three modes (`control`: 9
+channels, 62 network-log mentions, 18 STUN/TURN). The same review changed the
+product: a `dom_app` send identity is `dom_app:<hex>` (no `app` code can
+produce it), imports link through Sucrase's imports transform and a mapping
+`require` (no source text is rewritten), props that arrive during startup are
+replayed, a stopped frame drops its unconfirmed requests, Run reserves the
+full-app ownership and one of the page's shared runtime slots, and an app out
+of view or on a hidden page stops after 1.5 s. Admission row: Google Chrome on
+macOS, major ≥ 157 (`domAppsEnabled.ts`). Later majors are admitted on the
+owner's direction to keep practical use; the suite is rerun on them and a
+failure removes the row. Every other engine shows the fallback.
+
+### 7.5 Product row (2026-11-11)
+
+The `policy` run now also drives the product's `dom_app` node inside
+`WidgetView` (`web/src/domAppsProductConformance.tsx`) on the same dedicated
+Chrome 157: no frame before Run; Run starts an `allow-scripts` frame whose
+WebGL app's send reaches the person's confirmation with its exact text and,
+once confirmed, carries a `dom_app:<hex>` identity; a second Run stops the
+first (one full app per page); Stop removes the frame; an app pushed out of
+view is stopped after its grace. All four passed with the run's egress,
+network-log and STUN/TURN counts still 0. The verdict requires them.
+
+## 8. Infrastructure
+
+None in production beyond Cowboy: the shell is a Web release file and a
+Controller route. First admission still requires the full §7 evidence, run in
+a disposable Chrome launched for the suite on the test machine (its own
+profile directory, flags and DevTools port; never the person's or the
+bridge's browser):
+
+- Chrome's network log (`--log-net-log`) as the authoritative record of every
+  host resolution and socket the browser opened during the probes, and
+  DevTools interception of every URL (any host, Cowboy's included) for
+  request contents;
+- STUN/TURN listeners (UDP, TCP, TLS) for WebRTC, which the network log does
+  not cover;
+- process evidence: the frame attaches as its own out-of-process target; a
+  second run with `--disable-features=IsolateSandboxedIframes` must make the
+  suite fail (the negative control for the isolation check).
+
+The DevTools-interception and loopback results of §7.1-§7.3 are prototype
+evidence only.
 
 ## 9. Order of work
 
@@ -267,11 +338,41 @@ and containment checks; admission stays empty until it passes.
       documents, `document.write`) and worklets, each with an allowing control
       that runs a probe inside it.
    Stop here if either fails.
-2. Infrastructure (§8) after owner confirmation; the suite against the real
-   host; the first admission row.
-3. Contract, Controller validation, Web frame host and registry admission.
+2. Contract, Controller route and validation, Web frame host and registry
+   admission, with the `widget-apps-dom` suite run against the real route on
+   a disposable local stack.
+3. The first admission row (desktop Chrome on the Mac, the version the suite
+   passed on), then real-use checks on Cowboy.
 
-## 10. Review record
+## 10. Phase C trust tiers (owner direction, 2026-11-11; not yet approved)
+
+Phase C renders MCP Apps (`ui://` resources) from MCP servers. Most of them
+will be Cowboy's own servers; the owner asked that those not be held to the
+third-party bar. Trust follows who wrote the code, never what content says:
+
+- **Agent-written** (`app`, `dom_app`): untrusted always, since a prompt
+  injection can author them; phases A and B as designed.
+- **First-party MCP Apps**: served by MCP servers whose package Cowboy
+  verifies (a signed Cowboy plugin or a server pinned in Cowboy's own
+  configuration). Same opaque frame and same-origin shell, never
+  `allow-same-origin`, but the policy may grant the app's declared network
+  origins (`connect-src` and `Connection-Allowlist` list them), its own
+  server's tools without a confirmation per call, host-backed storage over the
+  port, and links opened through Cowboy.
+- **Third-party MCP Apps**: everything of the agent-written tier plus the MCP
+  Apps contract; declared domains shown to the person; tools confirmed per
+  call; and, if an app needs `allow-same-origin` or a real origin, it runs on
+  `thundersparrow.top`, never on Cowboy's origin.
+
+Review of revision 4 (`call-26918e60062dfe76ed7d5b86`): package verification
+is not authority for privileged execution, since a pinned server may be a third
+party and a trusted server may return agent-generated or external UI. Before
+phase C, trust is a host-owned assignment naming the executable resource and
+the capabilities it may use, and privileged response policies stay separate
+from phase B's network-denying `/app-shell` policy. This section is a
+direction, not an approved design.
+
+## 11. Review record
 
 Revision 1 (Astra Max design review, `call-79e62aad9a656fd53c04ecdc`):
 
@@ -291,3 +392,16 @@ revision 3: worklets follow `script-src` and are exercised, not assumed
 refused (§7); a request after the shell fails admission whatever the host
 answers (§3); removal is best effort (§1); the prototype's conclusions are
 narrowed (§7.1); unknown node types fall back as unsupported (§6).
+
+Revision 4 (owner decision, 2026-11-11): the separate site is dropped for
+phase B after §7.3 showed the same isolation and egress results with a
+same-origin shell; the price is a Controller route with its own headers and
+the rule that the frame is never `allow-same-origin` (§3). Phase C trust
+tiers recorded (§10).
+
+Revision 5 (review of revision 4, `call-26918e60062dfe76ed7d5b86`):
+process isolation is not attested on the person's client, so DOM apps start
+only when tapped and the suite adds a forced-disabled negative control (§1,
+§8); first admission keeps the full network evidence through a disposable,
+net-logged Chrome (§8); phase C trust tiers are deferred until trust is a
+host-owned assignment per resource and capability (§10).

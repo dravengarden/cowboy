@@ -68,7 +68,8 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "sql-formatter": "^15.9.0",
-    "sucrase": "3.35.1"
+    "sucrase": "3.35.1",
+    "three": "0.181.0"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

@@ -26,7 +26,13 @@ const CONFIRM_INTERVAL_MS = 5000;
 
 type AppNodeData = Extract<ParsedNode, { type: "app" }>;
 
-function Fallback({ node, note }: { node: AppNodeData; note: string | null }): React.JSX.Element {
+export function Fallback({
+  node,
+  note,
+}: {
+  node: { fallback: string };
+  note: string | null;
+}): React.JSX.Element {
   return (
     <Box
       data-widget-app-fallback=""
@@ -60,15 +66,22 @@ function Fallback({ node, note }: { node: AppNodeData; note: string | null }): R
 /** Turns an app's send(text) into a confirmation; one at a time per app.
  *  The send carries the code that is running, which may be an older version
  *  the person kept, so the Controller can refuse it as `app_updated`. */
-function useAppSend(node: AppNodeData, target: Omit<AppMessageTarget, "code"> | null) {
+export function useAppSend(
+  node: { title: string },
+  target: Omit<AppMessageTarget, "code"> | null,
+) {
   const [pending, setPending] = useState<PendingAppMessage | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // Reserved synchronously, so a request that arrives while one is being
   // prepared or shown is refused instead of replacing it.
   const slot = useRef(false);
   const last = useRef(0);
+  // A stopped frame's requests die with it: a confirmation still being
+  // prepared, or shown and not yet sent, is dropped (confirmed sends live on
+  // in the outbox).
+  const generation = useRef(0);
   const onSend = target
-    ? (text: string, code: string): void => {
+    ? (text: string, code: string, kind: "app" | "dom_app" = "app"): void => {
         const now = Date.now();
         if (slot.current || now - last.current < CONFIRM_INTERVAL_MS) return;
         const problem = appMessageProblem(text);
@@ -78,14 +91,29 @@ function useAppSend(node: AppNodeData, target: Omit<AppMessageTarget, "code"> | 
         }
         slot.current = true;
         last.current = now;
-        void prepareAppMessage({ ...target, code }, text).then(setPending, () => {
-          slot.current = false;
-        });
+        const current = generation.current;
+        void prepareAppMessage({ ...target, code, kind }, text).then(
+          (prepared) => {
+            if (generation.current === current) setPending(prepared);
+            else slot.current = false;
+          },
+          () => {
+            slot.current = false;
+          },
+        );
       }
     : undefined;
   const close = (): void => {
     slot.current = false;
     setPending(null);
+  };
+  const revoke = (): void => {
+    generation.current += 1;
+    setPending((current) => {
+      if (current?.state !== "confirming") return current;
+      slot.current = false;
+      return null;
+    });
   };
   const confirm = pending ? (
     <Suspense fallback={null}>
@@ -96,7 +124,7 @@ function useAppSend(node: AppNodeData, target: Omit<AppMessageTarget, "code"> | 
       {notice}
     </Typography>
   ) : null;
-  return { onSend, confirm };
+  return { onSend, confirm, revoke };
 }
 
 export function WidgetApp({ node }: { node: AppNodeData }): React.JSX.Element {
