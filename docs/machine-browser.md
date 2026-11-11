@@ -106,7 +106,7 @@ graph; it has no UI, URLs, credentials or network targets.
 {
   "schema_version": 1,
   "id": "machine-browser",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "display_name": "Machine browser",
   "description": "Owner-operated Chromium on the Machine for account sign-in.",
   "supported_platforms": [{"os": "linux", "architecture": "x86_64"}],
@@ -341,14 +341,14 @@ nothing is configurable from outside beyond the argument vector.
    --disable-extensions --disable-breakpad --disable-crash-reporter
    --disable-quic --disk-cache-size=1048576 --password-store=basic
    --lang=en-US --window-position=0,0 --window-size=WxH
-   --force-device-scale-factor=<scale> about:blank`.
+   --force-device-scale-factor=<scale> chrome://newtab`.
 7. **Managed policy.** The policy file is part of the signed artifact and
    turns off everything a sign-in browser must not do, enforced by the
    browser inside the isolated view: `RemoteDebuggingAllowed=false`,
    `DeveloperToolsAvailability=2`, `DownloadRestrictions=3`,
    `AllowFileSelectionDialogs=false`,
    `URLBlocklist=["file://*","chrome://*"]` with `URLAllowlist` for
-   `chrome://newtab`, `ExtensionInstallBlocklist=["*"]`, `BrowserSignin=0`,
+   `chrome://newtab` (and the `new-tab-page` hosts it renders), `ExtensionInstallBlocklist=["*"]`, `BrowserSignin=0`,
    `SyncDisabled=true`, `PasswordManagerEnabled=false`,
    `AutofillAddressEnabled=false`, `AutofillCreditCardEnabled=false`,
    `BackgroundModeEnabled=false`, `MetricsReportingEnabled=false`,
@@ -357,12 +357,11 @@ nothing is configurable from outside beyond the argument vector.
    `BuiltInDnsClientEnabled=false`, `DnsOverHttpsMode=off`,
    `DefaultGeolocationSetting=2`, `DefaultNotificationsSetting=2`,
    `AudioCaptureAllowed=false`, `VideoCaptureAllowed=false`,
-   `RestoreOnStartup=5`. It also shows the bookmarks bar
-   (`BookmarkBarEnabled=true`, no apps shortcut) with one managed
-   "Sign in" folder (`ManagedBookmarks`): Claude, ChatGPT · Codex, Grok,
-   DeepSeek and Google sign-in, the same pages as the panel's quick links.
-   Bookmarks are browser UI only; no page can read them, and opening one is
-   an ordinary typed-address navigation. With the built-in resolver off, Chromium resolves
+   `RestoreOnStartup=5`. The browser starts on Chromium's own new-tab page,
+   whose `NTPShortcuts` tiles are the sign-in pages: Claude, ChatGPT · Codex,
+   Grok, DeepSeek and Google sign-in. Shortcuts are browser UI only; no page
+   can read them, and opening one is an ordinary typed-address navigation.
+   With the built-in resolver off, Chromium resolves
    names through the artifact's glibc, which the scaffolded `resolv.conf`
    forces onto TCP, so the browser needs no UDP socket at all and the sealed
    profile denies them. Session restoration is off on purpose: a reopened

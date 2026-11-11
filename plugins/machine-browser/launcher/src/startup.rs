@@ -487,7 +487,8 @@ impl Init {
             "--window-position=0,0".to_owned(),
             format!("--window-size={}", self.args.window_size()),
             format!("--force-device-scale-factor={}", self.args.scale),
-            "about:blank".to_owned(),
+            // Chromium's own new-tab page, with the policy's sign-in shortcuts.
+            "chrome://newtab".to_owned(),
         ]
     }
 
