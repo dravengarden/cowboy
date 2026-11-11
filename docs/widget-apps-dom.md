@@ -346,6 +346,8 @@ evidence only.
 
 ## 10. Phase C trust tiers (owner direction, 2026-11-11; not yet approved)
 
+Superseded by the phase C design draft, [`widget-apps-mcp.md`](widget-apps-mcp.md).
+
 Phase C renders MCP Apps (`ui://` resources) from MCP servers. Most of them
 will be Cowboy's own servers; the owner asked that those not be held to the
 third-party bar. Trust follows who wrote the code, never what content says:
