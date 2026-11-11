@@ -1122,16 +1122,22 @@ whose browser it displays and the Machine it runs on.
   sign-in; the "More" menu offers them while the viewed browser runs. The
   card's own service comes first (the opening card's, for a shared browser),
   Google last and, for a shared browser, emphasized. A tap navigates this
-  panel's connected viewer through the ordinary navigate command, or first
-  opens the browser (sending the identity shown as `expected_browser`; a
-  first open waits for the Machine picked in the chooser), attaches to it
-  or asks to take it over, and navigates once this panel's viewer has
-  connected to exactly that browser. The waiting link is bound to the
-  browser identity it was tapped for: an answer naming another identity, a
-  failed attachment (another viewer holds it) or a cancelled takeover drops
-  it, so it never reaches another profile or another viewer's page; a
-  re-bind drops it too. Links are disabled while a command runs or the
-  browser starts or stops. It is viewer-side only: nothing is injected into
+  panel's connected viewer through the ordinary navigate command, reuses an
+  attachment already connecting (never a second attach), or first opens the
+  browser (sending the identity shown as `expected_browser`; a first open
+  waits for the Machine picked in the chooser, which then opens with that
+  identity), attaches to it or asks to take it over. The waiting link is
+  bound to the browser identity it was tapped for (from reads, answers and
+  the sheet's inventory in the same render), then to exactly the first
+  attachment established after the tap (its lifecycle epoch, generation,
+  Machine and instance), and navigates once that attachment's stream is
+  open. Another identity, a failed command, an attachment that ends or
+  fails, one on another Machine, or a cancelled takeover drops it, so it
+  never reaches another profile or another viewer's page; a re-bind drops
+  it too. Links are disabled until the first state read answered (and,
+  against a Service with shared profiles, named the identity), while
+  admission refuses, while a command runs and while the browser starts or
+  stops. It is viewer-side only: nothing is injected into
   the browser and its runtime and policy are unchanged, so no site can tell
   a quick link from a typed address.
 - **Shared browsers look different.** Account and usage card entries of a
@@ -1172,7 +1178,9 @@ whose browser it displays and the Machine it runs on.
   overflow links), Maximize/Restore and Close; the frame fills the rest and
   picks its fixed screen mode as below, re-requesting it when the modal is
   resized or maximized. With focus in the remote frame every key, Esc and
-  browser shortcuts included, goes to the remote browser; Esc closes the
+  browser shortcuts included, goes to the remote browser: the global Desktop
+  key router stands aside before any leader (Space, the workspace prefix,
+  the modal leader) can claim a key there; Esc closes the
   modal only from Cowboy's chrome. The release chord, registered as
   `DESKTOP_SHORTCUTS.browserRelease` (Command-Shift-Esc on macOS,
   Alt-Shift-Q elsewhere, where Ctrl-Shift-Esc and Alt-Esc belong to the

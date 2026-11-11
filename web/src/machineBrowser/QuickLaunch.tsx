@@ -10,52 +10,95 @@ import { useEffect, useState } from "react";
 import type { BrowserTarget } from "./api";
 import type { ConfirmKind } from "./confirmation";
 import type { BrowserCommands } from "./MachineBrowserActions";
+import { shownTarget } from "./browserModel";
 import {
   type PendingQuickLink,
   type QuickLink,
   panelIdentity,
+  quickDisabled,
   quickLaunchPlan,
   quickStep,
+  viewerOf,
 } from "./quickLinks";
 import type { MachineBrowserController } from "./useMachineBrowser";
+
+export interface QuickLaunch {
+  launch: (url: string) => void;
+  /** The panel's open (the chooser's included): a link waiting for the
+   * Machine choice opens there, with the identity it was tapped for. */
+  open: (machine?: string, expected?: string) => void;
+  disabled: boolean;
+}
 
 export function useQuickLaunch(
   browser: MachineBrowserController,
   commands: BrowserCommands,
   confirm: { ask: (kind: ConfirmKind) => void; showing: ConfirmKind | undefined },
-  /** This panel's connected viewer's target (`controlsFor`), if any. */
-  connected: BrowserTarget | undefined,
-): (url: string) => void {
+  context: {
+    /** This panel's connected viewer's target (`controlsFor`), if any. */
+    connected: BrowserTarget | undefined;
+    /** The sheet's binding (inventory) identity, known in the same render. */
+    sheetIdentity: string | undefined;
+    identityRequired: boolean;
+  },
+): QuickLaunch {
   const [pending, setPending] = useState<PendingQuickLink | undefined>(undefined);
   const { model } = browser;
+  const connected = model.busy ? undefined : context.connected;
   const step = pending
     ? quickStep(pending, {
         identity: panelIdentity(model),
-        connected: model.busy ? undefined : connected,
+        sheetIdentity: context.sheetIdentity,
+        viewer: viewerOf(model),
+        connected,
         confirming: confirm.showing,
         takeoverViewer: model.viewer?.takeover === true,
         error: model.error,
       })
-    : "wait";
+    : undefined;
   useEffect(() => {
-    if (!pending || step === "wait") return;
+    if (!pending || !step) return;
+    if (step.action === "wait") {
+      if (step.pending !== pending) setPending(step.pending);
+      return;
+    }
     setPending(undefined);
-    if (step === "navigate" && connected) browser.navigate(pending.url, connected);
+    if (step.action === "navigate" && connected) browser.navigate(pending.url, connected);
   }, [browser, connected, pending, step]);
-  return (url) => {
-    const plan = quickLaunchPlan(model, connected);
+  const launch = (url: string): void => {
+    const plan = quickLaunchPlan(model, connected, context.identityRequired);
     if (plan === "none") return;
     if (plan === "navigate" && connected) {
       browser.navigate(url, connected);
       return;
     }
     const identity = panelIdentity(model);
-    setPending({ url, identity, takeover: plan === "takeover", error: model.error });
+    const target = model.read?.state ? shownTarget(model) : undefined;
+    setPending({
+      url,
+      identity,
+      takeover: plan === "takeover",
+      error: model.error,
+      sinceEpoch: model.epoch ?? 0,
+      // Reuse binds to the attachment already connecting; attaching and
+      // taking over stay on the shown browser's Machine.
+      viewer: plan === "reuse" ? viewerOf(model) : undefined,
+      machine: plan === "attach" || plan === "takeover" ? target?.machine_id : undefined,
+    });
     // "choose": the first open waits for the Machine picked in the chooser.
     if (plan === "open") commands.open(undefined, identity);
     else if (plan === "attach") commands.attach(false);
     else if (plan === "takeover") confirm.ask("takeover");
   };
+  const open = (machine?: string, expected?: string): void => {
+    if (pending && !pending.viewer && machine !== undefined) {
+      setPending({ ...pending, machine });
+      commands.open(machine, pending.identity);
+      return;
+    }
+    commands.open(machine, expected);
+  };
+  return { launch, open, disabled: quickDisabled(model, context.identityRequired) };
 }
 
 export function QuickLinkList({

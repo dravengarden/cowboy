@@ -40,10 +40,15 @@ export function quickLinks(family: string | undefined, shared: boolean): QuickLi
   }));
 }
 
-/** Whether quick links are offered now: not while a command runs or the
- * browser is starting or stopping (a tap would do nothing). */
-export function quickDisabled(model: BrowserModel): boolean {
-  const state = model.read?.state?.state;
+/** Whether quick links are offered now: only once the initial browser
+ * read answered (admission, Machine choice and, against a Service with
+ * shared profiles, the browser identity known), and not while a command
+ * runs or the browser starts or stops (a tap would do nothing). */
+export function quickDisabled(model: BrowserModel, identityRequired = false): boolean {
+  const read = model.read;
+  if (!read || read.admission) return true;
+  if (identityRequired && panelIdentity(model) === undefined) return true;
+  const state = read.state?.state;
   return Boolean(model.busy) || state === "starting" || state === "stopping";
 }
 
@@ -52,41 +57,97 @@ export function panelIdentity(model: BrowserModel): string | undefined {
   return model.observedIdentity ?? model.read?.browser_identity;
 }
 
-/** A quick link waiting for its browser: bound to the identity it was
- * tapped for, the error shown then, and whether only a confirmed takeover
- * may carry it. */
+/** The viewer a pending link is bound to: one attachment, by the lifecycle
+ * epoch it was established in, its generation and its exact target. */
+export interface QuickViewer {
+  since: number;
+  generation: number;
+  target: BrowserTarget;
+}
+
+export function viewerOf(model: BrowserModel): QuickViewer | undefined {
+  const viewer = model.viewer;
+  return (
+    viewer && { since: viewer.since ?? 0, generation: viewer.generation, target: viewer.target }
+  );
+}
+
+function sameViewer(left: QuickViewer, right: QuickViewer | undefined): boolean {
+  return (
+    right !== undefined &&
+    left.since === right.since &&
+    left.generation === right.generation &&
+    sameBrowserTarget(left.target, right.target)
+  );
+}
+
+function sameBrowserTarget(left: BrowserTarget, right: BrowserTarget | undefined): boolean {
+  return (
+    right !== undefined &&
+    left.machine_id === right.machine_id &&
+    left.instance.instance_id === right.instance.instance_id &&
+    left.instance.incarnation === right.instance.incarnation
+  );
+}
+
+/** A quick link waiting for its browser. It is bound to the browser
+ * identity it was tapped for, the lifecycle epoch then (only a viewer
+ * established after it, or the viewer already connecting, may carry it), the
+ * Machine it opens on when known, the error shown then, and whether only a
+ * confirmed takeover may carry it. Once a viewer appears the link binds to
+ * exactly that attachment. */
 export interface PendingQuickLink {
   url: string;
   identity: string | undefined;
   takeover: boolean;
   error: string;
+  sinceEpoch: number;
+  machine?: string | undefined;
+  viewer?: QuickViewer | undefined;
 }
 
-/** What a waiting quick link does now. It navigates only through this
- * panel's connected viewer (`connected`: the stream opened for exactly the
- * viewer's target), and is dropped when the browser identity changed, a
- * command or attachment failed since the tap, or the takeover it waits on
- * was cancelled. */
+export interface QuickNow {
+  /** The panel's identity now, and the sheet's (inventory) binding. */
+  identity: string | undefined;
+  sheetIdentity: string | undefined;
+  viewer: QuickViewer | undefined;
+  /** This panel's connected viewer's target (the stream is open). */
+  connected: BrowserTarget | undefined;
+  confirming: string | undefined;
+  takeoverViewer: boolean;
+  error: string;
+}
+
+/** The next state of a waiting quick link: keep waiting (possibly newly
+ * bound to the viewer that appeared), navigate its bound and connected
+ * viewer, or drop it: another browser identity (from a read, an answer or
+ * the inventory), a failed command or attachment, its attachment ended or
+ * replaced, a viewer on another Machine, or a cancelled takeover. */
 export function quickStep(
   pending: PendingQuickLink,
-  now: {
-    identity: string | undefined;
-    connected: BrowserTarget | undefined;
-    confirming: string | undefined;
-    takeoverViewer: boolean;
-    error: string;
-  },
-): "wait" | "navigate" | "drop" {
-  if (
-    pending.identity !== undefined &&
-    now.identity !== undefined &&
-    now.identity !== pending.identity
-  ) {
-    return "drop";
+  now: QuickNow,
+): { action: "wait"; pending: PendingQuickLink } | { action: "navigate" | "drop" } {
+  const moved = (identity: string | undefined): boolean =>
+    pending.identity !== undefined && identity !== undefined && identity !== pending.identity;
+  if (moved(now.identity) || moved(now.sheetIdentity)) return { action: "drop" };
+  if (now.error && now.error !== pending.error) return { action: "drop" };
+  let bound = pending;
+  if (!pending.viewer) {
+    if (pending.takeover && now.confirming !== "takeover" && !now.takeoverViewer) {
+      return { action: "drop" };
+    }
+    const viewer = now.viewer;
+    if (!viewer || viewer.since <= pending.sinceEpoch) return { action: "wait", pending };
+    if (pending.machine !== undefined && viewer.target.machine_id !== pending.machine) {
+      return { action: "drop" };
+    }
+    bound = { ...pending, viewer };
+  } else if (!sameViewer(pending.viewer, now.viewer)) {
+    return { action: "drop" };
   }
-  if (now.error && now.error !== pending.error) return "drop";
-  if (pending.takeover && now.confirming !== "takeover" && !now.takeoverViewer) return "drop";
-  return now.connected ? "navigate" : "wait";
+  return now.connected && sameBrowserTarget(bound.viewer!.target, now.connected)
+    ? { action: "navigate" }
+    : { action: "wait", pending: bound };
 }
 
 /** What a quick link does first when the panel does not view a running
@@ -100,16 +161,18 @@ export function quickEntry(model: BrowserModel): "open" | "attach" | "takeover" 
   return "open";
 }
 
-/** What a quick-link tap does now: navigate the connected viewer, or wait
- * for it after opening (on the Machine the owner picks in the chooser, for a
- * first open), attaching or a takeover the owner confirms; nothing while a
- * transition runs. */
+/** What a quick-link tap does now: navigate the connected viewer; wait for
+ * the attachment already connecting (never a second attach); or open (on
+ * the Machine the owner picks in the chooser, for a first open), attach or
+ * take over (once confirmed) and then wait; nothing while disabled. */
 export function quickLaunchPlan(
   model: BrowserModel,
   connected: BrowserTarget | undefined,
-): "navigate" | "open" | "choose" | "attach" | "takeover" | "none" {
-  if (quickDisabled(model)) return "none";
+  identityRequired = false,
+): "navigate" | "reuse" | "open" | "choose" | "attach" | "takeover" | "none" {
+  if (quickDisabled(model, identityRequired)) return "none";
   if (connected) return "navigate";
+  if (model.viewer || model.awaitingOpen) return "reuse";
   const entry = quickEntry(model);
   if (entry === "open") return needsMachineChoice(model.read) ? "choose" : "open";
   return entry === "wait" ? "none" : entry;

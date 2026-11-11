@@ -77,8 +77,13 @@ test("quick links put the card's own service first and Google last", () => {
 test("a quick link navigates the connected viewer, else opens, attaches or asks first", () => {
   const target = { machine_id: "ovh", instance: state("detached").instance };
   assertEquals(quickLaunchPlan(model("detached", true), target), "navigate");
-  // A viewer requested but not connected yet never receives the link now.
-  assertEquals(quickLaunchPlan(model("detached", true), undefined), "attach");
+  // An attachment already connecting is reused, never doubled or torn down.
+  assertEquals(quickLaunchPlan(model("detached", true), undefined), "reuse");
+  assertEquals(
+    quickLaunchPlan({ ...model("hibernated"), awaitingOpen: target }, undefined),
+    "reuse",
+  );
+  assertEquals(quickLaunchPlan(model("detached"), undefined), "attach");
   assertEquals(quickLaunchPlan(model("hibernated"), undefined), "open");
   assertEquals(quickLaunchPlan(model(null), undefined), "open");
   assertEquals(quickLaunchPlan(model("attached"), undefined), "takeover");
@@ -99,47 +104,85 @@ test("a quick link navigates the connected viewer, else opens, attaches or asks 
     assertEquals(quickDisabled(busy), true);
     assertEquals(quickLaunchPlan(busy, target), "none");
   }
+  // Disabled until the first read answered, while admission refuses, and
+  // (against a Service with shared profiles) until the identity is known.
+  assertEquals(quickDisabled(INITIAL_BROWSER_MODEL), true);
+  assertEquals(quickDisabled({ ...model("hibernated"), loaded: true, read: undefined }), true);
+  const refused = model("hibernated");
+  refused.read = { ...refused.read!, admission: "browser_not_enabled" };
+  assertEquals(quickDisabled(refused), true);
+  assertEquals(quickDisabled(model("hibernated"), true), true);
+  const named = model("hibernated");
+  named.read = { ...named.read!, browser_identity: "own" };
+  assertEquals(quickDisabled(named, true), false);
   assertEquals(quickDisabled(model("hibernated")), false);
   assertEquals(quickEntry(model("detached")), "attach");
 });
 
-test("a waiting quick link reaches only its own identity's connected viewer", () => {
+test("a waiting quick link reaches only its own attachment of its own identity", () => {
   const target = { machine_id: "ovh", instance: state("detached").instance };
+  const other = { machine_id: "hawk", instance: { ...target.instance, instance_id: "b-2" } };
+  const viewer = { since: 5, generation: 1, target };
   const pending = {
     url: "https://claude.ai/",
     identity: `share:${SHARE}:2`,
     takeover: false,
     error: "",
+    sinceEpoch: 4,
   };
   const now = {
     identity: `share:${SHARE}:2`,
+    sheetIdentity: undefined as string | undefined,
+    viewer: undefined as typeof viewer | undefined,
     connected: undefined as typeof target | undefined,
     confirming: undefined as string | undefined,
     takeoverViewer: false,
     error: "",
   };
-  assertEquals(quickStep(pending, now), "wait");
-  assertEquals(quickStep(pending, { ...now, connected: target }), "navigate");
-  // The open answered another identity: dropped, even with a viewer
-  // connected in the same flush.
-  assertEquals(quickStep(pending, { ...now, identity: "own", connected: target }), "drop");
-  // The attachment failed (another viewer holds it): dropped, never
-  // navigating that viewer's page.
+  const step = (p: Parameters<typeof quickStep>[0], n: Partial<typeof now>) =>
+    quickStep(p, { ...now, ...n });
+  assertEquals(step(pending, {}).action, "wait");
+  // The first viewer established after the tap binds the link.
+  const bound = step(pending, { viewer });
+  assertEquals(bound.action === "wait" && bound.pending.viewer, viewer);
+  // An older viewer (before the tap) never carries it.
+  assertEquals(step(pending, { viewer: { ...viewer, since: 3 } }), { action: "wait", pending });
+  const held = bound.action === "wait" ? bound.pending : pending;
+  // Only once that exact attachment's stream is open.
+  assertEquals(step(held, { viewer, connected: target }).action, "navigate");
+  assertEquals(step(held, { viewer, connected: other }).action, "wait");
+  // The attachment ended or failed (viewer_ended), or another replaced it.
+  assertEquals(step(held, {}).action, "drop");
   assertEquals(
-    quickStep(pending, { ...now, error: "Another viewer is attached to this browser." }),
+    step(held, { viewer: { ...viewer, generation: 2 }, connected: target }).action,
     "drop",
   );
-  // An error already shown when the link was tapped does not drop it.
-  assertEquals(quickStep({ ...pending, error: "old" }, { ...now, error: "old" }), "wait");
-  // A takeover link waits while its confirmation shows, is carried by the
-  // confirmed takeover, and is dropped when the confirmation is cancelled.
-  const takeover = { ...pending, takeover: true };
-  assertEquals(quickStep(takeover, { ...now, confirming: "takeover" }), "wait");
+  // Another identity, from a read or the sheet's inventory in this render.
+  assertEquals(step(held, { viewer, connected: target, identity: "own" }).action, "drop");
   assertEquals(
-    quickStep(takeover, { ...now, takeoverViewer: true, connected: target }),
+    step(held, { viewer, connected: target, sheetIdentity: `share:${SHARE}:3` }).action,
+    "drop",
+  );
+  // A viewer on another Machine than the one it opens on.
+  assertEquals(
+    step({ ...pending, machine: "ovh" }, { viewer: { ...viewer, target: other } }).action,
+    "drop",
+  );
+  // A failure since the tap drops it; an error already shown does not.
+  assertEquals(
+    step(pending, { error: "Another viewer is attached to this browser." }).action,
+    "drop",
+  );
+  assertEquals(step({ ...pending, error: "old" }, { error: "old" }).action, "wait");
+  // A takeover link waits while confirming, is carried by the confirmed
+  // takeover, and is dropped when the confirmation is cancelled.
+  const takeover = { ...pending, takeover: true };
+  assertEquals(step(takeover, { confirming: "takeover" }).action, "wait");
+  assertEquals(
+    step(takeover, { takeoverViewer: true, viewer, connected: target }).action,
     "navigate",
   );
-  assertEquals(quickStep(takeover, now), "drop");
+  assertEquals(step(takeover, {}).action, "drop");
 });
 
 test("the card's family comes from the Service's static table", () => {

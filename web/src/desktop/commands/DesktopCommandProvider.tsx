@@ -19,7 +19,7 @@ import { workspaceCommandKey } from "./workspaceCommandKey";
 import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 import { assertChromeShortcutAllowed } from "./chromeShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
-import { desktopOverlayOwnsShortcuts } from "./desktopShortcutScope";
+import { desktopOverlayOwnsShortcuts, remoteViewerOwnsKey } from "./desktopShortcutScope";
 import {
   desktopShouldBlockStaleVimSink,
   desktopVimSinkShouldHandleKeys,
@@ -489,9 +489,9 @@ export function DesktopCommandProvider(
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (remoteViewerOwnsKey(event)) return; // The remote page owns every key.
       // Vim in a native text field (inputVim) goes first: its Insert Esc and
-      // Normal motions belong to the field. An armed leader keeps its
-      // continuation; a composition keeps every key.
+      // Normal motions belong to the field. An armed leader keeps its continuation; a composition keeps every key.
       if (
         !leaderArmed.current && desktopKeyIntent(event).owner !== "ime" &&
         handleInputVimKey(event)

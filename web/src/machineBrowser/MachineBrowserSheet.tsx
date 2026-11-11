@@ -49,7 +49,7 @@ import {
   takeLatch,
 } from "./shareRules";
 import { useSharedBrowser } from "./useSharedBrowser";
-import { type QuickLink, quickDisabled, quickLinks } from "./quickLinks";
+import { type QuickLink, quickLinks } from "./quickLinks";
 import { QuickLinkList, useQuickLaunch } from "./QuickLaunch";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import { type MachineBrowserController, useMachineBrowser } from "./useMachineBrowser";
@@ -296,17 +296,29 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
 /** The panel's quick links: the card's own family first (for a shared
  * browser, the opening card's), Google last and emphasized when shared. */
 function usePanelQuickLinks(
-  props: { account: { id: string }; snapshot: SubscriptionSnapshot | undefined },
+  props: {
+    account: { id: string };
+    snapshot: SubscriptionSnapshot | undefined;
+    shared: SharedBrowser | undefined;
+  },
   browser: MachineBrowserController,
   commands: BrowserCommands,
   confirm: { ask: (kind: ConfirmKind) => void; showing: ConfirmKind | undefined },
   [shared, connected]: [SharedBrowser | undefined, BrowserTarget | undefined],
 ) {
-  const launch = useQuickLaunch(browser, commands, confirm, connected);
+  const quick = useQuickLaunch(browser, commands, confirm, {
+    connected,
+    // The inventory's identity in this very render: a membership change
+    // never lets an older link navigate before the panel is re-bound.
+    sheetIdentity: props.snapshot ? browserIdentityKey(props.shared) : undefined,
+    identityRequired: identityRequiredFor(props.snapshot),
+  });
   const links = quickLinks(browserFamily(props.snapshot, props.account.id), shared !== undefined);
-  const disabled = quickDisabled(browser.model);
-  const list = <QuickLinkList links={links} disabled={disabled} onLaunch={launch} />;
-  return { links, launch, list, disabled };
+  const list = <QuickLinkList links={links} disabled={quick.disabled} onLaunch={quick.launch} />;
+  // Every open (the chooser's too) goes through the quick launch, so a link
+  // waiting for the Machine choice opens there with its identity.
+  const panelCommands: BrowserCommands = { ...commands, open: quick.open };
+  return { links, launch: quick.launch, commands: panelCommands, list, disabled: quick.disabled };
 }
 
 /** The panel's sharing state: the identity binding, what the Service says
@@ -381,6 +393,7 @@ function MachineBrowserPanel(
     shared,
     ui.controls?.target,
   ]);
+  const uiCommands = quick.commands;
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";
   const menu = (
     <BrowserMenu
@@ -389,7 +402,7 @@ function MachineBrowserPanel(
       items={browserMenuItems({
         model,
         chrome,
-        commands,
+        commands: uiCommands,
         ask: confirm.ask,
         onPaste: paste.start,
         onClose,
@@ -411,7 +424,7 @@ function MachineBrowserPanel(
     link: link !== undefined,
     pinned: link !== undefined,
     retry: retryOffered(model, link !== undefined),
-    commands,
+    commands: uiCommands,
     enabling,
     onEnableBrowser: props.onEnableBrowser,
     onConfirm: confirm.ask,
