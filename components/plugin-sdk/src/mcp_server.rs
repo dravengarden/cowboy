@@ -73,13 +73,13 @@ pub struct McpAppsContract {
     pub tools: Vec<McpAppTool>,
 }
 
-/// One static view: a file of the release's signed host bundle and its digest.
+/// One static view. Its HTML is part of the signed contract, so the package
+/// signature covers the exact bytes that may ever run as this view.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpUiResource {
     pub uri: String,
-    pub file: String,
-    pub sha256: String,
+    pub html: String,
 }
 
 /// Visibility and view linkage of one signed tool. Tools without an entry are
@@ -104,6 +104,8 @@ pub enum McpToolVisibility {
 }
 
 pub const MAX_MCP_UI_RESOURCES: usize = 8;
+pub const MAX_MCP_UI_RESOURCE_BYTES: usize = 512 * 1024;
+pub const MAX_MCP_UI_TOTAL_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -233,23 +235,20 @@ impl McpAppsContract {
             "too many MCP UI resources"
         );
         let mut uris = BTreeSet::new();
-        let mut files = BTreeSet::new();
+        let mut total = 0usize;
         for resource in &self.ui_resources {
             validate_ui_uri(&resource.uri)?;
-            validate_ui_file(&resource.file)?;
-            crate::validate_digest(&resource.sha256, "MCP UI resource digest")?;
+            validate_ui_html(&resource.html)?;
+            total += resource.html.len();
             ensure!(
-                resource
-                    .sha256
-                    .bytes()
-                    .all(|byte| !byte.is_ascii_uppercase()),
-                "MCP UI resource digest must be canonical"
-            );
-            ensure!(
-                uris.insert(resource.uri.as_str()) && files.insert(resource.file.as_str()),
+                uris.insert(resource.uri.as_str()),
                 "duplicate MCP UI resource"
             );
         }
+        ensure!(
+            total <= MAX_MCP_UI_TOTAL_BYTES,
+            "MCP UI resources too large"
+        );
         let mut names = BTreeSet::new();
         for tool in &self.tools {
             ensure!(
@@ -293,20 +292,35 @@ fn validate_ui_uri(uri: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_ui_file(file: &str) -> Result<()> {
+/// A self-contained document: no subresource can be referenced. This is a
+/// signing-time check; the serving CSP (`default-src 'none'`) is the boundary.
+fn validate_ui_html(html: &str) -> Result<()> {
     ensure!(
-        file.len() <= 128
-            && std::path::Path::new(file)
-                .extension()
-                .is_some_and(|extension| extension == "html")
-            && file
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"-._/".contains(&byte))
-            && file
-                .split('/')
-                .all(|segment| !segment.is_empty() && segment != "." && segment != ".."),
-        "invalid MCP UI resource file"
+        !html.trim().is_empty() && html.len() <= MAX_MCP_UI_RESOURCE_BYTES && !html.contains('\0'),
+        "invalid MCP UI resource HTML"
     );
+    let lower = html.to_ascii_lowercase();
+    for marker in [
+        "<link",
+        "<base",
+        "<iframe",
+        "<frame",
+        "<object",
+        "<embed",
+        "http-equiv",
+        " src=",
+        "\tsrc=",
+        "\nsrc=",
+        "srcset=",
+        "@import",
+        "url(http",
+        "url(//",
+    ] {
+        ensure!(
+            !lower.contains(marker),
+            "MCP UI resource references a subresource ({marker})"
+        );
+    }
     Ok(())
 }
 
@@ -516,14 +530,12 @@ mod discovery_tests {
         Ok(contract)
     }
 
-    fn digest() -> String {
-        format!("sha256:{}", "b".repeat(64))
-    }
+    const VIEW: &str = "<!doctype html><style>p{color:red}</style><p style=\"margin:0\">x</p><script>parent.postMessage(1,'*')</script>";
 
     #[test]
     fn apps_declare_signed_views_and_visibility() {
         let contract = with_apps(json!({
-            "ui_resources":[{"uri":"ui://fixture/status","file":"ui/status.html","sha256":digest()}],
+            "ui_resources":[{"uri":"ui://fixture/status","html":VIEW}],
             "tools":[
                 {"name":"fixture_status","resource":"ui://fixture/status","visibility":["model","app"],"read_only":true},
                 {"name":"fixture_read","visibility":["app"]}
@@ -537,8 +549,8 @@ mod discovery_tests {
         assert_eq!(
             contract
                 .ui_resource_for("fixture_status")
-                .map(|r| r.file.as_str()),
-            Some("ui/status.html")
+                .map(|r| r.uri.as_str()),
+            Some("ui://fixture/status")
         );
         assert!(contract.ui_resource_for("fixture_read").is_none());
         // Without a declaration every signed tool keeps today's meaning.
@@ -557,18 +569,24 @@ mod discovery_tests {
 
     #[test]
     fn apps_reject_unsafe_or_dangling_declarations() {
-        let view = |uri: &str, file: &str, sha: String| json!({"uri":uri,"file":file,"sha256":sha});
+        let view = |uri: &str, html: &str| json!({"uri":uri,"html":html});
+        let big = "x".repeat(MAX_MCP_UI_RESOURCE_BYTES + 1);
+        let full = "y".repeat(MAX_MCP_UI_RESOURCE_BYTES);
         for apps in [
             json!({}),
-            json!({"ui_resources":[view("https://x.invalid/a", "a.html", digest())]}),
-            json!({"ui_resources":[view("ui://fixture/../a", "a.html", digest())]}),
-            json!({"ui_resources":[view("ui://Fixture/a", "a.html", digest())]}),
-            json!({"ui_resources":[view("ui://fixture/a", "../a.html", digest())]}),
-            json!({"ui_resources":[view("ui://fixture/a", "/a.html", digest())]}),
-            json!({"ui_resources":[view("ui://fixture/a", "a.js", digest())]}),
-            json!({"ui_resources":[view("ui://fixture/a", "a.html", format!("sha256:{}", "B".repeat(64)))]}),
-            json!({"ui_resources":[view("ui://fixture/a", "a.html", digest()), view("ui://fixture/a", "b.html", digest())]}),
-            json!({"ui_resources":(0..9).map(|n| view(&format!("ui://fixture/{n}"), &format!("{n}.html"), digest())).collect::<Vec<_>>()}),
+            json!({"ui_resources":[view("https://x.invalid/a", VIEW)]}),
+            json!({"ui_resources":[view("ui://fixture/../a", VIEW)]}),
+            json!({"ui_resources":[view("ui://Fixture/a", VIEW)]}),
+            json!({"ui_resources":[view("ui://fixture/a", " ")]}),
+            json!({"ui_resources":[view("ui://fixture/a", &big)]}),
+            json!({"ui_resources":(0..5).map(|n| view(&format!("ui://fixture/{n}"), &full)).collect::<Vec<_>>()}),
+            json!({"ui_resources":[view("ui://fixture/a", "<script SRC=\"https://x.invalid/a.js\"></script>")]}),
+            json!({"ui_resources":[view("ui://fixture/a", "<LINK rel=stylesheet href=a.css>")]}),
+            json!({"ui_resources":[view("ui://fixture/a", "<style>@import 'x.css'</style>")]}),
+            json!({"ui_resources":[view("ui://fixture/a", "<img\nsrc=x>")]}),
+            json!({"ui_resources":[view("ui://fixture/a", "<base href=/>")]}),
+            json!({"ui_resources":[view("ui://fixture/a", VIEW), view("ui://fixture/a", VIEW)]}),
+            json!({"ui_resources":(0..9).map(|n| view(&format!("ui://fixture/{n}"), VIEW)).collect::<Vec<_>>()}),
             json!({"tools":[{"name":"unsigned","visibility":["app"]}]}),
             json!({"tools":[{"name":"fixture_read","visibility":[]}]}),
             json!({"tools":[{"name":"fixture_read","visibility":["app","app"]}]}),

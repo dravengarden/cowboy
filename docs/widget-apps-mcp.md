@@ -56,14 +56,17 @@ server's live answers.
 The `mcp_server` contract gains an optional `apps` declaration
 (`McpAppsContract`, `components/plugin-sdk/src/mcp_server.rs`):
 
-- `ui_resources`, at most 8: `{uri, file, sha256}` with `ui://` URIs of
-  lowercase path segments. `file` names a file of the release's signed
-  **host bundle** (`*.hostbundle.json`, bound to the package digest and
-  carried to the Controller, which is where views are served), ≤ 512 KiB,
-  one document with inline scripts and styles only (no `src`/`href`
-  subresources, checked when the bundle is verified). A view's data arrives
-  through tool input, tool results and its own granted tool calls, never
-  over the network.
+- `ui_resources`, at most 8: `{uri, html}` with `ui://` URIs of lowercase
+  path segments. The HTML is part of the signed contract, so the package
+  signature covers the exact bytes that may ever run as the view, and the
+  Controller and every Machine already hold it with the package; no host
+  bundle, release envelope or install change is needed. Each document is
+  ≤ 512 KiB, all of them ≤ 2 MiB (the Machine package limit is 8 MiB), with
+  inline scripts and styles only: signing refuses `<link>`, `<base>`,
+  frames, objects, `src`/`srcset` attributes, `@import` and remote `url()`.
+  That check is a lint; the serving CSP is the boundary. A view's data
+  arrives through tool input, tool results and its own granted tool calls,
+  never over the network.
 - `tools`: per signed tool, `{name, resource?, visibility, read_only}` where
   `visibility` is `["model"]`, `["app"]` or both and `read_only` mirrors the
   tool's `readOnlyHint`. A tool without an entry is visible to both (the
@@ -71,10 +74,9 @@ The `mcp_server` contract gains an optional `apps` declaration
   `apps` serialize exactly as before; older verifiers refuse the unknown
   field.
 
-The Controller verifies each digest against the host bundle when the Plugin
-is installed and again when serving, and computes inline-script and style
-hashes once. MCP releases currently refuse host bundles; admitting one that
-carries only declared view files is part of step 1.
+The Controller takes a view's bytes only from the verified package of the
+exact generation the binding names, and computes inline-script and style
+hashes once.
 
 Two projections replace "the granted tools":
 
@@ -291,9 +293,10 @@ requires, on that browser:
 
 1. a. Contract `apps` (views, visibility, read-only) and the agent
       projection enforced by Machine preparation. Done (this revision).
-   b. MCP releases admitting a host bundle of declared view files, Controller
-      digest verification; policy `apps` with CAS and validation. No
-      rendering.
+   b. Views inlined in the signed contract (no host bundle); one component
+      release for 1a and 1b. Done (this revision).
+   c. Policy `apps` with CAS and validation against the exact generation's
+      contract. No rendering.
 2. Frame tokens, `/mcp-app/` route and headers, the lease; the suite's
    network and navigation rows.
 3. Bridge, scope-bound `tools/call`, transcript row; the SDK fixture rows.
