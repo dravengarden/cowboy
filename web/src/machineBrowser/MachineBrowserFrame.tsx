@@ -4,7 +4,7 @@
  * banners so the frame (and the framebuffer size it requests) never moves. */
 import { GroupsRounded, PublicOutlined } from "@mui/icons-material";
 import { Alert, Box, Button, Stack, Typography } from "@mui/material";
-import { type ReactNode, type RefObject, Suspense, lazy } from "react";
+import { type RefObject, Suspense, lazy } from "react";
 import { type BrowserStateEvent, browserErrorText } from "./api";
 import { type ViewerControls, browserStateSummary } from "./browserChrome";
 import { type BrowserModel, browserRunning } from "./browserModel";

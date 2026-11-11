@@ -6,7 +6,7 @@
  * modal only from Cowboy's chrome, and the release chord moves focus there.
  * See docs/machine-browser.md, "Desktop panel". */
 import { CloseFullscreenRounded, CloseRounded, OpenInFullRounded } from "@mui/icons-material";
-import { Box, Button, Dialog, IconButton, Stack, Tooltip } from "@mui/material";
+import { Box, Dialog, IconButton, Stack, Tooltip } from "@mui/material";
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import { DESKTOP_SHORTCUTS } from "../desktop/commands/workspaceShortcuts";
 import { isMac } from "../platform";
