@@ -1,4 +1,7 @@
-use super::super::{Authority, Resolved, authorize_account, authorize_shared, instance_id, legacy};
+use super::super::{
+    Authority, Resolved, authorize_account, authorize_shared, expected_identity, instance_id,
+    legacy,
+};
 use super::*;
 use crate::machine_protocol::machine_browser::{InstanceRef, StateEvent};
 use crate::store::provider_accounts::Account;
@@ -689,4 +692,23 @@ fn a_lost_open_stops_only_the_members_own_running_browser() {
     for state in [BrowserState::Hibernated, BrowserState::Stopping] {
         assert!(!post_open_cleanup(false, state));
     }
+}
+
+#[test]
+fn an_identity_bound_open_refuses_another_browser_identity() {
+    let share_id = uuid::Uuid::new_v4().to_string();
+    let pika = resolved("openai", true, &share_id);
+    // A plain open is not identity-bound.
+    assert_eq!(expected_identity(None, &pika), Ok(()));
+    assert_eq!(expected_identity(Some(&pika.identity()), &pika), Ok(()));
+    // The card left the share (or it moved) since the restart was
+    // confirmed: the reopen never opens the other profile.
+    assert_eq!(
+        expected_identity(Some("own"), &pika),
+        Err("browser_identity_changed")
+    );
+    assert_eq!(
+        expected_identity(Some(&format!("share:{share_id}:3")), &pika),
+        Err("browser_identity_changed")
+    );
 }

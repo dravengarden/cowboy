@@ -692,8 +692,8 @@ async fn dispatch_open(
     owner: &str,
     resolved: &Resolved,
     (machine_id, connection): (&str, &ConnectionToken),
-    purpose: Purpose,
-    viewport: Viewport,
+    (purpose, viewport): (Purpose, Viewport),
+    fence: Option<tokio::sync::OwnedMutexGuard<()>>,
 ) -> Result<StateEvent, &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
     let account_id = &resolved.key;
@@ -728,6 +728,10 @@ async fn dispatch_open(
                 .await
         }
     };
+    // An identity-bound open (a restart's reopen) held the owner's share
+    // fence from its identity check through this admission; the placement
+    // is committed for exactly the identity it checked.
+    drop(fence);
     admitted
         .map_err(|error| {
             tracing::warn!(%error, "browser placement not committed; open refused");
@@ -797,6 +801,15 @@ async fn dispatch_open(
     Ok(event)
 }
 
+/// An identity-bound request names the browser identity the member's card
+/// uses now, or is refused.
+fn expected_identity(expected: Option<&str>, resolved: &Resolved) -> Result<(), &'static str> {
+    match expected {
+        Some(expected) if expected != resolved.identity() => Err("browser_identity_changed"),
+        _ => Ok(()),
+    }
+}
+
 /// Whether an open whose member lost its access meanwhile stops what it
 /// started: only the member's own browser, and only while it runs. A share's
 /// browser serves its other members and is never stopped here.
@@ -810,14 +823,24 @@ fn post_open_cleanup(shared: bool, started: BrowserState) -> bool {
 
 /// Open the account's browser as a tab on its Machine, or only on `machine`
 /// when the caller names one.
+///
+/// `expected_browser` binds the open to the browser identity the caller
+/// confirmed (a restart's reopen): it is checked under the owner's share
+/// fence, held until the placement is admitted, and a changed identity is
+/// refused (`browser_identity_changed`) instead of opening another profile.
 pub(in crate::server) async fn open_tab(
     state: &AppState,
     owner: &str,
     account_id: &ProviderAccountId,
     viewport: Viewport,
-    machine: Option<&str>,
+    (machine, expected_browser): (Option<&str>, Option<&str>),
 ) -> Result<Value, &'static str> {
+    let fence = match expected_browser {
+        Some(_) => Some(state.browsers.share_lock(owner).lock_owned().await),
+        None => None,
+    };
     let resolved = authorize(state, owner, account_id, Authority::Launch).await?;
+    expected_identity(expected_browser, &resolved)?;
     viewport.validate().map_err(|_| "invalid_viewport")?;
     let (machine_id, connection) = machine_for(state, owner, &resolved, machine).await?;
     let event = dispatch_open(
@@ -825,8 +848,8 @@ pub(in crate::server) async fn open_tab(
         owner,
         &resolved,
         (&machine_id, &connection),
-        Purpose::Tab,
-        viewport,
+        (Purpose::Tab, viewport),
+        fence,
     )
     .await?;
     Ok(resolved.state_json(&machine_id, &event))
@@ -1083,6 +1106,9 @@ pub(in crate::server) struct OpenBody {
     scale: u8,
     /// Open only on this Machine.
     machine_id: Option<String>,
+    /// Open only while the card still uses this browser identity
+    /// (`browser_identity`), as a restart's reopen does.
+    expected_browser: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1165,7 +1191,7 @@ pub(in crate::server) async fn http_open(
                 height: body.height,
                 scale: body.scale,
             },
-            body.machine_id.as_deref(),
+            (body.machine_id.as_deref(), body.expected_browser.as_deref()),
         )
         .await,
     )
