@@ -68,6 +68,77 @@ fn inline_script_hashes(html: &[u8]) -> Vec<String> {
     hashes
 }
 
+/// The full-DOM app shell (docs/widget-apps-dom.md §3): framed only by Cowboy,
+/// in a frame that is always `sandbox="allow-scripts"`. Its one inline script
+/// is authorized by its hash; everything else the app runs arrives over the
+/// verified port as `blob:` URLs. No network destination is allowed, WebRTC
+/// included (`Connection-Allowlist: ()`), and every powerful feature is off.
+pub(super) fn app_shell_headers(html: &[u8]) -> Vec<(&'static str, String)> {
+    let hashes: String = inline_script_hashes(html)
+        .iter()
+        .map(|hash| format!(" '{hash}'"))
+        .collect();
+    let csp = format!(
+        "default-src 'none'; script-src{hashes} blob: 'wasm-unsafe-eval'; \
+         style-src 'unsafe-inline' blob:; img-src blob: data:; font-src blob: data:; \
+         media-src blob: data:; connect-src 'none'; frame-src 'none'; child-src 'none'; \
+         worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'; \
+         frame-ancestors 'self'; webrtc 'block'"
+    );
+    let features = [
+        "accelerometer",
+        "ambient-light-sensor",
+        "autoplay",
+        "bluetooth",
+        "browsing-topics",
+        "camera",
+        "clipboard-read",
+        "clipboard-write",
+        "compute-pressure",
+        "display-capture",
+        "encrypted-media",
+        "fullscreen",
+        "gamepad",
+        "geolocation",
+        "gyroscope",
+        "hid",
+        "identity-credentials-get",
+        "idle-detection",
+        "local-fonts",
+        "magnetometer",
+        "microphone",
+        "midi",
+        "otp-credentials",
+        "payment",
+        "picture-in-picture",
+        "publickey-credentials-create",
+        "publickey-credentials-get",
+        "screen-wake-lock",
+        "serial",
+        "speaker-selection",
+        "storage-access",
+        "usb",
+        "web-share",
+        "window-management",
+        "xr-spatial-tracking",
+    ];
+    let permissions = features
+        .iter()
+        .map(|feature| format!("{feature}=()"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    vec![
+        ("content-type", "text/html; charset=utf-8".to_owned()),
+        ("cache-control", "no-store".to_owned()),
+        ("content-security-policy", csp),
+        ("connection-allowlist", "()".to_owned()),
+        ("permissions-policy", permissions),
+        ("referrer-policy", "no-referrer".to_owned()),
+        ("x-content-type-options", "nosniff".to_owned()),
+        ("cross-origin-resource-policy", "same-origin".to_owned()),
+    ]
+}
+
 pub(super) fn harden_static_response(headers: &mut HeaderMap, document_csp: Option<&str>) {
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
@@ -122,6 +193,32 @@ mod tests {
         let csp = app_document_csp(b"", Some("evil; script-src *"));
         assert!(csp.contains("connect-src 'self' ipc:"));
         assert!(!csp.contains("evil"));
+    }
+
+    #[test]
+    fn the_app_shell_denies_every_destination_and_hashes_its_script() {
+        let html = b"<!doctype html><div id=root></div><script>boot()</script>";
+        let headers: std::collections::HashMap<_, _> =
+            app_shell_headers(html).into_iter().collect();
+        let csp = &headers["content-security-policy"];
+        assert!(csp.contains(&digest("boot()")));
+        for directive in [
+            "default-src 'none'",
+            "connect-src 'none'",
+            "frame-src 'none'",
+            "worker-src 'none'",
+            "frame-ancestors 'self'",
+        ] {
+            assert!(csp.contains(directive), "{directive}");
+        }
+        assert!(
+            !csp.contains("'self' "),
+            "no network-loaded script or style: {csp}"
+        );
+        assert_eq!(headers["connection-allowlist"], "()");
+        assert!(headers["permissions-policy"].contains("camera=()"));
+        assert!(!headers.contains_key("x-frame-options"));
+        assert!(!headers.contains_key("set-cookie"));
     }
 
     #[test]

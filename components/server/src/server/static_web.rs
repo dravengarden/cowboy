@@ -195,6 +195,9 @@ pub(super) async fn static_handler(
     } else {
         requested
     };
+    if requested.starts_with("app-shell") {
+        return app_shell(&state, requested, uri.query().is_some()).await;
+    }
 
     // Never allow a URI to escape the configured asset root. Percent-encoded
     // traversal remains a literal filename at this layer and is harmless.
@@ -301,4 +304,26 @@ pub(super) async fn static_handler(
         .into_response();
     web_security::harden_static_response(response.headers_mut(), document_csp.as_deref());
     response
+}
+
+/// `GET /app-shell.html`, exactly (docs/widget-apps-dom.md §3). Any other
+/// path below it, any query string and a missing shell get an empty 404, never
+/// the SPA document: a frame that navigated itself with data must find nothing.
+async fn app_shell(state: &AppState, requested: &str, query: bool) -> Response {
+    if requested != "app-shell.html" || query {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(root) = state.web_roots.observe() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Ok(html) = tokio::fs::read(root.join("app-shell.html")).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let mut response = Response::builder().status(StatusCode::OK);
+    for (name, value) in web_security::app_shell_headers(&html) {
+        response = response.header(name, value);
+    }
+    response
+        .body(Body::from(html))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }

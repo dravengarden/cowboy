@@ -429,7 +429,7 @@ fn leaf(node: &Map<String, Value>, kind: &str, path: &str, budget: &mut Budget) 
     let field = |name: &str| format!("{path}.{name}");
     match kind {
         "divider" => Ok(()),
-        "app" => app(node, path, budget),
+        "app" | "dom_app" => app(node, path, budget),
         "text" => {
             text(node.get("text"), &field("text"), TEXT_CHARS, false)?;
             one_of(

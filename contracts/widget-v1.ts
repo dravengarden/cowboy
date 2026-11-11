@@ -239,7 +239,14 @@ interface NodeBase {
   fallback?: string;
 }
 
-export type Node = LayoutNode | ContentNode | StatusNode | MediaNode | InputNode | AppNode;
+export type Node =
+  | LayoutNode
+  | ContentNode
+  | StatusNode
+  | MediaNode
+  | InputNode
+  | AppNode
+  | DomAppNode;
 
 // Layout. A container adapts to the width it is actually given (a phone, a
 // split Desktop pane, an inspector), never to a surface name; documents
@@ -393,6 +400,15 @@ export type AppNode = NodeBase & {
   /** Required: what every client without the app shows. */
   fallback: string;
 };
+
+/** A full-DOM app (docs/widget-apps-dom.md): the same bounds as `app`, run in
+ *  an opaque sandboxed frame with no network, started only when the person
+ *  taps Run, on admitted engines only. Imports: `react`, `react-dom/client`,
+ *  `three`, `@cowboy/dom`. */
+export type DomAppNode = NodeBase &
+  Omit<AppNode, "type"> & {
+    type: "dom_app";
+  };
 
 // Input. A tap resolves to an `Action`. The only path back to the agent is
 // `prompt`, and it carries no hidden text: the Controller composes the user

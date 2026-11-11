@@ -7,6 +7,7 @@ import { splashLoadingCss } from "../components/app-shell/loading";
 import { EDITOR_PLUGIN_SANDBOX_BOOT, EDITOR_PLUGIN_SANDBOX_BOOT_ID } from "./src/editorPlugins/sandboxBoot";
 import { APP_SANDBOX_BOOT, APP_SANDBOX_BOOT_ID } from "./src/widgets/apps/appSandboxBoot";
 import { cowboyAppRuntime } from "./appRuntimePlugin.mjs";
+import { cowboyDomRuntime } from "./domRuntimePlugin.mjs";
 
 const webRoot = dirname(fileURLToPath(import.meta.url));
 
@@ -162,6 +163,7 @@ export default defineConfig({
       },
     },
     cowboyAppRuntime(),
+    cowboyDomRuntime(),
     {
       // Never executed here. Its hash in the served CSP is what lets the same
       // text run inside the srcdoc sandbox (src/editorPlugins/sandboxBoot.ts).

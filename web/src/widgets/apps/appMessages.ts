@@ -13,6 +13,8 @@ export type AppMessageTarget = {
   widgetId: string;
   nodeId: string;
   code: string;
+  /** A `dom_app` identity is `dom_app:<hex>`, never a plain digest. */
+  kind?: "app" | "dom_app";
 };
 
 /** One confirmation: frozen when the app asked, sent unchanged. */
@@ -94,7 +96,8 @@ export async function prepareAppMessage(
     sessionId: target.sessionId,
     widgetId: target.widgetId,
     nodeId: target.nodeId,
-    codeSha256: await sha256(target.code),
+    codeSha256:
+      target.kind === "dom_app" ? `dom_app:${await sha256(target.code)}` : await sha256(target.code),
     text,
     textSha256: await sha256(text),
     state: "confirming",

@@ -3,6 +3,7 @@
 // Inputs act only in a published widget (WidgetInputs.tsx); images draw only
 // when the Controller verified them (WidgetImages.tsx).
 
+import { lazy, Suspense } from "react";
 import {
   Alert,
   Box,
@@ -30,6 +31,9 @@ import { ButtonNode, ChoiceNode } from "./WidgetInputs";
 import { WidgetApp } from "./WidgetApp";
 import { moreLabel, previewSlice, useWidgetMode } from "./widgetMode";
 import { WIDGET_LIMITS } from "../../../contracts/widget-v1.ts";
+
+// Full-DOM apps load their host only when a widget has one.
+const WidgetDomApp = lazy(() => import("./dom/WidgetDomApp"));
 
 const GAP = { xs: 0.5, sm: 1, md: 1.5, lg: 2.5 } as const;
 
@@ -394,7 +398,16 @@ function AlertNode({ node }: { node: Of<"alert"> }): React.JSX.Element {
 }
 
 type Leaf = Of<
-  "progress" | "steps" | "alert" | "image" | "gallery" | "app" | "button" | "choice" | "unsupported"
+  | "progress"
+  | "steps"
+  | "alert"
+  | "image"
+  | "gallery"
+  | "app"
+  | "dom_app"
+  | "button"
+  | "choice"
+  | "unsupported"
 >;
 
 /** Status, media and input nodes. */
@@ -412,6 +425,12 @@ function WidgetLeaf({ node }: { node: Leaf }): React.JSX.Element {
       return <GalleryNode node={node} />;
     case "app":
       return <WidgetApp node={node} />;
+    case "dom_app":
+      return (
+        <Suspense fallback={null}>
+          <WidgetDomApp node={node} />
+        </Suspense>
+      );
     case "button":
       return <ButtonNode node={node} />;
     case "choice":

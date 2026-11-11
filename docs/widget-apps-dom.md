@@ -267,6 +267,34 @@ The 7.2 suite with the shell served from the parent's own origin
 - every nested-document, worklet, worker and WebRTC probe reached no sink,
   while the allowing control reached every sink.
 
+### 7.4 First admission (2026-11-11)
+
+`tools/dom-apps-conformance.ts` against this tree: the real `/app-shell.html`
+of a disposable Controller (a query string answered 404), the production
+frame host, and a dedicated headless Google Chrome 157.0.8103.39 on the Mac
+(own profile, DevTools port and network log).
+
+| Mode | Rendering | Out-of-process frame | Intercepted requests | Network-log mentions of the run | STUN/TURN |
+|---|---|---|---|---|---|
+| `policy` | React, Three pixel `34,68,255`, image, click | yes | 0 | 0 | 0 |
+| `control` (shell without its security headers) | same | yes | 9 channels (fetch, image, prefetch, blob/srcdoc/data documents, both worklets, worker) | 71 | 18 |
+| `no-isolation` (`--disable-features=IsolateSandboxedIframes`) | same | **no**: detected | 0 | 0 | 0 |
+
+The app's self-navigation removed its frame. After the implementation review
+(`call-a92d7ad39b50a2475de490cc`) the verdict requires every probe to have
+reported, every control channel to be observed and both logs to exist (a
+missing log fails the run); a rerun passed all three modes (`control`: 9
+channels, 62 network-log mentions, 18 STUN/TURN). The same review changed the
+product: a `dom_app` send identity is `dom_app:<hex>` (no `app` code can
+produce it), imports link through Sucrase's imports transform and a mapping
+`require` (no source text is rewritten), props that arrive during startup are
+replayed, a stopped frame drops its unconfirmed requests, Run reserves the
+full-app ownership and one of the page's shared runtime slots, and an app out
+of view or on a hidden page stops after 1.5 s. Admission row: Google Chrome on
+macOS, major ≥ 157 (`domAppsEnabled.ts`). Later majors are admitted on the
+owner's direction to keep practical use; the suite is rerun on them and a
+failure removes the row. Every other engine shows the fallback.
+
 ## 8. Infrastructure
 
 None in production beyond Cowboy: the shell is a Web release file and a
