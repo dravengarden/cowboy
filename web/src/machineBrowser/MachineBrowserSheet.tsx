@@ -28,7 +28,6 @@ import type { ConfirmKind } from "./confirmation";
 import { type BrowserCommands, useBrowserConfirm } from "./MachineBrowserActions";
 import { Identity } from "./MachineBrowserAddressBar";
 import { DesktopBrowserModal } from "./DesktopBrowserModal";
-import { headerQuickLinks } from "./desktopBrowserLayout";
 import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { BrowserMenu, type BrowserMenuItem, MobileBrowserToolbar } from "./MachineBrowserToolbar";
 import { devicePortrait, useTouchInput } from "./inputProfile";
@@ -41,15 +40,12 @@ import {
   type IdentityBinding,
   identityRequiredFor,
   newEntryLatch,
-  browserFamily,
   panelShared,
   reconcileBinding,
   sharedIdentityLabel,
   takeLatch,
 } from "./shareRules";
 import { useSharedBrowser } from "./useSharedBrowser";
-import { type QuickLink, quickLinks } from "./quickLinks";
-import { QuickLinkList, useQuickLaunch } from "./QuickLaunch";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import { type MachineBrowserController, useMachineBrowser } from "./useMachineBrowser";
 
@@ -147,7 +143,6 @@ function browserMenuItems({
   ask,
   onPaste,
   onClose,
-  quick,
 }: {
   model: BrowserModel;
   chrome: BrowserChromeState;
@@ -156,27 +151,9 @@ function browserMenuItems({
   /** Opens the paste sheet; runs inside the menu tap. */
   onPaste: () => void;
   onClose: () => void;
-  /** Quick links, offered while the viewed browser runs (`always`: in
-   * every state, as Desktop's header overflow). */
-  quick: {
-    links: readonly QuickLink[];
-    launch: (url: string) => void;
-    always?: boolean;
-    /** A lifecycle transition is in progress: links wait. */
-    disabled?: boolean;
-  };
 }): BrowserMenuItem[] {
   const remote = model.remoteClipboard;
   const items: (BrowserMenuItem | false)[] = [
-    ...(chrome.address || quick.always
-      ? quick.links.map((link, index) => ({
-          key: `quick-${link.key}`,
-          label: `Open ${link.label}`,
-          group: index === 0,
-          disabled: quick.disabled === true,
-          onSelect: () => quick.launch(link.url),
-        }))
-      : []),
     {
       key: "hibernate",
       label: "Hibernate…",
@@ -292,39 +269,6 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   );
 }
 
-/** The panel's quick links: the card's own family first (for a shared
- * browser, the opening card's), Google last and emphasized when shared. */
-function usePanelQuickLinks(
-  props: {
-    account: { id: string };
-    snapshot: SubscriptionSnapshot | undefined;
-    shared: SharedBrowser | undefined;
-  },
-  browser: MachineBrowserController,
-  commands: BrowserCommands,
-  confirm: { ask: (kind: ConfirmKind) => void; showing: ConfirmKind | undefined },
-  [shared, controls]: [SharedBrowser | undefined, ViewerControls | undefined],
-) {
-  const quick = useQuickLaunch(browser, commands, confirm, {
-    // Connected only once its attachment is named: every quick-link
-    // navigation is fenced to that attachment on the Machine.
-    connected:
-      controls?.attachmentId === undefined
-        ? undefined
-        : { target: controls.target, attachmentId: controls.attachmentId },
-    // The inventory's identity in this very render: a membership change
-    // never lets an older link navigate before the panel is re-bound.
-    sheetIdentity: props.snapshot ? browserIdentityKey(props.shared) : undefined,
-    identityRequired: identityRequiredFor(props.snapshot),
-  });
-  const links = quickLinks(browserFamily(props.snapshot, props.account.id), shared !== undefined);
-  const list = <QuickLinkList links={links} disabled={quick.disabled} onLaunch={quick.launch} />;
-  // Every open (the chooser's too) goes through the quick launch, so a link
-  // waiting for the Machine choice opens there with its identity.
-  const panelCommands: BrowserCommands = { ...commands, open: quick.open };
-  return { links, launch: quick.launch, commands: panelCommands, list, disabled: quick.disabled };
-}
-
 /** The panel's sharing state: the identity binding, what the Service says
  * about the share, and confirmations and Reset bound to that identity. */
 function usePanelSharing(
@@ -393,11 +337,7 @@ function MachineBrowserPanel(
   // The Service's read names the browser a reset deletes; before it
   // arrives the inventory's view stands in.
   const { shared, confirm, chrome } = usePanelSharing(props, model, commands, ui.chrome);
-  const quick = usePanelQuickLinks(props, browser, commands, confirm, [
-    shared,
-    ui.controls,
-  ]);
-  const uiCommands = quick.commands;
+  const uiCommands = commands;
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";
   const menu = (
     <BrowserMenu
@@ -410,11 +350,6 @@ function MachineBrowserPanel(
         ask: confirm.ask,
         onPaste: paste.start,
         onClose,
-        // Desktop shows the first quick links in its header; the rest
-        // overflow here, offered whatever the state (a tap opens first).
-        quick: desktop
-          ? { ...quick, links: headerQuickLinks(quick.links).overflow, always: true }
-          : quick,
       })}
     />
   );
@@ -435,7 +370,6 @@ function MachineBrowserPanel(
     onControls: ui.setPublished,
     onKeyboard: ui.setKeyboardOpen,
     shared,
-    quick: quick.list,
   };
   const identity = {
     accountLabel: shared ? sharedIdentityLabel(shared) : account.label,
@@ -452,9 +386,6 @@ function MachineBrowserPanel(
         identity={identity}
         chrome={chrome}
         onChord={chord}
-        quickLinks={quick.links}
-        quickDisabled={quick.disabled}
-        onQuick={quick.launch}
         menu={menu}
       >
         <Box

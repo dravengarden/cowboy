@@ -16,7 +16,6 @@ import type { BrowserChromeState } from "./browserChrome";
 import {
   HEADER_HEIGHT,
   escapeClosesModal,
-  headerQuickLinks,
   isBrowserRelease,
   modalBox,
   readMaximized,
@@ -24,7 +23,6 @@ import {
 } from "./desktopBrowserLayout";
 import { Identity } from "./MachineBrowserAddressBar";
 import { BrowserNavigationButtons } from "./MachineBrowserToolbar";
-import type { QuickLink } from "./quickLinks";
 
 function storage(): Storage | undefined {
   try {
@@ -62,23 +60,17 @@ export interface DesktopBrowserModalProps {
   };
   chrome: BrowserChromeState;
   onChord: (chord: BrowserChord) => void;
-  quickLinks: readonly QuickLink[];
-  quickDisabled: boolean;
-  onQuick: (url: string) => void;
   menu: ReactNode;
   children: ReactNode;
 }
 
-/** The compact (40 px) header row: identity and state, navigation, quick
- * links, More, Maximize/Restore and Close. */
+/** The compact (40 px) header row: identity and state, navigation, More,
+ * Maximize/Restore and Close. */
 export function DesktopBrowserHeader({
   labelId,
   identity,
   chrome,
   onChord,
-  quickLinks,
-  quickDisabled,
-  onQuick,
   menu,
   maximized,
   onToggleMaximized,
@@ -88,7 +80,6 @@ export function DesktopBrowserHeader({
   maximized: boolean;
   onToggleMaximized: () => void;
 }): React.JSX.Element {
-  const { inline } = headerQuickLinks(quickLinks);
   const maximizeLabel = maximized ? "Restore" : "Maximize";
   return (
     <Stack
@@ -102,29 +93,6 @@ export function DesktopBrowserHeader({
         <Identity {...identity} align="left" />
       </Box>
       <BrowserNavigationButtons chrome={chrome} touch={false} onChord={onChord} />
-      <Stack
-        direction="row"
-        spacing={0.5}
-        role="group"
-        aria-label="Quick links"
-        data-machine-browser-header-links
-        sx={{ flexShrink: 1, minWidth: 0, overflow: "hidden" }}
-      >
-        {inline.map((link) => (
-          <Button
-            key={link.key}
-            size="small"
-            variant={link.emphasized ? "contained" : "outlined"}
-            color={link.emphasized ? "secondary" : "inherit"}
-            disabled={quickDisabled}
-            aria-label={`Open ${link.label} in this browser`}
-            onClick={() => onQuick(link.url)}
-            sx={{ minHeight: 28, py: 0, px: 1.25, borderRadius: 999, whiteSpace: "nowrap" }}
-          >
-            {link.label}
-          </Button>
-        ))}
-      </Stack>
       {menu}
       <Tooltip title={maximized ? "Restore the window size" : "Fill the whole window"}>
         <IconButton

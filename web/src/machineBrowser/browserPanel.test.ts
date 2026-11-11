@@ -9,9 +9,7 @@ import { confirmText } from "./MachineBrowserActions";
 import { Identity } from "./MachineBrowserAddressBar";
 import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { MobileBrowserToolbar } from "./MachineBrowserToolbar";
-import { QuickLinkList } from "./QuickLaunch";
-import { quickDisabled, quickEntry, quickLaunchPlan, quickLinks, quickStep } from "./quickLinks";
-import { browserFamily, sharedHibernateNote, sharedIdentityLabel } from "./shareRules";
+import { sharedHibernateNote, sharedIdentityLabel } from "./shareRules";
 import { AccountBrowserEntry } from "./AccountBrowserEntry";
 import { restartOn } from "./useMachineBrowser";
 
@@ -56,170 +54,6 @@ function model(value: BrowserStateEvent["state"] | null, viewer = false): Browse
   };
 }
 
-test("quick links put the card's own service first and Google last", () => {
-  const keys = (family: string | undefined, shared = false) =>
-    quickLinks(family, shared).map((link) => `${link.key}${link.emphasized ? "*" : ""}`);
-  assertEquals(keys("deepseek"), ["deepseek*", "anthropic", "openai", "xai", "google"]);
-  assertEquals(keys("openai"), ["openai*", "anthropic", "xai", "deepseek", "google"]);
-  assertEquals(keys(undefined), ["anthropic", "openai", "xai", "deepseek", "google"]);
-  // A shared browser opened from Pika: OpenAI first, Google emphasized.
-  assertEquals(keys("openai", true), ["openai*", "anthropic", "xai", "deepseek", "google*"]);
-  const urls = quickLinks(undefined, false).map((link) => link.url);
-  assertEquals(urls, [
-    "https://claude.ai/",
-    "https://chatgpt.com/",
-    "https://grok.com/",
-    "https://chat.deepseek.com/",
-    "https://accounts.google.com/",
-  ]);
-});
-
-test("a quick link navigates the connected viewer, else opens, attaches or asks first", () => {
-  const target = { machine_id: "ovh", instance: state("detached").instance };
-  assertEquals(quickLaunchPlan(model("detached", true), target), "navigate");
-  // An attachment already connecting is reused, never doubled or torn down.
-  assertEquals(quickLaunchPlan(model("detached", true), undefined), "reuse");
-  assertEquals(
-    quickLaunchPlan({ ...model("hibernated"), awaitingOpen: target }, undefined),
-    "reuse",
-  );
-  assertEquals(quickLaunchPlan(model("detached"), undefined), "attach");
-  assertEquals(quickLaunchPlan(model("hibernated"), undefined), "open");
-  assertEquals(quickLaunchPlan(model(null), undefined), "open");
-  assertEquals(quickLaunchPlan(model("attached"), undefined), "takeover");
-  // A never-placed account waits for the Machine chosen in the chooser.
-  const choose = model(null);
-  choose.read = {
-    ...choose.read!,
-    choose_machine: true,
-    capable_machines: [{ machine_id: "ovh" }],
-  };
-  assertEquals(quickLaunchPlan(choose, undefined), "choose");
-  // While a transition runs a tap does nothing, and the links are disabled.
-  for (const busy of [
-    model("starting"),
-    model("stopping"),
-    { ...model("hibernated"), busy: "open" as const },
-  ]) {
-    assertEquals(quickDisabled(busy), true);
-    assertEquals(quickLaunchPlan(busy, target), "none");
-  }
-  // Disabled until the first read answered, while admission refuses, and
-  // (against a Service with shared profiles) until the identity is known.
-  assertEquals(quickDisabled(INITIAL_BROWSER_MODEL), true);
-  assertEquals(quickDisabled({ ...model("hibernated"), loaded: true, read: undefined }), true);
-  const refused = model("hibernated");
-  refused.read = { ...refused.read!, admission: "browser_not_enabled" };
-  assertEquals(quickDisabled(refused), true);
-  assertEquals(quickDisabled(model("hibernated"), true), true);
-  const named = model("hibernated");
-  named.read = { ...named.read!, browser_identity: "own" };
-  assertEquals(quickDisabled(named, true), false);
-  assertEquals(quickDisabled(model("hibernated")), false);
-  assertEquals(quickEntry(model("detached")), "attach");
-});
-
-test("a waiting quick link reaches only its own attachment of its own identity", () => {
-  const target = { machine_id: "ovh", instance: state("detached").instance };
-  const other = { machine_id: "hawk", instance: { ...target.instance, instance_id: "b-2" } };
-  const viewer = { since: 5, generation: 1, target };
-  const pending = {
-    url: "https://claude.ai/",
-    identity: `share:${SHARE}:2`,
-    takeover: false,
-    failures: 0,
-    sinceEpoch: 4,
-  };
-  const now = {
-    identity: `share:${SHARE}:2`,
-    sheetIdentity: undefined as string | undefined,
-    viewer: undefined as typeof viewer | undefined,
-    connected: undefined as typeof target | undefined,
-    confirming: undefined as string | undefined,
-    takeoverViewer: false,
-    failures: 0,
-  };
-  const step = (p: Parameters<typeof quickStep>[0], n: Partial<typeof now>) =>
-    quickStep(p, { ...now, ...n });
-  assertEquals(step(pending, {}).action, "wait");
-  // The first viewer established after the tap binds the link.
-  const bound = step(pending, { viewer });
-  assertEquals(bound.action === "wait" && bound.pending.viewer, viewer);
-  // An older viewer (before the tap) never carries it.
-  assertEquals(step(pending, { viewer: { ...viewer, since: 3 } }), { action: "wait", pending });
-  const held = bound.action === "wait" ? bound.pending : pending;
-  // Only once that exact attachment's stream is open.
-  assertEquals(step(held, { viewer, connected: target }).action, "navigate");
-  assertEquals(step(held, { viewer, connected: other }).action, "wait");
-  // The attachment ended or failed (viewer_ended), or another replaced it.
-  assertEquals(step(held, {}).action, "drop");
-  assertEquals(
-    step(held, { viewer: { ...viewer, generation: 2 }, connected: target }).action,
-    "drop",
-  );
-  // Another identity, from a read or the sheet's inventory in this render.
-  assertEquals(step(held, { viewer, connected: target, identity: "own" }).action, "drop");
-  assertEquals(
-    step(held, { viewer, connected: target, sheetIdentity: `share:${SHARE}:3` }).action,
-    "drop",
-  );
-  // A viewer on another Machine than the one it opens on.
-  assertEquals(
-    step({ ...pending, machine: "ovh" }, { viewer: { ...viewer, target: other } }).action,
-    "drop",
-  );
-  // A failure since the tap drops it, even one repeating the error already
-  // shown; failures before the tap do not.
-  assertEquals(step(pending, { failures: 1 }).action, "drop");
-  assertEquals(step({ ...pending, failures: 3 }, { failures: 3 }).action, "wait");
-  // A takeover link waits while confirming, is carried by the confirmed
-  // takeover, and is dropped when the confirmation is cancelled.
-  const takeover = { ...pending, takeover: true };
-  assertEquals(step(takeover, { confirming: "takeover" }).action, "wait");
-  assertEquals(
-    step(takeover, { takeoverViewer: true, viewer, connected: target }).action,
-    "navigate",
-  );
-  assertEquals(step(takeover, {}).action, "drop");
-});
-
-test("the card's family comes from the Service's static table", () => {
-  const snapshot = {
-    dataset: { dataset_id: "d", user_id: "u" },
-    registry: {
-      revision: 1,
-      defaults: {},
-      accounts: [{ id: LARK, provider_id: "claude-code", label: "Lark", enabled: true }],
-    },
-    session_admission: "enabled",
-    legacy_browsers: [
-      {
-        card: "openai",
-        account_id: PIKA,
-        providers: ["codex"],
-        browser_enabled: true,
-        available: true,
-      },
-      {
-        card: "future",
-        account_id: LYNX,
-        providers: ["x"],
-        browser_enabled: true,
-        available: true,
-      },
-    ],
-    browser_share_families: {
-      version: 1,
-      providers: { "claude-code": "anthropic" },
-      cards: ["openai"],
-    },
-  } satisfies SubscriptionSnapshot;
-  assertEquals(browserFamily(snapshot, PIKA), "openai");
-  assertEquals(browserFamily(snapshot, LARK), "anthropic");
-  assertEquals(browserFamily(snapshot, LYNX), undefined);
-  assertEquals(browserFamily(undefined, PIKA), undefined);
-});
-
 test("shared browsers say so in the identity line, confirmations and empty page", () => {
   assertEquals(sharedIdentityLabel(GOOGLE), "Google · shared with Lynx, Pika, Fox");
   assertEquals(
@@ -255,8 +89,8 @@ test("shared browsers say so in the identity line, confirmations and empty page"
     }),
   );
   assertEquals(own.includes("Shared browser"), false);
-  // The hibernated page of a shared browser is titled by its group and
-  // offers the quick links under its primary action.
+  // The hibernated page of a shared browser is titled by its group; it
+  // offers no quick links (the remote new-tab page has them).
   const frame = (shared: typeof GOOGLE | undefined) =>
     render(
       React.createElement(BrowserFrame, {
@@ -275,21 +109,12 @@ test("shared browsers say so in the identity line, confirmations and empty page"
         onControls: () => {},
         onKeyboard: () => {},
         shared,
-        quick: React.createElement(QuickLinkList, {
-          links: quickLinks("openai", shared !== undefined),
-          disabled: false,
-          onLaunch: () => {},
-        }),
       } as unknown as BrowserFrameProps),
     );
   const sharedPage = frame(GOOGLE);
   assertEquals(sharedPage.includes("Shared browser · Google"), true);
   assertEquals(sharedPage.includes('data-machine-browser-title="shared"'), true);
-  assertEquals(sharedPage.includes('aria-label="Open ChatGPT · Codex in this browser"'), true);
-  assertEquals(
-    sharedPage.indexOf('data-quick-link="openai"') < sharedPage.indexOf('data-quick-link="google"'),
-    true,
-  );
+  assertEquals(sharedPage.includes("data-quick-link"), false);
   const ownPage = frame(undefined);
   assertEquals(ownPage.includes("This browser is hibernating"), true);
   assertEquals(ownPage.includes("Shared browser"), false);

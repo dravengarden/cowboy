@@ -9,14 +9,12 @@ import { DesktopBrowserHeader, releaseLabel } from "./DesktopBrowserModal";
 import {
   MAXIMIZED_KEY,
   escapeClosesModal,
-  headerQuickLinks,
   isBrowserRelease,
   modalBox,
   modalFrameSize,
   readMaximized,
   writeMaximized,
 } from "./desktopBrowserLayout";
-import { quickLinks } from "./quickLinks";
 
 function render(element: React.ReactElement): string {
   const prior = Object.getOwnPropertyDescriptor(globalThis, "React");
@@ -162,9 +160,6 @@ function header(shared: boolean, maximized = false): string {
         refresh: true,
       },
       onChord: () => {},
-      quickLinks: quickLinks(shared ? "openai" : "deepseek", shared),
-      quickDisabled: false,
-      onQuick: () => {},
       menu: React.createElement("button", { "aria-label": "More browser actions" }),
       maximized,
       onToggleMaximized: () => {},
@@ -173,7 +168,7 @@ function header(shared: boolean, maximized = false): string {
   );
 }
 
-test("the header row names the browser, its state and its compact quick links", () => {
+test("the header row names the browser and its state, without quick links", () => {
   const own = header(false);
   assertEquals(own.includes('id="browser-label"'), true);
   assertEquals(own.includes("DeepSeek · Mole"), true);
@@ -182,13 +177,7 @@ test("the header row names the browser, its state and its compact quick links", 
   for (const label of ["Back", "Forward", "Reload", "Maximize", "Close browser"]) {
     assertEquals(own.includes(`aria-label="${label}"`), true, label);
   }
-  // Three chips inline, the card's own service first; the rest in More.
-  assertEquals((own.match(/aria-label="Open [^"]+ in this browser"/g) ?? []).length, 3);
-  assertEquals(own.indexOf("Open DeepSeek in this browser") < own.indexOf("Open Claude"), true);
-  assertEquals(
-    headerQuickLinks(quickLinks("deepseek", false)).overflow.map((link) => link.key),
-    ["xai", "google"],
-  );
+  assertEquals(own.includes("in this browser"), false);
   const shared = header(true, true);
   assertEquals(shared.includes('data-machine-browser-identity="shared"'), true);
   assertEquals(shared.includes('aria-label="Shared browser"'), true);

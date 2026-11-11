@@ -42,7 +42,6 @@ function BrowserEmptyPage({
   onEnableBrowser,
   onConfirm,
   shared,
-  quick,
 }: {
   model: BrowserModel;
   state: BrowserStateEvent | null;
@@ -54,7 +53,6 @@ function BrowserEmptyPage({
   onEnableBrowser: (() => void) | undefined;
   onConfirm: (kind: ConfirmKind) => void;
   shared: SharedBrowser | undefined;
-  quick: ReactNode;
 }): React.JSX.Element {
   const admission = model.read?.admission;
   const stateTitle = !model.loaded
@@ -113,7 +111,6 @@ function BrowserEmptyPage({
         commands={commands}
         onConfirm={onConfirm}
       />
-      {model.loaded && !admission && quick}
       {link && (
         <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 420 }}>
           The link opens in this account’s browser once it runs. Anything the page shows you (such
@@ -188,8 +185,6 @@ export interface BrowserFrameProps {
   onKeyboard: (open: boolean) => void;
   /** The shared browser this card uses, if any. */
   shared?: SharedBrowser | undefined;
-  /** Quick links under the primary action of the empty page. */
-  quick?: ReactNode;
 }
 
 /** The frame is the measured area: opens request the screen mode for it and
@@ -248,7 +243,6 @@ export function BrowserFrame(props: BrowserFrameProps): React.JSX.Element {
           onEnableBrowser={props.onEnableBrowser}
           onConfirm={props.onConfirm}
           shared={props.shared}
-          quick={props.quick}
         />
       )}
       <BrowserBanners model={model} retry={props.retry} commands={commands} />

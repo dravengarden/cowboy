@@ -4,7 +4,6 @@
  * "Desktop panel". */
 import { desktopKeyIntent } from "../desktop/commands/keyIntent";
 import { matchesShortcut, parseShortcut } from "../desktop/commands/shortcut";
-import type { QuickLink } from "./quickLinks";
 
 export const MAXIMIZED_KEY = "cowboy:machine-browser:maximized";
 
@@ -71,17 +70,4 @@ export function escapeClosesModal(focused: Element | null | undefined): boolean 
 export function isBrowserRelease(event: KeyboardEvent, shortcut: string, mac: boolean): boolean {
   if (desktopKeyIntent(event).owner === "ime") return false;
   return matchesShortcut(parseShortcut(shortcut), event, mac);
-}
-
-/** How many quick links fit as header chips; the rest live in More. */
-export const HEADER_QUICK_LINKS = 3;
-
-export function headerQuickLinks(links: readonly QuickLink[]): {
-  inline: QuickLink[];
-  overflow: QuickLink[];
-} {
-  return {
-    inline: links.slice(0, HEADER_QUICK_LINKS),
-    overflow: links.slice(HEADER_QUICK_LINKS),
-  };
 }
