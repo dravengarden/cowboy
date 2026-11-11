@@ -223,12 +223,14 @@ text result.
 3. Bridge, relay-backed `tools/call`, transcript row; the SDK fixture.
 4. First real view: a Suger status view, granted on one session.
 
-## 10. Decisions for the owner
+## 10. Owner decisions (2026-11-11)
 
-1. Static, signed views only in phase C, with dynamic or same-origin views
-   deferred to the `thundersparrow.top` tier. (Recommended.)
+The owner accepted the recommendations:
+
+1. Static, signed views only in phase C; dynamic or same-origin views are
+   deferred to the `thundersparrow.top` tier.
 2. Capabilities offered: `connect`, `call_tools`, `message`, `open_links`;
-   no storage or device permissions. (Recommended.)
+   no storage or device permissions.
 3. Grants are per session, like the rest of the binding policy; a later
    "always for this Plugin generation" default would be a separate,
    reviewed change.
