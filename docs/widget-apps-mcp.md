@@ -1,6 +1,6 @@
 # Widget apps, phase C: MCP Apps from bound Plugin servers
 
-Status: design, revision 2 (2026-11-11). Not implemented. It replaces the
+Status: design, revision 3 (2026-11-11). Not implemented. It replaces the
 direction recorded in [`widget-apps-dom.md`](widget-apps-dom.md) §10 and the
 phase C line of [`widget-apps.md`](widget-apps.md) §10. Owner decisions are
 in §11, the review record in §12.
@@ -26,7 +26,8 @@ In:
 Out (each needs its own design): servers an agent connects to natively
 outside a binding; dynamic or server-generated views; views that need
 `allow-same-origin` or a real origin (the `thundersparrow.top` tier);
-remote scripts, styles, images or fonts; external URLs (`externalIframes`),
+remote scripts, styles, images or fonts; **direct network access from a
+view** (`connect`, deferred: §6); external URLs (`externalIframes`),
 `sampling/createMessage`, `ui/download-file`, `resources/read` from a view,
 app-registered tools and display modes other than inline.
 
@@ -37,7 +38,7 @@ app-registered tools and display modes other than inline.
 | Which bytes run | The digest in the signed contract, verified by Machine preparation and again when served (§3) | Anything a server returns |
 | What they may do | The owner's per-session grant (§4), CAS-written with the existing policy epoch | The signer, the manifest or the view's `_meta.ui` |
 | Which document holds it | A single-use frame token bound to one resource, digest, epoch and widget (§5) | The frame's `contentWindow` or its `"null"` origin |
-| Whether it still holds it | A renewable browser lease (§6) and the relay's live checks at dispatch and delivery (§7) | A URL that happens to return 404 later |
+| Whether it still holds it | A server-enforced frame lease and the relay's live checks, both required at dispatch and delivery (§6, §7) | The parent page's timers or a URL that happens to return 404 later |
 
 A view gets nothing beyond phase B unless the owner granted it, for this
 session, by binding, resource and capability, and only for as long as the
@@ -54,12 +55,11 @@ server's live answers.
 
 The `mcp_server` contract (Plugin SDK minor bump) gains:
 
-- `ui_resources`, at most 8: `{uri, file, sha256, connect}`. `file` is inside
-  the signed artifact, ≤ 512 KiB, one document with inline scripts and styles
+- `ui_resources`, at most 8: `{uri, file, sha256}`. `file` is inside the
+  signed artifact, ≤ 512 KiB, one document with inline scripts and styles
   only (no `src`/`href` subresources, checked at signing and verification).
-  `connect` lists at most 8 HTTPS origins the view may ever be granted.
-  Cowboy's own public origins and aliases are refused at signing and again at
-  grant time.
+  A view's data arrives through tool input, tool results and its own
+  granted tool calls, never over the network.
 - Per signed discovery entry, `ui: {resource?, visibility}` where
   `visibility` is `["model"]`, `["app"]` or both (omitted = both, as MCP
   Apps), and `read_only` mirroring the tool's `readOnlyHint` (omitted =
@@ -67,7 +67,7 @@ The `mcp_server` contract (Plugin SDK minor bump) gains:
 
 Machine preparation verifies each digest with the rest of the generation and
 computes inline-script and style hashes once; the Controller learns
-`(plugin_id, generation_digest, uri) → {sha256, hashes, connect}` only from
+`(plugin_id, generation_digest, uri) → {sha256, hashes}` only from
 the prepared binding.
 
 Two projections replace "the granted tools":
@@ -89,7 +89,6 @@ existing policy):
 "apps": [{
   "uri": "ui://suger/status",
   "capabilities": {
-    "connect": ["https://api.example.com"],
     "call_tools": ["suger_refresh"],
     "message": true,
     "open_links": true
@@ -97,15 +96,13 @@ existing policy):
 }]
 ```
 
-- `connect` ⊆ the resource's signed `connect`; `call_tools` ⊆ the app
-  projection. A generation change invalidates the grant like any other policy
+- `call_tools` ⊆ the app projection. A generation change invalidates the grant like any other policy
   field.
 - Storage, epoch, CAS, revocation, tombstones and non-inheritance are exactly
   the existing policy's.
 
 | Capability | Granted | Not granted |
 |---|---|---|
-| `connect` | Listed origins in `connect-src` and `Connection-Allowlist` | `connect-src 'none'`, `Connection-Allowlist: ()` |
 | `call_tools`, read-only tool | Called without a per-call prompt | Refused |
 | `call_tools`, other tool | Confirmation per call showing tool and arguments; an uncertain outcome is reported, never retried (supersedes the "no write tools" line of `widget-apps.md` §11 for granted tools only) | Refused |
 | `message` | `ui/message` → the confirmation used by `useSend` | Refused |
@@ -127,27 +124,45 @@ loads `GET /mcp-app/<token>.html`:
   path not logged; the service worker never answers `/mcp-app/`.
 - Headers per grant, separate from `/app-shell.html`:
   `Content-Security-Policy: sandbox allow-scripts; default-src 'none';
-  script-src <inline hashes>; style-src <inline hashes> 'unsafe-inline';
-  img-src data: blob:; font-src data:; connect-src <granted connect | 'none'>;
+  script-src <inline hashes>; style-src-elem <inline style hashes>;
+  style-src-attr 'unsafe-inline';
+  img-src data: blob:; font-src data:; connect-src 'none';
   frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none';
   base-uri 'none'; form-action 'none'; frame-ancestors 'self'`,
-  `Connection-Allowlist` listing the granted origins or `()`,
+  `Connection-Allowlist: ()`,
   `Permissions-Policy` disabling every feature, `CORP: cross-origin`. The
   response `sandbox` keeps the document opaque even if opened top-level or
   framed without the attribute; the frame is also exactly
   `sandbox="allow-scripts"`.
 - No grant contains a remote executable or style source: everything that
-  runs is the signed bytes.
+  runs is the signed bytes. Hashed `<style>` blocks and `style` attributes
+  are the supported styling; a view that generates unhashed `<style>`
+  elements is not eligible (checked by the fixture, not assumed).
 
 ## 6. Lease and revocation
 
-A running view holds a lease of 30 s, renewed every 10 s by the Web over its
-authenticated connection; renewal rechecks the grant, epoch, widget and the
-relay scope (§7). The parent removes the frame when renewal fails or the
-lease expires, on a policy-watch epoch change, on sign-out, and when the
-page loses its Controller connection. A browser that keeps Internet access
-but loses Cowboy therefore keeps a granted network origin for at most one
-lease.
+Authority is enforced by the Controller, not by the parent page: a stalled
+or throttled parent cannot remove a frame on time, so nothing the frame can
+do by itself may depend on the parent's timers.
+
+- A frame token starts a **server-side frame lease** of 30 s, renewed every
+  10 s by the Web over its authenticated connection; renewal rechecks the
+  grant, epoch, widget and relay scope. Each run has its own lease and run
+  identity.
+- Every view-originated `tools/call`, `ui/message` and `ui/open-link`
+  carries the token; the Controller requires the original, unexpired lease
+  and run identity at admission, at dispatch and again before delivering a
+  result. An expired or revoked lease refuses them server-side whatever the
+  page does.
+- Teardown (Stop, out of view, removal, failed renewal, epoch change,
+  sign-out, lost Controller connection) ends the lease on the Controller
+  when reachable and cancels any confirmation still shown for that run; a
+  confirmation answered after its lease ended is refused.
+- With no network capability (§1), a frame that outlives its lease in a
+  stalled parent can still draw and compute, but every effect it can have
+  goes through the Controller and is refused. Direct network grants are
+  deferred until they can be brokered under the same lease, or the owner
+  accepts a best-effort revocation contract for them.
 
 ## 7. Bridge
 
@@ -155,11 +170,14 @@ The view speaks MCP Apps JSON-RPC to `window.parent` (single frame; Cowboy
 already serves the document, so the spec's proxy frame adds nothing).
 
 - Accepted only from that frame's `contentWindow` with origin `"null"`. The
-  first `load` is the view; any later `load` removes the frame. Because the
-  token is single-use and grants never include Cowboy's origins, a
+  first `load` is the view; any later `load` removes the frame. A
   replacement document that posts before its `load` can only be one the view
   itself created (blob or data), which inherits its CSP and holds no more
-  than the view already had.
+  than the view already had, because: the token is single-use; the view's
+  CSP has `connect-src 'none'`; and the **parent page's `frame-src` stays
+  limited to Cowboy's own origin** (an invariant of the product CSP, tested:
+  a view navigating its frame to an external origin serving executable HTML
+  is blocked).
 - Handshake: the view's `ui/initialize` request is answered immediately with
   `protocolVersion` (the pinned spec revision), `hostInfo`
   (`{name: "Cowboy", version}`), `hostCapabilities` listing exactly the
@@ -168,19 +186,32 @@ already serves the document, so the spec's proxy frame adds nothing).
   `ui/notifications/initialized`; then tool input and result are replayed.
 - Host → view: `ui/notifications/tool-input`, `tool-result`,
   `tool-cancelled`, `host-context-changed`, `ui/resource-teardown`, `ping`.
-- View → host: `ui/notifications/size-changed` (coalesced to one per animation
-  frame and never counted against the RPC limit), `request-teardown`,
+- View → host: `ui/notifications/size-changed`, `request-teardown`,
   `ping`, `notifications/message` (recorded, bounded), `tools/list` (the
   view's app projection), `tools/call`, `ui/message`, `ui/open-link` per §4.
-  Other requests get method-not-found; RPC beyond 30/s or malformed messages
-  remove the frame.
+  Other requests get method-not-found; malformed messages remove the frame.
+- Ingress budget, checked on arrival before any parsing beyond size: every
+  message counts against 120 messages and 256 KiB per second per frame
+  (enough for one size notification per animation frame plus normal RPC);
+  requests additionally count against 30 per second. Exceeding either removes
+  the frame. Size notifications are then coalesced to one layout update per
+  animation frame.
 - A view `tools/call` goes to the Controller with the frame token. The
   widget records the **relay scope** that produced it (the native client's
   relay handle with its parent grant and both connection incarnations); the
-  Controller dispatches through that scope only, rechecking the app grant,
-  the confirmation (if required) and the scope at dispatch and again before
-  delivery. A closed or replaced scope refuses the call; it is never reopened
-  against current connections or another MCP process.
+  Controller dispatches through that scope only, rechecking the lease (§6),
+  the app grant, the confirmation (if required) and the scope at dispatch and
+  again before delivery. A closed or replaced scope refuses the call; it is
+  never reopened against current connections or another MCP process.
+- The scope is shared with the agent, whose calls must not be disturbed by a
+  view. A scope-wide scheduler admits **at most one view request in flight
+  per scope** and only when the transport has room for it beside the agent's
+  traffic (the Machine process queue holds one entry); otherwise the view
+  gets a busy error before anything reaches the transport. Once dispatched,
+  a view request is owned by the Controller until the backend answers: frame
+  teardown or a page leaving drops only the delivery, never the transport
+  request, so a view can never retire the agent's relay handle or leave a
+  write half-sent.
 
 ## 8. Transcript
 
@@ -207,18 +238,22 @@ Phase C has its **own admission table**, never inherited from phase B. A row
 requires, on that browser:
 
 - the phase B suite unchanged for `/app-shell.html`;
-- `/mcp-app/` network rows: an ungranted view shows zero egress on every
-  phase B channel with an allowing control; a granted view reaches exactly
-  its granted origin and an undeclared sink stays at zero;
+- `/mcp-app/` network rows: a view shows zero egress on every phase B
+  channel with an allowing control; navigating its frame to an external
+  origin is blocked by the parent's `frame-src`;
 - direct top-level navigation, unsandboxed embedding, a reused token,
   `Sec-Fetch-Dest` other than `iframe`, a query string or another path all
   get 404 or an opaque document with no bridge;
 - a view navigating its frame to another view's URL, and a blob document
   posting before `load`, gain no bridge;
-- revocation while the browser is disconnected from the Controller removes
-  the frame within one lease; sign-out and policy-epoch change remove it;
+- a view call, message or confirmation after its lease ended (including
+  with the parent page stalled) is refused by the Controller; sign-out and
+  policy-epoch change remove the frame;
+- a view call while the agent uses the same scope gets busy and the agent's
+  call completes; tearing down a frame with a dispatched call leaves the
+  relay handle open;
 - the pinned SDK's initialize sequence, sustained auto-resize without
-  removal, a granted read-only call without a prompt, a write call with one,
+  removal, a size-notification flood removed, a granted read-only call without a prompt, a write call with one,
   an ungranted call refused;
 - the service worker and an offline reload never serve `/mcp-app/`.
 
@@ -241,7 +276,10 @@ The owner accepted the recommendations:
 1. Static, signed views only in phase C; dynamic or same-origin views are
    deferred to the `thundersparrow.top` tier.
 2. Capabilities offered: `connect`, `call_tools`, `message`, `open_links`;
-   no storage or device permissions.
+   no storage or device permissions. Revision 3 defers `connect` (§6): the
+   review showed a page-enforced lease cannot revoke direct network access
+   on time, so views get data through tools until network access can be
+   brokered under the server lease.
 3. Grants are per session, like the rest of the binding policy; a later
    "always for this Plugin generation" default would be a separate,
    reviewed change.
@@ -266,3 +304,14 @@ Revision 1 (Astra Max design review, `call-7d83b8fd2f8aa9a796d359da`):
 | App calls append widgets (P2) | Rows only for agent-originated calls (§8) |
 | Write tools vs `widget-apps.md` §11 (P2) | Write tools confirm per call, uncertain outcomes not retried (§4) |
 | Phase C inherits phase B admission (P2) | Separate admission table and rows (§9) |
+
+Revision 2 (Astra Max design review, `call-8434093accddc29e773e8e1f`):
+
+| Finding | Resolution |
+|---|---|
+| The page-held lease cannot revoke direct network access on time (P1) | `connect` deferred; every effect goes through the Controller under a server-enforced lease (§1, §6) |
+| Dispatch does not require a live frame lease (P1) | Lease and run identity required at admission, dispatch and delivery; teardown cancels confirmations (§6, §7) |
+| Sharing the agent's relay handle (P1) | One view request per scope, busy before transport admission, dispatched requests owned until answered (§7) |
+| Size notifications bypass flood limits (P1) | One ingress budget for every message, then coalescing (§7) |
+| Replacement-document proof relies on the parent's `frame-src` (P2) | Stated as a product invariant and tested (§7, §9) |
+| Style hashes disable `'unsafe-inline'` (P2) | `style-src-elem` hashes and `style-src-attr 'unsafe-inline'` (§5) |
