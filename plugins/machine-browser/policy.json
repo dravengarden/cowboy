@@ -8,7 +8,9 @@
     "chrome://*"
   ],
   "URLAllowlist": [
-    "chrome://newtab"
+    "chrome://newtab",
+    "chrome://new-tab-page",
+    "chrome://new-tab-page-third-party"
   ],
   "ExtensionInstallBlocklist": [
     "*"
@@ -31,12 +33,7 @@
   "AudioCaptureAllowed": false,
   "VideoCaptureAllowed": false,
   "RestoreOnStartup": 5,
-  "BookmarkBarEnabled": true,
-  "ShowAppsShortcutInBookmarkBar": false,
-  "ManagedBookmarks": [
-    {
-      "toplevel_name": "Sign in"
-    },
+  "NTPShortcuts": [
     {
       "name": "Claude",
       "url": "https://claude.ai/"

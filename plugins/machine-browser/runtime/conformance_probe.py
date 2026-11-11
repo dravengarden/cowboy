@@ -16,6 +16,7 @@ import os
 import re
 import socket
 import struct
+import zlib
 import subprocess
 import sys
 import time
@@ -120,6 +121,9 @@ class Rfb:
         self.width, self.height = struct.unpack(">HH", self.exact(4))
         pixel_format = self.exact(16)
         self.bpp = pixel_format[0] // 8
+        self.big_endian = pixel_format[2] != 0
+        self.shifts = (pixel_format[10], pixel_format[11], pixel_format[12])
+        self.fb = bytearray(self.width * self.height * self.bpp)
         (name_length,) = struct.unpack(">I", self.exact(4))
         self.name = self.exact(name_length).decode(errors="replace")
         encodings = [0, -223, -308]
@@ -134,6 +138,32 @@ class Rfb:
             data += chunk
         return data
 
+    def paint(self, x, y, w, h, data):
+        if len(self.fb) != self.width * self.height * self.bpp:
+            self.fb = bytearray(self.width * self.height * self.bpp)
+        row = w * self.bpp
+        for line in range(h):
+            if y + line >= self.height or x + w > self.width:
+                break
+            start = ((y + line) * self.width + x) * self.bpp
+            self.fb[start:start + row] = data[line * row:(line + 1) * row]
+
+    def save_png(self, path):
+        """Write the tracked framebuffer (raw rects only) as an RGB PNG."""
+        order = "big" if self.big_endian else "little"
+        rows = bytearray()
+        for line in range(self.height):
+            rows.append(0)
+            for column in range(self.width):
+                start = (line * self.width + column) * self.bpp
+                pixel = int.from_bytes(self.fb[start:start + self.bpp], order)
+                rows.extend(((pixel >> shift) & 0xFF) for shift in self.shifts)
+        def chunk(kind, body):
+            return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+        header = struct.pack(">IIBBBBB", self.width, self.height, 8, 2, 0, 0, 0)
+        with open(path, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(rows))) + chunk(b"IEND", b""))
+
     def request_update(self, incremental):
         self.sock.sendall(struct.pack(">BBHHHH", 3, 1 if incremental else 0, 0, 0, self.width, self.height))
 
@@ -147,7 +177,7 @@ class Rfb:
             for _ in range(count):
                 x, y, w, h, encoding = struct.unpack(">HHHHi", self.exact(12))
                 if encoding == 0:
-                    self.exact(w * h * self.bpp)
+                    self.paint(x, y, w, h, self.exact(w * h * self.bpp))
                 elif encoding == -308:
                     screens = self.exact(4)[0]
                     self.exact(16 * screens)
@@ -465,6 +495,14 @@ def phase_fresh(args):
     rfb.request_update(False)
     first = rfb.wait_for(lambda message: message["type"] == "update", 30)
     record("rfb_first_framebuffer_update", bool(first), rects=len(first["rects"]) if first else 0)
+    # The start page as the owner first sees it: Chromium's new-tab page with
+    # the policy's shortcuts (inspected by eye, not asserted).
+    time.sleep(6)
+    rfb.request_update(False)
+    rfb.wait_for(lambda message: message["type"] == "update" and any(rect["encoding"] == 0 for rect in message["rects"]), 15)
+    start_page = os.path.join(args.out, "start-page.png")
+    rfb.save_png(start_page)
+    record("start_page_captured", os.path.isfile(start_page), path=start_page, fatal=False)
     # SetDesktopSize must be refused or ignored (AcceptSetDesktopSize=0).
     rfb.sock.sendall(struct.pack(">BBHHBB", 251, 0, 640, 480, 1, 0) + struct.pack(">IHHHHI", 0, 0, 0, 640, 480, 0))
     rfb.request_update(True)
