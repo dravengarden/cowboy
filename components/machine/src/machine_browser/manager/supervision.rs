@@ -160,7 +160,9 @@ impl BrowserManager {
             }
         }
         let checked = self.recheck_unlatched(instance);
-        if let Err(Recheck::Stop(reason)) = checked {
+        if let Err(Recheck::Stop(reason)) = checked
+            && !torn_down_by_stop(instance)
+        {
             // A definite finding is latched like the denial limit, so no
             // renewed use can abandon the stop it requires and nothing is
             // published meanwhile, whichever caller found it.
@@ -245,6 +247,22 @@ pub(super) enum Recheck {
     /// Only the ptrace access check denied some evidence: unverified, so
     /// an operation is refused, but nothing was found.
     Unverified,
+}
+
+/// Whether a failed recheck only observed a deliberate stop's teardown: the
+/// instance is `Stopping` and its cgroup no longer holds any process (or is
+/// gone), so missing tables, sockets or directories are not findings. A
+/// listener in a still-populated cgroup is a finding whatever the phase.
+pub(super) fn torn_down_by_stop(instance: &Instance) -> bool {
+    if instance.live.lock().phase != Phase::Stopping {
+        return false;
+    }
+    match unit::populated(&instance.cgroup_dir) {
+        Ok(populated) => !populated,
+        Err(error) => error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound),
+    }
 }
 
 /// Latch a stop that must be forced (the first reason wins) and cancel any

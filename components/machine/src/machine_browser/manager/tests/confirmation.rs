@@ -615,3 +615,33 @@ async fn pins_lost_to_a_deliberate_stop_are_not_latched() {
         Some(Reason::ConfinementUnverified)
     );
 }
+
+#[tokio::test]
+async fn a_stopping_instance_s_teardown_is_not_latched_but_its_listener_is() {
+    let fixture = fixture().await;
+    let _rfb = recheck_passes(&fixture);
+    std::fs::write(fixture.instance.runtime_dir.join("stray"), b"").unwrap();
+    fixture.instance.live.lock().phase = Phase::Stopping;
+    // Processes still run: a finding while stopping is latched.
+    std::fs::write(fixture.cgroup.join("cgroup.events"), "populated 1\n").unwrap();
+    assert!(!super::super::supervision::torn_down_by_stop(
+        &fixture.instance
+    ));
+    // The stop emptied the cgroup: what the scan misses is its teardown.
+    std::fs::write(fixture.cgroup.join("cgroup.events"), "populated 0\n").unwrap();
+    assert_eq!(
+        fixture.manager.recheck(&fixture.instance),
+        Err(Recheck::Stop(Reason::ConfinementUnverified))
+    );
+    assert_eq!(*fixture.instance.latch.lock(), None);
+    // Back to populated: the same finding is latched.
+    std::fs::write(fixture.cgroup.join("cgroup.events"), "populated 1\n").unwrap();
+    assert_eq!(
+        fixture.manager.recheck(&fixture.instance),
+        Err(Recheck::Stop(Reason::ConfinementUnverified))
+    );
+    assert_eq!(
+        *fixture.instance.latch.lock(),
+        Some(Reason::ConfinementUnverified)
+    );
+}
