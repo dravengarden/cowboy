@@ -1117,9 +1117,27 @@ dependency is acceptable; its application UI, `resizeSession` and clipboard
 automation are not used. The chrome always shows the label of the account
 whose browser it displays and the Machine it runs on.
 
+- **Quick links.** The empty page (hibernated, never opened) offers, under
+  its primary action, Claude, ChatGPT · Codex, Grok, DeepSeek and Google
+  sign-in; the "More" menu offers them while the viewed browser runs. The
+  card's own service comes first (the opening card's, for a shared browser),
+  Google last and, for a shared browser, emphasized. A tap navigates the
+  viewed browser through the ordinary navigate command, or first opens
+  (attaches to, or asks to take over) it and navigates once, when it is
+  viewed. It is viewer-side only: nothing is injected into the browser and
+  its runtime and policy are unchanged, so no site can tell a quick link
+  from a typed address. A pending quick link belongs to its panel and is
+  dropped by a re-bind.
+- **Shared browsers look different.** Account and usage card entries of a
+  shared browser carry the group icon, the secondary accent and an
+  accessible name "Shared browser: <group>"; the identity line reads
+  "<group> · shared with <members>" with the same icon; the empty page is
+  titled "Shared browser · <group>"; the reset and hibernate confirmations
+  name the group and every member they affect. Private browsers keep their
+  look.
 - **Browser chrome.** The panel adds only Close and one identity line
-  (account label, Machine and state): a slim top row on Desktop, the bottom
-  area on a phone. The remote page fills the frame and the remote Chromium
+  (account label, Machine and state): a slim top row on Desktop, the very
+  bottom of the bottom area on a phone. The remote page fills the frame and the remote Chromium
   shows its own address bar and tabs, so the panel adds no address field of
   its own. Back, Forward and Reload send the
   standard Chromium key chords through the attached RFB session (Alt+Left,
@@ -1231,11 +1249,11 @@ whose browser it displays and the Machine it runs on.
   `incarnation: 0`), which is valid only as `hibernated`.
 - **Mobile sheet.** An edge-to-edge full-screen cover with no top row:
   the frame starts right below the status bar (safe-area top inset) and
-  fills everything down to the bottom area, which holds one ellipsized
-  16 px identity line (account, Machine, state) over one row of six 46 px
-  targets, Close, Back, Forward, Reload, Keyboard and More (2 px top
-  padding, then the safe-area bottom inset less `--kb-inset`, at least
-  4 px: 68 px plus the home indicator). Nothing overlays the framebuffer but
+  fills everything down to the bottom area, which holds one row of six
+  46 px targets, Close, Back, Forward, Reload, Keyboard and More, with one
+  ellipsized 16 px identity line (account, Machine, state) below it at the
+  very bottom (2 px top padding, then the safe-area bottom inset less
+  `--kb-inset`, at least 4 px: 68 px plus the home indicator). Nothing overlays the framebuffer but
   transient banners. The bottom area clears the side safe areas and sits
   above the home indicator and the app shell's keyboard inset, so the
   software keyboard never covers it. Touches reach the remote Chromium as
@@ -1813,7 +1831,10 @@ shared: every card keeps its own browser exactly as above.
   feed one binding per sheet: the first binds, agreement from either source
   never remounts, another identity re-binds once. A restart is confirmed
   for the identity shown; a hibernate answer or confirmation read naming
-  another one stops it before the reopen and re-binds. A re-bind aborts
+  another one stops it before the reopen and re-binds, and the reopen
+  itself carries `expected_browser`: the Service checks it under the
+  owner's share fence, held until the placement is admitted, and refuses a
+  changed identity (`browser_identity_changed`). A re-bind aborts
   every request and continuation of the former panel, and the sheet's
   one-shot link navigation and auto-open are consumed above the re-bound
   panel, so they never repeat. A shared reset the Machine carried out
