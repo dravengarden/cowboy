@@ -11,7 +11,13 @@ import { Sheet } from "../Sheet";
 import { copyText } from "../clipboard";
 import { useStoreSelector } from "../store";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
-import { type BrowserViewport, PREFERRED_SCALE, browserStateLabel, browserViewport } from "./api";
+import {
+  type BrowserTarget,
+  type BrowserViewport,
+  PREFERRED_SCALE,
+  browserStateLabel,
+  browserViewport,
+} from "./api";
 import {
   type BrowserChromeState,
   type ViewerControls,
@@ -43,7 +49,7 @@ import {
   takeLatch,
 } from "./shareRules";
 import { useSharedBrowser } from "./useSharedBrowser";
-import { type QuickLink, quickLinks } from "./quickLinks";
+import { type QuickLink, quickDisabled, quickLinks } from "./quickLinks";
 import { QuickLinkList, useQuickLaunch } from "./QuickLaunch";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import { type MachineBrowserController, useMachineBrowser } from "./useMachineBrowser";
@@ -90,7 +96,7 @@ function browserCommands(
   };
   const { dispatch } = browser;
   return {
-    open: (machine) => browser.open(viewportNow(), pinned ?? machine),
+    open: (machine, expected) => browser.open(viewportNow(), pinned ?? machine, expected),
     attach: (takeover, target) => dispatch({ type: "attach", takeover, target }),
     detach: () => dispatch({ type: "detach" }),
     hibernate: browser.hibernate,
@@ -153,7 +159,13 @@ function browserMenuItems({
   onClose: () => void;
   /** Quick links, offered while the viewed browser runs (`always`: in
    * every state, as Desktop's header overflow). */
-  quick: { links: readonly QuickLink[]; launch: (url: string) => void; always?: boolean };
+  quick: {
+    links: readonly QuickLink[];
+    launch: (url: string) => void;
+    always?: boolean;
+    /** A lifecycle transition is in progress: links wait. */
+    disabled?: boolean;
+  };
 }): BrowserMenuItem[] {
   const remote = model.remoteClipboard;
   const items: (BrowserMenuItem | false)[] = [
@@ -162,6 +174,7 @@ function browserMenuItems({
           key: `quick-${link.key}`,
           label: `Open ${link.label}`,
           group: index === 0,
+          disabled: quick.disabled === true,
           onSelect: () => quick.launch(link.url),
         }))
       : []),
@@ -286,15 +299,14 @@ function usePanelQuickLinks(
   props: { account: { id: string }; snapshot: SubscriptionSnapshot | undefined },
   browser: MachineBrowserController,
   commands: BrowserCommands,
-  ask: (kind: ConfirmKind) => void,
-  shared: SharedBrowser | undefined,
+  confirm: { ask: (kind: ConfirmKind) => void; showing: ConfirmKind | undefined },
+  [shared, connected]: [SharedBrowser | undefined, BrowserTarget | undefined],
 ) {
-  const launch = useQuickLaunch(browser, commands, ask);
+  const launch = useQuickLaunch(browser, commands, confirm, connected);
   const links = quickLinks(browserFamily(props.snapshot, props.account.id), shared !== undefined);
-  const list = (
-    <QuickLinkList links={links} disabled={Boolean(browser.model.busy)} onLaunch={launch} />
-  );
-  return { links, launch, list };
+  const disabled = quickDisabled(browser.model);
+  const list = <QuickLinkList links={links} disabled={disabled} onLaunch={launch} />;
+  return { links, launch, list, disabled };
 }
 
 /** The panel's sharing state: the identity binding, what the Service says
@@ -365,7 +377,10 @@ function MachineBrowserPanel(
   // The Service's read names the browser a reset deletes; before it
   // arrives the inventory's view stands in.
   const { shared, confirm, chrome } = usePanelSharing(props, model, commands, ui.chrome);
-  const quick = usePanelQuickLinks(props, browser, commands, confirm.ask, shared);
+  const quick = usePanelQuickLinks(props, browser, commands, confirm, [
+    shared,
+    ui.controls?.target,
+  ]);
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";
   const menu = (
     <BrowserMenu
@@ -421,7 +436,7 @@ function MachineBrowserPanel(
         chrome={chrome}
         onChord={chord}
         quickLinks={quick.links}
-        quickDisabled={Boolean(model.busy)}
+        quickDisabled={quick.disabled}
         onQuick={quick.launch}
         menu={menu}
       >

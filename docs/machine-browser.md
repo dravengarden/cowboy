@@ -1121,19 +1121,25 @@ whose browser it displays and the Machine it runs on.
   its primary action, Claude, ChatGPT · Codex, Grok, DeepSeek and Google
   sign-in; the "More" menu offers them while the viewed browser runs. The
   card's own service comes first (the opening card's, for a shared browser),
-  Google last and, for a shared browser, emphasized. A tap navigates the
-  viewed browser through the ordinary navigate command, or first opens
-  (attaches to, or asks to take over) it and navigates once, when it is
-  viewed. It is viewer-side only: nothing is injected into the browser and
-  its runtime and policy are unchanged, so no site can tell a quick link
-  from a typed address. A pending quick link belongs to its panel and is
-  dropped by a re-bind.
+  Google last and, for a shared browser, emphasized. A tap navigates this
+  panel's connected viewer through the ordinary navigate command, or first
+  opens the browser (sending the identity shown as `expected_browser`; a
+  first open waits for the Machine picked in the chooser), attaches to it
+  or asks to take it over, and navigates once this panel's viewer has
+  connected to exactly that browser. The waiting link is bound to the
+  browser identity it was tapped for: an answer naming another identity, a
+  failed attachment (another viewer holds it) or a cancelled takeover drops
+  it, so it never reaches another profile or another viewer's page; a
+  re-bind drops it too. Links are disabled while a command runs or the
+  browser starts or stops. It is viewer-side only: nothing is injected into
+  the browser and its runtime and policy are unchanged, so no site can tell
+  a quick link from a typed address.
 - **Shared browsers look different.** Account and usage card entries of a
   shared browser carry the group icon, the secondary accent and an
   accessible name "Shared browser: <group>"; the identity line reads
   "<group> · shared with <members>" with the same icon; the empty page is
-  titled "Shared browser · <group>"; the reset and hibernate confirmations
-  name the group and every member they affect. Private browsers keep their
+  titled "Shared browser · <group>"; the reset, hibernate and restart
+  confirmations name the group and every member they affect. Private browsers keep their
   look.
 - **Browser chrome.** The panel adds only Close and one identity line
   (account label, Machine and state): a slim top row on Desktop, the very

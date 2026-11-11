@@ -255,10 +255,15 @@ export function sharedIdentityLabel(shared: SharedBrowser): string {
     : `${shared.label} · shared`;
 }
 
-/** The hibernate confirmation's note for a shared browser. */
-export function sharedHibernateNote(shared: SharedBrowser | undefined): string | undefined {
+/** The hibernate (or restart, which hibernates first) confirmation's note
+ * for a shared browser. */
+export function sharedHibernateNote(
+  shared: SharedBrowser | undefined,
+  kind: "hibernate" | "restart" = "hibernate",
+): string | undefined {
   if (!shared) return undefined;
-  return `This browser is shared (${shared.label}). Hibernating it stops it for every member: ${shared.members.join(", ")}.`;
+  const verb = kind === "restart" ? "Restarting" : "Hibernating";
+  return `This browser is shared (${shared.label}). ${verb} it stops it for every member: ${shared.members.join(", ")}.`;
 }
 
 /** The reset confirmation's note for a shared browser. */

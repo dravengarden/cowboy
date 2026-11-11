@@ -10,7 +10,7 @@ import { Identity } from "./MachineBrowserAddressBar";
 import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { MobileBrowserToolbar } from "./MachineBrowserToolbar";
 import { QuickLinkList } from "./QuickLaunch";
-import { quickEntry, quickLinks, quickTarget } from "./quickLinks";
+import { quickDisabled, quickEntry, quickLaunchPlan, quickLinks, quickStep } from "./quickLinks";
 import { browserFamily, sharedHibernateNote, sharedIdentityLabel } from "./shareRules";
 import { AccountBrowserEntry } from "./AccountBrowserEntry";
 import { restartOn } from "./useMachineBrowser";
@@ -74,18 +74,72 @@ test("quick links put the card's own service first and Google last", () => {
   ]);
 });
 
-test("a quick link navigates the viewed browser, else opens or attaches first", () => {
-  assertEquals(quickTarget(model("detached", true))?.machine_id, "ovh");
-  assertEquals(quickTarget(model("attached", true))?.instance.instance_id, "b-1");
-  assertEquals(quickTarget({ ...model("detached", true), busy: "open" }), undefined);
-  assertEquals(quickTarget(model("detached")), undefined);
-  assertEquals(quickTarget(model("hibernated", true)), undefined);
-  assertEquals(quickEntry(model("hibernated")), "open");
-  assertEquals(quickEntry(model(null)), "open");
+test("a quick link navigates the connected viewer, else opens, attaches or asks first", () => {
+  const target = { machine_id: "ovh", instance: state("detached").instance };
+  assertEquals(quickLaunchPlan(model("detached", true), target), "navigate");
+  // A viewer requested but not connected yet never receives the link now.
+  assertEquals(quickLaunchPlan(model("detached", true), undefined), "attach");
+  assertEquals(quickLaunchPlan(model("hibernated"), undefined), "open");
+  assertEquals(quickLaunchPlan(model(null), undefined), "open");
+  assertEquals(quickLaunchPlan(model("attached"), undefined), "takeover");
+  // A never-placed account waits for the Machine chosen in the chooser.
+  const choose = model(null);
+  choose.read = {
+    ...choose.read!,
+    choose_machine: true,
+    capable_machines: [{ machine_id: "ovh" }],
+  };
+  assertEquals(quickLaunchPlan(choose, undefined), "choose");
+  // While a transition runs a tap does nothing, and the links are disabled.
+  for (const busy of [
+    model("starting"),
+    model("stopping"),
+    { ...model("hibernated"), busy: "open" as const },
+  ]) {
+    assertEquals(quickDisabled(busy), true);
+    assertEquals(quickLaunchPlan(busy, target), "none");
+  }
+  assertEquals(quickDisabled(model("hibernated")), false);
   assertEquals(quickEntry(model("detached")), "attach");
-  assertEquals(quickEntry(model("attached")), "takeover");
-  assertEquals(quickEntry(model("starting")), "wait");
-  assertEquals(quickEntry({ ...model("hibernated"), busy: "open" }), "wait");
+});
+
+test("a waiting quick link reaches only its own identity's connected viewer", () => {
+  const target = { machine_id: "ovh", instance: state("detached").instance };
+  const pending = {
+    url: "https://claude.ai/",
+    identity: `share:${SHARE}:2`,
+    takeover: false,
+    error: "",
+  };
+  const now = {
+    identity: `share:${SHARE}:2`,
+    connected: undefined as typeof target | undefined,
+    confirming: undefined as string | undefined,
+    takeoverViewer: false,
+    error: "",
+  };
+  assertEquals(quickStep(pending, now), "wait");
+  assertEquals(quickStep(pending, { ...now, connected: target }), "navigate");
+  // The open answered another identity: dropped, even with a viewer
+  // connected in the same flush.
+  assertEquals(quickStep(pending, { ...now, identity: "own", connected: target }), "drop");
+  // The attachment failed (another viewer holds it): dropped, never
+  // navigating that viewer's page.
+  assertEquals(
+    quickStep(pending, { ...now, error: "Another viewer is attached to this browser." }),
+    "drop",
+  );
+  // An error already shown when the link was tapped does not drop it.
+  assertEquals(quickStep({ ...pending, error: "old" }, { ...now, error: "old" }), "wait");
+  // A takeover link waits while its confirmation shows, is carried by the
+  // confirmed takeover, and is dropped when the confirmation is cancelled.
+  const takeover = { ...pending, takeover: true };
+  assertEquals(quickStep(takeover, { ...now, confirming: "takeover" }), "wait");
+  assertEquals(
+    quickStep(takeover, { ...now, takeoverViewer: true, connected: target }),
+    "navigate",
+  );
+  assertEquals(quickStep(takeover, now), "drop");
 });
 
 test("the card's family comes from the Service's static table", () => {
@@ -135,6 +189,11 @@ test("shared browsers say so in the identity line, confirmations and empty page"
   assertEquals(confirmText("reset", GOOGLE).title, "Reset the shared browser profile (Google)?");
   assertEquals(confirmText("hibernate", GOOGLE).title, "Hibernate the shared browser (Google)?");
   assertEquals(confirmText("reset", undefined).title, "Reset the browser profile?");
+  assertEquals(confirmText("restart", GOOGLE).title, "Restart the shared browser (Google)?");
+  assertEquals(
+    sharedHibernateNote(GOOGLE, "restart"),
+    "This browser is shared (Google). Restarting it stops it for every member: Lynx, Pika, Fox.",
+  );
   const shared = render(
     React.createElement(Identity, {
       accountLabel: sharedIdentityLabel(GOOGLE),

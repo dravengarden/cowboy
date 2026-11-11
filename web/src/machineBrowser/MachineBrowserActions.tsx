@@ -19,8 +19,9 @@ import { type SharedBrowser, sharedHibernateNote, sharedResetNote } from "./shar
 
 /** Commands that follow a confirmation take the target it captured. */
 export interface BrowserCommands {
-  /** `machine` pins the open to the Machine the owner chose. */
-  open(machine?: string): void;
+  /** `machine` pins the open to the Machine the owner chose; `expected`
+   * binds it to the browser identity the owner saw (a quick link's). */
+  open(machine?: string, expected?: string): void;
   attach(takeover: boolean, target?: BrowserTarget): void;
   detach(): void;
   hibernate(target?: BrowserTarget): void;
@@ -80,6 +81,9 @@ export function confirmText(
   }
   if (kind === "hibernate") {
     return { ...text, title: `Hibernate the shared browser (${shared.label})?` };
+  }
+  if (kind === "restart") {
+    return { ...text, title: `Restart the shared browser (${shared.label})?` };
   }
   return text;
 }
@@ -164,7 +168,7 @@ export function useBrowserConfirm(
   commands: BrowserCommands,
   shared?: SharedBrowser,
   identityRequired = false,
-): { ask: (kind: ConfirmKind) => void; dialog: ReactNode } {
+): { ask: (kind: ConfirmKind) => void; dialog: ReactNode; showing: ConfirmKind | undefined } {
   const [confirm, setConfirm] = useState<Confirmation | undefined>(undefined);
   const current = confirm !== undefined && confirmationCurrent(confirm, model, identityRequired);
   useEffect(() => {
@@ -201,11 +205,12 @@ export function useBrowserConfirm(
           {sharedResetNote(shared)}
         </Typography>
       )}
-      {confirm?.kind === "hibernate" && sharedHibernateNote(shared) && (
-        <Typography variant="body2" color="secondary.main" data-shared-confirm-note>
-          {sharedHibernateNote(shared)}
-        </Typography>
-      )}
+      {(confirm?.kind === "hibernate" || confirm?.kind === "restart") &&
+        sharedHibernateNote(shared, confirm.kind) && (
+          <Typography variant="body2" color="secondary.main" data-shared-confirm-note>
+            {sharedHibernateNote(shared, confirm.kind)}
+          </Typography>
+        )}
       {confirm?.kind === "takeover" && (
         <Typography variant="caption" color="text.secondary">
           Current state: {browserStateLabel(state?.state)}.
@@ -213,5 +218,5 @@ export function useBrowserConfirm(
       )}
     </ConfirmSheet>
   ) : null;
-  return { ask, dialog };
+  return { ask, dialog, showing: confirm && current ? confirm.kind : undefined };
 }

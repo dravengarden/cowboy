@@ -49,7 +49,8 @@ export interface MachineBrowserController {
   /** Open the account's ordinary tab browser; `machine` pins the open to
    * that Machine (the owner's choice for a first open, or the Machine a
    * caller names). */
-  open(viewport: BrowserViewport, machine?: string): void;
+  /** `expected` binds the open to a browser identity (a quick link's). */
+  open(viewport: BrowserViewport, machine?: string, expected?: string): void;
   /** Navigate exactly `target` to an `https` URL. */
   navigate(url: string, target: BrowserTarget): void;
   /** Instance commands name `target`, the browser a confirmation captured,
@@ -309,8 +310,8 @@ export function useMachineBrowser({
     [account, api, dataset],
   );
   const open = useCallback(
-    (viewport: BrowserViewport, machine?: string) =>
-      run("open", (abort) => openCall(viewport, abort, machine), OPEN_TIMEOUT_MS),
+    (viewport: BrowserViewport, machine?: string, expected?: string) =>
+      run("open", (abort) => openCall(viewport, abort, machine, expected), OPEN_TIMEOUT_MS),
     [openCall, run],
   );
   const navigate = useCallback(

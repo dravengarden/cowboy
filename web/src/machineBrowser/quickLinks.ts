@@ -4,7 +4,8 @@
  * is injected into the browser and no page can tell it apart from typing
  * the address. See docs/machine-browser.md, "Viewer (core web)". */
 import type { BrowserTarget } from "./api";
-import { type BrowserModel, browserRunning } from "./browserModel";
+import type { BrowserModel } from "./browserModel";
+import { needsMachineChoice } from "./entryRules";
 
 export interface QuickLink {
   key: string;
@@ -39,11 +40,53 @@ export function quickLinks(family: string | undefined, shared: boolean): QuickLi
   }));
 }
 
-/** The browser a quick link navigates now: the one this panel views,
- * running and idle. Otherwise the link waits until the panel views it. */
-export function quickTarget(model: BrowserModel): BrowserTarget | undefined {
-  if (model.busy || !model.viewer) return undefined;
-  return browserRunning(model.read?.state?.state) ? model.viewer.target : undefined;
+/** Whether quick links are offered now: not while a command runs or the
+ * browser is starting or stopping (a tap would do nothing). */
+export function quickDisabled(model: BrowserModel): boolean {
+  const state = model.read?.state?.state;
+  return Boolean(model.busy) || state === "starting" || state === "stopping";
+}
+
+/** The browser identity the panel shows now. */
+export function panelIdentity(model: BrowserModel): string | undefined {
+  return model.observedIdentity ?? model.read?.browser_identity;
+}
+
+/** A quick link waiting for its browser: bound to the identity it was
+ * tapped for, the error shown then, and whether only a confirmed takeover
+ * may carry it. */
+export interface PendingQuickLink {
+  url: string;
+  identity: string | undefined;
+  takeover: boolean;
+  error: string;
+}
+
+/** What a waiting quick link does now. It navigates only through this
+ * panel's connected viewer (`connected`: the stream opened for exactly the
+ * viewer's target), and is dropped when the browser identity changed, a
+ * command or attachment failed since the tap, or the takeover it waits on
+ * was cancelled. */
+export function quickStep(
+  pending: PendingQuickLink,
+  now: {
+    identity: string | undefined;
+    connected: BrowserTarget | undefined;
+    confirming: string | undefined;
+    takeoverViewer: boolean;
+    error: string;
+  },
+): "wait" | "navigate" | "drop" {
+  if (
+    pending.identity !== undefined &&
+    now.identity !== undefined &&
+    now.identity !== pending.identity
+  ) {
+    return "drop";
+  }
+  if (now.error && now.error !== pending.error) return "drop";
+  if (pending.takeover && now.confirming !== "takeover" && !now.takeoverViewer) return "drop";
+  return now.connected ? "navigate" : "wait";
 }
 
 /** What a quick link does first when the panel does not view a running
@@ -55,4 +98,19 @@ export function quickEntry(model: BrowserModel): "open" | "attach" | "takeover" 
   if (state === "detached") return "attach";
   if (state === "attached") return model.viewer ? "wait" : "takeover";
   return "open";
+}
+
+/** What a quick-link tap does now: navigate the connected viewer, or wait
+ * for it after opening (on the Machine the owner picks in the chooser, for a
+ * first open), attaching or a takeover the owner confirms; nothing while a
+ * transition runs. */
+export function quickLaunchPlan(
+  model: BrowserModel,
+  connected: BrowserTarget | undefined,
+): "navigate" | "open" | "choose" | "attach" | "takeover" | "none" {
+  if (quickDisabled(model)) return "none";
+  if (connected) return "navigate";
+  const entry = quickEntry(model);
+  if (entry === "open") return needsMachineChoice(model.read) ? "choose" : "open";
+  return entry === "wait" ? "none" : entry;
 }
