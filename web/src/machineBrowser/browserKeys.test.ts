@@ -33,8 +33,21 @@ test("paste presses Ctrl+V and releases V before Ctrl", () => {
   ]);
 });
 
+test("address presses Ctrl+L and enter presses Return", () => {
+  assertEquals(chordStrokes("address"), [
+    { keysym: 0xffe3, code: "ControlLeft", down: true },
+    { keysym: 0x6c, code: "KeyL", down: true },
+    { keysym: 0x6c, code: "KeyL", down: false },
+    { keysym: 0xffe3, code: "ControlLeft", down: false },
+  ]);
+  assertEquals(chordStrokes("enter"), [
+    { keysym: 0xff0d, code: "Enter", down: true },
+    { keysym: 0xff0d, code: "Enter", down: false },
+  ]);
+});
+
 test("every chord releases each key it pressed", () => {
-  for (const chord of ["back", "forward", "reload", "paste"] as const) {
+  for (const chord of ["back", "forward", "reload", "paste", "address", "enter"] as const) {
     const strokes = chordStrokes(chord);
     const held = new Set<number>();
     for (const stroke of strokes) {

@@ -50,6 +50,8 @@ export interface ViewerSession extends KeyboardSink {
   sendKey(action: KeyAction): void;
   /** Press a browser chord (`chordStrokes`) on the remote. */
   sendChord(chord: BrowserChord): void;
+  /** Put `url` into the address bar through the remote clipboard and go. */
+  openAddress(url: string): void;
   focus(): void;
   close(): void;
 }
@@ -154,6 +156,16 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
       if (!client) return;
       client.clipboardPasteFrom(text);
       sendChord(client, "paste");
+    },
+    // Ctrl+L selects the address bar, Ctrl+V replaces it, Return navigates:
+    // what a person does, in order on the same stream.
+    openAddress: (url) => {
+      const client = rfb;
+      if (!client) return;
+      client.clipboardPasteFrom(url);
+      sendChord(client, "address");
+      sendChord(client, "paste");
+      sendChord(client, "enter");
     },
     setFocusOnClick: (value) => {
       focusOnClick = value;

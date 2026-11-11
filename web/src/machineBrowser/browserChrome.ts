@@ -25,6 +25,8 @@ export interface ViewerControls {
   toggleKeyboard(): void;
   /** Set the remote clipboard to `text` and press Ctrl+V. */
   paste(text: string): void;
+  /** Paste `url` into the address bar and press Return. */
+  openAddress(url: string): void;
 }
 
 /** The viewer controls the chrome may use: only those of the viewer mounted

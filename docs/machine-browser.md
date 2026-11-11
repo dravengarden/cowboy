@@ -12,6 +12,10 @@ policy boundary the same day; see the
 amendment. The owner also stated strict isolation between the browsers of
 different account cards as a core requirement; see
 [Account isolation](#account-isolation-core-requirement).
+On 2026-11-11 the owner required the named-account sign-in dialog to stop
+opening its link in a browser of the owner's device: it only copies the
+link, which is pasted into the account's Machine browser; see
+[Viewer](#viewer-core-web).
 On 2026-11-09 the owner required Provider logins (Claude, Codex, Grok and any
 other) to be fully independent of the browser: the sign-in binding was
 removed, and a login's verification link may only be shown in the account's
@@ -1317,6 +1321,10 @@ whose browser it displays and the Machine it runs on.
   sets the remote clipboard (`ClientCutText`) and presses Ctrl+V on exactly
   the viewer that was bound when the sheet opened; the sheet closes without
   sending once another viewer is shown.
+  When the text is exactly one `http`/`https` link, the sheet also offers
+  Open as address: it sets the remote clipboard, then presses Ctrl+L,
+  Ctrl+V and Return, so a copied sign-in link opens without first tapping
+  the address bar.
 - **Remote clipboard.** Xvnc forwards only explicit copies (`SendPrimary=0`).
   A received cut text is held in viewer memory for the open attachment and
   offered as the explicit "Copy remote clipboard (n characters) to this
@@ -1364,6 +1372,13 @@ whose browser it displays and the Machine it runs on.
   never names the login to the Controller or the Machine, the login works
   identically without it, and nothing flows from the browser into the
   dialog.
+
+- **No device browser (2026-11-11).** The owner decided a named-account
+  sign-in dialog never opens its link in a browser of the owner's device
+  (no anchor, no system-browser launch). Its primary action copies the
+  link, with a read-only field to copy by hand when the clipboard write
+  fails; the person pastes it into the account's Machine browser with
+  Paste from this device… → Open as address.
 
 The cross-device route `/#subscription-sign-in/<account>/<request>` resumes
 the sign-in dialog on another device; its verification-link entry opens the

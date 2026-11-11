@@ -82,6 +82,7 @@ export default function MachineBrowserViewer(props: MachineBrowserViewerProps): 
         else input.focus({ preventScroll: true });
       },
       paste: (text) => sessionRef.current?.pasteText(text),
+      openAddress: (url) => sessionRef.current?.openAddress(url),
     });
     return () => latest.current.onControls(undefined);
   }, [account, attachmentId, connected, sessionRef]);

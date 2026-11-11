@@ -1,13 +1,17 @@
 import { Alert, Button, Stack, TextField, Typography } from "@mui/material";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { copyText } from "./clipboard";
-import { hasNativeAuthenticationBrowser, hasNativeExternalOpener, openAccountAuthorizationUrl } from "./openExternal";
 import type { ProviderLoginEvent } from "./providerAuthenticationOwner";
 import { LinkBrowserEntry } from "./machineBrowser/LinkBrowserEntry";
 import type { LoginScope } from "./subscriptionLoginController";
 
 /** Mounted for one account/request/challenge only. Authorization material stays
- * in this component, never in account metadata or browser recovery storage. */
+ * in this component, never in account metadata or browser recovery storage.
+ *
+ * The dialog never opens the link in a browser of this device (owner
+ * decision 2026-11-11): the person copies it and pastes it into the
+ * account's Machine browser, so the sign-in happens where the credentials
+ * are used. */
 export function SubscriptionAuthorization({ label, link, challenge, busy, checking, submit, scope, machine }: {
   label: string; link: string;
   challenge: Extract<ProviderLoginEvent, { event: "login_challenge" }>;
@@ -19,46 +23,36 @@ export function SubscriptionAuthorization({ label, link, challenge, busy, checki
 }): React.JSX.Element {
   const [code, setCode] = useState("");
   const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
-  const [opening, setOpening] = useState(false);
-  const openingRef = useRef(false);
-  const systemBrowser = hasNativeExternalOpener();
-  const unsupportedShell = hasNativeAuthenticationBrowser() && !systemBrowser;
+  const [manualCopy, setManualCopy] = useState(false);
   const expired = () => challenge.expires_at_ms <= Date.now();
   return <Stack spacing={1.5} data-subscription-authorization={label}>
     <Typography variant="body2">
-      On Claude’s page, check that you are authorizing the account for <strong>{label}</strong>.
+      Copy the sign-in link and paste it into the Machine browser of <strong>{label}</strong>.
+      On Claude’s page, check that you are authorizing this account.
     </Typography>
     <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-      <Button component="a" href={link} target="_blank" rel="noopener noreferrer"
-        variant="contained" disabled={busy || opening || unsupportedShell}
-        onClick={(event) => {
-          if (busy || openingRef.current || expired()) { event.preventDefault(); return; }
-          if (!systemBrowser) return; // Keep Safari/PWA's native user-gesture navigation.
-          event.preventDefault();
-          openingRef.current = true; setOpening(true); setError("");
-          void openAccountAuthorizationUrl(link).catch((cause: unknown) => {
-            setError(cause instanceof Error ? cause.message : "Could not open the browser. Copy the link instead.");
-          }).finally(() => { openingRef.current = false; setOpening(false); });
-        }}>{opening ? "Opening browser…" : "Open Claude sign-in"}</Button>
-      <Button disabled={busy} onClick={() => {
+      <Button variant="contained" disabled={busy} onClick={() => {
         if (expired()) return;
-        setNotice(""); setError("");
+        setNotice("");
         void copyText(link).then((copied) => {
-          if (copied) setNotice("Link copied. Open it in the browser profile for this account, then return here.");
-          else setError("Could not copy the link. Press and hold Open Claude sign-in to copy its link.");
+          setManualCopy(!copied);
+          if (copied) setNotice("Link copied.");
         });
       }}>Copy sign-in link</Button>
       {scope && machine && <LinkBrowserEntry owner={scope.owner} dataset={scope.dataset} account={scope.account}
         label={label} machine={machine} url={link} disabled={busy} />}
     </Stack>
-    <Typography variant="caption" color="text.secondary">
-      Another Claude account already open? Use a separate browser profile, or close other private sign-in tabs and paste the link into a new private session.
-      {" "}A new regular tab shares the browser’s Claude login.
-    </Typography>
-    {unsupportedShell && <Alert severity="info">Copy the link to your browser to keep this account out of the shared sign-in window.</Alert>}
     {notice && <Typography role="status" variant="caption">{notice}</Typography>}
-    {error && <Alert severity="warning">{error}</Alert>}
+    {manualCopy && <Stack spacing={1}>
+      <Alert severity="warning">Could not copy automatically. Select the link below and copy it.</Alert>
+      <TextField fullWidth size="small" label="Sign-in link" value={link}
+        slotProps={{ htmlInput: { readOnly: true, autoComplete: "off", spellCheck: false, style: { fontSize: 16 } } }}
+        onFocus={(event) => event.target.select()} />
+    </Stack>}
+    <Typography variant="caption" color="text.secondary">
+      In the account’s Browser…, choose More → Paste from this device…, then Open as address.
+      {" "}Do not open the link in a regular tab on this device: it shares that browser’s Claude login.
+    </Typography>
     {challenge.user_code && <Typography component="code">{challenge.user_code}</Typography>}
     {challenge.input_required && <Stack spacing={1}>
       <TextField fullWidth size="small" label={`Authorization code for ${label}`} value={code} autoComplete="off" type="password"

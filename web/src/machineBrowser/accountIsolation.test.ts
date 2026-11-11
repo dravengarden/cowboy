@@ -410,6 +410,7 @@ function recordingControls(account: string, target: BrowserTarget) {
       keyboard += 1;
     },
     paste: (text) => pastes.push(text),
+    openAddress: (url) => pastes.push(`address:${url}`),
   };
   return { controls, chords, pastes, keyboard: () => keyboard };
 }

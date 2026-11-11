@@ -112,7 +112,7 @@ export async function subscriptionLoginIsolationBrowser(profile: SurfaceProfile)
     held!(); held = undefined;
     await new Promise((resolve) => setTimeout(resolve, 0));
     check(input("otter")?.value === "" && container.textContent!.includes("Claude · Otter") &&
-      !container.textContent!.includes("Claude · Lynx") && !container.querySelector('a[href*="state=lynx"]'),
+      !container.textContent!.includes("Claude · Lynx") && !container.querySelector('[data-subscription-authorization="Claude · Lynx"]'),
       "switching accounts clears code and ignores the previous account’s delayed challenge");
     typeCode("otter", "old-challenge-code");
     await until(() => !button("otter", "Continue")!.disabled);

@@ -275,9 +275,9 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     await until(() => Boolean(dialogButton("Check status")));
     check(lifecycleWrites.length === 0, "reopening native sign-in never automatically starts another login");
     dialogButton("Check status")!.click();
-    await until(() => document.body.textContent!.includes("Open Claude sign-in"));
-    const link = document.querySelector<HTMLAnchorElement>('a[href^="https://claude.ai/oauth/"]');
-    check(Boolean(link && link.rel.includes("noopener") && link.rel.includes("noreferrer")), "native sign-in stays on the Provider page without opener access");
+    await until(() => Boolean(dialogButton("Copy sign-in link")));
+    check(!document.querySelector('a[href^="https://claude.ai/oauth/"]') && !document.body.textContent!.includes("state=private"),
+      "native sign-in only copies its link and never opens it in a browser of this device");
     check(!sessionStorage.getItem(loginKey)!.includes("private"), "authorization link stays out of persisted recovery metadata");
     await observe?.(surface, "login");
     await until(() => Boolean(dialogButton("Cancel sign-in") && !dialogButton("Cancel sign-in")!.disabled));
@@ -285,7 +285,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     check(document.activeElement === dialogButton("Cancel sign-in"), "native sign-in cancellation is keyboard focusable");
     dialogButton("Cancel sign-in")!.click();
     await until(() => document.body.textContent!.includes("Cancellation requested"));
-    check(!document.querySelector('a[href^="https://claude.ai/oauth/"]'), "cancellation removes the old authorization link");
+    check(!document.querySelector('[data-subscription-authorization]'), "cancellation removes the old authorization link");
     await observe?.(surface, "cancelled");
     root.unmount(); root = createRoot(container); await render();
     await until(() => Boolean(button("Remove account…") && !button("Remove account…")!.disabled));
@@ -346,7 +346,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
       <SubscriptionSignInHandoff hash={`#subscription-sign-in/${handoffAccount}/${handoffRequest}`} />
     </SurfaceContext.Provider></BrowserProductTheme>));
     handoffRender();
-    await until(() => document.body.textContent!.includes("Open Claude sign-in"));
+    await until(() => Boolean(dialogButton("Copy sign-in link")));
     check(document.body.textContent!.includes("Claude · Otter") && handoffWrites.length === 0 &&
       !dialogButton("Start sign-in"), "agent link opens the verified subscription without dispatching a new login");
     const handoffInput = document.querySelector<HTMLInputElement>('input[type="password"]')!;
@@ -367,7 +367,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     root.unmount(); root = createRoot(container); handoffRender();
     await until(() => document.body.textContent!.includes("Signed in on this Machine"));
     check(handoffWrites.length === 1 && handoffReads.filter((path) => path.includes("/logins/")).length >= 2 &&
-      !document.querySelector('a[href^="https://claude.ai/oauth/"]'), "reopening a completed handoff reads its receipt without restarting authorization");
+      !document.querySelector('[data-subscription-authorization]'), "reopening a completed handoff reads its receipt without restarting authorization");
     root.unmount(); root = createRoot(container); sessionStorage.removeItem(handoffKey);
     const continueFetch = globalThis.fetch;
     const restartEffects: string[] = [];
@@ -404,7 +404,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     handoffRender();
     await until(() => Boolean(dialogButton("Start again")));
     await observe?.(surface, "expired");
-    check(!document.querySelector('a[href^="https://claude.ai/oauth/"]') && !document.querySelector('input[type="password"]'),
+    check(!document.querySelector('[data-subscription-authorization]') && !document.querySelector('input[type="password"]'),
       "expired handoff hides the old authorization link and code input");
     dialogButton("Start again")!.click();
     await until(() => Boolean(dialogButton("Start sign-in") && !dialogButton("Start sign-in")!.disabled));
@@ -477,10 +477,10 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     handoffRender();
     await until(() => Boolean(document.querySelector('[role="alert"]') && dialogButton("Check status") && !dialogButton("Check status")!.disabled));
     const retryable = !document.body.textContent!.includes("Another sign-in is saved") && !dialogButton("Start sign-in") &&
-      !document.querySelector('a[href^="https://claude.ai/oauth/"]');
+      !document.querySelector('[data-subscription-authorization]');
     offlineHandoff = false;
     dialogButton("Check status")!.click();
-    await until(() => Boolean(document.querySelector('a[href^="https://claude.ai/oauth/"]')));
+    await until(() => Boolean(document.querySelector('[data-subscription-authorization]')));
     check(retryable && JSON.parse(sessionStorage.getItem(handoffKey)!).operation === "recoverable-operation",
       "an unavailable saved operation stays retryable on the handoff without a false mismatch or redispatch");
     globalThis.fetch = continueFetch;
@@ -497,7 +497,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
       await until(() => document.body.textContent!.includes("Another sign-in is saved in this tab"));
       const blocked = {
         actions: !dialogButton("Check status") && !dialogButton("Cancel sign-in") && !dialogButton("Retry same sign-in"),
-        inputs: !document.querySelector('input, a[href^="https://claude.ai/oauth/"]'),
+        inputs: !document.querySelector('input, [data-subscription-authorization]'),
         reads: handoffReads.slice(before), preserved: sessionStorage.getItem(handoffKey) === pending,
       };
       check(blocked.actions && blocked.inputs && blocked.reads.every((path) => ["/api/provider-accounts", "/api/sync/dataset", "/api/provider-accounts/login-operations/another-operation"].includes(path)) && blocked.preserved,
@@ -515,7 +515,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
       const effectsBefore = handoffWrites.length;
       dialogButton("Continue saved sign-in")!.click();
       await until(() => document.body.textContent!.includes("This sign-in expired or disconnected."));
-      check(handoffWrites.length === effectsBefore && !document.querySelector('input[type="password"], a[href^="https://claude.ai/oauth/"]') &&
+      check(handoffWrites.length === effectsBefore && !document.querySelector('input[type="password"], [data-subscription-authorization]') &&
         document.body.textContent!.includes("other-machine"), "a conflicting handoff can explicitly resume its saved attempt without dispatching a new login");
       globalThis.fetch = savedFetch;
     }

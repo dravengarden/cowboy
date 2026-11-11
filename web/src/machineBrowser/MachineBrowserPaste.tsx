@@ -3,11 +3,14 @@
  * field. It is prefilled from the device clipboard only when the browser
  * allows reading it inside the tap that opened it; otherwise the owner
  * pastes (or types) into the field. Send sets the remote clipboard and
- * presses Ctrl+V on exactly the viewer that was bound when it opened. */
+ * presses Ctrl+V on exactly the viewer that was bound when it opened. When
+ * the text is one web link (a sign-in link, for example), "Open as address"
+ * pastes it into the address bar and presses Return instead. */
 import { Button, Stack, TextField, Typography } from "@mui/material";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ConfirmSheet } from "../Sheet";
 import type { ViewerControls } from "./browserChrome";
+import { pastedAddress } from "./pasteAddress";
 
 interface PasteDraft {
   /** The viewer the text goes to; Send refuses once another one is bound. */
@@ -50,6 +53,12 @@ export function useDevicePaste(controls: ViewerControls | undefined): {
     draft.controls.paste(draft.text);
     close();
   };
+  const address = draft ? pastedAddress(draft.text) : undefined;
+  const open = (): void => {
+    if (!draft || !current || !address) return;
+    draft.controls.openAddress(address);
+    close();
+  };
   const dialog = draft ? (
     <ConfirmSheet
       open
@@ -58,15 +67,24 @@ export function useDevicePaste(controls: ViewerControls | undefined): {
       actions={
         <Stack direction="row" spacing={1}>
           <Button onClick={close}>Cancel</Button>
-          <Button variant="contained" disabled={!current || !draft.text} onClick={send}>
+          <Button
+            variant={address ? "text" : "contained"}
+            disabled={!current || !draft.text}
+            onClick={send}
+          >
             Send
           </Button>
+          {address && (
+            <Button variant="contained" disabled={!current} onClick={open}>
+              Open as address
+            </Button>
+          )}
         </Stack>
       }
     >
       <Typography variant="body2" color="text.secondary">
         Paste or type the text here. Send puts it on the remote clipboard and presses Ctrl+V in the
-        browser.
+        browser. For a link, Open as address puts it in the address bar and opens it.
       </Typography>
       <TextField
         multiline
