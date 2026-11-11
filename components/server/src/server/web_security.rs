@@ -73,6 +73,8 @@ fn inline_script_hashes(html: &[u8]) -> Vec<String> {
 /// is authorized by its hash; everything else the app runs arrives over the
 /// verified port as `blob:` URLs. No network destination is allowed, WebRTC
 /// included (`Connection-Allowlist: ()`), and every powerful feature is off.
+/// The response itself carries `sandbox allow-scripts`, so the document has an
+/// opaque origin even when opened top-level or framed without a sandbox.
 pub(super) fn app_shell_headers(html: &[u8]) -> Vec<(&'static str, String)> {
     let hashes: String = inline_script_hashes(html)
         .iter()
@@ -83,7 +85,7 @@ pub(super) fn app_shell_headers(html: &[u8]) -> Vec<(&'static str, String)> {
          style-src 'unsafe-inline' blob:; img-src blob: data:; font-src blob: data:; \
          media-src blob: data:; connect-src 'none'; frame-src 'none'; child-src 'none'; \
          worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'; \
-         frame-ancestors 'self'; webrtc 'block'"
+         frame-ancestors 'self'; webrtc 'block'; sandbox allow-scripts"
     );
     let features = [
         "accelerometer",
@@ -208,6 +210,7 @@ mod tests {
             "frame-src 'none'",
             "worker-src 'none'",
             "frame-ancestors 'self'",
+            "sandbox allow-scripts",
         ] {
             assert!(csp.contains(directive), "{directive}");
         }
