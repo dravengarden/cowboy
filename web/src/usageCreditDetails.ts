@@ -72,6 +72,11 @@ export function usageCreditDetails(rateLimits: unknown): UsageCreditRow[] {
     });
   }
   const resets = record(limits.rateLimitResetCredits);
+  // A collector that reports credits but no reset block did not read resets
+  // (a named Claude account's native CLI cannot): unknown, never "none".
+  if (limits.rateLimitResetCredits === undefined && typeof credit.balanceStatus === "string") {
+    rows.push({ label: "Limit resets", value: "Not reported · see claude.ai Settings → Usage" });
+  }
   if (
     resets.availableCount === 0 &&
     (!Array.isArray(resets.grants) || resets.grants.length === 0)

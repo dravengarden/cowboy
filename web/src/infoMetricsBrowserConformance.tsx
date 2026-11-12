@@ -477,7 +477,9 @@ export async function runInfoMetricsBrowserConformance(
     await until(() => !accountCard("anthropic")!.textContent?.includes("Balance"));
     check(accountCard("otter")!.querySelectorAll('[role="meter"]').length === 0 &&
       accountCard("otter")!.textContent?.includes("No quota reported"), "missing Otter quota never borrows Lynx percentages");
-    check(!accountCard("otter")!.querySelector("button, input") &&
+    // The card's own Machine browser entry is the only control it may carry.
+    check(!accountCard("otter")!.querySelector('[aria-label^="Refresh"], input') &&
+      [...accountCard("otter")!.querySelectorAll("button")].every((button) => button.textContent?.trim() === "Browser") &&
       !accountCard("otter")!.textContent?.includes("Updated"), "uncollected account has no wrong-account refresh or fabricated timestamp");
     const lynxFreshness = accountCard("anthropic")!.querySelector<HTMLElement>("[data-usage-freshness]");
     check(lynxFreshness !== null && /ago|just now|from session/.test(lynxFreshness.textContent ?? ""),
@@ -514,10 +516,22 @@ export async function runInfoMetricsBrowserConformance(
     nativeUsage = [{
       account_id: "otter", provider_id: "claude-code", machine_id: "ovh", available: true, refreshing: false,
       usage: { provider: "anthropic", source: "Anthropic", status: "available", observed_at_ms: now + 1,
-        rate_limits: { rateLimits: { primary: { usedPercent: 46, windowDurationMins: 300 } } } },
+        rate_limits: { rateLimits: { primary: { usedPercent: 46, windowDurationMins: 300 } },
+          rateLimitResetCredits: { availableCount: 1, credits: [{ id: "otter-grant:0", status: "available", title: "Weekly reset (1 left)" }] } } },
     }];
     window.dispatchEvent(new Event("focus"));
     await until(() => accountCard("otter")!.textContent?.includes("54% remaining") === true);
+    accountCard("otter")!.querySelector<HTMLButtonElement>('[aria-label$="usage details"]')!.click();
+    await until(() => accountCard("otter")!.textContent?.includes("Usage limit resets") === true);
+    const otterResets = [...accountCard("otter")!.querySelectorAll<HTMLElement>(".MuiAccordion-root")]
+      .find((node) => node.textContent?.startsWith("Usage limit resets"))!;
+    otterResets.querySelector<HTMLElement>(".MuiAccordionSummary-root")!.click();
+    await until(() => otterResets.textContent?.includes("Weekly reset (1 left)") === true);
+    check(otterResets.textContent!.includes("1 available") && !otterResets.textContent!.includes("Use next") &&
+      [...otterResets.querySelectorAll(".MuiButtonBase-root")].every((node) => node.classList.contains("MuiAccordionSummary-root")),
+      "a named account lists its usage-limit resets read-only, without a reset action");
+    accountCard("otter")!.querySelector<HTMLButtonElement>('[aria-label$="usage details"]')!.click();
+    await until(() => !accountCard("otter")!.textContent?.includes("Usage limit resets"));
     check(accountCard("anthropic")!.textContent?.includes("82% remaining"),
       "background named quota replaces its own session fallback without changing the Service account");
     check(!!accountCard("otter")!.querySelector('[aria-label="Refresh Claude · River Otter"]') &&

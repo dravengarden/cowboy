@@ -32,7 +32,7 @@ test("credit status retains off and zero without inventing a balance", () => {
     value: "500 minor units · currency not reported",
   }, { label: "Auto reload", value: "Off" }]);
   expect(usageCreditDetails({ usageCredits: { balanceStatus: "unavailable" } }))
-    .toEqual([{ label: "Balance", value: "Unavailable" }]);
+    .toEqual([{ label: "Balance", value: "Unavailable" }, { label: "Limit resets", value: "Not reported · see claude.ai Settings → Usage" }]);
   expect(usageCreditDetails(undefined)).toEqual([]);
   expect(
     usageCreditDetails({
@@ -41,7 +41,15 @@ test("credit status retains off and zero without inventing a balance", () => {
   ).toEqual([{
     label: "Balance",
     value: "0 minor units · currency not reported",
-  }]);
+  }, { label: "Limit resets", value: "Not reported · see claude.ai Settings → Usage" }]);
+});
+
+test("an unread reset block is not reported, never none", () => {
+  const named = { usageCredits: { enabled: false, balanceStatus: "unavailable" } };
+  expect(usageCreditDetails(named)).toContainEqual({ label: "Limit resets", value: "Not reported · see claude.ai Settings → Usage" });
+  expect(usageCreditDetails({ ...named, rateLimitResetCredits: { availableCount: 0 } }))
+    .toContainEqual({ label: "Limit resets", value: "None available" });
+  expect(usageCreditDetails({ rateLimits: {} })).toEqual([]);
 });
 
 test("held resets remain visible without claiming they are usable", () => {

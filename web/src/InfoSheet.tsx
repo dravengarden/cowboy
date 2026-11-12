@@ -431,7 +431,7 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
         <PluginSlot pluginId={usagePluginId(usage.provider)} slot="provider.usage" context={detailsContext}>
           <ProviderUsageCredits rows={detailsContext.creditDetails} />
         </PluginSlot>
-        {resetProvider !== undefined && credits.length > 0 && (
+        {credits.length > 0 && (
           <Accordion
             disableGutters
             elevation={0}
@@ -467,7 +467,7 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
               <Divider />
               {credits.map((credit, index) => {
                 const expiresAt = num(credit.expiresAt);
-                const actionable = str(credit.id) === nearestCreditId;
+                const actionable = resetProvider !== undefined && str(credit.id) === nearestCreditId;
                 const row = (
                   <Box sx={{ py: 1.1, width: "100%", textAlign: "left" }}>
                     <Stack
