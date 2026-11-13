@@ -95,7 +95,7 @@ fn private_directory() -> Result<PathBuf> {
     }
     let meta = std::fs::symlink_metadata(&directory)?;
     ensure!(
-        meta.is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0,
+        meta.is_dir() && meta.uid() == uid && meta.mode() & 0o777 == 0o700,
         "MCP descriptor directory is not private"
     );
     Ok(directory)
