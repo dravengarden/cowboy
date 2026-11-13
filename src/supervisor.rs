@@ -690,7 +690,7 @@ impl Supervisor {
                         listener(session_id);
                     }
                 } else {
-                    runtime.ensure(session);
+                    runtime.ensure_current_mcp_plan(session);
                 }
                 runtime.prompt_traced(session_id, content, cmid, trace);
             }
@@ -749,7 +749,7 @@ impl Supervisor {
                 listener(session_id);
             }
         } else {
-            runtime.ensure(session);
+            runtime.ensure_current_mcp_plan(session);
         }
         Ok(())
     }
@@ -869,7 +869,7 @@ impl Supervisor {
         if !has_worker && meta.status == Status::Exited {
             runtime.revive(session);
         } else {
-            runtime.ensure(session);
+            runtime.ensure_current_mcp_plan(session);
         }
         Ok(!has_worker)
     }

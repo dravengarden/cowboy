@@ -42,6 +42,41 @@ impl RemoteRuntime {
         self.observe_worker_authority(service, parent, Some(plan), true)
     }
 
+    /// Ensure the session, replacing an idle worker whose MCP launch plan is
+    /// no longer the session's current one (policy changed, or it launched
+    /// before content-addressed descriptors). Adoption can never move a live
+    /// worker's plan, so a plain ensure would only be refused on every send;
+    /// a reset re-declares the plan and relaunches with it. A prompt queued
+    /// after this call waits for the replacement. A busy worker keeps its turn.
+    pub fn ensure_current_mcp_plan(&self, session: crate::runtime_wire::StartSession) {
+        let stale = self
+            .shared
+            .workers
+            .lock()
+            .get(&session.session_id)
+            .is_some_and(|worker| {
+                worker.state == crate::runtime_wire::WorkerState::Running
+                    && worker.current_turn_id.is_none()
+                    && worker.has_connected_owner()
+                    && worker
+                        .launch
+                        .as_ref()
+                        .is_some_and(|launch| launch.mcp_plan != session.mcp_plan)
+            });
+        if !stale {
+            self.ensure(session);
+            return;
+        }
+        tracing::info!(
+            session = %session.session_id,
+            "replacing idle worker whose MCP launch plan is stale"
+        );
+        self.shared
+            .hub
+            .set_status(&session.session_id, crate::core::Status::Starting, None);
+        self.reset(session);
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn disconnect_for_test(&self) {
         self.shared
@@ -94,5 +129,56 @@ impl RemoteRuntime {
             "worker MCP launch differs from admitted plan"
         );
         Authority::for_worker(service, parent, worker).map(Some)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::runtime_wire::{CoreCommand, StartSession, WorkerSnapshot};
+    use serde_json::json;
+
+    fn worker(plan: &str, turn: Option<&str>) -> WorkerSnapshot {
+        serde_json::from_value(json!({
+            "session_id":"s","worker_epoch":"worker-one","generation":"gen","state":"running",
+            "current_turn_id":turn,
+            "launch":{"session_id":"s","provider":"codex","cwd":"/w","generation":"gen",
+                "mcp_plan":{"schema":1,"command":"/bin/cowboy",
+                    "bindings":[{"name":"suger","descriptor":plan}]}}
+        }))
+        .unwrap()
+    }
+
+    fn declaration(plan: &str) -> StartSession {
+        let mut session = worker(plan, None).launch.unwrap();
+        session.generation.clear();
+        session
+    }
+
+    fn commands(worker: WorkerSnapshot, plan: &str) -> Vec<CoreCommand> {
+        let runtime = super::RemoteRuntime::for_test(crate::core::Hub::new(), vec![worker]);
+        runtime.ensure_current_mcp_plan(declaration(plan));
+        runtime.pending_for_test()
+    }
+
+    fn resets(commands: &[CoreCommand]) -> bool {
+        commands.iter().any(|command| {
+            matches!(command, CoreCommand::StopSession { command_id, .. }
+                if command_id.starts_with("reset-"))
+        })
+    }
+
+    #[tokio::test]
+    async fn an_idle_worker_with_a_stale_mcp_plan_is_replaced_not_adopted() {
+        let stale = commands(worker("/old.json", None), "/new.json");
+        assert!(resets(&stale));
+        assert!(stale.iter().any(|command| matches!(command,
+            CoreCommand::EnsureSession { session }
+                if session.adopt_only && session.mcp_plan == declaration("/new.json").mcp_plan)));
+        assert!(!resets(&commands(worker("/new.json", None), "/new.json")));
+        // A running turn is never interrupted to refresh its plan.
+        assert!(!resets(&commands(
+            worker("/old.json", Some("turn")),
+            "/new.json"
+        )));
     }
 }
