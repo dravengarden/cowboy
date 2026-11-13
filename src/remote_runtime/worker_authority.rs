@@ -1,6 +1,8 @@
 //! Resolve authority only from the currently observed worker.
 use super::RemoteRuntime;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
+
+type Authority = crate::managed_calls::authority::Authority;
 
 impl RemoteRuntime {
     /// Resolve call authority from this runtime's current worker observation.
@@ -10,7 +12,7 @@ impl RemoteRuntime {
         &self,
         service: &str,
         parent: &crate::core::SessionMeta,
-    ) -> Result<crate::managed_calls::authority::Authority> {
+    ) -> Result<Authority> {
         self.worker_authority(service, parent, None)
     }
 
@@ -19,23 +21,25 @@ impl RemoteRuntime {
         service: &str,
         parent: &crate::core::SessionMeta,
         plan: &crate::mcp_binding::NativeLaunchPlan,
-    ) -> Result<crate::managed_calls::authority::Authority> {
+    ) -> Result<Authority> {
         plan.validate()?;
         self.worker_authority(service, parent, Some(plan))
     }
 
-    /// A transport gap or a broker registry placeholder hides the worker
-    /// owner without replacing it. Callers must not treat such an
-    /// unobservable worker as a different one; the next connected owner
-    /// observation decides.
-    pub fn worker_observation_pending(&self, session_id: &str) -> bool {
-        !self.connected()
-            || self
-                .shared
-                .workers
-                .lock()
-                .get(session_id)
-                .is_some_and(|worker| !worker.has_connected_owner())
+    /// Like [`Self::mcp_launch_authority`], but `Ok(None)` when the worker
+    /// owner is currently unobservable: the transport is down or the broker
+    /// reports only its registry placeholder. That gap hides a surviving
+    /// worker without replacing it, so it is classified from the same
+    /// observation instead of being read as a different worker. This is never
+    /// authority; callers use it only to decide whether a plan stays owned.
+    pub fn observe_mcp_launch_authority(
+        &self,
+        service: &str,
+        parent: &crate::core::SessionMeta,
+        plan: &crate::mcp_binding::NativeLaunchPlan,
+    ) -> Result<Option<Authority>> {
+        plan.validate()?;
+        self.observe_worker_authority(service, parent, Some(plan), true)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -50,8 +54,24 @@ impl RemoteRuntime {
         service: &str,
         parent: &crate::core::SessionMeta,
         plan: Option<&crate::mcp_binding::NativeLaunchPlan>,
-    ) -> Result<crate::managed_calls::authority::Authority> {
-        anyhow::ensure!(self.connected(), "parent runtime is disconnected");
+    ) -> Result<Authority> {
+        self.observe_worker_authority(service, parent, plan, false)?
+            .context("parent worker is unobservable")
+    }
+
+    fn observe_worker_authority(
+        &self,
+        service: &str,
+        parent: &crate::core::SessionMeta,
+        plan: Option<&crate::mcp_binding::NativeLaunchPlan>,
+        allow_pending: bool,
+    ) -> Result<Option<Authority>> {
+        // A runtime seeds its worker map before it is marked connected, so a
+        // connected read below observes the reconnected inventory.
+        if !self.connected() {
+            anyhow::ensure!(allow_pending, "parent runtime is disconnected");
+            return Ok(None);
+        }
         // Match merge_worker_snapshots' lock order (workers, then resetting).
         let workers = self.shared.workers.lock();
         let resetting = self.shared.resetting.lock();
@@ -62,6 +82,9 @@ impl RemoteRuntime {
         let worker = workers
             .get(&parent.id)
             .ok_or_else(|| anyhow::anyhow!("parent worker is unavailable"))?;
+        if allow_pending && !worker.has_connected_owner() {
+            return Ok(None);
+        }
         anyhow::ensure!(
             plan.is_none_or(|plan| worker
                 .launch
@@ -70,6 +93,6 @@ impl RemoteRuntime {
                 == Some(plan)),
             "worker MCP launch differs from admitted plan"
         );
-        crate::managed_calls::authority::Authority::for_worker(service, parent, worker)
+        Authority::for_worker(service, parent, worker).map(Some)
     }
 }

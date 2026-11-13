@@ -147,17 +147,26 @@ impl Fixture {
         Ok(())
     }
     fn worker(&self, plan: &crate::mcp_binding::NativeLaunchPlan, epoch: &str) {
+        let runtime = self.runtime(plan, epoch);
+        runtime.connect_for_test();
+        runtime
+            .mcp_launch_authority(&self.service, &self.meta, plan)
+            .unwrap();
+    }
+    /// Install a not-yet-connected runtime that reports this worker.
+    fn runtime(
+        &self,
+        plan: &crate::mcp_binding::NativeLaunchPlan,
+        epoch: &str,
+    ) -> Arc<crate::remote_runtime::RemoteRuntime> {
         let snapshot = serde_json::from_value(json!({"session_id":self.meta.id,"worker_epoch":epoch,"generation":"gen","state":"running","launch":{
             "session_id":self.meta.id,"provider":self.meta.provider,"provider_version":self.meta.provider_version,"provider_generation_digest":self.meta.provider_generation_digest,
             "provider_behavior":self.meta.provider_behavior,"cwd":self.meta.cwd,"system":false,"generation":"gen","execution_binding":self.meta.execution_binding,"mcp_plan":plan
         }})).unwrap();
         let runtime =
             crate::remote_runtime::RemoteRuntime::for_test(self.hub.clone(), vec![snapshot]);
-        runtime.connect_for_test();
+        self.runtimes.install("ovh".into(), Arc::clone(&runtime));
         runtime
-            .mcp_launch_authority(&self.service, &self.meta, plan)
-            .unwrap();
-        self.runtimes.install("ovh".into(), runtime);
     }
 }
 
@@ -269,8 +278,15 @@ async fn runtime_reconnect_keeps_the_plan_of_a_surviving_worker() {
     let plan = launches.resolve(&context, &f.meta).unwrap();
     f.worker(&plan, "worker-one");
     launches.resolve(&context, &f.meta).unwrap();
-    let runtime = f.runtimes.runtime("ovh").unwrap();
-    runtime.disconnect_for_test();
+    let kept = |launches: &Launches| {
+        launches.sweep(&context);
+        assert_eq!(launches.entries.lock().len(), 1);
+        assert_eq!(launches.resolve(&context, &f.meta).unwrap(), plan);
+    };
+    // WebSocket teardown: the runtime leaves the router and the Machine
+    // control connection is replaced.
+    let old = f.runtimes.runtime("ovh").unwrap();
+    f.runtimes.remove_if_current("ovh", &old);
     let (tx, _replacement) = mpsc::unbounded_channel();
     f.control.install(
         "ovh".into(),
@@ -279,14 +295,21 @@ async fn runtime_reconnect_keeps_the_plan_of_a_surviving_worker() {
         crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION,
         tx,
     );
-    assert_eq!(launches.resolve(&context, &f.meta).unwrap(), plan);
-    launches.sweep(&context);
-    assert_eq!(launches.entries.lock().len(), 1);
-    runtime.connect_for_test();
-    assert_eq!(launches.resolve(&context, &f.meta).unwrap(), plan);
+    kept(&launches);
+    // The next runtime is installed while still connecting.
+    let next = f.runtime(&plan, "worker-one");
+    kept(&launches);
+    // A broker registry placeholder hides the same worker without replacing it.
+    next.disconnect_for_test();
+    let placeholder = f.runtime(&plan, "broker-placeholder");
+    placeholder.connect_for_test();
+    kept(&launches);
+    let next = f.runtime(&plan, "worker-one");
+    next.connect_for_test();
+    kept(&launches);
     assert!(launches.ready_authority(&context, &f.meta).is_ok());
     assert!(f.commands.lock().await.try_recv().is_err());
-    // A connected runtime that no longer has the worker is a real change.
+    // A connected runtime without that worker is a real change.
     let empty = crate::remote_runtime::RemoteRuntime::for_test(f.hub.clone(), vec![]);
     empty.connect_for_test();
     f.runtimes.install("ovh".into(), empty);

@@ -143,24 +143,20 @@ impl Entry {
             self.owner.is_current(state.control, &binding),
             "MCP execution identity changed"
         );
-        let runtime = state
-            .runtimes
-            .runtime(&meta.machine_id)
-            .context("MCP runtime unavailable")?;
-        let current = runtime.mcp_launch_authority(state.service, &meta, self.owner.plan());
+        // Between a Machine WebSocket teardown and its next runtime install the
+        // worker is unobservable, not replaced; the next observation decides.
+        let Some(runtime) = state.runtimes.runtime(&meta.machine_id) else {
+            return Ok(());
+        };
+        let current = runtime.observe_mcp_launch_authority(state.service, &meta, self.owner.plan());
         let mut worker = self.worker.lock();
         match (worker.as_ref(), current) {
-            (Some(original), Ok(current)) => {
+            (_, Ok(None)) | (None, Err(_)) => {}
+            (Some(original), Ok(Some(current))) => {
                 ensure!(original.accepts(&current), "MCP worker changed");
             }
-            // An unobservable worker is not a replaced one. Only a connected
-            // owner observation may invalidate the plan it was launched with.
-            (Some(_), Err(error)) => ensure!(
-                runtime.worker_observation_pending(&meta.id),
-                "MCP worker changed: {error:#}"
-            ),
-            (None, Ok(current)) => *worker = Some(current),
-            (None, Err(_)) => {}
+            (Some(_), Err(error)) => anyhow::bail!("MCP worker changed: {error:#}"),
+            (None, Ok(Some(current))) => *worker = Some(current),
         }
         Ok(())
     }
