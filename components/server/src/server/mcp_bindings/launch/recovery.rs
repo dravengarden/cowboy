@@ -5,7 +5,7 @@ impl Launches {
         &self,
         state: &Context<'_>,
         cursor: &mut String,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut sessions = state.hub.session_list();
         sessions.sort_by(|a, b| a.id.cmp(&b.id));
         let start = sessions.partition_point(|meta| meta.id <= *cursor);
@@ -18,9 +18,12 @@ impl Launches {
             }
             // Advance even on failure so an unavailable Machine cannot starve others.
             *cursor = meta.id.clone();
-            return self.prepare_context(state, &meta.id, &stored.epoch).await;
+            return self
+                .prepare_context(state, &meta.id, &stored.epoch)
+                .await
+                .map(|()| true);
         }
-        Ok(())
+        Ok(false)
     }
 }
 
@@ -45,11 +48,18 @@ pub(super) fn start(state: &Arc<AppState>) {
             else {
                 continue;
             };
-            let _ = state
-                .extensions
-                .launches
-                .recover_next(&Context::from(state.as_ref()), &mut cursor)
-                .await;
+            // After a restart every surviving MCP worker waits on its owner:
+            // continue while sessions recover; a failure waits for the next tick.
+            for _ in 0..64 {
+                let recovered = state
+                    .extensions
+                    .launches
+                    .recover_next(&Context::from(state.as_ref()), &mut cursor)
+                    .await;
+                if !matches!(recovered, Ok(true)) || *state.shutdown.borrow() {
+                    break;
+                }
+            }
         }
     });
 }

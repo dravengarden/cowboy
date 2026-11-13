@@ -483,6 +483,43 @@ async fn native_descriptors_are_verified_private_and_connection_owned() {
 }
 
 #[tokio::test]
+async fn a_replacement_connection_prepares_the_same_descriptor_path() {
+    use crate::machine_plugins::McpSessions;
+    let (store, profile, _root) = installed().await;
+    let connection = |profile: &crate::mcp_binding::ProcessProfile| {
+        let scope =
+            std::sync::Arc::new(PluginExecutionScope::new(Some(&profile.service_id), "hawk"));
+        let sessions = McpSessions::new(&scope);
+        (scope, sessions)
+    };
+    let (old_scope, old) = connection(&profile);
+    let first = old.prepare_native(&store, profile.clone()).await.unwrap();
+    assert!(old.confirm_native(first["handle"].as_str().unwrap()));
+    let path = std::path::PathBuf::from(first["path"].as_str().unwrap());
+    // A Controller restart overlaps the old connection's teardown.
+    let (new_scope, new) = connection(&profile);
+    let second = new.prepare_native(&store, profile.clone()).await.unwrap();
+    assert_eq!(second["path"], first["path"]);
+    drop(old);
+    drop(old_scope);
+    assert!(
+        path.exists(),
+        "the replacement connection still owns the file"
+    );
+    drop(new);
+    drop(new_scope);
+    assert!(!path.exists());
+    // Without overlap the same content returns to the same path.
+    let (_scope, again) = connection(&profile);
+    let third = again.prepare_native(&store, profile.clone()).await.unwrap();
+    assert_eq!(third["path"], first["path"]);
+    let mut changed = profile.clone();
+    changed.epoch = "c".repeat(32);
+    let other = again.prepare_native(&store, changed).await.unwrap();
+    assert_ne!(other["path"], first["path"]);
+}
+
+#[tokio::test]
 async fn releasing_native_receipts_recovers_capacity_without_ending_the_connection() {
     use crate::machine_plugins::McpSessions;
     let (store, profile, _root) = installed().await;
@@ -523,7 +560,8 @@ async fn releasing_native_receipts_recovers_capacity_without_ending_the_connecti
     let fresh = sessions.prepare_native(&store, profile).await.unwrap();
     let fresh_path = std::path::PathBuf::from(fresh["path"].as_str().unwrap());
     assert!(fresh_path.exists());
-    assert_ne!(fresh_path, path);
+    // Content-addressed: the same profile and descriptor return to their path.
+    assert_eq!(fresh_path, path);
     drop(sessions);
     assert!(!fresh_path.exists());
 }

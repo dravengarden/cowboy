@@ -1819,9 +1819,7 @@ async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
         }
         let id = session.session_id.clone();
         if !native_admission::send(shared, writer, CoreCommand::EnsureSession { session }).await? {
-            shared
-                .hub
-                .broadcast_error(Some(id), "Worker recovery admission denied".into());
+            native_admission::declaration_denied(shared, id);
         }
     }
     Ok(())

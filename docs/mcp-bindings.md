@@ -528,8 +528,15 @@ retained worker's launch. The weakly owned cleanup loop removes invalid
 entries within one second; delivery refuses them immediately. Owners are neither
 serialized into Hub settings nor persisted across Controller restarts. After a
 restart, a weakly owned recovery loop rebuilds missing owners from current policy.
-It attempts one session per five-second tick, rotates past failures, and shares
-the mutation capacity limit. Source preparation is serialized; concurrent requests
+Each five-second tick recovers sessions back to back until one fails, rotates
+past failures, and shares the mutation capacity limit. Descriptor files are
+content-addressed on the execution Machine (a private per-user directory, keyed
+by store, profile and descriptor) and shared by every connection's receipts, so
+recovery re-prepares the exact plan a surviving worker launched with; the worker
+adopts again and its MCP authority still matches. Changed policy or generation
+content yields a new path. Until a session's owner recovers, the restart
+declaration for its surviving worker is deferred with a log line rather than
+reported as a session error; the Machine keeps its own declaration. Source preparation is serialized; concurrent requests
 receive a retryable refusal, and valid owners are reused. Every attempt repeats
 keeper identity and live policy checks. Recovery prepares metadata only: it does
 not start/reset a worker or grant authority. Native-provider recovery/E2E remains unfinished. Grant eligibility alone does

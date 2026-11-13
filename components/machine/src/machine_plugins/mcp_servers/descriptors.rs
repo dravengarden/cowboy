@@ -1,7 +1,7 @@
 //! Private, connection-owned startup metadata. Files carry no execution authority
-//! and disappear when their last receipt or connection releases them.
+//! and disappear when their last receipt on any connection releases them. Paths
+//! are content-addressed so a Controller restart re-prepares the same plan.
 use std::collections::HashMap;
-use std::io::Write as _;
 use std::sync::{Arc, Weak};
 
 use anyhow::{Result, ensure};
@@ -14,7 +14,7 @@ use crate::mcp_binding::{NativeDescriptor, ProcessProfile};
 struct Entry {
     profile: ProcessProfile,
     descriptor: NativeDescriptor,
-    file: tempfile::NamedTempFile,
+    file: Arc<super::descriptor_files::DescriptorFile>,
 }
 
 #[derive(Default)]
@@ -63,13 +63,11 @@ impl Descriptors {
         let entry = if let Some(entry) = existing {
             entry
         } else {
-            let bytes = serde_json::to_vec(&descriptor)?;
-            ensure!(bytes.len() <= 65536, "MCP descriptor too large");
-            let mut file = tempfile::Builder::new()
-                .prefix("cowboy-mcp-binding-")
-                .tempfile()?;
-            file.write_all(&bytes)?;
-            file.as_file().sync_all()?;
+            let file = super::descriptor_files::DescriptorFile::acquire(
+                &store.root,
+                profile,
+                &descriptor,
+            )?;
             Arc::new(Entry {
                 profile: profile.clone(),
                 descriptor,

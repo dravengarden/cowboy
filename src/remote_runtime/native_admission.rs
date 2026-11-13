@@ -204,6 +204,23 @@ fn mcp_launch_current(hub: &crate::core::Hub, command: &CoreCommand) -> bool {
     })
 }
 
+/// A Controller restart re-declares surviving workers before its in-memory MCP
+/// launch owners are recovered. That declaration is merely deferred: the
+/// Machine keeps its own, and recovery rebuilds the same content-addressed plan.
+pub(super) fn declaration_denied(shared: &Shared, session_id: String) {
+    let owner_pending = shared
+        .hub
+        .session_info(&session_id)
+        .is_some_and(|info| crate::controller_hooks::launch_mcp(&shared.hub, &info.meta).is_err());
+    if owner_pending {
+        tracing::info!(session = %session_id, "worker declaration deferred until its MCP launch owner recovers");
+        return;
+    }
+    shared
+        .hub
+        .broadcast_error(Some(session_id), "Worker recovery admission denied".into());
+}
+
 /// False is a pre-write denial. Any failure after starting a write closes the
 /// transport: partially written frames must never be treated as safe rejection.
 pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
@@ -333,4 +350,41 @@ fn validate_delivery(
         "mcp_launch_changed"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_unrecovered_mcp_owner_defers_the_restart_declaration_silently() {
+        let hub = crate::core::Hub::new();
+        let meta: crate::core::SessionMeta = serde_json::from_value(serde_json::json!({
+            "id":"s", "provider":"codex", "machine_id":"hawk",
+            "workspace_id":"project", "cwd":"/tmp", "title":"MCP", "status":"running"
+        }))
+        .unwrap();
+        hub.project_persisted_session(meta);
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![]);
+        let mut frames = hub.subscribe();
+        let key = format!(
+            "{}s",
+            crate::core::settings_keys::SESSION_MCP_BINDINGS_PREFIX
+        );
+        hub.set_setting(key.clone(), serde_json::json!({"bindings":[]}));
+        declaration_denied(&runtime.shared, "s".into());
+        while let Ok(frame) = frames.try_recv() {
+            assert!(
+                !matches!(**frame, crate::core::Outbound::Error { .. }),
+                "deferred"
+            );
+        }
+        hub.set_setting(key, serde_json::Value::Null);
+        declaration_denied(&runtime.shared, "s".into());
+        let mut reported = false;
+        while let Ok(frame) = frames.try_recv() {
+            reported |= matches!(**frame, crate::core::Outbound::Error { .. });
+        }
+        assert!(reported);
+    }
 }

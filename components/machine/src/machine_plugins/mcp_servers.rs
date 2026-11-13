@@ -127,6 +127,8 @@ mod process;
 pub use process::McpProcess;
 
 #[cfg(target_os = "linux")]
+mod descriptor_files;
+#[cfg(target_os = "linux")]
 mod descriptors;
 #[cfg(target_os = "linux")]
 mod sessions;
