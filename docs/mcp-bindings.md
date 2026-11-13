@@ -517,9 +517,14 @@ keeps confirmed receipts after preparation returns. Both launch entry points and
 queued delivery resolve it through the Hub's Controller callback; MCP launches
 also carry the required session-extension metadata on the fresh-session path.
 
-Delivery checks policy epoch, full placement, exact connections and pinned
-Provider identity. Once an exact ready worker is observed, replacement of that
-worker invalidates the owner. The weakly owned cleanup loop removes invalid
+Delivery checks policy epoch, full placement, the exact execution connection
+that owns the descriptors and pinned Provider identity. Once an exact ready
+worker is observed, replacement of that worker invalidates the owner. A runtime
+transport gap or broker placeholder is not replacement: the surviving worker
+already launched with this plan, so the owner and its descriptor paths stay
+until a connected observation shows a different or absent worker. Re-preparing
+on a runtime reconnect would make every later declaration conflict with the
+retained worker's launch. The weakly owned cleanup loop removes invalid
 entries within one second; delivery refuses them immediately. Owners are neither
 serialized into Hub settings nor persisted across Controller restarts. After a
 restart, a weakly owned recovery loop rebuilds missing owners from current policy.

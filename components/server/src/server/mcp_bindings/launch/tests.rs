@@ -257,6 +257,43 @@ async fn worker_replacement_cannot_reuse_a_ready_launch_owner() {
 }
 
 #[tokio::test]
+async fn runtime_reconnect_keeps_the_plan_of_a_surviving_worker() {
+    let f = Fixture::new().await;
+    let launches = Launches::default();
+    let context = f.context();
+    tokio::try_join!(
+        launches.prepare_context(&context, &f.meta.id, &f.epoch),
+        f.respond()
+    )
+    .unwrap();
+    let plan = launches.resolve(&context, &f.meta).unwrap();
+    f.worker(&plan, "worker-one");
+    launches.resolve(&context, &f.meta).unwrap();
+    let runtime = f.runtimes.runtime("ovh").unwrap();
+    runtime.disconnect_for_test();
+    let (tx, _replacement) = mpsc::unbounded_channel();
+    f.control.install(
+        "ovh".into(),
+        "epoch".into(),
+        false,
+        crate::machine_protocol::MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION,
+        tx,
+    );
+    assert_eq!(launches.resolve(&context, &f.meta).unwrap(), plan);
+    launches.sweep(&context);
+    assert_eq!(launches.entries.lock().len(), 1);
+    runtime.connect_for_test();
+    assert_eq!(launches.resolve(&context, &f.meta).unwrap(), plan);
+    assert!(launches.ready_authority(&context, &f.meta).is_ok());
+    assert!(f.commands.lock().await.try_recv().is_err());
+    // A connected runtime that no longer has the worker is a real change.
+    let empty = crate::remote_runtime::RemoteRuntime::for_test(f.hub.clone(), vec![]);
+    empty.connect_for_test();
+    f.runtimes.install("ovh".into(), empty);
+    assert!(launches.resolve(&context, &f.meta).is_err());
+}
+
+#[tokio::test]
 async fn controller_hook_delivers_owned_plan_and_refuses_connection_replacement() {
     let f = Arc::new(Fixture::new().await);
     let launches = Arc::new(Launches::default());

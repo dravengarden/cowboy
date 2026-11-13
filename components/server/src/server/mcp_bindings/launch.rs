@@ -36,10 +36,13 @@ pub(in crate::server) struct Launches {
     preparation: tokio::sync::Mutex<()>,
 }
 
+/// Descriptors are owned by the execution connection, so only that connection
+/// must stay exact. A runtime reconnect keeps a surviving worker, which already
+/// launched with this plan; re-preparing would hand it a different plan and
+/// make every later declaration conflict with that retained worker.
 struct Scope {
     session: String,
     stored: Stored,
-    runtime: ConnectionToken,
     execution: ConnectionToken,
     provider: (
         String,
@@ -73,12 +76,13 @@ impl Scope {
             stored.epoch == epoch && !stored.bindings.is_empty(),
             "MCP policy changed"
         );
+        // Preparation still starts only while the runtime Machine is connected.
+        state
+            .control
+            .operation_connection(&meta.machine_id)
+            .map_err(anyhow::Error::msg)?;
         let scope = Scope {
             session: session.into(),
-            runtime: state
-                .control
-                .operation_connection(&meta.machine_id)
-                .map_err(anyhow::Error::msg)?,
             execution: state
                 .control
                 .operation_connection(&stored.placement.execution_machine)
@@ -98,7 +102,7 @@ impl Scope {
     fn current(&self, state: &Context<'_>) -> Result<SessionMeta> {
         ensure!(!*state.shutdown.borrow(), "Controller is stopping");
         ensure!(
-            state.control.is_current(&self.runtime) && state.control.is_current(&self.execution),
+            state.control.is_current(&self.execution),
             "MCP connection changed"
         );
         let meta = state
@@ -145,15 +149,18 @@ impl Entry {
             .context("MCP runtime unavailable")?;
         let current = runtime.mcp_launch_authority(state.service, &meta, self.owner.plan());
         let mut worker = self.worker.lock();
-        if let Some(original) = worker.as_ref() {
-            ensure!(
-                current
-                    .as_ref()
-                    .is_ok_and(|current| original.accepts(current)),
-                "MCP worker changed"
-            );
-        } else if let Ok(current) = current {
-            *worker = Some(current);
+        match (worker.as_ref(), current) {
+            (Some(original), Ok(current)) => {
+                ensure!(original.accepts(&current), "MCP worker changed");
+            }
+            // An unobservable worker is not a replaced one. Only a connected
+            // owner observation may invalidate the plan it was launched with.
+            (Some(_), Err(error)) => ensure!(
+                runtime.worker_observation_pending(&meta.id),
+                "MCP worker changed: {error:#}"
+            ),
+            (None, Ok(current)) => *worker = Some(current),
+            (None, Err(_)) => {}
         }
         Ok(())
     }

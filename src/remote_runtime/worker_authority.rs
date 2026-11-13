@@ -24,6 +24,20 @@ impl RemoteRuntime {
         self.worker_authority(service, parent, Some(plan))
     }
 
+    /// A transport gap or a broker registry placeholder hides the worker
+    /// owner without replacing it. Callers must not treat such an
+    /// unobservable worker as a different one; the next connected owner
+    /// observation decides.
+    pub fn worker_observation_pending(&self, session_id: &str) -> bool {
+        !self.connected()
+            || self
+                .shared
+                .workers
+                .lock()
+                .get(session_id)
+                .is_some_and(|worker| !worker.has_connected_owner())
+    }
+
     fn worker_authority(
         &self,
         service: &str,
