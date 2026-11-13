@@ -379,11 +379,6 @@ impl RemoteRuntime {
         self.shared.connected.store(true, Ordering::Release);
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn disconnect_for_test(&self) {
-        self.shared.connected.store(false, Ordering::Release);
-    }
-
     #[cfg(all(any(test, feature = "test-support"), feature = "machine-host"))]
     pub async fn project_trace_fixture(&self, frame: Frame) {
         handle_frame(&self.shared, frame, &mut tokio::io::sink())

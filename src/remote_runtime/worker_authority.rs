@@ -38,6 +38,13 @@ impl RemoteRuntime {
                 .is_some_and(|worker| !worker.has_connected_owner())
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn disconnect_for_test(&self) {
+        self.shared
+            .connected
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+
     fn worker_authority(
         &self,
         service: &str,
