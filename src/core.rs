@@ -28,6 +28,7 @@ use crate::persistence::EventReducer;
 use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 
 mod code_scope;
+mod context_rollover;
 mod mcp_launch;
 mod review_defaults;
 pub use review_defaults::LanguageServerTrust;
@@ -112,15 +113,6 @@ fn is_user_message_chunk(envelope: &Envelope) -> bool {
     )
 }
 
-fn is_context_cleared(envelope: &Envelope) -> bool {
-    matches!(
-        &envelope.event,
-        Event::Update { update }
-            if update.get("sessionUpdate").and_then(serde_json::Value::as_str)
-                == Some("context_cleared")
-    )
-}
-
 fn is_turn_end(envelope: &Envelope) -> bool {
     matches!(envelope.event, Event::TurnEnd { .. })
 }
@@ -146,7 +138,7 @@ fn current_context_has_user_message(session: &Session) -> bool {
             // A forked native thread holds the copied conversation.
             return true;
         }
-        if is_context_cleared(envelope) {
+        if crate::context_rollover::is_context_boundary(envelope) {
             return false;
         }
     }

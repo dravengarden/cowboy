@@ -11,8 +11,8 @@ pub use cowboy::local_operator;
 pub use cowboy::test_fifo;
 pub use cowboy::{
     acp, admin, agent_api, agent_model, auth_plugins, browser_device, cli, client_auth,
-    code_adapter, code_buffer_read, code_cache, code_review, composition, config, core,
-    core_passkeys, core_security, deepseek_cache, diff_snapshot, durable_state,
+    code_adapter, code_buffer_read, code_cache, code_review, composition, config, context_rollover,
+    core, core_passkeys, core_security, deepseek_cache, diff_snapshot, durable_state,
     execution_environment, execution_protocol, files, generation_retention, logs, machine_auth,
     machine_control, machine_convergence, machine_lanes, machine_protocol, machine_transport,
     managed_calls, managed_config, mcp_binding, memory_observability, observability, oidc,

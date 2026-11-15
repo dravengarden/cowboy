@@ -156,6 +156,7 @@ pub(super) fn apply(
             &state.hub, &source.id
         )),
     );
+    super::rollover::inherit(state, &source.id, &target.id);
     let policy = super::super::send_delivery::policy(&state.hub, &source.id);
     state.hub.set_setting(
         format!(

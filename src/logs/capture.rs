@@ -716,6 +716,21 @@ fn field_name(name: &str) -> Option<&'static str> {
         "headroom_bytes" => "cowboy.headroom_bytes",
         "memory_bytes" => "cowboy.memory_bytes",
         "attempt" => "cowboy.attempt",
+        // Context renewal decisions and the first turn that follows them:
+        // counts and identifiers only, never prompt or transcript text.
+        "provider" => "cowboy.provider.id",
+        "outcome" => "cowboy.outcome",
+        "renewed" => "cowboy.context.renewed",
+        "context_used" => "cowboy.context.used_tokens",
+        "min_context" => "cowboy.context.min_tokens",
+        "threshold_ms" => "cowboy.threshold_ms",
+        "boundary" => "cowboy.context.boundary_seq",
+        "digest_bytes" => "cowboy.context.digest_bytes",
+        "input_tokens" => "gen_ai.usage.input_tokens",
+        "output_tokens" => "gen_ai.usage.output_tokens",
+        "cached_input_tokens" => "gen_ai.usage.cache_read.input_tokens",
+        "cache_write_tokens" => "gen_ai.usage.cache_creation.input_tokens",
+        "uncached_input_tokens" => "cowboy.usage.uncached_input_tokens",
         _ => return None,
     })
 }

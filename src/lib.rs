@@ -60,6 +60,8 @@ pub mod composition;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod config;
 #[cfg(feature = "full")]
+pub mod context_rollover;
+#[cfg(feature = "full")]
 pub mod controller_hooks;
 #[cfg(feature = "full")]
 pub mod core;

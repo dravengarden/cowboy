@@ -3158,7 +3158,7 @@ fn clear_transcript_discards_history_before_the_new_boundary() {
     let (events, reached_start) = hub.snapshot("clear-history").expect("snapshot");
     assert!(reached_start);
     assert_eq!(events.len(), 1);
-    assert!(is_context_cleared(&events[0]));
+    assert!(crate::context_rollover::is_context_boundary(&events[0]));
     assert_eq!(
         hub.session_info("clear-history")
             .expect("session")

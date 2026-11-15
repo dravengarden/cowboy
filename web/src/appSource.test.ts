@@ -31,6 +31,7 @@ export const SPLIT_SOURCES = {
     "./ComposerSheet.tsx",
     "./composerImageSelection.tsx",
     "./DraftMoveSurfaces.tsx",
+    "./ContextRolloverSettings.tsx",
   ],
   "mobile/review/ReviewApp.tsx": [
     "./mobile/review/ReviewApp.tsx",

@@ -7,6 +7,7 @@ use crate::session_context::{Context, Delivery, Injection, Link, NextAgent, Sour
 mod cancel;
 mod fork;
 mod inheritance;
+pub(super) mod rollover;
 pub(super) use cancel::cancel;
 pub(super) use fork::{duplicate, fork};
 
@@ -245,7 +246,8 @@ fn view(
 ) -> Result<serde_json::Value, String> {
     let resumed = owned(state, principal, id)?.meta.handoff_resumed;
     let context = crate::session_context::read(&state.hub, id)?;
-    let links: Vec<_> = context.known_links().iter().map(|link| {
+    // A renewal's self-link is this session's own history, not a linked session.
+    let links: Vec<_> = context.known_links().iter().filter(|link| link.session_id != id).map(|link| {
         match owned(state, principal, &link.session_id) {
             Ok(info) => serde_json::json!({"id":link.session_id,"available":true,"title":info.meta.title,"provider":info.meta.provider,"provider_account_id":info.meta.provider_account_id,"before":link.before}),
             Err(_) => serde_json::json!({"id":link.session_id,"available":false,"title":link.title}),
@@ -439,6 +441,7 @@ pub(super) async fn set(
             links,
             waiting,
             workspace_base: current.workspace_base,
+            rollover: current.rollover,
         };
         current_authority(&state, &auth)?;
         owned(&state, &auth.principal, &id)?;

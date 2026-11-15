@@ -15,6 +15,7 @@ use serde::Deserialize;
 use tower::ServiceExt as _;
 
 mod browser_routes;
+mod context_routes;
 
 static EFFECTS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(16)));
 
@@ -519,31 +520,6 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/sessions/{session_id}/review-fetch",
             post(web::api_review_fetch),
         ),
-        "sessions.duplicate" => (
-            "POST",
-            "/api/sessions/{session_id}/duplicate",
-            post(web::session_context::duplicate),
-        ),
-        "sessions.context" => (
-            "GET",
-            "/api/sessions/{session_id}/context",
-            get(web::session_context::get),
-        ),
-        "sessions.context_set" => (
-            "PUT",
-            "/api/sessions/{session_id}/context",
-            put(web::session_context::set),
-        ),
-        "sessions.context_send" => (
-            "POST",
-            "/api/sessions/{session_id}/context/send",
-            post(web::session_context::send),
-        ),
-        "sessions.fork" => (
-            "POST",
-            "/api/sessions/{session_id}/fork",
-            post(web::session_context::fork),
-        ),
         "queue.policy_set" => (
             "PUT",
             "/api/sessions/{session_id}/delivery-policy",
@@ -713,7 +689,10 @@ fn route(name: &str) -> Option<(&'static str, &'static str, MethodRouter<Arc<App
             "/api/drafts/{id}/history/{revision}",
             get(web::draft_documents::history_snapshot),
         ),
-        _ => return browser_routes::browser_route(name),
+        _ => {
+            return context_routes::context_route(name)
+                .or_else(|| browser_routes::browser_route(name));
+        }
     })
 }
 

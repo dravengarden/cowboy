@@ -1335,18 +1335,22 @@ async fn serve_axum(
         state.shutdown.clone(),
     ));
 
-    let provider_update_task = tokio::spawn(session_provider_updates::run(Arc::clone(&state)));
-    let execution_reconciler_task = tokio::spawn(execution::reconciler::run(Arc::clone(&state)));
-    let generation_retention_task = tokio::spawn(run_generation_retention(Arc::clone(&state)));
     let adoption_state = Arc::clone(&state);
-    let shared_authentication_task = tokio::spawn(async move {
-        adopt_shared_provider_authentication(&adoption_state).await;
-    });
-    let trash_retention_task = tokio::spawn(session_trash::run_retention(Arc::clone(&state)));
-    let account_recovery_task = tokio::spawn(provider_accounts::run_recovery(Arc::clone(&state)));
-    let usage_broadcast_task = tokio::spawn(run_usage_broadcast(Arc::clone(&state)));
-    let superagent_task = tokio::spawn(superagent::run(Arc::clone(&state)));
-    let native_usage_task = tokio::spawn(provider_accounts::usage::run(Arc::clone(&state)));
+    // Aborted together once the server stops serving.
+    let background_tasks = [
+        tokio::spawn(session_provider_updates::run(Arc::clone(&state))),
+        tokio::spawn(execution::reconciler::run(Arc::clone(&state))),
+        tokio::spawn(run_generation_retention(Arc::clone(&state))),
+        tokio::spawn(async move {
+            adopt_shared_provider_authentication(&adoption_state).await;
+        }),
+        tokio::spawn(session_trash::run_retention(Arc::clone(&state))),
+        tokio::spawn(provider_accounts::run_recovery(Arc::clone(&state))),
+        tokio::spawn(run_usage_broadcast(Arc::clone(&state))),
+        tokio::spawn(superagent::run(Arc::clone(&state))),
+        tokio::spawn(provider_accounts::usage::run(Arc::clone(&state))),
+        tokio::spawn(session_context::rollover::observe(Arc::clone(&state))),
+    ];
     let code_buffers = Arc::clone(&state.code_buffers);
     let result = axum::serve(
         listener,
@@ -1358,15 +1362,9 @@ async fn serve_axum(
     #[cfg(unix)]
     local_operator.shutdown().await;
     convergence_task.abort();
-    provider_update_task.abort();
-    execution_reconciler_task.abort();
-    generation_retention_task.abort();
-    shared_authentication_task.abort();
-    trash_retention_task.abort();
-    account_recovery_task.abort();
-    usage_broadcast_task.abort();
-    superagent_task.abort();
-    native_usage_task.abort();
+    for task in &background_tasks {
+        task.abort();
+    }
     code_buffers.shutdown().await;
     result?;
     Ok(())

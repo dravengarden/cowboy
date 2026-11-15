@@ -47,6 +47,7 @@ pub fn defaults(scope: &str) -> Option<Preferences> {
         "subscriptions" => json!({"legacy_labels":{}}),
         "trash" => json!({"retention_days": TRASH_RETENTION_DEFAULT_DAYS}),
         crate::superagent::SCOPE => json!({"configuration":crate::superagent::Settings::default()}),
+        crate::context_rollover::PREFERENCE_SCOPE => crate::context_rollover::default_preferences(),
         _ => return None,
     };
     Some(Preferences {
@@ -69,6 +70,11 @@ pub fn schema() -> Value {
         "superagent":{"storage":"database","ownership":"current_user","default":{"configuration":crate::superagent::Settings::default()},
         "update":"preferences.update with expected_revision and changes:{configuration}; supplied sources/projects/sessions replace their field, omitted fields are retained; atomic validation and durable receipt",
         "discovery":"cowboy_read({help:'superagent'})","semantics":"Explicit project coordinator bindings and session enrollment; immutable Markdown knowledge grants no external-action permission. Coordinators cannot edit settings."},
+        "context_rollover":{"storage":"database","ownership":"current_user",
+        "fields":{"enabled":{"type":"boolean","default":true},
+                  "min_context_tokens":{"type":"integer","min":8_000,"max":2_000_000,"default":crate::context_rollover::DEFAULT_MIN_CONTEXT_TOKENS},
+                  "idle_minutes":{"type":"provider_minutes_map","default":{},"values":"integer 1..10080, or null to never renew that Provider","builtin":{"claude-code":60}}},
+        "semantics":"Default for renewing a session's agent context when its next message arrives after the Provider prompt cache expired: same session, worktree and settings; a fresh native context reads the earlier history on demand. Applies only when idle >= idle_minutes for the session's Provider and the context holds >= min_context_tokens. idle_minutes replaces the complete map; omitted Providers use the built-in preset (only claude-code renews by default). Per-session override: sessions.context_rollover_set."},
         "trash":{"storage":"database","ownership":"current_user",
         "fields":{"retention_days":{"type":"integer","min":1,"max":365,"default":30}},
         "semantics":"Days a session or folder stays in Trash before the Controller deletes it permanently. Applies to items already in Trash: each deadline is trashed_at + retention_days. Move items with sessions.trash, bring them back with sessions.restore."},
@@ -88,6 +94,13 @@ fn valid(change: &PreferenceChange) -> bool {
         && change.changes.as_object().is_some_and(|fields| {
             !fields.is_empty()
                 && fields.iter().all(|(key, value)| {
+                    if change.scope == crate::context_rollover::PREFERENCE_SCOPE {
+                        return crate::context_rollover::valid_preference(
+                            key,
+                            value,
+                            super::provider_accounts::provider_id_valid,
+                        );
+                    }
                     if change.scope == "trash" {
                         return key == "retention_days"
                             && value.as_i64().is_some_and(|days| {

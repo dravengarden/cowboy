@@ -1,0 +1,135 @@
+# Context renewal after prompt-cache expiry
+
+Status: implemented 2026-11-15 for Claude Code; other Providers are off by
+default.
+
+## Problem
+
+Resuming an idle native conversation re-sends its whole context. While the
+Provider prompt cache is warm, that costs a cache read (0.025x–0.1x input).
+After it expires, the first request is billed as a cold cache write of every
+token: 1.25x input on a five-minute cache, 2x on Claude's one-hour cache. A
+300k-token Claude session idle for two hours therefore pays for about 600k
+input-equivalent tokens before doing any work.
+
+Cowboy traffic measured on 2026-11-15 (per-turn `TurnUsage` grouped by the gap
+between the previous `turn_end` and the next human prompt):
+
+| Provider | Gap | Turns | Mean cache write / uncached per turn | Miss ratio |
+|---|---|---|---|---|
+| claude-code | < 5 min | 2769 | 14k | 1.9% |
+| claude-code | 30–60 min | 167 | 40k | 3.2% |
+| claude-code | 1–3 h | 157 | 336k | 33% |
+| claude-code | > 12 h | 105 | 420k | 40% |
+| codex | 1–3 h | 14 | 144k uncached | 3.0% |
+| codex | 3–12 h | 9 | 328k uncached | 11.6% |
+
+Claude Code on an included subscription requests a one-hour TTL for the main
+conversation (`code.claude.com/docs/en/prompt-caching`); the jump past one hour
+confirms it. Codex kept most of its cache for hours (GPT-5.6+ guarantees at
+least 30 minutes; OpenAI says logged-in Codex users keep it much longer), and
+DeepSeek misses are cheap and already covered by its cache protection.
+
+## Behavior
+
+When an authored message (not a slash command, scheduler or managed call)
+reaches the dispatcher and all of these hold, Cowboy renews the context first:
+
+- renewal is enabled for the session (its override, else the owner's
+  `preferences.context_rollover.enabled`, default on);
+- the Provider has an idle preset (`claude-code`: 60 minutes; others: none
+  unless the owner sets `idle_minutes`);
+- the session has been idle (no activity event) at least that long. Idle is
+  measured from the last event, which never exceeds the time since the last
+  request started, so a full TTL guarantees the cache is gone;
+- `context_used` is at least `min_context_tokens` (default 80k). Below that the
+  fresh context's own system prompt and reads would cost about as much;
+- the session is quiescent: ordinary, resumable native id, no background work,
+  no context send or staged links, and either dormant (`exited`) or an idle
+  local worker (`running`, no execution binding). Crashed, interrupted and
+  remote-execution sessions resume normally.
+
+Renewal keeps the Cowboy session, worktree, settings, queue and full
+transcript. It records a self-link (`{session_id: self, before: boundary}`)
+and a `Rollover` record on the session context, forgets the native session id
+(so the next launch is `session/new`), and appends a `context_rolled_over`
+divider. A live idle worker is replaced and the message waits in the queue
+until the fresh agent runs; a dormant session simply starts fresh.
+
+The first prompt carries the shared linked-context preamble with a renewal
+body: the boundary, why the context was renewed, a deterministic digest
+(first request, the latest three human messages and the final reply of the
+last turn, truncated, reminder tags neutralized) and instructions to recover
+anything else on demand with `sessions.search` / `sessions.history` /
+`sessions.event` bounded by `before`. The digest is computed once and stored,
+so a retried prompt receives the identical preamble and requeue strips it.
+No model call produces it and no history is copied.
+
+Everything that treats Clear as the start of the native context (fork answer
+lookup, Provider-version portability) also treats the renewal marker as one.
+Unlike Clear, the Web keeps every earlier row; the divider is an info notice.
+
+## Control
+
+- Session: Session Settings → "Fresh context after cache expiry";
+  `GET|PUT /api/sessions/{id}/context-rollover` (`{enabled: bool|null}`, null
+  inherits); MCP `sessions.context_rollover` / `sessions.context_rollover_set`.
+- Owner defaults: preferences scope `context_rollover`
+  (`enabled`, `min_context_tokens` 8k–2M, `idle_minutes` map of Provider →
+  1–10080 or null). Discover with `cowboy.preferences.schema()`.
+- A continuation inherits the source's explicit session choice.
+
+## Evidence: did it meet expectations?
+
+Every judgement must come from recorded data, in two layers.
+
+**Durable (transcript, no retention limit).** The `context_rolled_over` marker
+stores `idleMs` and `contextUsed`, and every `turn_end` keeps its `TurnUsage`
+(input, cache read, cache write, uncached). `tools/context-rollover-report.ts`
+groups turns by Provider, idle gap before the human prompt and whether a
+renewal preceded it:
+
+```bash
+nix develop -c bun tools/context-rollover-report.ts /var/lib/cowboy/cowboy.sqlite3 --days 30 [--json]
+```
+
+Expected: renewed Claude turns past one idle hour show a mean cache write near
+the fresh context's size (system prompt + preamble + reads, tens of
+thousands) instead of the 290k–390k cold resume baseline above, and
+`fresh_ratio` falls toward the warm buckets. Later turns stay smaller because
+the context is smaller.
+
+**Controller evidence log (`cowboy::evidence`, local OTel store, ~7 days).**
+
+| Event | When | Attributes |
+|---|---|---|
+| `cowboy.context_rollover.decision` | every authored prompt after ≥5 min idle | `cowboy.provider.id`, `cowboy.outcome` (`renewed`, `no_preset`, `disabled`, `cache_warm`, `small_context`, `not_quiescent`, `context_pending`, `context_unreadable`, `no_history`, `record_failed`), `cowboy.idle_ms`, `cowboy.context.used_tokens`, `cowboy.threshold_ms`, `cowboy.context.min_tokens` |
+| `cowboy.context_rollover.first_turn` | the turn that answers that prompt | `cowboy.context.renewed`, idle, context before, `gen_ai.usage.input_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, `cowboy.usage.uncached_input_tokens`, `gen_ai.usage.output_tokens`, `cowboy.duration_ms` (dispatch → turn end, includes a worker relaunch) |
+| `cowboy.context_rollover.history_read` | a renewed session reads its own history | `cowboy.operation` (`history`/`search`/`event`), `cowboy.bytes` returned, `cowboy.context.boundary_seq` |
+
+```bash
+cowboy logs --directory /var/lib/cowboy/logs query --from 7d --event cowboy.context_rollover.first_turn --limit 500
+cowboy logs --directory /var/lib/cowboy/logs metrics --from 7d   # duration histograms per event
+```
+
+Check the reported `coverage` before treating a window as complete. Questions
+these answer: how often renewal fires and why it is skipped; the first-turn
+cost with and without renewal per idle bucket; how many on-demand reads and
+bytes a renewal needs (a high count means the digest is too thin, zero reads
+with user corrections means it may be missing context); and the latency a
+live-worker relaunch adds. The log carries counts and identifiers only, never
+prompt or transcript text.
+
+## Limits
+
+- A running turn whose cache expires mid-turn (long tools, waiting for
+  approval or subagents) cannot be renewed; it pays the miss.
+- An over-limit Claude subscription or API key uses a five-minute TTL; the
+  60-minute preset then renews later than the cache expires (no worse than
+  before).
+- The digest uses the held log tail; after memory reclaim it may be partial,
+  and the agent relies on the on-demand reads.
+
+The local layer can be deleted when Providers resume idle conversations
+without a cold full-context write, or the native CLIs perform an equivalent
+lazy renewal themselves.

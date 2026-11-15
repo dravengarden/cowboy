@@ -230,25 +230,14 @@ impl Host for SessionHost<'_> {
         }
         match op {
             op if op.starts_with("code.") => self.code(op, &args).await,
-            "session.event" | "sessions.event" => {
-                let value = event_reads::read(
+            "session.event" | "sessions.event" | "session.search" | "sessions.search"
+            | "session.history" | "sessions.history" => {
+                let value = event_reads::transcript(
                     &self.state.hub,
                     self.state.store.as_ref(),
                     self.meta,
-                    op == "sessions.event",
-                    &args,
-                )
-                .await?;
-                actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
-                Ok(value)
-            }
-            "session.search" | "sessions.search" => {
-                let value = event_reads::search(
-                    &self.state.hub,
-                    self.state.store.as_ref(),
-                    self.meta,
-                    op == "sessions.search",
-                    &args,
+                    op,
+                    args,
                 )
                 .await?;
                 actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
@@ -279,18 +268,6 @@ impl Host for SessionHost<'_> {
                     })
                     .collect::<Vec<_>>();
                 Ok(json!({"calls":calls,"next_before":next}))
-            }
-            "session.history" | "sessions.history" => {
-                let value = session_reads::history(
-                    &self.state.hub,
-                    self.state.store.as_ref(),
-                    self.meta,
-                    op == "sessions.history",
-                    args,
-                )
-                .await?;
-                actions::read_parent(&self.state.hub, self.state.store.as_ref(), self.meta).await?;
-                Ok(value)
             }
             "session.info" | "session.usage" | "session.queue" | "session.drafts"
             | "session.message" | "session.events" | "sessions.info" | "sessions.usage"

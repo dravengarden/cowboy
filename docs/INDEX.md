@@ -48,6 +48,7 @@ primary phone/desktop product path.
 - [`examples/superagent-patterns/patterns/suger-delivery.md`](examples/superagent-patterns/patterns/suger-delivery.md) — Inactive example: Suger company-project delivery ownership
 - [`examples/superagent-patterns/patterns/columbus-delivery.md`](examples/superagent-patterns/patterns/columbus-delivery.md) — Inactive example: Columbus and external-project delivery routing
 - [`examples/superagent-patterns/patterns/cowboy-delivery.md`](examples/superagent-patterns/patterns/cowboy-delivery.md) — Inactive example: Cowboy component release evidence
+- [`context-rollover.md`](context-rollover.md) — Renewing an idle session's agent context after the Provider prompt cache expired: measured presets, digest preamble and on-demand history reads
 - [`session-context.md`](session-context.md) — Multiple session links, staged fresh-agent selection, account isolation and first-send recovery
 - [`session-fork.md`](session-fork.md) — Native ACP session fork from a whole conversation or a turn-final message, forked worktree state, admission and retries
 - [`background-tasks.md`](background-tasks.md) — Background tasks: one compact row, inspector and bar for subagents and Calls; durable transcript anchors, terminal-state reconciliation, approval binding, diagnostics (Phase 1 implemented) and the later notification/native-work/capability phases

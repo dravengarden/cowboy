@@ -50,6 +50,8 @@ pub const SESSION_HANDOFF_RESUMED_PREFIX: &str = "session_handoff_resumed:";
 pub const SESSION_FORK_PREFIX: &str = "session_fork:";
 /// Per-session opt-in for idle Provider updates; the session id follows.
 pub const SESSION_PROVIDER_AUTO_UPDATE_PREFIX: &str = "session_provider_auto_update:";
+/// Per-session context renewal override (bool); the session id follows.
+pub const SESSION_CONTEXT_ROLLOVER_PREFIX: &str = "session_context_rollover:";
 /// Agent tools defaults for one agent kind; the agent id follows.
 pub const AGENT_TOOLS_PREFIX: &str = "agent_tools:";
 /// A session's agent tools override; the session id follows.
@@ -99,6 +101,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_HANDOFF_RESUMED_PREFIX,
             SESSION_FORK_PREFIX,
             SESSION_PROVIDER_AUTO_UPDATE_PREFIX,
+            SESSION_CONTEXT_ROLLOVER_PREFIX,
             AGENT_TOOLS_PREFIX,
             SESSION_TOOLS_PREFIX,
             SESSION_MCP_BINDINGS_PREFIX,
@@ -134,6 +137,7 @@ pub fn examples() -> Vec<String> {
         format!("{SESSION_HANDOFF_RESUMED_PREFIX}sess-1"),
         format!("{SESSION_FORK_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_AUTO_UPDATE_PREFIX}sess-1"),
+        format!("{SESSION_CONTEXT_ROLLOVER_PREFIX}sess-1"),
         format!("{AGENT_TOOLS_PREFIX}codex"),
         format!("{SESSION_TOOLS_PREFIX}sess-1"),
         format!("{SESSION_MCP_BINDINGS_PREFIX}sess-1"),

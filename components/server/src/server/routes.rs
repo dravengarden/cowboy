@@ -431,6 +431,10 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/sessions/{id}/cache-protection",
             get(api_session_cache_protection),
         )
+        .route(
+            "/api/sessions/{id}/context-rollover",
+            get(session_context::rollover::get).put(session_context::rollover::set),
+        )
         .route("/api/sessions/{id}/question-pages", get(api_question_pages))
         .route(
             "/api/sessions/{id}/question-pages/{page_id}",

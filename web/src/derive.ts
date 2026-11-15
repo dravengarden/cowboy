@@ -10,6 +10,7 @@ import { type Elicitation, elicitationOf } from "./elicitation";
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
 import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
 import { isTurnActivityUpdate } from "./turnWaiting";
+import { contextBoundaryItem } from "./contextBoundaries";
 import { resultStatus, toolContent } from "./tools/result";
 import {
   mergeSubagent,
@@ -682,29 +683,13 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             callIndex.set(callId, items.length - 1);
             break;
           }
-          case "cowboy_fork_origin": {
-            const source = u["sourceSessionId"];
-            if (typeof source !== "string" || !source) break;
-            const title = u["sourceTitle"];
-            items.push({
-              kind: "forked",
-              key: String(env.seq),
-              sourceSessionId: source,
-              sourceTitle: typeof title === "string" ? title : "",
-              atMessage: typeof u["messageId"] === "string",
-            });
-            cursor = null;
-            break;
-          }
-          case "context_cleared": {
-            // The "Clear conversation" reset (src/core.rs mark_context_cleared):
-            // render a divider so the user sees where the agent's memory was cut.
-            const at = u["at"];
-            items.push({
-              kind: "cleared",
-              at: typeof at === "number" ? at : 0,
-              key: String(env.seq),
-            });
+          case "cowboy_fork_origin":
+          case "context_cleared":
+          case "context_rolled_over": {
+            // Where the agent's native context starts over (fork, Clear, renewal).
+            const item = contextBoundaryItem(u, String(env.seq));
+            if (item) items.push(item);
+            if (item && item.kind !== "cleared") cursor = null;
             break;
           }
           // `plan` is NOT rendered inline — it's surfaced by the pinned PlanDock

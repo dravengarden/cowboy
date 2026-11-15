@@ -13,7 +13,6 @@ import { SessionAccountDetails } from "./SessionAccountDetails";
 import { resolveProviderAuthenticationPresentation } from "@cowboy/provider-ui";
 import { sessionProviderFacts, sessionProviderManageLabel, sessionProviderNeedsAttention, sessionProviderShowsUsage, sessionProviderSummary, sessionProviderUsageEmptyMessage, sessionProviderUsageRows, workspaceOptionsSummary } from "./sessionSettingsPresentation";
 import { providerUsage, providerUsageAccount, usageRefreshing } from "./usageLimits";
-import { expectHttpOk } from "./httpResponse";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { ProviderUpdateCard } from "./ProviderUpdateCard";
 import { ProviderUpdateDialog } from "./ProviderUpdateDialog";
@@ -40,6 +39,7 @@ import { ConfirmSheet, Sheet } from "./Sheet";
 import { MobileSheetDismiss } from "@cowboy/app-shell";
 import { type SessionSettingsFocus } from "./sessionSettingsOpen";
 import { ConfigRevertBack } from "./ConfigRevertBack";
+import { ContextRolloverSettings, useCacheProtectionStatus } from "./ContextRolloverSettings";
 
 export function SessionActionConfirmDialog({
   action,
@@ -776,45 +776,8 @@ export function SessionInfoSection({
     session.provider_version,
     session.provider_generation_digest,
   );
-  const [cacheProtection, setCacheProtection] = useState<
-    DeepseekCacheProtectionStatus | null
-  >(null);
-  const [cacheProtectionUnavailable, setCacheProtectionUnavailable] = useState(
-    false,
-  );
-  useEffect(() => {
-    if (!cacheProtectionVisible) {
-      setCacheProtection(null);
-      setCacheProtectionUnavailable(false);
-      return;
-    }
-    const controller = new AbortController();
-    const refresh = (): void => {
-      void fetch(
-        `/api/sessions/${encodeURIComponent(session.id)}/cache-protection`,
-        { signal: controller.signal },
-      ).then(async (response) => {
-        await expectHttpOk(response, "Could not load cache protection status");
-        const value = await response.json() as DeepseekCacheProtectionStatus;
-        if (!["protected", "inactive", "disabled"].includes(value.state)) {
-          throw new Error("invalid cache status");
-        }
-        setCacheProtection(value);
-        setCacheProtectionUnavailable(false);
-      }).catch(() => {
-        if (!controller.signal.aborted) {
-          setCacheProtection(null);
-          setCacheProtectionUnavailable(true);
-        }
-      });
-    };
-    refresh();
-    const interval = globalThis.setInterval(refresh, 60_000);
-    return (): void => {
-      controller.abort();
-      globalThis.clearInterval(interval);
-    };
-  }, [cacheProtectionVisible, session.id]);
+  const { cacheProtection, cacheProtectionUnavailable } =
+    useCacheProtectionStatus(cacheProtectionVisible, session.id);
   const rows: { label: string; value: string; mono?: boolean }[] = [
     { label: "Project", value: project },
     { label: "Working dir", value: execution.cwd, mono: true },
@@ -989,6 +952,7 @@ export function SessionInfoSection({
             )}
           </Stack>
         )}
+        <ContextRolloverSettings sessionId={session.id} />
         <Box sx={{ pt: 0.5 }}>
           <ButtonBase
             aria-label={actionsExpanded

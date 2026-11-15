@@ -2,6 +2,48 @@
 //! Selection precedes serialization to the model; attachments stay references.
 use super::*;
 
+/// One transcript read (history, search or a raw event) by an agent. A
+/// renewed session reading its own earlier context is recorded, so the
+/// on-demand cost of a renewal can be compared with the cold resume it
+/// avoided (`cowboy.context_rollover.history_read`).
+pub(super) async fn transcript(
+    hub: &crate::core::Hub,
+    store: Option<&crate::store::Store>,
+    parent: &SessionMeta,
+    op: &str,
+    args: Value,
+) -> Result<Value, String> {
+    let (namespace, method) = op.split_once('.').ok_or("unknown_operation")?;
+    let other = namespace == "sessions";
+    let target = if other {
+        args.get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    } else {
+        Some(parent.id.clone())
+    };
+    let value = match method {
+        "event" => read(hub, store, parent, other, &args).await?,
+        "search" => search(hub, store, parent, other, &args).await?,
+        _ => session_reads::history(hub, store, parent, other, args).await?,
+    };
+    if target.as_deref() == Some(parent.id.as_str())
+        && let Ok(context) = crate::session_context::read(hub, &parent.id)
+        && let Some(rollover) = context.rollover
+    {
+        tracing::info!(
+            target: "cowboy::evidence",
+            event_name = "cowboy.context_rollover.history_read",
+            session = %parent.id,
+            operation = method,
+            bytes = serde_json::to_vec(&value).map_or(0, |bytes| bytes.len() as u64),
+            boundary = rollover.before,
+            "renewed session read its earlier context"
+        );
+    }
+    Ok(value)
+}
+
 pub(super) async fn search(
     hub: &crate::core::Hub,
     store: Option<&crate::store::Store>,

@@ -65,6 +65,8 @@ operations! {
     "sessions.update_policy", true, "{session_id:string,body:{enabled?:boolean,when_idle?:boolean}}";
     "sessions.hibernate", true, "{session_id:string}";
     "sessions.cache_protection", false, "{session_id:string}";
+    "sessions.context_rollover", false, "{session_id:string}; effective context renewal policy, idle time and whether the next message renews";
+    "sessions.context_rollover_set", true, "{session_id:string,body:{enabled:boolean|null}}; renew this session's agent context when a message arrives after the Provider cache expired; null inherits preferences.context_rollover";
     "sessions.questions", false, "{session_id:string,query?:{before:number,limit:number}}";
     "sessions.question", false, "{session_id:string,page:string}; exact question-page sequence as a decimal string";
     "sessions.calls", false, "{session_id:string}";

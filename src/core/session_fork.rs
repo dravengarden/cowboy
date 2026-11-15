@@ -137,7 +137,7 @@ impl Hub {
                 Some(("agent_message_chunk", Some(id))) if finished => {
                     return Some(id.to_owned());
                 }
-                Some(("context_cleared", _)) => return None,
+                Some(("context_cleared" | crate::context_rollover::MARKER, _)) => return None,
                 _ => {}
             }
         }
@@ -152,7 +152,7 @@ impl Hub {
         for envelope in session.log.iter().rev() {
             match update_kind(envelope) {
                 Some(("agent_message_chunk", Some(id))) => return Some(id.to_owned()),
-                Some(("context_cleared", _)) => return None,
+                Some(("context_cleared" | crate::context_rollover::MARKER, _)) => return None,
                 _ => {}
             }
         }
