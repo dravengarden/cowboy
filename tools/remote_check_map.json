@@ -256,6 +256,7 @@
         "plugins/claude-code/runtime/tools.mjs",
         "plugins/claude-code/runtime/connection.mjs",
         "plugins/claude-code/runtime/mod-bridge.mjs",
+        "plugins/claude-code/runtime/mod-bridge-ledger.mjs",
         "plugins/claude-code/runtime/build.ts",
         "plugins/claude-code/relay/",
         "tools/execution_claude_worker_conformance.py",

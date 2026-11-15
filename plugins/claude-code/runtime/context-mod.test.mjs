@@ -1,12 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  bridgeFailure,
   nativeLocalRead,
   rememberDenial,
   targetCompactionResult,
   targetImageResult,
   withheldResult,
 } from "./context-mod.js";
+
+test("bridge denial keeps HTTP status and closed reason codes without leaking raw diagnostics", () => {
+  assert.equal(
+    bridgeFailure({ status: 409, text: JSON.stringify({ code: "bridge_busy", deny: "secret" }) }),
+    "HTTP 409: bridge_busy",
+  );
+  assert.equal(
+    bridgeFailure({ status: 500, text: JSON.stringify({ code: "execution_connection_lost" }) }),
+    "HTTP 500: execution_connection_lost",
+  );
+  assert.equal(
+    bridgeFailure({ status: 500, text: JSON.stringify({ code: "secret", deny: "secret" }) }),
+    "HTTP 500: execution_unavailable",
+  );
+  assert.equal(bridgeFailure({ status: 500, text: "secret" }), "HTTP 500: execution_unavailable");
+});
 
 test("target image result retains media and target path without the native cache locator", () => {
   const image = { type: "image", source: { type: "base64", data: "fixture" } };

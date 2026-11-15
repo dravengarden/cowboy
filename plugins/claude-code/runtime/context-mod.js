@@ -412,7 +412,30 @@ async function runTargetHook($, entry, input, owner, run) {
   }
   const hook = response.ok ? JSON.parse(response.text).hook : undefined;
   // The bridge or target could not run it: not the hook's own outcome.
-  return hook ?? { unavailable: true };
+  return hook ?? { unavailable: true, reason: bridgeFailure(response) };
+}
+
+export function bridgeFailure(response) {
+  let code = "execution_unavailable";
+  try {
+    const body = JSON.parse(response.text);
+    if (
+      [
+        "bridge_busy",
+        "duplicate_call",
+        "call_cancelled",
+        "bridge_storage_unavailable",
+        "execution_request_limit",
+        "execution_connection_lost",
+        "hook_transcript_failed",
+        "bridge_result_limit",
+      ].includes(body?.code)
+    )
+      code = body.code;
+  } catch {
+    /* Do not echo an invalid body or a transport's private diagnostics. */
+  }
+  return `HTTP ${Number.isInteger(response.status) ? response.status : "unknown"}: ${code}`;
 }
 
 // Project PreToolUse/PostToolUse hooks for a facade tool, run on the target in
@@ -466,6 +489,7 @@ async function toolHooks($, event, call, input, run, response, error) {
   const runOne = (entry) =>
     runTargetHook($, entry, hookInput, call.agentId, run).catch(() => ({
       unavailable: true,
+      reason: "bridge_transport_error",
     }));
   // Async hooks run in the background, as natively: they cannot decide, and
   // their additionalContext/systemMessage reach the model on its next turn.
@@ -489,7 +513,7 @@ async function toolHooks($, event, call, input, run, response, error) {
   if (event === "PreToolUse" && unavailable) {
     return {
       context: [],
-      deny: `PreToolUse:${call.tool} hook could not run on the target, so the call did not run.`,
+      deny: `PreToolUse:${call.tool} hook could not run on the target, so the call did not run (${unavailable.result.reason}).`,
     };
   }
   const outcomes = runs.map(({ entry, result }) =>
@@ -1712,7 +1736,7 @@ export function register(on) {
         }
         if (!response.ok) {
           return {
-            deny: "Execution result unavailable. Inspect state before repeating a mutation.",
+            deny: `Execution result unavailable (${bridgeFailure(response)}). Inspect state before repeating a mutation.`,
           };
         }
         let result = JSON.parse(response.text);

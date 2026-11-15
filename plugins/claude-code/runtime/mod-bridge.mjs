@@ -3,6 +3,7 @@ import { chmod, lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { AGENT_ID, NATIVE_TOOLS } from "./tools.mjs";
+import { SpentCalls } from "./mod-bridge-ledger.mjs";
 
 const MAX_FRAME = 16 * 1024 * 1024;
 
@@ -103,8 +104,7 @@ export async function startModBridge(
   const token = randomBytes(32).toString("hex");
   const authorization = Buffer.from(`Bearer ${token}`);
   const admitted = new Map();
-  // Calls native Claude abandoned before their /tool request arrived.
-  const cancelled = new Set();
+  const spent = new SpentCalls(directory);
   // Host approvals in progress; one request per native tool use.
   const approvals = new Map();
   let retainedBytes = 0;
@@ -114,7 +114,7 @@ export async function startModBridge(
   let moduleReady = false;
   const consume = (id, operation) => {
     if (admitted.get(id) !== operation) return;
-    admitted.set(id, null);
+    admitted.delete(id);
     clearTimeout(operation.expiry);
     retainedBytes -= operation.bytes;
     outstanding--;
@@ -304,7 +304,7 @@ export async function startModBridge(
           answer(400, { deny: "Invalid execution call" });
           return;
         }
-        if (cancelled.has(call.id) || admitted.has(call.id) || !permissions) {
+        if (spent.get(call.id) !== undefined || !permissions) {
           answer(200, {
             behavior: "deny",
             message: "Approval is unavailable for this tool call",
@@ -394,11 +394,10 @@ export async function startModBridge(
         // a late /tool cannot start work native Claude no longer awaits.
         const operation = admitted.get(call.id);
         if (operation === undefined) {
-          if (cancelled.size >= 16384) {
-            cancelled.delete(cancelled.values().next().value);
+          if (spent.claim(call.id, "cancelled") === "admitted") {
+            tools.cancelDiscarded(call.id).catch(() => {});
           }
-          cancelled.add(call.id);
-        } else if (operation && !operation.result) {
+        } else if (!operation.result) {
           tools.cancelCall(call.id).catch(() => {});
         } else {
           // Settled, but native abandoned it before delivery.
@@ -407,23 +406,28 @@ export async function startModBridge(
         answer(200, { cancelled: true });
         return;
       }
-      if (!polling && cancelled.delete(call.id)) {
-        admitted.set(call.id, null);
-        answer(200, {
-          deny: "Tool call was cancelled before the target received it",
-        });
-        return;
-      }
       // Admission and observation are separate: Mods HTTP has a fixed 30s
       // timeout. A long tool waits through read-only /result requests, never
       // a second /tool submission or another model turn.
-      if (!polling && (admitted.has(call.id) || admitted.size >= 16384 || outstanding >= 32)) {
+      if (!polling && outstanding >= 32) {
         answer(409, {
-          deny: "Execution call already admitted or capacity reached; inspect state before retrying",
+          code: "bridge_busy",
+          deny: "Too many outstanding execution calls; inspect state before retrying",
         });
         return;
       }
       if (!polling) {
+        const previous = spent.claim(call.id, "admitted");
+        if (previous !== undefined) {
+          answer(409, {
+            code: previous === "cancelled" ? "call_cancelled" : "duplicate_call",
+            deny:
+              previous === "cancelled"
+                ? "Tool call was cancelled before the target received it"
+                : "Execution call already admitted; inspect state before retrying",
+          });
+          return;
+        }
         const operation = { bytes: 0 };
         outstanding++;
         admitted.set(call.id, operation);
@@ -465,7 +469,8 @@ export async function startModBridge(
                   .then((hook) => ({ hook }))
               : tools.nativeCall(call.tool, call.input, owned),
           )
-          .catch(() => ({
+          .catch((error) => ({
+            code: executionFailureCode(error),
             deny: "Execution result unavailable; inspect state before repeating a mutation",
           }))
           .then((result) => {
@@ -473,6 +478,7 @@ export async function startModBridge(
             const bytes = Buffer.byteLength(serialized ?? "");
             if (!serialized || bytes > MAX_FRAME || retainedBytes + bytes > 64 * 1024 * 1024) {
               serialized = JSON.stringify({
+                code: "bridge_result_limit",
                 deny: "Target operation finished but its result exceeds the bridge limit; inspect state before repeating a mutation",
               });
             }
@@ -515,8 +521,9 @@ export async function startModBridge(
         answer(200, operation.result);
         consume(call.id, operation);
       }
-    } catch {
+    } catch (error) {
       answer(500, {
+        code: executionFailureCode(error),
         deny: "Execution result unavailable; inspect state before repeating a mutation",
       });
     }
@@ -549,4 +556,17 @@ export async function startModBridge(
       await rm(directory, { recursive: true, force: true });
     },
   };
+}
+
+// Closed diagnostic codes only. Never echo target stderr, commands, paths or
+// transport exception messages, which may carry project or credential data.
+function executionFailureCode(error) {
+  if (error?.code === "bridge_storage_unavailable") return error.code;
+  if (error?.message === "Too many execution requests") return "execution_request_limit";
+  if (error?.message === "Target hook transcript preparation failed")
+    return "hook_transcript_failed";
+  if (/^Execution (?:unavailable|connection)/.test(error?.message ?? "")) {
+    return "execution_connection_lost";
+  }
+  return "execution_unavailable";
 }

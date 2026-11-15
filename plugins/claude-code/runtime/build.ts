@@ -73,6 +73,7 @@ try {
       "idle-compaction.mjs",
       "connection.mjs",
       "mod-bridge.mjs",
+      "mod-bridge-ledger.mjs",
       "tools.mjs",
       "context-mod.js",
       "hook-proxy.mjs",

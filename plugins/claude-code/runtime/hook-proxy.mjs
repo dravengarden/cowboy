@@ -100,8 +100,20 @@ export async function runProxy(command, { stdin, stdout, stderr, env, signal, ru
   delete hookInput.agent_transcript_path;
   // The hook itself may fail or time out (non-blocking, as natively). If the
   // proxy cannot run a PreToolUse guard at all, block the tool instead.
-  const unavailable = () => {
-    stderr.write("Target hook could not run\n");
+  const unavailable = (reply) => {
+    const codes = [
+      "bridge_busy",
+      "duplicate_call",
+      "call_cancelled",
+      "bridge_storage_unavailable",
+      "execution_request_limit",
+      "execution_connection_lost",
+      "hook_transcript_failed",
+      "bridge_result_limit",
+      "execution_unavailable",
+    ];
+    const reason = codes.includes(reply?.body?.code) ? reply.body.code : "bridge_transport_error";
+    stderr.write(`Target hook could not run (${reason})\n`);
     return hookInput.hook_event_name === "PreToolUse" ? 2 : 1;
   };
   let reply;
@@ -126,7 +138,7 @@ export async function runProxy(command, { stdin, stdout, stderr, env, signal, ru
     stderr.write("Target hook timed out\n");
     return 1;
   }
-  if (!result || !Number.isSafeInteger(result.exitCode)) return unavailable();
+  if (!result || !Number.isSafeInteger(result.exitCode)) return unavailable(reply);
   stdout.write(result.stdout);
   stderr.write(result.stderr);
   return result.exitCode;
