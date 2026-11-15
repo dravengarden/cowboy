@@ -1460,6 +1460,20 @@ async fn run_storage_contract(store: &Store, session_id: &str) -> Result<()> {
     store
         .update_config_preferences(session_id, &serde_json::json!({"model": "gpt-test"}))
         .await?;
+    let last_usage = crate::agent_model::SessionUsage {
+        used: 780_000,
+        size: 1_000_000,
+        raw: serde_json::json!({"sessionUpdate": "usage_update", "cost": {"amount": 1.5}}),
+        observed_at_ms: 1_700_000_000_123,
+    };
+    store
+        .update_session_usage(session_id, Some(&last_usage))
+        .await?;
+    // Clear drops the snapshot: the companion restores with nothing reported.
+    store
+        .update_session_usage(&companion_id, Some(&last_usage))
+        .await?;
+    store.update_session_usage(&companion_id, None).await?;
     store
         .update_title(session_id, "Storage contract renamed")
         .await?;
@@ -1641,6 +1655,17 @@ async fn run_storage_contract(store: &Store, session_id: &str) -> Result<()> {
     assert_eq!(restored.config_preferences["model"], "gpt-test");
     assert_eq!(restored.mobile_review_state["mode"], "code");
     assert_eq!(restored.folder_id.as_deref(), Some("f-child"));
+    assert_eq!(restored.meta.usage.as_ref(), Some(&last_usage));
+    assert_eq!(
+        (restored.meta.context_used, restored.meta.context_size),
+        (780_000, 1_000_000)
+    );
+    let companion = loaded
+        .iter()
+        .find(|loaded| loaded.meta.id == companion_id)
+        .context("storage contract companion was not restored")?;
+    assert!(companion.meta.usage.is_none());
+    assert_eq!(companion.meta.context_size, 0);
     assert_eq!(restored.meta.trashed_at_ms, Some(1_700_000_000_001));
     assert!(
         loaded

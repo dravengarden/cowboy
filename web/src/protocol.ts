@@ -209,7 +209,9 @@ export interface SessionMeta {
   trashed_at_ms?: number;
   /** Context-window usage the agent reports over ACP `usage_update`:
    *  `context_used` tokens of a `context_size`-token window (drives the composer's
-   *  "context X% full" ring). `0`/`0` (or absent) = not reported yet. Transient. */
+   *  "context X% full" ring). `0`/`0` (or absent) = not reported yet. The last
+   *  reading is persisted, so a session without a live worker still carries it;
+   *  `usage.observed_at_ms` says when it was recorded. Clear resets it. */
   context_used?: number;
   context_size?: number;
   /** Native background tasks the agent still waits on after its prompt turn

@@ -3103,6 +3103,43 @@ fn context_reset_forgets_the_discarded_context_usage() {
 }
 
 #[test]
+fn context_usage_is_persisted_once_per_change_and_cleared_by_reset() {
+    let health = std::sync::Arc::new(PersistenceHealth::default());
+    let (sink, mut rx) = StoreSink::channel(64, health);
+    let hub = Hub::with_store(Some(sink));
+    hub.create_local_session(
+        "usage-durable".to_owned(),
+        "codex".to_owned(),
+        "/tmp".to_owned(),
+        "usage".to_owned(),
+        SessionOrigin::Api,
+        false,
+    );
+    while rx.try_recv().is_ok() {}
+    let usage = crate::agent_model::SessionUsage {
+        used: 870,
+        size: 1000,
+        raw: serde_json::Value::Null,
+        observed_at_ms: 1,
+    };
+    hub.set_session_usage("usage-durable", usage.clone());
+    // A re-emitted identical reading is neither broadcast nor written again.
+    hub.set_session_usage("usage-durable", usage.clone());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(StoreWrite::UpdateSessionUsage { usage: Some(written), .. }) if written == usage
+    ));
+    assert!(rx.try_recv().is_err());
+
+    hub.prepare_context_reset("usage-durable");
+    let mut cleared = false;
+    while let Ok(write) = rx.try_recv() {
+        cleared |= matches!(write, StoreWrite::UpdateSessionUsage { usage: None, .. });
+    }
+    assert!(cleared, "Clear must drop the persisted reading");
+}
+
+#[test]
 fn clear_transcript_discards_history_before_the_new_boundary() {
     let hub = hub_with_session("clear-history");
     hub.push(

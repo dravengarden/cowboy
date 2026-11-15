@@ -124,6 +124,7 @@ import {
 import { PendingPanel, DesktopRegionShortcut, TOOLBAR_ICON_BTN, AttachmentPreviews } from "./PendingPanel";
 import { ComposerSheet, SessionActionConfirmDialog } from "./ComposerSheet";
 import { InlineImageActions, useInlineImageSelection } from "./composerImageSelection";
+import { compactTooltip } from "./contextUsageRecord";
 export { SessionProviderSection } from "./ComposerSheet";
 export { PendingPanel } from "./PendingPanel";
 
@@ -183,15 +184,6 @@ const TOOLBAR_MIN_H = {
 // MUI's Button start-icon selector assigns a fixed px size with more
 // specificity than an SvgIcon's own sx prop. Own the glyph size at the button
 // primitive so both image actions follow the root rem scale truthfully.
-// Compact "K/M" token count for the context tooltip (48436 → "48K", 1_000_000 → "1M").
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(n >= 9_950_000 ? 0 : 1)}M`;
-  }
-  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
-  return String(n);
-}
-
 // Keep the reading optically balanced for one, two, and three digits. The text
 // lives in the same 26-unit SVG coordinate space as the gauge, so it scales
 // proportionally if the toolbar icon size changes instead of relying on a
@@ -337,18 +329,6 @@ export function CompactIcon(
       <CompactReading value={pct} />
     </Box>
   );
-}
-
-// The Compact tooltip — names the action and, when known, the context fullness it
-// acts on ("Compact · context 79% · 780K / 1M tokens").
-export function compactTooltip(used: number, size: number): string {
-  if (!(size > 0)) return "Compact conversation";
-  const pct = used > 0
-    ? Math.max(1, Math.round(Math.min(100, (used / size) * 100)))
-    : 0;
-  return `Compact conversation · context ${pct}% · ${fmtTokens(used)} / ${
-    fmtTokens(size)
-  } tokens`;
 }
 
 export function ComposerWorkspace({
@@ -2146,10 +2126,7 @@ export function ComposerWorkspace({
                         ? "Compacting…"
                         : compactContext.refreshing
                         ? "Refreshing context usage…"
-                        : compactTooltip(
-                          compactContext.used,
-                          compactContext.size,
-                        )}
+                        : compactTooltip(compactContext, sessionState.contextRecordedAtMs)}
                     >
                       <span>
                         <IconButton

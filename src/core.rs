@@ -1291,6 +1291,12 @@ pub enum StoreWrite {
         session_id: String,
         preferences: serde_json::Value,
     },
+    /// Persist the last agent-reported context usage so a dormant session
+    /// still shows it after a Controller restart. `None` clears it.
+    UpdateSessionUsage {
+        session_id: String,
+        usage: Option<crate::agent_model::SessionUsage>,
+    },
     ClearEvents {
         session_id: String,
         calls_before_ms: i64,
@@ -3415,8 +3421,9 @@ impl Hub {
     }
 
     /// Record the agent-reported context-window usage (ACP `usage_update`):
-    /// `used` tokens of a `size`-token window. Broadcast-only (transient, not
-    /// persisted). Deduped — the agent re-emits identical usage several times per
+    /// `used` tokens of a `size`-token window. Broadcast, and persisted as the
+    /// session's last reading so a dormant session still shows it after a
+    /// Controller restart. Deduped — the agent re-emits identical usage several times per
     /// turn, so we only broadcast when the numbers actually move, keeping the
     /// session-list churn (and mobile bandwidth) down.
     pub fn set_session_usage(&self, session_id: &str, usage: crate::agent_model::SessionUsage) {
@@ -3426,13 +3433,19 @@ impl Hub {
                 Some(s) if s.meta.usage.as_ref() != Some(&usage) => {
                     s.meta.context_used = usage.used;
                     s.meta.context_size = usage.size;
-                    s.meta.usage = Some(usage);
+                    s.meta.usage = Some(usage.clone());
                     true
                 }
                 _ => false,
             }
         };
         if changed {
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::UpdateSessionUsage {
+                    session_id: session_id.to_owned(),
+                    usage: Some(usage),
+                });
+            }
             self.broadcast_sessions();
         }
     }
@@ -3680,6 +3693,12 @@ impl Hub {
             })
         };
         if usage_changed {
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::UpdateSessionUsage {
+                    session_id: session_id.to_owned(),
+                    usage: None,
+                });
+            }
             self.broadcast_sessions();
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {

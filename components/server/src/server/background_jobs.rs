@@ -226,11 +226,18 @@ pub(super) async fn apply_store_batch(
     let mut highwaters: HashMap<String, u64> = HashMap::new();
     let mut anchors: Vec<crate::transcript_anchors::AnchorWrite> = Vec::new();
     let mut occurrences: Vec<crate::task_notifications::Occurrence> = Vec::new();
+    // A worker re-reports usage several times per turn, interleaved with the
+    // streamed events. Only the newest snapshot per session matters, so keep
+    // it aside instead of letting each one split the event batch.
+    let mut usages: BTreeMap<String, StoreWrite> = BTreeMap::new();
     let mut ok = true;
     for write in writes {
         match write {
             // Committed with the batch, so it never splits one.
             StoreWrite::RecordOccurrence(occurrence) => occurrences.push(occurrence),
+            StoreWrite::UpdateSessionUsage { ref session_id, .. } => {
+                usages.insert(session_id.clone(), write);
+            }
             StoreWrite::AppendEvent(env) => {
                 occurrences.extend(notifications::occurrence_of(&env));
                 highwaters
@@ -315,6 +322,9 @@ pub(super) async fn apply_store_batch(
         &mut occurrences,
     )
     .await;
+    for write in usages.into_values() {
+        ok &= retry_store_write(store, &write).await;
+    }
     ok
 }
 
@@ -606,6 +616,9 @@ pub(super) async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyh
             session_id,
             options,
         } => store.update_config_options(session_id, options).await,
+        StoreWrite::UpdateSessionUsage { session_id, usage } => {
+            store.update_session_usage(session_id, usage.as_ref()).await
+        }
         StoreWrite::UpdateConfigPreferences {
             session_id,
             preferences,

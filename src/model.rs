@@ -302,10 +302,11 @@ pub struct SessionMeta {
     /// Context-window usage the agent reports over ACP `usage_update`:
     /// `context_used` tokens of a `context_size`-token window (so the UI shows a
     /// "context X% full" ring — see the composer). `0`/`0` = not yet reported.
-    /// Transient live state (intercepted onto the meta rather than bloating the
-    /// timeline with a copy per turn — see acp.rs); `serde(default)` covers old
-    /// clients + the restore path. Not persisted — a fresh `usage_update` re-seeds
-    /// it right after any revive.
+    /// Intercepted onto the meta rather than bloating the timeline with a copy
+    /// per turn — see acp.rs. The latest reading is persisted
+    /// (`sessions.last_usage`) and restored, so a dormant session keeps showing
+    /// it until a live worker reports again; `usage.observed_at_ms` says when it
+    /// was recorded. Clear resets it.
     #[serde(default)]
     pub context_used: u64,
     #[serde(default)]

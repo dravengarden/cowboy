@@ -1,3 +1,4 @@
+import { recordedContextUsageAt } from "./contextUsageRecord";
 import type { SessionMeta } from "./protocol";
 
 export interface ComposerDestination {
@@ -16,6 +17,8 @@ export interface ComposerSessionSlice {
   paused: boolean;
   contextUsed: number;
   contextSize: number;
+  /** Set while the reading is a persisted one from a stopped worker. */
+  contextRecordedAtMs: number | undefined;
   destinations: ComposerDestination[];
 }
 
@@ -41,6 +44,7 @@ export function composerSessionSlice(
     paused: active?.paused ?? false,
     contextUsed: active?.context_used ?? 0,
     contextSize: active?.context_size ?? 0,
+    contextRecordedAtMs: recordedContextUsageAt(active),
     destinations: sessions
       .filter((session) => session.id !== sessionId)
       .map(({ id, title, cwd }) => ({ id, title, cwd })),
@@ -53,19 +57,26 @@ export function sameComposerSessionSlice(
   a: ComposerSessionSlice,
   b: ComposerSessionSlice,
 ): boolean {
-  return a === b ||
+  return (
+    a === b ||
     (a.provider === b.provider &&
       a.providerVersion === b.providerVersion &&
       a.providerDigest === b.providerDigest &&
       a.paused === b.paused &&
       a.contextUsed === b.contextUsed &&
       a.contextSize === b.contextSize &&
+      a.contextRecordedAtMs === b.contextRecordedAtMs &&
       a.destinations.length === b.destinations.length &&
       a.destinations.every((destination, index) => {
         const other = b.destinations[index];
-        return other !== undefined && destination.id === other.id &&
-          destination.title === other.title && destination.cwd === other.cwd;
-      }));
+        return (
+          other !== undefined &&
+          destination.id === other.id &&
+          destination.title === other.title &&
+          destination.cwd === other.cwd
+        );
+      }))
+  );
 }
 
 /** Equality for the navbar's normally-closed session settings sheet. Usage,
@@ -74,8 +85,10 @@ export function sameComposerSheetSession(
   a: SessionMeta | undefined,
   b: SessionMeta | undefined,
 ): boolean {
-  return a === b ||
-    (a !== undefined && b !== undefined &&
+  return (
+    a === b ||
+    (a !== undefined &&
+      b !== undefined &&
       a.id === b.id &&
       a.provider === b.provider &&
       a.provider_version === b.provider_version &&
@@ -85,7 +98,8 @@ export function sameComposerSheetSession(
       a.status === b.status &&
       a.origin === b.origin &&
       a.paused === b.paused &&
-      sameProviderUpdateOffer(a, b));
+      sameProviderUpdateOffer(a, b))
+  );
 }
 
 /** The update offer drives the session-settings badge and card. Its
@@ -96,13 +110,16 @@ function sameProviderUpdateOffer(a: SessionMeta, b: SessionMeta): boolean {
   const y = b.provider_update_available;
   const minute = (at: number | undefined): number | undefined =>
     at === undefined ? undefined : Math.round(at / 60_000);
-  return a.system === b.system &&
+  return (
+    a.system === b.system &&
     (a.provider_update === undefined) === (b.provider_update === undefined) &&
     (x === y ||
-      (x !== undefined && y !== undefined &&
+      (x !== undefined &&
+        y !== undefined &&
         x.version === y.version &&
         x.digest === y.digest &&
         x.when_idle === y.when_idle &&
         x.on_open === y.on_open &&
-        minute(x.automatic_at_ms) === minute(y.automatic_at_ms)));
+        minute(x.automatic_at_ms) === minute(y.automatic_at_ms)))
+  );
 }

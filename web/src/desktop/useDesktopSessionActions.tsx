@@ -9,27 +9,18 @@ import {
   DialogTitle,
 } from "@mui/material";
 import { resolveSessionAction, type SessionAction } from "../agentCommands";
-import { compactTooltip, StopConfirmDialog } from "../Composer";
+import { StopConfirmDialog } from "../Composer";
+import { compactTooltip, recordedContextUsageAt } from "../contextUsageRecord";
 import { ConfirmConsequence } from "../ConfirmConsequence";
 import { importantHaptic } from "../haptic";
 import { Kbd, useConfirmEnter } from "../Kbd";
 import { NetworkButton } from "../NetworkActionFeedback";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
 import type { Status } from "../protocol";
-import {
-  cancelTurn,
-  resetSession,
-  submitPrompt,
-  useStoreSelector,
-} from "../store";
+import { cancelTurn, resetSession, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
-import {
-  type DesktopCommand,
-  useDesktopCommand,
-} from "./commands/DesktopCommandProvider";
-import {
-  DESKTOP_SHORTCUTS,
-} from "./commands/workspaceShortcuts";
+import { type DesktopCommand, useDesktopCommand } from "./commands/DesktopCommandProvider";
+import { DESKTOP_SHORTCUTS } from "./commands/workspaceShortcuts";
 import {
   desktopTopBarTimelineSlice,
   sameDesktopTopBarTimelineSlice,
@@ -58,17 +49,15 @@ export interface DesktopSessionActions {
  * another pane; Stop's `Mod+.` runs from anywhere, an emergency key.
  */
 /** Compact and Clear run only while the Prompt (its editor too) owns focus. */
-const PROMPT_SCOPE: Pick<
-  DesktopCommand,
-  "allowInEditor" | "contexts" | "regions"
-> = { allowInEditor: true, contexts: ["prompt"], regions: ["prompt.composer"] };
+const PROMPT_SCOPE: Pick<DesktopCommand, "allowInEditor" | "contexts" | "regions"> = {
+  allowInEditor: true,
+  contexts: ["prompt"],
+  regions: ["prompt.composer"],
+};
 
-export function useDesktopSessionActions(
-  sessionId: string,
-  status: Status,
-): DesktopSessionActions {
+export function useDesktopSessionActions(sessionId: string, status: Status): DesktopSessionActions {
   const session = useStoreSelector((snapshot) =>
-    snapshot.sessions.find((candidate) => candidate.id === sessionId)
+    snapshot.sessions.find((candidate) => candidate.id === sessionId),
   );
   const timeline = useStoreSelector(
     (snapshot) => desktopTopBarTimelineSlice(snapshot.timelines.get(sessionId)),
@@ -84,18 +73,24 @@ export function useDesktopSessionActions(
       session?.provider_version,
       session?.provider_generation_digest,
     );
-  const compactAction = useMemo(() => resolve("compact"), [
-    timeline.availableCommands,
-    session?.provider,
-    session?.provider_version,
-    session?.provider_generation_digest,
-  ]);
-  const clearAction = useMemo(() => resolve("clear"), [
-    timeline.availableCommands,
-    session?.provider,
-    session?.provider_version,
-    session?.provider_generation_digest,
-  ]);
+  const compactAction = useMemo(
+    () => resolve("compact"),
+    [
+      timeline.availableCommands,
+      session?.provider,
+      session?.provider_version,
+      session?.provider_generation_digest,
+    ],
+  );
+  const clearAction = useMemo(
+    () => resolve("clear"),
+    [
+      timeline.availableCommands,
+      session?.provider,
+      session?.provider_version,
+      session?.provider_generation_digest,
+    ],
+  );
   const busy = status === "busy";
   const compacting = busy && timeline.compactingTail;
   const context = useCompactionContext({
@@ -125,42 +120,49 @@ export function useDesktopSessionActions(
 
   const hasCompact = compactAction !== null;
   const hasClear = clearAction !== null;
-  const compactCommand = useMemo<DesktopCommand>(() => ({
-    id: "prompt.compact",
-    title: "Compact Conversation",
-    group: "Prompt",
-    shortcut: DESKTOP_SHORTCUTS.compact,
-    ...PROMPT_SCOPE,
-    when: () => hasCompact && !compacting,
-    disabledReason: compacting
-      ? "Compacting…"
-      : "This agent has no compact command",
-    run: () => setOpen("compact"),
-  }), [compacting, hasCompact]);
+  const compactCommand = useMemo<DesktopCommand>(
+    () => ({
+      id: "prompt.compact",
+      title: "Compact Conversation",
+      group: "Prompt",
+      shortcut: DESKTOP_SHORTCUTS.compact,
+      ...PROMPT_SCOPE,
+      when: () => hasCompact && !compacting,
+      disabledReason: compacting ? "Compacting…" : "This agent has no compact command",
+      run: () => setOpen("compact"),
+    }),
+    [compacting, hasCompact],
+  );
   useDesktopCommand(compactCommand);
-  const clearCommand = useMemo<DesktopCommand>(() => ({
-    id: "prompt.clear",
-    title: "Clear Conversation",
-    group: "Prompt",
-    shortcut: DESKTOP_SHORTCUTS.clear,
-    ...PROMPT_SCOPE,
-    when: () => hasClear,
-    disabledReason: "This agent has no clear command",
-    run: () => setOpen("clear"),
-  }), [hasClear]);
+  const clearCommand = useMemo<DesktopCommand>(
+    () => ({
+      id: "prompt.clear",
+      title: "Clear Conversation",
+      group: "Prompt",
+      shortcut: DESKTOP_SHORTCUTS.clear,
+      ...PROMPT_SCOPE,
+      when: () => hasClear,
+      disabledReason: "This agent has no clear command",
+      run: () => setOpen("clear"),
+    }),
+    [hasClear],
+  );
   useDesktopCommand(clearCommand);
-  const stopCommand = useMemo<DesktopCommand>(() => ({
-    id: "session.stop",
-    title: "Stop Current Turn",
-    group: "Global",
-    shortcut: DESKTOP_SHORTCUTS.stop,
-    allowInEditor: true,
-    when: () => busy,
-    disabledReason: "No turn is running",
-    // The browser's own Mod+. must never fire while a turn is idle.
-    consumeWhenDisabled: true,
-    run: () => setOpen("stop"),
-  }), [busy]);
+  const stopCommand = useMemo<DesktopCommand>(
+    () => ({
+      id: "session.stop",
+      title: "Stop Current Turn",
+      group: "Global",
+      shortcut: DESKTOP_SHORTCUTS.stop,
+      allowInEditor: true,
+      when: () => busy,
+      disabledReason: "No turn is running",
+      // The browser's own Mod+. must never fire while a turn is idle.
+      consumeWhenDisabled: true,
+      run: () => setOpen("stop"),
+    }),
+    [busy],
+  );
   useDesktopCommand(stopCommand);
 
   const provider = session?.provider ?? "the agent";
@@ -190,19 +192,11 @@ export function useDesktopSessionActions(
           )}
         </DialogContent>
         <DialogActions>
-          <Button
-            color="inherit"
-            onClick={close}
-            sx={{ textTransform: "none" }}
-          >
+          <Button color="inherit" onClick={close} sx={{ textTransform: "none" }}>
             Cancel
             <Kbd keys="Esc" />
           </Button>
-          <Button
-            variant="contained"
-            onClick={confirmCompact}
-            sx={{ textTransform: "none" }}
-          >
+          <Button variant="contained" onClick={confirmCompact} sx={{ textTransform: "none" }}>
             Compact
             <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
           </Button>
@@ -218,11 +212,7 @@ export function useDesktopSessionActions(
           </ConfirmConsequence>
         </DialogContent>
         <DialogActions>
-          <Button
-            color="inherit"
-            onClick={close}
-            sx={{ textTransform: "none" }}
-          >
+          <Button color="inherit" onClick={close} sx={{ textTransform: "none" }}>
             Cancel
             <Kbd keys="Esc" />
           </Button>
@@ -258,8 +248,8 @@ export function useDesktopSessionActions(
         title: context.refreshing
           ? "Updating context usage…"
           : compacting
-          ? "Compacting…"
-          : compactTooltip(context.used, context.size),
+            ? "Compacting…"
+            : compactTooltip(context, recordedContextUsageAt(session)),
         open: () => setOpen("compact"),
       },
     }),

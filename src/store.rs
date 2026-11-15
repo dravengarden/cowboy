@@ -3301,7 +3301,7 @@ impl PostgresStorage {
              provider_account_id, provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              execution_binding, cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
-             config_options, config_preferences, mobile_review_state, folder_id, trashed_at_ms, \
+             config_options, config_preferences, mobile_review_state, folder_id, trashed_at_ms, last_usage, \
              owner_user_id, \
              (SELECT username FROM users WHERE users.id = sessions.owner_user_id) AS owner_username \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
@@ -5843,24 +5843,6 @@ impl PostgresStorage {
             .execute(&self.pool)
             .await
             .with_context(|| format!("UPDATE session agent_session_id {session_id}"))?;
-        Ok(())
-    }
-
-    /// Persist the latest agent-advertised config options. This is a display
-    /// snapshot, not the source of the user's selected values.
-    pub async fn update_config_options(
-        &self,
-        session_id: &str,
-        options: &serde_json::Value,
-    ) -> Result<()> {
-        let mut options = options.clone();
-        strip_nul(&mut options);
-        sqlx::query("UPDATE sessions SET config_options = $1, updated_at = now() WHERE id = $2")
-            .bind(options)
-            .bind(session_id)
-            .execute(&self.pool)
-            .await
-            .with_context(|| format!("UPDATE session config_options {session_id}"))?;
         Ok(())
     }
 
@@ -8764,6 +8746,7 @@ struct SessionRow {
     mobile_review_state: serde_json::Value,
     folder_id: Option<String>,
     trashed_at_ms: Option<i64>,
+    last_usage: Option<serde_json::Value>,
     owner_user_id: Option<String>,
     owner_username: Option<String>,
 }

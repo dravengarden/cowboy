@@ -5,6 +5,8 @@ impl SqliteSessionRow {
         self,
         account_id: crate::provider_account::ProviderAccountId,
     ) -> SessionMeta {
+        let last_usage =
+            crate::store::session_metadata::decode_last_usage(self.last_usage, &self.id);
         SessionMeta {
             continued_from: None,
             handoff_resumed: false,
@@ -35,9 +37,10 @@ impl SqliteSessionRow {
             system: self.system,
             paused: false,
             closing: false,
-            context_used: 0,
-            context_size: 0,
-            usage: None,
+            // Restored last-reported usage (see the PostgreSQL row).
+            context_used: last_usage.as_ref().map_or(0, |usage| usage.used),
+            context_size: last_usage.as_ref().map_or(0, |usage| usage.size),
+            usage: last_usage,
             attention: crate::model::SessionAttention::default(),
             background_tasks: 0,
             supports_current_turn: false,
@@ -49,5 +52,42 @@ impl SqliteSessionRow {
             owner_username: self.owner_username,
             trashed_at_ms: self.trashed_at_ms,
         }
+    }
+}
+
+impl SqliteStorage {
+    pub(in crate::store) async fn update_session_usage(
+        &self,
+        session_id: &str,
+        usage: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        let mut usage = usage.cloned();
+        if let Some(value) = usage.as_mut() {
+            strip_nul(value);
+        }
+        sqlx::query("UPDATE sessions SET last_usage = ?1 WHERE id = ?2")
+            .bind(usage)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE SQLite session last_usage {session_id}"))?;
+        Ok(())
+    }
+
+    pub(in crate::store) async fn update_config_options(
+        &self,
+        session_id: &str,
+        options: &serde_json::Value,
+    ) -> Result<()> {
+        let mut options = options.clone();
+        strip_nul(&mut options);
+        sqlx::query("UPDATE sessions SET config_options = ?1, updated_at_ms = ?2 WHERE id = ?3")
+            .bind(options)
+            .bind(now_ms())
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE SQLite session config_options {session_id}"))?;
+        Ok(())
     }
 }
