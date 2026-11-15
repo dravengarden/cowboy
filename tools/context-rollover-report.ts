@@ -42,7 +42,7 @@ const rows = db
        -- managed-call notices or runtime prompts.
        AND coalesce(json_extract(x.payload, '$.update.promptOrigin.actor'), 'human') = 'human'
        AND coalesce(json_extract(x.payload, '$.update.autoResumed'), 0) = 0
-       AND json_extract(x.payload, '$.update.content.text') NOT LIKE '<system-reminder>%')
+       AND coalesce(json_extract(x.payload, '$.update.content.text'), '') NOT LIKE '<system-reminder>%')
       - te.prev_end AS gap_ms,
     EXISTS (SELECT 1 FROM events x WHERE x.session_id = te.session_id
        AND x.seq > te.prev_seq AND x.seq < te.seq

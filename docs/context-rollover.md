@@ -59,23 +59,28 @@ with the same native id; if it woke meanwhile the recorded renewal is
 withdrawn and the prompt resumes the old context.
 
 Renewal keeps the Cowboy session, worktree, settings, queue and full
-transcript. Under the context write lock it claims this prompt as the carrier
-of a renewal injection (`context-renewal-<id>-<boundary>`, a self-link
-bounded by the marker), saves the context with its `Rollover` record, forgets
-the native session id (so the launch this prompt triggers is `session/new`)
-and appends a `context_rolled_over` divider. The prompt continues its own
-dispatch; nothing is requeued. If that prompt is later removed before the
-fresh agent received any message, the next authored prompt becomes the
-carrier, so the fresh agent always starts with the renewal preamble. An
-answer before the marker is no longer a fork point.
+transcript. Under the context write lock it saves a `Rollover` record (the
+boundary, idle time, context size and digest), forgets the native session id
+(so the launch this prompt triggers is `session/new`) and appends a
+`context_rolled_over` divider naming the same boundary. The marker is the
+commit point: a record without its marker is inert. The prompt continues its
+own dispatch; nothing is requeued.
 
-The first prompt carries the shared linked-context preamble with a renewal
+Delivery is not bound to a prompt identity. At the Supervisor send boundary
+every prompt (except a slash command) carries the renewal preamble while the
+newest context boundary is this renewal's marker and no agent output
+(message, thought or tool call) follows it. A prompt withdrawn before the
+fresh agent answered leaves it pending for the next one; a Clear writes a
+newer boundary and retires it. An answer before the marker is no longer a
+fork point.
+
+The renewal preamble uses the shared linked-context prefix with a renewal
 body: the boundary, why the context was renewed, a deterministic digest
 (first request, the latest three human messages and the final reply of the
 last turn, truncated, reminder tags neutralized) and instructions to recover
 anything else on demand with `sessions.search` / `sessions.history` /
 `sessions.event` bounded by `before`. The digest is computed once and stored,
-so a retried prompt receives the identical preamble and requeue strips it.
+so every attempt receives the identical preamble and requeue strips it.
 No model call produces it and no history is copied.
 
 Everything that treats Clear as the start of the native context (fork answer

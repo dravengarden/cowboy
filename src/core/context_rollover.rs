@@ -15,6 +15,35 @@ impl Hub {
         ))
     }
 
+    /// Whether the renewal bounded by `before` still awaits its first answer:
+    /// the newest context boundary is its marker and no agent output follows.
+    #[must_use]
+    pub fn renewal_pending(&self, session_id: &str, before: u64) -> bool {
+        let sessions = self.inner.sessions.lock();
+        let Some(session) = sessions.get(session_id) else {
+            return false;
+        };
+        for envelope in session.log.iter().rev() {
+            let Event::Update { update } = &envelope.event else {
+                continue;
+            };
+            match update
+                .get("sessionUpdate")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some(MARKER) => {
+                    return update.get("before").and_then(serde_json::Value::as_u64)
+                        == Some(before);
+                }
+                Some(
+                    "context_cleared" | "agent_message_chunk" | "agent_thought_chunk" | "tool_call",
+                ) => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// Whether the current native context has received a user turn; a
     /// renewal or Clear starts a new one.
     #[must_use]
@@ -32,6 +61,7 @@ impl Hub {
     pub fn mark_context_rolled_over(
         &self,
         session_id: &str,
+        before: u64,
         idle_ms: u64,
         context_used: u64,
     ) -> Option<u64> {
@@ -42,6 +72,7 @@ impl Hub {
                 update: serde_json::json!({
                     "sessionUpdate": MARKER,
                     "at": at,
+                    "before": before,
                     "idleMs": idle_ms,
                     "contextUsed": context_used,
                 }),

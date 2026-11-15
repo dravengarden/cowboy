@@ -401,7 +401,7 @@ mod tests {
         chunk(&hub, "user_message_chunk", None);
         assert_eq!(hub.fork_point("source", "old"), ForkPoint::Completed);
         assert!(hub.context_has_user_message("source"));
-        assert!(hub.mark_context_rolled_over("source", 1, 2).is_some());
+        assert!(hub.mark_context_rolled_over("source", 0, 1, 2).is_some());
         assert_eq!(hub.fork_point("source", "old"), ForkPoint::Missing);
         assert_eq!(hub.last_answer_id("source"), None);
         assert!(!hub.context_has_user_message("source"));
