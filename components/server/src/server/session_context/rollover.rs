@@ -252,7 +252,8 @@ pub(in crate::server) async fn observe(state: Arc<AppState>) {
 /// Renew the context if this prompt reaches a dormant session after its
 /// Provider cache expired. Never fails the prompt: anything short of a
 /// recorded, atomic renewal leaves the session to resume its old context.
-/// Authored prompts after [`MEASURED_IDLE`] log their decision.
+/// Authored prompts after [`MEASURED_IDLE`] and every renewal log their
+/// decision.
 pub(in crate::server) async fn before_dispatch(
     state: &AppState,
     id: &str,
@@ -341,9 +342,8 @@ pub(in crate::server) async fn before_dispatch(
         context_used = meta.context_used,
         "renewing agent context after the Provider prompt cache expired"
     );
-    if measured {
-        measure(&meta, cmid, Some(policy), idle_ms, "renewed");
-    }
+    // Every renewal is evidence, whatever its idle time.
+    measure(&meta, cmid, Some(policy), idle_ms, "renewed");
 }
 
 #[derive(Deserialize)]
