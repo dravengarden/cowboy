@@ -1028,6 +1028,25 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Forget a dormant session's native context so its next launch starts
+    /// fresh (context renewal). Every wake path holds the same lifecycle lock,
+    /// so a worker cannot start between this check and the reset. Refuses when
+    /// a worker exists or is still hibernating, or the session's native id
+    /// changed since the caller decided.
+    pub fn forget_dormant_context(&self, session_id: &str, agent_session_id: &str) -> bool {
+        let _lifecycle = self.lifecycle.lock();
+        let dormant = self.hub.session_info(session_id).is_some_and(|info| {
+            info.meta.status == Status::Exited
+                && info.meta.agent_session_id.as_deref() == Some(agent_session_id)
+        }) && self.runtime_for_session(session_id).is_ok_and(|runtime| {
+            !runtime.has_worker(session_id) && !runtime.hibernation_pending(session_id)
+        });
+        if dormant {
+            self.hub.prepare_context_reset(session_id);
+        }
+        dormant
+    }
+
     /// Replace a session's agent with a fresh context without deleting the
     /// Cowboy session. The remote broker needs an explicit reset operation so
     /// its permanent-delete tombstone cannot poison the replacement launch.

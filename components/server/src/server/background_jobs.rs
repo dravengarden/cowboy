@@ -1183,13 +1183,7 @@ pub(super) async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
         retain(session_id, text, content, cmid, &error);
         return;
     }
-    match session_context::rollover::before_dispatch(&state, &session_id, &text, cmid.as_deref())
-        .await
-    {
-        Ok(false) => {}
-        Ok(true) => return hub.requeue_prompt(&session_id, text, content, cmid),
-        Err(error) => return retain(session_id, text, content, cmid, &error),
-    }
+    session_context::rollover::before_dispatch(&state, &session_id, &text, cmid.as_deref()).await;
     // Links wait for a real message: a preamble would break a slash command.
     if !crate::session_context::is_command(&text)
         && let Err(error) =

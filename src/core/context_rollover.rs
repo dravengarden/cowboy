@@ -15,6 +15,17 @@ impl Hub {
         ))
     }
 
+    /// Whether the current native context has received a user turn; a
+    /// renewal or Clear starts a new one.
+    #[must_use]
+    pub fn context_has_user_message(&self, session_id: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(super::current_context_has_user_message)
+    }
+
     /// Drop the renewal divider into the timeline and return its sequence,
     /// the exclusive boundary of the earlier history. Unlike Clear, every
     /// earlier event stays.

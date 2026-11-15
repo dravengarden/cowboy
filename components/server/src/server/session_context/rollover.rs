@@ -1,7 +1,24 @@
 //! Renew an idle session's agent context before a prompt reaches it, once the
 //! Provider prompt cache has expired. See [`crate::context_rollover`].
+//!
+//! Renewal only ever replaces a dormant session's context: no worker exists
+//! to race, the native id is forgotten under the Supervisor lifecycle lock
+//! that every wake path holds, and the prompt continues its own dispatch.
+//! A live worker idle past its cache is hibernated first (atomically refused
+//! by its Machine if work started), so its next prompt takes the same path.
 use super::*;
 use crate::context_rollover::{Policy, Rollover};
+use crate::session_context::{Carrier, carrier, carrier_key};
+
+/// Prompts after at least this much idle are measured, renewed or not, so a
+/// renewal's first turn can be compared with ordinary cold resumes.
+const MEASURED_IDLE: std::time::Duration = std::time::Duration::from_mins(5);
+/// Bound on prompts awaiting their first-turn measurement.
+const MAX_PENDING: usize = 1_024;
+/// How often live workers idle past their cache are hibernated.
+const HIBERNATE_PASS: std::time::Duration = std::time::Duration::from_mins(5);
+/// Injection ids of renewals; the session id and boundary follow.
+const RENEWAL_PREFIX: &str = "context-renewal-";
 
 fn override_key(id: &str) -> String {
     format!(
@@ -24,48 +41,38 @@ pub(super) fn inherit(state: &AppState, source: &str, target: &str) {
     }
 }
 
-async fn policy(state: &AppState, meta: &crate::core::SessionMeta) -> Policy {
+/// The effective policy, or `None` when the owner's preferences cannot be
+/// read: an unknown choice is never taken as consent.
+async fn policy(state: &AppState, meta: &crate::core::SessionMeta) -> Option<Policy> {
     let preferences = match (meta.owner_user_id.as_deref(), state.store.as_ref()) {
         (Some(owner), Some(store)) => store
             .preferences(owner, crate::context_rollover::PREFERENCE_SCOPE)
             .await
-            .ok()
-            .flatten()
+            .ok()?
             .map(|preferences| preferences.values),
         _ => None,
     };
-    crate::context_rollover::policy(
+    Some(crate::context_rollover::policy(
         preferences.as_ref(),
         session_override(&state.hub, &meta.id),
         &meta.provider,
-    )
+    ))
 }
 
-/// Whether nothing about the session would be lost or raced by a renewal: an
-/// idle, ordinary session whose native context is resumable, with no
-/// background work and no context send in flight. A live worker is replaced
-/// only on a plain local runtime; a dormant one simply starts fresh.
-fn quiescent(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
-    let live = state.supervisor.has_live_worker(&meta.id);
+/// Shared gate for renewal and hibernation: an ordinary, resumable session
+/// with no background work. A native fork keeps inherited history only in its
+/// native thread, so it is never renewed.
+fn ordinary(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
     !meta.system
         && !meta.closing
         && meta.agent_session_id.is_some()
         && meta.background_tasks == 0
         && !state.hub.is_managed_child(&meta.id)
-        && if live {
-            meta.status == Status::Running && meta.execution_binding.is_none()
-        } else {
-            meta.status == Status::Exited
-        }
+        && state.hub.session_fork(&meta.id).is_none()
 }
 
-/// Prompts after at least this much idle are measured, renewed or not, so a
-/// renewal's first turn can be compared with ordinary cold resumes.
-const MEASURED_IDLE: std::time::Duration = std::time::Duration::from_mins(5);
-/// Bound on prompts awaiting their first-turn measurement.
-const MAX_PENDING: usize = 1_024;
-
 struct Pending {
+    cmid: String,
     provider: String,
     renewed: bool,
     idle_ms: u64,
@@ -76,7 +83,13 @@ struct Pending {
 static PENDING: std::sync::LazyLock<parking_lot::Mutex<HashMap<String, Pending>>> =
     std::sync::LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
-fn measure(meta: &crate::core::SessionMeta, policy: &Policy, idle_ms: u64, outcome: &str) {
+fn measure(
+    meta: &crate::core::SessionMeta,
+    cmid: &str,
+    policy: Option<&Policy>,
+    idle_ms: u64,
+    outcome: &str,
+) {
     tracing::info!(
         target: "cowboy::evidence",
         event_name = "cowboy.context_rollover.decision",
@@ -85,17 +98,27 @@ fn measure(meta: &crate::core::SessionMeta, policy: &Policy, idle_ms: u64, outco
         outcome,
         idle_ms,
         context_used = meta.context_used,
-        threshold_ms = policy.idle_minutes.map_or(0, |minutes| minutes.saturating_mul(60_000)),
-        min_context = policy.min_context_tokens,
+        threshold_ms = policy
+            .and_then(|policy| policy.idle_minutes)
+            .map_or(0, |minutes| minutes.saturating_mul(60_000)),
+        min_context = policy.map_or(0, |policy| policy.min_context_tokens),
         "context renewal decision"
     );
     let mut pending = PENDING.lock();
+    // A retry of the same prompt keeps its first decision.
+    if pending
+        .get(&meta.id)
+        .is_some_and(|known| known.cmid == cmid)
+    {
+        return;
+    }
     if pending.len() >= MAX_PENDING {
         pending.clear();
     }
     pending.insert(
         meta.id.clone(),
         Pending {
+            cmid: cmid.to_owned(),
             provider: meta.provider.clone(),
             renewed: outcome == "renewed",
             idle_ms,
@@ -105,76 +128,179 @@ fn measure(meta: &crate::core::SessionMeta, policy: &Policy, idle_ms: u64, outco
     );
 }
 
-/// Record the first turn after a measured prompt: what the resume or the
-/// renewal actually cost (`cowboy.context_rollover.first_turn`).
-pub(in crate::server) async fn observe(state: Arc<AppState>) {
-    let mut events = state.hub.subscribe();
-    loop {
-        let frame = match events.recv().await {
-            Ok(frame) => frame,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-        };
-        let crate::core::Outbound::Event { envelope } = frame.outbound() else {
-            continue;
-        };
-        let crate::core::Event::TurnEnd { usage, .. } = &envelope.event else {
-            continue;
-        };
-        let Some(pending) = PENDING.lock().remove(&envelope.session_id) else {
-            continue;
-        };
+fn first_turn(session: &str, usage: Option<&crate::agent_model::TurnUsage>) {
+    let Some(pending) = PENDING.lock().remove(session) else {
+        return;
+    };
+    tracing::info!(
+        target: "cowboy::evidence",
+        event_name = "cowboy.context_rollover.first_turn",
+        session,
+        provider = %pending.provider,
+        renewed = pending.renewed,
+        idle_ms = pending.idle_ms,
+        context_used = pending.context_used,
         // An adapter that reports no reconciled usage still logs the turn.
-        let usage = usage.as_ref();
+        outcome = if usage.is_some() { "usage" } else { "usage_unknown" },
+        input_tokens = usage.map_or(0, |usage| usage.input_tokens),
+        cached_input_tokens = usage.and_then(|usage| usage.cached_input_tokens).unwrap_or_default(),
+        cache_write_tokens = usage.and_then(|usage| usage.cache_write_tokens).unwrap_or_default(),
+        uncached_input_tokens = usage.and_then(|usage| usage.uncached_input_tokens).unwrap_or_default(),
+        output_tokens = usage.map_or(0, |usage| usage.output_tokens),
+        duration_ms = pending.dispatched.elapsed().as_secs_f64() * 1000.0,
+        "first turn after an idle prompt"
+    );
+}
+
+/// Hibernate live workers whose cache has expired under their policy, so the
+/// next prompt renews a dormant session. The Machine refuses atomically if
+/// work started; a refusal is only logged.
+async fn hibernate_expired(state: &AppState) {
+    for meta in state.hub.session_list() {
+        if meta.status != Status::Running
+            || !ordinary(state, &meta)
+            || state.hub.session_has_in_flight_prompt(&meta.id)
+            || !state.supervisor.has_live_worker(&meta.id)
+        {
+            continue;
+        }
+        let Some(idle) = state.hub.session_idle_for(&meta.id) else {
+            continue;
+        };
+        let Some(policy) = policy(state, &meta).await else {
+            continue;
+        };
+        if !policy.due(idle, meta.context_used) {
+            continue;
+        }
+        let result = state.supervisor.hibernate_session(&meta.id);
         tracing::info!(
             target: "cowboy::evidence",
-            event_name = "cowboy.context_rollover.first_turn",
-            session = %envelope.session_id,
-            provider = %pending.provider,
-            renewed = pending.renewed,
-            idle_ms = pending.idle_ms,
-            context_used = pending.context_used,
-            outcome = if usage.is_some() { "usage" } else { "usage_unknown" },
-            input_tokens = usage.map_or(0, |usage| usage.input_tokens),
-            cached_input_tokens = usage.and_then(|usage| usage.cached_input_tokens).unwrap_or_default(),
-            cache_write_tokens = usage.and_then(|usage| usage.cache_write_tokens).unwrap_or_default(),
-            uncached_input_tokens = usage.and_then(|usage| usage.uncached_input_tokens).unwrap_or_default(),
-            output_tokens = usage.map_or(0, |usage| usage.output_tokens),
-            duration_ms = pending.dispatched.elapsed().as_secs_f64() * 1000.0,
-            "first turn after an idle prompt"
+            event_name = "cowboy.context_rollover.hibernate",
+            session = %meta.id,
+            provider = %meta.provider,
+            outcome = if result.is_ok() { "requested" } else { "refused" },
+            idle_ms = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX),
+            context_used = meta.context_used,
+            "hibernating a worker whose prompt cache expired"
         );
     }
 }
 
-/// Renew the context if this prompt arrives after the Provider cache expired.
-/// `Ok(true)` means the worker is being replaced: keep the prompt queued until
-/// the fresh agent is running. Any failure before the native id is forgotten
-/// leaves the session untouched and the prompt goes to its old context.
-/// Every authored prompt after [`MEASURED_IDLE`] logs its decision.
+/// Record the first turn after a measured prompt (what the resume or renewal
+/// actually cost) and periodically hibernate workers past their cache.
+pub(in crate::server) async fn observe(state: Arc<AppState>) {
+    let mut events = state.hub.subscribe();
+    let mut pass = tokio::time::interval(HIBERNATE_PASS);
+    pass.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        let frame = tokio::select! {
+            _ = pass.tick() => {
+                hibernate_expired(&state).await;
+                continue;
+            }
+            frame = events.recv() => frame,
+        };
+        let frame = match frame {
+            Ok(frame) => frame,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+        };
+        if let crate::core::Outbound::Event { envelope } = frame.outbound()
+            && let crate::core::Event::TurnEnd { usage, .. } = &envelope.event
+        {
+            first_turn(&envelope.session_id, usage.as_ref());
+        }
+    }
+}
+
+/// Claim `cmid` as the carrier of the renewal injection by compare-and-set.
+async fn claim(
+    state: &AppState,
+    id: &str,
+    injection: &crate::session_context::Injection,
+    cmid: &str,
+) -> bool {
+    let Some(store) = state.store.as_ref() else {
+        return false;
+    };
+    let key = carrier_key(id);
+    let expected = state.hub.setting(&key);
+    let value = serde_json::to_value(Carrier {
+        injection: injection.cmid.clone(),
+        cmid: cmid.to_owned(),
+    })
+    .expect("carrier serializes");
+    if !store
+        .compare_and_put_setting(&key, expected.as_ref(), &value)
+        .await
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    state.hub.load_settings(vec![(key, value)]);
+    true
+}
+
+/// A renewal whose first prompt never reached the fresh agent (its queued
+/// message was removed) moves to this prompt, so the fresh agent always
+/// receives the renewal preamble with its first message.
+async fn redeliver(state: &AppState, id: &str, cmid: &str, context: &Context) {
+    let Some(injection) = context
+        .injection
+        .as_ref()
+        .filter(|injection| injection.cmid.starts_with(RENEWAL_PREFIX))
+    else {
+        return;
+    };
+    let Some(current) = carrier(&state.hub, id, injection) else {
+        return;
+    };
+    if current.cmid != cmid
+        && !state.hub.has_queued_cmid(id, &current.cmid)
+        && !state.hub.context_has_user_message(id)
+    {
+        claim(state, id, injection, cmid).await;
+    }
+}
+
+/// Renew the context if this prompt reaches a dormant session after its
+/// Provider cache expired. Never fails the prompt: anything short of a
+/// recorded, atomic renewal leaves the session to resume its old context.
+/// Authored prompts after [`MEASURED_IDLE`] log their decision.
 pub(in crate::server) async fn before_dispatch(
     state: &AppState,
     id: &str,
     text: &str,
     cmid: Option<&str>,
-) -> Result<bool, String> {
-    if !cmid.is_some_and(Hub::is_authored_cmid) || crate::session_context::is_command(text) {
-        return Ok(false);
+) {
+    let Some(cmid) = cmid.filter(|cmid| Hub::is_authored_cmid(cmid)) else {
+        return;
+    };
+    if crate::session_context::is_command(text) {
+        return;
     }
     let Some(meta) = state.hub.session_info(id).map(|info| info.meta) else {
-        return Ok(false);
+        return;
     };
-    let Some(idle) = state
-        .hub
-        .session_idle_for(id)
-        .filter(|idle| *idle >= MEASURED_IDLE)
-    else {
-        return Ok(false);
+    // Serializes with context edits, which take the same lock.
+    let lock = write_lock(id);
+    let _write = lock.lock().await;
+    let Ok(context) = crate::session_context::read(&state.hub, id) else {
+        return;
     };
+    redeliver(state, id, cmid, &context).await;
+    let idle = state.hub.session_idle_for(id).unwrap_or_default();
     let idle_ms = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX);
+    let measured = idle >= MEASURED_IDLE;
     let policy = policy(state, &meta).await;
     let skip = |outcome: &str| {
-        measure(&meta, &policy, idle_ms, outcome);
-        Ok(false)
+        if measured {
+            measure(&meta, cmid, policy.as_ref(), idle_ms, outcome);
+        }
+    };
+    let Some(policy) = policy.as_ref() else {
+        return skip("preferences_unavailable");
     };
     if policy.idle_minutes.is_none() {
         return skip("no_preset");
@@ -188,57 +314,90 @@ pub(in crate::server) async fn before_dispatch(
     if meta.context_used < policy.min_context_tokens {
         return skip("small_context");
     }
-    if !quiescent(state, &meta) {
-        return skip("not_quiescent");
+    if !ordinary(state, &meta) {
+        return skip("not_eligible");
     }
-    let lock = write_lock(id);
-    let _write = lock.lock().await;
-    let Ok(mut context) = crate::session_context::read(&state.hub, id) else {
-        return skip("context_unreadable");
-    };
-    if context.revision != context.applied_revision
+    if meta.status != Status::Exited || state.supervisor.has_live_worker(id) {
+        return skip("live_worker");
+    }
+    // An earlier linked-context prompt that has not been delivered keeps its
+    // injection; replacing it would lose those links.
+    let outstanding = context.injection.as_ref().is_some_and(|injection| {
+        carrier(&state.hub, id, injection).is_none_or(|current| {
+            current.cmid == cmid || state.hub.has_queued_cmid(id, &current.cmid)
+        })
+    });
+    if outstanding
+        || context.revision != context.applied_revision
         || !context.waiting.is_empty()
         || context.next_agent.is_some()
         || crate::session_context::pending(&state.hub, id)
     {
         return skip("context_pending");
     }
-    let Some(last) = state.hub.last_event_seq(id) else {
+    let (Some(last), Some(agent_session_id)) =
+        (state.hub.last_event_seq(id), meta.agent_session_id.clone())
+    else {
         return skip("no_history");
     };
-    let rollover = Rollover {
-        before: last.saturating_add(1),
+    let before = last.saturating_add(1);
+    let mut renewed = context.clone();
+    let injection = crate::session_context::Injection {
+        cmid: format!("{RENEWAL_PREFIX}{id}-{before}"),
+        sources: vec![crate::session_context::Source {
+            session_id: id.to_owned(),
+            before,
+        }],
+        follows_first_prompt: true,
+    };
+    renewed.remember_links(vec![Link {
+        session_id: id.to_owned(),
+        before,
+        title: meta.title.clone(),
+    }]);
+    renewed.rollover = Some(Rollover {
+        before,
         idle_ms,
         context_used: meta.context_used,
         digest: state.hub.rollover_digest(id).unwrap_or_default(),
-    };
-    let digest_bytes = serde_json::to_vec(&rollover.digest).map_or(0, |bytes| bytes.len());
-    context.waiting.push(Link {
-        session_id: id.to_owned(),
-        before: rollover.before,
-        title: meta.title.clone(),
     });
-    context.rollover = Some(rollover);
-    if let Err(error) = save(state, id, &context).await {
+    renewed.injection = Some(injection.clone());
+    let Some(revision) = renewed.revision.checked_add(1) else {
+        return skip("record_failed");
+    };
+    renewed.revision = revision;
+    renewed.applied_revision = revision;
+    // The carrier names the injection, so it is inert until the context
+    // that holds that injection is saved.
+    if !claim(state, id, &injection, cmid).await {
+        return skip("record_failed");
+    }
+    if let Err(error) = save(state, id, &renewed).await {
         tracing::warn!(session = id, %error, "context renewal not recorded; resuming the old context");
         return skip("record_failed");
+    }
+    if !state
+        .supervisor
+        .forget_dormant_context(id, &agent_session_id)
+    {
+        // A worker started meanwhile: keep its context and drop the renewal.
+        if let Err(error) = save(state, id, &context).await {
+            tracing::warn!(session = id, %error, "could not withdraw a raced context renewal");
+        }
+        return skip("raced");
     }
     tracing::info!(
         session = id,
         idle_ms,
         context_used = meta.context_used,
-        digest_bytes,
         "renewing agent context after the Provider prompt cache expired"
     );
-    measure(&meta, &policy, idle_ms, "renewed");
-    state.hub.prepare_context_reset(id);
+    if measured {
+        measure(&meta, cmid, Some(policy), idle_ms, "renewed");
+    }
     state
         .hub
         .mark_context_rolled_over(id, idle_ms, meta.context_used);
-    if !state.supervisor.has_live_worker(id) {
-        return Ok(false);
-    }
-    state.supervisor.reset_session(id).map(|()| true)
 }
 
 #[derive(Deserialize)]
@@ -252,7 +411,9 @@ async fn view(state: &AppState, id: &str) -> Response {
     let Some(meta) = state.hub.session_info(id).map(|info| info.meta) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let policy = policy(state, &meta).await;
+    let Some(policy) = policy(state, &meta).await else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "preferences unavailable").into_response();
+    };
     let idle_ms = state
         .hub
         .session_idle_for(id)
@@ -262,7 +423,7 @@ async fn view(state: &AppState, id: &str) -> Response {
         "context_used": meta.context_used,
         "idle_ms": idle_ms,
         "due": idle_ms.is_some_and(|idle| policy.due(std::time::Duration::from_millis(idle), meta.context_used))
-            && quiescent(state, &meta),
+            && ordinary(state, &meta),
     }))
     .into_response()
 }

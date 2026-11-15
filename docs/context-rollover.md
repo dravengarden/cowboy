@@ -44,17 +44,30 @@ reaches the dispatcher and all of these hold, Cowboy renews the context first:
   request started, so a full TTL guarantees the cache is gone;
 - `context_used` is at least `min_context_tokens` (default 80k). Below that the
   fresh context's own system prompt and reads would cost about as much;
-- the session is quiescent: ordinary, resumable native id, no background work,
-  no context send or staged links, and either dormant (`exited`) or an idle
-  local worker (`running`, no execution binding). Crashed, interrupted and
-  remote-execution sessions resume normally.
+- the session is dormant (`exited`, no worker or pending hibernation),
+  ordinary (not system, closing, a managed child or a native fork, whose
+  inherited history lives only in its native thread), has a resumable native
+  id and no background work, and its context has no staged links, pending
+  send or undelivered linked-context prompt. Anything else resumes normally.
+
+A live worker idle past its policy is hibernated by a five-minute pass
+(`hibernate_session`, which its Machine refuses atomically if work started),
+so its next prompt takes the dormant path. Renewal never resets a running
+worker: the native id is forgotten under the Supervisor lifecycle lock that
+every wake path holds, after re-checking that the session is still dormant
+with the same native id; if it woke meanwhile the recorded renewal is
+withdrawn and the prompt resumes the old context.
 
 Renewal keeps the Cowboy session, worktree, settings, queue and full
-transcript. It records a self-link (`{session_id: self, before: boundary}`)
-and a `Rollover` record on the session context, forgets the native session id
-(so the next launch is `session/new`), and appends a `context_rolled_over`
-divider. A live idle worker is replaced and the message waits in the queue
-until the fresh agent runs; a dormant session simply starts fresh.
+transcript. Under the context write lock it claims this prompt as the carrier
+of a renewal injection (`context-renewal-<id>-<boundary>`, a self-link
+bounded by the marker), saves the context with its `Rollover` record, forgets
+the native session id (so the launch this prompt triggers is `session/new`)
+and appends a `context_rolled_over` divider. The prompt continues its own
+dispatch; nothing is requeued. If that prompt is later removed before the
+fresh agent received any message, the next authored prompt becomes the
+carrier, so the fresh agent always starts with the renewal preamble. An
+answer before the marker is no longer a fork point.
 
 The first prompt carries the shared linked-context preamble with a renewal
 body: the boundary, why the context was renewed, a deterministic digest
@@ -103,8 +116,9 @@ the context is smaller.
 
 | Event | When | Attributes |
 |---|---|---|
-| `cowboy.context_rollover.decision` | every authored prompt after ≥5 min idle | `cowboy.provider.id`, `cowboy.outcome` (`renewed`, `no_preset`, `disabled`, `cache_warm`, `small_context`, `not_quiescent`, `context_pending`, `context_unreadable`, `no_history`, `record_failed`), `cowboy.idle_ms`, `cowboy.context.used_tokens`, `cowboy.threshold_ms`, `cowboy.context.min_tokens` |
-| `cowboy.context_rollover.first_turn` | the turn that answers that prompt | `cowboy.context.renewed`, idle, context before, `gen_ai.usage.input_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, `cowboy.usage.uncached_input_tokens`, `gen_ai.usage.output_tokens`, `cowboy.duration_ms` (dispatch → turn end, includes a worker relaunch) |
+| `cowboy.context_rollover.decision` | every authored prompt after ≥5 min idle | `cowboy.provider.id`, `cowboy.outcome` (`renewed`, `preferences_unavailable`, `no_preset`, `disabled`, `cache_warm`, `small_context`, `not_eligible`, `live_worker`, `context_pending`, `no_history`, `record_failed`, `raced`); a retry of the same prompt keeps its first decision, `cowboy.idle_ms`, `cowboy.context.used_tokens`, `cowboy.threshold_ms`, `cowboy.context.min_tokens` |
+| `cowboy.context_rollover.first_turn` | the turn that answers that prompt | `cowboy.context.renewed`, idle, context before, `gen_ai.usage.input_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, `cowboy.usage.uncached_input_tokens`, `gen_ai.usage.output_tokens`, `cowboy.duration_ms` (dispatch → turn end, includes a fresh launch) |
+| `cowboy.context_rollover.hibernate` | a worker idle past its cache is hibernated | `cowboy.outcome` (`requested`/`refused`), idle, context |
 | `cowboy.context_rollover.history_read` | a renewed session reads its own history | `cowboy.operation` (`history`/`search`/`event`), `cowboy.bytes` returned, `cowboy.context.boundary_seq` |
 
 ```bash
@@ -117,13 +131,14 @@ these answer: how often renewal fires and why it is skipped; the first-turn
 cost with and without renewal per idle bucket; how many on-demand reads and
 bytes a renewal needs (a high count means the digest is too thin, zero reads
 with user corrections means it may be missing context); and the latency a
-live-worker relaunch adds. The log carries counts and identifiers only, never
+fresh launch adds. The log carries counts and identifiers only, never
 prompt or transcript text.
 
 ## Limits
 
 - A running turn whose cache expires mid-turn (long tools, waiting for
   approval or subagents) cannot be renewed; it pays the miss.
+- A preferences read failure skips renewal rather than assuming the default.
 - An over-limit Claude subscription or API key uses a five-minute TTL; the
   60-minute preset then renews later than the cache expires (no worse than
   before).

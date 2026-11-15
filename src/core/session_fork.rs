@@ -104,6 +104,13 @@ impl Hub {
                 ForkPoint::NotLoaded
             };
         };
+        // An answer before a renewal belongs to a native context that is gone.
+        if session.log[index + 1..]
+            .iter()
+            .any(crate::context_rollover::is_context_boundary)
+        {
+            return ForkPoint::Missing;
+        }
         for envelope in &session.log[index + 1..] {
             match update_kind(envelope) {
                 Some(("user_message_chunk", _)) => return ForkPoint::Completed,
@@ -382,6 +389,26 @@ mod tests {
                 }),
             },
         );
+    }
+
+    #[test]
+    fn a_renewal_ends_the_native_context_answers_can_fork_from() {
+        let hub = Hub::new();
+        session(&hub, "source");
+        hub.set_status("source", crate::agent_model::Status::Running, None);
+        chunk(&hub, "user_message_chunk", None);
+        chunk(&hub, "agent_message_chunk", Some("old"));
+        chunk(&hub, "user_message_chunk", None);
+        assert_eq!(hub.fork_point("source", "old"), ForkPoint::Completed);
+        assert!(hub.context_has_user_message("source"));
+        assert!(hub.mark_context_rolled_over("source", 1, 2).is_some());
+        assert_eq!(hub.fork_point("source", "old"), ForkPoint::Missing);
+        assert_eq!(hub.last_answer_id("source"), None);
+        assert!(!hub.context_has_user_message("source"));
+        chunk(&hub, "user_message_chunk", None);
+        chunk(&hub, "agent_message_chunk", Some("new"));
+        assert!(hub.context_has_user_message("source"));
+        assert_eq!(hub.last_answer_id("source").as_deref(), Some("new"));
     }
 
     #[test]

@@ -69,7 +69,8 @@ pub fn carrier_key(id: &str) -> String {
     )
 }
 
-fn carrier(hub: &crate::core::Hub, id: &str, injection: &Injection) -> Option<Carrier> {
+/// The recorded carrier of `injection`, if one was claimed.
+pub fn carrier(hub: &crate::core::Hub, id: &str, injection: &Injection) -> Option<Carrier> {
     hub.setting(&carrier_key(id))
         .and_then(|value| serde_json::from_value::<Carrier>(value).ok())
         .filter(|carrier| carrier.injection == injection.cmid)
