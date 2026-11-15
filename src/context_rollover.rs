@@ -25,6 +25,21 @@ pub const MIN_CONTEXT_TOKENS_RANGE: std::ops::RangeInclusive<u64> = 8_000..=2_00
 pub const IDLE_MINUTES_RANGE: std::ops::RangeInclusive<u64> = 1..=10_080;
 /// Marker event separating the renewed context from the earlier history.
 pub const MARKER: &str = "context_rolled_over";
+/// How a renewal block's body starts, after its link line.
+const BODY_START: &str = "Context renewed: ";
+
+/// Whether a prompt text block is a generated renewal preamble. A retry
+/// rebuilt from the echo drops it; the send path adds the current one.
+#[must_use]
+pub fn is_renewal_block(block: &Value) -> bool {
+    block
+        .get("text")
+        .and_then(Value::as_str)
+        .is_some_and(|text| {
+            text.starts_with("<system-reminder>\nLinked Cowboy sessions: ")
+                && text.contains(&format!("]\n{BODY_START}"))
+        })
+}
 
 const DIGEST_FIRST_CHARS: usize = 1_200;
 const DIGEST_USER_CHARS: usize = 700;
@@ -304,7 +319,7 @@ fn duration_label(ms: u64) -> String {
 pub fn preamble_body(session_id: &str, rollover: &Rollover) -> String {
     let before = rollover.before;
     let mut text = format!(
-        "Context renewed: this session's earlier conversation (events before seq {before}) is NOT in your context. The Provider prompt cache had expired after {} idle, so resuming would have re-billed ~{} tokens as a cold cache write. Cowboy started a fresh agent context in the same session: worktree, branch, files and settings are unchanged.\n",
+        "{BODY_START}this session's earlier conversation (events before seq {before}) is NOT in your context. The Provider prompt cache had expired after {} idle, so resuming would have re-billed ~{} tokens as a cold cache write. Cowboy started a fresh agent context in the same session: worktree, branch, files and settings are unchanged.\n",
         duration_label(rollover.idle_ms),
         rollover.context_used,
     );

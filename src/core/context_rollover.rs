@@ -41,7 +41,8 @@ impl Hub {
                 _ => {}
             }
         }
-        false
+        // The marker fell out of the held tail with no answer after it.
+        !session.reached_start
     }
 
     /// Whether the current native context has received a user turn; a

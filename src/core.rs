@@ -252,7 +252,11 @@ fn last_user_prompt(log: &[Envelope]) -> LastUserPrompt {
         .iter()
         .rposition(|env| user_block(env).is_none())
         .map_or(0, |index| index + 1);
-    let blocks: Vec<serde_json::Value> = log[start..=last].iter().filter_map(user_block).collect();
+    let blocks: Vec<serde_json::Value> = log[start..=last]
+        .iter()
+        .filter_map(user_block)
+        .filter(|block| !crate::context_rollover::is_renewal_block(block))
+        .collect();
     let text: String = blocks
         .iter()
         .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))

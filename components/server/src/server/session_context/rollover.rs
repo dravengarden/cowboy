@@ -188,7 +188,12 @@ async fn hibernate_expired(state: &AppState) {
         let Some(policy) = policy(state, &meta).await else {
             continue;
         };
-        if !policy.due(idle, meta.context_used) {
+        if !policy.due(idle, meta.context_used)
+            || state
+                .hub
+                .session_info(&meta.id)
+                .is_none_or(|info| info.queue_count > 0)
+        {
             continue;
         }
         let result = state.supervisor.hibernate_session(&meta.id);
@@ -320,16 +325,16 @@ pub(in crate::server) async fn before_dispatch(
         tracing::warn!(session = id, %error, "context renewal not recorded; resuming the old context");
         return skip("record_failed");
     }
-    if !state
-        .supervisor
-        .forget_dormant_context(id, &agent_session_id)
-    {
+    // The marker and the forgotten native id are published together under
+    // the lifecycle lock, so no wake can launch between them.
+    if !state.supervisor.forget_dormant_context(
+        id,
+        &agent_session_id,
+        (before, idle_ms, meta.context_used),
+    ) {
         // A worker started meanwhile and keeps its context.
         return skip("raced");
     }
-    state
-        .hub
-        .mark_context_rolled_over(id, before, idle_ms, meta.context_used);
     tracing::info!(
         session = id,
         idle_ms,

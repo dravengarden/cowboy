@@ -1033,7 +1033,12 @@ impl Supervisor {
     /// so a worker cannot start between this check and the reset. Refuses when
     /// a worker exists or is still hibernating, or the session's native id
     /// changed since the caller decided.
-    pub fn forget_dormant_context(&self, session_id: &str, agent_session_id: &str) -> bool {
+    pub fn forget_dormant_context(
+        &self,
+        session_id: &str,
+        agent_session_id: &str,
+        marker: (u64, u64, u64),
+    ) -> bool {
         let _lifecycle = self.lifecycle.lock();
         let dormant = self.hub.session_info(session_id).is_some_and(|info| {
             info.meta.status == Status::Exited
@@ -1042,6 +1047,11 @@ impl Supervisor {
             !runtime.has_worker(session_id) && !runtime.hibernation_pending(session_id)
         });
         if dormant {
+            // Marker first: if only it persists, the old context resumes
+            // with a harmless extra digest instead of a fresh one without.
+            let (before, idle_ms, context_used) = marker;
+            self.hub
+                .mark_context_rolled_over(session_id, before, idle_ms, context_used);
             self.hub.prepare_context_reset(session_id);
         }
         dormant

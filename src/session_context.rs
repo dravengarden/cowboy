@@ -123,8 +123,13 @@ pub fn without_preamble(
     cmid: Option<&str>,
     mut content: Vec<serde_json::Value>,
 ) -> Vec<serde_json::Value> {
+    // A renewal's block is recognized even after a Clear retired it, so a
+    // returned prompt never requeues the cleared history as user content.
     let generated = [
-        renewal_preamble(hub, id),
+        read(hub, id)
+            .ok()
+            .and_then(|context| context.rollover)
+            .map(|rollover| renewal_text(id, &rollover)),
         preamble(hub, id, cmid).ok().flatten(),
     ];
     while content.len() > 1
@@ -440,18 +445,21 @@ pub fn validate_sources(ids: &[String]) -> Result<(), String> {
 #[must_use]
 pub fn renewal_preamble(hub: &crate::core::Hub, id: &str) -> Option<String> {
     let rollover = read(hub, id).ok()?.rollover?;
-    if !hub.renewal_pending(id, rollover.before) {
-        return None;
-    }
+    hub.renewal_pending(id, rollover.before)
+        .then(|| renewal_text(id, &rollover))
+}
+
+/// The preamble text of a renewal record, pending or not.
+fn renewal_text(id: &str, rollover: &crate::context_rollover::Rollover) -> String {
     let source = serde_json::to_string(&[Source {
         session_id: id.to_owned(),
         before: rollover.before,
     }])
     .expect("renewal link serializes");
-    Some(format!(
+    format!(
         "{PREAMBLE_PREFIX}{source}\n{}</system-reminder>",
-        crate::context_rollover::preamble_body(id, &rollover)
-    ))
+        crate::context_rollover::preamble_body(id, rollover)
+    )
 }
 
 pub fn prompt_content(
@@ -735,8 +743,19 @@ mod tests {
         // A Clear after a renewal retires it as well.
         hub.mark_context_rolled_over("destination", 12, 1, 2);
         assert!(renewal_preamble(&hub, "destination").is_some());
+        let returned = vec![
+            serde_json::json!({"type":"text","text":preamble}),
+            serde_json::json!({"type":"text","text":"hi"}),
+        ];
+        assert!(crate::context_rollover::is_renewal_block(&returned[0]));
+        assert!(!crate::context_rollover::is_renewal_block(&returned[1]));
         hub.mark_context_cleared("destination");
         assert_eq!(renewal_preamble(&hub, "destination"), None);
+        // A prompt returned after Clear never requeues the cleared digest.
+        assert_eq!(
+            without_preamble(&hub, "destination", Some("c-3"), returned),
+            vec![serde_json::json!({"type":"text","text":"hi"})]
+        );
     }
 
     #[test]

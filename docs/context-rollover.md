@@ -69,7 +69,10 @@ own dispatch; nothing is requeued.
 Delivery is not bound to a prompt identity. At the Supervisor send boundary
 every prompt (except a slash command) carries the renewal preamble while the
 newest context boundary is this renewal's marker and no agent output
-(message, thought or tool call) follows it. A prompt withdrawn before the
+(message, thought or tool call) follows it. The marker is published and the
+native id forgotten together under the Supervisor lifecycle lock. A retry
+rebuilt from the echo drops the old renewal block, and a returned prompt is
+stripped of it even after a Clear. A prompt withdrawn before the
 fresh agent answered leaves it pending for the next one; a Clear writes a
 newer boundary and retires it. An answer before the marker is no longer a
 fork point.
@@ -147,6 +150,11 @@ prompt or transcript text.
 - An over-limit Claude subscription or API key uses a five-minute TTL; the
   60-minute preset then renews later than the cache expires (no worse than
   before).
+- First-turn measurements are armed by the measured prompt's echo; a direct
+  Prompt that overtakes it can still attribute the wrong turn's usage.
+- The marker and the forgotten native id are separate write-behind records;
+  the marker is written first, so a crash between them resumes the old
+  context with an extra digest rather than a fresh one without it.
 - The digest uses the held log tail; after memory reclaim it may be partial,
   and the agent relies on the on-demand reads.
 
