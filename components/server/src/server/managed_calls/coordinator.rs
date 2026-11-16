@@ -1012,7 +1012,7 @@ async fn start(
     if let Some(code) = agent_tools::capability_refusal(&policy, request.purpose.is_image()) {
         return error(code, "not_submitted");
     }
-    let own_family = request.purpose.is_image() && policy.self_images;
+    let own_family = agent_tools::own_family(&policy, &request);
     // A continued conversation keeps its own agent.
     let continued = match &request.conversation {
         Conversation::Continue { child_session_id } => {

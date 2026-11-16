@@ -400,19 +400,12 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         advance(state, store, record, fail("conversation_unavailable", None)).await;
         return Step::Again;
     }
-    let round = ChildRound {
-        child_session_id: child.to_owned(),
-        parent_session_id: record.placement.parent_session_id.clone(),
-        call_id: record.call_id.clone(),
-        workspace_id: record.placement.workspace_id.clone(),
-        source_cwd: request
-            .context
-            .root
-            .clone()
-            .unwrap_or_else(|| record.placement.cwd.clone()),
-        files: request.context.files.clone(),
-        output_schema: output_schema(&request),
-        profile: record.purpose.profile(),
+    let round = match child_round(state, record, &request, child).await {
+        Ok(round) => round,
+        Err(code) => {
+            advance(state, store, record, fail(code, None)).await;
+            return Step::Again;
+        }
     };
     let prepared = match execution_action(
         state,
@@ -750,6 +743,30 @@ async fn remote_binding(
     ))
 }
 
+/// The round input: the parent's worktree, or a context ask's exported history.
+async fn child_round(
+    state: &AppState,
+    record: &Record,
+    request: &Request,
+    child: &str,
+) -> Result<ChildRound, &'static str> {
+    Ok(ChildRound {
+        child_session_id: child.to_owned(),
+        parent_session_id: record.placement.parent_session_id.clone(),
+        call_id: record.call_id.clone(),
+        workspace_id: record.placement.workspace_id.clone(),
+        source_cwd: request
+            .context
+            .root
+            .clone()
+            .unwrap_or_else(|| record.placement.cwd.clone()),
+        files: request.context.files.clone(),
+        output_schema: output_schema(request),
+        profile: record.purpose.profile(),
+        documents: super::history::round_documents(state, record, request).await?,
+    })
+}
+
 async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<(), &'static str> {
     let parent = state
         .hub
@@ -1007,14 +1024,8 @@ async fn observe(state: &Arc<AppState>, store: &Store, record: &Record) -> Step 
         if let Some(usage) = turn.usage {
             result["usage"] = json!(usage);
         }
-        if let Some(request) = &request
-            && let Some(base) = request.labels.get(crate::managed_calls::review::BASE)
-        {
-            result["review_input"] = json!({
-                "root": request.context.root,
-                "base": base,
-                "task": request.labels.get(crate::managed_calls::review::TASK),
-            });
+        if let Some(request) = &request {
+            super::history::annotate(state, record, request, &mut result).await;
         }
         if record.purpose.is_image()
             && let Some(failure) = turn

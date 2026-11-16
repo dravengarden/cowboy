@@ -82,7 +82,11 @@ body: the boundary, why the context was renewed, a deterministic digest
 (first request, the latest three human messages and the final reply of the
 last turn, truncated, reminder tags neutralized) and instructions to recover
 anything else on demand with `sessions.search` / `sessions.history` /
-`sessions.event` bounded by `before`. The digest is computed once and stored,
+`sessions.event` bounded by `before`, or, when the answer needs much of a
+long history, to hand one question to a cheap model through a context ask
+(`calls.start` with `sessions`, see
+[managed-agent-calls.md](managed-agent-calls.md#context-asks-over-recorded-history)).
+The digest is computed once and stored,
 so every attempt receives the identical preamble and requeue strips it.
 No model call produces it and no history is copied.
 

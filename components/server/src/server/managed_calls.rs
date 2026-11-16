@@ -2,6 +2,7 @@
 
 mod approval;
 mod coordinator;
+mod history;
 mod runner;
 mod selection;
 

@@ -254,6 +254,11 @@ pub struct ChildRound {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<serde_json::Value>,
     pub profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+    /// A context ask's exported history: the round's whole workspace, with no
+    /// repository capture. Sent only to Machines that negotiated
+    /// `MANAGED_CONTEXT_PROTOCOL_VERSION`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<super::history::ContextDocument>,
 }
 
 impl std::fmt::Debug for ChildRound {
@@ -278,6 +283,11 @@ impl ChildRound {
             && !self.source_cwd.contains('\0')
             && self.files.len() <= 32
             && self.files.iter().all(|file| super::relative_file(file))
+            && super::history::valid_documents(&self.documents)
+            && (self.documents.is_empty()
+                || (self.files.is_empty()
+                    && self.output_schema.is_none()
+                    && self.profile == cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1))
             && self.output_schema.as_ref().is_none_or(|schema| {
                 super::OutputFormat::JsonSchema {
                     schema: schema.clone(),

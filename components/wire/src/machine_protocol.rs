@@ -33,7 +33,10 @@ pub mod telemetry_recovery_audit;
 mod challenge_proof;
 pub use challenge_proof::{challenge_proof_v1, challenge_proof_v2, challenge_proof_v3};
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 45;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 46;
+/// Managed rounds accept a context ask's exported history documents
+/// (`ChildRound::documents`) as their whole workspace.
+pub const MANAGED_CONTEXT_PROTOCOL_VERSION: u16 = 46;
 /// Connection-scoped signed MCP process commands and responses.
 pub const MCP_TRANSPORT_PROTOCOL_VERSION: u16 = 43;
 /// Expiring native descriptor receipts require explicit ownership confirmation.
@@ -1601,6 +1604,7 @@ mod tests {
             files: vec![],
             output_schema: None,
             profile: cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1,
+            documents: Vec::new(),
         };
         let command = |round| MachineCommand::Execution {
             request_id: "request".into(),

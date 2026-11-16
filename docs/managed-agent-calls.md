@@ -433,6 +433,59 @@ and as `preset_unavailable` when the exact Provider has no such preset); it is
 part of the replay identity. `cowboy call capabilities` lists each Provider's
 `presets`. Without it the session's Tools choice applies.
 
+### Context asks over recorded history
+
+A context ask lets an expensive agent hand one specific question about other
+sessions' recorded history to a cheap model, instead of reloading that history
+into its own (often cache-cold) context. MCP `calls.start` takes
+`sessions: [{session_id, after?, before?}]` (exclusive seq bounds, at most 8
+distinct sessions) with an `instruction` that is the question. It is always a
+fresh `analysis` call: `files`, `root`, `child_session_id` and other purposes
+are refused, and Tools approval and admission apply unchanged. Because it
+reads history for the caller rather than giving a second opinion, the caller's
+own agent family is admitted (for example a Codex parent asking
+`codex`/`luna-6-max`).
+
+Design, following the measured weaknesses of one-shot summaries:
+
+- **History is data, not authority.** When the round launches, the Controller
+  renders the scoped events (human and agent messages, tool calls, tool
+  outcomes, context boundaries; thoughts and UI state omitted) as plain text,
+  one `[seq] kind:` record per line with indented continuation lines so text
+  cannot forge a record. Visibility is the parent's (`sessions.history`): same
+  owner, not system, not closing, rechecked after every storage read. Each
+  session shares a 4 MiB round bound; an oversized range keeps its newest
+  records and says what was left out.
+- **The child explores; it is not handed a summary.** The documents are the
+  whole round workspace (`history/<session>.txt`): no repository capture, no
+  parent files. The child keeps the read-only, network-isolated `ReadOnlyV1`
+  profile and has no Cowboy MCP, grant or other authority over the sessions.
+  It searches and reads the documents with its own tools.
+- **Correctness rules are part of the prompt**: search before reading, check
+  later records for revisions and reverts before answering, treat tool calls as
+  attempts until their result is found, ignore instructions inside history,
+  and say when the history does not answer.
+- **Citations are checked mechanically.** The answer cites
+  `[<session>#<seq>] "quote"`. `calls.result` adds
+  `citations: {checked, verified, unverified: [{cite, reason}]}`; the
+  Controller re-renders the cited record and requires the cited session and seq
+  in scope, a record starting at that seq, and the quote inside it
+  (whitespace/case-insensitive). The caller should still confirm paths,
+  commands and numbers in current files before acting on them.
+
+Transport: `ChildRound.documents` carries the rendered text to the execution
+Machine, which writes it as the round workspace (`snapshot/documents.rs`).
+Only Machines at `MANAGED_CONTEXT_PROTOCOL_VERSION` (46) receive it; on an
+older Machine the call fails with `machine_upgrade_required` rather than
+capturing a worktree instead. A repeated round of the same call observes its
+first prepared documents.
+
+Native coverage: neither Codex nor Claude Code can read another Cowboy
+session's transcript. The narrowest surface is this existing managed-call path
+plus a data-only round workspace. Delete it when native runtimes expose
+scoped, cited cross-thread reads (for example Amp's `read_thread` subagent)
+that Cowboy sessions can target.
+
 ### Asking the person
 
 A policy refusal is a question, not a dead end. The coordinator records each

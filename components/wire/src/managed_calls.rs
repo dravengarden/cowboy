@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+pub mod history;
 pub mod lifecycle;
 pub mod media;
 pub mod protocol;
@@ -102,6 +103,10 @@ pub struct Context {
     /// accepts a work tree of a repository registered on that Machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
+    /// Sessions whose recorded history a context ask reads instead of a
+    /// worktree (see [`history`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<history::SessionScope>,
 }
 
 /// A lexical absolute path without `.`/`..`, empty or control components.
@@ -261,7 +266,7 @@ impl Request {
         if !valid_id(&self.request_id) {
             return Err(InputError::InvalidRequestId);
         }
-        if !review::validate(self) {
+        if !review::validate(self) || !history::validate(self) {
             return Err(InputError::InvalidContext);
         }
         if self.instruction.trim().is_empty()
@@ -313,7 +318,7 @@ impl Request {
     /// The explicit task and file names only; never copy the parent's history
     /// or all project guidance into a native image turn.
     pub fn prompt(&self) -> String {
-        if let Some(prompt) = review::prompt(self) {
+        if let Some(prompt) = review::prompt(self).or_else(|| history::prompt(self)) {
             return prompt;
         }
         if !self.purpose.is_image() {

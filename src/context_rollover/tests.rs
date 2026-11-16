@@ -183,6 +183,7 @@ fn preamble_names_the_boundary_and_on_demand_reads() {
         "<your_last_reply>\nanswer\n</your_last_reply>",
         "cowboy.sessions.search('sess-1', {query, before:42})",
         "Never reload the whole history",
+        "sessions:[{session_id:'sess-1', before:42}]",
     ] {
         assert!(text.contains(expected), "{expected}\n{text}");
     }

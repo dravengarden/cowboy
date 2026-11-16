@@ -23,6 +23,7 @@ use super::round::read_round;
 use super::round::{MAX_ROUND_BYTES, RoundMarker, read_private};
 use crate::execution_environment::ManagedChildV1;
 
+mod documents;
 mod images;
 pub use images::deliver;
 
@@ -432,6 +433,27 @@ fn input_revision(capture: &Capture, files: &[String]) -> String {
     }))
 }
 
+/// Record the child directory's identity once; a later round must match it.
+fn claim_identity(marker: &Path, identity: &ManagedChildV1) -> Result<(), &'static str> {
+    match read_private(marker, 16 * 1024) {
+        Some(bytes) => {
+            if serde_json::from_slice::<ManagedChildV1>(&bytes)
+                .ok()
+                .as_ref()
+                != Some(identity)
+            {
+                return Err("identity_mismatch");
+            }
+        }
+        None if marker.exists() => return Err("identity_mismatch"),
+        None => {
+            let bytes = serde_json::to_vec(identity).map_err(|_| "preparation_failed")?;
+            write_private(marker, &bytes).map_err(|_| "preparation_failed")?;
+        }
+    }
+    Ok(())
+}
+
 /// Prepare one round. Repeating the same call id observes the stored receipt
 /// instead of capturing again, so a lost reply cannot change the input.
 pub async fn prepare(
@@ -471,23 +493,7 @@ pub async fn prepare(
         profile: round.profile,
     };
     identity.validate().map_err(|_| "invalid_request")?;
-    let marker = directory.join("snapshot.json");
-    match read_private(&marker, 16 * 1024) {
-        Some(bytes) => {
-            if serde_json::from_slice::<ManagedChildV1>(&bytes)
-                .ok()
-                .as_ref()
-                != Some(&identity)
-            {
-                return Err("identity_mismatch");
-            }
-        }
-        None if marker.exists() => return Err("identity_mismatch"),
-        None => {
-            let bytes = serde_json::to_vec(&identity).map_err(|_| "preparation_failed")?;
-            write_private(&marker, &bytes).map_err(|_| "preparation_failed")?;
-        }
-    }
+    claim_identity(&directory.join("snapshot.json"), &identity)?;
     let round_path = directory.join("round.json");
     if let Some(existing) = read_private(&round_path, MAX_ROUND_BYTES)
         .and_then(|bytes| serde_json::from_slice::<RoundMarker>(&bytes).ok())
@@ -501,6 +507,8 @@ pub async fn prepare(
     }
     if round.profile == cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1 {
         return images::prepare(&directory, &source, round);
+    } else if !round.documents.is_empty() {
+        return documents::prepare(&directory, round);
     }
     let top = git
         .run(
@@ -853,6 +861,7 @@ mod tests {
             files,
             output_schema: Some(serde_json::json!({"type":"object"})),
             profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+            documents: Vec::new(),
         }
     }
 

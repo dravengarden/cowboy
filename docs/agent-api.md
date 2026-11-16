@@ -557,7 +557,7 @@ writer. It does not evaluate code or promise atomicity across domains.
 | Action               | Contract                                                                                                                                        |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `review.start`       | Focus, design/code choice, files/root and optional provider/preset; shared CLI review instruction, immutable worktree snapshot, read-only child |
-| `calls.start`        | Self-contained instruction and existing managed-call policy/approval/admission                                                                  |
+| `calls.start`        | Self-contained instruction and existing managed-call policy/approval/admission; `sessions` makes a cited context ask over recorded history      |
 | `calls.cancel`       | `call_id`; operation must equal that id; requesting cancellation does not prove termination                                                     |
 | `documents.mutate`   | Create, text write, attachment replacement, rename, move, trash or restore; existing owner-scoped store transaction and revision CAS            |
 | `preferences.update` | `{scope,expected_revision,changes}`; typed partial update of the current user's DB preferences, with atomic revision and receipt                |

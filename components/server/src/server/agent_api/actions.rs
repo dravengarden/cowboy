@@ -31,6 +31,10 @@ struct CallInput {
     files: Vec<String>,
     #[serde(default)]
     root: Option<String>,
+    /// A context ask: `[{session_id, after?, before?}]` whose recorded
+    /// history the child reads instead of a worktree.
+    #[serde(default)]
+    sessions: Vec<Value>,
     #[serde(default)]
     preset: Option<String>,
     #[serde(default)]
@@ -46,6 +50,8 @@ struct CallInput {
     #[serde(default)]
     notify: bool,
 }
+
+const SESSIONS_ALONE: &str = "sessions makes a fresh analysis call over recorded history only; omit purpose (or pass analysis), capability, child_session_id, files and root";
 
 fn auto() -> String {
     "auto".into()
@@ -78,7 +84,7 @@ fn input_refusal(error: &crate::managed_calls::InputError) -> CallRefusal {
         InputError::RequestTooLarge => "request exceeds the size limit",
         InputError::InvalidInstruction => "instruction must be non-empty text up to 128 KiB",
         InputError::InvalidContext => {
-            "image calls take up to 4 files, and image.edit needs files or child_session_id; a base-bound review needs root"
+            "image calls take up to 4 files, and image.edit needs files or child_session_id; a base-bound review needs root; sessions takes up to 8 distinct {session_id, after?, before?} with after < before"
         }
         InputError::InvalidConversation => "child_session_id is not a valid session id",
         InputError::InvalidLabels => "title and reason must be short single-line text",
@@ -156,6 +162,19 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
         return Err(refuse(
             "focus, design, task, base and fresh belong to review.start",
         ));
+    }
+    if !input.sessions.is_empty()
+        && (review
+            || input.capability.is_some()
+            || input
+                .purpose
+                .as_deref()
+                .is_some_and(|purpose| purpose != "analysis")
+            || input.child_session_id.is_some()
+            || !input.files.is_empty()
+            || input.root.is_some())
+    {
+        return Err(refuse(SESSIONS_ALONE));
     }
     if input.task.is_some() != input.base.is_some() {
         return Err(refuse(TASK_NEEDS_BASE));
@@ -265,7 +284,7 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
     let request = Request::parse(
         serde_json::to_string(&json!({
             "schema":1,"request_id":operation,"purpose":purpose,"instruction":instruction,
-            "context":{"scope":"current-worktree","files":input.files,"root":input.root},
+            "context":{"scope":"current-worktree","files":input.files,"root":input.root,"sessions":input.sessions},
             "access":"read-only","conversation":conversation,"labels":labels,"output":output
         }))
         .map_err(|_| refuse("arguments could not be encoded"))?
@@ -1081,6 +1100,52 @@ mod tests {
             crate::managed_calls::Access::ReadOnly
         ));
     }
+    #[test]
+    fn a_context_ask_is_a_sessions_only_analysis_call() {
+        let Action::Start { request, .. } = call_action(
+            "calls.start",
+            json!({"instruction":"what did we decide?","sessions":[{"session_id":"sess-1","before":90}],"provider":"codex","preset":"luna-6-max"}),
+            "op",
+        )
+        .unwrap() else {
+            panic!("not a start");
+        };
+        assert_eq!(request.purpose, crate::managed_calls::Purpose::Analysis);
+        assert_eq!(request.context.sessions[0].before, Some(90));
+        assert!(request.prompt().contains("history/sess-1.txt"));
+        let sessions = json!([{"session_id":"sess-1"}]);
+        for args in [
+            json!({"instruction":"x","sessions":sessions,"files":["a.md"]}),
+            json!({"instruction":"x","sessions":sessions,"root":"/srv/x"}),
+            json!({"instruction":"x","sessions":sessions,"purpose":"review"}),
+            json!({"instruction":"x","sessions":sessions,"child_session_id":"c-1"}),
+            json!({"focus":"x","sessions":sessions}),
+        ] {
+            let action = if args.get("focus").is_some() {
+                "review.start"
+            } else {
+                "calls.start"
+            };
+            let refusal = call_action(action, args, "op").unwrap_err();
+            assert!(
+                refusal.message.contains("recorded history only"),
+                "{}",
+                refusal.message
+            );
+        }
+        let bounds = call_action(
+            "calls.start",
+            json!({"instruction":"x","sessions":[{"session_id":"s","after":5,"before":5}]}),
+            "op",
+        )
+        .unwrap_err();
+        assert!(
+            bounds.message.contains("after < before"),
+            "{}",
+            bounds.message
+        );
+    }
+
     #[test]
     fn call_refusals_name_the_rule_without_echoing_input() {
         let message =

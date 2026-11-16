@@ -156,6 +156,7 @@ async fn native_managed_execution(images: bool) {
         },
         output_schema: schema.clone(),
         profile,
+        documents: Vec::new(),
     };
     let prepared = match manager
         .request(

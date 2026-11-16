@@ -200,6 +200,7 @@ mod tests {
             files: vec!["input.png".into()],
             output_schema: None,
             profile: cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1,
+            documents: Vec::new(),
         };
         let prepared = super::super::prepare(&managed, "machine", &round, &roots, &[])
             .await

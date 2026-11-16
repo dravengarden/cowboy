@@ -541,6 +541,13 @@ pub(super) fn inherited_settings(
     settings
 }
 
+/// Whether a call may run in the caller's own agent family: an image call
+/// with `self_images` on, or a context ask, which reads recorded history for
+/// the caller rather than giving it a second opinion.
+pub(super) fn own_family(policy: &CallsPolicy, request: &crate::managed_calls::Request) -> bool {
+    (request.purpose.is_image() && policy.self_images) || !request.context.sessions.is_empty()
+}
+
 /// A refusal no approval can answer, checked before any is asked for.
 pub(super) fn capability_refusal(policy: &CallsPolicy, image: bool) -> Option<&'static str> {
     (image && !policy.images).then_some("capability_disabled")
