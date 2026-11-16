@@ -514,6 +514,33 @@ async fn transition_plan(
     ))
 }
 
+/// Start a call from MCP arguments: build the request, pin a context ask's
+/// history bounds, then admit it like any other call.
+async fn start_call(
+    state: &Arc<AppState>,
+    meta: &SessionMeta,
+    ledger: &Ledger,
+    action: &str,
+    args: Value,
+    operation: &str,
+) -> Value {
+    let origin = super::super::background_tasks::CallOrigin::Mcp {
+        action: action.to_owned(),
+        operation: operation.to_owned(),
+    };
+    let mut action = match call_action(action, args, operation) {
+        Ok(action) => action,
+        Err(refusal) => return refusal.value(),
+    };
+    if let Action::Start { request, .. } = &mut action {
+        super::super::managed_calls::pin_bounds(state, &meta.id, ledger, request).await;
+    }
+    call_result(
+        super::super::managed_calls::dispatch_calls_from(state, meta, ledger, action, &origin)
+            .await,
+    )
+}
+
 async fn execute(
     state: &Arc<AppState>,
     meta: &SessionMeta,
@@ -708,23 +735,7 @@ async fn execute(
             }
         }
         "calls.start" | "review.start" => {
-            let origin = super::super::background_tasks::CallOrigin::Mcp {
-                action: action.to_owned(),
-                operation: operation.to_owned(),
-            };
-            let mut action = match call_action(action, args, operation) {
-                Ok(action) => action,
-                Err(refusal) => return Ok(refusal.value()),
-            };
-            if let Action::Start { request, .. } = &mut action {
-                super::super::managed_calls::pin_bounds(state, &meta.id, ledger, request).await;
-            }
-            Ok(call_result(
-                super::super::managed_calls::dispatch_calls_from(
-                    state, meta, ledger, action, &origin,
-                )
-                .await,
-            ))
+            Ok(start_call(state, meta, ledger, action, args, operation).await)
         }
         "calls.cancel" => {
             only_keys(&args, &["call_id"]).map_err(|_| "invalid_argument")?;
