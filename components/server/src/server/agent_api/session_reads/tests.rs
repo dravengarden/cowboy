@@ -271,8 +271,38 @@ async fn archived_history_is_paged_without_hydrating_or_waking_the_session() {
     )
     .await
     .unwrap();
+    // One call scans the whole short history, so an empty result is final.
     assert_eq!(empty["matches"], json!([]));
-    assert!(!empty["next_before"].is_null());
+    assert_eq!(empty["scanned"], 130);
+    assert!(empty["next_before"].is_null());
+    assert_eq!(empty["reached_start"], true);
+    let cased = super::super::event_reads::search(
+        &hub,
+        Some(&store),
+        &parent,
+        true,
+        &json!({"session_id":"archived","query":"SAVED-12"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(cased["matches"], json!([]));
+    let folded = super::super::event_reads::search(
+        &hub,
+        Some(&store),
+        &parent,
+        true,
+        &json!({"session_id":"archived","query":"saved-12","limit":20}),
+    )
+    .await
+    .unwrap();
+    let seqs: Vec<_> = folded["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, [129, 128, 127, 126, 125, 124, 123, 122, 121, 120, 12]);
+    assert!(folded["next_before"].is_null());
     let mut foreign = parent.clone();
     foreign.owner_user_id = Some("other".into());
     assert_eq!(

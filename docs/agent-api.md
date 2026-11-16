@@ -384,8 +384,9 @@ arrays use `offset`/`limit`. Details carry a content `revision`; send it as
 recovers every retained block across a summary's `seq..to` span without putting
 full output or binary attachment bodies in a list response.
 
-`session.search({query,before?,limit?,chars?})` scans at most 64 saved records
-per call and returns the first literal, case-sensitive string match per event,
+`session.search({query,before?,limit?,chars?})` scans back through at most
+4,096 saved records or 1.5 seconds per call and returns the first literal
+smart-case string match per event (a query without uppercase ignores case),
 with its exact JSON pointer, Unicode offset, content revision and a short
 excerpt. It searches individual stored string values, including tool output; it
 does not join strings across events. Follow `next_before` even on an empty

@@ -449,8 +449,8 @@ export type EventDetailQuery = {path?:string;offset?:number;chars?:number;limit?
 export type EventDetail = {seq:Seq;source:"durable"|"memory";revision:string;page:{path:string;kind:string;data:unknown;range:TextRange}};
 export type SearchQuery = {query:string;before?:Seq;limit?:number;chars?:number};
 export type SearchPage = {matches:{seq:Seq;path:string;text:string;offset:number;revision:string}[];scanned:number;next_before:Seq|null;reached_start:boolean;source:string};
-// search: literal case-sensitive JSON strings (tools included), first hit/event, no cross-event match.
-// Scan<=64 records; hits default20/max64; excerpts default200/max1000 chars (>=query length).
+// search: literal smart-case JSON strings (no uppercase = ignore case; tools included), first hit/event, no cross-event match.
+// Scan<=4096 records or 1.5s; hits default20/max64; excerpts default200/max1000 chars (>=query length).
 // Follow next_before even if empty. event: raw shape; select JSON pointer for content.
 // Strings: Unicode offset/chars default1000/max4000; object/array: offset/limit default50/max200.
 // 32KiB/page; describe:true=shape. Continue with expected:detail.revision; conflict -> restart event.
