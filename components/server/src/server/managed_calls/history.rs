@@ -104,7 +104,7 @@ pub(super) fn render(events: &[Envelope]) -> Vec<Rendered> {
                     "assistant"
                 } else if text.starts_with("<system-reminder") {
                     "reminder"
-                } else if crate::prompt_origin::is_human_prompt_update(&update) {
+                } else if crate::prompt_origin::is_human_prompt_update(update) {
                     "user"
                 } else {
                     "prompt"
