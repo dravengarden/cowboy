@@ -131,7 +131,10 @@ the context is smaller.
 | `cowboy.context_rollover.decision` | every authored prompt after ≥5 min idle | `cowboy.provider.id`, `cowboy.outcome` (`renewed`, `preferences_unavailable`, `no_preset`, `disabled`, `cache_warm`, `small_context`, `not_eligible`, `live_worker`, `context_pending`, `no_history`, `record_failed`, `raced`); a retry of the same prompt keeps its first decision, `cowboy.idle_ms`, `cowboy.context.used_tokens`, `cowboy.threshold_ms`, `cowboy.context.min_tokens` |
 | `cowboy.context_rollover.first_turn` | the turn that answers that prompt | `cowboy.context.renewed`, idle, context before, `gen_ai.usage.input_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, `cowboy.usage.uncached_input_tokens`, `gen_ai.usage.output_tokens`, `cowboy.duration_ms` (dispatch → turn end, includes a fresh launch) |
 | `cowboy.context_rollover.hibernate` | a worker idle past its cache is hibernated | `cowboy.outcome` (`requested`/`refused`), idle, context |
-| `cowboy.context_rollover.history_read` | a renewed session reads its own history | `cowboy.operation` (`history`/`search`/`event`), `cowboy.bytes` returned, `cowboy.context.boundary_seq` |
+| `cowboy.context_rollover.digest` | a renewal is recorded | `cowboy.context.boundary_seq`, `cowboy.context.used_tokens`, `cowboy.context.preamble_bytes` (the reminder body handed over instead of the history), `cowboy.context.first_request` (`held`/`durable`/`durable_failed`/`absent`), `cowboy.context.first_request_bytes`, `cowboy.context.recent_requests`, `cowboy.context.recent_requests_bytes`, `cowboy.context.last_reply_bytes` |
+| `cowboy.context_rollover.history_read` | a renewed session reads its own history, refusals included (warn) | `cowboy.operation` (`history`/`search`/`event`), `cowboy.outcome` (`ok` or the refusal code), `cowboy.bytes` returned, `cowboy.context.boundary_seq`, `cowboy.read.depth` (events behind the boundary the read starts), request `cowboy.read.limit`/`chars`/`query_chars`/`kinds` (never the query text), result `cowboy.read.items`/`scanned`/`more`/`reached_start`/`source`, `cowboy.duration_ms` |
+| `cowboy.context_ask.export` | a context ask round exports its history | `cowboy.call.id`, `cowboy.ask.scopes`, `cowboy.bytes`, `cowboy.ask.records`, `cowboy.ask.omitted_scopes` (scopes cut by the export bound), `cowboy.duration_ms` |
+| `cowboy.context_ask.answered` | a context ask's answer is annotated | `cowboy.call.id`, `cowboy.provider.id`, `cowboy.call.preset`, `cowboy.ask.scopes`, `cowboy.ask.stop_reason`, `cowboy.ask.answer_bytes`, input/cached/output tokens, `cowboy.ask.citations.checked`/`verified`, `cowboy.duration_ms` (call start → answer) |
 
 ```bash
 cowboy logs --directory /var/lib/cowboy/logs query --from 7d --event cowboy.context_rollover.first_turn --limit 500
@@ -143,8 +146,16 @@ these answer: how often renewal fires and why it is skipped; the first-turn
 cost with and without renewal per idle bucket; how many on-demand reads and
 bytes a renewal needs (a high count means the digest is too thin, zero reads
 with user corrections means it may be missing context); and the latency a
-fresh launch adds. The log carries counts and identifiers only, never
-prompt or transcript text.
+fresh launch adds. The read attributes also show whether search pages stop
+short (`more` with low `items`), how deep reads reach, which digest part was
+missing when reads followed, refused arguments, and whether a context ask's
+cost and citation accuracy justify it over direct reads. The log carries
+counts and identifiers only, never prompt or transcript text.
+
+```bash
+cowboy logs --directory /var/lib/cowboy/logs query --from 7d --event cowboy.context_rollover.history_read --limit 1000
+cowboy logs --directory /var/lib/cowboy/logs query --from 7d --event cowboy.context_ask.answered --limit 200
+```
 
 ## Limits
 

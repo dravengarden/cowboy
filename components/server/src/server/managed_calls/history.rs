@@ -607,13 +607,41 @@ pub(super) async fn round_documents(
         Some(_) => {}
     }
     let owner = parent_owner(state, record)?;
-    documents(
+    let started = std::time::Instant::now();
+    let documents = documents(
         &state.hub,
         state.store.as_ref(),
         owner.as_deref(),
         &request.context.sessions,
     )
-    .await
+    .await?;
+    // The third line is the export's own omission header, or the first record.
+    let omitted = documents
+        .iter()
+        .filter(|document| {
+            document
+                .text
+                .lines()
+                .nth(2)
+                .is_some_and(|line| line.starts_with("# Older records before seq"))
+        })
+        .count();
+    tracing::info!(
+        target: "cowboy::evidence",
+        event_name = "cowboy.context_ask.export",
+        session = %record.placement.parent_session_id,
+        call_id = %record.call_id,
+        ask_scopes = documents.len() as u64,
+        bytes = documents.iter().map(|document| document.text.len() as u64).sum::<u64>(),
+        ask_records = documents
+            .iter()
+            .map(|document| document.text.lines().filter(|line| line.starts_with('[')).count() as u64)
+            .sum::<u64>(),
+        ask_omitted = omitted as u64,
+        duration_ms = started.elapsed().as_secs_f64() * 1000.0,
+        "context ask history exported"
+    );
+    Ok(documents)
 }
 
 /// Attribution a caller needs to trust a result: a scoped review's input, and
@@ -643,7 +671,38 @@ pub(super) async fn annotate(
             &answer,
         )
         .await;
+        measure_answer(record, request, result, answer.len());
     }
+}
+
+/// One context ask's outcome, so `cowboy logs metrics` compares its cost and
+/// citation accuracy with the direct reads it replaces. The durable call
+/// record keeps the answer itself.
+fn measure_answer(record: &Record, request: &Request, result: &Value, answer_bytes: usize) {
+    let usage = &result["usage"];
+    let tokens = |key: &str| usage[key].as_u64().unwrap_or_default();
+    let citations = &result["citations"];
+    let duration_ms = record.started_at_ms.map_or(0.0, |started| {
+        (chrono::Utc::now().timestamp_millis() - started).max(0) as f64
+    });
+    tracing::info!(
+        target: "cowboy::evidence",
+        event_name = "cowboy.context_ask.answered",
+        session = %record.placement.parent_session_id,
+        call_id = %record.call_id,
+        provider = %record.provider,
+        call_preset = record.preset.as_deref().unwrap_or(""),
+        ask_scopes = request.context.sessions.len() as u64,
+        ask_stop_reason = result["stop_reason"].as_str().unwrap_or(""),
+        ask_answer_bytes = answer_bytes as u64,
+        input_tokens = tokens("input_tokens"),
+        cached_input_tokens = tokens("cached_input_tokens"),
+        output_tokens = tokens("output_tokens"),
+        ask_citations_checked = citations["checked"].as_u64().unwrap_or_default(),
+        ask_citations_verified = citations["verified"].as_u64().unwrap_or_default(),
+        duration_ms,
+        "context ask answered"
+    );
 }
 
 #[cfg(test)]

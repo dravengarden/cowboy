@@ -3,9 +3,9 @@
 use super::*;
 
 /// One transcript read (history, search or a raw event) by an agent. A
-/// renewed session reading its own earlier context is recorded, so the
-/// on-demand cost of a renewal can be compared with the cold resume it
-/// avoided (`cowboy.context_rollover.history_read`).
+/// renewed session reading its own earlier context is recorded, refusals
+/// included, so the on-demand cost and coverage of a renewal can be compared
+/// with the cold resume it avoided (`cowboy.context_rollover.history_read`).
 pub(super) async fn transcript(
     hub: &crate::core::Hub,
     store: Option<&crate::store::Store>,
@@ -13,6 +13,7 @@ pub(super) async fn transcript(
     op: &str,
     args: Value,
 ) -> Result<Value, String> {
+    let started = std::time::Instant::now();
     let (namespace, method) = op.split_once('.').ok_or("unknown_operation")?;
     let other = namespace == "sessions";
     let target = if other {
@@ -22,26 +23,145 @@ pub(super) async fn transcript(
     } else {
         Some(parent.id.clone())
     };
-    let value = match method {
-        "event" => read(hub, store, parent, other, &args).await?,
-        "search" => search(hub, store, parent, other, &args).await?,
-        _ => session_reads::history(hub, store, parent, other, args).await?,
+    let request = ReadRequest::of(&args);
+    let result = match method {
+        "event" => read(hub, store, parent, other, &args).await,
+        "search" => search(hub, store, parent, other, &args).await,
+        _ => session_reads::history(hub, store, parent, other, args).await,
     };
     if target.as_deref() == Some(parent.id.as_str())
         && let Ok(context) = crate::session_context::read(hub, &parent.id)
         && let Some(rollover) = context.rollover
     {
-        tracing::info!(
-            target: "cowboy::evidence",
-            event_name = "cowboy.context_rollover.history_read",
-            session = %parent.id,
-            operation = method,
-            bytes = serde_json::to_vec(&value).map_or(0, |bytes| bytes.len() as u64),
-            boundary = rollover.before,
-            "renewed session read its earlier context"
+        record_read(
+            &parent.id,
+            method,
+            rollover.before,
+            &request,
+            &result,
+            started,
         );
     }
-    Ok(value)
+    result
+}
+
+/// The bounded shape of a read request: sizes and positions, never the
+/// query text, which can quote anything the session held.
+#[derive(Default)]
+pub(super) struct ReadRequest {
+    pub(super) before: Option<u64>,
+    pub(super) seq: Option<u64>,
+    pub(super) limit: u64,
+    pub(super) chars: u64,
+    pub(super) query_chars: u64,
+    pub(super) kinds: String,
+}
+
+impl ReadRequest {
+    pub(super) fn of(args: &Value) -> Self {
+        let number = |key: &str| args.get(key).and_then(Value::as_u64);
+        let mut kinds: Vec<&str> = args
+            .get("kinds")
+            .and_then(Value::as_array)
+            .map(|kinds| kinds.iter().filter_map(Value::as_str).take(8).collect())
+            .unwrap_or_default();
+        kinds.sort_unstable();
+        Self {
+            before: number("before"),
+            seq: number("seq"),
+            limit: number("limit").unwrap_or_default(),
+            chars: number("chars").unwrap_or_default(),
+            query_chars: args
+                .get("query")
+                .and_then(Value::as_str)
+                .map_or(0, |query| query.chars().count() as u64),
+            kinds: kinds
+                .iter()
+                .map(|kind| kind.chars().take(16).collect::<String>())
+                .collect::<Vec<_>>()
+                .join(","),
+        }
+    }
+}
+
+/// `depth` is how far behind the renewal boundary the read starts, so later
+/// analysis can tell recent-tail reads from deep searches; `more` says the
+/// answer left older in-range history unread.
+fn record_read(
+    session: &str,
+    operation: &str,
+    boundary: u64,
+    request: &ReadRequest,
+    result: &Result<Value, String>,
+    started: std::time::Instant,
+) {
+    let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let start = request.seq.or(request.before).unwrap_or(boundary);
+    let depth = boundary.saturating_sub(start.min(boundary));
+    match result {
+        Ok(value) => {
+            let items = ["items", "matches"]
+                .iter()
+                .find_map(|key| value.get(*key).and_then(Value::as_array))
+                .map_or(0, Vec::len);
+            let more = value.get("more").and_then(Value::as_bool).unwrap_or(false)
+                || value.get("next_before").is_some_and(|next| !next.is_null());
+            // Read before the macro, whose expansion shadows `Value`.
+            let scanned = value
+                .get("scanned")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let reached_start = value
+                .get("reached_start")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let source = value.get("source").and_then(Value::as_str).unwrap_or("");
+            let bytes = serde_json::to_vec(value).map_or(0, |bytes| bytes.len() as u64);
+            tracing::info!(
+                target: "cowboy::evidence",
+                event_name = "cowboy.context_rollover.history_read",
+                session,
+                operation,
+                outcome = "ok",
+                bytes,
+                boundary,
+                read_depth = depth,
+                read_limit = request.limit,
+                read_chars = request.chars,
+                read_query_chars = request.query_chars,
+                read_kinds = %request.kinds,
+                read_items = items as u64,
+                read_scanned = scanned,
+                read_more = more,
+                read_reached_start = reached_start,
+                read_source = source,
+                duration_ms,
+                "renewed session read its earlier context"
+            );
+        }
+        Err(error) => tracing::warn!(
+            target: "cowboy::evidence",
+            event_name = "cowboy.context_rollover.history_read",
+            session,
+            operation,
+            // A code, never echoed input: `invalid_argument: <key> ...`.
+            outcome = %error
+                .split([':', ' '])
+                .next()
+                .unwrap_or("error")
+                .chars()
+                .take(40)
+                .collect::<String>(),
+            boundary,
+            read_depth = depth,
+            read_limit = request.limit,
+            read_chars = request.chars,
+            read_query_chars = request.query_chars,
+            read_kinds = %request.kinds,
+            duration_ms,
+            "renewed session read of its earlier context refused"
+        ),
+    }
 }
 
 pub(super) async fn search(

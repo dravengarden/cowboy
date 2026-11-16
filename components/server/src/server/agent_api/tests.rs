@@ -889,3 +889,21 @@ async fn configuration_mcp_discovery_and_projection_keep_the_explicit_scope() {
         "op":"configuration.read","args":{"scope":"mcp","session_id":"same-owner","path":"/runtime_ready"}}})
     );
 }
+
+#[test]
+fn renewal_read_evidence_keeps_request_shape_without_query_text() {
+    let request = event_reads::ReadRequest::of(&json!({
+        "query": "secret phrase",
+        "before": 42,
+        "limit": 4,
+        "chars": 300,
+        "kinds": ["user", "agent", "plan"],
+    }));
+    assert_eq!(request.before, Some(42));
+    assert_eq!(request.seq, None);
+    assert_eq!((request.limit, request.chars), (4, 300));
+    assert_eq!(request.query_chars, 13);
+    assert_eq!(request.kinds, "agent,plan,user");
+    let empty = event_reads::ReadRequest::of(&json!({"seq": 7}));
+    assert_eq!((empty.seq, empty.kinds.as_str()), (Some(7), ""));
+}

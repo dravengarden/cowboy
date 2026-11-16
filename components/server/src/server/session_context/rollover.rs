@@ -314,12 +314,13 @@ pub(in crate::server) async fn before_dispatch(
         return skip("no_history");
     };
     let before = last.saturating_add(1);
+    let (digest, opening) = digest(state, id).await;
     let mut renewed = context;
     renewed.rollover = Some(Rollover {
         before,
         idle_ms,
         context_used: meta.context_used,
-        digest: digest(state, id).await,
+        digest,
     });
     // Inert until the marker below names the same boundary.
     if let Err(error) = save(state, id, &renewed).await {
@@ -344,27 +345,62 @@ pub(in crate::server) async fn before_dispatch(
     );
     // Every renewal is evidence, whatever its idle time.
     measure(&meta, cmid, Some(policy), idle_ms, "renewed");
+    if let Some(rollover) = &renewed.rollover {
+        measure_digest(id, rollover, opening);
+    }
+}
+
+/// What the fresh context was handed in place of its history: the preamble
+/// size against the cold resume it replaced, and whether each digest part
+/// was present, so a later read of the earlier context can be attributed to
+/// a missing part rather than to the question.
+fn measure_digest(id: &str, rollover: &Rollover, opening: &'static str) {
+    let digest = &rollover.digest;
+    tracing::info!(
+        target: "cowboy::evidence",
+        event_name = "cowboy.context_rollover.digest",
+        session = id,
+        boundary = rollover.before,
+        context_used = rollover.context_used,
+        preamble_bytes = crate::context_rollover::preamble_body(id, rollover).len() as u64,
+        first_request = opening,
+        first_request_bytes = digest.first_request.as_ref().map_or(0, |text| text.len() as u64),
+        recent_requests = digest.recent_requests.len() as u64,
+        recent_requests_bytes = digest.recent_requests.iter().map(|text| text.len() as u64).sum::<u64>(),
+        last_reply_bytes = digest.last_reply.as_ref().map_or(0, |text| text.len() as u64),
+        "context renewal digest"
+    );
 }
 
 /// The held-tail digest, with the opening request read back from the
 /// durable transcript when a long session trimmed it from memory. A failed
-/// read only leaves that excerpt out.
-async fn digest(state: &AppState, id: &str) -> crate::context_rollover::Digest {
+/// read only leaves that excerpt out. Also names where the opening request
+/// came from: `held`, `durable`, `durable_failed` or `absent`.
+async fn digest(state: &AppState, id: &str) -> (crate::context_rollover::Digest, &'static str) {
     let Some((mut digest, cursor)) = state.hub.rollover_digest(id) else {
-        return crate::context_rollover::Digest::default();
+        return (crate::context_rollover::Digest::default(), "absent");
     };
-    if let (None, Some(cursor), Some(store)) = (&digest.first_request, cursor, state.store.as_ref())
-    {
-        match store.context_opening_prompts(id, cursor).await {
-            Ok(prompts) => {
-                digest.first_request = crate::context_rollover::opening_request(&prompts)
-            }
-            Err(error) => {
-                tracing::warn!(session = id, %error, "renewal digest without its opening request");
-            }
+    if digest.first_request.is_some() {
+        return (digest, "held");
+    }
+    let (Some(cursor), Some(store)) = (cursor, state.store.as_ref()) else {
+        return (digest, "absent");
+    };
+    match store.context_opening_prompts(id, cursor).await {
+        Ok(prompts) => {
+            digest.first_request = crate::context_rollover::opening_request(&prompts);
+            let opening = if digest.first_request.is_some() {
+                "durable"
+            } else {
+                "absent"
+            };
+            (digest, opening)
+        }
+        Err(error) => {
+            tracing::warn!(session = id, %error, "renewal digest without its opening request");
+            (digest, "durable_failed")
         }
     }
-    digest
 }
 
 #[derive(Deserialize)]
