@@ -110,6 +110,10 @@ fn citations_take_session_seq_and_an_optional_quote() {
         ]
     );
     assert_eq!(normalized("Switched  the\nDEFAULT"), "switched the default");
+    assert_eq!(
+        normalized("比‘先压缩再做’好"),
+        normalized("比\"先压缩再做\"好")
+    );
 }
 
 fn session(hub: &Hub, id: &str, owner: &str) {

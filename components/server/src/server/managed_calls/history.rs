@@ -461,7 +461,8 @@ fn normalized(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .replace(['“', '”'], "\"")
+        // Answers often re-quote nested quotation marks in another style.
+        .replace(['“', '”', '‘', '’', '\'', '「', '」'], "\"")
         .to_lowercase()
 }
 
