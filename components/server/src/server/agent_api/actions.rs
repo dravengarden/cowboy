@@ -712,10 +712,13 @@ async fn execute(
                 action: action.to_owned(),
                 operation: operation.to_owned(),
             };
-            let action = match call_action(action, args, operation) {
+            let mut action = match call_action(action, args, operation) {
                 Ok(action) => action,
                 Err(refusal) => return Ok(refusal.value()),
             };
+            if let Action::Start { request, .. } = &mut action {
+                super::super::managed_calls::pin_bounds(state, &meta.id, ledger, request).await;
+            }
             Ok(call_result(
                 super::super::managed_calls::dispatch_calls_from(
                     state, meta, ledger, action, &origin,

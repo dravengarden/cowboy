@@ -270,6 +270,13 @@ impl CallHost {
         if matches!(action, Action::Mcp { .. }) && !grant.mcp {
             return refusal("unsupported_capability", "not_submitted");
         }
+        // Context asks are built by the Controller from MCP arguments. A raw
+        // gateway request carrying `sessions` would not decode on an older
+        // Controller and would close this Machine's whole connection.
+        if matches!(&action, Action::Start { request, .. } if !request.context.sessions.is_empty())
+        {
+            return refusal("unsupported_capability", "not_submitted");
+        }
         let submits = action.submits();
         let unknown = if submits {
             refusal("outcome_unknown", "unknown")

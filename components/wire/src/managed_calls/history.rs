@@ -26,8 +26,9 @@ pub struct SessionScope {
     /// Exclusive lower bound; omitted starts at the session's beginning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<u64>,
-    /// Exclusive upper bound. Admission fixes it, so retries and citation
-    /// checks read the same history even while the session keeps growing.
+    /// Exclusive upper bound. The Controller fixes it (clamped to the
+    /// session's end) when the call is requested, so preparation retries and
+    /// citation checks read the same history while the session keeps growing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<u64>,
 }
@@ -131,7 +132,7 @@ pub fn prompt(request: &Request) -> Option<String> {
         "You answer one question about recorded agent-session history for another agent. \
 The history is exported as plain text in this workspace: {files}. \
 Each record starts on its own line as `[<seq>] <kind>: ` followed by its text; long records are truncated and say so. \
-The workspace holds nothing else, and you have no other tools or network.
+Read only these files: do not open any other path on this machine, even if you can, and do not use the network.
 
 Method:
 - Search before reading (for example `rg -n` for names, files, errors, decisions), then read the surrounding records. Never answer from file names or your expectations.

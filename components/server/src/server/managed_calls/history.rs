@@ -26,27 +26,65 @@ const ASSISTANT_CHARS: usize = 6_000;
 const TOOL_CALL_CHARS: usize = 600;
 const TOOL_RESULT_CHARS: usize = 1_500;
 const REMINDER_CHARS: usize = 1_500;
+/// Events read per storage page while exporting.
+const EXPORT_PAGE: usize = 256;
+/// Events one scope may scan; older history is reported as left out.
+const MAX_SCANNED_EVENTS: usize = 200_000;
+/// Room kept in each share for the document header and omission notice.
+const HEADER_RESERVE: usize = 4096;
+/// Transient failures the runner retries rather than failing the call.
+pub(super) const RETRY: &str = "retry";
 /// Citations checked per answer.
 const MAX_CITATIONS: usize = 200;
 const MAX_QUOTE_CHARS: usize = 400;
-/// Events read before a cited seq to find where its record starts.
-const RECORD_LEAD: u64 = 256;
 
-/// One rendered record: the seq it starts at and its single-paragraph text.
+/// One rendered record: the seq it starts at, the last seq it covers, and
+/// its text, already bounded by its kind's limit.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Rendered {
     pub seq: u64,
+    pub end: u64,
     pub kind: &'static str,
+    /// The streamed message id the record continues, if any.
+    pub id: Option<String>,
     pub text: String,
 }
 
+fn limit(kind: &str) -> usize {
+    match kind {
+        "user" | "prompt" => USER_CHARS,
+        "assistant" => ASSISTANT_CHARS,
+        "reminder" => REMINDER_CHARS,
+        "tool" => TOOL_CALL_CHARS,
+        _ => TOOL_RESULT_CHARS,
+    }
+}
+
+const TRUNCATED: &str = " … [truncated]";
+
+/// Append to a record without ever holding more than its limit.
+fn append(text: &mut String, separator: &str, more: &str, limit: usize) {
+    if text.ends_with(TRUNCATED) {
+        return;
+    }
+    text.push_str(separator);
+    text.push_str(more);
+    if text.chars().count() > limit {
+        *text = bounded(text, limit);
+    }
+}
+
 fn clipped(text: &str, limit: usize) -> String {
-    let text = text.trim();
+    bounded(text.trim(), limit)
+}
+
+/// At most `limit` characters, keeping whitespace so streamed chunks join.
+fn bounded(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_owned();
     }
     let head: String = text.chars().take(limit).collect();
-    format!("{head} … [truncated]")
+    format!("{head}{TRUNCATED}")
 }
 
 /// Text leaves of a tool result's content blocks, in order.
@@ -83,23 +121,66 @@ fn content_text(value: &Value, out: &mut String, limit: usize) {
     }
 }
 
+/// A tool event's records: the attempt (title and input) for a new call, and
+/// its outcome once a terminal status is recorded, both naming the call id.
+fn tool_records(seq: u64, update: &Value, call: bool, records: &mut Vec<Rendered>) {
+    let id = update
+        .get("toolCallId")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    if call {
+        let mut text = format!("id={id} ");
+        text.push_str(update.get("title").and_then(Value::as_str).unwrap_or(""));
+        if let Some(input) = update.get("rawInput").filter(|input| !input.is_null()) {
+            let _ = write!(text, " {input}");
+        }
+        records.push(Rendered {
+            seq,
+            end: seq,
+            kind: "tool",
+            id: None,
+            text: clipped(&text, TOOL_CALL_CHARS),
+        });
+    }
+    let status = update.get("status").and_then(Value::as_str);
+    if !matches!(status, Some("completed" | "failed")) {
+        return;
+    }
+    let mut text = format!("id={id} ");
+    if let Some(content) = update.get("content") {
+        content_text(content, &mut text, TOOL_RESULT_CHARS);
+    }
+    records.push(Rendered {
+        seq,
+        end: seq,
+        kind: if status == Some("failed") {
+            "tool_failed"
+        } else {
+            "tool_result"
+        },
+        id: None,
+        text: clipped(&text, TOOL_RESULT_CHARS),
+    });
+}
+
 /// Render a contiguous, ascending event slice. Streamed chunks of one
 /// message become one record at the seq of their first chunk; thoughts,
 /// usage and UI state are left out.
 pub(super) fn render(events: &[Envelope]) -> Vec<Rendered> {
     let mut records: Vec<Rendered> = Vec::new();
-    // The open streamed record: (kind, message id) it continues.
-    let mut open: Option<(&'static str, Option<String>)> = None;
+    // Whether the last record may still receive streamed chunks.
+    let mut open = false;
     for envelope in events {
         let Event::Update { update } = &envelope.event else {
-            open = None;
+            open = false;
             continue;
         };
         let kind = update.get("sessionUpdate").and_then(Value::as_str);
-        let text = update.pointer("/content/text").and_then(Value::as_str);
         match kind {
             Some("user_message_chunk" | "agent_message_chunk") => {
-                let Some(text) = text else { continue };
+                let Some(text) = update.pointer("/content/text").and_then(Value::as_str) else {
+                    continue;
+                };
                 let label = if kind == Some("agent_message_chunk") {
                     "assistant"
                 } else if text.starts_with("<system-reminder") {
@@ -113,62 +194,30 @@ pub(super) fn render(events: &[Envelope]) -> Vec<Rendered> {
                     .get("messageId")
                     .and_then(Value::as_str)
                     .map(str::to_owned);
-                let continues = open.as_ref().is_some_and(|(open_kind, open_id)| {
-                    *open_kind == label && (id.is_none() || *open_id == id)
-                });
+                let piece = Rendered {
+                    seq: envelope.seq,
+                    end: envelope.seq,
+                    kind: label,
+                    id,
+                    text: bounded(text, limit(label)),
+                };
                 match records.last_mut() {
-                    Some(last) if continues => {
-                        if label == "user" || label == "prompt" {
-                            last.text.push('\n');
-                        }
-                        last.text.push_str(text);
-                    }
-                    _ => records.push(Rendered {
-                        seq: envelope.seq,
-                        kind: label,
-                        text: text.to_owned(),
-                    }),
+                    Some(last) if open && continues(last, &piece) => join(last, piece),
+                    _ => records.push(piece),
                 }
-                open = Some((label, id));
+                open = true;
             }
-            Some("tool_call") => {
-                open = None;
-                let title = update.get("title").and_then(Value::as_str).unwrap_or("");
-                let mut text = title.to_owned();
-                if let Some(input) = update.get("rawInput").filter(|input| !input.is_null()) {
-                    let _ = write!(text, " {input}");
-                }
-                records.push(Rendered {
-                    seq: envelope.seq,
-                    kind: "tool",
-                    text: clipped(&text, TOOL_CALL_CHARS),
-                });
-            }
-            Some("tool_call_update") => {
-                open = None;
-                let status = update.get("status").and_then(Value::as_str);
-                if !matches!(status, Some("completed" | "failed")) {
-                    continue;
-                }
-                let mut text = String::new();
-                if let Some(content) = update.get("content") {
-                    content_text(content, &mut text, TOOL_RESULT_CHARS);
-                }
-                records.push(Rendered {
-                    seq: envelope.seq,
-                    kind: if status == Some("failed") {
-                        "tool_failed"
-                    } else {
-                        "tool_result"
-                    },
-                    text: clipped(&text, TOOL_RESULT_CHARS),
-                });
+            Some(tool @ ("tool_call" | "tool_call_update")) => {
+                open = false;
+                tool_records(envelope.seq, update, tool == "tool_call", &mut records);
             }
             Some(boundary @ ("context_cleared" | crate::context_rollover::MARKER)) => {
-                open = None;
+                open = false;
                 records.push(Rendered {
                     seq: envelope.seq,
+                    end: envelope.seq,
                     kind: "boundary",
+                    id: None,
                     text: boundary.to_owned(),
                 });
             }
@@ -180,19 +229,32 @@ pub(super) fn render(events: &[Envelope]) -> Vec<Rendered> {
                 | "config_option_update"
                 | "session_info_update",
             ) => {}
-            _ => open = None,
+            _ => open = false,
         }
     }
-    for record in &mut records {
-        let limit = match record.kind {
-            "user" | "prompt" => USER_CHARS,
-            "assistant" => ASSISTANT_CHARS,
-            "reminder" => REMINDER_CHARS,
-            _ => continue,
-        };
-        record.text = clipped(&record.text, limit);
-    }
     records
+}
+
+/// Whether `next` continues the streamed message of `previous`.
+fn continues(previous: &Rendered, next: &Rendered) -> bool {
+    matches!(previous.kind, "user" | "prompt" | "reminder" | "assistant")
+        && previous.kind == next.kind
+        && (next.id.is_none() || previous.id == next.id)
+}
+
+fn join(previous: &mut Rendered, next: Rendered) {
+    let separator = if previous.kind == "assistant" {
+        ""
+    } else {
+        "\n"
+    };
+    append(
+        &mut previous.text,
+        separator,
+        &next.text,
+        limit(previous.kind),
+    );
+    previous.end = next.end;
 }
 
 /// One record as document lines. Continuation lines are indented, so text
@@ -213,43 +275,47 @@ fn visible(meta: &crate::core::SessionMeta, owner: Option<&str>) -> bool {
     !meta.system && !meta.closing && meta.owner_user_id.as_deref() == owner
 }
 
-/// Ascending events of one scope, newest pages first until `budget` bytes
-/// of rendered text, plus whether older in-scope history was left out.
-async fn scope_events(
+fn check(hub: &Hub, owner: Option<&str>, id: &str) -> Result<(), &'static str> {
+    hub.session_info(id)
+        .filter(|info| visible(&info.meta, owner))
+        .map(|_| ())
+        .ok_or("history_unavailable")
+}
+
+/// One scope's records, newest first until `budget` bytes of document lines,
+/// reading at most [`MAX_SCANNED_EVENTS`]. Only rendered, bounded records
+/// are retained between pages. Also returns whether older in-scope history
+/// was left out.
+async fn export(
     hub: &Hub,
     store: Option<&Store>,
     owner: Option<&str>,
     scope: &SessionScope,
     budget: usize,
-) -> Result<(Vec<Envelope>, bool), &'static str> {
+) -> Result<(Vec<Rendered>, bool), &'static str> {
     let id = scope.session_id.as_str();
     let allowed = |meta: &crate::core::SessionMeta| visible(meta, owner);
-    let check = || {
-        hub.session_info(id)
-            .filter(|info| allowed(&info.meta))
-            .map(|_| ())
-            .ok_or("history_unavailable")
-    };
-    check()?;
+    check(hub, owner, id)?;
     let mut before = scope.before.unwrap_or(i64::MAX as u64);
-    let mut pages: Vec<Vec<Envelope>> = Vec::new();
+    let mut records: std::collections::VecDeque<Rendered> = Default::default();
     let mut size = 0;
+    let mut scanned = 0;
     loop {
         let (mut events, reached_start) = match store {
             Some(store) => {
                 let (events, _, reached_start) = store
-                    .history_page(id, before, crate::core::HISTORY_PAGE)
+                    .history_page(id, before, EXPORT_PAGE)
                     .await
-                    .map_err(|_| "history_unreadable")?;
+                    .map_err(|_| RETRY)?;
                 (events, reached_start)
             }
             None => hub
-                .log_window(id, None, Some(before), crate::core::HISTORY_PAGE, allowed)
+                .log_window(id, None, Some(before), EXPORT_PAGE, allowed)
                 .ok_or("history_unavailable")?,
         };
         // Recheck after storage I/O; a closed or transferred session's
         // archive must not be released by a stale check.
-        check()?;
+        check(hub, owner, id)?;
         let floor = events
             .iter()
             .position(|event| scope.after.is_none_or(|after| event.seq > after))
@@ -259,50 +325,62 @@ async fn scope_events(
         let Some(oldest) = events.first().map(|event| event.seq) else {
             break;
         };
-        size += render(&events)
-            .iter()
-            .map(|record| record.text.len() + 16)
-            .sum::<usize>();
-        pages.push(events);
-        if size > budget {
-            let mut flat: Vec<Envelope> = pages.into_iter().rev().flatten().collect();
-            // Drop whole oldest records until the rendering fits.
-            while !flat.is_empty()
-                && render(&flat)
-                    .iter()
-                    .map(|record| record.text.len() + 16)
-                    .sum::<usize>()
-                    > budget
-            {
-                let drop = (flat.len() / 8).max(1);
-                flat.drain(..drop);
+        scanned += events.len();
+        let mut page = render(&events);
+        // A message streamed across the page boundary is one record.
+        if let (Some(last), Some(first)) = (page.last_mut(), records.front())
+            && last.end + 1 == first.seq
+            && continues(last, first)
+        {
+            let first = records.pop_front().expect("front exists");
+            size -= record_line(&first).len();
+            join(last, first);
+        }
+        for record in page.into_iter().rev() {
+            size += record_line(&record).len();
+            records.push_front(record);
+        }
+        if size > budget || scanned >= MAX_SCANNED_EVENTS {
+            // The oldest record may continue in an unread page; drop whole
+            // records from the old end until the lines fit.
+            records.pop_front();
+            size = records.iter().map(|record| record_line(record).len()).sum();
+            while size > budget {
+                let Some(record) = records.pop_front() else {
+                    break;
+                };
+                size -= record_line(&record).len();
             }
-            return Ok((flat, true));
+            return Ok((records.into(), true));
         }
         if cut || reached_start {
             break;
         }
         before = oldest;
     }
-    Ok((pages.into_iter().rev().flatten().collect(), false))
+    Ok((records.into(), false))
+}
+
+fn share(scopes: &[SessionScope]) -> usize {
+    MAX_DOCUMENT_BYTES / scopes.len().max(1) - HEADER_RESERVE
 }
 
 /// The documents of a context ask, one per scope, each within an equal share
-/// of the round's byte bound.
+/// of the round's byte bound. Every source is rechecked after the last read,
+/// so no buffered history outlives a session that became invisible.
 pub(super) async fn documents(
     hub: &Hub,
     store: Option<&Store>,
     owner: Option<&str>,
     scopes: &[SessionScope],
 ) -> Result<Vec<ContextDocument>, &'static str> {
-    let share = MAX_DOCUMENT_BYTES / scopes.len().max(1) - 4096;
     let mut documents = Vec::with_capacity(scopes.len());
     for scope in scopes {
         let name = format!("{}.txt", scope.session_id);
         if !valid_document_name(&name) {
             return Err("history_unavailable");
         }
-        let (events, omitted) = scope_events(hub, store, owner, scope, share).await?;
+        let (records, omitted) = export(hub, store, owner, scope, share(scopes)).await?;
         let title = hub
             .session_info(&scope.session_id)
             .map(|info| info.meta.title)
@@ -310,7 +388,7 @@ pub(super) async fn documents(
         let mut text = format!(
             "# Cowboy session {} — {}\n# Records [after {}, before {}). One record per `[seq] kind:` line; indented lines continue it.\n",
             scope.session_id,
-            clipped(&title, 200).replace('\n', " "),
+            clipped(&title, 200).replace(['\n', '\r'], " "),
             scope
                 .after
                 .map_or("start".into(), |after| after.to_string()),
@@ -318,7 +396,6 @@ pub(super) async fn documents(
                 .before
                 .map_or("now".into(), |before| before.to_string()),
         );
-        let records = render(&events);
         if omitted {
             let _ = writeln!(
                 text,
@@ -329,15 +406,10 @@ pub(super) async fn documents(
         for record in &records {
             text.push_str(&record_line(record));
         }
-        // Rendering limits keep each record small; never exceed the share.
-        if text.len() > share {
-            let mut end = text.len() - share;
-            while !text.is_char_boundary(end) {
-                end += 1;
-            }
-            text.drain(..end);
-        }
         documents.push(ContextDocument { name, text });
+    }
+    for scope in scopes {
+        check(hub, owner, &scope.session_id)?;
     }
     Ok(documents)
 }
@@ -393,9 +465,10 @@ fn normalized(text: &str) -> String {
         .to_lowercase()
 }
 
-/// Check each citation against the record it names, re-rendered from the
-/// durable history: in scope, an existing record start, and a quote that
-/// appears in that record (whitespace- and case-insensitive).
+/// Check each citation against the exact records the child was given: the
+/// same scopes and bounds re-exported, so a citation matches only a record
+/// start that was in its document, with the quote inside that record
+/// (whitespace- and case-insensitive).
 pub(super) async fn verify(
     hub: &Hub,
     store: Option<&Store>,
@@ -404,7 +477,7 @@ pub(super) async fn verify(
     answer: &str,
 ) -> Value {
     let cited = citations(answer);
-    let mut records: BTreeMap<(String, u64), Option<String>> = BTreeMap::new();
+    let mut exported: BTreeMap<&str, Option<BTreeMap<u64, String>>> = BTreeMap::new();
     let mut verified = 0;
     let mut unverified = Vec::new();
     for citation in &cited {
@@ -418,12 +491,25 @@ pub(super) async fn verify(
             if !scope.contains(citation.seq) {
                 break 'check Some("seq_out_of_scope");
             }
-            let key = (citation.session_id.clone(), citation.seq);
-            if !records.contains_key(&key) {
-                let text = record_at(hub, store, owner, scope, citation.seq).await;
-                records.insert(key.clone(), text);
+            if !exported.contains_key(scope.session_id.as_str()) {
+                let records = export(hub, store, owner, scope, share(scopes))
+                    .await
+                    .ok()
+                    .map(|(records, _)| {
+                        records
+                            .into_iter()
+                            .map(|record| (record.seq, record.text))
+                            .collect()
+                    });
+                exported.insert(scope.session_id.as_str(), records);
             }
-            let Some(text) = records.get(&key).and_then(Option::as_deref) else {
+            let Some(records) = exported
+                .get(scope.session_id.as_str())
+                .and_then(Option::as_ref)
+            else {
+                break 'check Some("history_unavailable");
+            };
+            let Some(text) = records.get(&citation.seq) else {
                 break 'check Some("no_record_at_seq");
             };
             match &citation.quote {
@@ -443,37 +529,48 @@ pub(super) async fn verify(
     json!({"checked": cited.len(), "verified": verified, "unverified": unverified})
 }
 
-/// The rendered record starting at `seq`, or `None` when no record starts
-/// there or the history cannot be read.
-async fn record_at(
-    hub: &Hub,
-    store: Option<&Store>,
-    owner: Option<&str>,
-    scope: &SessionScope,
-    seq: u64,
-) -> Option<String> {
-    // A streamed record spans its chunks: read a little before its start, so
-    // a cited mid-record chunk is not mistaken for a record start, and one
-    // page after it.
-    let lead = seq.checked_sub(RECORD_LEAD);
-    let window = SessionScope {
-        session_id: scope.session_id.clone(),
-        after: match (lead, scope.after) {
-            (Some(lead), Some(after)) => Some(lead.max(after)),
-            (lead, after) => lead.or(after),
-        },
-        before: Some(
-            seq.saturating_add(crate::core::HISTORY_PAGE as u64)
-                .min(scope.before.unwrap_or(u64::MAX)),
-        ),
-    };
-    let (events, _) = scope_events(hub, store, owner, &window, usize::MAX)
-        .await
-        .ok()?;
-    render(&events)
-        .into_iter()
-        .find(|record| record.seq == seq)
-        .map(|record| record.text)
+/// Fix each scope's upper bound when the call is requested, so preparation
+/// retries and citation checks read the same history while sessions keep
+/// growing. A repeated operation reuses its stored bounds, so the request
+/// still matches its original digest.
+pub(in crate::server) async fn pin_bounds(
+    state: &AppState,
+    parent: &str,
+    ledger: &crate::managed_calls::service::Ledger,
+    request: &mut Request,
+) {
+    if request.context.sessions.is_empty() {
+        return;
+    }
+    if let (Ok(Some(original)), Some(store)) = (
+        ledger.observe(&request.request_id).await,
+        state.store.as_ref(),
+    ) && let Ok(Some(stored)) = store.managed_call_input(parent, &original.call_id).await
+    {
+        let same = |a: &SessionScope, b: &SessionScope| {
+            a.session_id == b.session_id
+                && a.after == b.after
+                && a.before
+                    .is_none_or(|before| b.before.is_some_and(|pinned| pinned <= before))
+        };
+        if stored.context.sessions.len() == request.context.sessions.len()
+            && stored
+                .context
+                .sessions
+                .iter()
+                .zip(&request.context.sessions)
+                .all(|(stored, requested)| same(requested, stored))
+        {
+            request.context.sessions = stored.context.sessions;
+        }
+        return;
+    }
+    for scope in &mut request.context.sessions {
+        if let Some(last) = state.hub.last_event_seq(&scope.session_id) {
+            let now = last.saturating_add(1);
+            scope.before = Some(scope.before.map_or(now, |before| before.min(now)));
+        }
+    }
 }
 
 fn parent_owner(state: &AppState, record: &Record) -> Result<Option<String>, &'static str> {
@@ -485,8 +582,9 @@ fn parent_owner(state: &AppState, record: &Record) -> Result<Option<String>, &'s
 }
 
 /// The exported documents of a context ask's round, or none for any other
-/// call. Its Machine must accept documents; older Machines refuse the call
-/// rather than silently capturing a worktree instead.
+/// call. Its Machine must accept documents; an older Machine refuses the call
+/// rather than silently capturing a worktree instead, while a disconnected one
+/// is retried.
 pub(super) async fn round_documents(
     state: &AppState,
     record: &Record,
@@ -495,14 +593,17 @@ pub(super) async fn round_documents(
     if request.context.sessions.is_empty() {
         return Ok(Vec::new());
     }
-    let supported = state
+    match state
         .machine_control
         .connection_protocol(&record.placement.machine_id)
-        .is_some_and(|(_, protocol)| {
-            protocol >= crate::machine_protocol::MANAGED_CONTEXT_PROTOCOL_VERSION
-        });
-    if !supported {
-        return Err("machine_upgrade_required");
+    {
+        None => return Err(RETRY),
+        Some((_, protocol))
+            if protocol < crate::machine_protocol::MANAGED_CONTEXT_PROTOCOL_VERSION =>
+        {
+            return Err("machine_upgrade_required");
+        }
+        Some(_) => {}
     }
     let owner = parent_owner(state, record)?;
     documents(

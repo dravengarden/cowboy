@@ -11,6 +11,7 @@ pub(super) use coordinator::{
     dispatch_calls_from, handle, image_capabilities, mcp_ready, parent_deleted,
     touch_code_observation,
 };
+pub(super) use history::pin_bounds;
 
 use super::{AppState, AuthenticatedProductRequest, session_is_visible};
 use axum::{

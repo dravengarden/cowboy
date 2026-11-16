@@ -452,15 +452,26 @@ Design, following the measured weaknesses of one-shot summaries:
   renders the scoped events (human and agent messages, tool calls, tool
   outcomes, context boundaries; thoughts and UI state omitted) as plain text,
   one `[seq] kind:` record per line with indented continuation lines so text
-  cannot forge a record. Visibility is the parent's (`sessions.history`): same
-  owner, not system, not closing, rechecked after every storage read. Each
-  session shares a 4 MiB round bound; an oversized range keeps its newest
-  records and says what was left out.
+  cannot forge a record; tool attempts and outcomes carry their call id.
+  Visibility is the parent's (`sessions.history`): same owner, not system, not
+  closing, rechecked after every storage read and for every source once the
+  export is complete. Each session shares a 4 MiB round bound; only rendered,
+  bounded records are retained while paging, at most 200,000 events are
+  scanned per session, and an oversized range keeps its newest whole records
+  and says what was left out.
+- **Bounds are fixed at request time.** An omitted or future `before` is
+  pinned to the session's end when `calls.start` runs (a repeated operation
+  reuses the stored bounds), so preparation retries and citation checks read
+  the same history while the session keeps growing.
 - **The child explores; it is not handed a summary.** The documents are the
   whole round workspace (`history/<session>.txt`): no repository capture, no
   parent files. The child keeps the read-only, network-isolated `ReadOnlyV1`
   profile and has no Cowboy MCP, grant or other authority over the sessions.
-  It searches and reads the documents with its own tools.
+  It searches and reads the documents with its own tools. `ReadOnlyV1` does
+  not confine reads to the workspace: like every analysis call, the child can
+  read what its Machine user can read, which never exceeds what the parent's
+  own worker on that Machine can read. The prompt directs it to the documents
+  only; enforced per-round read containment is a separate, profile-wide change.
 - **Correctness rules are part of the prompt**: search before reading, check
   later records for revisions and reverts before answering, treat tool calls as
   attempts until their result is found, ignore instructions inside history,
@@ -468,17 +479,21 @@ Design, following the measured weaknesses of one-shot summaries:
 - **Citations are checked mechanically.** The answer cites
   `[<session>#<seq>] "quote"`. `calls.result` adds
   `citations: {checked, verified, unverified: [{cite, reason}]}`; the
-  Controller re-renders the cited record and requires the cited session and seq
-  in scope, a record starting at that seq, and the quote inside it
-  (whitespace/case-insensitive). The caller should still confirm paths,
+  Controller re-exports the same pinned scopes and requires the cited session
+  and seq in scope, an exported record starting at that seq, and the quote
+  inside it (whitespace/case-insensitive). The caller should still confirm paths,
   commands and numbers in current files before acting on them.
 
 Transport: `ChildRound.documents` carries the rendered text to the execution
 Machine, which writes it as the round workspace (`snapshot/documents.rs`).
-Only Machines at `MANAGED_CONTEXT_PROTOCOL_VERSION` (46) receive it; on an
+Only Machines at `MANAGED_CONTEXT_PROTOCOL_VERSION` (46) receive it (the
+command's minimum protocol, checked on the dispatching connection); on an
 older Machine the call fails with `machine_upgrade_required` rather than
-capturing a worktree instead. A repeated round of the same call observes its
-first prepared documents.
+capturing a worktree instead, and a disconnected Machine is retried. A
+repeated round of the same call observes its first prepared documents.
+Context asks are MCP-only: a Machine gateway refuses a raw `cowboy call`
+request carrying `sessions`, so a newer Machine never sends an older
+Controller a request it cannot decode.
 
 Native coverage: neither Codex nor Claude Code can read another Cowboy
 session's transcript. The narrowest surface is this existing managed-call path

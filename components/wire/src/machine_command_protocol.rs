@@ -38,6 +38,12 @@ impl MachineCommand {
                 PROVIDER_ACCOUNT_PROTOCOL_VERSION
             }
             Self::Execution { request, .. }
+                if matches!(&request.action, execution::Action::PrepareManagedRound { round }
+                        if !round.documents.is_empty()) =>
+            {
+                MANAGED_CONTEXT_PROTOCOL_VERSION
+            }
+            Self::Execution { request, .. }
                 if matches!(
                     &request.action,
                     execution::Action::DeliverManagedArtifact { .. }

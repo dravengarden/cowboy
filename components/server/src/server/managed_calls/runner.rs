@@ -402,6 +402,7 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     }
     let round = match child_round(state, record, &request, child).await {
         Ok(round) => round,
+        Err(super::history::RETRY) => return Step::Wait(Duration::from_secs(5)),
         Err(code) => {
             advance(state, store, record, fail(code, None)).await;
             return Step::Again;
