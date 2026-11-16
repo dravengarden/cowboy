@@ -138,6 +138,46 @@ fn context_fault(files: &[String], root: Option<&str>) -> Option<&'static str> {
     None
 }
 
+/// The request purpose. A context ask (`sessions`) is only ever a fresh
+/// analysis over recorded history.
+fn call_purpose(input: &CallInput, review: bool) -> Result<String, CallRefusal> {
+    if !input.sessions.is_empty()
+        && (review
+            || input.capability.is_some()
+            || input
+                .purpose
+                .as_deref()
+                .is_some_and(|purpose| purpose != "analysis")
+            || input.child_session_id.is_some()
+            || !input.files.is_empty()
+            || input.root.is_some())
+    {
+        return Err(refuse(SESSIONS_ALONE));
+    }
+    Ok(if review {
+        if input.design {
+            "design_review"
+        } else {
+            "review"
+        }
+        .to_owned()
+    } else if let Some(capability) = &input.capability {
+        match capability.as_str() {
+            "image.generate" => "image_generate",
+            "image.edit" => "image_edit",
+            _ => {
+                return Err(CallRefusal {
+                    code: "unsupported_capability",
+                    message: "capability must be image.generate or image.edit",
+                });
+            }
+        }
+        .to_owned()
+    } else {
+        input.purpose.clone().unwrap_or_else(|| "analysis".into())
+    })
+}
+
 fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, CallRefusal> {
     let input: CallInput = serde_json::from_value(args)
         .map_err(|_| refuse("unknown or mistyped argument; see cowboy_read({help:\"actions\"})"))?;
@@ -162,19 +202,6 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
         return Err(refuse(
             "focus, design, task, base and fresh belong to review.start",
         ));
-    }
-    if !input.sessions.is_empty()
-        && (review
-            || input.capability.is_some()
-            || input
-                .purpose
-                .as_deref()
-                .is_some_and(|purpose| purpose != "analysis")
-            || input.child_session_id.is_some()
-            || !input.files.is_empty()
-            || input.root.is_some())
-    {
-        return Err(refuse(SESSIONS_ALONE));
     }
     if input.task.is_some() != input.base.is_some() {
         return Err(refuse(TASK_NEEDS_BASE));
@@ -223,28 +250,7 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
             "task must be a short id (letters, digits, '-', '_' or '.', up to 128); put the description in focus",
         ));
     }
-    let purpose = if review {
-        if input.design {
-            "design_review"
-        } else {
-            "review"
-        }
-        .to_owned()
-    } else if let Some(capability) = input.capability {
-        match capability.as_str() {
-            "image.generate" => "image_generate",
-            "image.edit" => "image_edit",
-            _ => {
-                return Err(CallRefusal {
-                    code: "unsupported_capability",
-                    message: "capability must be image.generate or image.edit",
-                });
-            }
-        }
-        .to_owned()
-    } else {
-        input.purpose.unwrap_or_else(|| "analysis".into())
-    };
+    let purpose = call_purpose(&input, review)?;
     let instruction = if review {
         crate::managed_calls::review_instruction(
             input.design,
