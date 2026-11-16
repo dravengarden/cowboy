@@ -87,4 +87,7 @@ macro_rules! implementation {
 }
 
 implementation!(PostgresStorage, "payload->'update'->>'sessionUpdate'");
-implementation!(SqliteStorage, "json_extract(payload, '$.update.sessionUpdate')");
+implementation!(
+    SqliteStorage,
+    "json_extract(payload, '$.update.sessionUpdate')"
+);

@@ -353,11 +353,12 @@ async fn digest(state: &AppState, id: &str) -> crate::context_rollover::Digest {
     let Some((mut digest, cursor)) = state.hub.rollover_digest(id) else {
         return crate::context_rollover::Digest::default();
     };
-    if let (None, Some(cursor), Some(store)) =
-        (&digest.first_request, cursor, state.store.as_ref())
+    if let (None, Some(cursor), Some(store)) = (&digest.first_request, cursor, state.store.as_ref())
     {
         match store.context_opening_prompts(id, cursor).await {
-            Ok(prompts) => digest.first_request = crate::context_rollover::opening_request(&prompts),
+            Ok(prompts) => {
+                digest.first_request = crate::context_rollover::opening_request(&prompts)
+            }
             Err(error) => {
                 tracing::warn!(session = id, %error, "renewal digest without its opening request");
             }
