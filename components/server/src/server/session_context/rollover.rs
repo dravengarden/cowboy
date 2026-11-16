@@ -319,7 +319,7 @@ pub(in crate::server) async fn before_dispatch(
         before,
         idle_ms,
         context_used: meta.context_used,
-        digest: state.hub.rollover_digest(id).unwrap_or_default(),
+        digest: digest(state, id).await,
     });
     // Inert until the marker below names the same boundary.
     if let Err(error) = save(state, id, &renewed).await {
@@ -344,6 +344,26 @@ pub(in crate::server) async fn before_dispatch(
     );
     // Every renewal is evidence, whatever its idle time.
     measure(&meta, cmid, Some(policy), idle_ms, "renewed");
+}
+
+/// The held-tail digest, with the opening request read back from the
+/// durable transcript when a long session trimmed it from memory. A failed
+/// read only leaves that excerpt out.
+async fn digest(state: &AppState, id: &str) -> crate::context_rollover::Digest {
+    let Some((mut digest, cursor)) = state.hub.rollover_digest(id) else {
+        return crate::context_rollover::Digest::default();
+    };
+    if let (None, Some(cursor), Some(store)) =
+        (&digest.first_request, cursor, state.store.as_ref())
+    {
+        match store.context_opening_prompts(id, cursor).await {
+            Ok(prompts) => digest.first_request = crate::context_rollover::opening_request(&prompts),
+            Err(error) => {
+                tracing::warn!(session = id, %error, "renewal digest without its opening request");
+            }
+        }
+    }
+    digest
 }
 
 #[derive(Deserialize)]

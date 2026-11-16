@@ -305,6 +305,52 @@ pub fn digest(log: &[Envelope], reached_start: bool) -> Digest {
     }
 }
 
+/// The seq before which the current context's opening request must be read
+/// from the durable transcript: the held tail neither starts at the session's
+/// first event nor contains the context's boundary.
+#[must_use]
+pub fn opening_cursor(log: &[Envelope], reached_start: bool) -> Option<u64> {
+    if reached_start || log.iter().any(is_context_boundary) {
+        return None;
+    }
+    log.first().map(|envelope| envelope.seq)
+}
+
+/// The first human request among a context's opening prompt rows (oldest
+/// first, see [`crate::store::Store::context_opening_prompts`]); chunks at
+/// consecutive seqs continue one request.
+#[must_use]
+pub fn opening_request(prompts: &[Envelope]) -> Option<String> {
+    let mut request: Option<(u64, String)> = None;
+    for envelope in prompts {
+        let Event::Update { update } = &envelope.event else {
+            continue;
+        };
+        let Some(text) = text_of(update) else {
+            continue;
+        };
+        match &mut request {
+            Some((last, request)) => {
+                if envelope.seq != last.saturating_add(1) {
+                    break;
+                }
+                request.push('\n');
+                request.push_str(text);
+                *last = envelope.seq;
+            }
+            None => {
+                if text.starts_with("<system-reminder>")
+                    || !crate::prompt_origin::is_human_prompt_update(update)
+                {
+                    continue;
+                }
+                request = Some((envelope.seq, text.to_owned()));
+            }
+        }
+    }
+    request.map(|(_, text)| truncated(&text, DIGEST_FIRST_CHARS))
+}
+
 fn duration_label(ms: u64) -> String {
     let minutes = ms / 60_000;
     match minutes {

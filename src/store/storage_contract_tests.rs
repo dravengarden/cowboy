@@ -1782,6 +1782,12 @@ async fn run_storage_contract(store: &Store, session_id: &str) -> Result<()> {
     assert_eq!(total, 1);
     assert_eq!(questions.len(), 1);
     assert!(questions[0].title.contains("verify both storage backends"));
+    let opening = store.context_opening_prompts(session_id, 2).await?;
+    assert!(
+        crate::context_rollover::opening_request(&opening)
+            .is_some_and(|request| request.contains("verify both storage backends"))
+    );
+    assert!(store.context_opening_prompts(session_id, 0).await?.is_empty());
     let page = store
         .question_page_at(session_id, 0)
         .await?

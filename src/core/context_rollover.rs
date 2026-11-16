@@ -4,14 +4,15 @@ use crate::context_rollover::{Digest, MARKER};
 
 impl Hub {
     /// The digest of the session's current native context from the held log
-    /// tail, or `None` for an unknown session.
+    /// tail, or `None` for an unknown session, with the durable cursor to read
+    /// its opening request from when the tail no longer holds it.
     #[must_use]
-    pub fn rollover_digest(&self, session_id: &str) -> Option<Digest> {
+    pub fn rollover_digest(&self, session_id: &str) -> Option<(Digest, Option<u64>)> {
         let sessions = self.inner.sessions.lock();
         let session = sessions.get(session_id)?;
-        Some(crate::context_rollover::digest(
-            &session.log,
-            session.reached_start,
+        Some((
+            crate::context_rollover::digest(&session.log, session.reached_start),
+            crate::context_rollover::opening_cursor(&session.log, session.reached_start),
         ))
     }
 

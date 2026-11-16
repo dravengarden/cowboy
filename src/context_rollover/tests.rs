@@ -196,3 +196,33 @@ fn excerpts_cannot_close_the_reminder_block() {
     assert!(!text.contains("</system-reminder"), "{text}");
     assert!(!text.contains("<system-reminder"), "{text}");
 }
+
+#[test]
+fn a_trimmed_tail_reads_its_opening_request_durably() {
+    let tail = vec![user(40, "later ask"), turn_end(41)];
+    assert_eq!(opening_cursor(&tail, false), Some(40));
+    assert_eq!(opening_cursor(&tail, true), None);
+    let mut renewed = tail.clone();
+    renewed.push(update(42, json!({"sessionUpdate":MARKER,"at":1})));
+    assert_eq!(opening_cursor(&renewed, false), None);
+}
+
+#[test]
+fn opening_request_skips_generated_prompts_and_joins_its_chunks() {
+    let machine = update(
+        2,
+        json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"auto"},"promptOrigin":{"actor":"agent"}}),
+    );
+    let prompts = vec![
+        user(1, "<system-reminder>\nLinked Cowboy sessions: []"),
+        machine,
+        user(5, "build the feature"),
+        user(6, "with notes"),
+        user(9, "second ask"),
+    ];
+    assert_eq!(
+        opening_request(&prompts).as_deref(),
+        Some("build the feature\nwith notes")
+    );
+    assert_eq!(opening_request(&prompts[..2]), None);
+}

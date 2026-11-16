@@ -155,8 +155,11 @@ prompt or transcript text.
 - The marker and the forgotten native id are separate write-behind records;
   the marker is written first, so a crash between them resumes the old
   context with an extra digest rather than a fresh one without it.
-- The digest uses the held log tail; after memory reclaim it may be partial,
-  and the agent relies on the on-demand reads.
+- The digest uses the held log tail. When that tail no longer reaches the
+  current context's start, the opening request is read back from the durable
+  transcript (the first human prompt after the newest Clear or renewal
+  boundary); without a store, or if that read fails, it is omitted and the
+  agent relies on the on-demand reads.
 
 The local layer can be deleted when Providers resume idle conversations
 without a cold full-context write, or the native CLIs perform an equivalent
