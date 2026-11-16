@@ -3103,6 +3103,46 @@ fn context_reset_forgets_the_discarded_context_usage() {
 }
 
 #[test]
+fn relaunched_worker_seed_keeps_the_resumed_context_usage() {
+    let health = std::sync::Arc::new(PersistenceHealth::default());
+    let (sink, mut rx) = StoreSink::channel(64, health);
+    let hub = Hub::with_store(Some(sink));
+    hub.create_local_session(
+        "usage-relaunch".to_owned(),
+        "claude-code".to_owned(),
+        "/tmp".to_owned(),
+        "usage".to_owned(),
+        SessionOrigin::Api,
+        false,
+    );
+    let usage = crate::agent_model::SessionUsage {
+        used: 612_297,
+        size: 1_000_000,
+        raw: serde_json::Value::Null,
+        observed_at_ms: 1,
+    };
+    hub.set_session_usage("usage-relaunch", usage.clone());
+    while rx.try_recv().is_ok() {}
+
+    // A relaunched worker's snapshot is seeded with 0/0 before its agent
+    // reports usage; it must not erase the resumed context's size.
+    hub.set_session_usage(
+        "usage-relaunch",
+        crate::agent_model::SessionUsage {
+            used: 0,
+            size: 0,
+            raw: serde_json::Value::Null,
+            observed_at_ms: 0,
+        },
+    );
+
+    let meta = hub.session_info("usage-relaunch").expect("session").meta;
+    assert_eq!((meta.context_used, meta.context_size), (612_297, 1_000_000));
+    assert_eq!(meta.usage, Some(usage));
+    assert!(rx.try_recv().is_err(), "the seed must not be persisted");
+}
+
+#[test]
 fn context_usage_is_persisted_once_per_change_and_cleared_by_reset() {
     let health = std::sync::Arc::new(PersistenceHealth::default());
     let (sink, mut rx) = StoreSink::channel(64, health);

@@ -3422,7 +3422,17 @@ impl Hub {
     /// Controller restart. Deduped — the agent re-emits identical usage several times per
     /// turn, so we only broadcast when the numbers actually move, keeping the
     /// session-list churn (and mobile bandwidth) down.
+    ///
+    /// A `0`/`0` reading carries no observation: a freshly launched worker
+    /// seeds its snapshot that way before the agent reports anything. Applying
+    /// it after a resume (Provider update, reload, crash recovery) would erase
+    /// the resumed context's real size, so idle hibernation and context
+    /// rollover would treat a large expired context as empty. Only Clear and
+    /// renewal, which discard the native context, reset the reading.
     pub fn set_session_usage(&self, session_id: &str, usage: crate::agent_model::SessionUsage) {
+        if usage.used == 0 && usage.size == 0 {
+            return;
+        }
         let changed = {
             let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
