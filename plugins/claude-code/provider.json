@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.20.38",
+  "version": "3.20.39",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.2.0",
   "display": {
@@ -52,13 +52,13 @@
   },
   "configuration_presets": [
     {
-      "id": "sonnet-high",
-      "name": "Sonnet · High",
-      "detail": "Sonnet 5.5 · High effort",
-      "is_default": false,
+      "id": "sonnet-xhigh",
+      "name": "Sonnet · XHigh",
+      "detail": "Sonnet 5.5 · Extra high effort",
+      "is_default": true,
       "values": {
         "model": "sonnet",
-        "effort": "high"
+        "effort": "xhigh"
       }
     },
     {
@@ -85,7 +85,7 @@
       "id": "opus-default",
       "name": "Opus · Recommended",
       "detail": "Opus 5.5 (1M context) · Model default effort",
-      "is_default": true,
+      "is_default": false,
       "values": {
         "model": "opus",
         "effort": "default"
@@ -154,8 +154,8 @@
       "configuration": "portable_v1",
       "default_preferences": {
         "mode": "bypassPermissions",
-        "model": "opus",
-        "effort": "default"
+        "model": "sonnet",
+        "effort": "xhigh"
       },
       "error_rules": [
         {
