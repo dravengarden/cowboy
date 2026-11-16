@@ -59,7 +59,9 @@ function BrowserEmptyPage({
     ? "Reading the browser state…"
     : admission
       ? "The browser is not available"
-      : (EMPTY_TITLE[state?.state ?? ""] ?? "This browser was never opened");
+      : model.resume
+        ? "Reconnecting to the browser"
+        : (EMPTY_TITLE[state?.state ?? ""] ?? "This browser was never opened");
   const title = shared ? `Shared browser · ${shared.label}` : stateTitle;
   return (
     <Stack
@@ -221,10 +223,9 @@ export function BrowserFrame(props: BrowserFrameProps): React.JSX.Element {
             takeover={model.viewer.takeover}
             touch={touch}
             onState={(next) => dispatch({ type: "stream_state", state: next })}
-            onEnded={(message) => {
-              dispatch({ type: "viewer_ended", message });
-              browser.refresh();
-            }}
+            onEnded={(message, resumable) =>
+              dispatch({ type: "viewer_ended", message, resumable, now: Date.now() })
+            }
             onRemoteClipboard={(text) => dispatch({ type: "remote_clipboard", text })}
             onNotice={commands.notice}
             onControls={props.onControls}

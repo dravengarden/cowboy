@@ -236,6 +236,37 @@ function useLive(owner: string): () => boolean {
   );
 }
 
+/** A viewer that ended re-reads at once, after the end advanced the
+ * lifecycle epoch (a read issued before it would be discarded), so the
+ * panel never keeps showing the display it just lost. Polls pause while the
+ * page is hidden; returning re-reads at once instead of showing the state
+ * from before. */
+function useReadOnReturn(
+  active: boolean,
+  viewerMounted: boolean,
+  refresh: () => void,
+  modelRef: { current: BrowserModel },
+): void {
+  const wasMounted = useRef(viewerMounted);
+  useEffect(() => {
+    const ended = wasMounted.current && !viewerMounted;
+    wasMounted.current = viewerMounted;
+    if (active && ended) refresh();
+  }, [active, viewerMounted, refresh]);
+  useEffect(() => {
+    if (!active) return undefined;
+    const returned = (): void => {
+      if (document.visibilityState === "visible" && !modelRef.current.viewer) refresh();
+    };
+    document.addEventListener("visibilitychange", returned);
+    globalThis.addEventListener("pageshow", returned);
+    return () => {
+      document.removeEventListener("visibilitychange", returned);
+      globalThis.removeEventListener("pageshow", returned);
+    };
+  }, [active, refresh, modelRef]);
+}
+
 export function useMachineBrowser({
   account,
   dataset,
@@ -278,6 +309,7 @@ export function useMachineBrowser({
   useEffect(() => {
     if (active) refresh();
   }, [active, browserEnabled, refresh]);
+  useReadOnReturn(active, model.viewer !== undefined, refresh, modelRef);
   // Status polling: 5 s idle, 2 s while starting (bounded), none while a
   // stream is attached and reports state itself.
   const period = active ? pollPeriod(model, Date.now()) : undefined;

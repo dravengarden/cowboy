@@ -1229,7 +1229,20 @@ whose browser it displays and the Machine it runs on.
   holds the display is an explicit, confirmed takeover. A refused or
   unanswered attachment ends the viewer with the stream's close code
   (`browser_attach_refused`, `browser_attach_failed`) and a notice naming
-  the state; re-attaching is a user action, never automatic. An open whose
+  the state. A stream that drops (not an authentication, security or proof
+  end, and not a state that ended the browser) starts a bounded reconnect
+  for the browser it showed: the panel re-reads at once (after the end
+  advanced the lifecycle epoch, so the answer is not discarded) and, only
+  while the panel is open and the page visible, takes one step per new
+  read: attach to a detached browser (never a takeover), reclaim the
+  display from this device's own dropped attachment (the read names the
+  `attachment_id` the stream named), or reopen a hibernated browser on the
+  same Machine bound to the shown identity. A display another device holds
+  is never taken over by itself: the reconnect ends and says so. At most
+  three automatic steps run within ten minutes of the drop; any other
+  owner command, Stop viewing or a refused open ends it. A takeover
+  confirmed against a stale state (the browser hibernated meanwhile) is
+  therefore reopened instead of failing silently. An open whose
   answer is a live browser carrying a reason did not take effect: the panel
   shows the failure and never mounts the viewer for it, and an open that
   answers `attached` never takes the display over by itself.
@@ -1282,8 +1295,9 @@ whose browser it displays and the Machine it runs on.
   native multi-touch contacts ([Native touch](#native-touch)); against a
   display server without it, tap clicks, two-finger drag scrolls and long
   press is right click. Backgrounding the app suspends lease renewal,
-  which detaches within 30 s; returning shows the detached state and the
-  Open browser action while the grace period keeps the instance alive.
+  which detaches within 30 s; returning re-reads the state at once and
+  reconnects (attaching while the grace period keeps the instance alive,
+  else reopening it from its snapshot), as for any dropped stream.
 - **Touch keyboard.** As in neko, a transparent full-size `<textarea>`
   lies over the framebuffer (16 px so iOS never zooms; autocapitalize,
   autocomplete and autocorrect off, no spellcheck, `inputmode="text"`). It

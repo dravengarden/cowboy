@@ -104,6 +104,14 @@ export function BrowserPrimaryAction({
   onConfirm: (kind: ConfirmKind) => void;
 }): React.JSX.Element | null {
   if (model.read?.admission || !model.loaded) return null;
+  if (model.resume && !model.busy) {
+    return (
+      <Stack direction="row" spacing={1} alignItems="center" role="status">
+        <CircularProgress size={18} aria-label="Reconnecting to the browser" />
+        <Typography variant="body2">Reconnecting…</Typography>
+      </Stack>
+    );
+  }
   if (model.busy === "open" || state?.state === "starting") {
     return (
       <Stack direction="row" spacing={1} alignItems="center" role="status">

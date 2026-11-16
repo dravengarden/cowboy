@@ -32,7 +32,16 @@ import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { BrowserMenu, type BrowserMenuItem, MobileBrowserToolbar } from "./MachineBrowserToolbar";
 import { devicePortrait, useTouchInput } from "./inputProfile";
 import { useDevicePaste } from "./MachineBrowserPaste";
-import { type BrowserModel, autoEntry, linkEntry, linkTarget, resetTarget } from "./browserModel";
+import {
+  type BrowserModel,
+  RESUME_FAILED,
+  RESUME_OTHER_DEVICE,
+  autoEntry,
+  linkEntry,
+  linkTarget,
+  resetTarget,
+  resumeStep,
+} from "./browserModel";
 import {
   type SharedBrowser,
   browserIdentityKey,
@@ -134,6 +143,55 @@ function useAutoEntry(
     if (!link || !shownLink || !takeLatch(latch, "linked")) return;
     browser.navigate(link.url, shownLink);
   }, [browser, latch, link, shownLink]);
+}
+
+function usePageVisible(): boolean {
+  const [visible, setVisible] = useState(() => document.visibilityState === "visible");
+  useEffect(() => {
+    const update = (): void => setVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+  return visible;
+}
+
+/** Reconnect after a dropped viewer (`resumeStep`), only while the panel is
+ * open and the page visible: a backgrounded app reconnects when it
+ * returns. Each step waits for a new read; another device's display is
+ * never taken over. */
+function useResume(
+  open: boolean,
+  browser: MachineBrowserController,
+  commands: BrowserCommands,
+): void {
+  const { model, dispatch } = browser;
+  const visible = usePageVisible();
+  const step = open && visible ? resumeStep(model, Date.now()) : undefined;
+  const machine = model.resume?.target.machine_id;
+  const identity = model.observedIdentity ?? model.read?.browser_identity;
+  const commandsRef = useRef(commands);
+  commandsRef.current = commands;
+  useEffect(() => {
+    switch (step) {
+      case "attach":
+        commandsRef.current.attach(false);
+        break;
+      case "reclaim":
+        commandsRef.current.attach(true);
+        break;
+      case "open":
+        commandsRef.current.open(machine, identity);
+        break;
+      case "other_device":
+        dispatch({ type: "resume_end", message: RESUME_OTHER_DEVICE });
+        break;
+      case "give_up":
+        dispatch({ type: "resume_end", message: RESUME_FAILED });
+        break;
+      default:
+        break;
+    }
+  }, [step, machine, identity, dispatch]);
 }
 
 function browserMenuItems({
@@ -332,6 +390,7 @@ function MachineBrowserPanel(
     : "no Machine yet";
   const commands = browserCommands(browser, areaRef, touch, link?.machine);
   useAutoEntry(props, browser, commands);
+  useResume(open, browser, commands);
   const ui = useBrowserChrome(account.id, model);
   const paste = useDevicePaste(ui.controls);
   // The Service's read names the browser a reset deletes; before it

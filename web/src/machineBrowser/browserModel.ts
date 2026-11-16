@@ -25,8 +25,21 @@ export interface BrowserModel {
    * attaches to exactly `target`, never to another browser of the account.
    * `since` is the lifecycle epoch it was established in. */
   viewer?:
-    | { takeover: boolean; generation: number; target: BrowserTarget; since?: number }
+    | {
+        takeover: boolean;
+        generation: number;
+        target: BrowserTarget;
+        since?: number;
+        /** The attachment the stream's first state named: this device's. */
+        attachmentId?: string;
+      }
     | undefined;
+  /** The viewer's connection dropped (a backgrounded app, a network
+   * change, an attach refused because the shown state was stale) and the
+   * panel reconnects by itself (`resumeStep`). `fresh` is set by a read
+   * applied after the drop or the last automatic step: each step needs a
+   * new observation. */
+  resume?: BrowserResume | undefined;
   /** Text the remote browser copied, held for the open attachment only. */
   remoteClipboard?: string | undefined;
   /** When the instance was first seen `starting`, bounding the fast poll. */
@@ -48,6 +61,29 @@ export interface BrowserModel {
    * command's outcome compares this, never the error text. */
   failures?: number;
 }
+
+export interface BrowserResume {
+  /** The browser the dropped viewer showed. */
+  target: BrowserTarget;
+  /** This device's attachment on it, when the stream named one. */
+  attachmentId?: string | undefined;
+  /** When the first drop of this chain happened. */
+  since: number;
+  /** Automatic steps taken so far (`RESUME_ATTEMPTS` bounds them). */
+  attempts: number;
+  fresh: boolean;
+}
+
+/** Reconnecting by itself stops this long after the drop: a browser that
+ * hibernated meanwhile is reopened only within it. */
+export const RESUME_WINDOW_MS = 10 * 60_000;
+/** Automatic steps per drop; the owner retries after that. */
+export const RESUME_ATTEMPTS = 3;
+
+export const RESUME_NOTICE = "The connection to the browser dropped. Reconnecting…";
+export const RESUME_FAILED =
+  "Could not reconnect to the browser by itself. Open it again to continue.";
+export const RESUME_OTHER_DEVICE = "Another device is viewing this browser now.";
 
 export type BrowserEvent =
   | {
@@ -75,7 +111,16 @@ export type BrowserEvent =
     }
   | { type: "detach" }
   | { type: "stream_state"; state: BrowserStateEvent }
-  | { type: "viewer_ended"; message: string }
+  | {
+      type: "viewer_ended";
+      message: string;
+      /** The connection dropped (not an auth, security or state end): the
+       * panel reconnects by itself. */
+      resumable?: boolean | undefined;
+      now?: number | undefined;
+    }
+  /** Reconnecting by itself stopped; `message` says why. */
+  | { type: "resume_end"; message: string }
   | { type: "remote_clipboard"; text: string | undefined }
   | { type: "notice"; message: string }
   /** An intermediate answer (a restart's hibernate or confirmation read)
@@ -302,6 +347,46 @@ export function linkEntry(
   return read?.machine_id === machine ? autoEntry(read.state?.state) : "open";
 }
 
+export type ResumeStep =
+  /** The browser still runs undisplayed: attach (never a takeover). */
+  | "attach"
+  /** The display is still held by this device's dropped attachment. */
+  | "reclaim"
+  /** It hibernated meanwhile: reopen it on the same Machine. */
+  | "open"
+  /** Starting or stopping, or no new observation yet. */
+  | "wait"
+  /** Another device holds the display: never taken over by itself. */
+  | "other_device"
+  /** Outside the window or out of attempts. */
+  | "give_up";
+
+/** What the panel does next to reconnect after a dropped viewer, or
+ * `undefined` when it is not reconnecting. It only ever attaches to a
+ * browser nobody views, reclaims the display from this device's own
+ * dropped attachment, or reopens the hibernated browser of the same
+ * Machine; another device's display is left alone. */
+export function resumeStep(model: BrowserModel, now: number): ResumeStep | undefined {
+  const resume = model.resume;
+  if (!resume) return undefined;
+  if (now - resume.since > RESUME_WINDOW_MS || resume.attempts >= RESUME_ATTEMPTS) {
+    return "give_up";
+  }
+  if (!resume.fresh || model.viewer || model.busy || model.awaitingOpen) return "wait";
+  if (model.read?.admission) return "give_up";
+  const machine = resume.target.machine_id;
+  const read = model.read;
+  const state = read?.state;
+  if (read?.machine_id !== machine || !state || state.state === "hibernated") return "open";
+  if (state.state === "detached") return "attach";
+  if (state.state === "attached") {
+    return resume.attachmentId !== undefined && state.attachment_id === resume.attachmentId
+      ? "reclaim"
+      : "other_device";
+  }
+  return "wait";
+}
+
 /** The running browser on `machine` a link may be shown in: the one the
  * panel shows, only while it runs on exactly that Machine. */
 export function linkTarget(model: BrowserModel, machine: string): BrowserTarget | undefined {
@@ -454,6 +539,37 @@ function countFailure(model: BrowserModel, event: BrowserEvent, next: BrowserMod
   return failed ? { ...next, failures: (model.failures ?? 0) + 1 } : next;
 }
 
+/** An automatic step was taken: it needs a new observation before the
+ * next one. */
+function stepTaken(resume: BrowserResume | undefined): BrowserResume | undefined {
+  return resume && { ...resume, fresh: false, attempts: resume.attempts + 1 };
+}
+
+/** A viewer ended. A dropped connection starts (or continues) a reconnect
+ * for the browser it showed; any other end is final. */
+function viewerEnded(
+  model: BrowserModel,
+  event: Extract<BrowserEvent, { type: "viewer_ended" }>,
+): BrowserModel {
+  const ended = { ...model, viewer: undefined, remoteClipboard: undefined };
+  const viewer = model.viewer;
+  if (!viewer || !event.resumable) {
+    return { ...ended, resume: undefined, notice: event.message };
+  }
+  const prior = model.resume;
+  const resume: BrowserResume = {
+    target: viewer.target,
+    attachmentId: viewer.attachmentId ?? prior?.attachmentId,
+    since: prior?.since ?? event.now ?? Date.now(),
+    attempts: prior?.attempts ?? 0,
+    fresh: false,
+  };
+  if (resume.attempts >= RESUME_ATTEMPTS) {
+    return { ...ended, resume: undefined, notice: RESUME_FAILED };
+  }
+  return { ...ended, resume, notice: RESUME_NOTICE };
+}
+
 function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
   switch (event.type) {
     case "read": {
@@ -463,13 +579,22 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
           ? model
           : { ...model, observedIdentity: event.read.browser_identity };
       if (staleForViewer(observed, event.read, event.issued)) return { ...observed, loaded: true };
-      return withRead(observed, event.read, event.now);
+      const read = withRead(observed, event.read, event.now);
+      return read.resume ? { ...read, resume: { ...read.resume, fresh: true } } : read;
     }
     case "read_failed":
       if (issuedBefore(model, event.issued)) return model;
       return { ...model, loaded: true, error: event.message };
     case "busy":
-      return { ...model, busy: event.action, error: "", notice: "" };
+      // Only an open continues a reconnect; any other command is the
+      // owner's and ends it.
+      return {
+        ...model,
+        busy: event.action,
+        error: "",
+        notice: "",
+        resume: event.action === "open" ? stepTaken(model.resume) : undefined,
+      };
     case "result": {
       const read = resultRead(model.read, event.result);
       const observed = observeResultIdentity(model, event.result);
@@ -482,6 +607,7 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
           return {
             ...next,
             awaitingOpen: undefined,
+            resume: undefined,
             error: `The browser was not opened. ${browserReasonText(state.reason) ?? ""}`.trim(),
           };
         }
@@ -495,6 +621,7 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
         if (state.state === "hibernated") {
           return {
             ...next,
+            resume: undefined,
             error: browserReasonText(state.reason) ?? "The browser did not start.",
           };
         }
@@ -511,7 +638,13 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
       return next;
     }
     case "failed":
-      return { ...model, busy: undefined, awaitingOpen: undefined, error: event.message };
+      return {
+        ...model,
+        busy: undefined,
+        awaitingOpen: undefined,
+        resume: undefined,
+        error: event.message,
+      };
     case "attach": {
       // Attach to the browser the panel shows, by Machine and instance.
       const target = targetOf(model.read);
@@ -523,12 +656,13 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
         ...model,
         viewer: { takeover: event.takeover, generation: nextGeneration(model), target },
         remoteClipboard: undefined,
+        resume: stepTaken(model.resume),
         error: "",
         notice: "",
       };
     }
     case "detach":
-      return { ...model, viewer: undefined, remoteClipboard: undefined };
+      return { ...model, viewer: undefined, remoteClipboard: undefined, resume: undefined };
     case "stream_state": {
       // The stream reports the instance it is attached to, on its Machine.
       const read: BrowserRead = {
@@ -536,10 +670,22 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
         machine_id: model.viewer?.target.machine_id ?? model.read?.machine_id ?? null,
         state: event.state,
       };
-      return withRead(model, read, event.state.observed_at_ms);
+      const next = withRead(model, read, event.state.observed_at_ms);
+      // The stream's attached state names this device's attachment: the
+      // display is back, so a reconnect is over.
+      const own = event.state.state === "attached" ? event.state.attachment_id : undefined;
+      if (!next.viewer || own === undefined) return next;
+      return {
+        ...next,
+        viewer: next.viewer.attachmentId ? next.viewer : { ...next.viewer, attachmentId: own },
+        resume: undefined,
+        notice: next.resume ? "" : next.notice,
+      };
     }
     case "viewer_ended":
-      return { ...model, viewer: undefined, remoteClipboard: undefined, notice: event.message };
+      return viewerEnded(model, event);
+    case "resume_end":
+      return { ...model, resume: undefined, notice: event.message };
     case "remote_clipboard":
       return { ...model, remoteClipboard: event.text };
     case "notice":
@@ -557,6 +703,7 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
  * attached and reports state itself. */
 export function pollPeriod(model: BrowserModel, now: number): number | undefined {
   if (model.viewer) return undefined;
+  if (model.resume) return POLL_STARTING_MS;
   const starting = model.read?.state?.state === "starting";
   if (
     (starting || model.awaitingOpen) &&

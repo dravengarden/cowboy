@@ -21,8 +21,10 @@ import { type ViewerEnd, type ViewerSession, startViewerSession } from "./viewer
 
 export interface ViewerCallbacks {
   onState(state: BrowserStateEvent): void;
-  /** The session is over; the owner unmounts the viewer and shows the text. */
-  onEnded(message: string): void;
+  /** The session is over; the owner unmounts the viewer and shows the text.
+   * `resumable`: the connection dropped, nothing ended the browser or
+   * refused this device. */
+  onEnded(message: string, resumable: boolean): void;
   onRemoteClipboard(text: string | undefined): void;
   onNotice(message: string): void;
 }
@@ -46,6 +48,11 @@ export function viewerEndMessage(end: ViewerEnd): string {
         ? `The browser stream closed (${end.close.reason}).`
         : "The browser stream closed.";
   }
+}
+
+/** A dropped connection, not an auth, security or proof refusal. */
+export function viewerEndResumable(end: ViewerEnd): boolean {
+  return end.kind === "closed" && !end.close.authRequired;
 }
 
 function stateEndMessage(state: BrowserStateEvent): string {
@@ -130,13 +137,13 @@ export function useViewerSession({
               setAttachmentId(state.attachment_id);
             }
             latest.current.onState(state);
-            if (viewerEnds(state)) latest.current.onEnded(stateEndMessage(state));
+            if (viewerEnds(state)) latest.current.onEnded(stateEndMessage(state), false);
           },
           onStreamError: (code) => latest.current.onNotice(browserErrorText(code)),
           onAuthSession: announceProductAuthSession,
           onConnected: () => setConnected(true),
           onClipboard: (text) => latest.current.onRemoteClipboard(text),
-          onEnded: (end) => latest.current.onEnded(viewerEndMessage(end)),
+          onEnded: (end) => latest.current.onEnded(viewerEndMessage(end), viewerEndResumable(end)),
         }),
     });
     attachmentRef.current = attachment;

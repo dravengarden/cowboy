@@ -6,6 +6,8 @@ import {
   INITIAL_BROWSER_MODEL,
   POLL_IDLE_MS,
   POLL_STARTING_MS,
+  RESUME_ATTEMPTS,
+  RESUME_WINDOW_MS,
   STARTING_FAST_POLL_MS,
   autoEntry,
   openRefused,
@@ -17,6 +19,7 @@ import {
   readTicket,
   reduceBrowser,
   resetTarget,
+  resumeStep,
   shownTarget,
   stoppedFor,
   targetOf,
@@ -602,4 +605,129 @@ test("a restart reopens only after that exact browser verifiably stopped", async
     assertEquals(cause instanceof MachineBrowserError && cause.code, "browser_restart_unconfirmed");
   }
   assertEquals(attempts, RESTART_CONFIRM_ATTEMPTS);
+});
+
+/** A viewer attached to `shown()` whose stream named attachment `att-me`. */
+function viewing(): BrowserModel {
+  let model = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "read",
+    read: read(event("detached")),
+    now: 1,
+  });
+  model = reduceBrowser(model, { type: "attach", takeover: false });
+  return reduceBrowser(model, {
+    type: "stream_state",
+    state: event("attached", { attachment_id: "att-me" }),
+  });
+}
+
+function dropped(model: BrowserModel, now = 1_000): BrowserModel {
+  return reduceBrowser(model, {
+    type: "viewer_ended",
+    message: "The browser stream closed.",
+    resumable: true,
+    now,
+  });
+}
+
+function observed(model: BrowserModel, state: BrowserStateEvent | null, now = 2_000): BrowserModel {
+  return reduceBrowser(model, {
+    type: "read",
+    read: read(state),
+    now,
+    issued: model.epoch,
+  });
+}
+
+test("a dropped viewer reconnects only after a new read, without a takeover", () => {
+  const model = viewing();
+  assertEquals(model.viewer?.attachmentId, "att-me");
+  const ended = dropped(model);
+  assertEquals(ended.viewer, undefined);
+  assertEquals(ended.resume?.attachmentId, "att-me");
+  assertEquals(pollPeriod(ended, 1_000), POLL_STARTING_MS);
+  // The state shown before the drop is not a new observation.
+  assertEquals(resumeStep(ended, 1_000), "wait");
+  const detached = observed(ended, event("detached"));
+  assertEquals(resumeStep(detached, 2_000), "attach");
+  const attaching = reduceBrowser(detached, { type: "attach", takeover: false });
+  assertEquals(attaching.viewer?.takeover, false);
+  assertEquals(resumeStep(attaching, 2_000), "wait");
+  // The stream naming the new attachment ends the reconnect.
+  const back = reduceBrowser(attaching, {
+    type: "stream_state",
+    state: event("attached", { attachment_id: "att-new" }),
+  });
+  assertEquals(back.resume, undefined);
+  assertEquals(back.notice, "");
+  assertEquals(back.viewer?.attachmentId, "att-new");
+});
+
+test("a reconnect reopens a hibernated browser on the same Machine", () => {
+  const ended = dropped(viewing());
+  const stopped = observed(ended, event("hibernated", { instance: { account_id: account, instance_id: "", incarnation: 0 } }));
+  assertEquals(resumeStep(stopped, 2_000), "open");
+  const opening = reduceBrowser(stopped, { type: "busy", action: "open" });
+  assertEquals(resumeStep(opening, 2_000), "wait");
+  assertEquals(opening.resume?.attempts, 1);
+  // A refused open ends the reconnect with its reason.
+  const refused = reduceBrowser(opening, {
+    type: "result",
+    action: "open",
+    result: { machine_id: "ovh", state: event("hibernated", { reason: "capacity" }) },
+    now: 3_000,
+  });
+  assertEquals(refused.resume, undefined);
+  assertEquals(refused.error.length > 0, true);
+});
+
+test("a reconnect reclaims only this device's own attachment", () => {
+  const ended = dropped(viewing());
+  assertEquals(resumeStep(observed(ended, event("attached", { attachment_id: "att-me" })), 2_000), "reclaim");
+  assertEquals(
+    resumeStep(observed(ended, event("attached", { attachment_id: "att-other" })), 2_000),
+    "other_device",
+  );
+  assertEquals(resumeStep(observed(ended, event("attached")), 2_000), "other_device");
+});
+
+test("a takeover refused against a stale state reopens the browser", () => {
+  // The panel still shows another attachment; the browser hibernated since.
+  let model = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "read",
+    read: read(event("attached", { attachment_id: "att-gone" })),
+    now: 1,
+  });
+  model = reduceBrowser(model, { type: "attach", takeover: true, target: shown() });
+  assertEquals(model.viewer?.takeover, true);
+  model = dropped(model);
+  assertEquals(resumeStep(model, 1_000), "wait");
+  model = observed(model, null);
+  assertEquals(resumeStep(model, 2_000), "open");
+});
+
+test("a reconnect is bounded in attempts and time, and final ends never resume", () => {
+  let model = dropped(viewing());
+  for (let attempt = 0; attempt < RESUME_ATTEMPTS; attempt++) {
+    model = observed(model, event("detached"));
+    assertEquals(resumeStep(model, 2_000), "attach", `attempt ${attempt}`);
+    model = dropped(reduceBrowser(model, { type: "attach", takeover: false }), 2_000);
+  }
+  assertEquals(model.resume, undefined);
+  assertEquals(model.notice.length > 0, true);
+  const late = observed(dropped(viewing(), 1_000), event("detached"));
+  assertEquals(resumeStep(late, 1_000 + RESUME_WINDOW_MS + 1), "give_up");
+  const final = reduceBrowser(viewing(), {
+    type: "viewer_ended",
+    message: "Sign in again",
+    resumable: false,
+    now: 1_000,
+  });
+  assertEquals(final.resume, undefined);
+  // Stopping viewing, or another command of the owner, ends a reconnect.
+  assertEquals(reduceBrowser(dropped(viewing()), { type: "detach" }).resume, undefined);
+  assertEquals(
+    reduceBrowser(dropped(viewing()), { type: "busy", action: "hibernate" }).resume,
+    undefined,
+  );
 });
