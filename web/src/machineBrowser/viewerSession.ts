@@ -82,6 +82,9 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
   let touch: NativeTouch | undefined;
   let lease: ReturnType<typeof setInterval> | undefined;
   let focusOnClick = true;
+  // What this device last put on the remote clipboard: should the display
+  // server echo it back, it is not a copy made in the remote browser.
+  let pasted: string | undefined;
   const end = (value: ViewerEnd): void => {
     if (ended) return;
     ended = true;
@@ -132,7 +135,12 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
       rfb.qualityLevel = 6;
       rfb.compressionLevel = 2;
       rfb.addEventListener("connect", () => options.onConnected());
-      rfb.addEventListener("clipboard", (event) => options.onClipboard(event.detail.text));
+      rfb.addEventListener("clipboard", (event) => {
+        const text = event.detail.text;
+        if (text === pasted) return;
+        pasted = undefined;
+        options.onClipboard(text);
+      });
       rfb.addEventListener("securityfailure", (event) =>
         end({ kind: "security_failure", reason: event.detail.reason }),
       );
@@ -154,6 +162,7 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
     pasteText: (text) => {
       const client = rfb;
       if (!client) return;
+      pasted = text;
       client.clipboardPasteFrom(text);
       sendChord(client, "paste");
     },
@@ -162,6 +171,7 @@ export function startViewerSession(options: ViewerSessionOptions): ViewerSession
     openAddress: (url) => {
       const client = rfb;
       if (!client) return;
+      pasted = url;
       client.clipboardPasteFrom(url);
       sendChord(client, "address");
       sendChord(client, "paste");
