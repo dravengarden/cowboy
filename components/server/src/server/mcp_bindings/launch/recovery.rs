@@ -10,6 +10,11 @@ impl Launches {
         sessions.sort_by(|a, b| a.id.cmp(&b.id));
         let start = sessions.partition_point(|meta| meta.id <= *cursor);
         for meta in sessions[start..].iter().chain(&sessions[..start]) {
+            // Trashed and closing sessions cannot launch; a restore makes a
+            // trashed session eligible again.
+            if meta.closing || meta.trashed_at_ms.is_some() {
+                continue;
+            }
             let Some(stored) = Stored::load(state.hub, &meta.id) else {
                 continue;
             };
