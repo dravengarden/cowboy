@@ -189,9 +189,32 @@ Remaining Phase 1 items need the dedicated test account.
   global `PreToolUse` hook (denied). Hooks therefore also gate subagent tools,
   but background work outliving `end_turn` needs its own lifecycle handling.
 
-Remaining Phase 1: OVH install, login and footprint; ACP logout; concurrent
-refresh on two Machines; suspension and 429 shapes (observe only, never
-provoke).
+#### Phase 1 progress — OVH (2026-11-17)
+
+- The verified tarball was copied from Hawk (SHA-512 rechecked on OVH, nothing
+  built there). Login with a private `XDG_RUNTIME_DIR` stored the credential
+  as `$HOME/.gemini/antigravity-cli/antigravity-oauth-token`; over SSH the log
+  states "Using file-based token storage because SSH session detected".
+- Idle authenticated ACP server on OVH: about 166 MB RSS.
+- Location: every OVH prompt ended with the agent message "Your current account
+  is not eligible for Gemini Code Assist for individuals because it is not
+  currently available in your location" (`PERMISSION_DENIED`,
+  `UNSUPPORTED_LOCATION`). OVH egresses directly from its OVH US address. On
+  Hawk, Google traffic resolves to Stormbird fake-IP addresses and the same
+  account worked, so Google's location decision depends on the egress path.
+  OVH remote mode therefore needs a deliberate, stable egress for `agy` that
+  Google accepts; which Stormbird exit Hawk used was not determined. Choosing an
+  egress to satisfy a location check is an additional account-risk factor that
+  the owner must accept explicitly, and the login and runtime of one account
+  must use the same egress.
+- Logout: ACP `logout` returned `{}`, removed the token file, and the next
+  `session/new` failed with `-32000 Authentication required`. A separate grant
+  on Hawk kept working afterwards, so per-Machine logins are independent
+  grants. Whether logout revokes the grant at Google was not tested.
+
+Remaining Phase 1: OVH egress decision and a retest of the OVH facade path;
+concurrent refresh after access-token expiry; suspension and 429 shapes
+(observe only, never provoke).
 
 ### Phase 2 — Native custody as a Provider declaration
 
