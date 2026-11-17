@@ -133,7 +133,9 @@ exact evidence IDs. Results preserve source-local attribution. `--after` is an
 opaque cursor bound to the store, filters and original window. Retention can
 remove earlier pages; coverage exposes missing history. Query limit is 1–1000;
 scan budgets are 100,000 matched records, 16 MiB and 5 seconds, across at most
-90 days. Remote RPC is limited to 16 KiB input, 8 MiB output and 20 seconds.
+90 days. SQLite `metrics` and `analyze` group inside each segment instead
+of scanning records, so they cover the whole retained window within the same
+5 seconds; JSONL sources keep the record scan budget. Remote RPC is limited to 16 KiB input, 8 MiB output and 20 seconds.
 Exports reject truncated pages instead of silently producing incomplete bundles.
 
 Metrics describe **retained observations**, not all requests: event counts,

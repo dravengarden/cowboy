@@ -801,3 +801,46 @@ fn incomplete_shutdown_flush_is_explicit_in_coverage() {
             .contains(&"writer_shutdown_flush_incomplete".into())
     );
 }
+
+#[test]
+fn aggregated_metrics_equal_a_newest_first_record_scan() {
+    let (_root, store) = fixture();
+    // Several groups, severities, durations on every bucket boundary, beyond
+    // one page, in more than one segment and with equal timestamps.
+    for n in 0..240_u64 {
+        let mut e = entry(1000 + (n / 3) as i64, n);
+        e.event = format!("cowboy.fixture.{}", n % 5);
+        e.severity = [9, 13, 17][(n % 3) as usize];
+        e.duration_ms = match n % 4 {
+            0 => None,
+            1 => Some(super::analysis::BUCKETS[(n as usize / 4) % 14]),
+            2 => Some(n as f64 * 997.0),
+            _ => Some(0.5),
+        };
+        // Appended a rotation period apart: two segments.
+        let now = if n < 120 { 1000 } else { 90_000_000 };
+        store.append(&[e], now).unwrap();
+    }
+    let mut q = query(1000, 2000);
+    let mut scanned = std::collections::BTreeMap::new();
+    q.limit = 1000;
+    for item in store.query(&q).unwrap().items {
+        super::analysis::accumulate(&mut scanned, &item);
+    }
+    let metrics = store.metrics(&q).unwrap();
+    assert_eq!(
+        serde_json::to_value(&metrics.groups).unwrap(),
+        serde_json::to_value(&scanned).unwrap()
+    );
+    assert_eq!(metrics.coverage.scanned, 240);
+    assert_eq!(metrics.coverage.segments, 2);
+    assert!(!metrics.coverage.truncated);
+    // Filters apply as in a scan.
+    q.min_severity = 13;
+    q.event = Some("cowboy.fixture.1".into());
+    let filtered = store.metrics(&q).unwrap();
+    assert_eq!(filtered.groups.len(), 1);
+    let series = filtered.groups.values().next().unwrap();
+    assert_eq!(series.count, series.errors + series.warnings);
+    assert_eq!(series.count, 32);
+}

@@ -10,6 +10,8 @@ use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod aggregate;
+
 const APPLICATION_ID: i64 = 0x43424c47;
 const MAX_SEGMENTS: usize = 64;
 const PAGE_BYTES: u64 = 4096;
@@ -596,9 +598,7 @@ impl SqliteStore {
         ensure!(query.after.is_none(), "metrics do not accept a page cursor");
         let _lock = self.lock(false)?;
         let mut groups = std::collections::BTreeMap::new();
-        let coverage = self.scan(query, None, false, MAX_SCAN, |e| {
-            super::analysis::accumulate(&mut groups, &e)
-        })?;
+        let coverage = self.aggregate(query, &mut groups)?;
         Ok(Metrics {
             schema: "cowboy.logs.metrics/v1".into(),
             from_ms: query.from_ms,
