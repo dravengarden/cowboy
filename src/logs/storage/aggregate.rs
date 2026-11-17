@@ -35,7 +35,7 @@ fn totals_sql() -> String {
 
 fn evidence_sql() -> String {
     format!(
-        "SELECT service,signal,event,id,failure,n,f FROM (SELECT service,signal,event,id,observed_ms,severity>=13 AS failure,row_number() OVER (PARTITION BY service,signal,event ORDER BY observed_ms DESC,id DESC) AS n,row_number() OVER (PARTITION BY service,signal,event,severity>=13 ORDER BY observed_ms DESC,id DESC) AS f FROM entries WHERE {FILTER}) WHERE n<={EVIDENCE} OR (failure AND f<={EVIDENCE}) ORDER BY observed_ms DESC,id DESC"
+        "SELECT service,signal,event,id,failure,n,f FROM (SELECT service,signal,event,id,observed_ms,severity>=13 AS failure,row_number() OVER (PARTITION BY service,signal,event ORDER BY observed_ms DESC,id DESC) AS n,row_number() OVER (PARTITION BY service,signal,event,severity>=13 ORDER BY observed_ms DESC,id DESC) AS f FROM entries WHERE {FILTER} AND service||char(31)||signal||char(31)||event IN (SELECT value FROM json_each(?13))) WHERE n<={EVIDENCE} OR (failure AND f<={EVIDENCE}) ORDER BY observed_ms DESC,id DESC"
     )
 }
 
@@ -91,8 +91,19 @@ impl SqliteStore {
             // they name groups first and the 128-group cap picks the same ones.
             // Newer segments usually fill every group's evidence: then the
             // window query, most of a segment's cost, is skipped.
-            if rows.iter().any(|row| row.needs_evidence(groups))
-                && !segment_evidence(&db, &evidence, query, groups, &mut coverage)?
+            // Only groups that can still gain one: a frequent group's rows
+            // never reach the window query once its evidence is complete.
+            let needed: Vec<String> = rows
+                .iter()
+                .filter(|row| row.needs_evidence(groups))
+                .map(|row| {
+                    [&row.key.0, &row.key.1, &row.key.2]
+                        .map(String::as_str)
+                        .join("\u{1f}")
+                })
+                .collect();
+            if !needed.is_empty()
+                && !segment_evidence(&db, &evidence, query, &needed, groups, &mut coverage)?
             {
                 return Ok(coverage);
             }
@@ -212,21 +223,40 @@ fn segment_evidence(
     db: &Connection,
     sql: &str,
     query: &Query,
+    needed: &[String],
     groups: &mut BTreeMap<String, Series>,
     coverage: &mut Coverage,
 ) -> Result<bool> {
     let mut statement = db.prepare(sql)?;
-    let rows = statement.query_map(filter_params!(query), |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, String>(2)?,
-            r.get::<_, String>(3)?,
-            r.get::<_, bool>(4)?,
-            r.get::<_, i64>(5)?,
-            r.get::<_, i64>(6)?,
-        ))
-    })?;
+    let needed = serde_json::to_string(needed)?;
+    let rows = statement.query_map(
+        params![
+            query.from_ms,
+            query.to_ms,
+            query.session,
+            query.machine,
+            query.environment,
+            query.trace_id,
+            query.event,
+            query.service,
+            query.signal,
+            query.min_severity,
+            query.contains,
+            query.id,
+            needed
+        ],
+        |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, bool>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+            ))
+        },
+    )?;
     for row in rows {
         let Some((service, signal, event, id, failure, n, f)) = query_step(row, coverage)? else {
             return Ok(false);
