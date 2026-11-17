@@ -355,13 +355,37 @@ STUN/TURN listeners.
   the same browser (`policy`, `control`, `no-isolation`).
 
 Admission row: Google Chrome on macOS, major ≥ 157 (`mcpAppsEnabled.ts`).
-Open rows, not claimed by this run: the pinned
-`@modelcontextprotocol/ext-apps` SDK's own initialize sequence (the
-conformance view is a hand-written client of the same revision); a view
-navigating to another view's URL and a blob document posting before `load`
-(the host removes a frame on its second load, but neither case was driven);
-calls after a lease ended with the parent stalled; and the concurrent view
-and agent calls, which need a real binding (step 4).
+
+Rows added the same day, same browser, `policy` and `control` again passing:
+
+- The pinned SDK: `@modelcontextprotocol/ext-apps` 2.0.4 with its
+  dependencies from its own lockfile (`tools/mcp-apps-sdk`, not a workspace
+  member and never shipped), bundled into one inline script as a signed
+  view ships it (312 KB, under the 512 KiB view bound). Its `App` connected
+  over `PostMessageTransport` with the host's initialize answer, received
+  tool input and result, called the read-only tool without a prompt and the
+  write tool after one, had the ungranted call refused, kept
+  auto-resizing for 2 s without removal, opened a link and sent a message.
+- A view navigating its frame to another view's URL never reached it:
+  Chrome failed the navigation before any request
+  (`net::ERR_NETWORK_ACCESS_REVOKED`, the view's `Connection-Allowlist: ()`),
+  and the host removed the frame on its second load. The route's own
+  `Sec-Fetch-Site` and single-use checks stand behind that; the run's view
+  server applies them and recorded every served view as `iframe
+  same-origin` without cookies.
+- A blob document the view navigates to cannot post before `load`: the
+  parent's `frame-src 'self'` blocks the navigation
+  (`net::ERR_BLOCKED_BY_CSP`), so no such document exists; the frame was
+  removed and no call reached the host.
+- A lease that ran out authorizes nothing whatever a stalled page still
+  holds: `an_expired_lease_authorizes_nothing_even_if_the_page_still_holds_it`
+  (effects start from `live`, renewal cannot revive it, its token serves
+  nothing). A view has no network path of its own to reach the Controller
+  around its parent (zero egress above), so a stalled parent also forwards
+  nothing.
+
+Open: the concurrent view and agent calls, which need a real binding
+(step 4).
 
 ## 10. Order of work
 
@@ -388,8 +412,8 @@ and agent calls, which need a real binding (step 4).
    effects under the lease (`mcp_bindings/apps_bridge.rs`); transcript rows
    (`apps_rows.rs`); the Web bridge (`web/src/widgets/dom/mcpAppBridge.ts`,
    `mcpAppHost.ts`, `WidgetMcpApp.tsx`) with its protocol tests. The
-   browser admission run of §9.1 admits macOS Google Chrome ≥ 157; its open
-   rows are listed there. App-only tools need the Machine change of §3.
+   browser admission run of §9.1 admits macOS Google Chrome ≥ 157 and covers
+   every browser row of §9 except the concurrent calls of step 4. App-only tools need the Machine change of §3.
 4. A real native-binding test with the retained execution executable (not a
    standalone SDK view), then the first view: a Suger status view granted on
    one session.

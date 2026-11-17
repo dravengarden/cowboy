@@ -8,7 +8,7 @@ import { setMcpAppTransport, startMcpApp } from "./widgets/dom/mcpAppHost";
 
 type Conformance = {
   log: string[];
-  start: (mode: "main" | "flood" | "navigate", token: string) => void;
+  start: (mode: "main" | "flood" | "navigate" | "hop" | "blob" | "sdk", token: string) => void;
 };
 
 const state: Conformance = {
