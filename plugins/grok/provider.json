@@ -102,9 +102,9 @@
     "dependencies": [
       {
         "id": "xai-grok",
-        "version": "1.0.70",
-        "source": "https://registry.npmjs.org/@xai-official/grok/-/grok-1.0.70.tgz",
-        "integrity": "sha512-Q2Ncoez//mk1Z9CNhgvp9eAYfZJZmshDAPxs0XAhhGnilH3abGAyTwqOSvqVnsFCUjjzT9TCYZIgAH2A2XL6CQ==",
+        "version": "1.0.77",
+        "source": "https://registry.npmjs.org/@xai-official/grok/-/grok-1.0.77.tgz",
+        "integrity": "sha512-zNGi+PGXR/cxL3URtxEIHX91Lm06jOb28ra98FWEO9keIJOO83Pr67rpmLtwufp7A51NvMM4Nm0Kh77/9l9rQg==",
         "private": true
       }
     ],

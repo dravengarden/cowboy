@@ -1408,7 +1408,12 @@ export async function main(args) {
     new URL("./node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js", import.meta.url),
   );
   process.argv = [process.execPath, upstream, ...args];
-  const { ClaudeAcpAgent } = await import(new URL("./acp-agent.js", pathToFileURL(upstream)));
+  // ACP 0.103 serves draft ACP v2 from a separate agent and keeps the v1
+  // ClaudeAcpAgent under dist/v1. Cowboy speaks ACP v1 and extends only that
+  // agent, so pin the router to v1: a v2 negotiation cannot bypass the
+  // Cowboy extensions installed below.
+  process.env.CLAUDE_AGENT_ACP_PROTOCOL = "v1";
+  const { ClaudeAcpAgent } = await import(new URL("./v1/acp-agent.js", pathToFileURL(upstream)));
   const { IdleCompaction } = await import(new URL("./idle-compaction.js", pathToFileURL(upstream)));
   advertiseCurrentTurn(ClaudeAcpAgent);
   installConfigurationEquivalence(ClaudeAcpAgent);
