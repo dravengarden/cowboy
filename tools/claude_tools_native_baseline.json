@@ -2,7 +2,7 @@
  "default_tools": {
   "Agent": {
    "input_schema": "2a099fe78ecec63f",
-   "description": "88a9589cfebd2385"
+   "description": "b01761d951f98e1b"
   },
   "AskUserQuestion": {
    "input_schema": "ca4359704f78256e",
@@ -10,7 +10,7 @@
   },
   "Bash": {
    "input_schema": "bdaf40923f7e3ec4",
-   "description": "2a77e3952da8a6b3"
+   "description": "11d631d16167ff13"
   },
   "CronCreate": {
    "input_schema": "dcb40209c5b18a9f",
@@ -45,8 +45,8 @@
    "description": "fe30ebb4bbb58a13"
   },
   "ExitWorktree": {
-   "input_schema": "2d5d23ccff1dc7ff",
-   "description": "6e6c9c47472f7abb"
+   "input_schema": "bff9b901e1563ba5",
+   "description": "a90269e4a07fde31"
   },
   "ListAgents": {
    "input_schema": "914feef060a70cb1",
@@ -54,7 +54,7 @@
   },
   "Monitor": {
    "input_schema": "cb6281ac54ea04ec",
-   "description": "f045360ef39b0827"
+   "description": "e9d6dc6cf29846ff"
   },
   "NotebookEdit": {
    "input_schema": "9c1cd406f135978f",
@@ -109,7 +109,7 @@
    "description": "cd4f73c711b72c1c"
   },
   "Workflow": {
-   "input_schema": "5784507a689a53b3",
+   "input_schema": "684063ecd76bded9",
    "description": "ef0df2163903276f"
   },
   "Write": {

@@ -3776,11 +3776,14 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     if (snapshot) {
       lines.push(`. ${shellLiteral(snapshot)} 2>/dev/null || true`);
     }
-    // Native turns extglob off in bash; zsh has no shopt (and an ERR_EXIT
-    // option from the snapshot would end the wrapper on its failure).
-    if (!this.shell?.endsWith("/zsh")) {
-      lines.push("{ shopt -u extglob; } 2>/dev/null");
-    }
+    // As native 2.1.326: builtins (a snapshot function cannot shadow them)
+    // turn extglob off in bash, or the matching glob options off in zsh.
+    // `|| true` keeps an ERR_EXIT option from the snapshot from ending the
+    // wrapper on the other shell's missing builtin.
+    lines.push(
+      "{ \\builtin shopt -u extglob || \\builtin setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL" +
+        " NO_BRACE_CCL NO_MAGIC_EQUAL_SUBST; } >/dev/null 2>&1 || true",
+    );
     const cwd = this.state.shellCwd;
     if (cwd && cwd !== this.cwd) {
       lines.push(`cd -- ${shellLiteral(cwd)} 2>/dev/null || cd -- ${shellLiteral(this.cwd)}`);
