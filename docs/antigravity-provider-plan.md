@@ -92,6 +92,40 @@ binary for login, storage, isolation and footprint probes. Pass/fail questions:
 Failing 3 blocks multi-account; failing 5 blocks OVH remote mode (there is no
 colocated OVH session fallback).
 
+#### Phase 1 progress — Hawk, no login (2026-11-17)
+
+Binary `agy` 1.5.9 from the versioned URL; SHA-512 matched the manifest; the
+tarball (99 MB) contains one static executable `antigravity` (266 MB). Run with
+a disposable `HOME`/`XDG_*` and no D-Bus session:
+
+- `antigravity acp --help` exposes `--disable-telemetry`, `--login`,
+  `--process-per-session`, `--sandbox`, `--app-data-dir`, `--gemini-dir`,
+  `--ide-mcp-port` and `--override_user_agent_name` (never to be used: client
+  identity spoofing). The binary contains `AGY_CLI_DISABLE_AUTO_UPDATE`; its
+  effect is unverified. `GEMINI_FORCE_FILE_STORAGE` does not occur in the
+  binary; "keyringAuth" and "no OS keyring" strings exist, so the file fallback
+  must be tested with a real login.
+- ACP `initialize` (protocol 1) returns `loadSession`, session
+  `resume`/`close`/`load`/`list`/`additionalDirectories`, `auth.logout`,
+  `_meta.antigravity.systemPrompt.append`, image and embedded-context prompts,
+  and auth methods `oauth-personal`, `oauth-business`, `gemini-api-key`,
+  `agent-platform`. Only `oauth-personal` may be offered. Unauthenticated
+  `session/new` fails with `-32000 Authentication required`.
+- All state is written below `$HOME/.gemini/antigravity-cli/` (conversations,
+  logs, `installation_id`, `conversation_summaries.db`, built-in skills). No
+  other directory was written, so per-generation `HOME` isolation is plausible
+  apart from the keyring.
+- Idle unauthenticated ACP server: one process, 13 threads, about 170 MB RSS,
+  no listening TCP socket.
+- Hooks (`hooks.json`): `PreToolUse` can `allow`/`deny`/`ask` and rewrite tool
+  arguments; `PreInvocation`/`SessionStart` inject steps; `PostInvocation` and
+  `Stop` can terminate. Hooks cannot return a substituted tool result, so split
+  execution needs denial of built-in workspace tools plus an MCP facade, or the
+  ACP client `fs`/`terminal` capabilities if `agy` delegates to them (to test
+  after login).
+
+Remaining Phase 1 items need the dedicated test account.
+
 ### Phase 2 — Native custody as a Provider declaration
 
 Replace the `claude-code` literals of the native-owned fence with a signed
