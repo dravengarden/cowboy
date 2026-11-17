@@ -57,8 +57,14 @@ interface AuthenticationIdentity {
 export type ProviderAuthenticationFlow =
   & AuthenticationIdentity
   & (
-    | { requestId?: never; expiresAtMs?: never }
-    | { requestId: string; expiresAtMs: number }
+    | { requestId?: never; expiresAtMs?: never; machineId?: never }
+    | {
+      requestId: string;
+      expiresAtMs: number;
+      /** The Machine running this sign-in; its Machine browser is where
+       * the verification link may be shown. */
+      machineId?: string;
+    }
   );
 interface AuthenticationDialog {
   flow: ProviderAuthenticationFlow;
@@ -243,7 +249,7 @@ export function createProviderAuthenticationOwner(
   }
   function methods(value: AuthenticationDialog): AuthenticationDialog {
     clipboardTicket = undefined;
-    const { requestId: _id, expiresAtMs: _expiry, ...flow } = value.flow;
+    const { requestId: _id, expiresAtMs: _expiry, machineId: _machine, ...flow } = value.flow;
     return {
       flow: { ...flow, events: [] },
       input: "",
@@ -437,7 +443,7 @@ export function createProviderAuthenticationOwner(
     open(
       flow: Omit<
         ProviderAuthenticationFlow,
-        "events" | "requestId" | "expiresAtMs"
+        "events" | "requestId" | "expiresAtMs" | "machineId"
       >,
     ): void {
       const lease = dialog.open({
@@ -535,7 +541,7 @@ export function createProviderAuthenticationOwner(
             const requestId = body.request_id, expiresAtMs = body.expires_at_ms;
             lease.update((value) => ({
               ...value,
-              flow: { ...value.flow, requestId, expiresAtMs, events: [] },
+              flow: { ...value.flow, requestId, expiresAtMs, ...(text(body.machine_id, 256) ? { machineId: body.machine_id } : {}), events: [] },
             }));
             if (lease.active) {
               startPolling(lease);

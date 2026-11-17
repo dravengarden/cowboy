@@ -12,10 +12,14 @@ policy boundary the same day; see the
 amendment. The owner also stated strict isolation between the browsers of
 different account cards as a core requirement; see
 [Account isolation](#account-isolation-core-requirement).
-On 2026-11-11 the owner required the named-account sign-in dialog to stop
-opening its link in a browser of the owner's device: it only copies the
-link, which is pasted into the account's Machine browser; see
-[Viewer](#viewer-core-web).
+On 2026-11-17 the owner required every request a sign-in page makes, and
+every fingerprint it can read, to come from the Machine that holds the
+credential: a named-account sign-in dialog no longer shows or copies its
+link and offers only the account's Machine browser, and a Service (legacy
+default card) sign-in whose card has a Machine browser does the same
+instead of opening the page on the owner's device; see
+[Viewer](#viewer-core-web). (On 2026-11-11 the dialog had stopped opening
+the link on the device but still copied it.)
 On 2026-11-09 the owner required Provider logins (Claude, Codex, Grok and any
 other) to be fully independent of the browser: the sign-in binding was
 removed, and a login's verification link may only be shown in the account's
@@ -47,8 +51,8 @@ browsers of different accounts.
 Goal: an optional Plugin gives a Linux Machine a real, unmodified Chromium on
 its own X display, owned per Provider account, started on demand, streamed
 into the Cowboy web UI (phone and desktop) over the existing Machine
-connection, and stopped when idle. A named-account sign-in dialog may offer
-to show its verification link in that account's browser; the person completes
+connection, and stopped when idle. A sign-in dialog shows its verification
+link only in that account's (or card's) browser; the person completes
 the page and copies anything it shows back into the dialog. Its network
 identity, timezone, locale and DNS are the Machine's, because the browser is
 a process on the Machine.
@@ -88,7 +92,7 @@ precedent: the engine is a Plugin, the product is core.
 | Display stream, backpressure, binding, continuing authorization | Core wire protocol + Machine + Controller |
 | Routes, owner/device/Origin checks, per-account enablement | Core Controller |
 | Viewer (canvas, decoder, input, clipboard action, mobile sheet) | Core web |
-| Optional "open the verification link in the account's browser" entry | Core web (ordinary open and navigate routes only) |
+| "Open sign-in in this account's Machine browser" entry (the only place a verification link is shown) | Core web (ordinary open and navigate routes only) |
 | Resource settings | Core Device/Service configuration |
 | Host sandbox policy (AppArmor bootstrap and sealed profiles) | Host configuration (Columbus `machines/ovh`), outside Cowboy |
 
@@ -902,9 +906,9 @@ direction:
 - the Controller admits browser opens on browser rules alone (gate,
   per-account enablement, placement, capability), never on login state.
 
-The only meeting point is in the web UI, and it is optional: a named-account
-sign-in dialog whose challenge carries a verification URL may offer
-"Open in this account's Machine browser" (see [Viewer](#viewer-core-web)).
+The only meeting point is in the web UI: a sign-in dialog whose challenge
+carries a verification URL offers "Open sign-in in this account's Machine
+browser" (see [Viewer](#viewer-core-web)).
 It opens the account's ordinary `Tab` browser pinned to the login's Machine
 and navigates it to that URL through the ordinary routes. The person
 completes the page there and copies any code back into the dialog
@@ -1372,10 +1376,10 @@ whose browser it displays and the Machine it runs on.
   request result and viewer callback is tagged with the account that issued
   it, so a late answer for another account is discarded. Each entry mounts
   its own sheet keyed by the account id; two cards never share a viewer.
-- **Verification link (optional).** A named-account sign-in dialog of any
+- **Verification link.** A named-account sign-in dialog of any
   Provider (Claude, Codex, Grok, ...) whose challenge carries an `https`
-  verification URL may offer "Open in this account's Machine browser". The
-  entry appears only when the account's browser read on the login's Machine
+  verification URL offers "Open sign-in in this account's Machine browser".
+  The entry is enabled only when the account's browser read on the login's Machine
   is admitted (gate on, account available, browser enabled), that Machine is
   among `capable_machines`, and an open pinned there is the account's own
   (its placement there, no placement yet, or a first-Machine choice). It
@@ -1387,12 +1391,25 @@ whose browser it displays and the Machine it runs on.
   identically without it, and nothing flows from the browser into the
   dialog.
 
-- **No device browser (2026-11-11).** The owner decided a named-account
-  sign-in dialog never opens its link in a browser of the owner's device
-  (no anchor, no system-browser launch). Its primary action copies the
-  link, with a read-only field to copy by hand when the clipboard write
-  fails; the person pastes it into the account's Machine browser with
-  Paste from this device… → Open as address.
+- **Machine only (2026-11-17, replacing the 2026-11-11 copy action).** A
+  named-account sign-in dialog never opens, shows or copies its link on the
+  owner's device (no anchor, no system-browser launch, no clipboard, no
+  text field). Its only action is the Machine-browser entry above; when the
+  browser cannot be offered (gate off, browser disabled, capacity, another
+  Machine's placement, failed read) the entry names the reason and offers
+  Check again instead of a device fallback. So the Provider page, its
+  Google or email sign-in, and every fingerprint they read run on the
+  login's Machine, with that Machine's address.
+- **Service sign-in (legacy default cards).** The Service sign-in dialog
+  (`ServiceSignInPage`, rule in `serviceSignInBrowser.ts`) follows the same
+  rule when the Service runs Machine browsers and the Provider's usage card
+  has a browser key: the link opens only in that card's browser (its shared
+  profile when the card is in a share), pinned to the Machine the start
+  response reports. A disabled card browser is not a reason to use the
+  device; the entry asks to enable it. While the account inventory is
+  unknown the dialog shows no page action at all. Only a Service without
+  Machine browsers, or a Provider without a usage card browser, keeps the
+  device page ("The sign-in page opens on this device").
 
 The cross-device route `/#subscription-sign-in/<account>/<request>` resumes
 the sign-in dialog on another device; its verification-link entry opens the

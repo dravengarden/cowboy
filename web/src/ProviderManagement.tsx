@@ -16,7 +16,7 @@ import {
   Typography,
 } from "@mui/material";
 import { ArrowBackRounded } from "@mui/icons-material";
-import { ProviderAccountSwitch } from "./ProviderAccountSwitch";
+import { ServiceSignInPage, useServiceSignInBrowser } from "./ServiceSignInPage";
 import { SubscriptionManagement, type SubscriptionCards } from "./SubscriptionManagement";
 import { ProviderAccountIdentity, ProviderAccountStatus, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { alpha } from "@mui/material/styles";
@@ -622,7 +622,10 @@ function ProviderManagement(
     )
     : null;
   const copyAuthenticationCode = () => owners?.authentication.copyCode();
+  const signInBrowser = useServiceSignInBrowser(flow?.provider.provider_id);
   const openAuthenticationPage = () => {
+    // The device page exists only where no Machine browser serves the card.
+    if (signInBrowser?.kind !== "device") return;
     const current = owners?.authentication.snapshot();
     const activeFlow = current?.value?.flow;
     const challenge = activeFlow?.events.findLast((event) =>
@@ -1287,51 +1290,17 @@ function ProviderManagement(
                   challenge?.event === "login_challenge"
                 ? (
                   <Stack spacing={1}>
-                    <Typography variant="caption" color="text.secondary">
-                      The sign-in page opens on this device and uses its network
-                      connection. Choosing a remote Agent does not route browser
-                      traffic through that Machine.
-                    </Typography>
-                    <Button
-                      variant="contained"
-                      disabled={Boolean(authentication.busy)}
-                      {...authenticationPageTap}
-                    >
-                      {challenge.user_code
-                        ? "Copy code & open sign-in"
-                        : flowCopy?.externalAction}
-                    </Button>
-                    <Typography variant="caption" color="text.secondary">
-                      {challenge.user_code
-                        ? "Cowboy copies the device code before opening the Provider page. Paste it only if the page does not fill it automatically. Close the browser to return here; Cowboy will keep waiting securely."
-                        : "After completing the Provider page, return to Cowboy. This dialog will keep waiting securely."}
-                    </Typography>
-                    {resolveProviderAuthenticationPresentation(
-                          flow.provider.manifest.authentication,
-                        ) === "account" && (
-                      <ProviderAccountSwitch
-                        key={flow.requestId}
-                        disabled={Boolean(authentication.busy)}
-                        requiresCode={Boolean(challenge.input_required)}
-                        onCopy={() => owners?.authentication.copyCode("link")}
-                        onOpen={openAuthenticationPage}
-                        notice={authenticationClipboardNotice}
-                      />
-                    )}
-                    {authenticationClipboardNotice
-                      ? (
-                        <Alert
-                          severity={authenticationClipboardNotice.startsWith(
-                              "Could not",
-                            )
-                            ? "warning"
-                            : "info"}
-                        >
-                          {authenticationClipboardNotice}
-                        </Alert>
-                      )
-                      : null}
-
+                    <ServiceSignInPage
+                      browser={signInBrowser}
+                      flow={flow}
+                      challenge={challenge}
+                      busy={Boolean(authentication.busy)}
+                      externalAction={flowCopy?.externalAction}
+                      pageTap={authenticationPageTap}
+                      onCopyLink={() => owners?.authentication.copyCode("link")}
+                      onOpen={openAuthenticationPage}
+                      notice={authenticationClipboardNotice}
+                    />
                     {challenge.user_code
                       ? (
                         <Button

@@ -275,9 +275,11 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
     await until(() => Boolean(dialogButton("Check status")));
     check(lifecycleWrites.length === 0, "reopening native sign-in never automatically starts another login");
     dialogButton("Check status")!.click();
-    await until(() => Boolean(dialogButton("Copy sign-in link")));
-    check(!document.querySelector('a[href^="https://claude.ai/oauth/"]') && !document.body.textContent!.includes("state=private"),
-      "native sign-in only copies its link and never opens it in a browser of this device");
+    await until(() => Boolean(document.querySelector("[data-subscription-authorization] [data-link-browser-unavailable]")));
+    check(!dialogButton("Copy sign-in link") && !document.querySelector('a[href^="https://claude.ai/oauth/"]') &&
+      ![...document.querySelectorAll("input")].some((node) => node.value.includes("state=private")) &&
+      !document.body.textContent!.includes("state=private"),
+      "native sign-in neither shows, copies nor opens its link on this device; without its Machine browser it explains why");
     check(!sessionStorage.getItem(loginKey)!.includes("private"), "authorization link stays out of persisted recovery metadata");
     await observe?.(surface, "login");
     await until(() => Boolean(dialogButton("Cancel sign-in") && !dialogButton("Cancel sign-in")!.disabled));
@@ -346,7 +348,7 @@ async function runSurface(surface: "mobile" | "desktop", observe?: (surface: str
       <SubscriptionSignInHandoff hash={`#subscription-sign-in/${handoffAccount}/${handoffRequest}`} />
     </SurfaceContext.Provider></BrowserProductTheme>));
     handoffRender();
-    await until(() => Boolean(dialogButton("Copy sign-in link")));
+    await until(() => Boolean(document.querySelector("[data-subscription-authorization]")));
     check(document.body.textContent!.includes("Claude · Otter") && handoffWrites.length === 0 &&
       !dialogButton("Start sign-in"), "agent link opens the verified subscription without dispatching a new login");
     const handoffInput = document.querySelector<HTMLInputElement>('input[type="password"]')!;
