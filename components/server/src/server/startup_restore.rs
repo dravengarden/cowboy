@@ -149,6 +149,9 @@ pub(super) async fn open_persistence(
             run_store_writer(writer_store, rx, writer_persistence_health, writer_shutdown).await;
             writer_health.set_store_writer(false);
         });
+        // Observed subagent transcripts have their own bounded writer, so
+        // they can never delay the session timeline's persistence.
+        crate::subagent_transcripts::spawn_writer(store.clone());
         // Background sweeper: hard-delete sessions soft-deleted past the
         // retention window, reclaiming their event storage.
         runtime_health.set_purge_sweeper(true);

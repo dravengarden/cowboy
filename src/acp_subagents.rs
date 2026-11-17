@@ -287,6 +287,18 @@ impl Subagents {
         self.children.contains_key(session_id) || self.retired.contains(session_id)
     }
 
+    /// Whether a child's own update belongs in its observed transcript
+    /// (docs/subagents.md#observed-transcripts). Announcements of a nested
+    /// child and linked messages are presented through snapshots instead.
+    #[must_use]
+    pub fn observes(&self, session_id: &str, update: &Value) -> bool {
+        self.owns(session_id)
+            && !matches!(
+                update.get("sessionUpdate").and_then(Value::as_str),
+                Some("subagent_update" | "session_message" | "session_message_chunk") | None
+            )
+    }
+
     /// Children whose foreground work is in progress.
     #[must_use]
     pub fn working(&self) -> u32 {

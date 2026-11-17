@@ -38,6 +38,12 @@ const QUERY_INTERVAL: Duration = Duration::from_secs(10);
 /// How often a reclaim hibernate lost to a reconnect is sent again to the
 /// captured instance, each at most once per `QUERY_INTERVAL`.
 const MAX_HIBERNATE_RESENDS: u32 = 3;
+/// How long a browser stays protected after its viewer left. Leaving is
+/// often brief (switching apps to fetch a code, a dropped connection), and
+/// a hibernated browser comes back without its tabs. The Machine's own
+/// detached grace (`browser.hibernate_after`, 120 s by default) stops it
+/// about then anyway; reclaim takes only one detached for longer.
+const DETACHED_PROTECTION: Duration = Duration::from_secs(120);
 
 #[derive(Default)]
 struct DeviceState {
@@ -57,6 +63,9 @@ struct DeviceState {
     /// The captured browser to send Hibernate to again this tick.
     hibernate_due: Option<Box<Observed>>,
     stuck_logged: Option<Instant>,
+    /// When reclaim first saw each running instance detached, by account,
+    /// instance id and incarnation; dropped once it is no longer detached.
+    detached_since: HashMap<(String, String, u64), Instant>,
 }
 
 impl DeviceState {
@@ -489,6 +498,13 @@ fn decide(
     observed_at_ms: i64,
     min_idle: Duration,
 ) -> Step {
+    let running: Vec<Observed> = state
+        .browsers
+        .running_on(machine_id)
+        .into_iter()
+        .filter(|observed| state.machine_control.is_current(&observed.connection))
+        .collect();
+    track_detached(&mut device.detached_since, &running, Instant::now());
     if let Some(pending) = device.pending.as_mut() {
         let released = state
             .hub
@@ -538,13 +554,7 @@ fn decide(
         device.stopping_wait = None;
         return Step::Idle;
     }
-    let running: Vec<Observed> = state
-        .browsers
-        .running_on(machine_id)
-        .into_iter()
-        .filter(|observed| state.machine_control.is_current(&observed.connection))
-        .collect();
-    if let Some(browser) = unused_browser(&running) {
+    if let Some(browser) = unused_browser(&running, &device.detached_since, Instant::now()) {
         device.stopping_wait = None;
         return Step::HibernateBrowser(Box::new(browser.clone()));
     }
@@ -578,12 +588,14 @@ fn decide(
         .collect::<Vec<_>>();
     match session_reclaim::choose(&candidates, min_idle) {
         Some(session) => Step::Hibernate(session.to_owned()),
-        // Only when no idle session can give memory back does a browser
-        // someone is using stop under them.
-        None => running.into_iter().next().map_or(Step::Stuck, |browser| {
-            device.stopping_wait = None;
-            Step::HibernateBrowser(Box::new(browser))
-        }),
+        // A browser someone is using is never reclaimed: admission already
+        // granted its memory and its own `MemoryMax` caps it, while taking
+        // it back stops the owner's view and their reopen is admitted again
+        // (OVH, 2026-11-17: stopped 3.5 s after it opened). It stops by
+        // itself once nobody watches (the detached grace); meanwhile the
+        // Machine refuses launches the headroom cannot cover and the
+        // kernel takes it first (`OOMScoreAdjust=1000`) if memory runs out.
+        None => Step::Stuck,
     }
 }
 
@@ -596,19 +608,57 @@ fn in_use(observed: &Observed) -> bool {
     )
 }
 
-/// The running browser reclaim hibernates before selecting any session:
-/// one nobody is using. Its snapshot keeps its state and no Provider cache
-/// is lost, so it is the cheapest memory to give back.
-fn unused_browser(running: &[Observed]) -> Option<&Observed> {
-    running.iter().find(|observed| !in_use(observed))
+fn detached_key(observed: &Observed) -> (String, String, u64) {
+    let instance = &observed.event.instance;
+    (
+        instance.account_id.as_str().to_owned(),
+        instance.instance_id.clone(),
+        instance.incarnation,
+    )
+}
+
+/// Record when each running instance was first seen detached; forget
+/// instances that are no longer detached (reattached, stopped, replaced).
+fn track_detached(
+    since: &mut HashMap<(String, String, u64), Instant>,
+    running: &[Observed],
+    now: Instant,
+) {
+    let detached: Vec<_> = running
+        .iter()
+        .filter(|observed| observed.event.state == BrowserState::Detached)
+        .map(detached_key)
+        .collect();
+    since.retain(|key, _| detached.contains(key));
+    for key in detached {
+        since.entry(key).or_insert(now);
+    }
+}
+
+/// The only running browser reclaim hibernates, before selecting any
+/// session: one nobody has used for `DETACHED_PROTECTION`. Its snapshot
+/// keeps its sign-in and no Provider cache is lost, so it is the cheapest
+/// memory to give back.
+fn unused_browser<'a>(
+    running: &'a [Observed],
+    detached_since: &HashMap<(String, String, u64), Instant>,
+    now: Instant,
+) -> Option<&'a Observed> {
+    running.iter().find(|observed| {
+        !in_use(observed)
+            && detached_since
+                .get(&detached_key(observed))
+                .is_some_and(|at| now.saturating_duration_since(*at) >= DETACHED_PROTECTION)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        BrowserPending, Dispatch, MAX_HIBERNATE_RESENDS, Observed, Pending, Policy, QUERY_INTERVAL,
-        RELEASE_TIMEOUT, Step, StoppingWait, browser_exited, browser_settled, pending_settled,
-        query_due, resend_due, stopping_step, unused_browser,
+        BrowserPending, DETACHED_PROTECTION, Dispatch, MAX_HIBERNATE_RESENDS, Observed, Pending,
+        Policy, QUERY_INTERVAL, RELEASE_TIMEOUT, Step, StoppingWait, browser_exited,
+        browser_settled, pending_settled, query_due, resend_due, stopping_step, track_detached,
+        unused_browser,
     };
     use crate::machine_control::{ConnectionToken, MachineControl};
     use crate::machine_protocol::machine_browser::{InstanceRef, State, StateEvent};
@@ -925,10 +975,24 @@ mod tests {
         let attached = observed(&current, 1, State::Attached);
         let starting = observed(&current, 2, State::Starting);
         let detached = observed(&current, 3, State::Detached);
+        let running = [attached.clone(), detached.clone(), starting.clone()];
+        let mut since = HashMap::new();
+        let left = Instant::now();
+        track_detached(&mut since, &running, left);
+        // Just left: switching apps to fetch a code must not lose the page.
+        assert_eq!(unused_browser(&running, &since, left), None);
+        let later = left + DETACHED_PROTECTION;
+        track_detached(&mut since, &running, later);
+        assert_eq!(unused_browser(&running, &since, later), Some(&detached));
         assert_eq!(
-            unused_browser(&[attached.clone(), detached.clone(), starting.clone()]),
-            Some(&detached)
+            unused_browser(&[attached.clone(), starting], &since, later),
+            None
         );
-        assert_eq!(unused_browser(&[attached, starting]), None);
+        // Reattaching forgets the detach; leaving again restarts the clock.
+        let back = observed(&current, 3, State::Attached);
+        track_detached(&mut since, &[attached.clone(), back], later);
+        assert!(since.is_empty());
+        track_detached(&mut since, &[attached, detached.clone()], later);
+        assert_eq!(unused_browser(&[detached], &since, later), None);
     }
 }

@@ -828,6 +828,54 @@ local adapters when native runtimes provide the same verified boundary. Codex
 uses its native authentication extension surfaces; Claude remains adapter-backed
 and must fail closed where an equivalent supported boundary is unavailable.
 
+### Antigravity consumer-subscription boundary
+
+Recorded 2026-11-17; recheck when the
+[Antigravity terms](https://antigravity.google/terms),
+[FAQ](https://antigravity.google/docs/faq) or the `agy` major version changes.
+The proposed Provider and its phases are in
+[`antigravity-provider-plan.md`](antigravity-provider-plan.md); no Antigravity
+Provider is admitted yet.
+
+Google's Additional Terms section 6 calls "using third party software, tools,
+or services to access the Service (e.g. using OpenClaw with Antigravity OAuth)"
+a breach that may suspend Antigravity and Gemini CLI accounts, and the FAQ says
+"Wrapping `agy` inside third-party coding agents or applications, or automating
+account rotation, is not supported under consumer plans." The owner chose to
+support only standard Google consumer subscriptions (`oauth-personal`), with no
+Gemini API key or Agent Platform method, accepting that account risk. Cowboy
+documentation, UI and receipts must therefore never describe this Provider as
+compliant or Google-supported; the engineering objective is a low suspension
+rate.
+
+These boundaries are mandatory and fail closed:
+
+- Run only the unmodified official `agy` binary at a pinned version obtained
+  from Google's versioned release URL with its published SHA-512, installed by
+  each Machine. Cowboy does not redistribute the binary without an applicable
+  licence and does not spoof client identity.
+- Login, refresh and logout are performed only by `agy`. Cowboy relays the
+  authorization URL and pasted code, and never reads, parses, exports, copies,
+  injects, refreshes or forwards Google OAuth credentials, nor calls Google
+  backends directly. Usage is shown only from a documented `agy`/ACP surface.
+- Every Antigravity account, including `default`, uses Machine-local
+  native-owned custody; its credentials never enter the Controller candidate,
+  vault or replica pipeline (same fence as named Claude subscriptions).
+- One person's own account per Cowboy account: no sharing, proxying, automatic
+  rotation or quota-driven fallback to another account.
+- Human-paced use only. Antigravity is not offered to managed calls, scheduled
+  or background jobs, auto-continue loops or automatic rollover turns. Each
+  account defaults to one placement and one active turn; 429/quota responses
+  back off without retry storms.
+- A suspension signal (for example "disabled in this account for violation of
+  Terms of Service") marks the account suspended, stops its workers and halts
+  retries until the owner acts.
+- An operational kill switch fences admission, confirms worker termination and
+  runs native logout without deleting conversations or worktrees.
+- Testing uses a dedicated free-tier test account unrelated to production
+  accounts; real accounts are admitted only after its acceptance and a soak
+  period without enforcement.
+
 ### CR-0: Integrations are versioned plugins over versioned components
 
 Every first-party integration has a generic `plugin.json` manifest with an

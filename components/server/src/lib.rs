@@ -21,9 +21,10 @@ pub use cowboy::{
     plugin_runtime_args, plugin_storage, product_auth, project_placement, prompt_origin, provider,
     provider_account, provider_behavior, provider_catalog, provider_service, remote_runtime,
     review_directory, runtime, runtime_router, runtime_trace, runtime_wire, scheduler,
-    send_delivery, service_identity, session_context, session_folders, store, superagent,
-    supervisor, task_notifications, telemetry_binding, telemetry_file, telemetry_plugin,
-    transcript_anchors, usage, web_push, widgets, workspace, workspace_extensions,
+    send_delivery, service_identity, session_context, session_folders, store, subagent_transcripts,
+    superagent, supervisor, task_notifications, telemetry_binding, telemetry_file,
+    telemetry_plugin, transcript_anchors, usage, web_push, widgets, workspace,
+    workspace_extensions,
 };
 
 mod server;

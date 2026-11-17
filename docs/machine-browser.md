@@ -347,8 +347,9 @@ nothing is configurable from outside beyond the argument vector.
    `--user-data-dir=/mnt/profile --no-first-run --no-default-browser-check
    --disable-sync --disable-background-networking --disable-component-update
    --disable-extensions --disable-breakpad --disable-crash-reporter
-   --disable-quic --disk-cache-size=1048576 --password-store=basic
-   --lang=en-US --window-position=0,0 --window-size=WxH
+   --disable-quic --disk-cache-size=1048576
+   --disable-features=OptimizationHints,OptimizationTargetPrediction
+   --password-store=basic --lang=en-US --window-position=0,0 --window-size=WxH
    --force-device-scale-factor=<scale> chrome://newtab`.
 7. **Managed policy.** The policy file is part of the signed artifact and
    turns off everything a sign-in browser must not do, enforced by the
@@ -1056,12 +1057,21 @@ properties they were started with; bounds enforced by the schema):
 | `browser.max_width` / `browser.max_height` | 2560 / 1600 | 320–4096 / 480–4096 | resize bound |
 
 Reclaim ordering: the Controller's memory reclaim hibernates running browsers
-nobody is using (`detached`, in their grace period) on a Machine before it
-selects any session. A browser being opened (`starting`) or watched
-(`attached`) is hibernated only when no session is eligible: stopping it
-closes the owner's view mid-task, and their reopen admits it again, so taking
-it first turned every low-memory episode into a stop/reopen loop (OVH,
-2026-11-17: three reclaims in a day, each stopping the attached browser).
+nobody is using on a Machine before it selects any session: a browser counts
+once reclaim has seen it `detached` for 120 s. Leaving is often brief
+(switching apps to fetch a code, a dropped connection) and a hibernated
+browser comes back without its tabs, while the Machine's own detached grace
+(`browser.hibernate_after`, 120 s by default) stops it about then anyway, so
+reclaim only takes one kept detached for longer. A browser being opened (`starting`) or watched
+(`attached`) is never reclaimed; with no eligible session left the step is
+stuck, as with no browser. Admission already granted its memory and its own
+`MemoryMax` caps it, while stopping it closes the owner's view mid-task and
+their reopen is admitted again: taking it first, and later taking it as a
+last resort, turned low-memory episodes into stop/reopen loops (OVH,
+2026-11-17: once 3.5 s after the open, at 740 MiB). It stops by itself after
+the detached grace; until then the Machine refuses launches the headroom
+cannot cover, and `OOMScoreAdjust=1000` makes it the kernel's first victim
+if memory truly runs out.
 Browser reclaim has its own
 pending state: the admission fence stays raised, the stop is retried and
 escalated (`SIGTERM`, then `SIGKILL` through the unit), and the step settles

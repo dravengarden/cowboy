@@ -65,6 +65,7 @@ const TABLES: &[&str] = &[
     "managed_review_sources",
     "events",
     "transcript_anchors",
+    "subagent_events",
     "session_widgets",
     "session_widget_interactions",
     "notification_intents",

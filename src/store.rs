@@ -49,6 +49,7 @@ pub mod preferences;
 pub mod provider_accounts;
 mod session_metadata;
 pub mod session_widgets;
+pub mod subagent_events;
 mod workspace_documents;
 pub use core_security::HandoffPoint;
 mod plugin_installations;

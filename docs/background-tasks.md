@@ -47,6 +47,7 @@ snapshot; delivery to the client failed:
 | 2 | Notifications: persisted intents, per-account acknowledgement, Web Push ([contract](task-notifications.md)) | Controller + Web | implemented; physical iPhone acceptance outstanding |
 | 3 | Native background work: ACP v2 Background Work once adapters and the worker speak it; no AIR impersonation | Machine/worker + Provider | planned |
 | 4 (first slice) | Per-session image policy and discovery over the fixed Provider profiles ([contract](call-capabilities.md)) | Controller + Web | implemented |
+| — | Observed subagent transcripts: each child's own updates in a separate timeline, Call-like view ([contract](subagents.md#observed-transcripts)) | worker + Machine, Controller, Web | implemented; Machine release pending |
 | 4–7 (rest) | Capability platform: versioned envelope and implementation binding, trust and injection rules, atomic quota reservation, schema negotiation and rollback readers, discovery | Controller, SDKs, Web | planned |
 
 User decisions (2026-10-31): accept the §9 decisions; add the durable

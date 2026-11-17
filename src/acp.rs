@@ -1280,6 +1280,10 @@ fn load_session_request(
 #[path = "acp_subagents.rs"]
 mod subagents;
 
+#[path = "acp_subagent_routing.rs"]
+mod subagent_routing;
+use subagent_routing::{publish_subagents, route_subagent_notification};
+
 #[path = "acp_model_usage.rs"]
 mod model_usage;
 
@@ -3777,59 +3781,6 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     }
     note_turn_progress(state, &update);
     state.sink.push(&state.session_id, Event::Update { update });
-}
-
-/// Route a notification that concerns subagents: a child session's own
-/// update, or the root's `subagent_update` / linked `session_message`. Returns
-/// whether the notification still belongs to the root timeline.
-fn route_subagent_notification(state: &ClientState, notif: &SessionNotification) -> bool {
-    let session = notif.session_id.0.as_ref();
-    let concerns_subagents = matches!(
-        notif.update,
-        SessionUpdate::SubagentUpdate(_)
-            | SessionUpdate::SessionMessage(_)
-            | SessionUpdate::SessionMessageChunk(_)
-    ) || state.subagents.lock().owns(session);
-    let now = Instant::now();
-    let now_ms = u64::try_from(observed_at_ms()).unwrap_or_default();
-    if !concerns_subagents {
-        let due = state.subagents.lock().due(now, now_ms);
-        publish_subagents(state, due);
-        return true;
-    }
-    let update = match serde_json::to_value(&notif.update) {
-        Ok(update) => update,
-        Err(error) => {
-            tracing::warn!(%error, "serializing subagent update");
-            return false;
-        }
-    };
-    let routed = state.subagents.lock().route(session, &update, now, now_ms);
-    publish_subagents(state, routed.snapshots);
-    if !routed.root {
-        // A working child proves the turn is alive even while the parent is
-        // silent: the watchdog must not cancel a parent that waits on it, and
-        // a prompt whose child already acted must never be replayed.
-        state.backoff.lock().take();
-        *state.last_progress.lock() = Instant::now();
-        if let Some(prompt) = state.current_prompt() {
-            prompt.visible_update.store(true, Ordering::SeqCst);
-        }
-    }
-    routed.root
-}
-
-fn publish_subagents(state: &ClientState, snapshots: Vec<serde_json::Value>) {
-    if snapshots.is_empty() {
-        return;
-    }
-    for update in snapshots {
-        state.sink.push(&state.session_id, Event::Update { update });
-    }
-    let working = state.subagents.lock().working();
-    let mut activity = state.activity.lock();
-    activity.working_subagents = working;
-    report_background_tasks(state, &mut activity);
 }
 
 /// Mark a permission or elicitation request that a child session raised with

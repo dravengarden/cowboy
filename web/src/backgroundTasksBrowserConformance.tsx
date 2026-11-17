@@ -18,6 +18,7 @@ import {
 } from "./backgroundTasks";
 import { BackgroundTasksBarView } from "./BackgroundTasksBar";
 import { BackgroundTasksInspector } from "./BackgroundTasksInspector";
+import { type ObservedPage, setSubagentTranscriptTransport } from "./observedTranscript";
 import { closeBackgroundTasks, inspectorState, openBackgroundTask } from "./backgroundTaskInspectorState";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { type CallApproval, currentCallApproval, receiveCallApproval } from "./callApproval";
@@ -626,6 +627,53 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     closeBackgroundTasks();
     passed.push("T11 only structured MCP identity links a call to its tool card");
 
+    // T19: a subagent with an observed transcript reads like a Call — the
+    // transcript beside its details on Desktop, first on a phone — and one
+    // with nothing observed keeps the bounded snapshot.
+    setSubagentTranscriptTransport((_session, child, cursor) =>
+      Promise.resolve(
+        child !== "b" || cursor.after !== undefined || cursor.before !== undefined
+          ? { events: [], more_before: false }
+          : {
+            events: [
+              { seq: 1, ts_ms: 1, update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Read parser.rs", kind: "read", status: "completed" } },
+              { seq: 2, ts_ms: 2, update: { sessionUpdate: "agent_message_chunk", messageId: "m", content: { type: "text", text: "The flaky test races the parser cache." } } },
+            ],
+            more_before: false,
+          },
+      )
+    );
+    for (const desktop of [true, false]) {
+      surface = desktop ? DESKTOP : MOBILE;
+      openBackgroundTask("s", subagentKey("b"), "row");
+      render(<BackgroundTasksInspector sessionId="s" desktop={desktop} background={backgroundOf(TIMELINE)} />);
+      const transcript = await waitFor(
+        () => document.querySelector<HTMLElement>("[data-subagent-transcript='b']"),
+        `${desktop ? "Desktop" : "Mobile"} shows the observed transcript`,
+      );
+      await waitFor(
+        () => transcript.textContent?.includes("The flaky test races the parser cache.") ? true : null,
+        "the child's own message renders",
+      );
+      check(transcript.textContent?.includes("Find why the parser test is flaky."), "the delegation prompt opens it");
+      if (desktop) {
+        check(document.querySelector("[data-subagent-activity]"), "details stay beside the transcript");
+        check(!document.querySelector("[data-subagent-activity-entry]"), "details omit the bounded activity");
+      } else {
+        await waitFor(() => inspector()?.dataset.mobileTaskLevel === "conversation" ? true : null, "a phone opens the transcript first");
+      }
+      closeBackgroundTasks();
+    }
+    surface = DESKTOP;
+    openBackgroundTask("s", subagentKey("c"), "row");
+    render(<BackgroundTasksInspector sessionId="s" desktop background={backgroundOf(TIMELINE)} />);
+    await waitFor(() => document.querySelector("[data-subagent-activity-entry]"), "an unobserved subagent keeps its snapshot");
+    await settle(4);
+    check(!document.querySelector("[data-subagent-transcript]"), "nothing observed shows no empty transcript");
+    closeBackgroundTasks();
+    setSubagentTranscriptTransport(null);
+    passed.push("T19 an observed subagent reads like a Call; an unobserved one keeps its snapshot");
+
     // A notification's link opens details; only the explicit action acknowledges.
     const acknowledged: string[] = [];
     setAcknowledgementTransport((_, ack) => {
@@ -668,9 +716,23 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
   return passed;
 }
 
+const PREVIEW_TRANSCRIPT = {
+  more_before: false,
+  events: [
+    { seq: 1, ts_ms: 1, update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Start from the failing test, then the parser cache it touches." } } },
+    { seq: 2, ts_ms: 2, update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "rg -n \"parse_cache\" src", kind: "search", status: "completed",
+      content: [{ type: "content", content: { type: "text", text: "src/parser.rs:88: static PARSE_CACHE: OnceLock<Cache>\nsrc/parser.rs:141: PARSE_CACHE.get_or_init(Cache::new)" } }] } },
+    { seq: 3, ts_ms: 3, update: { sessionUpdate: "tool_call", toolCallId: "t2", title: "Read src/parser.rs", kind: "read", status: "completed" } },
+    { seq: 4, ts_ms: 4, update: { sessionUpdate: "tool_call", toolCallId: "t3", title: "cargo test parser::cache -- --test-threads 8", kind: "execute", status: "failed",
+      content: [{ type: "content", content: { type: "text", text: "test parser::cache::reuses_entries ... FAILED\nthread panicked: entry evicted by a concurrent test" } }] } },
+    { seq: 5, ts_ms: 5, update: { sessionUpdate: "agent_message_chunk", messageId: "m", content: { type: "text", text: "**Cause:** `PARSE_CACHE` is process-global, so tests running in parallel evict each other's entries.\n\nGive each test its own `Cache` through `Parser::with_cache`; no production change is needed." } } },
+  ],
+} as unknown as ObservedPage;
+
 /** Leave the rows and bar drawn, with the inspector open at `open` (a task
  *  key, `"list"`, or nothing), for screenshots. */
-export function renderBackgroundTasksPreview(desktop: boolean, open: string | null = null): void {
+export function renderBackgroundTasksPreview(desktop: boolean, open: string | null = null, observed = false): void {
+  if (observed) setSubagentTranscriptTransport((_session, _child, cursor) => Promise.resolve(cursor.after !== undefined ? { events: [], more_before: false } : PREVIEW_TRANSCRIPT));
   if (open !== null) openBackgroundTask("s", open === "list" ? null : open, "row");
   const container = document.createElement("div");
   document.body.append(container);

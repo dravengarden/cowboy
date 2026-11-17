@@ -27,7 +27,12 @@ pub struct DeliveryTarget {
 
 /// Current runtime protocol. Version 1 is additive-only: new optional fields
 /// must use serde defaults and existing meanings must not change in place.
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
+/// Controllers that keep observed subagent transcripts. A Machine forwards
+/// [`SUBAGENT_EVENT_UPDATE`] only to a Controller at this version or later and
+/// retires it for an older one ([`retire_observation`]), so a Controller
+/// rollback never stores observations in a parent timeline.
+pub const SUBAGENT_OBSERVATION_PROTOCOL_VERSION: u16 = 7;
 /// Named subscriptions must never be sent to peers that ignore their identity.
 pub const PROVIDER_ACCOUNT_PROTOCOL_VERSION: u16 = 5;
 /// Mandatory MCP launch plans cannot be ignored by retained workers.
@@ -180,6 +185,115 @@ pub fn native_cycle(update: &serde_json::Value) -> Option<Option<String>> {
 /// keep only the latest durably and a Client renders the highest revision. A
 /// peer that predates it stores and ignores it like any unknown update.
 pub const SUBAGENT_UPDATE: &str = "cowboy_subagent";
+
+/// One of a subagent's own ACP updates, observed passively for its full
+/// transcript (`docs/subagents.md#observed-transcripts`). The payload is
+/// `{childSessionId, update, dropped?}`; `dropped` counts the child updates
+/// the worker discarded before this one instead of waiting for delivery.
+/// The Controller stores it outside the parent timeline; a peer that predates
+/// it never receives it (see `observe_subagents`).
+pub const SUBAGENT_EVENT_UPDATE: &str = "cowboy_subagent_event";
+
+/// Replace an observed child update with an inert one for a Controller
+/// before [`SUBAGENT_OBSERVATION_PROTOCOL_VERSION`]. The runtime sequence
+/// stays contiguous; such a Controller consumes a steering result without a
+/// `cmid` and never stores it.
+pub fn retire_observation(event: &mut RuntimeEvent) {
+    if let RuntimeEvent::Update { update, cmid } = event
+        && update
+            .get("sessionUpdate")
+            .and_then(serde_json::Value::as_str)
+            == Some(SUBAGENT_EVENT_UPDATE)
+    {
+        *update = serde_json::json!({ "sessionUpdate": STEERING_RESULT_UPDATE });
+        *cmid = None;
+    }
+}
+
+/// Approximate serialized JSON size of `value`, never below the real size
+/// for text that needs no unusual escaping; walks without allocating.
+#[must_use]
+pub fn json_size(value: &serde_json::Value) -> usize {
+    use serde_json::Value;
+    match value {
+        Value::Null => 4,
+        Value::Bool(_) => 5,
+        Value::Number(_) => 24,
+        Value::String(text) => string_size(text),
+        Value::Array(items) => items.iter().fold(2 + items.len(), |size, item| {
+            size.saturating_add(json_size(item))
+        }),
+        Value::Object(fields) => fields.iter().fold(2 + fields.len(), |size, (key, item)| {
+            size.saturating_add(string_size(key) + 1)
+                .saturating_add(json_size(item))
+        }),
+    }
+}
+
+fn string_size(text: &str) -> usize {
+    2 + text
+        .bytes()
+        .map(|byte| {
+            if byte < 0x20 || byte == b'"' || byte == b'\\' {
+                6
+            } else {
+                1
+            }
+        })
+        .sum::<usize>()
+}
+
+fn truncate_text(text: &str, max: usize) -> String {
+    let mut end = max.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
+/// Bound an observed child update to about `max` serialized bytes, keeping
+/// what identifies and summarizes it: long text first, then tool content and
+/// raw input/output, and finally a minimal identity with short labels. A
+/// trimmed update carries `_cowboy.truncated`.
+#[must_use]
+pub fn bound_observed_update(mut update: serde_json::Value, max: usize) -> serde_json::Value {
+    use serde_json::{Value, json};
+    if json_size(&update) <= max {
+        return update;
+    }
+    if let Some(text) = update.pointer_mut("/content/text")
+        && let Some(value) = text.as_str()
+    {
+        *text = Value::String(truncate_text(value, max / 8));
+    }
+    if let Some(object) = update.as_object_mut() {
+        for field in ["content", "rawOutput", "rawInput", "locations"] {
+            if json_size(&Value::Object(object.clone())) <= max {
+                break;
+            }
+            object.remove(field);
+        }
+        object.insert("_cowboy".to_owned(), json!({ "truncated": true }));
+    }
+    if json_size(&update) <= max {
+        return update;
+    }
+    let mut minimal = serde_json::Map::new();
+    for key in [
+        "sessionUpdate",
+        "toolCallId",
+        "messageId",
+        "title",
+        "status",
+        "kind",
+    ] {
+        if let Some(Value::String(text)) = update.get(key) {
+            minimal.insert(key.to_owned(), Value::String(truncate_text(text, 1024)));
+        }
+    }
+    minimal.insert("_cowboy".to_owned(), json!({ "truncated": true }));
+    Value::Object(minimal)
+}
 
 pub const CURRENT_TURN_CAPABILITIES_UPDATE: &str = "cowboy_delivery_capabilities";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -385,6 +499,38 @@ pub struct NativeFork {
 
 pub const SESSION_EXTENSIONS_SCHEMA: u16 = 1;
 
+impl CoreCommand {
+    /// The worker's form of a Controller prompt, with the session it targets.
+    #[must_use]
+    pub fn into_worker_prompt(self) -> Option<(String, WorkerCommand)> {
+        let Self::Prompt {
+            session_id,
+            command_id,
+            turn_id,
+            content,
+            cmid,
+            trace,
+            echo_artifacts,
+            observe_subagents,
+        } = self
+        else {
+            return None;
+        };
+        Some((
+            session_id,
+            WorkerCommand::Prompt {
+                command_id,
+                turn_id,
+                content,
+                cmid,
+                trace,
+                echo_artifacts,
+                observe_subagents,
+            },
+        ))
+    }
+}
+
 impl StartSession {
     #[must_use]
     pub fn minimum_protocol(&self) -> u16 {
@@ -458,6 +604,13 @@ pub enum CoreCommand {
         /// bytes. Absent from older Controllers, which keeps the inline echo.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         echo_artifacts: bool,
+        /// The Controller keeps observed subagent transcripts, so the worker
+        /// may forward each child's own updates as [`SUBAGENT_EVENT_UPDATE`].
+        /// Absent from older Controllers and dropped by older Machines, which
+        /// keeps the bounded snapshot only. Presentation only: it never
+        /// changes what the agent runs or sees.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        observe_subagents: bool,
     },
     Cancel {
         session_id: String,
@@ -588,6 +741,13 @@ pub enum WorkerCommand {
         /// bytes. Absent from older Controllers, which keeps the inline echo.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         echo_artifacts: bool,
+        /// The Controller keeps observed subagent transcripts, so the worker
+        /// may forward each child's own updates as [`SUBAGENT_EVENT_UPDATE`].
+        /// Absent from older Controllers and dropped by older Machines, which
+        /// keeps the bounded snapshot only. Presentation only: it never
+        /// changes what the agent runs or sees.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        observe_subagents: bool,
     },
     Cancel {
         command_id: String,
@@ -1167,6 +1327,7 @@ mod tests {
             decoded,
             WorkerCommand::Prompt {
                 echo_artifacts: false,
+                observe_subagents: false,
                 ..
             }
         ));
@@ -1178,6 +1339,7 @@ mod tests {
             decoded,
             WorkerCommand::Prompt {
                 echo_artifacts: true,
+                observe_subagents: false,
                 ..
             }
         ));

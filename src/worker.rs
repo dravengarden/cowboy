@@ -4,11 +4,11 @@
 //! connects *out* to Machine broker, so Cowboy and Machine broker may restart while the worker
 //! keeps an in-flight prompt and pending permission responders alive.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use agent_client_protocol::schema::v1::ContentBlock;
@@ -78,7 +78,31 @@ pub struct Shared {
     managed_round: Option<ManagedRound>,
     /// Options the signed package's presets set; see `PreparedLaunch`.
     preset_options: std::collections::BTreeSet<String>,
+    /// Passive observation of subagents' own updates.
+    observation: Observation,
 }
+
+/// Passive observation of subagents' own updates (docs/subagents.md).
+#[derive(Default)]
+struct Observation {
+    /// The latest prompt's Controller keeps observed subagent transcripts.
+    enabled: AtomicBool,
+    /// Runtime protocol negotiated with the Machine broker; observations are
+    /// retired at egress below `SUBAGENT_OBSERVATION_PROTOCOL_VERSION`.
+    peer_protocol: AtomicU16,
+    /// Per child, observed updates dropped since its last emitted one. Only
+    /// the ACP thread touches it.
+    dropped: Mutex<HashMap<String, u64>>,
+}
+
+/// Unacknowledged runtime events beyond which a subagent's observed update is
+/// dropped instead of queued: observation never grows the outbox without
+/// bound while the Controller is away, and never waits for it.
+const OBSERVE_OUTBOX_LIMIT: usize = 4096;
+/// Serialized bytes one observed update may carry, far below a frame.
+const OBSERVE_MAX_BYTES: usize = 1024 * 1024;
+/// Children whose dropped updates are attributed; more are not counted.
+const OBSERVE_DROP_CHILDREN: usize = 1024;
 
 struct ManagedRound {
     ready: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
@@ -89,6 +113,12 @@ struct ManagedRound {
 struct WorkspaceIdentity {
     device: u64,
     inode: u64,
+}
+
+fn current_executable() -> Option<String> {
+    std::env::current_exe()
+        .ok()
+        .map(|path| path.display().to_string())
 }
 
 fn workspace_identity(path: &std::path::Path) -> Option<WorkspaceIdentity> {
@@ -110,6 +140,23 @@ impl Shared {
             .is_some()
     }
 
+    /// The workspace was replaced or removed: report the crash it means and
+    /// return why a prompt cannot run.
+    fn workspace_replaced(&self) -> Option<String> {
+        if self.workspace_is_current() {
+            return None;
+        }
+        let message = format!(
+            "session workspace was replaced or removed: {}; retry after Cowboy recycles this worker",
+            self.workspace_path.display()
+        );
+        self.emit(RuntimeEvent::Status {
+            state: WorkerState::Crashed,
+            detail: Some(message.clone()),
+        });
+        Some(message)
+    }
+
     fn workspace_is_current(&self) -> bool {
         self.workspace_identity.is_some()
             && workspace_identity(&self.workspace_path) == self.workspace_identity
@@ -119,6 +166,10 @@ impl Shared {
         // Keep sequence assignment and event/metadata admission ordered even
         // when the ACP thread and broker command loop emit concurrently.
         let mut outbox = self.outbox.lock();
+        self.emit_locked(&mut outbox, event)
+    }
+
+    fn emit_locked(&self, outbox: &mut BTreeMap<u64, RuntimeEvent>, event: RuntimeEvent) -> u64 {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         self.apply_snapshot_event(seq, &event);
         let diagnostics = self.telemetry.lock().event(&event);
@@ -130,7 +181,6 @@ impl Shared {
             }
         }
         outbox.insert(seq, event);
-        drop(outbox);
         let _ = self.notify.send(());
         seq
     }
@@ -418,6 +468,48 @@ impl AgentSink for RemoteSink {
         });
     }
 
+    /// Never waits: a busy or full outbox drops the update and counts it for
+    /// that child, whose next emitted update reports the gap.
+    fn observe_subagent(
+        &self,
+        _session_id: &str,
+        child_session_id: &str,
+        update: serde_json::Value,
+    ) {
+        let shared = &self.shared;
+        if !shared.observation.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let update = crate::runtime_wire::bound_observed_update(update, OBSERVE_MAX_BYTES);
+        let mut dropped = shared.observation.dropped.lock();
+        let outbox = shared
+            .outbox
+            .try_lock()
+            .filter(|outbox| outbox.len() < OBSERVE_OUTBOX_LIMIT);
+        let Some(mut outbox) = outbox else {
+            if dropped.len() < OBSERVE_DROP_CHILDREN || dropped.contains_key(child_session_id) {
+                *dropped.entry(child_session_id.to_owned()).or_default() += 1;
+            }
+            return;
+        };
+        let mut observed = serde_json::json!({
+            "sessionUpdate": crate::runtime_wire::SUBAGENT_EVENT_UPDATE,
+            "childSessionId": child_session_id,
+            "update": update,
+        });
+        if let Some(count) = dropped.remove(child_session_id) {
+            observed["dropped"] = count.into();
+        }
+        drop(dropped);
+        shared.emit_locked(
+            &mut outbox,
+            RuntimeEvent::Update {
+                update: observed,
+                cmid: None,
+            },
+        );
+    }
+
     fn set_session_usage(&self, _session_id: &str, usage: crate::agent_model::SessionUsage) {
         let configured_size = self
             .shared
@@ -577,9 +669,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         })
         .filter(|_| crate::deepseek_cache::supported_behavior(&configuration));
     let epoch = args.worker_epoch.unwrap_or_else(generated_epoch);
-    let executable = std::env::current_exe()
-        .ok()
-        .map(|path| path.display().to_string());
+    let executable = current_executable();
     let launch = crate::runtime_wire::StartSession {
         session_id: args.session_id.clone(),
         provider: args.provider.clone(),
@@ -715,6 +805,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             .map(|endpoint| Arc::clone(&endpoint.client)),
         managed_round,
         preset_options: prepared.preset_options.clone(),
+        observation: Observation::default(),
     });
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (done_tx, mut done_rx) = mpsc::channel(1);
@@ -864,6 +955,10 @@ async fn connected(
                 (minimum_protocol..=PROTOCOL_VERSION).contains(&protocol),
                 "Machine broker selected an unsupported runtime protocol"
             );
+            shared
+                .observation
+                .peer_protocol
+                .store(protocol, Ordering::Relaxed);
         }
         Some(Frame::Reject { reason }) => return Ok(ConnectedExit::Rejected { reason }),
         Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
@@ -976,7 +1071,13 @@ pub async fn send_outbox<W: tokio::io::AsyncWrite + Unpin>(
         .range((last_sent.saturating_add(1))..)
         .map(|(seq, event)| (*seq, event.clone()))
         .collect();
-    for (seq, event) in pending {
+    let legacy = shared.observation.peer_protocol.load(Ordering::Relaxed)
+        < crate::runtime_wire::SUBAGENT_OBSERVATION_PROTOCOL_VERSION;
+    for (seq, mut event) in pending {
+        if legacy {
+            // An older broker would hand it to a Controller that stores it.
+            crate::runtime_wire::retire_observation(&mut event);
+        }
         let diagnostics = shared
             .trace_outbox
             .lock()
@@ -1108,16 +1209,15 @@ pub fn handle_command(
                 cmid,
                 trace,
                 echo_artifacts,
+                observe_subagents,
             } => {
-                if !shared.workspace_is_current() {
-                    let message = format!(
-                        "session workspace was replaced or removed: {}; retry after Cowboy recycles this worker",
-                        shared.workspace_path.display()
-                    );
-                    shared.emit(RuntimeEvent::Status {
-                        state: WorkerState::Crashed,
-                        detail: Some(message.clone()),
-                    });
+                // Each turn's Controller states whether it keeps observed
+                // transcripts, so a rolled-back Controller stops receiving them.
+                shared
+                    .observation
+                    .enabled
+                    .store(observe_subagents, Ordering::Relaxed);
+                if let Some(message) = shared.workspace_replaced() {
                     return command_ack(shared, command_id, false, Some(message));
                 }
                 if !shared.mark_command(&command_id) {
@@ -1329,6 +1429,7 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
             execution: None,
             managed_round: None,
             preset_options: std::collections::BTreeSet::new(),
+            observation: Observation::default(),
         }),
         rx,
     )
@@ -1348,6 +1449,81 @@ mod tests {
             .await
             .expect("SIGTERM did not end the worker")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_older_broker_never_receives_an_observed_update() {
+        let (shared, _rx) = shared();
+        shared.observation.enabled.store(true, Ordering::Relaxed);
+        let sink = RemoteSink {
+            shared: Arc::clone(&shared),
+        };
+        sink.observe_subagent(
+            "sess-1",
+            "child",
+            serde_json::json!({"sessionUpdate": "tool_call"}),
+        );
+        for (protocol, expected) in [
+            (6, crate::runtime_wire::STEERING_RESULT_UPDATE),
+            (7, crate::runtime_wire::SUBAGENT_EVENT_UPDATE),
+        ] {
+            shared
+                .observation
+                .peer_protocol
+                .store(protocol, Ordering::Relaxed);
+            let mut bytes = Vec::new();
+            let mut last_sent = 0;
+            send_outbox(&shared, &mut bytes, &mut last_sent)
+                .await
+                .unwrap();
+            let frame = crate::runtime_wire::read_frame(&mut bytes.as_slice())
+                .await
+                .unwrap();
+            let Some(Frame::WorkerEvent {
+                event: RuntimeEvent::Update { update, .. },
+                runtime_seq: 1,
+                ..
+            }) = frame
+            else {
+                panic!("the observed update keeps its runtime sequence");
+            };
+            assert_eq!(update["sessionUpdate"], expected);
+        }
+    }
+
+    #[test]
+    fn observed_child_updates_follow_the_prompt_flag_and_never_grow_a_full_outbox() {
+        let (shared, _rx) = shared();
+        let sink = RemoteSink {
+            shared: Arc::clone(&shared),
+        };
+        let update = || serde_json::json!({"sessionUpdate": "tool_call", "toolCallId": "t"});
+        sink.observe_subagent("sess-1", "child", update());
+        assert!(shared.outbox.lock().is_empty(), "no flag, no observation");
+        shared.observation.enabled.store(true, Ordering::Relaxed);
+        for _ in 0..OBSERVE_OUTBOX_LIMIT {
+            shared.emit(RuntimeEvent::Error {
+                message: "unacknowledged".to_owned(),
+            });
+        }
+        sink.observe_subagent("sess-1", "child", update());
+        sink.observe_subagent("sess-1", "child", update());
+        assert_eq!(shared.outbox.lock().len(), OBSERVE_OUTBOX_LIMIT);
+        shared.ack(u64::MAX);
+        sink.observe_subagent("sess-1", "child", update());
+        let outbox = shared.outbox.lock();
+        let Some(RuntimeEvent::Update { update, .. }) = outbox.values().next() else {
+            panic!("observed update was not emitted");
+        };
+        assert_eq!(
+            update["sessionUpdate"],
+            crate::runtime_wire::SUBAGENT_EVENT_UPDATE
+        );
+        assert_eq!(update["childSessionId"], "child");
+        assert_eq!(update["dropped"], 2);
+        assert_eq!(update["update"]["toolCallId"], "t");
+        drop(outbox);
+        assert!(shared.observation.dropped.lock().is_empty());
     }
 
     #[test]
@@ -1918,6 +2094,7 @@ mod tests {
                 content: vec![serde_json::json!({"type": "text", "text": "hello"})],
                 cmid: None,
                 echo_artifacts: false,
+                observe_subagents: false,
             },
         );
 
@@ -1955,6 +2132,7 @@ mod tests {
                 content: vec![image(1)],
                 cmid: Some("c-1".to_owned()),
                 echo_artifacts: true,
+                observe_subagents: false,
             },
         );
         let sink = RemoteSink {

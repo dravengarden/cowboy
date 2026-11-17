@@ -825,6 +825,7 @@ impl RemoteRuntime {
                 cmid,
                 trace,
                 echo_artifacts,
+                observe_subagents: true,
             },
         );
         command_id
@@ -1896,6 +1897,8 @@ fn reject_foreign_frame(shared: &Shared, session_id: &str, frame: &str) {
     );
 }
 
+use crate::subagent_transcripts::divert;
+
 #[allow(clippy::too_many_lines)] // One exhaustive wire-frame dispatch keeps broker ordering visible.
 async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
@@ -2006,13 +2009,9 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                             queue_permission(shared, &session_id, request_id, option_id);
                         } else {
                             mark_projected_provider_auth_expired(shared, &session_id, &event);
-                            let event = stamp_worker_incarnation(
-                                &shared.hub,
-                                &session_id,
-                                &worker_epoch,
-                                event,
-                            );
-                            apply_event(&shared.hub, &session_id, event);
+                            if let Some(event) = divert(&shared.hub, &key, runtime_seq, event) {
+                                apply_event(&shared.hub, &session_id, event);
+                            }
                             reconcile_idle_guard(shared, &session_id, idle_guard);
                         }
                     }
@@ -2740,35 +2739,6 @@ fn apply_worker_status(hub: &Hub, session_id: &str, state: WorkerState, detail: 
     hub.set_status(session_id, status, detail);
 }
 
-/// Name the worker incarnation that reported a subagent snapshot, and note
-/// the session's current incarnation (docs/background-tasks.md I3). A
-/// snapshot from an older incarnation renders as not reporting and loses its
-/// Stop grant until the new worker announces the child again.
-fn stamp_worker_incarnation(
-    hub: &Hub,
-    session_id: &str,
-    worker_epoch: &str,
-    mut event: RuntimeEvent,
-) -> RuntimeEvent {
-    if worker_epoch.is_empty() {
-        return event;
-    }
-    hub.note_worker_incarnation(session_id, worker_epoch);
-    if let RuntimeEvent::Update { update, .. } = &mut event
-        && update
-            .get("sessionUpdate")
-            .and_then(serde_json::Value::as_str)
-            == Some(crate::runtime_wire::SUBAGENT_UPDATE)
-        && let Some(object) = update.as_object_mut()
-    {
-        object.insert(
-            "incarnation".to_owned(),
-            serde_json::Value::String(worker_epoch.to_owned()),
-        );
-    }
-    event
-}
-
 #[allow(clippy::too_many_lines)] // Keep the exhaustive lifecycle projection behind one binding fence.
 fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
     if !hub.accepts_runtime_projection(session_id) {
@@ -3150,13 +3120,18 @@ mod tests {
             .epoch_changes
             .load(Ordering::Relaxed);
         let RuntimeEvent::Update { update, .. } =
-            stamp_worker_incarnation(&hub, "s", "worker-1", snapshot.clone())
+            crate::subagent_transcripts::stamp_worker_incarnation(
+                &hub,
+                "s",
+                "worker-1",
+                snapshot.clone(),
+            )
         else {
             panic!("an update stays an update");
         };
         assert_eq!(update["incarnation"], "worker-1");
         let RuntimeEvent::Update { update, .. } =
-            stamp_worker_incarnation(&hub, "s", "worker-2", snapshot)
+            crate::subagent_transcripts::stamp_worker_incarnation(&hub, "s", "worker-2", snapshot)
         else {
             panic!("an update stays an update");
         };
@@ -3179,7 +3154,7 @@ mod tests {
             cmid: None,
         };
         let RuntimeEvent::Update { update, .. } =
-            stamp_worker_incarnation(&hub, "s", "worker-2", other)
+            crate::subagent_transcripts::stamp_worker_incarnation(&hub, "s", "worker-2", other)
         else {
             panic!("an update stays an update");
         };
@@ -4465,6 +4440,7 @@ mod tests {
             content: vec![serde_json::json!({"type": "text", "text": "continue"})],
             cmid: Some("retry-1".to_owned()),
             echo_artifacts: false,
+            observe_subagents: false,
         };
         for mut commands in [
             vec![prompt.clone(), stop.clone()],
@@ -4706,6 +4682,7 @@ mod tests {
                 cmid: None,
                 trace: None,
                 echo_artifacts: false,
+                observe_subagents: false,
             },
         );
         let _stop = runtime
@@ -4754,6 +4731,7 @@ mod tests {
                 cmid: None,
                 trace: None,
                 echo_artifacts: false,
+                observe_subagents: false,
             },
         );
         assert!(pending_wire_commands(&runtime).await.is_empty());
@@ -5884,6 +5862,7 @@ mod tests {
                 content: vec![serde_json::json!({"type": "text", "text": "keep me"})],
                 cmid: Some("m".to_owned()),
                 echo_artifacts: false,
+                observe_subagents: false,
             }),
             Some("failed".to_owned()),
         );
@@ -6396,6 +6375,7 @@ mod tests {
                 content: vec![serde_json::json!({"type": "text", "text": "first"})],
                 cmid: None,
                 echo_artifacts: false,
+                observe_subagents: false,
             },
         );
         let mut idle = snapshot("s");
