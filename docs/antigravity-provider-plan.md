@@ -196,24 +196,26 @@ Remaining Phase 1 items need the dedicated test account.
   as `$HOME/.gemini/antigravity-cli/antigravity-oauth-token`; over SSH the log
   states "Using file-based token storage because SSH session detected".
 - Idle authenticated ACP server on OVH: about 166 MB RSS.
-- Location: every OVH prompt ended with the agent message "Your current account
-  is not eligible for Gemini Code Assist for individuals because it is not
-  currently available in your location" (`PERMISSION_DENIED`,
-  `UNSUPPORTED_LOCATION`). OVH egresses directly from its OVH US address. On
-  Hawk, Google traffic resolves to Stormbird fake-IP addresses and the same
-  account worked, so Google's location decision depends on the egress path.
-  OVH remote mode therefore needs a deliberate, stable egress for `agy` that
-  Google accepts; which Stormbird exit Hawk used was not determined. Choosing an
-  egress to satisfy a location check is an additional account-risk factor that
-  the owner must accept explicitly, and the login and runtime of one account
-  must use the same egress.
+- Location: with default address selection every OVH prompt ended with the
+  agent message "Your current account is not eligible for Gemini Code Assist
+  for individuals because it is not currently available in your location"
+  (`PERMISSION_DENIED`, `UNSUPPORTED_LOCATION`). OVH reaches Google over IPv6
+  (`2604:2dc0:202:300::1cec`), for which `www.google.com` answers with the
+  `/sorry` abuse interstitial, while its IPv4 address (`40.160.141.233`,
+  Hillsboro, Oregon) gets 200 and YouTube reports `GL=US`. Running `agy` (login
+  and runtime) in a unit with
+  `RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK` forces IPv4; the same
+  account then completed prompts on OVH and the full facade path returned
+  `TARGET_SENTINEL` through `mcp_cowboy_ReadFile` and `mcp_cowboy_RunCommand`
+  with no built-in tool attempt. The restriction is per Provider process only;
+  no other OVH traffic changes. (Hawk's earlier success used a Stormbird exit
+  that Google sees as `GL=FR`, not the OVH address.)
 - Logout: ACP `logout` returned `{}`, removed the token file, and the next
   `session/new` failed with `-32000 Authentication required`. A separate grant
   on Hawk kept working afterwards, so per-Machine logins are independent
   grants. Whether logout revokes the grant at Google was not tested.
 
-Remaining Phase 1: OVH egress decision and a retest of the OVH facade path;
-concurrent refresh after access-token expiry; suspension and 429 shapes
+Remaining Phase 1: concurrent refresh after access-token expiry; suspension and 429 shapes
 (observe only, never provoke).
 
 ### Phase 2 — Native custody as a Provider declaration
