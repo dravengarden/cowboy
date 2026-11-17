@@ -74,8 +74,10 @@ const PHRASES: &[(&str, &str)] = &[
     ("did not complete ACP session/new", "acp_new_timeout"),
     ("did not complete ACP initialize", "acp_initialize_timeout"),
     ("did not complete ACP", "acp_startup_timeout"),
+    // generation_retention::NOT_INSTALLED_MARKER, which the Code adapter
+    // build does not compile; a full-feature test keeps them equal.
     (
-        crate::generation_retention::NOT_INSTALLED_MARKER,
+        "is not installed on this Machine",
         "generation_not_installed",
     ),
     ("admission denied", "admission_denied"),
@@ -130,6 +132,12 @@ mod tests {
             "tls_unclean_close"
         );
         assert_eq!(text_reason("secret-body token=abc"), "unclassified");
+        #[cfg(any(feature = "full", feature = "machine-host"))]
+        assert!(
+            PHRASES
+                .iter()
+                .any(|(phrase, _)| *phrase == crate::generation_retention::NOT_INSTALLED_MARKER)
+        );
         for (_, reason) in PHRASES {
             assert!(reason.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'));
         }
