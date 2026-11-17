@@ -413,7 +413,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-Ce2AqPyv6kLurw1KtLmKzg8ya4cjqNh16GOA5MaYaaM=";
+        hash = "sha256-AVRVWxEkhrxEo9RSP39+F2zMbUZbCbBrCeWgtre+mcQ=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
