@@ -10,6 +10,7 @@ fn default_refresh_refuses_evidence_outside_the_signed_contract() {
         relative_path: ".claude.json".into(),
         subject_path: vec!["oauthAccount".into(), "accountUuid".into()],
         tenant_path: None,
+        subject_claim: None,
     };
     let identity = |authority: &str| NativeIdentity {
         authority: authority.into(),

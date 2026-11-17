@@ -973,14 +973,14 @@ mod tests {
         let store = Arc::new(root.for_account(&id).unwrap());
         assert_eq!(
             store
-                .with_secret_input("grok", "success", || async { Ok(7) })
+                .with_secret_input("portable-fixture", "success", || async { Ok(7) })
                 .await
                 .unwrap(),
             7
         );
         assert!(
             store
-                .with_secret_input::<(), _>("grok", "failed", || async {
+                .with_secret_input::<(), _>("portable-fixture", "failed", || async {
                     anyhow::bail!("input cancelled")
                 })
                 .await
@@ -990,7 +990,7 @@ mod tests {
         let task_store = store.clone();
         let task = tokio::spawn(async move {
             task_store
-                .with_secret_input::<(), _>("grok", "aborted", || async {
+                .with_secret_input::<(), _>("portable-fixture", "aborted", || async {
                     ready.send(()).unwrap();
                     std::future::pending().await
                 })
@@ -999,13 +999,13 @@ mod tests {
         started.await.unwrap();
         assert!(
             store
-                .auth_candidate_stop("grok", "aborted")
+                .auth_candidate_stop("portable-fixture", "aborted")
                 .unwrap()
                 .is_none()
         );
         assert!(
             store
-                .with_secret_input("grok", "overlap", || async { Ok(()) })
+                .with_secret_input("portable-fixture", "overlap", || async { Ok(()) })
                 .await
                 .is_err()
         );
@@ -1015,7 +1015,7 @@ mod tests {
             let observed = store
                 .observe_login_stop(&crate::provider_account::LoginStopRequest {
                     account_id: id.clone(),
-                    provider_id: "grok".into(),
+                    provider_id: "portable-fixture".into(),
                     login_request_id: request.into(),
                 })
                 .unwrap()
@@ -1025,7 +1025,7 @@ mod tests {
             );
             assert!(
                 store
-                    .with_secret_input("grok", request, || async {
+                    .with_secret_input("portable-fixture", request, || async {
                         panic!("stopped request reused");
                         #[allow(unreachable_code)]
                         Ok(())
@@ -1051,22 +1051,29 @@ mod tests {
             root.for_account(&uuid::Uuid::new_v4().to_string().try_into().unwrap())
                 .unwrap(),
         );
-        let receipts = store.auth_provider_root("grok").join("login-receipts");
+        let receipts = store
+            .auth_provider_root("portable-fixture")
+            .join("login-receipts");
         let result = store
-            .with_secret_input("grok", "failed", || async {
+            .with_secret_input("portable-fixture", "failed", || async {
                 // The action produced a candidate, but its cleanup journal cannot commit.
                 fs::write(&receipts, "obstruction").unwrap();
                 Ok("fixture candidate")
             })
             .await;
         assert!(result.is_err());
-        assert!(store.auth_candidate_root("grok").join("failed").exists());
+        assert!(
+            store
+                .auth_candidate_root("portable-fixture")
+                .join("failed")
+                .exists()
+        );
         fs::remove_file(receipts).unwrap();
-        let mut cleanup = AuthCandidateCleanup::new(store.clone(), "grok", "failed");
+        let mut cleanup = AuthCandidateCleanup::new(store.clone(), "portable-fixture", "failed");
         cleanup.discard().unwrap();
         assert!(
             store
-                .auth_candidate_stop("grok", "failed")
+                .auth_candidate_stop("portable-fixture", "failed")
                 .unwrap()
                 .unwrap()
                 .candidate_removed

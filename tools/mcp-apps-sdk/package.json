@@ -1,0 +1,12 @@
+{
+  "name": "cowboy-mcp-apps-sdk-fixture",
+  "private": true,
+  "type": "module",
+  "description": "Pinned MCP Apps SDK for the phase C admission view (tools/mcp-apps-conformance.ts). Not a workspace member; never shipped.",
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/core": "2.4.0",
+    "@modelcontextprotocol/ext-apps": "2.0.4",
+    "zod": "4.6.7"
+  }
+}

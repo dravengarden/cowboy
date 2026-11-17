@@ -1700,6 +1700,12 @@ impl MachinePluginStore {
         })
     }
 
+    /// A named account of a Provider with a signed native login recipe runs
+    /// from that account's native home, never from a Service replica.
+    fn native_account(&self, package: &ProviderPackage) -> bool {
+        !self.account_id.is_default() && package.manifest.authentication.native_accounts()
+    }
+
     /// Directory of each projected credential file in the one runtime
     /// projection that owns the credential bytes. Historical generations link
     /// their copies to it, so this is the single directory a Provider CLI may
@@ -1713,7 +1719,7 @@ impl MachinePluginStore {
         if !auth.required || auth.credential_files.is_empty() {
             return Ok(BTreeMap::new());
         }
-        if !self.account_id.is_default() && package.manifest.id == "claude-code" {
+        if self.native_account(package) {
             return Self::native_credential_directories(
                 package,
                 native_home.context("native profile home required")?,
@@ -1747,7 +1753,7 @@ impl MachinePluginStore {
         generation: u64,
         generation_digest: &str,
     ) -> Result<PathBuf> {
-        if !self.account_id.is_default() && provider_id == "claude-code" {
+        if self.native_account(package) {
             self.ensure_native_release(package, generation, generation_digest)?;
             return self.native_profile_home(package, generation);
         }

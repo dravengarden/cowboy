@@ -63,7 +63,11 @@ async fn target(
     if !account.available() {
         return Err("account_disabled");
     }
-    if account.provider_id != "claude-code" {
+    if !state
+        .provider_catalog
+        .native_account_providers()
+        .contains(&account.provider_id)
+    {
         return Err("account_usage_unsupported");
     }
     let machines = store.list_machines().await.map_err(|_| "unavailable")?;

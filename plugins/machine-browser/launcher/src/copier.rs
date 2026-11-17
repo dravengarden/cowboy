@@ -87,6 +87,9 @@ impl Exclusions {
                 "GraphiteDawnCache",
                 "blob_storage",
                 "Crashpad",
+                // Optimization Guide models, which the browser no longer
+                // downloads; older snapshots still carry about 47 MB.
+                "optimization_guide_model_store",
             ],
             files: &[
                 "SingletonLock",

@@ -138,7 +138,7 @@ transition failure is classified `sandbox`, every other start failure `host`.
    `/tmp`.
 3. `matchbox-window-manager -use_titlebar no -use_cursor yes` in `display/`.
 4. Browser in `browser/`:
-   `--user-data-dir=/mnt/profile --no-first-run --no-default-browser-check --disable-sync --disable-background-networking --disable-component-update --disable-extensions --disable-breakpad --disable-crash-reporter --disable-quic --disk-cache-size=1048576 --password-store=basic --lang=en-US --window-position=0,0 --window-size=W,H --force-device-scale-factor=<scale> about:blank`.
+   `--user-data-dir=/mnt/profile --no-first-run --no-default-browser-check --disable-sync --disable-background-networking --disable-component-update --disable-extensions --disable-breakpad --disable-crash-reporter --disable-quic --disk-cache-size=1048576 --disable-features=OptimizationHints,OptimizationTargetPrediction --password-store=basic --lang=en-US --window-position=0,0 --window-size=W,H --force-device-scale-factor=<scale> about:blank`.
 
 Environment of the display server, window manager and `xauth`/`xrandr`
 helpers:
@@ -251,7 +251,7 @@ the copy would exceed `--profile-bytes` logical bytes, 100000 entries or
 depth 32. Symlinks, sockets, FIFOs and device nodes are never copied. Skipped
 by basename at any depth: directories `Cache`, `Code Cache`, `GPUCache`,
 `ShaderCache`, `GrShaderCache`, `DawnCache`, `DawnGraphiteCache`,
-`DawnWebGPUCache`, `GraphiteDawnCache`, `blob_storage`, `Crashpad`; files
+`DawnWebGPUCache`, `GraphiteDawnCache`, `blob_storage`, `Crashpad`, `optimization_guide_model_store`; files
 `SingletonLock`, `SingletonSocket`, `SingletonCookie`, `lockfile`. Everything
 else is copied, including `*-journal`, `*-wal`, LevelDB `MANIFEST-*`, `LOG`,
 `*.ldb` and `*.log`. Restoration (`--snapshot-dir` into `/mnt/profile`)

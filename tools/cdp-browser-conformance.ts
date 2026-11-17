@@ -16,7 +16,7 @@ const themeMode = process.argv.slice(2)[2] ?? "light";
 const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "boot-snapshot": ["runBootSnapshotBrowserConformance", 4],
   "client-update": ["runClientUpdateFixture", 9],
-  subscriptions: ["runSubscriptionsBrowserConformance", 131],
+  subscriptions: ["runSubscriptionsBrowserConformance", 142],
   "session-context": ["runSessionContextBrowserConformance", 128],
   "desktop-viewport": ["runDesktopViewportBrowserConformance", 9],
   "loading-progress": ["runLoadingProgressBrowserConformance", 10],

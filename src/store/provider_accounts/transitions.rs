@@ -170,7 +170,6 @@ impl Intent {
             crate::managed_calls::valid_id(&request.session_id)
                 && crate::managed_calls::valid_id(&request.target_login_operation)
                 && !request.account_id.is_default()
-                && request.provider == "claude-code"
                 && request.from_generation > 0
                 && request.from_generation < target.profile.generation
                 && request.account_id == target.profile.account_id

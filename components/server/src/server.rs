@@ -562,7 +562,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let scheduler_task = start_scheduler(&hub, store.as_ref(), &runtime_health).await;
 
     let runtime_reconciliation_task =
-        spawn_runtime_reconciliation(hub.clone(), shutdown_rx.clone());
+        spawn_runtime_reconciliation(&hub, &machine_control, &shutdown_rx);
 
     tracing::info!(
         workspace = %args.workspace_root.display(),

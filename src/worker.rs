@@ -860,6 +860,7 @@ async fn connection_loop(
             Ok(stream) => stream,
             Err(error) => {
                 tracing::warn!(
+                    reason = crate::logs::error_reason(&error),
                     error = %error,
                     socket = %socket.display(),
                     retry_after_ms = backoff.as_millis(),
@@ -888,12 +889,14 @@ async fn connection_loop(
             }
             Ok(ConnectedExit::Disconnected) => {
                 tracing::warn!(
+                    reason = "broker_closed",
                     retry_after_ms = backoff.as_millis(),
                     "Machine broker connection closed; reconnecting"
                 );
             }
             Err(error) => {
                 tracing::warn!(
+                    reason = crate::logs::failure_reason(&error),
                     error = %error,
                     retry_after_ms = backoff.as_millis(),
                     "Machine broker connection lost; reconnecting"

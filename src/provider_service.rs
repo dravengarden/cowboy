@@ -1787,7 +1787,7 @@ mod tests {
         ));
         assert!(first.machine_grant(&second_key).is_err());
         assert!(service.machine_grant(&first_key).is_err());
-        let package = package("grok");
+        let package = package(PORTABLE_FIXTURE);
         let bundle = bundle(&package);
         // A named native login must never enter a portable, multi-writer vault.
         assert!(account.commit(&package, &bundle, None, Some(0)).is_err());
@@ -1800,17 +1800,29 @@ mod tests {
         second
             .commit(&package, &second_bundle, None, Some(0))
             .unwrap();
-        let stored = first.providers.read()["grok"].clone();
+        let stored = first.providers.read()[PORTABLE_FIXTURE].clone();
         assert_eq!(stored.vault_schema, 3);
         assert!(second.open_vault(&stored).is_err());
         let mut swapped = stored;
         swapped.recipient_key = Some(second_key.clone());
         assert!(second.open_vault(&swapped).is_err());
-        assert!(first.seal_for_machine("grok", &first_key).is_ok());
-        assert!(second.seal_for_machine("grok", &second_key).is_ok());
-        assert!(first.seal_for_machine("grok", &second_key).is_err());
-        assert!(second.seal_for_machine("grok", &first_key).is_err());
-        assert!(account.status("grok").is_none());
+        assert!(first.seal_for_machine(PORTABLE_FIXTURE, &first_key).is_ok());
+        assert!(
+            second
+                .seal_for_machine(PORTABLE_FIXTURE, &second_key)
+                .is_ok()
+        );
+        assert!(
+            first
+                .seal_for_machine(PORTABLE_FIXTURE, &second_key)
+                .is_err()
+        );
+        assert!(
+            second
+                .seal_for_machine(PORTABLE_FIXTURE, &first_key)
+                .is_err()
+        );
+        assert!(account.status(PORTABLE_FIXTURE).is_none());
         let mut refreshed = bundle;
         refreshed.values.insert(
             "auth_json".into(),
@@ -1818,11 +1830,16 @@ mod tests {
         );
         assert!(matches!(
             first
-                .compare_and_swap_refresh(std::slice::from_ref(&package), &refreshed, "grok", 1)
+                .compare_and_swap_refresh(
+                    std::slice::from_ref(&package),
+                    &refreshed,
+                    PORTABLE_FIXTURE,
+                    1
+                )
                 .unwrap(),
             ProviderAuthRefreshResult::Updated(_)
         ));
-        let second_stored = second.providers.read()["grok"].clone();
+        let second_stored = second.providers.read()[PORTABLE_FIXTURE].clone();
         let first_inventory = service
             .machine_account_replica_statuses(&first_key)
             .unwrap();
@@ -1843,11 +1860,14 @@ mod tests {
         let unchanged: PortableCredentialBundle =
             serde_json::from_slice(&second.open_vault(&second_stored).unwrap()).unwrap();
         assert_eq!(unchanged, second_bundle);
-        first.logout("grok").unwrap();
-        assert_eq!(first.status("grok").unwrap().auth_generation, 3);
-        assert_eq!(second.status("grok").unwrap().auth_generation, 1);
+        first.logout(PORTABLE_FIXTURE).unwrap();
+        assert_eq!(first.status(PORTABLE_FIXTURE).unwrap().auth_generation, 3);
+        assert_eq!(second.status(PORTABLE_FIXTURE).unwrap().auth_generation, 1);
         assert_eq!(
-            second.status("grok").unwrap().authentication_state,
+            second
+                .status(PORTABLE_FIXTURE)
+                .unwrap()
+                .authentication_state,
             ServiceAuthenticationState::Ready
         );
         drop(first);
@@ -1860,7 +1880,7 @@ mod tests {
             account
                 .machine_grant(&first_key)
                 .unwrap()
-                .status("grok")
+                .status(PORTABLE_FIXTURE)
                 .unwrap()
                 .authentication_state,
             ServiceAuthenticationState::SignedOut
@@ -1869,7 +1889,7 @@ mod tests {
             account
                 .machine_grant(&second_key)
                 .unwrap()
-                .status("grok")
+                .status(PORTABLE_FIXTURE)
                 .unwrap()
                 .authentication_state,
             ServiceAuthenticationState::Ready
@@ -1878,7 +1898,7 @@ mod tests {
             account
                 .machine_grant(&first_key)
                 .unwrap()
-                .seal_for_machine("grok", &second_key)
+                .seal_for_machine(PORTABLE_FIXTURE, &second_key)
                 .is_err()
         );
         drop(account);
@@ -1978,14 +1998,26 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// Fixture of the portable named-account prototype: an OAuth Provider
+    /// without a native recipe. First-party OAuth Providers are now native.
+    pub(crate) const PORTABLE_FIXTURE: &str = "portable-fixture";
+
     fn package(id: &str) -> ProviderPackage {
-        let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(match id {
-            "grok" => include_str!("../plugins/grok/provider.json"),
-            "claude-deepseek" => include_str!("../plugins/claude-deepseek/provider.json"),
-            "codex-deepseek" => include_str!("../plugins/codex-deepseek/provider.json"),
-            _ => panic!("unsupported fixture"),
-        })
-        .unwrap();
+        let mut source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(match id {
+                "grok" | PORTABLE_FIXTURE => include_str!("../plugins/grok/provider.json"),
+                "claude-deepseek" => include_str!("../plugins/claude-deepseek/provider.json"),
+                "codex-deepseek" => include_str!("../plugins/codex-deepseek/provider.json"),
+                _ => panic!("unsupported fixture"),
+            })
+            .unwrap();
+        if id == PORTABLE_FIXTURE {
+            source.id = PORTABLE_FIXTURE.into();
+            source
+                .authentication
+                .methods
+                .retain(|method| method.native_identity.is_none());
+        }
         cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap()
     }
 

@@ -163,7 +163,9 @@ fn native_generation(
     // is not proof that the native profile never existed.
     ensure!(
         login.native_generation.is_some()
-            || (login.provider_id != "claude-code" && login.native_completion.is_none()),
+            || (!crate::provider_account::NATIVE_ACCOUNT_PROVIDERS
+                .contains(&login.provider_id.as_str())
+                && login.native_completion.is_none()),
         "native_generation_unknown"
     );
     Ok(login.native_generation)

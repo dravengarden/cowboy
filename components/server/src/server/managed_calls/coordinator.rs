@@ -44,8 +44,10 @@ struct GrantEntry {
 }
 
 mod observation;
+mod readiness;
 pub(in crate::server) use observation::touch as touch_code_observation;
 pub(in crate::server) use observation::{changes as code_changes, head as code_observation_head};
+pub(super) use readiness::{child_runtime, runtime_readiness};
 
 impl GrantEntry {
     fn accepts_installation(
@@ -550,223 +552,6 @@ async fn wait(state: &AppState, ledger: &Ledger, call: &str, timeout_ms: u64) ->
     }
 }
 
-pub(super) struct ProviderReadiness {
-    pub available: bool,
-    pub reason: Option<&'static str>,
-    pub generation: Option<super::super::ResolvedProviderGeneration>,
-    pub structured_output: bool,
-}
-
-/// Where a managed child's Agent runtime runs, and whether it can. The
-/// execution Machine is preferred. When host policy places the Provider on
-/// other Machines, one of them (the parent's runtime first) runs the child
-/// against the execution Machine's snapshot through a keeper-enforced
-/// read-only environment. Execution never moves; there is no local fallback.
-pub(super) async fn child_runtime(
-    state: &AppState,
-    execution_machine: &str,
-    parent_runtime: Option<&str>,
-    provider: &str,
-    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
-) -> (String, ProviderReadiness) {
-    if profile == cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1
-        && state
-            .machine_control
-            .connection_protocol(execution_machine)
-            .is_none()
-    {
-        return (
-            execution_machine.into(),
-            ProviderReadiness {
-                available: false,
-                reason: Some("unsupported_capability"),
-                generation: None,
-                structured_output: false,
-            },
-        );
-    }
-    let local = provider_readiness(state, execution_machine, provider, profile).await;
-    if local.available
-        || !matches!(
-            local.reason,
-            Some("runtime_policy" | "provider_unavailable" | "unsupported_capability")
-        )
-    {
-        return (execution_machine.to_owned(), local);
-    }
-    let mut candidates: Vec<String> = parent_runtime.into_iter().map(str::to_owned).collect();
-    if let Some(store) = &state.store
-        && let Ok(machines) = store.list_machines().await
-    {
-        let mut registered: Vec<String> = machines
-            .into_iter()
-            .filter(|machine| !machine.revoked)
-            .map(|machine| machine.id)
-            .collect();
-        registered.sort();
-        candidates.extend(registered);
-    }
-    let mut seen = HashSet::new();
-    candidates.retain(|machine| machine != execution_machine && seen.insert(machine.clone()));
-    let mut remote_reason = None;
-    for runtime in candidates {
-        if !state.supervisor.runtime_allowed(provider, &runtime) {
-            continue;
-        }
-        let readiness =
-            runtime_readiness(state, execution_machine, &runtime, provider, profile).await;
-        if readiness.available {
-            return (runtime, readiness);
-        }
-        remote_reason.get_or_insert(readiness.reason.unwrap_or("provider_unavailable"));
-    }
-    let readiness = match remote_reason {
-        Some(reason) => ProviderReadiness {
-            available: false,
-            reason: Some(reason),
-            generation: None,
-            structured_output: false,
-        },
-        None => local,
-    };
-    (execution_machine.to_owned(), readiness)
-}
-
-/// Whether a child of `provider` can run with its runtime on `runtime` and
-/// its execution on `execution_machine`.
-pub(super) async fn runtime_readiness(
-    state: &AppState,
-    execution_machine: &str,
-    runtime: &str,
-    provider: &str,
-    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
-) -> ProviderReadiness {
-    let readiness = provider_readiness(state, runtime, provider, profile).await;
-    if runtime == execution_machine || !readiness.available {
-        return readiness;
-    }
-    let checked = match &readiness.generation {
-        Some(generation) => remote_ready(state, execution_machine, runtime, generation).await,
-        None => Err("provider_unavailable"),
-    };
-    match checked {
-        Ok(()) => readiness,
-        Err(reason) => ProviderReadiness {
-            available: false,
-            reason: Some(reason),
-            generation: None,
-            structured_output: false,
-        },
-    }
-}
-
-/// A split child needs both Machines to understand remote managed bindings
-/// and the exact runtime Provider to accept the target's executor.
-async fn remote_ready(
-    state: &AppState,
-    execution_machine: &str,
-    runtime_machine: &str,
-    generation: &super::super::ResolvedProviderGeneration,
-) -> Result<(), &'static str> {
-    for machine in [execution_machine, runtime_machine] {
-        match state.machine_control.connection_protocol(machine) {
-            Some(_) => {}
-            None => return Err("machine_unavailable"),
-        }
-    }
-    let executor = super::super::execution::sessions::executor(state, execution_machine)
-        .await
-        .map_err(|_| "machine_unavailable")?;
-    if !super::super::execution::sessions::accepts(&generation.behavior, &executor) {
-        return Err("unsupported_capability");
-    }
-    Ok(())
-}
-
-/// Whether the exact installed Provider on the target can run this request.
-pub(super) async fn provider_readiness(
-    state: &AppState,
-    machine: &str,
-    provider: &str,
-    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
-) -> ProviderReadiness {
-    let unavailable = |reason| ProviderReadiness {
-        available: false,
-        reason: Some(reason),
-        generation: None,
-        structured_output: false,
-    };
-    let Some(store) = state.store.as_ref() else {
-        return unavailable("provider_unavailable");
-    };
-    let Ok(machines) = store.list_machines().await else {
-        return unavailable("provider_unavailable");
-    };
-    let Some(record) = machines
-        .iter()
-        .find(|record| record.id == machine && !record.revoked)
-    else {
-        return unavailable("provider_unavailable");
-    };
-    if !state.runtime_router.connected(machine) {
-        return unavailable("machine_unavailable");
-    }
-    if profile == cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1
-        && state.machine_control.connection_protocol(machine).is_none()
-    {
-        return unavailable("unsupported_capability");
-    }
-    // Host policy may pin a Provider's runtime to other Machines. A managed
-    // child runs on the parent's execution Machine, never elsewhere.
-    if !state.supervisor.runtime_allowed(provider, machine) {
-        return unavailable("runtime_policy");
-    }
-    let inventory = super::super::execution::sessions::providers(record);
-    let authentication = state.provider_auth.status(provider);
-    let generation = match super::super::resolve_provider_generation(
-        &state.provider_catalog,
-        &state.plugin_catalog,
-        &inventory,
-        provider,
-        authentication.as_ref(),
-    ) {
-        Ok(generation) => generation,
-        Err(detail) => {
-            return unavailable(if detail.contains("auth") || detail.contains("sign") {
-                "authentication_required"
-            } else {
-                "provider_unavailable"
-            });
-        }
-    };
-    let supports = state
-        .provider_catalog
-        .package(provider, &generation.version, &generation.digest)
-        .is_some_and(|package| {
-            package
-                .manifest
-                .runtime
-                .launch_arguments(Some(profile))
-                .is_ok()
-        });
-    if !supports {
-        return ProviderReadiness {
-            available: false,
-            reason: Some("unsupported_capability"),
-            generation: Some(generation),
-            structured_output: false,
-        };
-    }
-    ProviderReadiness {
-        available: true,
-        reason: None,
-        generation: Some(generation),
-        // The managed read-only profile contract includes the native turn
-        // constraint; an adapter declaring it must apply the schema.
-        structured_output: profile == cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
-    }
-}
-
 /// On-demand native capability discovery. No reviewer prompt, preset catalog,
 /// quota refresh or external Provider request is needed to ask for an image.
 pub(in crate::server) async fn image_capabilities(
@@ -789,6 +574,7 @@ pub(in crate::server) async fn image_capabilities(
             .find(|target| target.agent == provider);
         let (runtime, readiness) = child_runtime(
             state,
+            meta.owner_user_id.as_deref(),
             &ledger.placement().machine_id,
             Some(meta.machine_id.as_str()),
             provider,
@@ -834,6 +620,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             .find(|target| target.agent == provider);
         let (runtime, readiness) = child_runtime(
             state,
+            meta.owner_user_id.as_deref(),
             &placement.machine_id,
             Some(meta.machine_id.as_str()),
             provider,
@@ -877,6 +664,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             && agent_tools::image_refusal(&policy, &meta.provider, provider).is_none()
             && child_runtime(
                 state,
+                meta.owner_user_id.as_deref(),
                 &placement.machine_id,
                 Some(meta.machine_id.as_str()),
                 provider,
@@ -975,6 +763,34 @@ fn same_request(original: &Record, requested: &str, preset: Option<&str>) -> boo
     } else {
         original.provider == requested
     }
+}
+
+/// The first candidate whose child can run now, in preference order; else
+/// the first refusal.
+async fn first_ready(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    ledger: &Ledger,
+    targets: Vec<agent_tools::CallTarget>,
+    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+) -> Result<agent_tools::CallTarget, &'static str> {
+    let mut refusal = None;
+    for target in targets {
+        let (_, readiness) = child_runtime(
+            state,
+            meta.owner_user_id.as_deref(),
+            &ledger.placement().machine_id,
+            Some(ledger.runtime_machine_id()),
+            &target.agent,
+            profile,
+        )
+        .await;
+        if readiness.available {
+            return Ok(target);
+        }
+        refusal.get_or_insert(readiness.reason.unwrap_or("provider_unavailable"));
+    }
+    Err(refusal.unwrap_or("provider_unavailable"))
 }
 
 #[allow(clippy::too_many_arguments)] // The admission inputs plus the anchor's origin.
@@ -1077,26 +893,11 @@ async fn start(
         },
         None => return error("capacity", "not_submitted"),
     }
-    let mut chosen = None;
-    let mut refusal = None;
-    for target in targets {
-        let (_, readiness) = child_runtime(
-            state,
-            &ledger.placement().machine_id,
-            Some(ledger.runtime_machine_id()),
-            &target.agent,
-            request.purpose.profile(),
-        )
-        .await;
-        if readiness.available {
-            chosen = Some(target);
-            break;
-        }
-        refusal.get_or_insert(readiness.reason.unwrap_or("provider_unavailable"));
-    }
-    let Some(mut target) = chosen else {
-        return error(refusal.unwrap_or("provider_unavailable"), "not_submitted");
-    };
+    let mut target =
+        match first_ready(state, meta, ledger, targets, request.purpose.profile()).await {
+            Ok(target) => target,
+            Err(reason) => return error(reason, "not_submitted"),
+        };
     if continued.is_none()
         && matches!(
             request.purpose,

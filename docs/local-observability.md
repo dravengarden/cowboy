@@ -107,6 +107,15 @@ delivery, retaining their local copies. Re-running configure without this flag
 sets local-only behavior. This option is independent of signed Plugin admission.
 Configure writes the complete displayed policy; inspect `status` after changes.
 
+Warnings and errors never store their free text: a message can carry an
+upstream response, a path or agent output. Instead the frequent ones carry a
+`reason` from a closed vocabulary (`src/logs/reason.rs`), recorded as OTel
+`error.type`: typed errors classify by type (I/O kind, timeout, WebSocket
+close), Cowboy's own startup errors by their fixed wording, and anything else
+as `unclassified`. `metrics`/`analyze` group failures by event; query
+`--event` with `error.type` to see why. journald on the same host still holds
+the full text for its own retention.
+
 ## AI-facing commands
 
 The CLI follows [Datadog pup](https://github.com/DataDog/pup)'s useful pattern of

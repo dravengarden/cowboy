@@ -1,7 +1,7 @@
 //! The legacy Claude vault and native-owned accounts have separate contracts.
 //!
 //! Adding a native login recipe must not rotate the default account's portable
-//! credential identity. Only native Claude methods are omitted: every existing
+//! credential identity. Only native methods are omitted: every existing
 //! method, projection, required key and refresh rule remains in the digest.
 //! The complete signed package still binds native methods, and native profiles
 //! continue to require its full auth fingerprint and exact release digest.
@@ -14,12 +14,7 @@ use sha2::{Digest as _, Sha256};
 
 pub fn contract(package: &ProviderPackage) -> Cow<'_, AuthenticationContract> {
     let auth = &package.manifest.authentication;
-    if package.manifest.id != "claude-code"
-        || !auth
-            .methods
-            .iter()
-            .any(|method| method.native_identity.is_some())
-    {
+    if !auth.native_accounts() {
         return Cow::Borrowed(auth);
     }
     let mut legacy = auth.clone();
@@ -116,14 +111,42 @@ mod tests {
                 "mutation {mutation}"
             );
         }
-        // Other Providers' identity recipes can belong to a portable grant;
-        // they retain the complete contract until their ownership is defined.
+        // Native ownership follows the signed recipe, not a Provider id: any
+        // Provider that adds native methods keeps its legacy vault identity.
         let mut other = source;
         other.id = "native-fixture".into();
         let other = cowboy_provider_sdk::build_package(other.compile().unwrap()).unwrap();
-        assert_eq!(
-            fingerprint(&other).unwrap(),
-            other.manifest.compatibility.auth_contract_fingerprint
-        );
+        assert_eq!(fingerprint(&other).unwrap(), fingerprint(&package).unwrap());
+    }
+
+    #[test]
+    fn adding_native_subscriptions_keeps_each_legacy_vault_identity() {
+        for (plugin, source) in [
+            (
+                "codex",
+                include_str!("../../../../plugins/codex/provider.json"),
+            ),
+            (
+                "grok",
+                include_str!("../../../../plugins/grok/provider.json"),
+            ),
+        ] {
+            let source: cowboy_provider_sdk::StandardProviderSource =
+                serde_json::from_str(source).unwrap();
+            let next =
+                cowboy_provider_sdk::build_package(source.clone().compile().unwrap()).unwrap();
+            assert!(next.manifest.authentication.native_accounts(), "{plugin}");
+            let mut previous = source;
+            previous
+                .authentication
+                .methods
+                .retain(|method| method.native_identity.is_none());
+            let previous = cowboy_provider_sdk::build_package(previous.compile().unwrap()).unwrap();
+            assert_eq!(
+                fingerprint(&next).unwrap(),
+                previous.manifest.compatibility.auth_contract_fingerprint,
+                "{plugin}"
+            );
+        }
     }
 }

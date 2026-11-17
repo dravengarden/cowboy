@@ -223,6 +223,24 @@ mod service_catalog {
                 })
         }
 
+        /// Providers whose newest signed release supports named native
+        /// accounts. Session admission still checks the exact pinned release.
+        pub fn native_account_providers(&self) -> std::collections::BTreeSet<String> {
+            let ids: std::collections::BTreeSet<String> = self
+                .external
+                .read()
+                .values()
+                .map(|artifact| artifact.entry.provider_id.clone())
+                .collect();
+            ids.into_iter()
+                .filter(|id| {
+                    self.latest_package(id).is_some_and(|(_, _, package)| {
+                        package.manifest.authentication.native_accounts()
+                    })
+                })
+                .collect()
+        }
+
         /// Return the newest signed package for each Provider in one public
         /// credential scope. Provider packages keep their own projection
         /// contract; only the portable bundle is shared.

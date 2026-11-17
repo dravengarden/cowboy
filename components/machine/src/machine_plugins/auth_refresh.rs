@@ -67,9 +67,9 @@ pub fn refresh_backing_off(error: &anyhow::Error) -> bool {
 /// an exact candidate's first rejection is a warning, repeats are debug.
 pub fn log_refresh_rejection(provider: &str, error: &anyhow::Error) {
     if let Some(repeated) = error.downcast_ref::<RefreshProbeRepeated>() {
-        tracing::debug!(provider, failures = repeated.failures, %error, "rejected credential refresh failed again");
+        tracing::debug!(provider, failures = repeated.failures, reason = crate::logs::failure_reason(error), %error, "rejected credential refresh failed again");
     } else {
-        tracing::warn!(provider, %error, "invalid credential refresh excluded from promotion");
+        tracing::warn!(provider, reason = crate::logs::failure_reason(error), %error, "invalid credential refresh excluded from promotion");
     }
 }
 

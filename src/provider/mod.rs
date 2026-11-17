@@ -1316,8 +1316,13 @@ mod tests {
 
     #[test]
     fn worker_accepts_machine_validated_historical_provider_package() {
-        let source: StandardProviderSource =
+        let mut source: StandardProviderSource =
             serde_json::from_str(include_str!("../../plugins/codex/provider.json")).unwrap();
+        // Historical releases predate native subscription recipes.
+        source
+            .authentication
+            .methods
+            .retain(|method| method.native_identity.is_none());
         let mut package = build_package(source.compile().unwrap()).unwrap();
         package.manifest.sdk_version = "2.4.0".to_owned();
         // Historical releases predate managed launch profiles.

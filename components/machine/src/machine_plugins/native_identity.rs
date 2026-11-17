@@ -17,12 +17,16 @@ pub(super) fn read(
         relative_path,
         subject_path,
         tenant_path,
+        subject_claim,
     } = recipe;
     let bytes = read_login_file(home, relative_path, LIMIT)?;
     let document: UniqueJson = serde_json::from_slice(&bytes)
         .map_err(|_| anyhow::anyhow!("invalid native identity JSON"))?;
     let document = document.0;
-    let subject = field(&document, subject_path)?;
+    let subject = match subject_claim {
+        None => field(&document, subject_path)?,
+        Some(claim) => field(&jwt_payload(&string(&document, subject_path)?)?, claim)?,
+    };
     let tenant = tenant_path
         .as_ref()
         .map(|path| field(&document, path))
@@ -153,19 +157,63 @@ pub(super) fn read_login_file(home: &Path, relative_path: &str, limit: usize) ->
     Ok(bytes)
 }
 
-fn field(document: &serde_json::Value, path: &[String]) -> Result<String> {
+/// Decode the payload of a compact JWT without trusting it: the token comes
+/// from the same fresh login file, so it only locates a stable claim.
+fn jwt_payload(token: &str) -> Result<serde_json::Value> {
+    use base64::Engine as _;
+    let mut parts = token.split('.');
+    let (Some(_), Some(payload), Some(_), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        anyhow::bail!("native identity token is not a compact JWT");
+    };
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .map_err(|_| anyhow::anyhow!("invalid native identity token"))?;
+    let claims: UniqueJson = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("invalid native identity token"))?;
+    Ok(claims.0)
+}
+
+fn lookup<'a>(document: &'a serde_json::Value, path: &[String]) -> Result<&'a serde_json::Value> {
     ensure!(
         !path.is_empty() && path.len() <= 16,
         "invalid native identity field path"
     );
     let mut value = document;
     for part in path {
-        value = value
+        let object = value
             .as_object()
-            .and_then(|object| object.get(part))
             .context("native identity field is missing")?;
+        value = if part == cowboy_provider_sdk::NATIVE_IDENTITY_SOLE_MEMBER {
+            let mut members = object.values();
+            match (members.next(), members.next()) {
+                (Some(only), None) => only,
+                _ => anyhow::bail!("native identity object must have exactly one member"),
+            }
+        } else {
+            object
+                .get(part)
+                .context("native identity field is missing")?
+        };
     }
-    let value = value
+    Ok(value)
+}
+
+/// A bounded string such as a token; identity fields use [`field`].
+fn string(document: &serde_json::Value, path: &[String]) -> Result<String> {
+    let value = lookup(document, path)?
+        .as_str()
+        .context("native identity field must be a string")?;
+    ensure!(
+        !value.is_empty() && value.len() <= 16 * 1024 && value.is_ascii(),
+        "invalid native identity token"
+    );
+    Ok(value.to_owned())
+}
+
+fn field(document: &serde_json::Value, path: &[String]) -> Result<String> {
+    let value = lookup(document, path)?
         .as_str()
         .context("native identity field must be a string")?;
     ensure!(
@@ -190,6 +238,7 @@ mod tests {
             relative_path: "profile.json".into(),
             subject_path: vec!["account".into(), "id".into()],
             tenant_path: Some(vec!["tenant".into()]),
+            subject_claim: None,
         }
     }
 
@@ -333,5 +382,84 @@ mod tests {
         let NativeIdentityRecipe::FreshLoginJsonV1 { relative_path, .. } = &mut nested;
         *relative_path = "alias/profile.json".into();
         assert!(read(home.path(), &nested).is_err());
+    }
+
+    fn plugin_recipe(plugin: &str, method: &str) -> NativeIdentityRecipe {
+        let source: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(format!(
+                "{}/../../plugins/{plugin}/provider.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let method = source["authentication"]["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate["id"] == method)
+            .unwrap();
+        serde_json::from_value(method["native_identity"].clone()).unwrap()
+    }
+
+    fn jwt(claims: &serde_json::Value) -> String {
+        use base64::Engine as _;
+        let encode = |value: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value);
+        format!(
+            "{}.{}.{}",
+            encode(br#"{"alg":"RS256"}"#),
+            encode(claims.to_string().as_bytes()),
+            encode(b"signature")
+        )
+    }
+
+    #[test]
+    fn codex_subscription_reads_the_chatgpt_user_from_the_fresh_id_token() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join(".codex")).unwrap();
+        let token = jwt(&serde_json::json!({
+            "sub":"auth0|subject",
+            "https://api.openai.com/auth":{"chatgpt_user_id":"user-1","chatgpt_account_id":"workspace-1"}
+        }));
+        let auth = serde_json::json!({"auth_mode":"chatgpt","tokens":{
+            "id_token":token,"access_token":"a","refresh_token":"r","account_id":"workspace-1"}});
+        fs::write(home.path().join(".codex/auth.json"), auth.to_string()).unwrap();
+        let identity = read(home.path(), &plugin_recipe("codex", "chatgpt-subscription")).unwrap();
+        assert_eq!(identity.authority, "chatgpt");
+        assert_eq!(identity.subject, "user-1");
+        assert_eq!(identity.tenant.as_deref(), Some("workspace-1"));
+        for invalid in ["not-a-jwt", "a.b", "a.%%%.c", "a.b.c.d"] {
+            let auth =
+                serde_json::json!({"tokens":{"id_token":invalid,"account_id":"workspace-1"}});
+            fs::write(home.path().join(".codex/auth.json"), auth.to_string()).unwrap();
+            assert!(read(home.path(), &plugin_recipe("codex", "chatgpt-subscription")).is_err());
+        }
+    }
+
+    #[test]
+    fn grok_subscription_reads_the_sole_issuer_entry_only() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join(".grok")).unwrap();
+        let entry = serde_json::json!({"key":"k","user_id":"user-1","team_id":"team-1"});
+        let path = home.path().join(".grok/auth.json");
+        fs::write(
+            &path,
+            serde_json::json!({"https://auth.x.ai::client": entry}).to_string(),
+        )
+        .unwrap();
+        let recipe = plugin_recipe("grok", "xai-subscription");
+        let identity = read(home.path(), &recipe).unwrap();
+        assert_eq!(identity.authority, "x-ai");
+        assert_eq!(identity.subject, "user-1");
+        assert_eq!(identity.tenant.as_deref(), Some("team-1"));
+        // Two cached logins are ambiguous; an empty cache has no identity.
+        fs::write(
+            &path,
+            serde_json::json!({"a::one": entry, "b::two": entry}).to_string(),
+        )
+        .unwrap();
+        assert!(read(home.path(), &recipe).is_err());
+        fs::write(&path, "{}").unwrap();
+        assert!(read(home.path(), &recipe).is_err());
     }
 }

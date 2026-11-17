@@ -20,6 +20,7 @@ primary phone/desktop product path.
 
 - [`architecture/00-overview.md`](architecture/00-overview.md) — Control plane, Machines, workers, storage, and client topology
 - [`configuration.md`](configuration.md) — Unified Service/Device configuration files, `cowboy config` CLI, reload classes, rolling-update pre-flight, and how to decide config file vs database vs wiring
+- [`antigravity-provider-plan.md`](antigravity-provider-plan.md) — Proposed Antigravity CLI Provider: consumer-subscription account-risk boundary, feasibility spike and phases; not implemented
 - [`execution-environments.md`](execution-environments.md) — Native remote execution, ownership, staged acceptance and OVH egress/context audit
 - [`execution-connection-recovery.md`](execution-connection-recovery.md) — Machine heartbeat, native handshake and execution lifetime recovery, including Retry preflight
 - [`remote-session-disaster-recovery.md`](remote-session-disaster-recovery.md) — Proposed recovery contract, October 24 incident audit, durable ACK gaps, per-session reconciliation and fault acceptance matrix; not implemented or activated
@@ -95,7 +96,8 @@ primary phone/desktop product path.
 - [`releases/agent-runtimes-2026-10-28.md`](releases/agent-runtimes-2026-10-28.md) — Claude Code 2.1.312, Codex 0.164.0 with ACP 2.3.0 and Grok 1.0.70 upgrades
 - [`releases/agent-runtimes-2026-10-30.md`](releases/agent-runtimes-2026-10-30.md) — Claude Code 2.1.314 with ACP 0.99.1, Codex 0.165.0 with ACP 2.5.0 and dsh rc.5; component release 3.71.0
 - [`releases/agent-runtimes-2026-11-10.md`](releases/agent-runtimes-2026-11-10.md) — Claude Code 2.1.321 (Fable 5.2) with ACP 0.102.0, idle compaction kept off; component release 3.107.0
-- [`releases/agent-runtimes-2026-11-17.md`](releases/agent-runtimes-2026-11-17.md) — Claude Code 2.1.326 with ACP 0.107.3 (v1 path, owner-only cycle naming), Grok 1.0.77, dsh 0.2.2-rc.1; component release 3.109.0, installed on Hawk and OVH
+- [`releases/agent-runtimes-2026-11-17.md`](releases/agent-runtimes-2026-11-17.md) — Claude Code 2.1.326 with ACP 0.107.3 (v1 path, owner-only cycle naming), Grok 1.0.77, dsh 0.2.2-rc.1; component release 3.109.0, installed on all four Machines
+- [`releases/machine-browser-1.0.7-2026-11-17.md`](releases/machine-browser-1.0.7-2026-11-17.md) — machine-browser 1.0.7 drops Chrome 157 Optimization Guide models (profile 53 → 6.5 MB) and the OVH Machine host update to SDK 1.16.0
 - [`releases/codex-runtime-2026-11-17.md`](releases/codex-runtime-2026-11-17.md) — Codex 0.166.0 with ACP 2.7.0, rebased adapter patch, 0.169.0 retained until ACP declares it, and Codex remote acceptance
 - [`releases/credential-probe-backoff-2026-10-31.md`](releases/credential-probe-backoff-2026-10-31.md) — failed credential probe backoff, usage after re-login, Ultra badge; Claude Code 3.20.22 and component release 3.73.0
 - [`releases/gemini-retirement-2026-10-30.md`](releases/gemini-retirement-2026-10-30.md) — Gemini retired from source, component release 3.72.0 and its fleet rollout

@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "grok",
-  "version": "3.1.60",
+  "version": "3.2.0",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.2.0",
+  "sdk_version": "3.3.0",
   "display": {
     "name": "Grok Build",
     "vendor": "xAI",
@@ -184,6 +184,50 @@
         },
         "required_bundle_keys": [
           "api_key"
+        ]
+      },
+      {
+        "id": "xai-subscription",
+        "label": "Personal Grok subscription",
+        "flow": "device_code",
+        "native_identity": {
+          "kind": "fresh_login_json_v1",
+          "authority": "x-ai",
+          "relative_path": ".grok/auth.json",
+          "subject_path": [
+            "*",
+            "user_id"
+          ],
+          "tenant_path": [
+            "*",
+            "team_id"
+          ]
+        },
+        "native_logout": {
+          "kind": "command_v1",
+          "arguments": [
+            "--no-auto-update",
+            "logout"
+          ]
+        },
+        "executor": {
+          "kind": "command_v1",
+          "component": {
+            "kind": "provider_cli",
+            "slot": "grok"
+          },
+          "arguments": [
+            "--no-auto-update",
+            "login",
+            "--device-auth"
+          ],
+          "terminal": "pipes",
+          "challenge": "device_code",
+          "environment": {},
+          "preflight": []
+        },
+        "required_bundle_keys": [
+          "auth_json"
         ]
       }
     ],

@@ -226,17 +226,21 @@ pub fn prepare_private_directory(path: &std::path::Path) -> anyhow::Result<()> {
 #[serde(try_from = "String", into = "String")]
 pub struct ProviderAccountId(String);
 
-/// Transitional first-party credential boundary. Named Claude subscriptions
-/// need native-owned login/status/logout, not the portable-vault prototype.
-/// Remove this admission fence only when that distinct lifecycle is accepted;
-/// a new identity recipe or protocol version alone must never open export.
+/// Providers whose signed releases carry native identity recipes. Their named
+/// credentials live only in a Machine's per-account native home and must never
+/// enter a portable vault. Transitional: the Service vault has no signed package
+/// at hand, so this list fences it until the portable named-account prototype
+/// is removed. Session admission and login use the signed manifest instead.
+#[cfg(any(feature = "full", feature = "machine-host", test))]
+pub const NATIVE_ACCOUNT_PROVIDERS: &[&str] = &["claude-code", "codex", "grok"];
+
 /// Legacy default accounts retain their existing migration boundary.
 #[cfg(any(feature = "full", feature = "machine-host", test))]
 pub fn portable_credentials_allowed(
     account: &ProviderAccountId,
     provider: &str,
 ) -> Result<(), &'static str> {
-    if !account.is_default() && provider == "claude-code" {
+    if !account.is_default() && NATIVE_ACCOUNT_PROVIDERS.contains(&provider) {
         Err("native_owned_credentials_required")
     } else {
         Ok(())

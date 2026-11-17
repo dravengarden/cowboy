@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.5.30",
+  "version": "3.6.0",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.2.0",
+  "sdk_version": "3.3.0",
   "display": {
     "name": "Codex",
     "vendor": "OpenAI",
@@ -345,6 +345,52 @@
         },
         "required_bundle_keys": [
           "api_key"
+        ]
+      },
+      {
+        "id": "chatgpt-subscription",
+        "label": "Personal ChatGPT subscription",
+        "flow": "device_code",
+        "native_identity": {
+          "kind": "fresh_login_json_v1",
+          "authority": "chatgpt",
+          "relative_path": ".codex/auth.json",
+          "subject_path": [
+            "tokens",
+            "id_token"
+          ],
+          "tenant_path": [
+            "tokens",
+            "account_id"
+          ],
+          "subject_claim": [
+            "https://api.openai.com/auth",
+            "chatgpt_user_id"
+          ]
+        },
+        "native_logout": {
+          "kind": "command_v1",
+          "arguments": [
+            "logout"
+          ]
+        },
+        "executor": {
+          "kind": "command_v1",
+          "component": {
+            "kind": "provider_cli",
+            "slot": "codex"
+          },
+          "arguments": [
+            "login",
+            "--device-auth"
+          ],
+          "terminal": "pipes",
+          "challenge": "device_code",
+          "environment": {},
+          "preflight": []
+        },
+        "required_bundle_keys": [
+          "auth_json"
         ]
       }
     ],

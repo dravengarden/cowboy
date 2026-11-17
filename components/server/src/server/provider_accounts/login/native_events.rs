@@ -21,8 +21,7 @@ pub(in crate::server) async fn poll(
             .await
             .map_err(|_| "unavailable")?
             .ok_or("login_operation_not_found")?;
-        if provider != "claude-code"
-            || receipt.provider_id != provider
+        if receipt.provider_id != provider
             || receipt.native_generation.is_none()
             || receipt.input.account_id.is_default()
         {

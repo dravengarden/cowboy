@@ -20,7 +20,6 @@ pub(super) fn begin_reserved(
         || receipt.native_completion.is_some()
         || executor.native_login.is_none()
         || executor.named_login.is_some()
-        || receipt.provider_id != "claude-code"
         || !executor.active(control, now_ms())
         || !executor.accepts_candidate(
             &receipt.input.machine_id,
@@ -80,7 +79,6 @@ pub(super) fn validate_executor(
     if profile.account_id.is_default()
         || executor.native_login.is_none()
         || executor.named_login.is_some()
-        || profile.provider_id != "claude-code"
         || !executor.connection.same(connection)
         || !executor.active(control, now_ms())
         || executor.expected_generation.checked_add(1) != Some(profile.generation)

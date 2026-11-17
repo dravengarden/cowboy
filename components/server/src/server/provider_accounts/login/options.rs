@@ -70,7 +70,6 @@ pub(in crate::server) async fn options_value(
         false
     };
     let reason = public_login_allowed(
-        &account.provider_id,
         state
             .service_config
             .get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_LOGIN),
@@ -142,7 +141,8 @@ pub(in crate::server) async fn options_value(
         "release": installed.map(|installed| json!({"provider_version":installed.plugin_version,"generation_digest":installed.generation_digest})),
         "methods":methods,
         "native_profile":native_profile,
-        "session_admission":if super::super::allow_named_creation(&account.provider_id,
+        "session_admission":if super::super::allow_named_creation(
+            state.provider_catalog.native_account_providers().contains(&account.provider_id),
             state.service_config.get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_SESSIONS)).is_ok() {"enabled"} else {"not_enabled"},
     }))
 }

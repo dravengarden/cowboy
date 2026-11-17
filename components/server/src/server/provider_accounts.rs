@@ -72,7 +72,10 @@ pub(super) async fn resolve_for_create(
     let id = registry.resolve(provider, explicit)?;
     if !id.is_default() {
         allow_named_creation(
-            provider,
+            state
+                .provider_catalog
+                .native_account_providers()
+                .contains(provider),
             state
                 .service_config
                 .get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_SESSIONS),
@@ -104,7 +107,7 @@ pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &
     let (shares, families) = browser::shares::list_value(state, owner).await?;
     Ok(
         json!({"registry":registry,"display_preferences":display,"revoked_accounts":revoked,"session_admission":if enabled {"enabled"} else {"not_enabled"},
-        "session_providers":if enabled {vec!["claude-code"]} else {vec![]},
+        "session_providers":if enabled {state.provider_catalog.native_account_providers().into_iter().collect()} else {Vec::<String>::new()},
         // The Service gate of the optional Machine browser (`accounts.machine_browser`).
         "machine_browser":if browser::gate_open(state) {"enabled"} else {"not_enabled"},
         // Each legacy default usage card's own browser key and enablement.
@@ -115,11 +118,13 @@ pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &
     )
 }
 
-fn allow_named_creation(provider: &str, enabled: bool) -> Result<(), &'static str> {
+/// `native` means the Provider signs a native login recipe; named accounts of
+/// other Providers have no credential path and never fall back to the default.
+fn allow_named_creation(native: bool, enabled: bool) -> Result<(), &'static str> {
     if !enabled {
         return Err("named_account_runtime_unavailable");
     }
-    if provider != "claude-code" {
+    if !native {
         return Err("named_account_provider_unavailable");
     }
     Ok(())
@@ -267,19 +272,17 @@ mod tests {
 
     #[test]
     fn rollout_cannot_enable_unsupported_provider_or_fall_back_to_default() {
-        assert!(allow_named_creation("claude-code", true).is_ok());
-        for provider in ["claude-code", "codex", "claude-deepseek", "grok", ""] {
+        assert!(allow_named_creation(true, true).is_ok());
+        for native in [true, false] {
             assert_eq!(
-                allow_named_creation(provider, false),
+                allow_named_creation(native, false),
                 Err("named_account_runtime_unavailable")
             );
-            if provider != "claude-code" {
-                assert_eq!(
-                    allow_named_creation(provider, true),
-                    Err("named_account_provider_unavailable")
-                );
-            }
         }
+        assert_eq!(
+            allow_named_creation(false, true),
+            Err("named_account_provider_unavailable")
+        );
     }
 
     #[test]
@@ -332,6 +335,7 @@ mod tests {
             relative_path: "profile.json".into(),
             subject_path: vec!["id".into()],
             tenant_path: Some(vec!["tenant".into()]),
+            subject_claim: None,
         };
         let identity = crate::provider_account::NativeIdentity {
             authority: "native".into(),

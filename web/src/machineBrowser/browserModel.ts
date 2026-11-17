@@ -1,6 +1,7 @@
 /** Pure state of the Machine browser panel: the last Controller read, the
- * action in flight, whether the viewer is mounted and the remote clipboard
- * held for the open attachment. The hook feeds it events; the sheet renders it. */
+ * action in flight, whether the viewer is mounted and the remote copies
+ * held for the open panel. The hook feeds it events; the sheet renders it. */
+import { NO_CLIPS, type RemoteClips, addClip, settleOffer } from "./remoteClips";
 import {
   type BrowserRead,
   type BrowserResult,
@@ -40,8 +41,9 @@ export interface BrowserModel {
    * applied after the drop or the last automatic step: each step needs a
    * new observation. */
   resume?: BrowserResume | undefined;
-  /** Text the remote browser copied, held for the open attachment only. */
-  remoteClipboard?: string | undefined;
+  /** Text the remote browser copied (`remoteClips.ts`): kept across
+   * reconnects and hibernation for this panel, never across accounts. */
+  clips?: RemoteClips | undefined;
   /** When the instance was first seen `starting`, bounding the fast poll. */
   startingSince?: number | undefined;
   /** An open answered `starting` for this instance; attach to it once it
@@ -121,7 +123,11 @@ export type BrowserEvent =
     }
   /** Reconnecting by itself stopped; `message` says why. */
   | { type: "resume_end"; message: string }
-  | { type: "remote_clipboard"; text: string | undefined }
+  | { type: "remote_clipboard"; text: string; now: number }
+  /** The copy prompt for this clip was answered. */
+  | { type: "clip_settled"; id: number }
+  /** The owner cleared the held clips. */
+  | { type: "clips_clear" }
   | { type: "notice"; message: string }
   /** An intermediate answer (a restart's hibernate or confirmation read)
    * named this browser identity: the panel re-binds. */
@@ -458,7 +464,6 @@ function withRead(model: BrowserModel, read: BrowserRead, now: number): BrowserM
     return {
       ...next,
       viewer: undefined,
-      remoteClipboard: undefined,
       notice: endNotice(state),
     };
   }
@@ -551,7 +556,7 @@ function viewerEnded(
   model: BrowserModel,
   event: Extract<BrowserEvent, { type: "viewer_ended" }>,
 ): BrowserModel {
-  const ended = { ...model, viewer: undefined, remoteClipboard: undefined };
+  const ended = { ...model, viewer: undefined };
   const viewer = model.viewer;
   if (!viewer || !event.resumable) {
     return { ...ended, resume: undefined, notice: event.message };
@@ -655,14 +660,13 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
       return {
         ...model,
         viewer: { takeover: event.takeover, generation: nextGeneration(model), target },
-        remoteClipboard: undefined,
         resume: stepTaken(model.resume),
         error: "",
         notice: "",
       };
     }
     case "detach":
-      return { ...model, viewer: undefined, remoteClipboard: undefined, resume: undefined };
+      return { ...model, viewer: undefined, resume: undefined };
     case "stream_state": {
       // The stream reports the instance it is attached to, on its Machine.
       const read: BrowserRead = {
@@ -686,8 +690,15 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
       return viewerEnded(model, event);
     case "resume_end":
       return { ...model, resume: undefined, notice: event.message };
-    case "remote_clipboard":
-      return { ...model, remoteClipboard: event.text };
+    case "remote_clipboard": {
+      const clips = model.clips ?? NO_CLIPS;
+      const next = addClip(clips, event.text, event.now);
+      return next === clips ? model : { ...model, clips: next };
+    }
+    case "clip_settled":
+      return model.clips ? { ...model, clips: settleOffer(model.clips, event.id) } : model;
+    case "clips_clear":
+      return model.clips ? { ...model, clips: undefined } : model;
     case "notice":
       return { ...model, notice: event.message };
     case "dismiss":
@@ -728,7 +739,7 @@ export type AccountBrowserAction =
   | { kind: "event"; account: string; event: BrowserEvent };
 
 /** One panel never mixes accounts: binding another account drops the
- * previous account's read, viewer target and remote clipboard, and an event
+ * previous account's read, viewer target and remote clips, and an event
  * from another account (a request still in flight, a closing viewer) is
  * discarded instead of applied to this one. */
 export function reduceAccountBrowser(

@@ -267,6 +267,7 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         None => {
             let (runtime, readiness) = child_runtime(
                 state,
+                parent.meta.owner_user_id.as_deref(),
                 &record.placement.machine_id,
                 Some(parent.meta.machine_id.as_str()),
                 &record.provider,
@@ -785,12 +786,14 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
         .ok_or("provider_unavailable")?;
     let readiness = runtime_readiness(
         state,
+        parent.meta.owner_user_id.as_deref(),
         &record.placement.machine_id,
         &runtime,
         &record.provider,
         record.purpose.profile(),
     )
     .await;
+    let account = readiness.account.clone();
     let generation = readiness
         .generation
         .filter(|generation| generation.version == *version && generation.digest == *digest)
@@ -832,38 +835,45 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
                 user_id,
                 username: parent.meta.owner_username.as_deref(),
             });
-    state
-        .provider_auth
-        .with_scheduling_generation(
+    // The same account-aware registration as a created session: a Service
+    // account keeps its scheduling fence, a named subscription rechecks its
+    // native login binding on the runtime Machine.
+    let registration = state
+        .supervisor
+        .prepare_session_on_with_id(
+            &record.child_session_id,
             &record.provider,
-            generation.auth_generation.is_some(),
-            generation.auth_generation,
-            || {
-                state.supervisor.register_session_on_with_id(
-                    &record.child_session_id,
-                    &record.provider,
-                    Some(session_cwd.clone()),
-                    crate::core::SessionOrigin::Api,
-                    false,
-                    crate::supervisor::SessionPlacement {
-                        machine_id: &runtime,
-                        workspace,
-                        execution_binding: Some(&binding),
-                    },
-                    crate::supervisor::ProviderGeneration {
-                        account_id: None,
-                        version: &generation.version,
-                        digest: &generation.digest,
-                        auth_generation: generation.auth_generation,
-                        behavior: Some(&generation.behavior),
-                    },
-                    owner,
-                )
+            Some(session_cwd.clone()),
+            crate::core::SessionOrigin::Api,
+            false,
+            crate::supervisor::SessionPlacement {
+                machine_id: &runtime,
+                workspace,
+                execution_binding: Some(&binding),
             },
+            crate::supervisor::ProviderGeneration {
+                account_id: Some(&account),
+                version: &generation.version,
+                digest: &generation.digest,
+                auth_generation: generation.auth_generation,
+                behavior: Some(&generation.behavior),
+            },
+            owner,
         )
-        .map_err(|_| "authentication_required")?
         .map_err(|_| "provider_unavailable")?;
-    Ok(())
+    super::super::provider_accounts::registration::register(
+        state,
+        registration,
+        generation.auth_generation,
+    )
+    .await
+    .map_err(|_| {
+        if account.is_default() {
+            "provider_unavailable"
+        } else {
+            "authentication_required"
+        }
+    })
 }
 
 fn stop_code(stop_reason: &str) -> &'static str {

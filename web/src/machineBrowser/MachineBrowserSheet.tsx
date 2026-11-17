@@ -8,7 +8,6 @@
 import { Box } from "@mui/material";
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { Sheet } from "../Sheet";
-import { copyText } from "../clipboard";
 import { useStoreSelector } from "../store";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import {
@@ -32,6 +31,7 @@ import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { BrowserMenu, type BrowserMenuItem, MobileBrowserToolbar } from "./MachineBrowserToolbar";
 import { devicePortrait, useTouchInput } from "./inputProfile";
 import { useDevicePaste } from "./MachineBrowserPaste";
+import { useRemoteClipboard } from "./MachineBrowserClipboard";
 import {
   type BrowserModel,
   RESUME_FAILED,
@@ -200,6 +200,7 @@ function browserMenuItems({
   commands,
   ask,
   onPaste,
+  onClipboard,
   onClose,
 }: {
   model: BrowserModel;
@@ -208,9 +209,10 @@ function browserMenuItems({
   ask: (kind: ConfirmKind) => void;
   /** Opens the paste sheet; runs inside the menu tap. */
   onPaste: () => void;
+  onClipboard: () => void;
   onClose: () => void;
 }): BrowserMenuItem[] {
-  const remote = model.remoteClipboard;
+  const held = model.clips?.items.length ?? 0;
   const items: (BrowserMenuItem | false)[] = [
     {
       key: "hibernate",
@@ -251,19 +253,8 @@ function browserMenuItems({
     },
     {
       key: "copy",
-      label:
-        remote === undefined
-          ? "Copy remote clipboard to this device"
-          : `Copy remote clipboard (${[...remote].length} characters) to this device`,
-      disabled: !chrome.copy,
-      onSelect: () => {
-        if (remote === undefined) return;
-        copyText(remote).then((copied) =>
-          commands.notice(
-            copied ? "Remote clipboard copied to this device." : "Could not copy on this device.",
-          ),
-        );
-      },
+      label: held === 0 ? "Remote clipboard…" : `Remote clipboard (${String(held)})…`,
+      onSelect: onClipboard,
     },
     {
       key: "refresh",
@@ -393,6 +384,12 @@ function MachineBrowserPanel(
   useResume(open, browser, commands);
   const ui = useBrowserChrome(account.id, model);
   const paste = useDevicePaste(ui.controls);
+  const clipboard = useRemoteClipboard(model, browser.dispatch);
+  // Copies are held while the panel is open; closing it forgets them.
+  const { dispatch } = browser;
+  useEffect(() => {
+    if (!open) dispatch({ type: "clips_clear" });
+  }, [open, dispatch]);
   // The Service's read names the browser a reset deletes; before it
   // arrives the inventory's view stands in.
   const { shared, confirm, chrome } = usePanelSharing(props, model, commands, ui.chrome);
@@ -408,6 +405,7 @@ function MachineBrowserPanel(
         commands: uiCommands,
         ask: confirm.ask,
         onPaste: paste.start,
+        onClipboard: clipboard.openSheet,
         onClose,
       })}
     />
@@ -429,6 +427,7 @@ function MachineBrowserPanel(
     onControls: ui.setPublished,
     onKeyboard: ui.setKeyboardOpen,
     shared,
+    overlay: clipboard.prompt,
   };
   const identity = {
     accountLabel: shared ? sharedIdentityLabel(shared) : account.label,
@@ -455,6 +454,7 @@ function MachineBrowserPanel(
         </Box>
         {confirm.dialog}
         {paste.dialog}
+        {clipboard.dialog}
       </DesktopBrowserModal>
     );
   }
@@ -495,6 +495,7 @@ function MachineBrowserPanel(
       </Box>
       {confirm.dialog}
       {paste.dialog}
+      {clipboard.dialog}
     </Sheet>
   );
 }

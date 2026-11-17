@@ -140,8 +140,10 @@ impl MachinePluginStore {
     }
 
     pub(super) fn validate_native_usage(&self, profile: &NativeProfileReceipt) -> Result<()> {
+        // A native profile receipt exists only for a Provider whose signed
+        // login recipe verified the identity; the receipt is the capability.
         ensure!(
-            !profile.account_id.is_default() && profile.provider_id == "claude-code",
+            !profile.account_id.is_default(),
             "named native account required"
         );
         ensure!(
@@ -168,17 +170,18 @@ impl MachinePluginStore {
 fn native_only_environment(environment: &mut BTreeMap<String, String>) -> Result<()> {
     let home = environment
         .get("HOME")
-        .context("native usage home missing")?;
+        .context("native usage home missing")?
+        .clone();
     // The signed Claude collector's optional credits enrichment reads this
     // variable. Omit it so only native auth-status/get_usage accesses credentials.
     // Native Claude must resolve the exact same .claude home, never a fallback.
-    ensure!(
-        environment
-            .get("CLAUDE_SECURESTORAGE_CONFIG_DIR")
-            .is_some_and(|directory| Path::new(directory) == Path::new(home).join(".claude")),
-        "native usage credential layout unsupported"
-    );
-    environment.remove("CLAUDE_SECURESTORAGE_CONFIG_DIR");
+    // Other Providers' collectors read their native home through HOME alone.
+    if let Some(directory) = environment.remove("CLAUDE_SECURESTORAGE_CONFIG_DIR") {
+        ensure!(
+            Path::new(&directory) == Path::new(&home).join(".claude"),
+            "native usage credential layout unsupported"
+        );
+    }
     Ok(())
 }
 
@@ -229,6 +232,9 @@ mod tests {
         native_only_environment(&mut environment).unwrap();
         assert_eq!(environment["HOME"], "/accounts/otter/home");
         assert!(!environment.contains_key("CLAUDE_SECURESTORAGE_CONFIG_DIR"));
+        // Providers without a separate credential directory read HOME alone.
+        native_only_environment(&mut environment).unwrap();
+        environment.remove("HOME");
         assert!(native_only_environment(&mut environment).is_err());
     }
 

@@ -1454,10 +1454,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         loop {
             tokio::select! {
                 () = liveness::wait(liveness_probe.deadline()) => {
-                    tracing::warn!(
-                        inbound_idle_ms = last_inbound.elapsed().as_millis(),
-                        "Machine Controller liveness probe timed out; reconnecting"
-                    );
+                    tracing::warn!(reason = "liveness_timeout", inbound_idle_ms = last_inbound.elapsed().as_millis(), "Machine Controller liveness probe timed out; reconnecting");
                     bail!("Controller did not answer the WebSocket liveness probe");
                 }
                 _ = heartbeat.tick() => {
@@ -1528,7 +1525,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
                                 None => ("eof", String::new()),
                             };
                             tracing::warn!(
-                                cause,
+                                reason = cause,
                                 %error,
                                 connected_ms = connected_at.elapsed().as_millis(),
                                 inbound_idle_ms = silent.as_millis(),
@@ -1657,7 +1654,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
                             // Replies sent on it may be lost; requests are
                             // idempotent by operation ID, so ask again.
                             let pending = outstanding.pending();
-                            tracing::warn!(resent = pending.len(), "Machine bulk lane failed; resending unanswered execution requests");
+                            tracing::warn!(reason = "bulk_lane_failed", resent = pending.len(), "Machine bulk lane failed; resending unanswered execution requests");
                             for text in pending {
                                 queue_controller_message(&controller_write_tx, Message::Text(text.to_string().into()))?;
                             }
@@ -1771,7 +1768,7 @@ async fn run_lane(
                         ));
                     }
                     crate::machine_lanes::ProbeAction::Failed => {
-                        tracing::warn!(lane = id, "Machine bulk lane stopped answering its liveness probe");
+                        tracing::warn!(lane = id, reason = "liveness_timeout", "Machine bulk lane stopped answering its liveness probe");
                         break true;
                     }
                 }
