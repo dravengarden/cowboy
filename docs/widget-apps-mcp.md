@@ -1,7 +1,7 @@
 # Widget apps, phase C: MCP Apps from bound Plugin servers
 
-Status: design revision 5 (2026-11-11); steps 1-3 implemented, browser
-admission and step 4 open (§10). It replaces the
+Status: design revision 5 (2026-11-11); steps 1-3 implemented and macOS
+Google Chrome ≥ 157 admitted (§9.1); step 4 open (§10). It replaces the
 direction recorded in [`widget-apps-dom.md`](widget-apps-dom.md) §10 and the
 phase C line of [`widget-apps.md`](widget-apps.md) §10. Owner decisions are
 in §11, the review record in §12.
@@ -325,6 +325,44 @@ requires, on that browser:
   an ungranted call refused;
 - the service worker and an offline reload never serve `/mcp-app/`.
 
+### 9.1 Admission run (2026-11-17)
+
+`tools/mcp-apps-conformance.ts` serves a conformance view
+(`web/src/mcpAppsConformanceView.ts`) with the headers the Controller computes
+for those exact bytes (the ignored test `export_view_headers_for_admission`),
+from a loopback TLS origin on the Mac, so Chrome sends its real request
+metadata. A dedicated headless Google Chrome 157.0.8103.79 on macOS runs the
+production host and bridge (`startMcpApp`) under the product's parent
+`frame-src 'self'`; the Controller's lease and call endpoints are substituted
+in the page (they are covered by the Controller tests of §10 step 2). Egress
+is observed as in phase B: DevTools interception, Chrome's network log and
+STUN/TURN listeners.
+
+- `policy` passed: the view request carried `Sec-Fetch-Dest: iframe` and
+  `Sec-Fetch-Site: same-origin`; the MCP Apps sequence completed (initialize
+  with the granted capabilities, tool input and result replayed after
+  `initialized`, the app projection listed, the read-only call without a
+  prompt, the write call after one confirmation of its exact arguments, the
+  ungranted call refused before the Controller, an unknown method answered
+  -32601, coalesced sizes, the link and the message); a size-notification
+  flood and a view navigating its frame were removed; all 14 phase B probes
+  reported from inside the view; egress, network-log mentions and
+  STUN/TURN were 0; the frame ran out of process.
+- `control` (the same view without its security headers) passed with
+  egress on all 9 channels, 79 network-log mentions and 18 STUN/TURN
+  packets, so silence under `policy` means blocked.
+- The phase B suite (`tools/dom-apps-conformance.ts`) passed unchanged on
+  the same browser (`policy`, `control`, `no-isolation`).
+
+Admission row: Google Chrome on macOS, major ≥ 157 (`mcpAppsEnabled.ts`).
+Open rows, not claimed by this run: the pinned
+`@modelcontextprotocol/ext-apps` SDK's own initialize sequence (the
+conformance view is a hand-written client of the same revision); a view
+navigating to another view's URL and a blob document posting before `load`
+(the host removes a frame on its second load, but neither case was driven);
+calls after a lease ended with the parent stalled; and the concurrent view
+and agent calls, which need a real binding (step 4).
+
 ## 10. Order of work
 
 1. a. Contract `apps` (views, visibility, read-only) and the agent
@@ -349,10 +387,9 @@ requires, on that browser:
    request at a time, Controller-owned dispatch, idle and unleased close);
    effects under the lease (`mcp_bindings/apps_bridge.rs`); transcript rows
    (`apps_rows.rs`); the Web bridge (`web/src/widgets/dom/mcpAppBridge.ts`,
-   `mcpAppHost.ts`, `WidgetMcpApp.tsx`) with its protocol tests. Open: the
-   §9 browser rows (pinned SDK fixture view driven through a real Web host);
-   until a browser passes them `mcpAppsEnabled.ts` admits none and every row
-   shows its text result. App-only tools need the Machine change of §3.
+   `mcpAppHost.ts`, `WidgetMcpApp.tsx`) with its protocol tests. The
+   browser admission run of §9.1 admits macOS Google Chrome ≥ 157; its open
+   rows are listed there. App-only tools need the Machine change of §3.
 4. A real native-binding test with the retained execution executable (not a
    standalone SDK view), then the first view: a Suger status view granted on
    one session.

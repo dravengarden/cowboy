@@ -533,6 +533,21 @@ mod tests {
         assert_eq!(frames.issue(scope(), html).unwrap_err(), "too_many_frames");
     }
 
+    /// The phase C admission run (tools/mcp-apps-conformance.ts) serves its
+    /// conformance view with the headers this Controller would send for it.
+    #[test]
+    #[ignore = "run by tools/mcp-apps-conformance.ts"]
+    fn export_view_headers_for_admission() {
+        let view = std::env::var("COWBOY_MCP_APP_VIEW").expect("COWBOY_MCP_APP_VIEW");
+        let out = std::env::var("COWBOY_MCP_APP_HEADERS_OUT").expect("COWBOY_MCP_APP_HEADERS_OUT");
+        let html = std::fs::read(view).unwrap();
+        let headers: Vec<_> = super::super::super::web_security::mcp_app_headers(&html)
+            .into_iter()
+            .map(|(name, value)| json!({"name": name, "value": value}))
+            .collect();
+        std::fs::write(out, serde_json::to_vec(&headers).unwrap()).unwrap();
+    }
+
     #[test]
     fn only_exact_token_paths_are_accepted() {
         let token = "a".repeat(64);

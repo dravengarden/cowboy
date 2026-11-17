@@ -7,8 +7,12 @@ import { domAppsEnabledFor } from "./domAppsEnabled";
 
 type Client = Parameters<typeof domAppsEnabledFor>[0];
 
-/** Admitted rows; empty until a browser has passed the phase C rows. */
-export const ADMITTED: readonly { platform: string; chromeMajor: number }[] = [];
+/** Admitted rows (§9): Google Chrome on macOS from the major the suite
+ *  passed on (`tools/mcp-apps-conformance.ts` policy and control, with the
+ *  phase B suite unchanged). A failed rerun on a later major removes the row. */
+export const ADMITTED: readonly { platform: string; chromeMajor: number }[] = [
+  { platform: "macOS", chromeMajor: 157 },
+];
 
 export function mcpAppsEnabledFor(client: Client): boolean {
   if (!domAppsEnabledFor(client)) return false;

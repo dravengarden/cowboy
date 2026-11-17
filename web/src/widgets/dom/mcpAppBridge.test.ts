@@ -228,10 +228,10 @@ describe("MCP Apps admission", () => {
       userAgentData: { mobile: false, platform, brands: [{ brand: "Google Chrome", version }] },
     } as unknown as Navigator & { userAgentData: unknown },
   });
-  test("its own table, never inherited from full-DOM apps", () => {
-    // Full-DOM apps are admitted on macOS Chrome 157; views are not, until
-    // the phase C rows pass there.
-    expect(mcpAppsEnabledFor(chrome("macOS", "157") as never)).toBe(false);
+  test("its own table: macOS Chrome from 157, nothing else", () => {
+    expect(mcpAppsEnabledFor(chrome("macOS", "157") as never)).toBe(true);
+    expect(mcpAppsEnabledFor(chrome("macOS", "156") as never)).toBe(false);
     expect(mcpAppsEnabledFor(chrome("Linux", "200") as never)).toBe(false);
+    expect(mcpAppsEnabledFor(chrome("Windows", "200") as never)).toBe(false);
   });
 });
