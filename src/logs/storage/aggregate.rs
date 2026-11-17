@@ -84,8 +84,10 @@ impl SqliteStore {
             }
             let db = Self::connection(&segment.path, false)?;
             query_deadline(&db, start);
-            if !segment_totals(&db, &totals, query, groups, &mut coverage)?
-                || !segment_evidence(&db, &evidence, query, groups, &mut coverage)?
+            // Evidence rows arrive in the scan's (observed_ms, id) order, so
+            // they name groups first and the 128-group cap picks the same ones.
+            if !segment_evidence(&db, &evidence, query, groups, &mut coverage)?
+                || !segment_totals(&db, &totals, query, groups, &mut coverage)?
             {
                 return Ok(coverage);
             }

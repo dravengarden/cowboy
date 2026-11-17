@@ -1869,14 +1869,13 @@ async fn publish_provider_auth_observations(
                 observations
                     .failed_provider_ids
                     .insert((candidate.account_id.clone(), candidate.provider_id.clone()));
-                // Backing off, or failing again after it: reported as Failed
-                // at the first rejection. A logged-out projection otherwise
-                // warned every 30 minutes forever.
-                if crate::machine_plugins::refresh_already_reported(&error) {
-                    tracing::debug!(provider = %candidate.provider_id, %error, "rejected credential refresh was already reported");
+                if crate::machine_plugins::refresh_backing_off(&error) {
+                    tracing::debug!(provider = %candidate.provider_id, "rejected credential refresh is backing off");
                 } else {
+                    // Republished as Failed so the Controller can repair it;
+                    // only its first rejection is a warning.
                     changed = true;
-                    tracing::warn!(provider = %candidate.provider_id, %error, "invalid credential refresh excluded from promotion");
+                    crate::machine_plugins::log_refresh_rejection(&candidate.provider_id, &error);
                 }
                 continue;
             }

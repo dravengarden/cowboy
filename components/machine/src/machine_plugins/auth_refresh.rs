@@ -58,10 +58,19 @@ impl std::fmt::Display for RefreshProbeRepeated {
     }
 }
 
-/// A rejection this Machine already reported for the exact same candidate.
-pub fn refresh_already_reported(error: &anyhow::Error) -> bool {
+/// The exact candidate was not probed again: it is still backing off.
+pub fn refresh_backing_off(error: &anyhow::Error) -> bool {
     error.downcast_ref::<RefreshProbeBackoff>().is_some()
-        || error.downcast_ref::<RefreshProbeRepeated>().is_some()
+}
+
+/// A logged-out projection otherwise warned every 30 minutes forever: only
+/// an exact candidate's first rejection is a warning, repeats are debug.
+pub fn log_refresh_rejection(provider: &str, error: &anyhow::Error) {
+    if let Some(repeated) = error.downcast_ref::<RefreshProbeRepeated>() {
+        tracing::debug!(provider, failures = repeated.failures, %error, "rejected credential refresh failed again");
+    } else {
+        tracing::warn!(provider, %error, "invalid credential refresh excluded from promotion");
+    }
 }
 
 fn candidate_digest(candidate: &ProviderAuthRefreshCandidate) -> Result<[u8; 32]> {
@@ -316,8 +325,8 @@ mod tests {
         }
         assert_eq!(failures.0.len(), PROBE_FAILURE_ENTRIES);
         let repeated = anyhow::anyhow!("logged out").context(RefreshProbeRepeated { failures: 2 });
-        assert!(refresh_already_reported(&repeated));
-        assert!(!refresh_already_reported(&anyhow::anyhow!("logged out")));
+        assert!(repeated.downcast_ref::<RefreshProbeRepeated>().is_some());
+        assert!(!refresh_backing_off(&repeated));
     }
 
     #[tokio::test]

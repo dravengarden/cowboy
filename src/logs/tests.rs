@@ -844,3 +844,25 @@ fn aggregated_metrics_equal_a_newest_first_record_scan() {
     assert_eq!(series.count, series.errors + series.warnings);
     assert_eq!(series.count, 32);
 }
+
+#[test]
+fn aggregated_metrics_cap_the_same_groups_as_a_scan_on_equal_timestamps() {
+    let (_root, store) = fixture();
+    for n in 0..140_u64 {
+        let mut e = entry(1000, n);
+        e.event = format!("cowboy.fixture.{n:03}");
+        store.append(&[e], 1000).unwrap();
+    }
+    let mut q = query(1000, 2000);
+    q.limit = 1000;
+    let mut scanned = std::collections::BTreeMap::new();
+    for item in store.query(&q).unwrap().items {
+        super::analysis::accumulate(&mut scanned, &item);
+    }
+    let metrics = store.metrics(&q).unwrap();
+    assert_eq!(metrics.groups.len(), 129);
+    assert_eq!(
+        serde_json::to_value(&metrics.groups).unwrap(),
+        serde_json::to_value(&scanned).unwrap()
+    );
+}
