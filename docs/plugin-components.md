@@ -83,6 +83,13 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.109.0 records provider-runtime 1.2.2: Claude Code 2.1.326
+with Claude Agent ACP 0.107.3, Codex ACP 2.7.0 with native Codex 0.166.0, Grok
+1.0.77 and dsh 0.2.2-rc.1. Every Plugin that pins provider-runtime advances one
+patch version: claude-code 3.20.41, claude-deepseek 3.1.60, codex 3.5.30,
+codex-deepseek 3.1.60, grok 3.1.60 and deepseek-harness 1.0.18. See
+[the release record](releases/agent-runtimes-2026-11-17.md).
+
 Component release 3.108.0 records plugin-sdk 1.15.0: the `mcp_server`
 contract gains an optional MCP Apps declaration (signed inline views and
 per-tool visibility, [`widget-apps-mcp.md`](widget-apps-mcp.md) §3), and
