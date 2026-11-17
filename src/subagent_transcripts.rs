@@ -8,7 +8,7 @@
 //! of waiting. Everything here is presentation: a full queue, a slow store or
 //! a failed write loses observed rows, never agent work.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -47,8 +47,17 @@ pub struct Observed {
     pub dropped: u64,
 }
 
+/// What the writer applies, in the order it was queued.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Msg {
+    Observed(Observed),
+    /// The session's transcript was cleared: rows queued before this are
+    /// deleted after they are written, and cached state is forgotten.
+    Clear(String),
+}
+
 struct Sink {
-    tx: mpsc::Sender<Observed>,
+    tx: mpsc::Sender<Msg>,
     /// `(session, child)` → updates dropped at this queue, reported with the
     /// child's next accepted update.
     dropped: Mutex<HashMap<(String, String), u64>>,
@@ -123,15 +132,28 @@ fn offer(sink: &Sink, mut observed: Observed) {
     if let Some(count) = dropped.remove(&key) {
         observed.dropped = observed.dropped.saturating_add(count);
     }
-    if let Err(error) = sink.tx.try_send(observed) {
-        let observed = match error {
-            mpsc::error::TrySendError::Full(observed)
-            | mpsc::error::TrySendError::Closed(observed) => observed,
+    if let Err(error) = sink.tx.try_send(Msg::Observed(observed)) {
+        let (mpsc::error::TrySendError::Full(Msg::Observed(observed))
+        | mpsc::error::TrySendError::Closed(Msg::Observed(observed))) = error
+        else {
+            return;
         };
         // Bounded too: a child that floods a stalled writer keeps one counter.
         if dropped.len() < CACHED_CHILDREN || dropped.contains_key(&key) {
             *dropped.entry(key).or_default() += observed.dropped.saturating_add(1);
         }
+    }
+}
+
+/// Order a transcript Clear after every observed update queued before it, so
+/// none of them is written back afterwards. Waits for queue space: Clear is a
+/// person's action, never the agent's path.
+pub async fn clear(session_id: &str) {
+    if let Some(sink) = SINK.get() {
+        sink.dropped
+            .lock()
+            .retain(|(session, _), _| session != session_id);
+        let _ = sink.tx.send(Msg::Clear(session_id.to_owned())).await;
     }
 }
 
@@ -152,7 +174,7 @@ pub(crate) struct Writer {
     highwaters: HashMap<(String, String), i64>,
 }
 
-async fn run_writer(store: Store, mut rx: mpsc::Receiver<Observed>) {
+async fn run_writer(store: Store, mut rx: mpsc::Receiver<Msg>) {
     let mut writer = Writer::default();
     while let Some(first) = rx.recv().await {
         let mut batch = vec![first];
@@ -168,60 +190,82 @@ async fn run_writer(store: Store, mut rx: mpsc::Receiver<Observed>) {
 }
 
 impl Writer {
-    pub(crate) async fn apply(&mut self, store: &Store, batch: Vec<Observed>) {
-        let mut rows: Vec<ObservedRow> = Vec::new();
-        let mut touched = HashSet::new();
-        for observed in batch {
-            let fence = (observed.session_id.clone(), observed.worker_epoch.clone());
-            let highwater = match self.highwaters.get(&fence) {
-                Some(highwater) => *highwater,
-                None => match store
-                    .subagent_events_highwater(&observed.session_id, &observed.worker_epoch)
-                    .await
-                {
-                    Ok(highwater) => highwater.unwrap_or(0),
-                    Err(error) => {
-                        tracing::warn!(%error, "reading observed subagent highwater");
-                        continue;
-                    }
-                },
-            };
-            let runtime_seq = i64::try_from(observed.runtime_seq).unwrap_or(i64::MAX);
-            self.highwaters.insert(fence, highwater.max(runtime_seq));
-            if runtime_seq <= highwater {
-                continue; // A replay after a Controller restart.
-            }
-            let key = (observed.session_id.clone(), observed.child_id.clone());
-            if !self.children.contains_key(&key) {
-                let Some(state) = load_child(store, &observed).await else {
-                    continue;
-                };
-                if self.children.len() >= CACHED_CHILDREN {
-                    self.children.clear();
-                }
-                self.children.insert(key.clone(), state);
-            }
-            let Some(state) = self.children.get_mut(&key) else {
-                continue;
-            };
-            for row in fold(state, observed, chrono::Utc::now().timestamp_millis()) {
-                touched.insert(key.clone());
-                rows.retain(|kept| {
-                    (&kept.session_id, &kept.child_id, kept.seq)
-                        != (&row.session_id, &row.child_id, row.seq)
-                });
-                rows.push(row);
-            }
+    pub(crate) async fn apply(&mut self, store: &Store, batch: Vec<Msg>) {
+        // Forget only between batches: a child touched by this batch keeps
+        // its uncommitted sequence and open row.
+        if self.children.len() >= CACHED_CHILDREN {
+            self.children.clear();
         }
-        if let Err(error) = store.upsert_subagent_events(&rows).await {
-            tracing::warn!(%error, rows = rows.len(), "writing observed subagent events");
-            // The store is authoritative: reload these children next time.
-            for key in touched {
-                self.children.remove(&key);
-            }
+        if self.highwaters.len() >= CACHED_CHILDREN {
             self.highwaters.clear();
         }
-        if self.highwaters.len() > CACHED_CHILDREN {
+        let mut rows: Vec<ObservedRow> = Vec::new();
+        for message in batch {
+            match message {
+                Msg::Observed(observed) => self.fold_into(store, observed, &mut rows).await,
+                Msg::Clear(session_id) => {
+                    self.flush(store, &mut rows).await;
+                    if let Err(error) = store.delete_subagent_events(&session_id).await {
+                        tracing::warn!(%error, "clearing observed subagent events");
+                    }
+                    self.children
+                        .retain(|(session, _), _| *session != session_id);
+                    self.highwaters
+                        .retain(|(session, _), _| *session != session_id);
+                }
+            }
+        }
+        self.flush(store, &mut rows).await;
+    }
+
+    async fn fold_into(&mut self, store: &Store, observed: Observed, rows: &mut Vec<ObservedRow>) {
+        let fence = (observed.session_id.clone(), observed.worker_epoch.clone());
+        let highwater = match self.highwaters.get(&fence) {
+            Some(highwater) => *highwater,
+            None => match store
+                .subagent_events_highwater(&observed.session_id, &observed.worker_epoch)
+                .await
+            {
+                Ok(highwater) => highwater.unwrap_or(0),
+                Err(error) => {
+                    tracing::warn!(%error, "reading observed subagent highwater");
+                    return;
+                }
+            },
+        };
+        let runtime_seq = i64::try_from(observed.runtime_seq).unwrap_or(i64::MAX);
+        self.highwaters.insert(fence, highwater.max(runtime_seq));
+        if runtime_seq <= highwater {
+            return; // A replay after a Controller restart.
+        }
+        let key = (observed.session_id.clone(), observed.child_id.clone());
+        if !self.children.contains_key(&key) {
+            let Some(state) = load_child(store, &observed).await else {
+                return;
+            };
+            self.children.insert(key.clone(), state);
+        }
+        let Some(state) = self.children.get_mut(&key) else {
+            return;
+        };
+        for row in fold(state, observed, chrono::Utc::now().timestamp_millis()) {
+            rows.retain(|kept| {
+                (&kept.session_id, &kept.child_id, kept.seq)
+                    != (&row.session_id, &row.child_id, row.seq)
+            });
+            rows.push(row);
+        }
+    }
+
+    async fn flush(&mut self, store: &Store, rows: &mut Vec<ObservedRow>) {
+        let written = std::mem::take(rows);
+        if let Err(error) = store.upsert_subagent_events(&written).await {
+            tracing::warn!(%error, rows = written.len(), "writing observed subagent events");
+            // The store is authoritative: reload these children next time.
+            for row in &written {
+                self.children
+                    .remove(&(row.session_id.clone(), row.child_id.clone()));
+            }
             self.highwaters.clear();
         }
     }
@@ -326,47 +370,13 @@ fn coalesce(open: &Value, next: &Value) -> Option<Value> {
     }
     let mut merged = open.clone();
     merged["content"]["text"] = Value::String(format!("{current}{more}"));
-    Some(merged)
+    (crate::runtime_wire::json_size(&merged) <= MAX_ROW_BYTES).then_some(merged)
 }
 
-/// Trim an update whose serialized form exceeds [`MAX_ROW_BYTES`], keeping
-/// what identifies and summarizes it.
+/// Trim an update to [`MAX_ROW_BYTES`], keeping what identifies it.
 #[must_use]
-pub fn bounded(mut update: Value) -> Value {
-    let size = |value: &Value| serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len());
-    if size(&update) <= MAX_ROW_BYTES {
-        return update;
-    }
-    if let Some(text) = update.pointer_mut("/content/text")
-        && let Some(value) = text.as_str()
-    {
-        let mut end = MAX_ROW_BYTES / 2;
-        while !value.is_char_boundary(end) {
-            end -= 1;
-        }
-        *text = Value::String(value[..end].to_owned());
-    }
-    if let Some(object) = update.as_object_mut() {
-        for field in ["content", "rawOutput", "rawInput", "locations"] {
-            if size(&Value::Object(object.clone())) <= MAX_ROW_BYTES {
-                break;
-            }
-            object.remove(field);
-        }
-        object.insert("_cowboy".to_owned(), json!({"truncated": true}));
-    }
-    if size(&update) <= MAX_ROW_BYTES {
-        return update;
-    }
-    let keep = |key: &str| update.get(key).cloned().unwrap_or(Value::Null);
-    json!({
-        "sessionUpdate": keep("sessionUpdate"),
-        "toolCallId": keep("toolCallId"),
-        "title": keep("title"),
-        "status": keep("status"),
-        "kind": keep("kind"),
-        "_cowboy": {"truncated": true},
-    })
+pub fn bounded(update: Value) -> Value {
+    crate::runtime_wire::bound_observed_update(update, MAX_ROW_BYTES)
 }
 
 /// The parent-timeline event for one runtime event of `(session, worker)`:

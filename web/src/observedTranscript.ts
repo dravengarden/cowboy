@@ -96,13 +96,13 @@ export function mergeObserved(
 
 /** The newest seq shown, the cursor for rows still arriving. A coalesced
  *  message keeps its seq, so its row is fetched again from there. */
+/** Kinds the Controller's writer extends in place (src/subagent_transcripts.rs). */
+const COALESCED = new Set(["agent_message_chunk", "agent_thought_chunk", "user_message_chunk"]);
+
 export function afterCursor(transcript: ObservedTranscript): number | undefined {
   const last = transcript.events.at(-1);
   if (!last) return undefined;
-  return last.update.sessionUpdate === "agent_message_chunk" ||
-    last.update.sessionUpdate === "agent_thought_chunk"
-    ? last.seq - 1
-    : last.seq;
+  return COALESCED.has(last.update.sessionUpdate) ? last.seq - 1 : last.seq;
 }
 
 /** Envelopes for the shared Transcript: the delegation prompt as the first

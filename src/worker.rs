@@ -4,7 +4,7 @@
 //! connects *out* to Machine broker, so Cowboy and Machine broker may restart while the worker
 //! keeps an in-flight prompt and pending permission responders alive.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -80,14 +80,19 @@ pub struct Shared {
     preset_options: std::collections::BTreeSet<String>,
     /// The latest prompt's Controller keeps observed subagent transcripts.
     observe_subagents: AtomicBool,
-    /// Observed child updates dropped since the last one emitted.
-    observe_dropped: AtomicU64,
+    /// Per child, observed updates dropped since its last emitted one. Only
+    /// the ACP thread touches it.
+    observe_dropped: Mutex<HashMap<String, u64>>,
 }
 
 /// Unacknowledged runtime events beyond which a subagent's observed update is
 /// dropped instead of queued: observation never grows the outbox without
 /// bound while the Controller is away, and never waits for it.
 const OBSERVE_OUTBOX_LIMIT: usize = 4096;
+/// Serialized bytes one observed update may carry, far below a frame.
+const OBSERVE_MAX_BYTES: usize = 1024 * 1024;
+/// Children whose dropped updates are attributed; more are not counted.
+const OBSERVE_DROP_CHILDREN: usize = 1024;
 
 struct ManagedRound {
     ready: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
@@ -151,6 +156,10 @@ impl Shared {
         // Keep sequence assignment and event/metadata admission ordered even
         // when the ACP thread and broker command loop emit concurrently.
         let mut outbox = self.outbox.lock();
+        self.emit_locked(&mut outbox, event)
+    }
+
+    fn emit_locked(&self, outbox: &mut BTreeMap<u64, RuntimeEvent>, event: RuntimeEvent) -> u64 {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         self.apply_snapshot_event(seq, &event);
         let diagnostics = self.telemetry.lock().event(&event);
@@ -162,7 +171,6 @@ impl Shared {
             }
         }
         outbox.insert(seq, event);
-        drop(outbox);
         let _ = self.notify.send(());
         seq
     }
@@ -450,6 +458,8 @@ impl AgentSink for RemoteSink {
         });
     }
 
+    /// Never waits: a busy or full outbox drops the update and counts it for
+    /// that child, whose next emitted update reports the gap.
     fn observe_subagent(
         &self,
         _session_id: &str,
@@ -460,23 +470,34 @@ impl AgentSink for RemoteSink {
         if !shared.observe_subagents.load(Ordering::Relaxed) {
             return;
         }
-        if shared.outbox.lock().len() >= OBSERVE_OUTBOX_LIMIT {
-            shared.observe_dropped.fetch_add(1, Ordering::Relaxed);
+        let update = crate::runtime_wire::bound_observed_update(update, OBSERVE_MAX_BYTES);
+        let mut dropped = shared.observe_dropped.lock();
+        let outbox = shared
+            .outbox
+            .try_lock()
+            .filter(|outbox| outbox.len() < OBSERVE_OUTBOX_LIMIT);
+        let Some(mut outbox) = outbox else {
+            if dropped.len() < OBSERVE_DROP_CHILDREN || dropped.contains_key(child_session_id) {
+                *dropped.entry(child_session_id.to_owned()).or_default() += 1;
+            }
             return;
-        }
+        };
         let mut observed = serde_json::json!({
             "sessionUpdate": crate::runtime_wire::SUBAGENT_EVENT_UPDATE,
             "childSessionId": child_session_id,
             "update": update,
         });
-        let dropped = shared.observe_dropped.swap(0, Ordering::Relaxed);
-        if dropped > 0 {
-            observed["dropped"] = dropped.into();
+        if let Some(count) = dropped.remove(child_session_id) {
+            observed["dropped"] = count.into();
         }
-        shared.emit(RuntimeEvent::Update {
-            update: observed,
-            cmid: None,
-        });
+        drop(dropped);
+        shared.emit_locked(
+            &mut outbox,
+            RuntimeEvent::Update {
+                update: observed,
+                cmid: None,
+            },
+        );
     }
 
     fn set_session_usage(&self, _session_id: &str, usage: crate::agent_model::SessionUsage) {
@@ -775,7 +796,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         managed_round,
         preset_options: prepared.preset_options.clone(),
         observe_subagents: AtomicBool::new(false),
-        observe_dropped: AtomicU64::new(0),
+        observe_dropped: Mutex::default(),
     });
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (done_tx, mut done_rx) = mpsc::channel(1);
@@ -1386,7 +1407,7 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
             managed_round: None,
             preset_options: std::collections::BTreeSet::new(),
             observe_subagents: AtomicBool::new(false),
-            observe_dropped: AtomicU64::new(0),
+            observe_dropped: Mutex::default(),
         }),
         rx,
     )
@@ -1439,6 +1460,8 @@ mod tests {
         assert_eq!(update["childSessionId"], "child");
         assert_eq!(update["dropped"], 2);
         assert_eq!(update["update"]["toolCallId"], "t");
+        drop(outbox);
+        assert!(shared.observe_dropped.lock().is_empty());
     }
 
     #[test]

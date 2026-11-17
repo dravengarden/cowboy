@@ -65,45 +65,72 @@ export function useSubagentTranscript(
   const tone = subagent ? subagentStatus(subagent).tone : "unknown";
   const working = tone === "working" || tone === "waiting";
 
+  // One request at a time, in order: an older response can never replace
+  // newer rows, and every cursor follows the rows already merged.
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  const busy = useRef(0);
   const fetchPage = useCallback(
-    async (direction: "newest" | "after" | "before"): Promise<void> => {
-      if (!childId) return;
-      const shown = latest.current.transcript;
-      const cursor =
-        direction === "after"
-          ? { after: afterCursor(shown) ?? 0 }
-          : direction === "before"
-            ? { before: shown.events[0]?.seq ?? Number.MAX_SAFE_INTEGER }
-            : {};
-      try {
-        const page = await fetchObservedPage(sessionId, childId, cursor);
-        if (latest.current.key !== key) return;
-        const transcript = mergeObserved(latest.current.transcript, page, direction);
-        remember(key, transcript);
-        setState({ key, transcript, loaded: true });
-      } catch {
-        if (latest.current.key === key && !latest.current.loaded) {
-          setState({ key, transcript: latest.current.transcript, loaded: true });
+    (direction: "newest" | "after" | "before"): Promise<void> => {
+      if (!childId) return Promise.resolve();
+      busy.current += 1;
+      const run = async (): Promise<void> => {
+        // A forward read drains every page the Controller has, bounded.
+        for (let page = 0; page < (direction === "after" ? 50 : 1); page += 1) {
+          if (latest.current.key !== key) return;
+          const shown = latest.current.transcript;
+          const cursor =
+            direction === "after"
+              ? { after: afterCursor(shown) ?? 0 }
+              : direction === "before"
+                ? { before: shown.events[0]?.seq ?? Number.MAX_SAFE_INTEGER }
+                : {};
+          const result = await fetchObservedPage(sessionId, childId, cursor);
+          if (latest.current.key !== key) return;
+          const transcript = mergeObserved(latest.current.transcript, result, direction);
+          remember(key, transcript);
+          latest.current = { key, transcript, loaded: true };
+          setState(latest.current);
+          if (!result.more_after) return;
         }
-      }
+      };
+      const next = queue.current
+        .then(run)
+        .catch(() => {
+          if (latest.current.key === key && !latest.current.loaded) {
+            latest.current = { ...latest.current, loaded: true };
+            setState(latest.current);
+          }
+        })
+        .finally(() => {
+          busy.current -= 1;
+        });
+      queue.current = next;
+      return next;
     },
     [childId, key, sessionId],
   );
 
   useEffect(() => {
-    if (childId) void fetchPage(latest.current.transcript.events.length > 0 ? "after" : "newest");
+    if (!childId) return;
+    // A cached transcript continues after its newest row; a fresh one starts
+    // from the newest page, so no hole opens between the two.
+    void fetchPage(latest.current.transcript.events.length > 0 ? "after" : "newest");
   }, [childId, fetchPage]);
 
-  // Live while it works, and once more after it stops for its final rows.
+  // Live while it works, once the first page is in; after it stops, twice
+  // more for rows still on their way through the Controller's writer.
+  const loaded = current.loaded;
   useEffect(() => {
-    if (!childId) return undefined;
+    if (!childId || !loaded) return undefined;
     if (!working) {
-      const settle = setTimeout(() => void fetchPage("after"), 500);
-      return () => clearTimeout(settle);
+      const timers = [600, 3000].map((delay) => setTimeout(() => void fetchPage("after"), delay));
+      return () => timers.forEach(clearTimeout);
     }
-    const timer = setInterval(() => void fetchPage("after"), LIVE_POLL_MS);
+    const timer = setInterval(() => {
+      if (busy.current === 0) void fetchPage("after");
+    }, LIVE_POLL_MS);
     return () => clearInterval(timer);
-  }, [childId, working, fetchPage]);
+  }, [childId, working, loaded, fetchPage]);
 
   const loadEarlier = useCallback(() => void fetchPage("before"), [fetchPage]);
   return {

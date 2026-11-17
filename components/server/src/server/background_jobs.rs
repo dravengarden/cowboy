@@ -630,7 +630,11 @@ pub(super) async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyh
         StoreWrite::ClearEvents {
             session_id,
             calls_before_ms,
-        } => store.clear_events(session_id, *calls_before_ms).await,
+        } => {
+            let cleared = store.clear_events(session_id, *calls_before_ms).await;
+            crate::subagent_transcripts::clear(session_id).await;
+            cleared
+        }
         StoreWrite::DeleteSession(id) => store.delete_session(id).await,
         StoreWrite::UpdatePending {
             session_id,

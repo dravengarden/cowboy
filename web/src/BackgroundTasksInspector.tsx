@@ -447,14 +447,14 @@ export function BackgroundTasksInspector({
         setLevel("list");
         selectBackgroundTask(null);
       } else if (target === 2) {
-        setLevel(selected?.source === "call" ? "conversation" : "detail");
+        setLevel(conversation ? "conversation" : "detail");
       } else if (target === 3) {
         setLevel("detail");
       }
     };
     globalThis.addEventListener("popstate", onPop);
     return () => globalThis.removeEventListener("popstate", onPop);
-  }, [open, desktop, selected?.source]);
+  }, [open, desktop, conversation]);
 
   if (!open) return null;
 

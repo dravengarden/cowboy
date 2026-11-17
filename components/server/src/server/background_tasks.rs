@@ -411,7 +411,7 @@ pub(super) async fn transcript(
             "schema": 1,
             "events": events,
             "more_before": page.more_before || (trimmed && newest_first),
-            "more_after": trimmed && !newest_first,
+            "more_after": page.more_after || (trimmed && !newest_first),
         })),
     )
         .into_response()

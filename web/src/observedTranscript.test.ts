@@ -54,6 +54,18 @@ test("a coalesced message row replaces its earlier copy and keeps order", () => 
   // A forward page never forgets that older rows remain.
   assertEquals(next.moreBefore, true);
   assertEquals(afterCursor(next), 3);
+  const prompt = mergeObserved(
+    EMPTY_TRANSCRIPT,
+    {
+      events: [
+        row(7, { sessionUpdate: "user_message_chunk", content: { type: "text", text: "go" } }),
+      ],
+      more_before: false,
+    },
+    "newest",
+  );
+  // Every kind the writer extends in place is read again from its own row.
+  assertEquals(afterCursor(prompt), 6);
   const older = mergeObserved(
     next,
     { events: [row(0.5, {}), say(-1, "x")], more_before: false },

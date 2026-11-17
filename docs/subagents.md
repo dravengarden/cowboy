@@ -106,16 +106,23 @@ parent or child model sees.
 **Worker.** `route_subagent_notification` (`src/acp_subagent_routing.rs`)
 makes every routing decision first, then offers each of a known child's own
 updates (not `subagent_update` or linked `session_message`s, which the
-snapshot presents) to `AgentSink::observe_subagent`. The worker emits it as a
+snapshot presents) to `AgentSink::observe_subagent`. The worker bounds it to
+1 MiB (`runtime_wire::bound_observed_update`) and emits it as a
 `cowboy_subagent_event` runtime update (`{childSessionId, update, dropped?}`)
-into the ordinary outbox: the same synchronous, never-awaiting `emit` as the
-parent's own updates, and an update the worker had already serialized. It does
+into the ordinary outbox, but never waits: it only `try_lock`s the outbox, and
+a busy outbox or one with 4,096 unacknowledged events drops the update and
+counts it for that child, whose next emitted update carries `dropped`. It does
 so only while the latest prompt carried `observe_subagents` (a
 `CoreCommand`/`WorkerCommand::Prompt` `serde(default)` field the Controller
-sets), so an older Controller, or one rolled back, never receives these
-updates. With more than 4,096 unacknowledged runtime events the update is
-dropped and counted; the next one carries `dropped`. Replayed history during
-`session/load` is suppressed before routing, as for the parent.
+sets). Replayed history during `session/load` is suppressed before routing,
+as for the parent.
+
+**Machine.** Runtime protocol 7 (`SUBAGENT_OBSERVATION_PROTOCOL_VERSION`)
+marks a Controller that keeps observations. For a Controller connection
+negotiated below it (a rollback while workers still observe, or queued
+observations replayed to it), the broker replaces each observed update with
+an inert steering result without a `cmid` (`retire_observation`): the runtime
+sequence stays contiguous and that Controller stores nothing.
 
 **Controller.** `subagent_transcripts::divert` takes these updates out of the
 runtime projection before `apply_event`, so they never enter the parent
@@ -125,8 +132,13 @@ store writer, which:
 
 - fences replays by `(worker_epoch, runtime_seq)` against the newest stored
   row of that incarnation;
+- applies a transcript Clear as an ordered barrier: the store writer's
+  `ClearEvents` also queues `Msg::Clear`, so observations queued before it are
+  deleted after they are written and the session's cached state is forgotten;
+- forgets cached children only between batches, never mid-batch;
+- strips U+0000 before binding, as PostgreSQL JSONB requires;
 - coalesces streamed text chunks of one message (same kind and `messageId`)
-  into one row while it stays within 128 KiB;
+  into one row while its serialized size stays within 128 KiB;
 - trims a larger update (text first, then `content`, `rawOutput`,
   `rawInput`, `locations`) and marks it `_cowboy.truncated`;
 - keeps at most 20,000 rows per child, then one final `limit` gap row;
@@ -136,13 +148,14 @@ Rows live in `subagent_events` (migrations `0084` / SQLite `0058`), keyed by
 `(session, child, seq)`, deleted with the session and by Clear. A failed write
 loses rows, never agent work. `GET /api/sessions/{id}/subagents/{child}/transcript`
 returns the newest page, an older page (`before_seq`) or rows after a cursor
-(`after_seq`), at most 200 rows or 2 MiB, under the session's ordinary read
-authorization.
+(`after_seq`, with `more_after` when the row or byte limit stopped it), at most
+200 rows or 2 MiB, under the session's ordinary read authorization.
 
 **Web.** `useSubagentTranscript` (`web/src/SubagentTranscript.tsx`) loads the
-newest page when a subagent is selected, polls after its cursor every 1.5 s
-while it works and once more after it stops, and pages back on "Show earlier
-activity". `observedTimeline` (`web/src/observedTranscript.ts`) prepends the
+newest page when a subagent is selected, then reads strictly one request at a
+time: forward reads follow the merged rows (a row the writer may still extend
+is read again), drain `more_after` pages, poll every 1.5 s while the subagent
+works and twice after it stops; "Show earlier activity" pages back. `observedTimeline` (`web/src/observedTranscript.ts`) prepends the
 delegation prompt as the first user message and hides gap rows behind "Some
 activity was not recorded". A subagent with observed rows reads like a Call:
 Desktop shows its transcript beside the details (which then omit the bounded
@@ -226,6 +239,7 @@ unchanged.
 | Bridge forwarding (`cowboy serve-acp`) | the `cowboy` CLI the ACP client starts |
 | Row, activity, Stop confirmation and key, request attribution, not reporting, model breakdown | Web |
 | Observed child updates (`observe_subagent`, `observe_subagents` prompt flag) | worker generation and Machine (wire field) |
+| Retiring observations for a protocol-6 Controller | Machine (runtime protocol 7) |
 | Observed transcript storage, writer and read API | Controller |
 | Observed transcript view | Web |
 

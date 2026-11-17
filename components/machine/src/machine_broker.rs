@@ -285,6 +285,8 @@ pub struct MachineBrokerArgs {
 struct Controller {
     lease: u64,
     tx: mpsc::UnboundedSender<Frame>,
+    /// Negotiated runtime protocol of this Controller connection.
+    protocol: u16,
 }
 
 #[derive(Clone)]
@@ -659,6 +661,7 @@ impl Broker {
         self.controller.lock().replace(Controller {
             lease,
             tx: tx.clone(),
+            protocol,
         });
         for worker in self.workers.lock().values() {
             let session_id = &worker.snapshot.session_id;
@@ -681,7 +684,11 @@ impl Broker {
     #[cfg(test)]
     fn install_controller(&self, tx: mpsc::UnboundedSender<Frame>) -> u64 {
         let lease = self.next_lease.fetch_add(1, Ordering::Relaxed);
-        self.controller.lock().replace(Controller { lease, tx });
+        self.controller.lock().replace(Controller {
+            lease,
+            tx,
+            protocol: PROTOCOL_VERSION,
+        });
         lease
     }
 
@@ -778,6 +785,7 @@ impl Broker {
             .map(|controller| controller.tx.clone())
     }
 
+    #[cfg(test)]
     fn current_controller(&self) -> Option<mpsc::UnboundedSender<Frame>> {
         self.controller
             .lock()
@@ -1322,9 +1330,22 @@ impl Broker {
         if let Frame::Snapshot { worker } = &mut frame {
             worker.incarnation = self.reported_lineage(&worker.session_id);
         }
-        if let Some(tx) = self.current_controller() {
-            let _ = tx.send(frame);
+        let controller = self
+            .controller
+            .lock()
+            .as_ref()
+            .map(|controller| (controller.tx.clone(), controller.protocol));
+        let Some((tx, protocol)) = controller else {
+            return;
+        };
+        // An older Controller would store observed subagent updates in the
+        // parent timeline: retire them, keeping the runtime sequence intact.
+        if protocol < crate::runtime_wire::SUBAGENT_OBSERVATION_PROTOCOL_VERSION
+            && let Frame::WorkerEvent { event, .. } = &mut frame
+        {
+            crate::runtime_wire::retire_observation(event);
         }
+        let _ = tx.send(frame);
     }
 
     fn publish_session_state(&self, session_id: &str, state: WorkerState) {
@@ -4394,35 +4415,6 @@ async fn handle_core(
     result
 }
 
-/// The worker's form of a Controller prompt, with the session it targets.
-fn worker_prompt(command: CoreCommand) -> Option<(String, WorkerCommand)> {
-    let CoreCommand::Prompt {
-        session_id,
-        command_id,
-        turn_id,
-        content,
-        cmid,
-        trace,
-        echo_artifacts,
-        observe_subagents,
-    } = command
-    else {
-        return None;
-    };
-    Some((
-        session_id,
-        WorkerCommand::Prompt {
-            command_id,
-            turn_id,
-            content,
-            cmid,
-            trace,
-            echo_artifacts,
-            observe_subagents,
-        },
-    ))
-}
-
 async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
     match command {
         CoreCommand::RecoverExecutionSession {
@@ -4526,7 +4518,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             broker.ensure_session(session).await;
         }
         prompt @ CoreCommand::Prompt { .. } => {
-            if let Some((session_id, prompt)) = worker_prompt(prompt) {
+            if let Some((session_id, prompt)) = prompt.into_worker_prompt() {
                 broker.route_prompt(&session_id, prompt);
             }
         }

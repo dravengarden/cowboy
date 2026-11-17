@@ -123,3 +123,27 @@ fn oversized_updates_are_trimmed_but_keep_their_identity() {
     let small = chunk("m", "fine");
     assert_eq!(bounded(small.clone()), small);
 }
+
+#[test]
+fn a_legacy_controller_gets_an_inert_event_and_huge_labels_are_bounded() {
+    let mut event = RuntimeEvent::Update {
+        update: json!({"sessionUpdate": SUBAGENT_EVENT_UPDATE, "childSessionId": "c",
+                       "update": chunk("m", "x")}),
+        cmid: None,
+    };
+    crate::runtime_wire::retire_observation(&mut event);
+    let RuntimeEvent::Update { update, .. } = &event else {
+        unreachable!()
+    };
+    assert_eq!(
+        update,
+        &json!({"sessionUpdate": crate::runtime_wire::STEERING_RESULT_UPDATE})
+    );
+    let title = "t".repeat(MAX_ROW_BYTES * 3);
+    let bounded = bounded(json!({"sessionUpdate": "tool_call", "toolCallId": "t", "title": title}));
+    assert!(serde_json::to_vec(&bounded).unwrap().len() <= MAX_ROW_BYTES);
+    assert_eq!(bounded["toolCallId"], "t");
+    // A coalesced message never grows past the row budget.
+    let open = chunk("m", &"a".repeat(MAX_ROW_BYTES - 200));
+    assert!(coalesce(&open, &chunk("m", &"\"".repeat(100))).is_none());
+}

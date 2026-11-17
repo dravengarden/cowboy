@@ -41,6 +41,8 @@ pub struct ChildTail {
 pub struct ObservedPage {
     pub rows: Vec<(i64, i64, serde_json::Value)>,
     pub more_before: bool,
+    /// A forward page stopped at its row limit.
+    pub more_after: bool,
 }
 
 impl Store {
@@ -51,6 +53,11 @@ impl Store {
             return Ok(());
         }
         dispatch!(self, upsert_subagent_events(rows))
+    }
+
+    /// Delete one session's observed transcripts (the writer's Clear barrier).
+    pub async fn delete_subagent_events(&self, session_id: &str) -> Result<()> {
+        dispatch!(self, delete_subagent_events(session_id))
     }
 
     /// The newest `runtime_seq` stored for one worker incarnation.
@@ -97,6 +104,9 @@ macro_rules! implementation {
                     .await
                     .context("begin subagent events")?;
                 for row in rows {
+                    // PostgreSQL JSONB refuses U+0000; tool output may hold it.
+                    let mut payload = row.payload.clone();
+                    super::strip_nul(&mut payload);
                     sqlx::query(
                         "INSERT INTO subagent_events(session_id, child_id, seq, ts_ms, worker_epoch, runtime_seq, payload) \
                          SELECT $1, $2, $3, $4, $5, $6, $7 WHERE EXISTS(SELECT 1 FROM sessions WHERE id = $1) \
@@ -110,7 +120,7 @@ macro_rules! implementation {
                     .bind(row.ts_ms)
                     .bind(&row.worker_epoch)
                     .bind(row.runtime_seq)
-                    .bind(&row.payload)
+                    .bind(&payload)
                     .execute(&mut *tx)
                     .await
                     .with_context(|| {
@@ -118,6 +128,15 @@ macro_rules! implementation {
                     })?;
                 }
                 tx.commit().await.context("commit subagent events")
+            }
+
+            async fn delete_subagent_events(&self, session_id: &str) -> Result<()> {
+                sqlx::query("DELETE FROM subagent_events WHERE session_id = $1")
+                    .bind(session_id)
+                    .execute(&self.pool)
+                    .await
+                    .context("DELETE observed subagent events")?;
+                Ok(())
             }
 
             async fn subagent_events_highwater(
@@ -173,18 +192,20 @@ macro_rules! implementation {
             ) -> Result<ObservedPage> {
                 let limit = i64::try_from(limit).unwrap_or(i64::MAX);
                 if let Some(after) = after_seq {
-                    let rows: Vec<(i64, i64, serde_json::Value)> = sqlx::query_as(
+                    let mut rows: Vec<(i64, i64, serde_json::Value)> = sqlx::query_as(
                         "SELECT seq, ts_ms, payload FROM subagent_events \
                          WHERE session_id = $1 AND child_id = $2 AND seq > $3 ORDER BY seq LIMIT $4",
                     )
                     .bind(session_id)
                     .bind(child_id)
                     .bind(after)
-                    .bind(limit)
+                    .bind(limit.saturating_add(1))
                     .fetch_all(&self.pool)
                     .await
                     .context("SELECT subagent events after")?;
-                    return Ok(ObservedPage { rows, more_before: false });
+                    let more_after = i64::try_from(rows.len()).unwrap_or(i64::MAX) > limit;
+                    rows.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+                    return Ok(ObservedPage { rows, more_before: false, more_after });
                 }
                 let mut rows: Vec<(i64, i64, serde_json::Value)> = sqlx::query_as(
                     "SELECT seq, ts_ms, payload FROM subagent_events \
@@ -200,7 +221,7 @@ macro_rules! implementation {
                 let more_before = i64::try_from(rows.len()).unwrap_or(i64::MAX) > limit;
                 rows.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
                 rows.reverse();
-                Ok(ObservedPage { rows, more_before })
+                Ok(ObservedPage { rows, more_before, more_after: false })
             }
         }
     };
