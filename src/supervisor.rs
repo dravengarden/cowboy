@@ -712,8 +712,9 @@ impl Supervisor {
                     return Ok(());
                 }
                 // A live (or crashed) session gets the value now; ensuring first
-                // coalesces it with the persisted preference replay.
-                runtime.ensure(self.start_session(session_id)?);
+                // coalesces it with the persisted preference replay. A stale
+                // MCP plan is never re-declared to a live worker.
+                runtime.ensure_current_mcp_plan(self.start_session(session_id)?);
                 runtime.set_config_option(session_id, &config_id, value);
             }
         }
