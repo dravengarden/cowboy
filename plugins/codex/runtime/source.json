@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "adapter": {
-    "version": "2.5.0",
-    "revision": "34e08970aa324a2be985f5080674d5aa91d7666f",
-    "archive_url": "https://codeload.github.com/agentclientprotocol/codex-acp/tar.gz/34e08970aa324a2be985f5080674d5aa91d7666f",
-    "archive_sha256": "3c104ab2730b7c40c837752a9f48f7ab914939bb5edf7255f3dc5585a276c417",
-    "npm_lock_sha256": "2471846cf50ed5c220c3d61a766733587304d9977ac4d3e2ce1370ab7a8175dd",
+    "version": "2.7.0",
+    "revision": "7c98a1608022cbb2b7e425ae7a1df5fde86c6ff2",
+    "archive_url": "https://codeload.github.com/agentclientprotocol/codex-acp/tar.gz/7c98a1608022cbb2b7e425ae7a1df5fde86c6ff2",
+    "archive_sha256": "6a29806c8a21f5e1c048fae34b70e2cf0d8e088859f8c6482f33eb27370d2397",
+    "npm_lock_sha256": "ef6dc0f6e1236f98aad9439af214751a7412dbae032f0ba654ca399fb71fd2bb",
     "patch": "adapter.patch"
   }
 }
