@@ -1,18 +1,13 @@
 # Cowboy Widgets: agent-authored structured UI over Cowboy MCP
 
-Status: design closed for implementation planning, revision 13 (2026-11-08);
-nothing here is built or activated. Thirteen Astra Max design review rounds
-ran (findings and resolutions in [§1](#1-review-findings-and-resolutions));
-by agreement with the owner the thirteenth was the last design round. Its
-verdict was "request changes" with three blocking findings, all in the
-interactive delivery protocol; they and its four P2 findings are recorded
-**open** in [§1.13](#113-revision-13-astra-max-fb9cedf2e--open-phase-1-freeze-prerequisites)
-as prerequisites that must be resolved, with fixtures, before the Phase 1
-interaction contract is frozen. Display widgets (document model,
-presentation, transport, storage, inline carrier) are not affected by them.
-Twelve decisions (17, 18, 20–24, 26, 27, 30–32) were approved as design
-choices. Statements marked
-**[unverified]** are inferred from code or history and still need evidence.
+Status: revision 13 (2026-11-08), implemented in slices (§0). Thirteen
+Astra Max design review rounds ran (findings and resolutions in
+[§1](#1-review-findings-and-resolutions)); by agreement with the owner the
+thirteenth was the last design round. Its three blocking findings concerned
+the exactly-once interaction transport of §8; the owner then chose to deliver
+decisions as ordinary prompts (§0, Interactions), which removes F1–F4 and F6
+at the source and leaves F5 resolved and F7 moot; §1.13 keeps them as the
+record.
 
 Related: [`agent-api.md`](agent-api.md) (the MCP read/execute/receipt surface
 this design extends), [`background-tasks.md`](background-tasks.md) (durable
@@ -320,11 +315,11 @@ wire domains for counters and timestamps (`maxCounter`, `maxTimestampMs`).
 | R5 | Supersession did not establish the one-per-node invariant for ungrouped nodes and could drop held records (P2) | Every interactive node without a `group` is its own implicit group; admitting a new decision on a node supersedes that node's released, retryable records; supersession only clears retryability and never removes a held record; `superseded_by` is in the schema sketch | §8.4, §8.6, §6.3 |
 | R6 | The record limit no longer left room for read-response overhead (P2) | `readPageBytes` is a target; a page may exceed it only for a single item and never the 16 KiB cap; one record plus ≤ 2 KiB of metadata always fits; the remaining 10 KiB statements are corrected | §6.1, contract |
 
-### 1.13 Revision 13 (Astra Max, `fb9cedf2e`) — open, Phase 1 freeze prerequisites
+### 1.13 Revision 13 (Astra Max, `fb9cedf2e`) — superseded by prompt delivery
 
-These are not resolved in this document. Each must be resolved and encoded in
-transition or boundary fixtures before the interaction part of the Phase 1
-contract is frozen; implementation of display widgets may proceed.
+Recorded as found. Delivering a decision as the person's ordinary prompt
+(§0, Interactions) removed F1–F4 and F6 at the source; F5 is resolved by
+the group-move rule there and F7 is moot without interaction lookup pages.
 
 | # | Finding (severity) | Required resolution |
 |---|---|---|

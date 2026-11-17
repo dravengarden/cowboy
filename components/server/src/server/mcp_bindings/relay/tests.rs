@@ -52,6 +52,7 @@ async fn relay_scope_rechecks_epoch_exact_grant_and_cancellation() {
         },
         cancelled: watch::channel(false).0,
         _permit: Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap(),
+        view: false,
     });
     let request = RelayRequest {
         binding: "suger".into(),
@@ -62,6 +63,30 @@ async fn relay_scope_rechecks_epoch_exact_grant_and_cancellation() {
     let mut changed = grant.clone();
     changed.grant_id = "replacement".into();
     assert!(!session.owns(&execution, &changed, &request));
+    // A view scope's process under the same grant, connection and epoch is
+    // never addressable by the agent's relay requests, and its profile
+    // carries only the view's tools.
+    let view_admission = policies
+        .admit(&hub, &meta.id, "runtime", &saved.epoch, "suger")
+        .unwrap()
+        .for_view(vec!["only_view".into()]);
+    assert_eq!(view_admission.profile("svc").binding.tools, ["only_view"]);
+    assert!(view_admission.is_view());
+    let view = Session {
+        admission: Mutex::new(view_admission),
+        grant: grant.clone(),
+        runtime: session.runtime.clone(),
+        remote: Remote {
+            control: Arc::clone(&control),
+            connection: execution.clone(),
+            handle: format!("mcp-{}", "b".repeat(32)),
+            closed: AtomicBool::new(true),
+        },
+        cancelled: watch::channel(false).0,
+        _permit: Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap(),
+        view: true,
+    };
+    assert!(!view.owns(&execution, &grant, &request));
     session.scope_current(&policies, &hub, &control).unwrap();
     drop(InFlight {
         state: std::sync::Weak::new(),
@@ -179,6 +204,7 @@ async fn replacing_either_connection_ends_the_scope() {
             },
             cancelled: watch::channel(false).0,
             _permit: Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap(),
+            view: false,
         };
         session.scope_current(&policies, &hub, &control).unwrap();
         let _replacement = connect(&control, changed);

@@ -200,43 +200,65 @@ pub(super) async fn search(
     hub.session_info(id)
         .filter(|info| visible(&info.meta))
         .ok_or("not_found")?;
-    let (events, reached_start, source) = if let Some(store) = store {
-        let (events, _, start) = store
-            .history_page(id, before, crate::core::HISTORY_PAGE)
-            .await
-            .map_err(|_| "unavailable")?;
-        (events, start, "durable")
-    } else {
-        let (events, start) = hub
-            .log_window(id, None, Some(before), crate::core::HISTORY_PAGE, visible)
-            .ok_or("not_found")?;
-        (events, start, "memory")
-    };
+    let started = std::time::Instant::now();
+    let source = if store.is_some() { "durable" } else { "memory" };
+    let mut matches = Vec::new();
+    let mut scanned = 0;
+    let mut cursor = before;
+    let mut reached_start = false;
+    let mut exhausted = false;
+    // Scan back page by page: one 64-record page covered under 1% of a long
+    // session, so most searches came back empty and agents rarely paged on.
+    'pages: while scanned < SEARCH_SCAN_EVENTS && started.elapsed() < SEARCH_SCAN_TIME {
+        let page = SEARCH_PAGE.min(SEARCH_SCAN_EVENTS - scanned);
+        let (events, start) = if let Some(store) = store {
+            let (events, _, start) = store
+                .history_page(id, cursor, page)
+                .await
+                .map_err(|_| "unavailable")?;
+            (events, start)
+        } else {
+            hub.log_window(id, None, Some(cursor), page, visible)
+                .ok_or("not_found")?
+        };
+        // Pages are also bounded by bytes, so a short page is not the start.
+        reached_start = start;
+        for event in events.iter().rev() {
+            scanned += 1;
+            cursor = event.seq;
+            let value = serde_json::to_value(&event.event).map_err(|_| "unavailable")?;
+            if let Some((path, text, offset)) = find_text(&value, query, chars, String::new()) {
+                matches.push(json!({"seq":event.seq,"path":path,"text":text,"offset":offset,"revision":crate::managed_calls::canonical_digest(&value)}));
+                if matches.len() == limit {
+                    exhausted = start && event.seq == events[0].seq;
+                    break 'pages;
+                }
+            }
+        }
+        if start || events.is_empty() {
+            exhausted = true;
+            break;
+        }
+    }
     hub.session_info(id)
         .filter(|info| visible(&info.meta))
         .ok_or("not_found")?;
-    let mut matches = Vec::new();
-    let mut scanned = 0;
-    let mut cursor = None;
-    for event in events.iter().rev() {
-        scanned += 1;
-        cursor = Some(event.seq);
-        let value = serde_json::to_value(&event.event).map_err(|_| "unavailable")?;
-        if let Some((path, text, offset)) = find_text(&value, query, chars, String::new()) {
-            matches.push(json!({"seq":event.seq,"path":path,"text":text,"offset":offset,"revision":crate::managed_calls::canonical_digest(&value)}));
-            if matches.len() == limit {
-                break;
-            }
-        }
-    }
-    let more = scanned < events.len() || !reached_start;
+    let more = !exhausted;
     Ok(
-        json!({"matches":matches,"scanned":scanned,"next_before":if more {cursor} else {None},"reached_start":reached_start && !more,"source":source}),
+        json!({"matches":matches,"scanned":scanned,"next_before":if more {Some(cursor)} else {None},"reached_start":reached_start && !more,"source":source}),
     )
 }
 
-// Literal, case-sensitive search of stored string values. One match locates an
-// event; it is not a claim that a streamed message is one stored string.
+/// Records fetched per storage round trip while searching.
+const SEARCH_PAGE: usize = 256;
+/// Records one search call may scan before handing back `next_before`.
+const SEARCH_SCAN_EVENTS: usize = 4_096;
+/// Wall time one search call may spend scanning.
+const SEARCH_SCAN_TIME: std::time::Duration = std::time::Duration::from_millis(1_500);
+
+// Literal smart-case search of stored string values: a query without an
+// uppercase letter ignores case. One match locates an event; it is not a claim
+// that a streamed message is one stored string.
 fn find_text(
     value: &Value,
     query: &str,
@@ -245,9 +267,9 @@ fn find_text(
 ) -> Option<(String, String, usize)> {
     match value {
         Value::String(text) => {
-            let byte = text.find(query)?;
+            let found = find_smart_case(text, query)?;
             let context = 40.min(chars.saturating_sub(query.chars().count()) / 2);
-            let offset = text[..byte].chars().count().saturating_sub(context);
+            let offset = found.saturating_sub(context);
             Some((
                 path,
                 text.chars().skip(offset).take(chars).collect(),
@@ -268,6 +290,33 @@ fn find_text(
         }),
         _ => None,
     }
+}
+
+/// Unicode scalar offset of the first match of `query` in `text`.
+fn find_smart_case(text: &str, query: &str) -> Option<usize> {
+    if query.chars().any(char::is_uppercase) {
+        let byte = text.find(query)?;
+        return Some(text[..byte].chars().count());
+    }
+    if query.is_ascii() {
+        // ASCII bytes never occur inside a multi-byte scalar, so a match
+        // always starts on a character boundary.
+        let byte = text
+            .as_bytes()
+            .windows(query.len())
+            .position(|window| window.eq_ignore_ascii_case(query.as_bytes()))?;
+        return Some(text[..byte].chars().count());
+    }
+    let folds = |c: char| c.to_lowercase();
+    let query: Vec<char> = query.chars().flat_map(folds).collect();
+    let text: Vec<(usize, char)> = text
+        .chars()
+        .enumerate()
+        .flat_map(|(at, c)| folds(c).map(move |folded| (at, folded)))
+        .collect();
+    text.windows(query.len())
+        .find(|window| window.iter().map(|(_, c)| *c).eq(query.iter().copied()))
+        .map(|window| window[0].0)
 }
 
 pub(super) async fn read(
@@ -372,6 +421,16 @@ mod tests {
                     .collect::<String>()
             );
         }
+    }
+
+    #[test]
+    fn search_ignores_case_only_for_a_lowercase_query() {
+        let text = "前Ünïcode 中 ContextRollover failed";
+        assert_eq!(find_smart_case(text, "contextrollover"), Some(11));
+        assert_eq!(find_smart_case(text, "ContextRollover"), Some(11));
+        assert_eq!(find_smart_case(text, "Contextrollover"), None);
+        assert_eq!(find_smart_case(text, "ünïcode 中"), Some(1));
+        assert_eq!(find_smart_case(text, "missing"), None);
     }
 
     #[test]

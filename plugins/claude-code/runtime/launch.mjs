@@ -708,6 +708,23 @@ export function initializeRequest(frame, allowlist = []) {
   };
 }
 
+// Control requests Cowboy answers itself instead of refusing. Cowboy owns
+// session titles: the adapter asks the CLI for one at a prompt or turn end,
+// and a refusal logged "failed to generate a session title" for every
+// session. No title is the adapter's ordinary answer; it then keeps the
+// stored summary, as before, without a model request.
+export function cowboyControlAnswer(frame) {
+  if (frame.request?.subtype !== "generate_session_title") return undefined;
+  return {
+    type: "control_response",
+    response: {
+      subtype: "success",
+      request_id: frame.request_id,
+      response: { title: null },
+    },
+  };
+}
+
 export function allowedControl(request) {
   if (request.subtype === "apply_flag_settings") {
     const settings = request.settings;
@@ -863,6 +880,11 @@ async function bridge(child, tools, context, memory, broker, managed, moduleRead
               error: "Native plan files are not supported in an execution session",
             },
           });
+          continue;
+        }
+        const answered = cowboyControlAnswer(frame);
+        if (answered) {
+          await send(process.stdout, answered);
           continue;
         }
         if (!allowedControl(frame.request) || (managed && managedControlRefused(frame.request))) {

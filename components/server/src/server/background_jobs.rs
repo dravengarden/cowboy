@@ -1302,6 +1302,12 @@ pub(super) fn recoverable_provider_auth_failure(
     hub: &Hub,
     session_id: &str,
 ) -> Option<((Status, u64), String)> {
+    // A trashed session refuses every reload, so recovering it would only
+    // reopen the same incident on each Provider status refresh. Restoring it
+    // makes it eligible again.
+    if hub.session_is_trashed(session_id) {
+        return None;
+    }
     let revision @ (status, _) = hub.status_revision(session_id)?;
     if !matches!(status, Status::Crashed | Status::Running) {
         return None;

@@ -1869,14 +1869,13 @@ async fn publish_provider_auth_observations(
                 observations
                     .failed_provider_ids
                     .insert((candidate.account_id.clone(), candidate.provider_id.clone()));
-                if error
-                    .downcast_ref::<crate::machine_plugins::RefreshProbeBackoff>()
-                    .is_some()
-                {
+                if crate::machine_plugins::refresh_backing_off(&error) {
                     tracing::debug!(provider = %candidate.provider_id, "rejected credential refresh is backing off");
                 } else {
+                    // Republished as Failed so the Controller can repair it;
+                    // only its first rejection is a warning.
                     changed = true;
-                    tracing::warn!(provider = %candidate.provider_id, %error, "invalid credential refresh excluded from promotion");
+                    crate::machine_plugins::log_refresh_rejection(&candidate.provider_id, &error);
                 }
                 continue;
             }

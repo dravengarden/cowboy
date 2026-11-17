@@ -534,7 +534,14 @@ content-addressed on the execution Machine (a private per-user directory, keyed
 by store, profile and descriptor) and shared by every connection's receipts, so
 recovery re-prepares the exact plan a surviving worker launched with; the worker
 adopts again and its MCP authority still matches. Changed policy or generation
-content yields a new path. Until a session's owner recovers, the restart
+content yields a new path. The Machine prepares only its active generation, so
+a policy pinned to a generation that a later Plugin release superseded can
+never recover as is: recovery then advances each superseded pin to the
+generation active on the execution Machine (name, tools, sources and view
+grants unchanged; the Machine verifies them against the new contract), keeps an
+`applied` directory-default outcome on the new epoch and prepares again. A
+Plugin that is no longer active keeps its pin. Each distinct recovery failure
+is logged once per session. Until a session's owner recovers, the restart
 declaration for its surviving worker is deferred with a log line rather than
 reported as a session error; the Machine keeps its own declaration.
 Adoption never moves a live worker's plan. When the current plan differs from
@@ -542,7 +549,9 @@ an idle worker's (policy changed, or the worker predates content-addressed
 descriptors), a send, queued wake or open replaces that worker through a reset
 instead of being refused. The broker accepts a new plan only in the adopt-only
 declaration that precedes such a reset; the execution binding stays exact and a
-busy worker keeps its turn. Source preparation is serialized; concurrent requests
+busy worker keeps its turn. A busy worker with a stale plan is not re-declared
+(the Machine would refuse the changed plan as a placement change); the first
+send after its turn ends replaces it. Source preparation is serialized; concurrent requests
 receive a retryable refusal, and valid owners are reused. Every attempt repeats
 keeper identity and live policy checks. Recovery prepares metadata only: it does
 not start/reset a worker or grant authority. Native-provider recovery/E2E remains unfinished. Grant eligibility alone does

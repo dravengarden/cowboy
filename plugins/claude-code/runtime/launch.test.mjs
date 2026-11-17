@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   advertiseCurrentTurn,
   allowedControl,
+  cowboyControlAnswer,
   dropPreloadedAllocator,
   hookPrefixScript,
   initializeRequest,
@@ -91,6 +92,28 @@ test("bare mode, local worktrees and unsupported flags are rejected", () => {
   }
   assert.throws(() => nativeArguments(["--model"], "/owned"), /Invalid/);
   assert.throws(() => nativeArguments(["--permission-mode=plan"], "/owned"), /plan files/);
+});
+
+test("a session title request gets no title instead of a refusal", () => {
+  assert.deepEqual(
+    cowboyControlAnswer({
+      type: "control_request",
+      request_id: "r1",
+      request: { subtype: "generate_session_title", description: "x", persist: true },
+    }),
+    {
+      type: "control_response",
+      response: { subtype: "success", request_id: "r1", response: { title: null } },
+    },
+  );
+  assert.equal(
+    cowboyControlAnswer({
+      type: "control_request",
+      request_id: "r2",
+      request: { subtype: "interrupt" },
+    }),
+    undefined,
+  );
 });
 
 test("configuration can change effort but cannot replace execution or reopen local IO", () => {

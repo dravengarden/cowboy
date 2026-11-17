@@ -349,7 +349,7 @@ mod auth_candidate;
 #[cfg(test)]
 mod startup_tests;
 pub use auth_candidate::AuthCandidateCleanup;
-pub use auth_refresh::RefreshProbeBackoff;
+pub use auth_refresh::{RefreshProbeBackoff, log_refresh_rejection, refresh_backing_off};
 
 impl MachinePluginStore {
     pub fn new(state_dir: &Path, platform: Platform, architecture: String) -> Result<Self> {

@@ -241,6 +241,7 @@ test("hook transcripts send only appends and keep immutable, verified snapshots"
     },
   });
   tools.fileHelper = fileHelper;
+  tools.shell = "bash";
   await writeFile(join(directory, "hashlib.py"), 'raise RuntimeError("project module")');
   const execute = async (argv) => {
     try {
@@ -264,7 +265,9 @@ test("hook transcripts send only appends and keep immutable, verified snapshots"
   await Promise.all(
     [initial, extended, extended].map((bytes, index) => tools.hookTranscript(bytes, paths[index])),
   );
-  assert.deepEqual(writes, [initial.length, addition.length, 0]);
+  // The append and the empty one travel inside their snapshot commands.
+  assert.deepEqual(writes, [initial.length]);
+  assert.ok(addition.length < 64 * 1024);
   for (const [index, bytes] of [initial, extended, extended].entries()) {
     assert.deepEqual(await readFile(paths[index]), bytes);
   }
@@ -276,7 +279,7 @@ test("hook transcripts send only appends and keep immutable, verified snapshots"
     writes.length = 0;
     const copy = join(directory, defect + ".jsonl");
     await tools.hookTranscript(extended, copy);
-    assert.deepEqual(writes, [0, extended.length]);
+    assert.deepEqual(writes, [extended.length]);
     assert.deepEqual(await readFile(copy), extended);
     assert.deepEqual(await readFile(paths[0]), initial);
   }
@@ -448,7 +451,7 @@ test("a target hook gets its input on stdin, the project directory and separate 
     async call(method, params) {
       calls.push({ method, params });
       if (method === "process/start") {
-        if (params.argv[2].startsWith("umask 077")) {
+        if (params.argv[2].startsWith("umask 077") || params.argv[4]?.includes(".delta'")) {
           utilities.add(params.processId);
         }
         return { processId: params.processId };
@@ -551,21 +554,22 @@ test("a target hook gets its input on stdin, the project directory and separate 
     transcript: Buffer.from("line\n"),
   });
   // Even a small transcript travels as a delta into the target cache; the
-  // hook reads a snapshot materialized from it.
-  const [deltaWrite] = calls.filter(({ method }) => method === "fs/writeFile");
+  // hook reads a snapshot materialized from it. A small delta is written by
+  // the snapshot command itself, which also removes it and its temporary.
+  assert.ok(!calls.some(({ method }) => method === "fs/writeFile"));
   const copy = JSON.parse(
     calls.findLast(({ method }) => method === "process/start").params.argv[4],
   ).transcript_path;
   assert.ok(copy.endsWith(".jsonl"));
-  assert.equal(fileURLToPath(deltaWrite.params.path), copy + ".delta");
-  assert.equal(Buffer.from(deltaWrite.params.dataBase64, "base64").toString(), "line\n");
+  const snapshot = calls.find(
+    ({ method, params }) => method === "process/start" && params.argv[4]?.includes(".delta'"),
+  ).params.argv[4];
+  assert.ok(snapshot.includes(`printf '%s' 'line\n' > '${copy}.delta'`));
+  assert.ok(snapshot.includes(`rm -f -- '${copy}.delta' '${copy}.cache'`));
   const href = (path) => pathToFileURL(path).href;
   assert.deepEqual(
-    calls
-      .filter(({ method }) => method === "fs/remove")
-      .map(({ params }) => params.path)
-      .sort(),
-    [href(copy), href(copy + ".delta"), href(copy + ".cache")].sort(),
+    calls.filter(({ method }) => method === "fs/remove").map(({ params }) => params.path),
+    [href(copy)],
   );
   // Exec form runs its argv directly; the placeholder is the target's.
   calls.length = 0;

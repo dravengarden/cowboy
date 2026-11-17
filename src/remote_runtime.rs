@@ -26,6 +26,7 @@ use crate::core::{Event, Hub, Status, config_option_accepts};
 pub mod account_stop;
 mod broker_protocol;
 mod native_admission;
+mod reset_admission;
 mod startup_watch;
 mod worker_authority;
 use crate::runtime_wire::{
@@ -1193,10 +1194,8 @@ impl RemoteRuntime {
             .declarations
             .lock()
             .insert(session_id.clone(), session.clone());
-        // Re-declare the replacement metadata before the reset-flavoured stop.
-        // `send_pending` orders this adopt-only EnsureSession first, so Machine
-        // can atomically fence and relaunch from the fresh specification while
-        // preserving the existing v1 wire contract.
+        // Declared adopt-only before the reset stop, which waits with it for its MCP
+        // plan (reset_admission), so Machine relaunches from this specification.
         let ensure_key = format!("ensure:{session_id}");
         self.queue(ensure_key, CoreCommand::EnsureSession { session });
         // Cross-version reloads must wait for the replacement's own option
@@ -1647,9 +1646,9 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
         .map(|(key, command)| (key.clone(), command.clone()))
         .collect();
     commands.sort_by_key(|(_, command)| command_priority(command));
+    let mut deferred = HashSet::new();
     for (key, command) in commands {
-        // Already carried by this connection. `queue` and a rejected ack clear
-        // the key to request a resend; a reconnect clears every key.
+        // Already carried by this connection; `queue`, a rejected ack and a reconnect clear it.
         if shared.sent.lock().contains(&key) {
             continue;
         }
@@ -1689,6 +1688,9 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
                 continue;
             }
         }
+        let Some(command) = reset_admission::current(shared, &key, command, &mut deferred) else {
+            continue;
+        };
         if !native_admission::send(shared, writer, command.clone()).await? {
             if let Some(session_id) = command.session_id() {
                 handle_frame(

@@ -24,6 +24,9 @@ pub(in crate::server) struct AppMessageRequest {
     /// The digest of the exact text the person confirmed; required.
     #[serde(default)]
     message_sha256: Option<String>,
+    /// An `mcp_app` view's frame lease (docs/widget-apps-mcp.md §6).
+    #[serde(default)]
+    lease: Option<String>,
 }
 
 fn valid_occurrence(occurrence: &str) -> bool {
@@ -129,6 +132,26 @@ pub(in crate::server) async fn api_widget_app_message(
             return refusal(status, refused.code, json!({"message": refused.message}));
         }
     };
+    // A signed view sends only under a live lease of that view whose grant
+    // includes `message`; agent-written apps need none.
+    if let Some(node) = interactions::mcp_app_ref(&widget.document, &node_id) {
+        let allowed = match request.lease.as_deref() {
+            Some(lease) => {
+                super::super::mcp_bindings::apps_bridge::message_allowed(
+                    &state,
+                    &session_id,
+                    lease,
+                    &widget_id,
+                    &node,
+                )
+                .await
+            }
+            None => Err("lease_ended"),
+        };
+        if let Err(code) = allowed {
+            return refusal(StatusCode::CONFLICT, code, json!({}));
+        }
+    }
     let record = StoredInteraction {
         cmid: cmid.clone(),
         revision: widget.revision,

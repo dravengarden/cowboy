@@ -19,6 +19,7 @@ import { Fallback, useAppSend } from "../WidgetApp";
 import { reserveExternalRuntime } from "../apps/appRuntimes";
 import { domAppsEnabled } from "./domAppsEnabled";
 import { startDomApp, type DomApp } from "./domAppHost";
+import { claimFullApp } from "./fullAppOwner";
 
 type DomAppData = Extract<ParsedNode, { type: "dom_app" }>;
 type Send = ((text: string, code: string, kind?: "app" | "dom_app") => void) | undefined;
@@ -26,10 +27,6 @@ type Send = ((text: string, code: string, kind?: "app" | "dom_app") => void) | u
 const HEIGHT = { xs: 160, sm: 320, md: 480, lg: 720 } as const;
 const OUT_OF_VIEW_GRACE_MS = 1500;
 
-// One full-DOM app per page (§5). Ownership is taken when Run is tapped, so
-// an earlier start still loading its images cannot displace a later one.
-let owner = 0;
-let running: DomApp | null = null;
 
 function RunningApp({
   node,
@@ -49,25 +46,29 @@ function RunningApp({
   const max = HEIGHT[node.height ?? "md"];
 
   useEffect(() => {
-    const token = (owner += 1);
-    running?.stop("Another full app started.");
+    // One full app per page (§5): a later Run stops this one.
+    const claim = claimFullApp(() => {
+      if (app.current) app.current.stop("Another full app started.");
+      else finish("Another full app started.");
+    });
     const release = reserveExternalRuntime();
-    if (!release) {
-      onStopped("Too many apps are running on this page. Close one, then run this again.");
-      return;
-    }
     let done = false;
     const finish = (reason: string): void => {
       if (done) return;
       done = true;
-      release();
+      claim.release();
+      release?.();
       onStopped(reason);
     };
+    if (!release) {
+      finish("Too many apps are running on this page. Close one, then run this again.");
+      return;
+    }
     void import("../apps/appImages")
       .then(({ loadAppImageBytes }) => loadAppImageBytes(node.images))
       .then((images) => {
-        if (done || token !== owner || !container.current) {
-          if (!done && token !== owner) finish("Another full app started.");
+        if (done || !claim.owns() || !container.current) {
+          if (!done) finish("Another full app started.");
           return;
         }
         const started = startDomApp(
@@ -84,13 +85,9 @@ function RunningApp({
               started.frame.style.height = `${Math.min(max, Math.max(80, height))}px`;
             },
             onSend: (text) => sendRef.current?.(text, node.code, "dom_app"),
-            onStopped: (reason) => {
-              if (running === started) running = null;
-              finish(reason);
-            },
+            onStopped: finish,
           },
         );
-        running = started;
         app.current = started;
       });
 
@@ -120,7 +117,6 @@ function RunningApp({
       document.removeEventListener("visibilitychange", review);
       if (hiddenSince) clearTimeout(hiddenSince);
       app.current?.stop();
-      if (token === owner && !app.current) owner += 1;
       finish("closed");
     };
     // Keyed by identity and code in the parent: each run starts once.

@@ -34,6 +34,7 @@ import { WIDGET_LIMITS } from "../../../contracts/widget-v1.ts";
 
 // Full-DOM apps load their host only when a widget has one.
 const WidgetDomApp = lazy(() => import("./dom/WidgetDomApp"));
+const WidgetMcpApp = lazy(() => import("./dom/WidgetMcpApp"));
 
 const GAP = { xs: 0.5, sm: 1, md: 1.5, lg: 2.5 } as const;
 
@@ -405,6 +406,7 @@ type Leaf = Of<
   | "gallery"
   | "app"
   | "dom_app"
+  | "mcp_app"
   | "button"
   | "choice"
   | "unsupported"
@@ -429,6 +431,12 @@ function WidgetLeaf({ node }: { node: Leaf }): React.JSX.Element {
       return (
         <Suspense fallback={null}>
           <WidgetDomApp node={node} />
+        </Suspense>
+      );
+    case "mcp_app":
+      return (
+        <Suspense fallback={null}>
+          <WidgetMcpApp node={node} />
         </Suspense>
       );
     case "button":

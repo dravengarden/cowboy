@@ -1,14 +1,16 @@
-/** Optional convenience of a sign-in dialog: show its verification link in
- * the account's ordinary Machine browser on the login's Machine. It opens
- * (or attaches to) that tab browser and navigates it once; the person
- * completes the page and copies anything it shows back into the dialog
- * themselves. The login never depends on this entry, and the browser never
- * reads or fills anything of the login. */
-import { Button } from "@mui/material";
+/** The only way a sign-in dialog shows its verification link: in the
+ * account's ordinary Machine browser on the login's Machine, so every
+ * request of the Provider page leaves from that Machine (owner decision
+ * 2026-11-17). It opens (or attaches to) that tab browser and navigates it
+ * once; the person completes the page and copies anything it shows back
+ * into the dialog themselves. The browser never reads or fills anything of
+ * the login. When the browser cannot be offered, the entry says why and
+ * never falls back to a browser of this device. */
+import { Button, Stack, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
 import { productSessionSignal } from "../productSessionEnd";
 import { productSyncPrincipal } from "../productSyncIdentity";
-import { type MachineBrowserApi, machineBrowserApi } from "./api";
+import { browserErrorText, type MachineBrowserApi, machineBrowserApi } from "./api";
 import { linkBrowserOffered } from "./entryRules";
 import { MachineBrowserSheet } from "./MachineBrowserSheet";
 
@@ -31,11 +33,15 @@ export function LinkBrowserEntry({
   disabled: boolean;
   api?: MachineBrowserApi;
 }): React.JSX.Element | null {
-  const [offered, setOffered] = useState(false);
+  /** `undefined` while the browser read is pending. */
+  const [offered, setOffered] = useState<boolean>();
+  const [reason, setReason] = useState("");
   const [open, setOpen] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const abort = new AbortController();
-    setOffered(false);
+    setOffered(undefined);
+    setReason("");
     api
       .read(
         account,
@@ -45,18 +51,40 @@ export function LinkBrowserEntry({
       .then(
         (read) => {
           if (!abort.signal.aborted && productSyncPrincipal() === owner) {
-            setOffered(linkBrowserOffered(read, machine));
+            const ok = linkBrowserOffered(read, machine);
+            setOffered(ok);
+            if (!ok) setReason(read.admission ? browserErrorText(read.admission) : `This account’s Machine browser cannot run on ${machine} now.`);
           }
         },
-        () => undefined,
+        () => {
+          if (!abort.signal.aborted) {
+            setOffered(false);
+            setReason("Could not read this account’s Machine browser.");
+          }
+        },
       );
     return () => abort.abort();
-  }, [account, api, machine, owner]);
-  if (!offered) return null;
+  }, [account, api, machine, owner, attempt]);
+  if (!offered) {
+    if (offered === undefined) {
+      return <Typography variant="caption" color="text.secondary">Checking this account’s Machine browser…</Typography>;
+    }
+    return (
+      <Stack spacing={0.5} data-link-browser-unavailable="">
+        <Typography variant="caption" color="error">
+          {reason} The sign-in page opens only in the Machine browser, never on this device.
+          Enable or free the browser, then check again.
+        </Typography>
+        <Button size="small" sx={{ alignSelf: "flex-start" }} disabled={disabled} onClick={() => setAttempt((n) => n + 1)}>
+          Check again
+        </Button>
+      </Stack>
+    );
+  }
   return (
     <>
-      <Button disabled={disabled} onClick={() => setOpen(true)}>
-        Open in this account’s Machine browser
+      <Button variant="contained" disabled={disabled} onClick={() => setOpen(true)}>
+        Open sign-in in this account’s Machine browser
       </Button>
       {open && (
         <MachineBrowserSheet

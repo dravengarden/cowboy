@@ -20,6 +20,12 @@ const surfaceSource = await readFile(
 const transcriptPresentationSource = await readFile(
   new URL("./ProviderTranscript.tsx", import.meta.url), "utf8",
 );
+const signInPageSource = await readFile(
+  new URL("./ServiceSignInPage.tsx", import.meta.url), "utf8",
+);
+const authorizationSource = await readFile(
+  new URL("./SubscriptionAuthorization.tsx", import.meta.url), "utf8",
+);
 const grokProviderSource = await readFile(
   new URL("../../plugins/grok/provider.json", import.meta.url), "utf8",
 );
@@ -200,7 +206,7 @@ test("device-code sign-in copies before opening and keeps a manual fallback", ()
   assertEquals(openIndex > copyIndex, true);
   assertEquals(managementSource.includes("copyText(code)"), true);
   assertEquals(
-    managementSource.includes('"Copy code & open sign-in"'),
+    signInPageSource.includes('"Copy code & open sign-in"'),
     true,
   );
   assertEquals(
@@ -211,6 +217,29 @@ test("device-code sign-in copies before opening and keeps a manual fallback", ()
     managementSource.includes("navigator.clipboard.writeText"),
     false,
   );
+});
+
+test("sign-in pages served by a Machine browser never open on this device", () => {
+  // The device page is reachable only in the `device` branch, and its
+  // opener refuses every other placement.
+  assertEquals(
+    managementSource.includes('if (signInBrowser?.kind !== "device") return;'),
+    true,
+  );
+  const machineBranch = signInPageSource.indexOf('browser?.kind === "machine"');
+  const deviceBranch = signInPageSource.indexOf('browser?.kind === "device"');
+  const pageButton = signInPageSource.indexOf("{...pageTap}");
+  assertEquals(machineBranch >= 0 && deviceBranch > machineBranch, true);
+  assertEquals(pageButton > deviceBranch, true);
+  assertEquals(
+    signInPageSource.slice(machineBranch, deviceBranch).includes("<LinkBrowserEntry"),
+    true,
+  );
+  // A named account's sign-in dialog neither copies nor shows its link.
+  for (const forbidden of ["copyText", "Copy sign-in link", "value={link}", "openAuthenticationUrl", "window.open"]) {
+    assertEquals(authorizationSource.includes(forbidden), false);
+  }
+  assertEquals(authorizationSource.includes("<LinkBrowserEntry"), true);
 });
 
 test("Provider sign-in success and expiry leave no stale browser controls", () => {

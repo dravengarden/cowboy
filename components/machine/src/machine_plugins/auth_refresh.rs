@@ -41,6 +41,38 @@ impl std::fmt::Display for RefreshProbeBackoff {
 
 impl std::error::Error for RefreshProbeBackoff {}
 
+/// The exact candidate failed its probe again after its backoff. It was
+/// already reported as Failed; the retry is not new evidence.
+#[derive(Debug)]
+pub struct RefreshProbeRepeated {
+    pub failures: u32,
+}
+
+impl std::fmt::Display for RefreshProbeRepeated {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "unchanged credentials failed the Plugin authentication probe {} times",
+            self.failures
+        )
+    }
+}
+
+/// The exact candidate was not probed again: it is still backing off.
+pub fn refresh_backing_off(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<RefreshProbeBackoff>().is_some()
+}
+
+/// A logged-out projection otherwise warned every 30 minutes forever: only
+/// an exact candidate's first rejection is a warning, repeats are debug.
+pub fn log_refresh_rejection(provider: &str, error: &anyhow::Error) {
+    if let Some(repeated) = error.downcast_ref::<RefreshProbeRepeated>() {
+        tracing::debug!(provider, failures = repeated.failures, %error, "rejected credential refresh failed again");
+    } else {
+        tracing::warn!(provider, %error, "invalid credential refresh excluded from promotion");
+    }
+}
+
 fn candidate_digest(candidate: &ProviderAuthRefreshCandidate) -> Result<[u8; 32]> {
     let mut hash = Sha256::new();
     for part in [
@@ -63,7 +95,7 @@ impl ProbeFailures {
             .is_some_and(|failure| now < failure.retry_at)
     }
 
-    fn record(&mut self, digest: [u8; 32], now: Instant) {
+    fn record(&mut self, digest: [u8; 32], now: Instant) -> u32 {
         let failures = self.0.get(&digest).map_or(0, |failure| failure.failures) + 1;
         let delay = PROBE_RETRY_INITIAL
             .saturating_mul(1 << (failures - 1).min(10))
@@ -86,6 +118,7 @@ impl ProbeFailures {
             };
             self.0.remove(&oldest);
         }
+        failures
     }
 }
 
@@ -104,13 +137,16 @@ impl MachinePluginStore {
         }
         let result = self.probe_auth_refresh_candidate(candidate).await;
         let mut failures = self.refresh_probe_failures.lock();
-        match &result {
-            Ok(_) => {
+        match result {
+            Ok(identity) => {
                 failures.0.remove(&digest);
+                Ok(identity)
             }
-            Err(_) => failures.record(digest, Instant::now()),
+            Err(error) => match failures.record(digest, Instant::now()) {
+                1 => Err(error),
+                failures => Err(error.context(RefreshProbeRepeated { failures })),
+            },
         }
-        result
     }
 
     async fn probe_auth_refresh_candidate(
@@ -271,12 +307,13 @@ mod tests {
         let start = Instant::now();
         let digest = [1; 32];
         assert!(!failures.suppressed(&digest, start));
-        failures.record(digest, start);
+        assert_eq!(failures.record(digest, start), 1);
         assert!(failures.suppressed(&digest, start + Duration::from_secs(29)));
         assert!(!failures.suppressed(&digest, start + PROBE_RETRY_INITIAL));
         assert!(!failures.suppressed(&[2; 32], start));
         let later = start + PROBE_RETRY_INITIAL;
-        failures.record(digest, later);
+        // A repeat is counted, so only the first rejection is reported.
+        assert_eq!(failures.record(digest, later), 2);
         assert!(failures.suppressed(&digest, later + Duration::from_secs(59)));
         assert!(!failures.suppressed(&digest, later + Duration::from_secs(60)));
         for _ in 0..20 {
@@ -287,6 +324,9 @@ mod tests {
             failures.record([index.wrapping_add(10); 32], later);
         }
         assert_eq!(failures.0.len(), PROBE_FAILURE_ENTRIES);
+        let repeated = anyhow::anyhow!("logged out").context(RefreshProbeRepeated { failures: 2 });
+        assert!(repeated.downcast_ref::<RefreshProbeRepeated>().is_some());
+        assert!(!refresh_backing_off(&repeated));
     }
 
     #[tokio::test]

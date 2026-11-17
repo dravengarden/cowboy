@@ -55,6 +55,7 @@ const KNOWN = new Set([
   "choice",
   "app",
   "dom_app",
+  "mcp_app",
 ]);
 const TONES = new Set(["neutral", "info", "success", "warning", "error", "running"]);
 const STEP_STATES = new Set(["pending", "active", "done", "failed", "skipped"]);
@@ -163,6 +164,34 @@ function app(node: Record<string, unknown>, path: string, budget: Budget): void 
     }
 }
 
+// Written only by the Controller (docs/widget-apps-mcp.md §8); an inline
+// fence carrying one is never verified, so it shows its fallback.
+function mcpApp(node: Record<string, unknown>, path: string): void {
+  if (typeof node["id"] !== "string") fail(`${path}.id`, "required");
+  line(node["title"], `${path}.title`, WIDGET_LIMITS.titleChars);
+  text(node["fallback"], `${path}.fallback`, 2048);
+  for (const key of ["binding", "tool"]) {
+    if (typeof node[key] !== "string" || !WIDGET_ID_PATTERN.test(node[key] as string))
+      fail(`${path}.${key}`, "expected a name");
+  }
+  // The signed-contract rule: `ui://` and lowercase path segments, ≤ 256 bytes.
+  const uri = node["uri"];
+  if (
+    typeof uri !== "string" ||
+    uri.length > 256 ||
+    !/^ui:\/\/[a-z0-9._-]+(\/[a-z0-9._-]+)*$/.test(uri) ||
+    uri.slice(5).split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    fail(`${path}.uri`, "expected a ui:// resource URI");
+  }
+  if (typeof node["sha256"] !== "string" || !/^[0-9a-f]{64}$/.test(node["sha256"]))
+    fail(`${path}.sha256`, "expected a digest");
+  if (typeof node["epoch"] !== "string" || !/^[0-9a-f]{32}$/.test(node["epoch"]))
+    fail(`${path}.epoch`, "expected a policy epoch");
+  text(node["input"], `${path}.input`, 8 * 1024);
+  if (node["result"] !== null) text(node["result"], `${path}.result`, 12 * 1024);
+}
+
 function leaf(node: Record<string, unknown>, type: string, path: string, budget: Budget): void {
   switch (type) {
     case "divider":
@@ -251,6 +280,9 @@ function leaf(node: Record<string, unknown>, type: string, path: string, budget:
     case "app":
     case "dom_app":
       app(node, path, budget);
+      return;
+    case "mcp_app":
+      mcpApp(node, path);
       return;
     case "button":
       if (typeof node["id"] !== "string") fail(`${path}.id`, "required");

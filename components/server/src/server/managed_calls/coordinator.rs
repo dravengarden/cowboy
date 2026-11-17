@@ -353,24 +353,25 @@ pub(in crate::server) fn authorize(
     Ok((meta, ledger))
 }
 
+/// The parent's live MCP grant and the execution connection it was
+/// acknowledged on: what a view scope relays under (docs/widget-apps-mcp.md §7).
+pub(in crate::server) fn mcp_parent(
+    state: &AppState,
+    parent: &str,
+) -> Option<(Grant, ConnectionToken)> {
+    let (grant, connection) = {
+        let grants = state.managed_calls.grants.lock();
+        let entry = grants.get(parent).filter(|entry| entry.grant.mcp)?;
+        (entry.grant.clone(), entry.installed_on.clone()?)
+    };
+    authorize(state, &connection, &grant)
+        .is_ok()
+        .then_some((grant, connection))
+}
+
 /// Report only a live grant acknowledged on its original execution connection.
 pub(in crate::server) fn mcp_ready(state: &AppState, parent: &str) -> bool {
-    let installed = {
-        let grants = state.managed_calls.grants.lock();
-        grants.get(parent).and_then(|entry| {
-            entry
-                .grant
-                .mcp
-                .then(|| {
-                    entry
-                        .installed_on
-                        .clone()
-                        .map(|connection| (entry.grant.clone(), connection))
-                })
-                .flatten()
-        })
-    };
-    installed.is_some_and(|(grant, connection)| authorize(state, &connection, &grant).is_ok())
+    mcp_parent(state, parent).is_some()
 }
 
 /// Handle one forwarded gateway action.

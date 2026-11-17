@@ -296,6 +296,11 @@ pub(in crate::server) async fn before_dispatch(
     if !policy.due(idle, u64::MAX) {
         return skip("cache_warm");
     }
+    if meta.context_used == 0 && meta.agent_session_id.is_some() {
+        // No usage reading for a context that will be resumed: report it
+        // apart from a measured small context, since its resume may be large.
+        return skip("usage_unknown");
+    }
     if meta.context_used < policy.min_context_tokens {
         return skip("small_context");
     }

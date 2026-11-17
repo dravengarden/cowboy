@@ -414,6 +414,24 @@ fn auth_refresh_recovery_requires_newer_ready_credentials_on_the_selected_machin
         )),
     );
     assert!(recoverable_provider_auth_failure(&hub, "s").is_some());
+    hub.trash_items(
+        &crate::session_folders::FolderActor::local(),
+        &[],
+        &["s".to_owned()],
+        1,
+    )
+    .unwrap();
+    assert!(
+        recoverable_provider_auth_failure(&hub, "s").is_none(),
+        "a trashed session refuses reloads and must not reopen its incident"
+    );
+    hub.restore_items(
+        &crate::session_folders::FolderActor::local(),
+        &[],
+        &["s".to_owned()],
+    )
+    .unwrap();
+    assert!(recoverable_provider_auth_failure(&hub, "s").is_some());
     hub.set_status("s", Status::Running, None);
     assert!(
         recoverable_provider_auth_failure(&hub, "s").is_some(),

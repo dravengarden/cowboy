@@ -9,10 +9,19 @@ export const IDLE_COMPACTION_POLICY = "Cowboy turn ownership";
 
 export function disableIdleCompaction(IdleCompaction) {
   const disabledBy = IdleCompaction?.prototype?.disabledBy;
-  if (typeof disabledBy !== "function") {
+  const onIdle = IdleCompaction?.prototype?.onIdle;
+  if (typeof disabledBy !== "function" || typeof onIdle !== "function") {
     throw new Error("The pinned Claude adapter changed its idle compaction gate");
   }
   IdleCompaction.prototype.disabledBy = function (...args) {
     return disabledBy.apply(this, args) ?? IDLE_COMPACTION_POLICY;
+  };
+  // Every turn end otherwise logs "[idle-compaction] skip: disabled by
+  // Cowboy turn ownership", which the worker records as a warning (about
+  // 1,300 a week on OVH). This policy is permanent, not news; a skip for
+  // any upstream reason is still logged.
+  IdleCompaction.prototype.onIdle = function (...args) {
+    if (!this.disposed && disabledBy.apply(this) == null) return;
+    return onIdle.apply(this, args);
   };
 }

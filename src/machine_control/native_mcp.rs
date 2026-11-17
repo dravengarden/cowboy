@@ -75,6 +75,9 @@ impl MachineControl {
             )
             .await
             .map_err(anyhow::Error::msg)?;
+        if let Some(code) = response.get("error").and_then(serde_json::Value::as_str) {
+            anyhow::bail!("execution Machine refused MCP preparation: {code}");
+        }
         let handle = response
             .get("handle")
             .and_then(serde_json::Value::as_str)

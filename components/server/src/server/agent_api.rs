@@ -43,6 +43,7 @@ mod widgets;
 pub(super) use actions::{invoke, read_parent};
 pub(super) use widget_app_messages::api_widget_app_message;
 pub(super) use widget_interactions::{api_widget_interaction, recover_decisions};
+pub(super) use widgets::{WIDGET_WRITES, push as push_widget};
 /// Concurrent programs across the Controller; excess is refused, not queued.
 static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
 /// Raw hot-log events one `session.events` call may coalesce.

@@ -20,6 +20,7 @@ use crate::mcp_binding::{RelayAction, RelayRequest, TransportRequest};
 pub(in crate::server) struct Relay {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     capacity: Arc<Semaphore>,
+    views: view::Views,
 }
 
 impl Default for Relay {
@@ -27,6 +28,7 @@ impl Default for Relay {
         Self {
             sessions: Mutex::new(HashMap::new()),
             capacity: Arc::new(Semaphore::new(32)),
+            views: view::Views::default(),
         }
     }
 }
@@ -67,6 +69,8 @@ struct Session {
     remote: Remote,
     cancelled: watch::Sender<bool>,
     _permit: OwnedSemaphorePermit,
+    /// A view scope's process: never addressable by the agent's relay.
+    view: bool,
 }
 
 impl Session {
@@ -112,7 +116,8 @@ impl Session {
     }
 
     fn owns(&self, connection: &ConnectionToken, grant: &Grant, request: &RelayRequest) -> bool {
-        self.grant == *grant
+        !self.view
+            && self.grant == *grant
             && self.remote.connection.same(connection)
             && self
                 .admission
@@ -217,6 +222,12 @@ async fn handle_inner(
             match response {
                 Ok(value) if value.get("response").is_some() => {
                     flight.completed = true;
+                    let (parent, binding) = {
+                        let admission = session.admission.lock();
+                        let (parent, binding) = admission.names();
+                        (parent.to_owned(), binding.to_owned())
+                    };
+                    super::apps_rows::after_agent_call(state, &parent, &binding, message, &value);
                     value
                 }
                 _ => {
@@ -254,6 +265,20 @@ async fn open(
         &request.epoch,
         &request.binding,
     )?;
+    open_admitted(state, connection, grant, admission, permit)
+        .await
+        .map(|(id, _)| id)
+}
+
+/// Opens one process for an admitted scope: the agent's, or a view's whose
+/// admission carries the app projection.
+async fn open_admitted(
+    state: &Arc<AppState>,
+    connection: &ConnectionToken,
+    grant: &Grant,
+    admission: Admission,
+    permit: OwnedSemaphorePermit,
+) -> Result<(String, Arc<Session>), &'static str> {
     let profile = admission.profile(&state.service_id);
     if profile.execution_machine != connection.machine_id() {
         return Err("mcp_wrong_execution_machine");
@@ -282,7 +307,9 @@ async fn open(
     }
     .validate()
     .map_err(|_| "mcp_invalid_handle")?;
+    let view = admission.is_view();
     let session = Arc::new(Session {
+        view,
         admission: Mutex::new(admission),
         grant: grant.clone(),
         runtime,
@@ -310,7 +337,7 @@ async fn open(
         retire(state, &id, &session);
         return Err(code);
     }
-    Ok(id)
+    Ok((id, session))
 }
 
 fn watch_session(state: &Arc<AppState>, id: &str, session: &Arc<Session>) {
@@ -361,3 +388,4 @@ impl Drop for InFlight {
 mod tests;
 
 mod renewal;
+pub(in crate::server) mod view;

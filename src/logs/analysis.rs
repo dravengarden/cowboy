@@ -7,15 +7,26 @@ pub const BUCKETS: &[f64] = &[
     60000.0,
 ];
 
-pub fn accumulate(groups: &mut BTreeMap<String, Series>, entry: &Entry) {
-    let mut key = format!("{}/{}/{}", entry.service, entry.signal, entry.event);
+/// The group an event counts in: at most 128 named groups, then one
+/// explicit overflow group.
+pub fn series<'a>(
+    groups: &'a mut BTreeMap<String, Series>,
+    service: &str,
+    signal: &str,
+    event: &str,
+) -> &'a mut Series {
+    let mut key = format!("{service}/{signal}/{event}");
     if groups.len() >= 128 && !groups.contains_key(&key) {
         key = "__other_groups__".into();
     }
-    let series = groups.entry(key).or_insert_with(|| Series {
+    groups.entry(key).or_insert_with(|| Series {
         duration_buckets: vec![0; BUCKETS.len() + 1],
         ..Default::default()
-    });
+    })
+}
+
+pub fn accumulate(groups: &mut BTreeMap<String, Series>, entry: &Entry) {
+    let series = series(groups, &entry.service, &entry.signal, &entry.event);
     series.count += 1;
     series.errors += u64::from(entry.severity >= 17);
     series.warnings += u64::from((13..17).contains(&entry.severity));

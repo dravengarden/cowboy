@@ -47,34 +47,44 @@ impl RemoteRuntime {
     /// before content-addressed descriptors). Adoption can never move a live
     /// worker's plan, so a plain ensure would only be refused on every send;
     /// a reset re-declares the plan and relaunches with it. A prompt queued
-    /// after this call waits for the replacement. A busy worker keeps its turn.
+    /// after this call waits for the replacement. A busy worker keeps its turn
+    /// and is not re-declared at all: the Machine would refuse the changed plan
+    /// and report it as a session error. The first send after the turn ends
+    /// replaces it.
     pub fn ensure_current_mcp_plan(&self, session: crate::runtime_wire::StartSession) {
         let stale = self
             .shared
             .workers
             .lock()
             .get(&session.session_id)
-            .is_some_and(|worker| {
+            .filter(|worker| {
                 worker.state == crate::runtime_wire::WorkerState::Running
-                    && worker.current_turn_id.is_none()
                     && worker.has_connected_owner()
                     && worker
                         .launch
                         .as_ref()
                         .is_some_and(|launch| launch.mcp_plan != session.mcp_plan)
-            });
-        if !stale {
-            self.ensure(session);
-            return;
+            })
+            .map(|worker| worker.current_turn_id.is_some());
+        match stale {
+            None => self.ensure(session),
+            Some(true) => tracing::debug!(
+                session = %session.session_id,
+                "busy worker keeps its stale MCP launch plan until its turn ends"
+            ),
+            Some(false) => {
+                tracing::info!(
+                    session = %session.session_id,
+                    "replacing idle worker whose MCP launch plan is stale"
+                );
+                self.shared.hub.set_status(
+                    &session.session_id,
+                    crate::core::Status::Starting,
+                    None,
+                );
+                self.reset(session);
+            }
         }
-        tracing::info!(
-            session = %session.session_id,
-            "replacing idle worker whose MCP launch plan is stale"
-        );
-        self.shared
-            .hub
-            .set_status(&session.session_id, crate::core::Status::Starting, None);
-        self.reset(session);
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -175,10 +185,14 @@ mod tests {
             CoreCommand::EnsureSession { session }
                 if session.adopt_only && session.mcp_plan == declaration("/new.json").mcp_plan)));
         assert!(!resets(&commands(worker("/new.json", None), "/new.json")));
-        // A running turn is never interrupted to refresh its plan.
-        assert!(!resets(&commands(
-            worker("/old.json", Some("turn")),
-            "/new.json"
-        )));
+        // A running turn is never interrupted to refresh its plan, nor sent a
+        // declaration the Machine must refuse as a placement change.
+        assert!(commands(worker("/old.json", Some("turn")), "/new.json").is_empty());
+        // A current busy worker still receives its idempotent ensure.
+        assert!(
+            commands(worker("/new.json", Some("turn")), "/new.json")
+                .iter()
+                .any(|command| matches!(command, CoreCommand::EnsureSession { .. }))
+        );
     }
 }

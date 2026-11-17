@@ -445,13 +445,16 @@ pub(super) fn session_id_from_sync_state(state: &str) -> Option<&str> {
         .filter(|id| !id.is_empty())
 }
 
-/// `/api/sessions/{id}/widgets/{widget}/interactions` and
-/// `/api/sessions/{id}/widgets/{widget}/apps/{node}/messages`.
+/// `/api/sessions/{id}/widgets/{widget}/interactions`,
+/// `/api/sessions/{id}/widgets/{widget}/apps/{node}/messages` and every
+/// `/api/sessions/{id}/mcp-apps/…` route: a signed view runs, calls tools and
+/// confirms writes only for a person (docs/widget-apps-mcp.md §4).
 fn human_only_session_route(path: &str) -> bool {
     let parts: Vec<&str> = path.trim_end_matches('/').split('/').collect();
     matches!(
         parts.as_slice(),
         ["", "api", "sessions", _, "widgets", _, "interactions"]
+            | ["", "api", "sessions", _, "mcp-apps", ..]
             | [
                 "",
                 "api",

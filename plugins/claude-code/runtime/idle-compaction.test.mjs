@@ -8,6 +8,7 @@ test("idle compaction never arms, and an upstream reason still wins", () => {
     disabledBy() {
       return this.reason;
     }
+    onIdle() {}
   }
   disableIdleCompaction(IdleCompaction);
   const gate = new IdleCompaction();
@@ -29,19 +30,22 @@ test("the pinned adapter's idle compaction is disabled before any session", asyn
   const { IdleCompaction } = await import(upstream);
   disableIdleCompaction(IdleCompaction);
   const timers = [];
+  const logs = [];
   const gate = new IdleCompaction(
     {
       isBusy: () => false,
       contextTokens: () => 900_000,
       settings: () => ({}),
       compact: () => assert.fail("idle compaction must not send /compact"),
-      log: () => {},
+      log: (line) => logs.push(line),
     },
     { env: {}, setTimeout: (callback) => timers.push(callback) },
   );
   gate.noteRequest({ cache_creation: { ephemeral_1h_input_tokens: 1 } }, "message");
   gate.onIdle();
   assert.deepEqual(timers, []);
+  // Cowboy's permanent policy is not logged at every idle.
+  assert.deepEqual(logs, []);
   assert.equal(gate.skipReason(), `disabled by ${IDLE_COMPACTION_POLICY}`);
   await gate.fire();
   assert.equal(gate.isCompacting, false);

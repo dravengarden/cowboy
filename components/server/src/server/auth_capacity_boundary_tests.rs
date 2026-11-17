@@ -167,6 +167,10 @@ fn automation_credentials_are_confined_to_declared_route_scopes() {
     for human_only in [
         "/api/sessions/example/widgets/w/interactions",
         "/api/sessions/example/widgets/w/apps/dash/messages",
+        "/api/sessions/example/mcp-apps/frames",
+        "/api/sessions/example/mcp-apps/frames/lease/call",
+        "/api/sessions/example/mcp-apps/frames/lease/open-link",
+        "/api/sessions/example/mcp-apps/frames/lease/renew",
     ] {
         assert!(
             !automation_route_allowed(writer, &Method::POST, human_only),

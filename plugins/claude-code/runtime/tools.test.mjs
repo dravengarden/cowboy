@@ -8,6 +8,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   cksumDigest,
+  hookInlineText,
+  hookSnapshotScript,
   readAhead,
   TASK_OUTPUT_PREFIX,
   textBytes,
@@ -336,8 +338,69 @@ test("a quiet command waits on notifications instead of polling every second", a
   assert.deepEqual(waits, [1000, 1000, 1000, 0, 0]);
 });
 
+test("only small valid text deltas travel inside the hook snapshot command", () => {
+  assert.equal(hookInlineText(Buffer.from('{"a":"it\'s"}\n')), '{"a":"it\'s"}\n');
+  assert.equal(hookInlineText(Buffer.from([0x7b, 0x00, 0x7d])), undefined);
+  assert.equal(hookInlineText(Buffer.from([0x7b, 0xe2, 0x82])), undefined);
+  assert.equal(hookInlineText(Buffer.from("x".repeat(65537))), undefined);
+  // Quoting expands each apostrophe fourfold; the quoted form is bounded.
+  assert.equal(hookInlineText(Buffer.from("'".repeat(20000))), undefined);
+  assert.equal(hookInlineText(Buffer.from("a"), 0), undefined);
+  const script = hookSnapshotScript(
+    ["helper", "snapshot", "--", "c", "d e", "f"],
+    "d e",
+    "f",
+    "x'y",
+  );
+  assert.match(
+    script,
+    /^set \+e\n\(umask 077 && set -C && printf '%s' 'x'\\''y' > 'd e'\) \|\| exit 1\n/,
+  );
+  assert.match(script, /\nrm -f -- 'd e' 'f\.cache' \|\| s=\$\(\(s \+ 100\)\)\nexit "\$s"$/);
+  assert.doesNotMatch(hookSnapshotScript(["helper"], "d", "f", undefined), /printf/);
+});
+
+test("the hook snapshot script cleans up under errexit and reports a failed removal", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-hook-script-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const delta = join(directory, "copy.jsonl.delta");
+  const copy = join(directory, "copy.jsonl");
+  const run = (env) => {
+    try {
+      execFileSync(
+        "sh",
+        ["-e", "-c", hookSnapshotScript(["sh", "-c", "exit 75"], delta, copy, "x")],
+        {
+          env,
+          stdio: "ignore",
+        },
+      );
+      return 0;
+    } catch (error) {
+      return error.status;
+    }
+  };
+  // An inherited errexit still removes the delta before the cache miss.
+  assert.equal(run(process.env), 75);
+  await assert.rejects(stat(delta));
+  // Without rm the status says so, and the caller removes the files.
+  const bin = join(directory, "bin");
+  await mkdir(bin);
+  const sh = execFileSync("sh", ["-c", "command -v sh"], { encoding: "utf8" }).trim();
+  execFileSync("ln", ["-s", sh, join(bin, "sh")]);
+  assert.equal(run({ PATH: bin }), 175);
+  await stat(delta);
+});
+
 test("hook transcripts send only appended bytes to an executor without the file helper", async (t) => {
-  const { tools } = await fixture(t);
+  const { tools, connection } = await fixture(t);
+  // Small appends travel inside the snapshot command, which removes its own
+  // files: no write or removal round trip of its own.
+  const calls = [];
+  connection.call = async (method) => {
+    calls.push(method);
+    return {};
+  };
   const directory = await mkdtemp(join(tmpdir(), "cowboy-hook-snapshot-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   tools.shell = "/bin/sh";
@@ -364,7 +427,7 @@ test("hook transcripts send only appended bytes to an executor without the file 
 
   const second = Buffer.concat([first, Buffer.from("appended\n")]);
   await tools.hookTranscript(second, join(directory, "two.jsonl"), undefined);
-  assert.equal(sent, first.length + 9);
+  assert.equal(sent, first.length);
   assert.deepEqual(await readFile(join(directory, "two.jsonl")), second);
   assert.deepEqual(await readFile(join(directory, "one.jsonl")), first);
   assert.deepEqual(await readFile(cache), second);
@@ -375,14 +438,14 @@ test("hook transcripts send only appended bytes to an executor without the file 
   const third = Buffer.concat([second, Buffer.from("more\n")]);
   sent = 0;
   await tools.hookTranscript(third, join(directory, "three.jsonl"), undefined);
-  assert.equal(sent, 5 + third.length);
+  assert.equal(sent, third.length);
   assert.deepEqual(await readFile(join(directory, "three.jsonl")), third);
 
   // Without sha256sum or shasum the same snapshot verifies with cksum:
   // one full base in the new digest, then only appends again.
   const bin = join(directory, "bin");
   await mkdir(bin);
-  for (const tool of ["awk", "cat", "cksum", "cut", "mv"]) {
+  for (const tool of ["awk", "cat", "cksum", "cut", "mv", "rm"]) {
     const path = execFileSync("sh", ["-c", `command -v ${tool}`], {
       encoding: "utf8",
     }).trim();
@@ -392,13 +455,13 @@ test("hook transcripts send only appended bytes to an executor without the file 
   const fourth = Buffer.concat([third, Buffer.from("last\n")]);
   sent = 0;
   await tools.hookTranscript(fourth, join(directory, "four.jsonl"), undefined);
-  assert.equal(sent, 5 + fourth.length);
+  assert.equal(sent, fourth.length);
   assert.deepEqual(await readFile(join(directory, "four.jsonl")), fourth);
   assert.equal(tools.hookDigestKind, "cksum");
   sent = 0;
   const fifth = Buffer.concat([fourth, Buffer.from("tail\n")]);
   await tools.hookTranscript(fifth, join(directory, "five.jsonl"), undefined);
-  assert.equal(sent, 5);
+  assert.equal(sent, 0);
   assert.deepEqual(await readFile(join(directory, "five.jsonl")), fifth);
   // A restarted runtime continues from the saved base, not a full copy.
   const restarted = new WorkspaceTools(
@@ -419,8 +482,15 @@ test("hook transcripts send only appended bytes to an executor without the file 
   sent = 0;
   const sixth = Buffer.concat([fifth, Buffer.from("more\n")]);
   await restarted.hookTranscript(sixth, join(directory, "six.jsonl"));
-  assert.equal(sent, 5);
+  assert.equal(sent, 0);
   assert.deepEqual(await readFile(join(directory, "six.jsonl")), sixth);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(
+    (await readdir(directory)).filter(
+      (name) => /\.(delta|cache)$/.test(name) && !name.startsWith("transcript-"),
+    ),
+    [],
+  );
 });
 
 test("a cancellation the executor has long not known ends instead of polling forever", async (t) => {
