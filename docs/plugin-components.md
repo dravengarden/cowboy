@@ -83,6 +83,10 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.112.0 records Zed 1.39.7, whose adapter dependency policy
+records the chrono "unmaintained" notice RUSTSEC-2026-0543 (no vulnerability;
+the pinned Zed crates require chrono). No component changes.
+
 Component release 3.111.0 records provider-sdk 3.4.0, plugin-sdk 1.17.0,
 provider-ui 3.5.0 and provider-authoring 1.0.16. Native identity gains the
 `owner_declared_v1` recipe: the owner names the subscription when adding the

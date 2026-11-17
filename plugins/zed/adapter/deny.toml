@@ -2,7 +2,11 @@
 targets = ["x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
 
 [advisories]
-ignore = []
+# RUSTSEC-2026-0543 is an "unmaintained" notice for chrono (no vulnerability)
+# reached through the pinned Zed crates; review with the next Zed pin move.
+ignore = [
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (notice, no vulnerability); the pinned Zed crates require it. Review with the next Zed pin; by 2027-01-31." },
+]
 
 [licenses]
 allow = [
