@@ -5,9 +5,13 @@ import { legacySubscriptionLabel, type SubscriptionDisplay, validSubscriptionDis
 import { useNativeAccountUsage } from "./nativeAccountUsage";
 import { loadUsageSnapshot, useStoreSelector } from "./store";
 import { providerUsage, subscriptionQuotaHint } from "./usageLimits";
+import { accountServes, providerDefault } from "./subscriptionAccounts";
 
 interface Account { id: string; provider_id: string; label: string; enabled: boolean }
-interface Accounts { registry: { accounts: Account[]; defaults: Record<string, string> }; display_preferences?: SubscriptionDisplay; session_admission: string; session_providers?: string[] }
+interface Accounts {
+  registry: { accounts: Account[]; defaults: Record<string, string> }; display_preferences?: SubscriptionDisplay;
+  session_admission: string; session_providers?: string[]; portable_scopes?: string[][];
+}
 
 export function providerSubscriptionEnabled(data: { session_admission: string; session_providers?: string[] } | undefined, provider: string): boolean {
   return data?.session_admission === "enabled" && data.session_providers?.includes(provider) === true;
@@ -33,16 +37,16 @@ export function subscriptionLoginReason(
 
 export function subscriptionAllowed(data: Accounts | undefined, provider: string, choice: string): boolean {
   if (!data) return false;
-  const id = choice || data.registry.defaults[provider] || "default";
+  const id = choice || providerDefault(data, provider) || "default";
   if (id === "default") return true;
   return providerSubscriptionEnabled(data, provider) && data.registry.accounts.some((account) =>
-    account.id === id && account.provider_id === provider && account.enabled
+    account.id === id && accountServes(data, account.provider_id, provider) && account.enabled
   );
 }
 
 function subscriptionUnavailableReason(data: Accounts | undefined, provider: string, id: string): string | undefined {
   if (id === "default") return undefined;
-  const account = data?.registry.accounts.find((account) => account.id === id && account.provider_id === provider);
+  const account = data?.registry.accounts.find((account) => account.id === id && accountServes(data, account.provider_id, provider));
   if (!account) return "Account unavailable";
   if (!account.enabled) return "Account disabled";
   if (data?.session_admission !== "enabled") return "Session access not enabled";
@@ -75,7 +79,7 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
   const hinted = preferred && subscriptionAllowed(data, provider, preferred) && !loginReason(preferred) ? preferred : "";
   // Resolve the default in this snapshot. Creation must submit the exact
   // account shown in the field, even if another client changes the default.
-  const value = choice || hinted || (data ? data.registry.defaults[provider] || "default" : "");
+  const value = choice || hinted || (data ? providerDefault(data, provider) || "default" : "");
   useEffect(() => {
     if (!active) return;
     const changed = (event: Event) => {
@@ -101,7 +105,9 @@ export function useSessionSubscription(active: boolean, provider: string, prefer
           !next.registry.accounts.every((account) => account && typeof account.id === "string" &&
             typeof account.provider_id === "string" && typeof account.label === "string" && typeof account.enabled === "boolean") ||
           typeof next.session_admission !== "string" || (next.session_providers !== undefined &&
-            (!Array.isArray(next.session_providers) || !next.session_providers.every((id) => typeof id === "string")))) throw new Error("invalid response");
+            (!Array.isArray(next.session_providers) || !next.session_providers.every((id) => typeof id === "string"))) ||
+          (next.portable_scopes !== undefined && (!Array.isArray(next.portable_scopes) ||
+            !next.portable_scopes.every((scope) => Array.isArray(scope) && scope.every((id) => typeof id === "string"))))) throw new Error("invalid response");
         if (!abort.signal.aborted) setData(next);
       }).catch(() => { if (!abort.signal.aborted) setError(true); });
     return () => abort.abort();
@@ -123,8 +129,8 @@ export function SessionSubscription({ state, disabled, desktop, helperText }: {
   state: ReturnType<typeof useSessionSubscription>; disabled: boolean; desktop: boolean;
   helperText?: string | undefined;
 }): React.JSX.Element {
-  const accounts = state.data?.registry.accounts.filter((account) => account.provider_id === state.provider) ?? [];
-  const defaultId = state.data?.registry.defaults[state.provider] ?? "default";
+  const accounts = state.data?.registry.accounts.filter((account) => accountServes(state.data, account.provider_id, state.provider)) ?? [];
+  const defaultId = providerDefault(state.data, state.provider) ?? "default";
   const legacyLabel = legacySubscriptionLabel(state.data?.display_preferences, state.provider);
   const selectedId = state.value;
   const choices = [{ id: "default", label: legacyLabel }, ...accounts].map((account) => ({

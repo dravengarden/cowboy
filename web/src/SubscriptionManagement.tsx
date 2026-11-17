@@ -7,6 +7,7 @@ import { productSyncPrincipal } from "./productSyncIdentity";
 import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { providerSubscriptionEnabled } from "./SessionSubscription";
 import { SubscriptionLogins } from "./SubscriptionLogins";
+import { SubscriptionApiKey } from "./SubscriptionApiKey";
 import { SubscriptionRevocation } from "./SubscriptionRevocation";
 import { LegacyBrowserActions, SubscriptionBrowserActions } from "./SubscriptionBrowserActions";
 import { type BrowserShareChange, BrowserShareSettings } from "./machineBrowser/BrowserShareSettings";
@@ -237,8 +238,12 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
         <ProviderAccountIdentity manifests={entry ? [entry.manifest] : []} title={account.label}
           summary={`${entry?.manifest.display.name ?? account.provider_id}${snapshot.registry.defaults[account.provider_id] === account.id ? " · Default" : ""}${account.revoking ? " · Removal requested" : !account.enabled ? " · Disabled" : ""}`}
           actions={<Button size="small" aria-expanded={editing.includes(account.id)} onClick={() => setEditing((old) => old.includes(account.id) ? old.filter((id) => id !== account.id) : [...old, account.id])}>{editing.includes(account.id) ? "Done" : "Manage"}</Button>}>
-          {owner && <SubscriptionLogins scope={{ owner, dataset: snapshot.dataset.dataset_id, account: account.id, provider: account.provider_id }} label={account.label}
-            expanded={editing.includes(account.id)} disabled={disabled || !account.enabled || Boolean(account.revoking)} />}
+          {owner && (snapshot.portable_providers?.includes(account.provider_id)
+            ? <SubscriptionApiKey account={account.id} credential={snapshot.portable_credentials?.find((item) => item.account_id === account.id)}
+              method={entry?.manifest.authentication.methods.find((method) => method.flow === "secret_input")}
+              expanded={editing.includes(account.id)} disabled={disabled || !account.enabled || Boolean(account.revoking)} onChange={() => void load()} />
+            : <SubscriptionLogins scope={{ owner, dataset: snapshot.dataset.dataset_id, account: account.id, provider: account.provider_id }} label={account.label}
+              expanded={editing.includes(account.id)} disabled={disabled || !account.enabled || Boolean(account.revoking)} />)}
         </ProviderAccountIdentity>
         {editing.includes(account.id) && <Stack spacing={1}>
           <Stack direction="row" spacing={1}>

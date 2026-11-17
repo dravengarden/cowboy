@@ -28,3 +28,21 @@ test("a global enabled flag cannot enable an unsupported provider", () => {
   assertEquals(subscriptionAllowed(data, "codex", "c"), false);
   assertEquals(subscriptionAllowed(data, "codex", "default"), true);
 });
+
+test("one portable account serves its whole credential scope, never other Providers", () => {
+  const scope = ["claude-deepseek", "codex-deepseek", "deepseek-harness"];
+  const data = { registry: {
+    accounts: [{ id: "k", provider_id: "claude-deepseek", label: "DeepSeek", enabled: true }],
+    defaults: { "claude-deepseek": "k" } as Record<string, string>,
+  }, session_admission: "enabled", session_providers: [...scope, "codex"], portable_scopes: [scope] };
+  for (const provider of scope) {
+    assertEquals(subscriptionAllowed(data, provider, "k"), true);
+    // The scope member default is inherited, as the Service resolves it.
+    assertEquals(subscriptionAllowed(data, provider, ""), true);
+  }
+  assertEquals(subscriptionAllowed(data, "codex", "k"), false);
+  assertEquals(subscriptionAllowed({ ...data, portable_scopes: [] }, "codex-deepseek", "k"), false);
+  data.registry.accounts[0]!.enabled = false;
+  // An unavailable inherited default refuses instead of using the Service account.
+  assertEquals(subscriptionAllowed(data, "deepseek-harness", ""), false);
+});

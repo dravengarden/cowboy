@@ -59,6 +59,15 @@ export interface BrowserShare {
    * may join meanwhile. */
   bound?: { family: string; account_id: string }[];
 }
+/** Public key state of a portable account (an API key held by the Service). */
+export interface PortableCredential {
+  account_id: string;
+  provider_id: string;
+  authentication_state: string;
+  auth_generation: number;
+  distribution_state: string;
+  updated_at_ms: number;
+}
 export interface SubscriptionSnapshot {
   dataset: { dataset_id: string; user_id: string };
   registry: { revision: number; accounts: SubscriptionAccount[]; defaults: Record<string, string> };
@@ -75,6 +84,28 @@ export interface SubscriptionSnapshot {
    * → family, and the legacy cards that have a family. Nothing else may
    * ever share a browser. */
   browser_share_families?: BrowserShareFamilies;
+  /** Providers whose accounts take an API key instead of a sign-in. */
+  portable_providers?: string[];
+  /** Credential scopes: one portable account serves every listed Provider. */
+  portable_scopes?: string[][];
+  portable_credentials?: PortableCredential[];
+}
+
+type PortableScopes = { portable_scopes?: string[][] } | undefined;
+/** Whether an account of `accountProvider` serves sessions of `provider`
+ * (the same Provider, or a portable credential scope that holds both). */
+export function accountServes(data: PortableScopes, accountProvider: string, provider: string): boolean {
+  return accountProvider === provider ||
+    (data?.portable_scopes ?? []).some((scope) => scope.includes(provider) && scope.includes(accountProvider));
+}
+/** The default account id the Service resolves for `provider`: its own
+ * default, else the first default among its portable scope (Provider order). */
+export function providerDefault(data: PortableScopes & { registry: { defaults: Record<string, string> } } | undefined, provider: string): string | undefined {
+  if (!data) return undefined;
+  const own = data.registry.defaults[provider];
+  if (own) return own;
+  const scope = (data.portable_scopes ?? []).find((members) => members.includes(provider)) ?? [];
+  return [...scope].sort().map((member) => data.registry.defaults[member]).find(Boolean);
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -103,6 +134,11 @@ function validBrowserShare(value: unknown): value is BrowserShare {
       value.bound.every((row: unknown) => record(row) && text(row.family) && text(row.account_id))));
 }
 
+function validPortableCredential(value: unknown): value is PortableCredential {
+  return record(value) && text(value.account_id) && text(value.provider_id) && text(value.authentication_state) &&
+    typeof value.auth_generation === "number" && text(value.distribution_state) && typeof value.updated_at_ms === "number";
+}
+
 export function validSubscriptionSnapshot(value: unknown, owner: string | undefined): value is SubscriptionSnapshot {
   if (!owner || !record(value) || !record(value.dataset) || !record(value.registry)) return false;
   const { dataset, registry } = value;
@@ -115,6 +151,10 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
     (value.legacy_browsers === undefined || (Array.isArray(value.legacy_browsers) && value.legacy_browsers.every(validLegacyBrowser))) &&
     (value.browser_shares === undefined || (Array.isArray(value.browser_shares) && value.browser_shares.every(validBrowserShare))) &&
     (value.browser_share_families === undefined || validShareFamilies(value.browser_share_families)) &&
+    (value.portable_providers === undefined || (Array.isArray(value.portable_providers) && value.portable_providers.every(text))) &&
+    (value.portable_scopes === undefined || (Array.isArray(value.portable_scopes) &&
+      value.portable_scopes.every((scope: unknown) => Array.isArray(scope) && scope.every(text)))) &&
+    (value.portable_credentials === undefined || (Array.isArray(value.portable_credentials) && value.portable_credentials.every(validPortableCredential))) &&
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
     Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
       text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean" &&
