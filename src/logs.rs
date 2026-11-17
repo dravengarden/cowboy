@@ -8,6 +8,7 @@ mod analysis;
 mod capture;
 pub mod cli;
 mod data;
+mod reason;
 mod source;
 pub mod storage;
 #[cfg(test)]
@@ -21,6 +22,7 @@ pub use capture::{Context, Guard, directory, init};
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use capture::{forward_runtime, init_stderr};
 pub use data::now_ms;
+pub use reason::{agent_stderr, error_reason, failure_reason, text_reason};
 #[cfg(feature = "full")]
 pub use storage::SqliteStore;
 

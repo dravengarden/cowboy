@@ -10,7 +10,7 @@ pub(super) async fn run(config: super::ControllerConfig) -> anyhow::Result<()> {
     let mut retry = Backoff::default();
     loop {
         if let Err(error) = super::controller_connection(&config, &mut retry).await {
-            tracing::warn!(%error, "Machine controller disconnected");
+            tracing::warn!(reason = crate::logs::failure_reason(&error), %error, "Machine controller disconnected");
         }
         let delay = retry.disconnected(Instant::now());
         tokio::time::sleep(delay).await;

@@ -2839,7 +2839,7 @@ pub fn run_agent_with_sink(
             let behavior = crate::provider::behavior(&spec.id);
             let detail = crate::provider::user_facing_startup_error(&behavior, &raw_error)
                 .unwrap_or_else(|| raw_error.clone());
-            tracing::error!(session = session_id, error = %raw_error, "agent session ended with error");
+            tracing::error!(session = session_id, reason = crate::logs::text_reason(&raw_error), error = %raw_error, "agent session ended with error");
             // Salvage un-consumed prompts. A cold-start / handshake failure returns
             // BEFORE the command loop (`while let Some(cmd) = cmd_rx.recv()`) drains
             // cmd_rx, so a prompt the dispatcher delivered to this (revived) agent is
@@ -2963,13 +2963,7 @@ async fn agent_main(
                 );
                 continue;
             }
-            tracing::warn!(
-                session = %stderr_session,
-                provider = %stderr_provider,
-                child = true,
-                message = %line,
-                "agent stderr"
-            );
+            crate::logs::agent_stderr(&stderr_session, &stderr_provider, &line);
         }
     });
 
@@ -3556,6 +3550,7 @@ async fn await_prompt_with_idle_watchdog<R>(
                         BackoffVerdict::None => turn_appears_stuck(state).then(|| {
                             tracing::warn!(
                                 session = %state.session_id,
+                                reason = "prompt_watchdog_idle",
                                 idle_seconds = WATCHDOG_IDLE.as_secs(),
                                 "prompt watchdog: idle turn — cancelling, awaiting grace"
                             );

@@ -2048,7 +2048,7 @@ impl Broker {
                     );
                     return;
                 }
-                tracing::error!(session = %session.session_id, error = %error, "worker launch failed");
+                tracing::error!(session = %session.session_id, reason = crate::logs::failure_reason(&error), error = %error, "worker launch failed");
                 broker
                     .startup_failures
                     .lock()
