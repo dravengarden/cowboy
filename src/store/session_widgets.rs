@@ -260,6 +260,11 @@ pub(super) async fn clear_transcript_projections_pg(
         .execute(&mut **tx)
         .await
         .with_context(|| format!("DELETE transcript anchors for {session_id}"))?;
+    sqlx::query("DELETE FROM subagent_events WHERE session_id = $1")
+        .bind(session_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("DELETE observed subagent events for {session_id}"))?;
     sqlx::query(
         "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) VALUES ($1, $2, 0, $3)",
     )
@@ -287,6 +292,11 @@ pub(super) async fn clear_transcript_projections_sqlite(
         .execute(&mut **tx)
         .await
         .with_context(|| format!("DELETE SQLite transcript anchors for {session_id}"))?;
+    sqlx::query("DELETE FROM subagent_events WHERE session_id = ?1")
+        .bind(session_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("DELETE observed subagent events for {session_id}"))?;
     sqlx::query(
         "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) VALUES (?1, ?2, 0, ?3)",
     )

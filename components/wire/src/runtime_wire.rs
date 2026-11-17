@@ -181,6 +181,14 @@ pub fn native_cycle(update: &serde_json::Value) -> Option<Option<String>> {
 /// peer that predates it stores and ignores it like any unknown update.
 pub const SUBAGENT_UPDATE: &str = "cowboy_subagent";
 
+/// One of a subagent's own ACP updates, observed passively for its full
+/// transcript (`docs/subagents.md#observed-transcripts`). The payload is
+/// `{childSessionId, update, dropped?}`; `dropped` counts the child updates
+/// the worker discarded before this one instead of waiting for delivery.
+/// The Controller stores it outside the parent timeline; a peer that predates
+/// it never receives it (see `observe_subagents`).
+pub const SUBAGENT_EVENT_UPDATE: &str = "cowboy_subagent_event";
+
 pub const CURRENT_TURN_CAPABILITIES_UPDATE: &str = "cowboy_delivery_capabilities";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeliveryControls {
@@ -458,6 +466,13 @@ pub enum CoreCommand {
         /// bytes. Absent from older Controllers, which keeps the inline echo.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         echo_artifacts: bool,
+        /// The Controller keeps observed subagent transcripts, so the worker
+        /// may forward each child's own updates as [`SUBAGENT_EVENT_UPDATE`].
+        /// Absent from older Controllers and dropped by older Machines, which
+        /// keeps the bounded snapshot only. Presentation only: it never
+        /// changes what the agent runs or sees.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        observe_subagents: bool,
     },
     Cancel {
         session_id: String,
@@ -588,6 +603,13 @@ pub enum WorkerCommand {
         /// bytes. Absent from older Controllers, which keeps the inline echo.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         echo_artifacts: bool,
+        /// The Controller keeps observed subagent transcripts, so the worker
+        /// may forward each child's own updates as [`SUBAGENT_EVENT_UPDATE`].
+        /// Absent from older Controllers and dropped by older Machines, which
+        /// keeps the bounded snapshot only. Presentation only: it never
+        /// changes what the agent runs or sees.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        observe_subagents: bool,
     },
     Cancel {
         command_id: String,
@@ -1167,6 +1189,7 @@ mod tests {
             decoded,
             WorkerCommand::Prompt {
                 echo_artifacts: false,
+                observe_subagents: false,
                 ..
             }
         ));
@@ -1178,6 +1201,7 @@ mod tests {
             decoded,
             WorkerCommand::Prompt {
                 echo_artifacts: true,
+                observe_subagents: false,
                 ..
             }
         ));

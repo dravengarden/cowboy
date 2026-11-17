@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use agent_client_protocol::schema::v1::ContentBlock;
@@ -78,7 +78,16 @@ pub struct Shared {
     managed_round: Option<ManagedRound>,
     /// Options the signed package's presets set; see `PreparedLaunch`.
     preset_options: std::collections::BTreeSet<String>,
+    /// The latest prompt's Controller keeps observed subagent transcripts.
+    observe_subagents: AtomicBool,
+    /// Observed child updates dropped since the last one emitted.
+    observe_dropped: AtomicU64,
 }
+
+/// Unacknowledged runtime events beyond which a subagent's observed update is
+/// dropped instead of queued: observation never grows the outbox without
+/// bound while the Controller is away, and never waits for it.
+const OBSERVE_OUTBOX_LIMIT: usize = 4096;
 
 struct ManagedRound {
     ready: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
@@ -89,6 +98,12 @@ struct ManagedRound {
 struct WorkspaceIdentity {
     device: u64,
     inode: u64,
+}
+
+fn current_executable() -> Option<String> {
+    std::env::current_exe()
+        .ok()
+        .map(|path| path.display().to_string())
 }
 
 fn workspace_identity(path: &std::path::Path) -> Option<WorkspaceIdentity> {
@@ -108,6 +123,23 @@ impl Shared {
             .and_then(|launch| launch.execution_binding.as_ref())
             .and_then(crate::execution_environment::ExecutionBinding::managed)
             .is_some()
+    }
+
+    /// The workspace was replaced or removed: report the crash it means and
+    /// return why a prompt cannot run.
+    fn workspace_replaced(&self) -> Option<String> {
+        if self.workspace_is_current() {
+            return None;
+        }
+        let message = format!(
+            "session workspace was replaced or removed: {}; retry after Cowboy recycles this worker",
+            self.workspace_path.display()
+        );
+        self.emit(RuntimeEvent::Status {
+            state: WorkerState::Crashed,
+            detail: Some(message.clone()),
+        });
+        Some(message)
     }
 
     fn workspace_is_current(&self) -> bool {
@@ -418,6 +450,35 @@ impl AgentSink for RemoteSink {
         });
     }
 
+    fn observe_subagent(
+        &self,
+        _session_id: &str,
+        child_session_id: &str,
+        update: serde_json::Value,
+    ) {
+        let shared = &self.shared;
+        if !shared.observe_subagents.load(Ordering::Relaxed) {
+            return;
+        }
+        if shared.outbox.lock().len() >= OBSERVE_OUTBOX_LIMIT {
+            shared.observe_dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        let mut observed = serde_json::json!({
+            "sessionUpdate": crate::runtime_wire::SUBAGENT_EVENT_UPDATE,
+            "childSessionId": child_session_id,
+            "update": update,
+        });
+        let dropped = shared.observe_dropped.swap(0, Ordering::Relaxed);
+        if dropped > 0 {
+            observed["dropped"] = dropped.into();
+        }
+        shared.emit(RuntimeEvent::Update {
+            update: observed,
+            cmid: None,
+        });
+    }
+
     fn set_session_usage(&self, _session_id: &str, usage: crate::agent_model::SessionUsage) {
         let configured_size = self
             .shared
@@ -577,9 +638,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         })
         .filter(|_| crate::deepseek_cache::supported_behavior(&configuration));
     let epoch = args.worker_epoch.unwrap_or_else(generated_epoch);
-    let executable = std::env::current_exe()
-        .ok()
-        .map(|path| path.display().to_string());
+    let executable = current_executable();
     let launch = crate::runtime_wire::StartSession {
         session_id: args.session_id.clone(),
         provider: args.provider.clone(),
@@ -715,6 +774,8 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             .map(|endpoint| Arc::clone(&endpoint.client)),
         managed_round,
         preset_options: prepared.preset_options.clone(),
+        observe_subagents: AtomicBool::new(false),
+        observe_dropped: AtomicU64::new(0),
     });
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (done_tx, mut done_rx) = mpsc::channel(1);
@@ -1105,16 +1166,14 @@ pub fn handle_command(
                 cmid,
                 trace,
                 echo_artifacts,
+                observe_subagents,
             } => {
-                if !shared.workspace_is_current() {
-                    let message = format!(
-                        "session workspace was replaced or removed: {}; retry after Cowboy recycles this worker",
-                        shared.workspace_path.display()
-                    );
-                    shared.emit(RuntimeEvent::Status {
-                        state: WorkerState::Crashed,
-                        detail: Some(message.clone()),
-                    });
+                // Each turn's Controller states whether it keeps observed
+                // transcripts, so a rolled-back Controller stops receiving them.
+                shared
+                    .observe_subagents
+                    .store(observe_subagents, Ordering::Relaxed);
+                if let Some(message) = shared.workspace_replaced() {
                     return command_ack(shared, command_id, false, Some(message));
                 }
                 if !shared.mark_command(&command_id) {
@@ -1326,6 +1385,8 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
             execution: None,
             managed_round: None,
             preset_options: std::collections::BTreeSet::new(),
+            observe_subagents: AtomicBool::new(false),
+            observe_dropped: AtomicU64::new(0),
         }),
         rx,
     )
@@ -1345,6 +1406,39 @@ mod tests {
             .await
             .expect("SIGTERM did not end the worker")
             .unwrap();
+    }
+
+    #[test]
+    fn observed_child_updates_follow_the_prompt_flag_and_never_grow_a_full_outbox() {
+        let (shared, _rx) = shared();
+        let sink = RemoteSink {
+            shared: Arc::clone(&shared),
+        };
+        let update = || serde_json::json!({"sessionUpdate": "tool_call", "toolCallId": "t"});
+        sink.observe_subagent("sess-1", "child", update());
+        assert!(shared.outbox.lock().is_empty(), "no flag, no observation");
+        shared.observe_subagents.store(true, Ordering::Relaxed);
+        for _ in 0..OBSERVE_OUTBOX_LIMIT {
+            shared.emit(RuntimeEvent::Error {
+                message: "unacknowledged".to_owned(),
+            });
+        }
+        sink.observe_subagent("sess-1", "child", update());
+        sink.observe_subagent("sess-1", "child", update());
+        assert_eq!(shared.outbox.lock().len(), OBSERVE_OUTBOX_LIMIT);
+        shared.ack(u64::MAX);
+        sink.observe_subagent("sess-1", "child", update());
+        let outbox = shared.outbox.lock();
+        let Some(RuntimeEvent::Update { update, .. }) = outbox.values().next() else {
+            panic!("observed update was not emitted");
+        };
+        assert_eq!(
+            update["sessionUpdate"],
+            crate::runtime_wire::SUBAGENT_EVENT_UPDATE
+        );
+        assert_eq!(update["childSessionId"], "child");
+        assert_eq!(update["dropped"], 2);
+        assert_eq!(update["update"]["toolCallId"], "t");
     }
 
     #[test]
@@ -1915,6 +2009,7 @@ mod tests {
                 content: vec![serde_json::json!({"type": "text", "text": "hello"})],
                 cmid: None,
                 echo_artifacts: false,
+                observe_subagents: false,
             },
         );
 
@@ -1952,6 +2047,7 @@ mod tests {
                 content: vec![image(1)],
                 cmid: Some("c-1".to_owned()),
                 echo_artifacts: true,
+                observe_subagents: false,
             },
         );
         let sink = RemoteSink {

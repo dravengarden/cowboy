@@ -144,10 +144,13 @@ export function taskToneColor(tone: SubagentTone, theme: Theme): string {
 export function SubagentDetail({
   subagent,
   resumed = false,
+  summaryOnly = false,
 }: {
   subagent: Subagent;
   /** A run after an earlier one was observed: snapshots keep the latest only. */
   resumed?: boolean;
+  /** Its full transcript is shown elsewhere: omit the bounded activity. */
+  summaryOnly?: boolean;
 }): React.JSX.Element {
   const status = subagentStatus(subagent);
   const working = status.tone === "working" || status.tone === "waiting";
@@ -165,14 +168,14 @@ export function SubagentDetail({
         </Typography>
       )}
       {subagent.prompt && <Section label="Asked">{subagent.prompt}</Section>}
-      {subagent.omittedActivity > 0 && (
+      {!summaryOnly && subagent.omittedActivity > 0 && (
         <Typography variant="caption" sx={{ display: "block", mt: 0.75, color: "text.secondary" }}>
           {subagent.omittedActivity === 1
             ? "1 earlier step not shown"
             : `${String(subagent.omittedActivity)} earlier steps not shown`}
         </Typography>
       )}
-      {subagent.activity.length > 0 && (
+      {!summaryOnly && subagent.activity.length > 0 && (
         <Stack component="ol" spacing={0.5} sx={{ listStyle: "none", m: 0, mt: 0.75, p: 0 }}>
           {subagent.activity.map((entry, index) => (
             <Stack
@@ -208,7 +211,7 @@ export function SubagentDetail({
       )}
       {subagent.result && !working && <Section label="Result">{subagent.result}</Section>}
       {subagent.error && <Section label="Error">{subagent.error}</Section>}
-      {!subagent.prompt && subagent.activity.length === 0 && !subagent.result && (
+      {!summaryOnly && !subagent.prompt && subagent.activity.length === 0 && !subagent.result && (
         <Typography variant="caption" sx={{ display: "block", mt: 0.75, color: "text.secondary" }}>
           No activity yet.
         </Typography>

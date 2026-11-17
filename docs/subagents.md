@@ -95,6 +95,61 @@ session's Stop (Mobile's inset card, Desktop's centered dialog); `Keep running`
 sends nothing. On Desktop, `x` on the selected row opens that confirmation
 (`conversation.stopSubagent`, see `web/src/desktop/FOCUS.md`).
 
+## Observed transcripts
+
+The bounded snapshot answers "what is it doing"; the observed transcript shows
+everything the child did, with the same `<Transcript>` as a session or a
+Call's conversation. It is presentation only: nothing here changes how an
+adapter runs a subagent, what Cowboy declares in `initialize`, or what the
+parent or child model sees.
+
+**Worker.** `route_subagent_notification` (`src/acp_subagent_routing.rs`)
+makes every routing decision first, then offers each of a known child's own
+updates (not `subagent_update` or linked `session_message`s, which the
+snapshot presents) to `AgentSink::observe_subagent`. The worker emits it as a
+`cowboy_subagent_event` runtime update (`{childSessionId, update, dropped?}`)
+into the ordinary outbox: the same synchronous, never-awaiting `emit` as the
+parent's own updates, and an update the worker had already serialized. It does
+so only while the latest prompt carried `observe_subagents` (a
+`CoreCommand`/`WorkerCommand::Prompt` `serde(default)` field the Controller
+sets), so an older Controller, or one rolled back, never receives these
+updates. With more than 4,096 unacknowledged runtime events the update is
+dropped and counted; the next one carries `dropped`. Replayed history during
+`session/load` is suppressed before routing, as for the parent.
+
+**Controller.** `subagent_transcripts::divert` takes these updates out of the
+runtime projection before `apply_event`, so they never enter the parent
+timeline, the Hub log or the reconnect tail. A bounded queue (8,192; overflow
+counted per child) feeds one write-behind writer, separate from the session
+store writer, which:
+
+- fences replays by `(worker_epoch, runtime_seq)` against the newest stored
+  row of that incarnation;
+- coalesces streamed text chunks of one message (same kind and `messageId`)
+  into one row while it stays within 128 KiB;
+- trims a larger update (text first, then `content`, `rawOutput`,
+  `rawInput`, `locations`) and marks it `_cowboy.truncated`;
+- keeps at most 20,000 rows per child, then one final `limit` gap row;
+- writes dropped counts as `cowboy_observation_gap` rows.
+
+Rows live in `subagent_events` (migrations `0084` / SQLite `0058`), keyed by
+`(session, child, seq)`, deleted with the session and by Clear. A failed write
+loses rows, never agent work. `GET /api/sessions/{id}/subagents/{child}/transcript`
+returns the newest page, an older page (`before_seq`) or rows after a cursor
+(`after_seq`), at most 200 rows or 2 MiB, under the session's ordinary read
+authorization.
+
+**Web.** `useSubagentTranscript` (`web/src/SubagentTranscript.tsx`) loads the
+newest page when a subagent is selected, polls after its cursor every 1.5 s
+while it works and once more after it stops, and pages back on "Show earlier
+activity". `observedTimeline` (`web/src/observedTranscript.ts`) prepends the
+delegation prompt as the first user message and hides gap rows behind "Some
+activity was not recorded". A subagent with observed rows reads like a Call:
+Desktop shows its transcript beside the details (which then omit the bounded
+activity), a phone opens the transcript first with Details one level deeper.
+A subagent with no observed rows (older worker or Controller, or a run from
+before the release) keeps the snapshot details unchanged.
+
 ## Per-model usage
 
 Both adapters end a prompt with `_meta.quota.model_usage`, one row per model
@@ -170,13 +225,18 @@ unchanged.
 | Durable row coalescing, `cancel_subagent` inbound and MCP action, protocol gate | Controller |
 | Bridge forwarding (`cowboy serve-acp`) | the `cowboy` CLI the ACP client starts |
 | Row, activity, Stop confirmation and key, request attribution, not reporting, model breakdown | Web |
+| Observed child updates (`observe_subagent`, `observe_subagents` prompt flag) | worker generation and Machine (wire field) |
+| Observed transcript storage, writer and read API | Controller |
+| Observed transcript view | Web |
 
 A Web without the row ignores `cowboy_subagent` updates. A Controller without
 coalescing stores one row per snapshot. Without a protocol-40 Machine and a
 current worker, Stop is refused. Snapshots from an older worker carry no
 `model`, `usage` or `reporting` (read as reporting) and its usage has no
 breakdown; the Web then shows neither, and still marks a row not reporting
-after a worker change. Every addition is an optional field.
+after a worker change. Every addition is an optional field. An older worker
+or Machine ignores or drops `observe_subagents` and sends no observed
+updates; the Web then keeps the snapshot details.
 
 ## ACP bridge clients
 
@@ -203,3 +263,10 @@ the client reloads the thread.
 - Per-model totals live in the worker and restart with it.
 - A bridge client sees a child's tool titles and statuses and its message
   text, not tool output or thoughts; the snapshot does not keep them.
+- The observed transcript starts with the first worker and Controller that
+  both speak it; earlier runs keep the snapshot. Reading a provider's own
+  stored child history to backfill them is not implemented, and must never
+  use `session/load` or resume for inspection.
+- A child's permission and elicitation requests stay in the parent
+  transcript; the observed transcript does not repeat them.
+- The view polls while the subagent works instead of receiving pushed rows.

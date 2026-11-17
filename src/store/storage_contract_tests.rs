@@ -1,5 +1,6 @@
 use super::*;
 
+mod subagent_events;
 mod test_support;
 
 pub(super) fn session(id: &str) -> SessionMeta {

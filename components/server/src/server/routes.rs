@@ -446,6 +446,10 @@ pub(super) fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             post(background_tasks::lookup),
         )
         .route(
+            "/api/sessions/{id}/subagents/{child}/transcript",
+            get(background_tasks::transcript),
+        )
+        .route(
             "/api/sessions/{id}/tasks/acknowledge",
             post(notifications::acknowledge),
         )

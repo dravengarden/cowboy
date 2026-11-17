@@ -352,3 +352,93 @@ mod tests {
         );
     }
 }
+
+/// Rows one observed-transcript page holds at most.
+const TRANSCRIPT_PAGE_ROWS: usize = 200;
+/// Serialized bytes one observed-transcript page holds at most.
+const TRANSCRIPT_PAGE_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TranscriptQuery {
+    after_seq: Option<i64>,
+    before_seq: Option<i64>,
+    limit: Option<usize>,
+}
+
+/// One subagent's observed transcript (docs/subagents.md#observed-transcripts):
+/// the newest page, an older page (`before_seq`) or the rows after a cursor
+/// (`after_seq`, while it still works). Empty means nothing was observed:
+/// the client keeps the bounded snapshot.
+pub(super) async fn transcript(
+    State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Path((session_id, child_id)): Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<TranscriptQuery>,
+) -> Response {
+    if !session_is_visible(&state.hub, &authenticated.principal, &session_id) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if !valid_id(&child_id) || (query.after_seq.is_some() && query.before_seq.is_some()) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let limit = query
+        .limit
+        .unwrap_or(TRANSCRIPT_PAGE_ROWS)
+        .clamp(1, TRANSCRIPT_PAGE_ROWS);
+    let page = match state.store.as_ref() {
+        Some(store) => {
+            store
+                .subagent_events_page(
+                    &session_id,
+                    &child_id,
+                    query.after_seq,
+                    query.before_seq,
+                    limit,
+                )
+                .await
+        }
+        None => Ok(crate::store::subagent_events::ObservedPage::default()),
+    };
+    let Ok(page) = page else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let newest_first = query.after_seq.is_none();
+    let (events, trimmed) = transcript_page(page.rows, newest_first);
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({
+            "schema": 1,
+            "events": events,
+            "more_before": page.more_before || (trimmed && newest_first),
+            "more_after": trimmed && !newest_first,
+        })),
+    )
+        .into_response()
+}
+
+/// Rows within the page byte budget, ascending. A backward page keeps its
+/// newest rows; a forward page keeps its oldest. Always keeps one row.
+fn transcript_page(rows: Vec<(i64, i64, Value)>, newest_first: bool) -> (Vec<Value>, bool) {
+    let mut events: Vec<Value> = Vec::with_capacity(rows.len());
+    let mut bytes = 0usize;
+    let total = rows.len();
+    let ordered: Box<dyn Iterator<Item = (i64, i64, Value)>> = if newest_first {
+        Box::new(rows.into_iter().rev())
+    } else {
+        Box::new(rows.into_iter())
+    };
+    for (seq, ts_ms, update) in ordered {
+        let event = json!({"seq": seq, "ts_ms": ts_ms, "update": update});
+        bytes = bytes.saturating_add(serde_json::to_vec(&event).map_or(0, |raw| raw.len()));
+        if !events.is_empty() && bytes > TRANSCRIPT_PAGE_BYTES {
+            break;
+        }
+        events.push(event);
+    }
+    let trimmed = events.len() < total;
+    if newest_first {
+        events.reverse();
+    }
+    (events, trimmed)
+}

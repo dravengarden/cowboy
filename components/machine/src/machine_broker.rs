@@ -4394,6 +4394,35 @@ async fn handle_core(
     result
 }
 
+/// The worker's form of a Controller prompt, with the session it targets.
+fn worker_prompt(command: CoreCommand) -> Option<(String, WorkerCommand)> {
+    let CoreCommand::Prompt {
+        session_id,
+        command_id,
+        turn_id,
+        content,
+        cmid,
+        trace,
+        echo_artifacts,
+        observe_subagents,
+    } = command
+    else {
+        return None;
+    };
+    Some((
+        session_id,
+        WorkerCommand::Prompt {
+            command_id,
+            turn_id,
+            content,
+            cmid,
+            trace,
+            echo_artifacts,
+            observe_subagents,
+        },
+    ))
+}
+
 async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
     match command {
         CoreCommand::RecoverExecutionSession {
@@ -4496,25 +4525,11 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             }
             broker.ensure_session(session).await;
         }
-        CoreCommand::Prompt {
-            session_id,
-            command_id,
-            turn_id,
-            content,
-            cmid,
-            trace,
-            echo_artifacts,
-        } => broker.route_prompt(
-            &session_id,
-            WorkerCommand::Prompt {
-                command_id,
-                turn_id,
-                content,
-                cmid,
-                trace,
-                echo_artifacts,
-            },
-        ),
+        prompt @ CoreCommand::Prompt { .. } => {
+            if let Some((session_id, prompt)) = worker_prompt(prompt) {
+                broker.route_prompt(&session_id, prompt);
+            }
+        }
         CoreCommand::CancelTurn {
             session_id,
             command_id,
@@ -5633,6 +5648,7 @@ mod tests {
             content: vec![serde_json::json!({"type": "text", "text": "next"})],
             cmid: None,
             echo_artifacts: false,
+            observe_subagents: false,
         };
         broker.route_prompt("sess-1", prompt.clone());
         broker.route_prompt("sess-1", prompt);
@@ -8739,6 +8755,7 @@ mod tests {
                 content: vec![serde_json::json!({"type": "text", "text": "next"})],
                 cmid: None,
                 echo_artifacts: false,
+                observe_subagents: false,
             },
         );
         let snapshots = broker.snapshots();

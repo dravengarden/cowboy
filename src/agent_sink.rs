@@ -28,6 +28,17 @@ pub trait AgentSink: Send + Sync + 'static {
         self.set_agent_session_id(session_id, agent_session_id);
     }
     fn set_session_usage(&self, session_id: &str, usage: SessionUsage);
+    /// One of a subagent's own ACP updates, offered for its observed full
+    /// transcript (docs/subagents.md#observed-transcripts). Presentation
+    /// only: it must never block, fail or change the agent; a sink that
+    /// cannot take it now drops it and reports the gap later.
+    fn observe_subagent(
+        &self,
+        _session_id: &str,
+        _child_session_id: &str,
+        _update: serde_json::Value,
+    ) {
+    }
     /// Live native background tasks that count as activity. A level, not an
     /// edge: every call replaces the previous count.
     fn set_background_tasks(&self, _session_id: &str, _count: u32) {}

@@ -178,6 +178,8 @@ pub mod prompt_origin;
 #[cfg(feature = "full")]
 pub mod provider;
 #[cfg(feature = "full")]
+pub mod subagent_transcripts;
+#[cfg(feature = "full")]
 pub mod transcript_anchors;
 #[cfg(feature = "full")]
 pub mod widgets;

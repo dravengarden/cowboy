@@ -23,11 +23,7 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import {
-  KeyboardArrowDown,
-  MyLocation,
-  StopCircleOutlined,
-} from "@mui/icons-material";
+import { StopCircleOutlined } from "@mui/icons-material";
 import {
   acknowledgeTask,
   groupTasks,
@@ -48,12 +44,14 @@ import {
 } from "./backgroundTaskInspectorState";
 import { setActiveSessionId } from "./controlPlane";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
+import { DesktopTasksHeader } from "./DesktopTasksHeader";
 import { shortcutKey } from "./desktop/commands/imeShortcut";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { CallConversation, CallDetailView } from "./ManagedCallsDock";
 import { callConversationId } from "./managedCalls";
 import { Sheet } from "./Sheet";
 import { SubagentDetail, SubagentStopConfirm } from "./SubagentCard";
+import { SubagentConversation, useTaskConversation } from "./SubagentTranscript";
 import { TaskChip } from "./TaskRow";
 import { taskDockContext } from "./taskDockContext";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
@@ -198,6 +196,7 @@ function TaskDetail({
   sessionId,
   desktop,
   resumed,
+  observed = false,
   onAnswerApproval,
   onOpenOrigin,
 }: {
@@ -205,6 +204,8 @@ function TaskDetail({
   sessionId: string;
   desktop: boolean;
   resumed: boolean;
+  /** Its full transcript is shown beside or before these details. */
+  observed?: boolean;
   onAnswerApproval: () => void;
   /** The MCP tool card that started this Call, when one is loaded. */
   onOpenOrigin?: (() => void) | undefined;
@@ -261,7 +262,7 @@ function TaskDetail({
         </Stack>
       )}
       {task.source === "subagent" && task.subagent && (
-        <SubagentDetail subagent={task.subagent} resumed={resumed} />
+        <SubagentDetail subagent={task.subagent} resumed={resumed && !observed} summaryOnly={observed} />
       )}
       {task.source === "call" && task.call && (
         <Stack spacing={1}>
@@ -382,6 +383,7 @@ export function BackgroundTasksInspector({
   const selected = selectedKey ? byKey.get(selectedKey) ?? lastSeen.current.get(selectedKey) ?? null : null;
   const [level, setLevel] = useState<MobileLevel>("list");
   const depth = useRef(0);
+  const { child, conversation } = useTaskConversation(sessionId, open ? selected : null, desktop, level, setLevel, depth);
   const consumedDeepLink = useRef<string | null>(null);
 
   // `␣G` and deep links open this session's inspector.
@@ -560,6 +562,7 @@ export function BackgroundTasksInspector({
         sessionId={sessionId}
         desktop={desktop}
         resumed={resumedChildren.has(selected.key)}
+        observed={selected.source === "subagent" && child.observed}
         onAnswerApproval={answerApproval}
         onOpenOrigin={originTool && onOpenTool
           ? (): void => {
@@ -613,46 +616,10 @@ export function BackgroundTasksInspector({
           onKeyDown={keys}
           sx={{ height: "100%", minHeight: 0, display: "grid", gridTemplateRows: "auto minmax(0, 1fr) auto" }}
         >
-          <Box
-            sx={{
-              px: 2.5,
-              py: 1.25,
-              display: "grid",
-              gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)",
-              alignItems: "center",
-              gap: 2.5,
-              borderBottom: 1,
-              borderColor: "divider",
-            }}
-          >
-            <Box>
-              <Typography id="background-tasks-title" variant="subtitle1" sx={{ fontWeight: 800 }}>
-                Background tasks
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                Subagents and calls this session started
-              </Typography>
-            </Box>
-            <Stack direction="row" alignItems="center" spacing={1.25} sx={{ minWidth: 0, justifyContent: "flex-end" }}>
-              {selected && selected.anchorSeq !== null && (
-                <Button
-                  onClick={(): void => locate(selected.key)}
-                  startIcon={<MyLocation fontSize="small" />}
-                  aria-label="Locate task in transcript"
-                  sx={{ textTransform: "none" }}
-                >
-                  Locate
-                </Button>
-              )}
-              <Button
-                onClick={close}
-                endIcon={<KeyboardArrowDown />}
-                sx={{ textTransform: "none", flexShrink: 0 }}
-              >
-                Close
-              </Button>
-            </Stack>
-          </Box>
+          <DesktopTasksHeader
+            onLocate={selected && selected.anchorSeq !== null ? (): void => locate(selected.key) : undefined}
+            onClose={close}
+          />
           <Box sx={{ minHeight: 0, display: "grid", gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)" }}>
             <Box
               sx={{
@@ -673,7 +640,7 @@ export function BackgroundTasksInspector({
               sx={{
                 minHeight: 0,
                 display: "flex",
-                flexDirection: selected?.source === "call" ? "row" : "column",
+                flexDirection: conversation ? "row" : "column",
                 gap: 2,
                 overflow: "hidden",
               }}
@@ -681,9 +648,12 @@ export function BackgroundTasksInspector({
               {selected?.source === "call" && selected.call && (
                 <CallConversation call={selected.call} desktop detailsOpen onDetails={(): void => undefined} />
               )}
+              {conversation && selected?.subagent && (
+                <SubagentConversation sessionId={sessionId} subagent={selected.subagent} state={child} desktop />
+              )}
               <Box
                 sx={{
-                  ...(selected?.source === "call"
+                  ...(conversation
                     ? { width: "clamp(320px, 26vw, 460px)", flexShrink: 0, borderLeft: 1, borderColor: "divider" }
                     : { flex: 1 }),
                   minHeight: 0,
@@ -735,12 +705,12 @@ export function BackgroundTasksInspector({
       open
       onClose={close}
       title={mobileTitle}
-      islandContext={{ ...taskDockContext(level === "list" ? null : selected, Date.now(), accounts), ...(level === "list" || !selected ? { title: "" } : {}), action: level !== "list" && selected?.call ? { label: level === "detail" ? "Back to transcript" : "Details", onActivate: showMobileDetails } : undefined }}
+      islandContext={{ ...taskDockContext(level === "list" ? null : selected, Date.now(), accounts), ...(level === "list" || !selected ? { title: "" } : {}), action: level !== "list" && conversation ? { label: level === "detail" ? "Back to transcript" : "Details", onActivate: showMobileDetails } : undefined }}
       onBack={level === "list"
         ? undefined
         : (): void => globalThis.history?.back()}
-      fill={level !== "list" && Boolean(selected?.call)}
-      readerTopBleed={level === "conversation" && Boolean(selected?.call)}
+      fill={level !== "list" && conversation}
+      readerTopBleed={level === "conversation" && conversation}
       forceSheet
       cover
       portal
@@ -750,10 +720,10 @@ export function BackgroundTasksInspector({
         data-mobile-task-level={level}
         sx={{
           // Transcript owns the floating footer clearance; avoid doubling it here.
-          pb: selected?.call && level !== "list" ? 0 : "calc(16px + env(safe-area-inset-bottom, 0px))",
+          pb: conversation && level !== "list" ? 0 : "calc(16px + env(safe-area-inset-bottom, 0px))",
           color: "text.primary",
           typography: "body2",
-          ...(selected?.call && level !== "list" ? { flex: 1, display: "flex", minHeight: 0, minWidth: 0 } : {}),
+          ...(conversation && level !== "list" ? { flex: 1, display: "flex", minHeight: 0, minWidth: 0 } : {}),
         }}
       >
         {level === "list" || !selected
@@ -763,11 +733,13 @@ export function BackgroundTasksInspector({
               {legacySwitch}
             </Stack>
           )
-          : selected.call
+          : conversation
           ? (
             <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", position: "relative" }}>
               <Box inert={level !== "conversation"} sx={{ flex: 1, minWidth: 0, display: "flex", visibility: level === "conversation" ? "visible" : "hidden" }}>
-                <CallConversation call={selected.call} desktop={false} onDetails={showMobileDetails} />
+                {selected.call
+                  ? <CallConversation call={selected.call} desktop={false} onDetails={showMobileDetails} />
+                  : selected.subagent && <SubagentConversation sessionId={sessionId} subagent={selected.subagent} state={child} desktop={false} />}
               </Box>
               {level === "detail" && <Box sx={{ position: "absolute", inset: 0, overflowY: "auto", px: 2, pb: "var(--cowboy-sheet-dock-clearance, 76px)" }}>{detail}<ScrollEdges /></Box>}
             </Box>
