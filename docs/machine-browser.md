@@ -1058,10 +1058,15 @@ properties they were started with; bounds enforced by the schema):
 Reclaim ordering: the Controller's memory reclaim hibernates running browsers
 nobody is using (`detached`, in their grace period) on a Machine before it
 selects any session. A browser being opened (`starting`) or watched
-(`attached`) is hibernated only when no session is eligible: stopping it
-closes the owner's view mid-task, and their reopen admits it again, so taking
-it first turned every low-memory episode into a stop/reopen loop (OVH,
-2026-11-17: three reclaims in a day, each stopping the attached browser).
+(`attached`) is never reclaimed; with no eligible session left the step is
+stuck, as with no browser. Admission already granted its memory and its own
+`MemoryMax` caps it, while stopping it closes the owner's view mid-task and
+their reopen is admitted again: taking it first, and later taking it as a
+last resort, turned low-memory episodes into stop/reopen loops (OVH,
+2026-11-17: once 3.5 s after the open, at 740 MiB). It stops by itself after
+the detached grace; until then the Machine refuses launches the headroom
+cannot cover, and `OOMScoreAdjust=1000` makes it the kernel's first victim
+if memory truly runs out.
 Browser reclaim has its own
 pending state: the admission fence stays raised, the stop is retried and
 escalated (`SIGTERM`, then `SIGKILL` through the unit), and the step settles

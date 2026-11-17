@@ -578,12 +578,14 @@ fn decide(
         .collect::<Vec<_>>();
     match session_reclaim::choose(&candidates, min_idle) {
         Some(session) => Step::Hibernate(session.to_owned()),
-        // Only when no idle session can give memory back does a browser
-        // someone is using stop under them.
-        None => running.into_iter().next().map_or(Step::Stuck, |browser| {
-            device.stopping_wait = None;
-            Step::HibernateBrowser(Box::new(browser))
-        }),
+        // A browser someone is using is never reclaimed: admission already
+        // granted its memory and its own `MemoryMax` caps it, while taking
+        // it back stops the owner's view and their reopen is admitted again
+        // (OVH, 2026-11-17: stopped 3.5 s after it opened). It stops by
+        // itself once nobody watches (the detached grace); meanwhile the
+        // Machine refuses launches the headroom cannot cover and the
+        // kernel takes it first (`OOMScoreAdjust=1000`) if memory runs out.
+        None => Step::Stuck,
     }
 }
 
@@ -596,9 +598,9 @@ fn in_use(observed: &Observed) -> bool {
     )
 }
 
-/// The running browser reclaim hibernates before selecting any session:
-/// one nobody is using. Its snapshot keeps its state and no Provider cache
-/// is lost, so it is the cheapest memory to give back.
+/// The only running browser reclaim hibernates, before selecting any
+/// session: one nobody is using. Its snapshot keeps its state and no
+/// Provider cache is lost, so it is the cheapest memory to give back.
 fn unused_browser(running: &[Observed]) -> Option<&Observed> {
     running.iter().find(|observed| !in_use(observed))
 }
