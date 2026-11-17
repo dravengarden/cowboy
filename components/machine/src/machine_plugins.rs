@@ -6115,6 +6115,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_portable_named_account_launches_from_its_own_delivered_replica() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap();
+        let signer =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("signer"))
+                .unwrap();
+        store.pin_service_key(signer.public_key()).unwrap();
+        let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(
+            include_str!("../../../plugins/claude-deepseek/provider.json"),
+        )
+        .unwrap();
+        let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
+        let id: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let scoped = store.for_account(&id).unwrap();
+        let bundle = PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id: "api-key".into(),
+            values: BTreeMap::from([(
+                "api_key".into(),
+                base64::engine::general_purpose::STANDARD.encode("sk-named"),
+            )]),
+        };
+        let envelope = seal_auth_for_test(&scoped, &package, &signer, 3, &bundle);
+        // The resident (default-scope) store routes the envelope to the account.
+        store.apply_auth(&envelope).await.unwrap();
+        let digest = format!("sha256:{}", "1".repeat(64));
+        // The default account has no replica; a named launch never uses it.
+        assert!(
+            store
+                .prepare_launch_auth_home("claude-deepseek", &package, 3, &digest)
+                .is_err()
+        );
+        let home = scoped
+            .prepare_launch_auth_home("claude-deepseek", &package, 3, &digest)
+            .unwrap();
+        assert!(home.starts_with(&scoped.auth_root));
+        assert_eq!(
+            fs::read_to_string(home.join(".config/credentials/deepseek-claude-api-key")).unwrap(),
+            "sk-named"
+        );
+        // Later worker launches open a fresh account scope over the same files.
+        let relaunch = store
+            .for_account(&id)
+            .unwrap()
+            .prepare_launch_auth_home("claude-deepseek", &package, 3, &digest)
+            .unwrap();
+        assert_eq!(relaunch, home);
+    }
+
+    #[tokio::test]
     async fn native_login_addition_preserves_legacy_materialization_and_rollback() {
         let root = tempfile::tempdir().unwrap();
         let store = MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".into()).unwrap();

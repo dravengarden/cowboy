@@ -20,16 +20,11 @@ pub(super) fn handle(
             request_id,
             envelope,
         } => {
-            // Storage can verify account-bound envelopes before the runtime
-            // supports account-scoped refresh, rolling and worker admission.
-            // Do not let an early sender reach the legacy Provider-wide path.
-            if !envelope.account_id.is_default() {
+            if let Some(detail) = named_auth_refusal(&envelope, protocol) {
                 let _ = events.send(MachineEvent::CommandResult {
                     request_id,
                     accepted: false,
-                    detail: Some(
-                        "Named Provider account runtime admission is not available".into(),
-                    ),
+                    detail: Some(detail.into()),
                 });
                 return;
             }
@@ -196,5 +191,63 @@ pub(super) fn handle(
             command = ?std::mem::discriminant(&other),
             "machine command routed to the wrong family (command_provider_auth)"
         ),
+    }
+}
+
+/// A named envelope carries only a portable account's Service-held secret,
+/// applied into that account's own scope. Named credentials of a native-login
+/// Provider live solely in its native home and are never delivered this way;
+/// an old Controller cannot address account scopes at all.
+fn named_auth_refusal(
+    envelope: &crate::machine_protocol::SealedProviderAuth,
+    protocol: u16,
+) -> Option<&'static str> {
+    if envelope.account_id.is_default() {
+        return None;
+    }
+    (protocol < crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION
+        || crate::provider_account::portable_credentials_allowed(
+            &envelope.account_id,
+            &envelope.provider_id,
+        )
+        .is_err())
+    .then_some("Named Provider account runtime admission is not available")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_portable_named_accounts_receive_service_credentials() {
+        let envelope = |provider: &str, account: crate::provider_account::ProviderAccountId| {
+            serde_json::from_value::<crate::machine_protocol::SealedProviderAuth>(
+                serde_json::json!({
+                    "envelope_schema": 2, "provider_id": provider, "account_id": account,
+                    "auth_generation": 1, "auth_contract_fingerprint": "sha256:x",
+                    "projection_schema": "p", "action": "apply",
+                    "ephemeral_public_key": "", "nonce": "", "ciphertext": "",
+                    "service_public_key": "", "signature": ""
+                }),
+            )
+            .unwrap()
+        };
+        let named: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let current = crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION;
+        for provider in ["claude-deepseek", "codex-deepseek", "deepseek-harness"] {
+            assert_eq!(
+                named_auth_refusal(&envelope(provider, named.clone()), current),
+                None
+            );
+            assert!(named_auth_refusal(&envelope(provider, named.clone()), current - 1).is_some());
+        }
+        for provider in ["claude-code", "codex", "grok"] {
+            assert!(named_auth_refusal(&envelope(provider, named.clone()), current).is_some());
+            assert_eq!(
+                named_auth_refusal(&envelope(provider, Default::default()), 0),
+                None
+            );
+        }
     }
 }

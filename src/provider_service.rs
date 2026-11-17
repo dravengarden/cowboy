@@ -44,6 +44,7 @@ const VAULT_DOMAIN: &[u8] = b"cowboy-provider-auth-vault-v1\0";
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub mod grants;
+mod portable_accounts;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -716,17 +717,18 @@ impl ProviderAuthService {
     /// to scope members that have never held Service authentication, such as a
     /// Provider installed after the user entered the scope's secret.
     ///
-    /// Only the default Service vault participates; named accounts stay bound
-    /// to their own native identity. The source is the scope's newest
-    /// generation and must be a ready credential: a newer logout or failure
-    /// tombstone means there is nothing to inherit. A member with any durable
-    /// state, including a tombstone, is never overwritten. Adopted entries keep
-    /// the source generation, so shared refresh and logout stay one lineage.
+    /// The default Service vault and named portable account vaults
+    /// participate; Machine-bound native grants never do. The source is the
+    /// scope's newest generation and must be a ready credential: a newer
+    /// logout or failure tombstone means there is nothing to inherit. A
+    /// member with any durable state, including a tombstone, is never
+    /// overwritten. Adopted entries keep the source generation, so shared
+    /// refresh and logout stay one lineage.
     pub fn adopt_shared_scope(
         &self,
         packages: &[ProviderPackage],
     ) -> Result<Vec<ProviderAuthenticationStatus>> {
-        if !self.account_id.is_default() || packages.len() < 2 {
+        if self.recipient_key.is_some() || packages.len() < 2 {
             return Ok(Vec::new());
         }
         let mut providers = self.providers.write();
@@ -1184,17 +1186,6 @@ impl ProviderAuthService {
         let status = stored.status();
         providers.insert(stored.provider_id.clone(), stored);
         Ok(status)
-    }
-
-    fn require_portable_packages(&self, packages: &[ProviderPackage]) -> Result<()> {
-        for package in packages {
-            crate::provider_account::portable_credentials_allowed(
-                &self.account_id,
-                &package.manifest.id,
-            )
-            .map_err(anyhow::Error::msg)?;
-        }
-        Ok(())
     }
 
     fn seal_vault(

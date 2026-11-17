@@ -241,6 +241,41 @@ mod service_catalog {
                 .collect()
         }
 
+        /// Providers whose newest signed release supports named portable
+        /// accounts: a Service-held secret entered once at account scope.
+        pub fn portable_account_providers(&self) -> std::collections::BTreeSet<String> {
+            let ids: std::collections::BTreeSet<String> = self
+                .external
+                .read()
+                .values()
+                .map(|artifact| artifact.entry.provider_id.clone())
+                .collect();
+            ids.into_iter()
+                .filter(|id| {
+                    self.latest_package(id).is_some_and(|(_, _, package)| {
+                        portable_account_contract(&package.manifest.authentication)
+                    })
+                })
+                .collect()
+        }
+
+        /// The portable account Providers that share `provider`'s credential
+        /// scope, `provider` included. Empty unless `provider` is itself one;
+        /// a named account of any member serves every member.
+        pub fn portable_account_scope(&self, provider: &str) -> Vec<String> {
+            let Some((_, _, package)) = self.latest_package(provider) else {
+                return Vec::new();
+            };
+            if !portable_account_contract(&package.manifest.authentication) {
+                return Vec::new();
+            }
+            self.packages_for_authentication_scope(&package.manifest.authentication.portable_schema)
+                .into_iter()
+                .filter(|member| portable_account_contract(&member.manifest.authentication))
+                .map(|member| member.manifest.id)
+                .collect()
+        }
+
         /// Return the newest signed package for each Provider in one public
         /// credential scope. Provider packages keep their own projection
         /// contract; only the portable bundle is shared.
@@ -416,6 +451,23 @@ mod service_catalog {
         Ok(())
     }
 
+    /// A portable account Provider holds only Service-refreshed secrets that
+    /// a person enters directly: no native login, no Machine-owned refresh.
+    /// Its named accounts keep credentials in the account's Service vault.
+    #[must_use]
+    pub fn portable_account_contract(auth: &cowboy_provider_sdk::AuthenticationContract) -> bool {
+        auth.required
+            && auth.refresh == cowboy_provider_sdk::RefreshOwnership::Service
+            && !auth.native_accounts()
+            && !auth.methods.is_empty()
+            && auth.methods.iter().all(|method| {
+                matches!(
+                    method.executor,
+                    cowboy_provider_sdk::AuthExecutor::SecretInputV1 { .. }
+                )
+            })
+    }
+
     fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
         let left = semver::Version::parse(left).expect("validated Provider semantic version");
         let right = semver::Version::parse(right).expect("validated Provider semantic version");
@@ -551,6 +603,35 @@ mod service_catalog {
                 cowboy_provider_sdk::fingerprint_json(&first).unwrap(),
                 cowboy_provider_sdk::fingerprint_json(&second).unwrap(),
             );
+        }
+
+        #[test]
+        fn only_service_held_secret_providers_have_portable_accounts() {
+            let contract = |source: &str| {
+                let source: StandardProviderSource = serde_json::from_str(source).unwrap();
+                source.compile().unwrap().authentication
+            };
+            for source in [
+                include_str!("../plugins/claude-deepseek/provider.json"),
+                include_str!("../plugins/codex-deepseek/provider.json"),
+                include_str!("../plugins/deepseek-harness/provider.json"),
+            ] {
+                assert!(portable_account_contract(&contract(source)));
+            }
+            for source in [
+                include_str!("../plugins/claude-code/provider.json"),
+                include_str!("../plugins/codex/provider.json"),
+                include_str!("../plugins/grok/provider.json"),
+            ] {
+                assert!(!portable_account_contract(&contract(source)));
+            }
+            let deepseek = include_str!("../plugins/claude-deepseek/provider.json");
+            let mut machine_refresh = contract(deepseek);
+            machine_refresh.refresh = cowboy_provider_sdk::RefreshOwnership::CompareAndSwap;
+            assert!(!portable_account_contract(&machine_refresh));
+            let mut optional = contract(deepseek);
+            optional.required = false;
+            assert!(!portable_account_contract(&optional));
         }
 
         #[test]
@@ -730,7 +811,7 @@ mod service_catalog {
 }
 
 #[cfg(feature = "full")]
-pub use service_catalog::ProviderCatalog;
+pub use service_catalog::{ProviderCatalog, portable_account_contract};
 
 #[cfg(test)]
 mod tests {

@@ -384,15 +384,36 @@ impl Registry {
         provider: &str,
         explicit: Option<&ProviderAccountId>,
     ) -> std::result::Result<ProviderAccountId, &'static str> {
+        self.resolve_in_scope(provider, &[], explicit)
+    }
+
+    /// Like [`Self::resolve`], where `scope` lists the Providers that share
+    /// `provider`'s portable credential (empty when it has none). An account
+    /// of any member serves every member. Defaults stay keyed by the
+    /// account's own Provider: `provider`'s own default wins, else the first
+    /// member (in `scope` order) that has one. An unavailable default fails;
+    /// it never falls back to the Service account.
+    pub fn resolve_in_scope(
+        &self,
+        provider: &str,
+        scope: &[String],
+        explicit: Option<&ProviderAccountId>,
+    ) -> std::result::Result<ProviderAccountId, &'static str> {
+        let serves = |member: &str| member == provider || scope.iter().any(|id| id == member);
         let id = explicit
             .cloned()
             .or_else(|| self.defaults.get(provider).cloned())
+            .or_else(|| {
+                scope
+                    .iter()
+                    .find_map(|member| self.defaults.get(member).cloned())
+            })
             .unwrap_or_default();
         if !id.is_default()
             && !self
                 .accounts
                 .iter()
-                .any(|a| a.id == id && a.provider_id == provider && a.available())
+                .any(|a| a.id == id && serves(&a.provider_id) && a.available())
         {
             return Err("account_unavailable");
         }
@@ -546,6 +567,76 @@ impl Store {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn one_portable_account_serves_its_whole_credential_scope() {
+        let account = |provider: &str, enabled: bool| Account {
+            id: uuid::Uuid::new_v4().to_string().try_into().unwrap(),
+            provider_id: provider.into(),
+            label: "DeepSeek".into(),
+            enabled,
+            revoking: false,
+            identity_fingerprint: None,
+            admission_revision: None,
+            browser_enabled: false,
+        };
+        let shared = account("claude-deepseek", true);
+        let own = account("codex-deepseek", true);
+        let native = account("claude-code", true);
+        let mut registry = Registry {
+            revision: 1,
+            accounts: vec![shared.clone(), own.clone(), native.clone()],
+            defaults: BTreeMap::from([("claude-deepseek".into(), shared.id.clone())]),
+        };
+        let scope: Vec<String> = ["claude-deepseek", "codex-deepseek", "deepseek-harness"]
+            .map(String::from)
+            .into();
+        // Explicit selection across scope members.
+        for provider in ["codex-deepseek", "deepseek-harness"] {
+            assert_eq!(
+                registry.resolve_in_scope(provider, &scope, Some(&shared.id)),
+                Ok(shared.id.clone())
+            );
+            // Without a scope the account belongs to one Provider only.
+            assert!(registry.resolve(provider, Some(&shared.id)).is_err());
+        }
+        // A non-member account never serves the scope.
+        assert!(
+            registry
+                .resolve_in_scope("codex-deepseek", &scope, Some(&native.id))
+                .is_err()
+        );
+        // A member's default applies to the other members; a Provider's own
+        // default takes precedence.
+        assert_eq!(
+            registry.resolve_in_scope("deepseek-harness", &scope, None),
+            Ok(shared.id.clone())
+        );
+        registry
+            .defaults
+            .insert("codex-deepseek".into(), own.id.clone());
+        assert_eq!(
+            registry.resolve_in_scope("codex-deepseek", &scope, None),
+            Ok(own.id.clone())
+        );
+        assert_eq!(
+            registry.resolve_in_scope("deepseek-harness", &scope, None),
+            Ok(shared.id.clone())
+        );
+        // An unavailable inherited default refuses; it never falls back.
+        registry.accounts[0].enabled = false;
+        assert_eq!(
+            registry.resolve_in_scope("deepseek-harness", &scope, None),
+            Err("account_unavailable")
+        );
+        registry.defaults.clear();
+        assert!(
+            registry
+                .resolve_in_scope("deepseek-harness", &scope, None)
+                .unwrap()
+                .is_default()
+        );
+    }
 
     async fn reserve_before_revocation(store: &Store, id: &ProviderAccountId) -> logins::Claim {
         let owner = "revocation-owner";
