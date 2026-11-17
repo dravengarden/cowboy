@@ -171,10 +171,27 @@ Remaining Phase 1 items need the dedicated test account.
   Linux and no other path. A same-path mirror directory on OVH may therefore
   present the target path; Git status and guidance discovery remain untested.
 
-Remaining Phase 1: OVH install, login and footprint; ACP logout; suspension
-and 429 shapes; concurrent refresh on two Machines; `systemPrompt.append`
-steering; Git/guidance context; disabling native subagents, browser and other
-tools that bypass the facade.
+- Steering: `session/new._meta.antigravity.systemPrompt.append` (string)
+  telling the model to use only the facade removed the built-in attempt; the
+  only tool call was `mcp_cowboy_ReadFile`.
+- Guidance: `agy` loaded `AGENTS.md` and `GEMINI.md` from the runtime `cwd`
+  and obeyed them. On OVH the same-path mirror directory stays empty, so target
+  guidance must be injected as a bounded snapshot through `systemPrompt.append`.
+  No Git branch or status was injected into model context.
+- Built-in tools reported by the model (free tier): `read_file`,
+  `run_command`, `write_file`, `edit_file`, `manage_task`, `send_message`,
+  `schedule`, `invoke_subagent`, `define_subagent`, `manage_subagents`,
+  `search_web`, `run_workflow`, `swarm`, `ask_question`, `list_resources`,
+  `read_resource`. `schedule`, `swarm` and `run_workflow` are unattended or
+  fan-out surfaces and must be denied by the hook.
+- Subagents: a subagent started with `invoke_subagent` ran asynchronously after
+  the parent turn ended, and its `read_file` call passed through the same
+  global `PreToolUse` hook (denied). Hooks therefore also gate subagent tools,
+  but background work outliving `end_turn` needs its own lifecycle handling.
+
+Remaining Phase 1: OVH install, login and footprint; ACP logout; concurrent
+refresh on two Machines; suspension and 429 shapes (observe only, never
+provoke).
 
 ### Phase 2 — Native custody as a Provider declaration
 
