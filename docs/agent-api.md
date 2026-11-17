@@ -664,6 +664,43 @@ first member default in Provider-id order. Session admission rechecks that the
 account is available and its vault key is Ready at or after the session's
 generation. Agents never upload credentials (an owned identity exception).
 
+Named subscription accounts of Codex and Grok (Providers whose native sign-in
+methods each have a portable twin and `refresh: compare_and_swap`) sign in once
+for every Machine. The login above still runs the Provider CLI on the one Machine
+the owner picks (Machine protocol 47), with the signed method that has a
+`native_identity` recipe, in a fresh candidate home. The Machine reads the
+identity with the recipe and exports the credential under the method's portable
+twin (for example `chatgpt-subscription` → `chatgpt`). Under the owner's account
+lock the Service binds that identity to the account (the first sign-in binds it;
+another identity is refused with `native_identity_mismatch`, an identity bound to
+another card with `native_identity_already_bound`) and commits the credential to
+the account's own Service vault, at a generation above every native profile
+generation the account ever had, then delivers it to every enrolled Machine.
+Machines propose refreshed credentials; the Service compare-and-swaps them on the
+account vault and redistributes the winner, while a loser is re-projected. A
+refreshed credential's identity evidence must match the account's. Session
+admission uses the vault and never falls back to the default account; a session
+registered on an older native profile keeps its native binding. An account signed
+in natively before needs one new sign-in to serve every Machine.
+
+Claude named accounts stay native per Machine (`NATIVE_ONLY_PROVIDERS`): their
+credentials never enter a vault or reach another Machine, and native login,
+session creation, registration and usage all require the host runtime policy
+(`--provider-runtime-machine claude-code=<machine>`, OVH on Hawk) to admit the
+Machine.
+
+A legacy default card (`openai`, `xai`, `deepseek`) becomes a named account
+without a new sign-in: `POST /api/provider-accounts/legacy/{card}/adopt` with
+`operation`, or `accounts.adopt_legacy {card}` with
+`cowboy_receipt({domain:"adoptions",operation})`. The account id is the card's
+Machine browser key, the label the legacy label; browser enablement and share
+membership move to it. Under the root vault lock the Service copies the legacy
+credential into the account vault and wipes the legacy entries in one step,
+then distributes both and makes the account the default of its scope. A Machine
+refresh of exactly the moved legacy generation is promoted into the account.
+`anthropic` refuses with `legacy_credential_expired`. Sessions created before
+keep `provider_account_id: "default"` and lose their credential with the wipe.
+
 Login and receipt responses include a relative `continue_url`. Resolve it
 against the Cowboy origin and give it to the user to continue the same login on
 Desktop or Mobile. The fragment contains only account and request IDs, not

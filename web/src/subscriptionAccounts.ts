@@ -89,7 +89,14 @@ export interface SubscriptionSnapshot {
   /** Credential scopes: one portable account serves every listed Provider. */
   portable_scopes?: string[][];
   portable_credentials?: PortableCredential[];
+  /** Subscription Providers: one sign-in on any Machine lands in the
+   * account's Service vault and serves every Machine. */
+  subscription_providers?: string[];
+  /** Legacy default cards that move into a named account without a new
+   * sign-in: card → its Provider, adoption state and account id. */
+  legacy_adoption?: Record<string, LegacyAdoption>;
 }
+export interface LegacyAdoption { provider_id: string; state: "available" | "resumable" | "completed"; account_id: string }
 
 type PortableScopes = { portable_scopes?: string[][] } | undefined;
 /** Whether an account of `accountProvider` serves sessions of `provider`
@@ -116,6 +123,10 @@ function validLegacyBrowser(value: unknown): value is LegacyBrowser {
   return record(value) && text(value.card) && text(value.account_id) && Array.isArray(value.providers) &&
     value.providers.every(text) && typeof value.browser_enabled === "boolean" && typeof value.available === "boolean" &&
     (value.share_id === undefined || value.share_id === null || text(value.share_id));
+}
+function validLegacyAdoption(value: unknown): value is LegacyAdoption {
+  return record(value) && text(value.provider_id) && text(value.account_id) &&
+    (value.state === "available" || value.state === "resumable" || value.state === "completed");
 }
 function validShareMember(value: unknown): value is BrowserShareMember {
   if (!record(value) || !record(value.member) || !text(value.family) || !text(value.account_id)) return false;
@@ -155,6 +166,8 @@ export function validSubscriptionSnapshot(value: unknown, owner: string | undefi
     (value.portable_scopes === undefined || (Array.isArray(value.portable_scopes) &&
       value.portable_scopes.every((scope: unknown) => Array.isArray(scope) && scope.every(text)))) &&
     (value.portable_credentials === undefined || (Array.isArray(value.portable_credentials) && value.portable_credentials.every(validPortableCredential))) &&
+    (value.subscription_providers === undefined || (Array.isArray(value.subscription_providers) && value.subscription_providers.every(text))) &&
+    (value.legacy_adoption === undefined || (record(value.legacy_adoption) && Object.values(value.legacy_adoption).every(validLegacyAdoption))) &&
     typeof value.session_admission === "string" && record(registry.defaults) && Object.values(registry.defaults).every(text) &&
     Array.isArray(registry.accounts) && registry.accounts.every((account: unknown) => record(account) &&
       text(account.id) && text(account.provider_id) && text(account.label) && typeof account.enabled === "boolean" &&

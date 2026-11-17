@@ -6,6 +6,7 @@ import { useStoreSelector } from "./store";
 import { SubscriptionLogin } from "./SubscriptionLogin";
 import type { LoginScope } from "./subscriptionLoginController";
 import { ProviderAccountStatus } from "./ProviderAccountIdentity";
+import type { PortableCredential } from "./subscriptionAccounts";
 
 interface Login {
   request_id: string; account_id: string; provider_id: string; machine_id: string; status: string; cancel_requested: boolean;
@@ -34,8 +35,16 @@ const status: Record<string, string> = {
   cancelling: "Cancellation pending", cancellation_requested: "Cancellation requested", not_started: "Not signed in",
 };
 
-/** Local DB metadata only. No polling, native login or Provider probe on mount. */
-export function SubscriptionLogins({ scope, label, disabled, expanded }: { scope: LoginScope; label: string; disabled: boolean; expanded: boolean }): React.JSX.Element {
+/** Local DB metadata only. No polling, native login or Provider probe on mount.
+ * A vault subscription (`vault` given: Codex, Grok) signs in once for every
+ * Machine; listed Machine logins are native profiles from before. Claude
+ * accounts stay native per Machine. */
+export function SubscriptionLogins({ scope, label, disabled, expanded, vault, onSignedIn }: {
+  scope: LoginScope; label: string; disabled: boolean; expanded: boolean; vault?: PortableCredential | null | undefined;
+  /** Reload the account snapshot: a sign-in changes the vault state it shows. */
+  onSignedIn?: () => void;
+}): React.JSX.Element {
+  const shared = vault?.authentication_state === "ready";
   const machines = useStoreSelector((state) => state.machines);
   const [page, setPage] = useState<Page>();
   const [error, setError] = useState("");
@@ -58,7 +67,9 @@ export function SubscriptionLogins({ scope, label, disabled, expanded }: { scope
   return <Stack spacing={0.5}>
     {error && <Alert severity="warning">{error}</Alert>}
     {!page && !error && <Typography variant="body2" color="text.secondary">Loading sign-ins…</Typography>}
-    {page?.logins.length === 0 && <ProviderAccountStatus label="Not signed in" tone="warning" detail="No Machine" />}
+    {vault !== undefined && <ProviderAccountStatus label={shared ? "Signed in" : vault ? "Sign in again" : "Not signed in"}
+      tone={shared ? "success" : "warning"} detail="Every Machine" />}
+    {vault === undefined && page?.logins.length === 0 && <ProviderAccountStatus label="Not signed in" tone="warning" detail="No Machine" />}
     {page?.logins.map((login) => <Stack key={login.machine_id} direction="row" spacing={1} alignItems="center" justifyContent="space-between" flexWrap="wrap" useFlexGap>
       <ProviderAccountStatus
         label={outdated(login) ? "Sign in again" : status[login.status] ?? "Sign-in needs attention"}
@@ -74,8 +85,9 @@ export function SubscriptionLogins({ scope, label, disabled, expanded }: { scope
     {expanded && <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
       <SubscriptionLogin scope={scope} label={label} disabled={disabled || busy} loginAllowed={!disabled}
         {...(page?.logins.find(outdated) ? { machine: page.logins.find(outdated)!.machine_id } : {})}
-        startLabel={page?.logins.some(outdated) ? "Sign in again…"
-          : page?.logins.some((login) => login.status === "completed") ? "Sign in on another Machine…" : "Sign in…"} onChange={() => void load()} />
+        startLabel={vault !== undefined ? (shared ? "Sign in again…" : "Sign in…") : page?.logins.some(outdated) ? "Sign in again…"
+          : page?.logins.some((login) => login.status === "completed") ? "Sign in on another Machine…" : "Sign in…"}
+        onChange={() => { void load(); onSignedIn?.(); }} />
       <Button disabled={busy} onClick={() => void load()}>Refresh status</Button>
       {page?.next_after_machine && <Button disabled={busy} onClick={() => void load(page.next_after_machine!)}>More Machines</Button>}
     </Stack>}

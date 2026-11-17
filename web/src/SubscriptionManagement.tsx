@@ -8,6 +8,7 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { providerSubscriptionEnabled } from "./SessionSubscription";
 import { SubscriptionLogins } from "./SubscriptionLogins";
 import { SubscriptionApiKey } from "./SubscriptionApiKey";
+import { SubscriptionLegacyAdoption } from "./SubscriptionLegacyAdoption";
 import { SubscriptionRevocation } from "./SubscriptionRevocation";
 import { LegacyBrowserActions, SubscriptionBrowserActions } from "./SubscriptionBrowserActions";
 import { type BrowserShareChange, BrowserShareSettings } from "./machineBrowser/BrowserShareSettings";
@@ -228,6 +229,7 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
       <Typography variant="caption" color="text.secondary">{id} · Service account{(providerDefault(snapshot, id) ?? "default") === "default" ? " · Default" : ""}</Typography>
       {(providerDefault(snapshot, id) ?? "default") !== "default" && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: id, id: "default" })}>Use by default</Button>}
       <LegacyBrowserActions snapshot={snapshot} provider={id} label={current} owner={owner} disabled={disabled} onSetBrowserEnabled={(card, enabled) => save({ type: "set_legacy_browser_enabled", card, enabled })} />
+      <SubscriptionLegacyAdoption snapshot={snapshot} provider={id} owner={owner} disabled={disabled} onChange={() => void load()} />
     </Stack> };
   };
   const named: SubscriptionCards["named"] = snapshot?.registry.accounts.filter((account) => !snapshot.revoked_accounts?.includes(account.id)).map((account) => {
@@ -243,6 +245,8 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
               method={entry?.manifest.authentication.methods.find((method) => method.flow === "secret_input")}
               expanded={editing.includes(account.id)} disabled={disabled || !account.enabled || Boolean(account.revoking)} onChange={() => void load()} />
             : <SubscriptionLogins scope={{ owner, dataset: snapshot.dataset.dataset_id, account: account.id, provider: account.provider_id }} label={account.label}
+              vault={snapshot.subscription_providers?.includes(account.provider_id) ? snapshot.portable_credentials?.find((item) => item.account_id === account.id) ?? null : undefined}
+              onSignedIn={() => void load()}
               expanded={editing.includes(account.id)} disabled={disabled || !account.enabled || Boolean(account.revoking)} />)}
         </ProviderAccountIdentity>
         {editing.includes(account.id) && <Stack spacing={1}>

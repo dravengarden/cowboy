@@ -7,6 +7,8 @@ const REASONS: Record<string, string> = {
   machine_unavailable: "This Machine is offline.",
   machine_account_protocol_required:
     "This Machine needs a Cowboy update before it can hold separate subscriptions.",
+  machine_update_required:
+    "This Machine needs a Cowboy update before it can sign in for every Machine.",
   machine_recipient_unavailable:
     "This Machine is not ready to receive a sign-in. Reconnect it and try again.",
   provider_not_installed: "This Provider is not installed on this Machine.",

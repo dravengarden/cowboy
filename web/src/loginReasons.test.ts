@@ -10,6 +10,7 @@ test("login readiness codes never reach people raw", () => {
       "machine_unavailable",
       "machine_account_protocol_required",
       "machine_recipient_unavailable",
+      "machine_update_required",
       "provider_not_installed",
       "release_unavailable",
       "native_identity_verification_unavailable",
