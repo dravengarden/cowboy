@@ -221,8 +221,8 @@ pub(super) async fn search(
             hub.log_window(id, None, Some(cursor), page, visible)
                 .ok_or("not_found")?
         };
+        // Pages are also bounded by bytes, so a short page is not the start.
         reached_start = start;
-        let full = events.len() == page;
         for event in events.iter().rev() {
             scanned += 1;
             cursor = event.seq;
@@ -230,12 +230,12 @@ pub(super) async fn search(
             if let Some((path, text, offset)) = find_text(&value, query, chars, String::new()) {
                 matches.push(json!({"seq":event.seq,"path":path,"text":text,"offset":offset,"revision":crate::managed_calls::canonical_digest(&value)}));
                 if matches.len() == limit {
-                    exhausted = event.seq == events[0].seq && (start || !full);
+                    exhausted = start && event.seq == events[0].seq;
                     break 'pages;
                 }
             }
         }
-        if start || !full || events.is_empty() {
+        if start || events.is_empty() {
             exhausted = true;
             break;
         }

@@ -338,6 +338,67 @@ async fn archived_history_is_paged_without_hydrating_or_waking_the_session() {
     );
 }
 
+#[tokio::test]
+async fn search_scans_past_byte_bounded_history_pages_to_the_start() {
+    const OWNER: &str = "0123456789abcdef0123456789abcdef";
+    let root = tempfile::tempdir().unwrap();
+    let store = crate::store::Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    store
+        .insert_user(&crate::store::ProductUser {
+            id: OWNER.into(),
+            username: "reader".into(),
+            password_algo: "fixture".into(),
+            password_hash: "unused".into(),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            disabled_at_ms: None,
+        })
+        .await
+        .unwrap();
+    let hub = Hub::new();
+    session(&hub, "parent", Some(OWNER), false);
+    session(&hub, "large", Some(OWNER), false);
+    let parent = hub.session_info("parent").unwrap().meta;
+    store
+        .insert_session(&hub.session_info("large").unwrap().meta)
+        .await
+        .unwrap();
+    // 300 records of ~4 KiB overflow the 512 KiB page byte bound, so storage
+    // returns short pages long before the history start.
+    let events: Vec<_> = (0..300)
+        .map(|seq| Envelope {
+            session_id: "large".into(),
+            seq,
+            cmid: None,
+            event: Event::TurnEnd {
+                usage: None,
+                stop_reason: format!("{}{seq}", "x".repeat(4096)),
+            },
+        })
+        .collect();
+    store
+        .upsert_event_batch(&events, &HashMap::from([("large".into(), 300)]))
+        .await
+        .unwrap();
+    let search =
+        |query: &str| json!({"session_id":"large","query":query,"chars":query.len().max(8)});
+    let empty =
+        super::super::event_reads::search(&hub, Some(&store), &parent, true, &search("absent"))
+            .await
+            .unwrap();
+    assert_eq!(empty["scanned"], 300);
+    assert!(empty["next_before"].is_null());
+    assert_eq!(empty["reached_start"], true);
+    let oldest =
+        super::super::event_reads::search(&hub, Some(&store), &parent, true, &search("x0"))
+            .await
+            .unwrap();
+    assert_eq!(oldest["matches"][0]["seq"], 0);
+}
+
 #[test]
 fn session_list_pages_signal_truncation_and_resume_after_the_cursor() {
     let hub = Hub::new();
