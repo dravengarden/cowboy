@@ -555,6 +555,9 @@ pub(super) struct ProviderReadiness {
     pub reason: Option<&'static str>,
     pub generation: Option<super::super::ResolvedProviderGeneration>,
     pub structured_output: bool,
+    /// The subscription the child runs on: the owner's default account of
+    /// the Provider, never a fallback to another account.
+    pub account: crate::provider_account::ProviderAccountId,
 }
 
 /// Where a managed child's Agent runtime runs, and whether it can. The
@@ -564,6 +567,7 @@ pub(super) struct ProviderReadiness {
 /// read-only environment. Execution never moves; there is no local fallback.
 pub(super) async fn child_runtime(
     state: &AppState,
+    owner: Option<&str>,
     execution_machine: &str,
     parent_runtime: Option<&str>,
     provider: &str,
@@ -582,10 +586,11 @@ pub(super) async fn child_runtime(
                 reason: Some("unsupported_capability"),
                 generation: None,
                 structured_output: false,
+                account: Default::default(),
             },
         );
     }
-    let local = provider_readiness(state, execution_machine, provider, profile).await;
+    let local = provider_readiness(state, owner, execution_machine, provider, profile).await;
     if local.available
         || !matches!(
             local.reason,
@@ -614,7 +619,7 @@ pub(super) async fn child_runtime(
             continue;
         }
         let readiness =
-            runtime_readiness(state, execution_machine, &runtime, provider, profile).await;
+            runtime_readiness(state, owner, execution_machine, &runtime, provider, profile).await;
         if readiness.available {
             return (runtime, readiness);
         }
@@ -626,6 +631,7 @@ pub(super) async fn child_runtime(
             reason: Some(reason),
             generation: None,
             structured_output: false,
+            account: Default::default(),
         },
         None => local,
     };
@@ -636,12 +642,13 @@ pub(super) async fn child_runtime(
 /// its execution on `execution_machine`.
 pub(super) async fn runtime_readiness(
     state: &AppState,
+    owner: Option<&str>,
     execution_machine: &str,
     runtime: &str,
     provider: &str,
     profile: cowboy_provider_sdk::ManagedRuntimeProfile,
 ) -> ProviderReadiness {
-    let readiness = provider_readiness(state, runtime, provider, profile).await;
+    let readiness = provider_readiness(state, owner, runtime, provider, profile).await;
     if runtime == execution_machine || !readiness.available {
         return readiness;
     }
@@ -656,6 +663,7 @@ pub(super) async fn runtime_readiness(
             reason: Some(reason),
             generation: None,
             structured_output: false,
+            account: Default::default(),
         },
     }
 }
@@ -686,6 +694,7 @@ async fn remote_ready(
 /// Whether the exact installed Provider on the target can run this request.
 pub(super) async fn provider_readiness(
     state: &AppState,
+    owner: Option<&str>,
     machine: &str,
     provider: &str,
     profile: cowboy_provider_sdk::ManagedRuntimeProfile,
@@ -695,6 +704,7 @@ pub(super) async fn provider_readiness(
         reason: Some(reason),
         generation: None,
         structured_output: false,
+        account: Default::default(),
     };
     let Some(store) = state.store.as_ref() else {
         return unavailable("provider_unavailable");
@@ -722,21 +732,45 @@ pub(super) async fn provider_readiness(
         return unavailable("runtime_policy");
     }
     let inventory = super::super::execution::sessions::providers(record);
-    let authentication = state.provider_auth.status(provider);
-    let generation = match super::super::resolve_provider_generation(
-        &state.provider_catalog,
-        &state.plugin_catalog,
-        &inventory,
-        provider,
-        authentication.as_ref(),
-    ) {
+    // A child runs on its owner's default subscription of the Provider, as a
+    // session created without an explicit account would. A named default
+    // needs its native login on this Machine; it never falls back.
+    let account = match owner {
+        Some(owner) => {
+            match super::super::provider_accounts::resolve_for_create(state, owner, provider, None)
+                .await
+            {
+                Ok(account) => account,
+                Err(_) => return unavailable("authentication_required"),
+            }
+        }
+        None => Default::default(),
+    };
+    let resolved = match owner {
+        Some(owner) if !account.is_default() => {
+            super::super::provider_accounts::registration::generation(
+                state, &inventory, provider, owner, &account, machine,
+            )
+            .await
+        }
+        _ => super::super::resolve_provider_generation(
+            &state.provider_catalog,
+            &state.plugin_catalog,
+            &inventory,
+            provider,
+            state.provider_auth.status(provider).as_ref(),
+        ),
+    };
+    let generation = match resolved {
         Ok(generation) => generation,
         Err(detail) => {
-            return unavailable(if detail.contains("auth") || detail.contains("sign") {
-                "authentication_required"
-            } else {
-                "provider_unavailable"
-            });
+            return unavailable(
+                if !account.is_default() || detail.contains("auth") || detail.contains("sign") {
+                    "authentication_required"
+                } else {
+                    "provider_unavailable"
+                },
+            );
         }
     };
     let supports = state
@@ -755,12 +789,14 @@ pub(super) async fn provider_readiness(
             reason: Some("unsupported_capability"),
             generation: Some(generation),
             structured_output: false,
+            account,
         };
     }
     ProviderReadiness {
         available: true,
         reason: None,
         generation: Some(generation),
+        account,
         // The managed read-only profile contract includes the native turn
         // constraint; an adapter declaring it must apply the schema.
         structured_output: profile == cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
@@ -789,6 +825,7 @@ pub(in crate::server) async fn image_capabilities(
             .find(|target| target.agent == provider);
         let (runtime, readiness) = child_runtime(
             state,
+            meta.owner_user_id.as_deref(),
             &ledger.placement().machine_id,
             Some(meta.machine_id.as_str()),
             provider,
@@ -834,6 +871,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             .find(|target| target.agent == provider);
         let (runtime, readiness) = child_runtime(
             state,
+            meta.owner_user_id.as_deref(),
             &placement.machine_id,
             Some(meta.machine_id.as_str()),
             provider,
@@ -877,6 +915,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             && agent_tools::image_refusal(&policy, &meta.provider, provider).is_none()
             && child_runtime(
                 state,
+                meta.owner_user_id.as_deref(),
                 &placement.machine_id,
                 Some(meta.machine_id.as_str()),
                 provider,
@@ -1082,6 +1121,7 @@ async fn start(
     for target in targets {
         let (_, readiness) = child_runtime(
             state,
+            meta.owner_user_id.as_deref(),
             &ledger.placement().machine_id,
             Some(ledger.runtime_machine_id()),
             &target.agent,
