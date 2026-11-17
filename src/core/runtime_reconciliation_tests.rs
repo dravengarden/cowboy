@@ -310,3 +310,40 @@ fn restore_discards_retired_continuations_but_keeps_user_work() {
     assert_eq!(value["drafts"].as_array().unwrap().len(), 1);
     assert_eq!(value["drafts"][0]["text"], "user draft");
 }
+
+#[test]
+fn a_restored_turn_waits_for_its_own_machine_before_it_is_judged() {
+    // 2026-11-17: OVH was replaced with the Controller and reconnected after
+    // the grace; its surviving turns were reported cut off. A Machine that has
+    // not settled keeps its sessions pending, and a later snapshot adopts them.
+    let hub = Hub::new();
+    let mut late = restored_busy("session-late");
+    late.meta.machine_id = "ovh".to_owned();
+    let mut gone = restored_busy("session-gone");
+    gone.meta.machine_id = "ovh".to_owned();
+    hub.restore_reconciling_runtime(vec![late, restored_busy("session-hawk")]);
+    hub.restore_reconciling_runtime(vec![gone]);
+
+    assert_eq!(
+        hub.finalize_settled_runtime_reconciliation(|machine| machine == "hawk"),
+        vec!["session-hawk".to_owned()]
+    );
+    assert_eq!(hub.status("session-late"), Some(Status::Busy));
+    assert!(hub.runtime_reconciliation_pending());
+
+    assert!(hub.accept_runtime_snapshot(&worker_snapshot("session-late", "worker-epoch-late")));
+    assert!(
+        hub.finalize_settled_runtime_reconciliation(|machine| machine == "hawk")
+            .is_empty()
+    );
+    assert_eq!(hub.status("session-late"), Some(Status::Busy));
+
+    // Once its Machine settled without the worker, the turn is genuinely lost.
+    assert_eq!(
+        hub.finalize_settled_runtime_reconciliation(|_| true),
+        vec!["session-gone".to_owned()]
+    );
+    assert_eq!(hub.status("session-late"), Some(Status::Busy));
+    assert_eq!(hub.status("session-gone"), Some(Status::Interrupted));
+    assert!(!hub.runtime_reconciliation_pending());
+}

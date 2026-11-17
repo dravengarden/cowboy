@@ -46,6 +46,7 @@ use mobile_review::*;
 mod session_attention;
 pub use session_attention::SessionAttention;
 mod lost_execution;
+mod runtime_reconciliation;
 mod session_trash;
 pub use code_scope::{CodeReadScope, SessionCodeScope};
 pub use session_trash::TRASHED_SESSION_REFUSAL;
@@ -2444,21 +2445,6 @@ impl Hub {
             return;
         }
         self.set_status(session_id, status, detail);
-    }
-
-    /// Finalize persisted Busy sessions whose detached owner did not reconnect
-    /// within the server's bounded grace period. Returns exactly the sessions
-    /// newly marked Interrupted for observability.
-    pub fn finalize_runtime_reconciliation(&self) -> Vec<String> {
-        let pending = std::mem::take(&mut *self.inner.runtime_reconciliation.lock());
-        let interrupted: Vec<String> = pending
-            .into_iter()
-            .filter(|id| self.status(id) == Some(Status::Busy))
-            .collect();
-        for id in &interrupted {
-            self.record_restart_interruption(id);
-        }
-        interrupted
     }
 
     fn record_restart_interruption(&self, session_id: &str) {

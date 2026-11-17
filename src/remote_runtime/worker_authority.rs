@@ -79,6 +79,27 @@ impl RemoteRuntime {
                 "busy worker keeps its stale MCP launch plan until its turn ends"
             ),
             Some(false) => {
+                // One replacement per stale worker. A client open and a send
+                // (or two opens) arrive back to back while the worker map
+                // still shows the old worker. A second reset would send the
+                // Machine another relaunch for the same unit: it recycles the
+                // first replacement as an orphan, and that failed start's
+                // stop is then delivered to the next worker, so the session
+                // crashes. Claiming `resetting` here is atomic; the in-flight
+                // reset relaunches with this same current declaration, and
+                // `begin_reset` re-inserting the claim is idempotent.
+                if !self
+                    .shared
+                    .resetting
+                    .lock()
+                    .insert(session.session_id.clone())
+                {
+                    tracing::debug!(
+                        session = %session.session_id,
+                        "stale MCP launch plan replacement already in flight"
+                    );
+                    return;
+                }
                 tracing::info!(
                     session = %session.session_id,
                     "replacing idle worker whose MCP launch plan is stale"
@@ -205,5 +226,27 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, CoreCommand::EnsureSession { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn back_to_back_ensures_replace_a_stale_worker_once() {
+        // An open and a send both see the old worker before the reset is
+        // acknowledged. Two reset stops made the Machine relaunch the unit
+        // twice and crash the session (2026-11-17, sess-1794833928134).
+        let runtime = super::RemoteRuntime::for_test(
+            crate::core::Hub::new(),
+            vec![worker("/old.json", None)],
+        );
+        runtime.ensure_current_mcp_plan(declaration("/new.json"));
+        runtime.ensure_current_mcp_plan(declaration("/new.json"));
+        let reset_stops = runtime
+            .pending_for_test()
+            .iter()
+            .filter(|command| {
+                matches!(command, CoreCommand::StopSession { command_id, .. }
+                    if command_id.starts_with("reset-"))
+            })
+            .count();
+        assert_eq!(reset_stops, 1);
     }
 }

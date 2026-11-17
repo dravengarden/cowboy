@@ -161,35 +161,76 @@ pub(super) async fn start_scheduler(
     scheduler_task
 }
 
+/// A restored Busy turn on a Machine that has not reconnected stays pending
+/// rather than being judged on the Controller's grace: a Machine replaced at
+/// the same time can take minutes to finish its hello (2026-11-17: OVH
+/// connected 104 s after a Controller restart and its 8 surviving turns were
+/// reported cut off). A Machine still absent after this bound is gone.
+const RUNTIME_RECONCILIATION_MACHINE_ABSENCE_LIMIT: std::time::Duration =
+    std::time::Duration::from_secs(10 * 60);
+
 /// Machine WebSockets can only reconnect after Axum starts listening. Keep
 /// this timer independent of the request task: real worker snapshots remove
 /// their sessions from the reconciliation set, while the remainder become
-/// genuine interruptions after the Machine's maximum reconnect delay plus
-/// a bounded snapshot-settlement window. Interrupted turns stay stopped
+/// genuine interruptions once their own Machine has been connected for a
+/// bounded snapshot-settlement window. A session whose Machine has not
+/// reconnected yet is not judged on the Controller's grace (see
+/// [`RUNTIME_RECONCILIATION_MACHINE_ABSENCE_LIMIT`]). In-process `local`
+/// sessions have no Machine to wait for. Interrupted turns stay stopped
 /// until the user submits work.
 pub(super) fn spawn_runtime_reconciliation(
-    hub: Hub,
-    mut shutdown: watch::Receiver<bool>,
+    hub: &Hub,
+    machine_control: &Arc<MachineControl>,
+    shutdown: &watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
+    let (hub, machine_control, mut shutdown) =
+        (hub.clone(), Arc::clone(machine_control), shutdown.clone());
     tokio::spawn(async move {
-        tokio::select! {
-            () = tokio::time::sleep(RUNTIME_RECONCILIATION_GRACE) => {
-                let interrupted = hub.finalize_runtime_reconciliation();
-                if !interrupted.is_empty() {
-                    tracing::warn!(
-                        count = interrupted.len(),
-                        grace_seconds = RUNTIME_RECONCILIATION_GRACE.as_secs(),
-                        "runtime reconciliation grace expired without detached owners"
-                    );
+        let started = tokio::time::Instant::now();
+        let mut wait = RUNTIME_RECONCILIATION_GRACE;
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep(wait) => {}
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        tracing::info!("runtime reconciliation cancelled by shutdown");
+                        return;
+                    }
+                    continue;
                 }
             }
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    tracing::info!("runtime reconciliation cancelled by shutdown");
-                }
+            let absence_expired = started.elapsed() >= RUNTIME_RECONCILIATION_MACHINE_ABSENCE_LIMIT;
+            let interrupted = hub.finalize_settled_runtime_reconciliation(|machine_id| {
+                runtime_machine_settled(&machine_control, machine_id, absence_expired)
+            });
+            if !interrupted.is_empty() {
+                tracing::warn!(
+                    count = interrupted.len(),
+                    elapsed_seconds = started.elapsed().as_secs(),
+                    "runtime reconciliation settled without detached owners"
+                );
             }
+            if !hub.runtime_reconciliation_pending() {
+                return;
+            }
+            wait = MACHINE_RECONNECT_SWEEP_INTERVAL;
         }
     })
+}
+
+fn runtime_machine_settled(
+    machine_control: &MachineControl,
+    machine_id: &str,
+    absence_expired: bool,
+) -> bool {
+    // The absence cap is for a Machine that never came back; one that did
+    // still gets its whole snapshot-settlement window.
+    machine_id == "local"
+        || machine_control
+            .connection_age(machine_id)
+            .map_or(absence_expired, |age| {
+                age >= std::time::Duration::from_secs(RUNTIME_SNAPSHOT_SETTLEMENT_SECONDS)
+            })
 }
 
 /// Starts notification delivery with the Controller's shutdown signal.
