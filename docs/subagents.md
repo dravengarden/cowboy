@@ -137,9 +137,12 @@ store writer, which:
 - honours a transcript Clear through a fence recorded when the Clear is
   admitted (`subagent_transcripts::fence`, before the replacement worker
   starts), never by waiting in the store writer: updates received before it
-  are skipped, rows already written are deleted once before the next batch
-  (or right after a batch that ran across it), a failed deletion is retried,
-  and the session's cached state is forgotten. A Controller crash between a
+  are skipped, rows already written are deleted by this writer alone (the
+  Clear transaction does not touch them) once before the next batch or right
+  after a batch that ran across it; a fence wakes the writer even with no
+  further update. A failed deletion is retried before each batch and every
+  5 s, holding that session's post-Clear updates until it succeeds; the
+  session's cached state is forgotten. A Controller crash between a
   write and that deletion can leave pre-Clear rows; they are presentation
   only;
 - forgets cached children only between batches, never mid-batch;
@@ -152,7 +155,8 @@ store writer, which:
 - writes dropped counts as `cowboy_observation_gap` rows.
 
 Rows live in `subagent_events` (migrations `0084` / SQLite `0058`), keyed by
-`(session, child, seq)`, deleted with the session and by Clear. A failed write
+`(session, child, seq)`, deleted with the session and, through the fence, by
+Clear. A failed write
 loses rows, never agent work. `GET /api/sessions/{id}/subagents/{child}/transcript`
 returns the newest page, an older page (`before_seq`) or rows after a cursor
 (`after_seq`, with `more_after` when the row or byte limit stopped it), at most

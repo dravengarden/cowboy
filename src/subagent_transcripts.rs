@@ -65,6 +65,12 @@ static FENCE_GEN: AtomicU64 = AtomicU64::new(0);
 /// Session → (receipt order before which its updates were cleared, fence
 /// generation). Written when a Clear is admitted, never awaited.
 static FENCES: LazyLock<Mutex<HashMap<String, (u64, u64)>>> = LazyLock::new(Mutex::default);
+/// Wakes the writer for a new fence even when no update follows it.
+static FENCE_WAKE: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
+/// How long a failed fence deletion waits before it is retried.
+const FENCE_RETRY: Duration = Duration::from_secs(5);
+/// Post-Clear updates held while their session's deletion is retried.
+const HELD_LIMIT: usize = QUEUE_CAPACITY;
 
 /// Fence a session's observed transcripts at a transcript Clear, when the
 /// Hub admits it and before a replacement worker can report anything: every
@@ -79,6 +85,8 @@ pub fn fence(session_id: &str) {
             .lock()
             .retain(|(session, _), _| session != session_id);
     }
+    drop(fences);
+    FENCE_WAKE.notify_one();
 }
 
 /// Start the writer for this process. Without a store (in-memory mode)
@@ -189,16 +197,28 @@ pub(crate) struct Writer {
     highwaters: HashMap<(String, String), i64>,
     /// Newest Clear fence whose rows were deleted.
     applied_fence: u64,
-    /// Fenced sessions whose deletion failed; retried every batch.
+    /// Fenced sessions whose deletion failed; retried before every batch and
+    /// on a timer. The store holds only their pre-Clear rows meanwhile.
     undeleted: std::collections::HashSet<String>,
+    /// Post-Clear updates of an undeleted session, written once it is.
+    held: Vec<Observed>,
 }
 
 async fn run_writer(store: Store, mut rx: mpsc::Receiver<Observed>) {
     let mut writer = Writer::default();
-    while let Some(first) = rx.recv().await {
-        let mut batch = vec![first];
+    loop {
+        let retry = !writer.undeleted.is_empty();
+        let first = tokio::select! {
+            next = rx.recv() => match next {
+                Some(next) => Some(next),
+                None => break,
+            },
+            () = FENCE_WAKE.notified() => None,
+            () = tokio::time::sleep(FENCE_RETRY), if retry => None,
+        };
+        let mut batch: Vec<Observed> = first.into_iter().collect();
         let deadline = tokio::time::Instant::now() + BATCH_WINDOW;
-        while batch.len() < BATCH_ROWS {
+        while !batch.is_empty() && batch.len() < BATCH_ROWS {
             match tokio::time::timeout_at(deadline, rx.recv()).await {
                 Ok(Some(next)) => batch.push(next),
                 Ok(None) | Err(_) => break,
@@ -224,15 +244,24 @@ impl Writer {
             let fences = FENCES.lock();
             (fences.clone(), FENCE_GEN.load(Ordering::SeqCst))
         };
-        self.apply_fences(store, &fences, self.applied_fence, generation)
+        self.apply_fences(store, &fences, self.applied_fence, generation, true)
             .await;
         let mut rows: Vec<ObservedRow> = Vec::new();
-        for observed in batch {
+        let held = std::mem::take(&mut self.held);
+        for observed in held.into_iter().chain(batch) {
             if fences
                 .get(&observed.session_id)
                 .is_some_and(|(order, _)| observed.order < *order)
             {
                 continue; // Received before a Clear.
+            }
+            if self.undeleted.contains(&observed.session_id) {
+                // Its pre-Clear rows are still stored: writing now would mix
+                // them, and a retried deletion would take these too.
+                if self.held.len() < HELD_LIMIT {
+                    self.held.push(observed);
+                }
+                continue;
             }
             self.fold_into(store, observed, &mut rows).await;
         }
@@ -240,7 +269,7 @@ impl Writer {
         // Fences admitted while this batch ran: it wrote only updates received
         // before them, so all their rows go.
         let latest = FENCES.lock().clone();
-        self.apply_fences(store, &latest, generation, u64::MAX)
+        self.apply_fences(store, &latest, generation, u64::MAX, false)
             .await;
     }
 
@@ -252,8 +281,15 @@ impl Writer {
         fences: &HashMap<String, (u64, u64)>,
         after: u64,
         through: u64,
+        retry: bool,
     ) {
-        let mut sessions: Vec<String> = std::mem::take(&mut self.undeleted).into_iter().collect();
+        // Retried only before a batch writes anything: afterwards the store
+        // may hold that session's post-Clear rows.
+        let mut sessions: Vec<String> = if retry {
+            std::mem::take(&mut self.undeleted).into_iter().collect()
+        } else {
+            Vec::new()
+        };
         for (session, (_, generation)) in fences {
             if *generation > after && *generation <= through {
                 self.applied_fence = self.applied_fence.max(*generation);

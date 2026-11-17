@@ -112,7 +112,12 @@ async fn transcript_contract(store: &Store, id: &str) {
         .await;
     assert!(seqs(store, "sess-missing", None, None, 10).await.is_empty());
 
+    // The transcript Clear itself leaves observed rows to the writer, which
+    // deletes them when it sees the fence, even with no update after it.
     store.clear_events(id, 0).await.unwrap();
+    assert_eq!(seqs(store, id, None, None, 10).await, [1, 2, 3]);
+    fence(id);
+    writer.apply(store, Vec::new()).await;
     assert!(seqs(store, id, None, None, 10).await.is_empty());
 }
 
