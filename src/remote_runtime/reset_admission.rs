@@ -43,7 +43,9 @@ pub(super) fn current(
     }
     let mut session = match command {
         CoreCommand::EnsureSession { session }
-            if session.adopt_only && shared.resetting.lock().contains(&session.session_id) =>
+            if session.adopt_only
+                && shared.resetting.lock().contains(&session.session_id)
+                && cross_release(shared, &session) =>
         {
             session
         }
@@ -95,6 +97,20 @@ pub(super) fn current(
     Some(CoreCommand::EnsureSession { session })
 }
 
+/// A same-release reset (a stuck or reconnecting worker) keeps its previous
+/// admission: its cached Machine declaration already names this release.
+fn cross_release(shared: &Shared, session: &super::StartSession) -> bool {
+    shared
+        .workers
+        .lock()
+        .get(&session.session_id)
+        .and_then(|worker| worker.launch.as_ref())
+        .is_none_or(|running| {
+            running.provider_version != session.provider_version
+                || running.provider_generation_digest != session.provider_generation_digest
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{Frame, Hub, RemoteRuntime, read_frame, send_pending};
@@ -131,7 +147,9 @@ mod tests {
         let worker = super::super::tests::snapshot("s");
         let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker.clone()]);
         runtime.connect_for_test();
-        runtime.reset(worker.launch.clone().unwrap());
+        let mut update = worker.launch.clone().unwrap();
+        update.provider_version = "2".to_owned();
+        runtime.reset(update);
         // Neither the declaration nor the stop leaves, and neither is refused:
         // the old worker keeps running instead of relaunching its old release.
         let early = wire(&runtime).await;
