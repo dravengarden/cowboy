@@ -26,10 +26,21 @@ function announce(agent, sessionId, cycleId) {
   ).catch(() => {});
 }
 
+// ACP 0.103+ keeps only the owner in `foregroundWork` (a turn, or the
+// autonomous-cycle string), so names live beside it, one per running work.
+const names = new WeakMap();
+
+function cycleNames(agent) {
+  let map = names.get(agent);
+  if (!map) names.set(agent, (map = new Map()));
+  return map;
+}
+
 /** The name of the self-started work that runs now, if any. A turn that took
  *  the work over keeps its name: the work is still the same cycle. */
 export function currentNativeCycle(agent, sessionId) {
-  return agent.foregroundWork?.get(sessionId)?.cowboyCycleId;
+  if (!agent.foregroundWork?.has(sessionId)) return undefined;
+  return names.get(agent)?.get(sessionId);
 }
 
 export function installNativeCycles(Agent) {
@@ -43,20 +54,25 @@ export function installNativeCycles(Agent) {
   ) {
     return false;
   }
-  proto.startForeground = function (sessionId, owner) {
-    const before = this.foregroundWork?.get(sessionId);
-    const result = startForeground.call(this, sessionId, owner);
-    const work = this.foregroundWork?.get(sessionId);
-    if (!before && work && this.runsAutonomousCycle(sessionId)) {
-      work.cowboyCycleId = `native-${randomUUID()}`;
-      announce(this, sessionId, work.cowboyCycleId);
+  proto.startForeground = function (...args) {
+    const [sessionId] = args;
+    const running = this.foregroundWork?.has(sessionId);
+    const result = startForeground.apply(this, args);
+    const cycles = cycleNames(this);
+    if (!running) cycles.delete(sessionId);
+    if (!running && this.foregroundWork?.has(sessionId) && this.runsAutonomousCycle(sessionId)) {
+      const name = `native-${randomUUID()}`;
+      cycles.set(sessionId, name);
+      announce(this, sessionId, name);
     }
     return result;
   };
-  proto.endForeground = function (sessionId, owner, end) {
-    const work = this.foregroundWork?.get(sessionId);
-    const result = endForeground.call(this, sessionId, owner, end);
-    if (work?.cowboyCycleId && this.foregroundWork?.get(sessionId) !== work) {
+  proto.endForeground = function (...args) {
+    const [sessionId] = args;
+    const result = endForeground.apply(this, args);
+    const cycles = cycleNames(this);
+    if (cycles.has(sessionId) && !this.foregroundWork?.has(sessionId)) {
+      cycles.delete(sessionId);
       announce(this, sessionId, null);
     }
     return result;

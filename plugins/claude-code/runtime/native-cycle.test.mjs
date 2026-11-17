@@ -5,8 +5,8 @@ import { currentNativeCycle, installNativeCycles } from "./native-cycle.mjs";
 const AUTONOMOUS = "autonomous-cycle";
 
 // The parts of ACP's agent this adapter extends, with upstream's contract:
-// new foreground work starts a cycle, a turn takes running work over, and
-// only the owner's end deletes it.
+// `foregroundWork` maps a session to its owner (ACP 0.103+), a turn takes
+// running work over, and only the owner's end deletes it.
 function fixture({ startTurnDelay = null } = {}) {
   const notices = [];
   const pushed = [];
@@ -23,19 +23,13 @@ function fixture({ startTurnDelay = null } = {}) {
       },
     };
     startForeground(sessionId, owner) {
-      const current = this.foregroundWork.get(sessionId);
-      if (current) {
-        current.owner = owner;
-        return;
-      }
-      this.foregroundWork.set(sessionId, { owner, awaitingUser: false });
+      this.foregroundWork.set(sessionId, owner);
     }
     endForeground(sessionId, owner) {
-      if (this.foregroundWork.get(sessionId)?.owner !== owner) return;
-      this.foregroundWork.delete(sessionId);
+      if (this.foregroundWork.get(sessionId) === owner) this.foregroundWork.delete(sessionId);
     }
     runsAutonomousCycle(sessionId) {
-      return this.foregroundWork.get(sessionId)?.owner === AUTONOMOUS;
+      return this.foregroundWork.get(sessionId) === AUTONOMOUS;
     }
     async steer(request) {
       steers.push(request);
@@ -77,7 +71,7 @@ test("only a self-started cycle gets a name, announced at its start and end", ()
   const { agent, cycles } = fixture();
   agent.startForeground("one", { turn: true });
   assert.equal(currentNativeCycle(agent, "one"), undefined, "a prompt turn is not a cycle");
-  agent.endForeground("one", agent.foregroundWork.get("one").owner);
+  agent.endForeground("one", agent.foregroundWork.get("one"));
   agent.startForeground("one", AUTONOMOUS);
   const first = currentNativeCycle(agent, "one");
   assert.match(first, /^native-/);
@@ -109,7 +103,7 @@ test("a steer joins exactly the named cycle as a new turn with its priority", as
   assert.equal(steers.length, 1);
   assert.equal(pushed.length, 1);
   // The turn's end ends the cycle.
-  agent.endForeground("one", agent.foregroundWork.get("one").owner);
+  agent.endForeground("one", agent.foregroundWork.get("one"));
   assert.deepEqual(cycles(), [cycle, null]);
 });
 
