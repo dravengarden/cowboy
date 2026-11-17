@@ -215,7 +215,12 @@ Remaining Phase 1 items need the dedicated test account.
   on Hawk kept working afterwards, so per-Machine logins are independent
   grants. Whether logout revokes the grant at Google was not tested.
 
-Remaining Phase 1: concurrent refresh after access-token expiry; suspension and 429 shapes
+- Refresh: at 06:09 UTC the Hawk grant (login 05:07) and the OVH grant (login
+  05:34) were prompted concurrently. Hawk refreshed and rewrote its token file
+  at 06:09:14; OVH was still within its access-token lifetime. Both turns
+  succeeded, so a refresh on one Machine did not invalidate the other grant.
+
+Remaining Phase 1: suspension and 429 shapes
 (observe only, never provoke).
 
 ### Phase 2 — Native custody as a Provider declaration
