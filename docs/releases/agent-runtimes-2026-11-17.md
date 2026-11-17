@@ -1,7 +1,6 @@
 # Agent runtime upgrades — 2026-11-17
 
-Status: published from `f472723d`; installed on Hawk and OVH. Falcon and
-macbook-air wait for a Machine that supports Plugin SDK 1.15.0.
+Status: published from `f472723d`; installed on all four Machines.
 
 ## Dependency audit
 
@@ -117,7 +116,24 @@ verified from clean source `f472723d9d6c4ad1e06283c2f8f49f0b7a00c552`.
 | --- | --- |
 | Hawk | claude-deepseek 3.1.60, codex 3.5.30, codex-deepseek 3.1.60, deepseek-harness 1.0.18, grok 3.1.60 |
 | OVH | claude-code 3.20.41, codex 3.5.30, grok 3.1.60 |
-| Falcon, macbook-air | Refused, `plugin_sdk_unsupported`: their Machines report Plugin SDK 1.14.0, and component release 3.108.0 moved every Plugin to 1.15.0 |
+| macbook-air | claude-deepseek 3.1.60, codex 3.5.30, codex-deepseek 3.1.60, grok 3.1.60, after its Machine update |
+| Falcon | claude-deepseek 3.1.60, codex 3.5.30, codex-deepseek 3.1.60, deepseek-harness 1.0.18, grok 3.1.60, after its Machine update |
+
+Falcon and macbook-air first refused with `plugin_sdk_unsupported`: their
+Machines reported Plugin SDK 1.14.0, and component release 3.108.0 moved every
+Plugin to 1.15.0. Neither had an active session.
+
+- macbook-air: `just build-machine-bootstrap` at `778fd509` on the Mac, then
+  `cowboy-machine-install --refresh` with its existing Service, state
+  directory, capacity, admission and seven workspaces. Installed hashes match
+  the build, the launcher is unchanged; backups carry the suffix
+  `pre-agent-deps-20261117`. It then reported SDK 1.15.0.
+- Falcon: its activator refuses a release behind freshly fetched `origin/main`,
+  so the Machine release was built on Falcon at `79d5abd5` and activated with
+  `cowboy-machine-activate` (receipt `succeeded`). It reports SDK 1.16.0.
+  Main had briefly been unbuildable: component release 3.110.0 moved
+  plugin-sdk to 1.16.0 without refreshing the fixed-output Cargo vendor hash,
+  fixed in `236bc84e` (`23273d10` had committed a placeholder by mistake).
 
 On OVH the Machine's control connection was replaced during the codex
 installation. `ovh-codex-3-5-30-converge` returned an unknown outcome; two
