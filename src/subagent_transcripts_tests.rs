@@ -8,6 +8,7 @@ fn observed(runtime_seq: u64, update: Value) -> Observed {
         child_id: "child-a".to_owned(),
         update,
         dropped: 0,
+        order: runtime_seq,
     }
 }
 

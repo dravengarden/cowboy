@@ -299,6 +299,7 @@ pub(super) fn reset_session_command(
                             && state.hub.in_flight_prompt_epoch(&session_id) == turn
                             && !state.hub.session_is_trashed(&session_id) => {
                             state.hub.prepare_context_reset(&session_id);
+                            crate::subagent_transcripts::fence(&session_id);
                             state.hub.clear_transcript(&session_id);
                             state.hub.mark_context_cleared(&session_id);
                             let result = match recovery {
@@ -325,6 +326,7 @@ pub(super) fn reset_session_command(
         //    permanent delete path: the Machine broker retains delete tombstones to
         //    reject stale launches for genuinely deleted sessions.
         state.hub.prepare_context_reset(&session_id);
+        crate::subagent_transcripts::fence(&session_id);
         state.hub.clear_transcript(&session_id);
         state.hub.mark_context_cleared(&session_id);
         match state.supervisor.reset_session(&session_id) {

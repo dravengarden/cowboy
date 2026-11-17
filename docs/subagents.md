@@ -122,7 +122,9 @@ marks a Controller that keeps observations. For a Controller connection
 negotiated below it (a rollback while workers still observe, or queued
 observations replayed to it), the broker replaces each observed update with
 an inert steering result without a `cmid` (`retire_observation`): the runtime
-sequence stays contiguous and that Controller stores nothing.
+sequence stays contiguous and that Controller stores nothing. A worker that
+reconnects to a broker negotiated below version 7 (a Machine rollback) retires
+them itself at egress, including replays.
 
 **Controller.** `subagent_transcripts::divert` takes these updates out of the
 runtime projection before `apply_event`, so they never enter the parent
@@ -132,9 +134,14 @@ store writer, which:
 
 - fences replays by `(worker_epoch, runtime_seq)` against the newest stored
   row of that incarnation;
-- applies a transcript Clear as an ordered barrier: the store writer's
-  `ClearEvents` also queues `Msg::Clear`, so observations queued before it are
-  deleted after they are written and the session's cached state is forgotten;
+- honours a transcript Clear through a fence recorded when the Clear is
+  admitted (`subagent_transcripts::fence`, before the replacement worker
+  starts), never by waiting in the store writer: updates received before it
+  are skipped, rows already written are deleted once before the next batch
+  (or right after a batch that ran across it), a failed deletion is retried,
+  and the session's cached state is forgotten. A Controller crash between a
+  write and that deletion can leave pre-Clear rows; they are presentation
+  only;
 - forgets cached children only between batches, never mid-batch;
 - strips U+0000 before binding, as PostgreSQL JSONB requires;
 - coalesces streamed text chunks of one message (same kind and `messageId`)
@@ -153,9 +160,12 @@ returns the newest page, an older page (`before_seq`) or rows after a cursor
 
 **Web.** `useSubagentTranscript` (`web/src/SubagentTranscript.tsx`) loads the
 newest page when a subagent is selected, then reads strictly one request at a
-time: forward reads follow the merged rows (a row the writer may still extend
-is read again), drain `more_after` pages, poll every 1.5 s while the subagent
-works and twice after it stops; "Show earlier activity" pages back. `observedTimeline` (`web/src/observedTranscript.ts`) prepends the
+time, each bound to the selection that queued it: the first read starts from
+the newest page (or after the newest cached row), forward reads follow the
+merged rows (a row the writer may still extend is read again) and drain
+`more_after` pages in runs of 50 that queue their own continuation, polling
+every 1.5 s while the subagent works and twice after it stops; "Show earlier
+activity" pages back. `observedTimeline` (`web/src/observedTranscript.ts`) prepends the
 delegation prompt as the first user message and hides gap rows behind "Some
 activity was not recorded". A subagent with observed rows reads like a Call:
 Desktop shows its transcript beside the details (which then omit the bounded

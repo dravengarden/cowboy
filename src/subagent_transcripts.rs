@@ -9,7 +9,8 @@
 //! a failed write loses observed rows, never agent work.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -45,25 +46,40 @@ pub struct Observed {
     pub update: Value,
     /// Updates of this child the worker dropped before this one.
     pub dropped: u64,
-}
-
-/// What the writer applies, in the order it was queued.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Msg {
-    Observed(Observed),
-    /// The session's transcript was cleared: rows queued before this are
-    /// deleted after they are written, and cached state is forgotten.
-    Clear(String),
+    /// Receipt order in this Controller process, against Clear fences.
+    pub order: u64,
 }
 
 struct Sink {
-    tx: mpsc::Sender<Msg>,
+    tx: mpsc::Sender<Observed>,
     /// `(session, child)` → updates dropped at this queue, reported with the
     /// child's next accepted update.
     dropped: Mutex<HashMap<(String, String), u64>>,
 }
 
 static SINK: OnceLock<Sink> = OnceLock::new();
+/// Receipt order of observed updates in this process.
+static ORDER: AtomicU64 = AtomicU64::new(0);
+/// Generation of the newest Clear fence.
+static FENCE_GEN: AtomicU64 = AtomicU64::new(0);
+/// Session → (receipt order before which its updates were cleared, fence
+/// generation). Written when a Clear is admitted, never awaited.
+static FENCES: LazyLock<Mutex<HashMap<String, (u64, u64)>>> = LazyLock::new(Mutex::default);
+
+/// Fence a session's observed transcripts at a transcript Clear, when the
+/// Hub admits it and before a replacement worker can report anything: every
+/// update received before it is dropped or deleted, none after it.
+pub fn fence(session_id: &str) {
+    let mut fences = FENCES.lock();
+    let order = ORDER.load(Ordering::SeqCst);
+    let generation = FENCE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    fences.insert(session_id.to_owned(), (order, generation));
+    if let Some(sink) = SINK.get() {
+        sink.dropped
+            .lock()
+            .retain(|(session, _), _| session != session_id);
+    }
+}
 
 /// Start the writer for this process. Without a store (in-memory mode)
 /// observed updates are discarded.
@@ -104,6 +120,19 @@ pub fn intercept(
     None
 }
 
+/// An observed update of child `child-a` received now, for storage tests.
+#[cfg(test)]
+pub(crate) fn parse_for_tests(session_id: &str, runtime_seq: u64) -> Observed {
+    parse(
+        session_id,
+        "epoch-1",
+        runtime_seq,
+        &json!({"sessionUpdate": SUBAGENT_EVENT_UPDATE, "childSessionId": "child-a",
+                "update": {"sessionUpdate": "tool_call"}}),
+    )
+    .expect("a valid observed update")
+}
+
 fn parse(
     session_id: &str,
     worker_epoch: &str,
@@ -123,6 +152,7 @@ fn parse(
         child_id: child_id.to_owned(),
         update: inner.clone(),
         dropped: update.get("dropped").and_then(Value::as_u64).unwrap_or(0),
+        order: ORDER.fetch_add(1, Ordering::SeqCst),
     })
 }
 
@@ -132,28 +162,13 @@ fn offer(sink: &Sink, mut observed: Observed) {
     if let Some(count) = dropped.remove(&key) {
         observed.dropped = observed.dropped.saturating_add(count);
     }
-    if let Err(error) = sink.tx.try_send(Msg::Observed(observed)) {
-        let (mpsc::error::TrySendError::Full(Msg::Observed(observed))
-        | mpsc::error::TrySendError::Closed(Msg::Observed(observed))) = error
-        else {
-            return;
-        };
+    if let Err(error) = sink.tx.try_send(observed) {
+        let (mpsc::error::TrySendError::Full(observed)
+        | mpsc::error::TrySendError::Closed(observed)) = error;
         // Bounded too: a child that floods a stalled writer keeps one counter.
         if dropped.len() < CACHED_CHILDREN || dropped.contains_key(&key) {
             *dropped.entry(key).or_default() += observed.dropped.saturating_add(1);
         }
-    }
-}
-
-/// Order a transcript Clear after every observed update queued before it, so
-/// none of them is written back afterwards. Waits for queue space: Clear is a
-/// person's action, never the agent's path.
-pub async fn clear(session_id: &str) {
-    if let Some(sink) = SINK.get() {
-        sink.dropped
-            .lock()
-            .retain(|(session, _), _| session != session_id);
-        let _ = sink.tx.send(Msg::Clear(session_id.to_owned())).await;
     }
 }
 
@@ -172,9 +187,13 @@ struct ChildState {
 pub(crate) struct Writer {
     children: HashMap<(String, String), ChildState>,
     highwaters: HashMap<(String, String), i64>,
+    /// Newest Clear fence whose rows were deleted.
+    applied_fence: u64,
+    /// Fenced sessions whose deletion failed; retried every batch.
+    undeleted: std::collections::HashSet<String>,
 }
 
-async fn run_writer(store: Store, mut rx: mpsc::Receiver<Msg>) {
+async fn run_writer(store: Store, mut rx: mpsc::Receiver<Observed>) {
     let mut writer = Writer::default();
     while let Some(first) = rx.recv().await {
         let mut batch = vec![first];
@@ -190,7 +209,7 @@ async fn run_writer(store: Store, mut rx: mpsc::Receiver<Msg>) {
 }
 
 impl Writer {
-    pub(crate) async fn apply(&mut self, store: &Store, batch: Vec<Msg>) {
+    pub(crate) async fn apply(&mut self, store: &Store, batch: Vec<Observed>) {
         // Forget only between batches: a child touched by this batch keeps
         // its uncommitted sequence and open row.
         if self.children.len() >= CACHED_CHILDREN {
@@ -199,23 +218,56 @@ impl Writer {
         if self.highwaters.len() >= CACHED_CHILDREN {
             self.highwaters.clear();
         }
+        // Fences admitted before this batch: every stored row of theirs was
+        // written by an earlier batch from updates received before them.
+        let (fences, generation) = {
+            let fences = FENCES.lock();
+            (fences.clone(), FENCE_GEN.load(Ordering::SeqCst))
+        };
+        self.apply_fences(store, &fences, self.applied_fence, generation)
+            .await;
         let mut rows: Vec<ObservedRow> = Vec::new();
-        for message in batch {
-            match message {
-                Msg::Observed(observed) => self.fold_into(store, observed, &mut rows).await,
-                Msg::Clear(session_id) => {
-                    self.flush(store, &mut rows).await;
-                    if let Err(error) = store.delete_subagent_events(&session_id).await {
-                        tracing::warn!(%error, "clearing observed subagent events");
-                    }
-                    self.children
-                        .retain(|(session, _), _| *session != session_id);
-                    self.highwaters
-                        .retain(|(session, _), _| *session != session_id);
-                }
+        for observed in batch {
+            if fences
+                .get(&observed.session_id)
+                .is_some_and(|(order, _)| observed.order < *order)
+            {
+                continue; // Received before a Clear.
             }
+            self.fold_into(store, observed, &mut rows).await;
         }
         self.flush(store, &mut rows).await;
+        // Fences admitted while this batch ran: it wrote only updates received
+        // before them, so all their rows go.
+        let latest = FENCES.lock().clone();
+        self.apply_fences(store, &latest, generation, u64::MAX)
+            .await;
+    }
+
+    /// Delete the rows of sessions fenced in `(after, through]` and of any
+    /// whose earlier deletion failed, and forget their cached state.
+    async fn apply_fences(
+        &mut self,
+        store: &Store,
+        fences: &HashMap<String, (u64, u64)>,
+        after: u64,
+        through: u64,
+    ) {
+        let mut sessions: Vec<String> = std::mem::take(&mut self.undeleted).into_iter().collect();
+        for (session, (_, generation)) in fences {
+            if *generation > after && *generation <= through {
+                self.applied_fence = self.applied_fence.max(*generation);
+                sessions.push(session.clone());
+            }
+        }
+        for session in sessions {
+            self.children.retain(|(owner, _), _| *owner != session);
+            self.highwaters.retain(|(owner, _), _| *owner != session);
+            if let Err(error) = store.delete_subagent_events(&session).await {
+                tracing::warn!(%error, "clearing observed subagent events");
+                self.undeleted.insert(session);
+            }
+        }
     }
 
     async fn fold_into(&mut self, store: &Store, observed: Observed, rows: &mut Vec<ObservedRow>) {

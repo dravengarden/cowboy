@@ -3,17 +3,13 @@
 //! store of each backend, paging, and NUL-safe JSON.
 
 use super::*;
-use crate::subagent_transcripts::{Msg, Observed, Writer};
+use crate::subagent_transcripts::{Observed, Writer, fence};
 
-fn observed(session: &str, runtime_seq: u64, update: serde_json::Value) -> Msg {
-    Msg::Observed(Observed {
-        session_id: session.to_owned(),
-        worker_epoch: "epoch-1".to_owned(),
-        runtime_seq,
-        child_id: "child-a".to_owned(),
-        update,
-        dropped: 0,
-    })
+/// Receipt order as `intercept` assigns it, from the process-wide counter.
+fn observed(session: &str, runtime_seq: u64, update: serde_json::Value) -> Observed {
+    let mut observed = crate::subagent_transcripts::parse_for_tests(session, runtime_seq);
+    observed.update = update;
+    observed
 }
 
 fn say(text: &str) -> serde_json::Value {
@@ -123,22 +119,19 @@ async fn transcript_contract(store: &Store, id: &str) {
 async fn clear_and_nul_contract(store: &Store, id: &str) {
     store.insert_session(&session(id)).await.unwrap();
     let mut writer = Writer::default();
-    // Queued before the Clear barrier, written in the same batch: gone after.
     writer
-        .apply(
-            store,
-            vec![
-                observed(id, 1, say("before")),
-                Msg::Clear(id.to_owned()),
-                observed(id, 2, tool("after\u{0}clear")),
-            ],
-        )
+        .apply(store, vec![observed(id, 1, say("written"))])
         .await;
+    // Received before the Clear but written after it: still cleared.
+    let late = observed(id, 2, say(" late"));
+    fence(id);
+    let after = observed(id, 3, tool("after\u{0}clear"));
+    writer.apply(store, vec![late, after]).await;
     let page = store
         .subagent_events_page(id, "child-a", None, None, 10)
         .await
         .unwrap();
-    assert_eq!(page.rows.len(), 1);
+    assert_eq!(page.rows.len(), 1, "{:?}", page.rows);
     // The cached sequence was forgotten with the Clear: numbering restarts.
     assert_eq!(page.rows[0].0, 1);
     assert_eq!(page.rows[0].2["toolCallId"], "afterclear");

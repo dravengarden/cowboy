@@ -69,34 +69,49 @@ export function useSubagentTranscript(
   // newer rows, and every cursor follows the rows already merged.
   const queue = useRef<Promise<void>>(Promise.resolve());
   const busy = useRef(0);
+  // Each selection is a generation: a request queued or answered for an
+  // earlier one (the same child closed and reopened included) does nothing.
+  const generation = useRef(0);
   const fetchPage = useCallback(
-    (direction: "newest" | "after" | "before"): Promise<void> => {
+    (direction: "sync" | "after" | "before"): Promise<void> => {
       if (!childId) return Promise.resolve();
+      const own = generation.current;
+      const current = (): boolean => generation.current === own && latest.current.key === key;
       busy.current += 1;
       const run = async (): Promise<void> => {
-        // A forward read drains every page the Controller has, bounded.
-        for (let page = 0; page < (direction === "after" ? 50 : 1); page += 1) {
-          if (latest.current.key !== key) return;
+        // Chosen when it runs: an empty view starts from the newest page and
+        // a shown one continues after its newest row, so no hole opens.
+        const mode =
+          direction === "sync"
+            ? latest.current.transcript.events.length > 0
+              ? "after"
+              : "newest"
+            : direction;
+        // A forward read drains every page the Controller has, in bounded
+        // runs that queue their own continuation.
+        for (let page = 0; page < (mode === "after" ? 50 : 1); page += 1) {
+          if (!current()) return;
           const shown = latest.current.transcript;
           const cursor =
-            direction === "after"
+            mode === "after"
               ? { after: afterCursor(shown) ?? 0 }
-              : direction === "before"
+              : mode === "before"
                 ? { before: shown.events[0]?.seq ?? Number.MAX_SAFE_INTEGER }
                 : {};
           const result = await fetchObservedPage(sessionId, childId, cursor);
-          if (latest.current.key !== key) return;
-          const transcript = mergeObserved(latest.current.transcript, result, direction);
+          if (!current()) return;
+          const transcript = mergeObserved(latest.current.transcript, result, mode);
           remember(key, transcript);
           latest.current = { key, transcript, loaded: true };
           setState(latest.current);
           if (!result.more_after) return;
+          if (page === 49) setTimeout(() => void fetchPage("after"), 0);
         }
       };
       const next = queue.current
         .then(run)
         .catch(() => {
-          if (latest.current.key === key && !latest.current.loaded) {
+          if (current() && !latest.current.loaded) {
             latest.current = { ...latest.current, loaded: true };
             setState(latest.current);
           }
@@ -111,10 +126,11 @@ export function useSubagentTranscript(
   );
 
   useEffect(() => {
-    if (!childId) return;
-    // A cached transcript continues after its newest row; a fresh one starts
-    // from the newest page, so no hole opens between the two.
-    void fetchPage(latest.current.transcript.events.length > 0 ? "after" : "newest");
+    if (!childId) return undefined;
+    void fetchPage("sync");
+    return () => {
+      generation.current += 1;
+    };
   }, [childId, fetchPage]);
 
   // Live while it works, once the first page is in; after it stops, twice
