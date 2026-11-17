@@ -537,7 +537,7 @@ def phase_fresh(args):
     record("snapshot_copies_profile", reply.get("ok") is True and reply.get("entries", 0) > 0 and len(names) == reply.get("entries"), reply=reply, entries=len(names))
     record("snapshot_has_local_state", any(name == "Local State" and kind == "file" for name, kind in names))
     record("snapshot_has_only_files_and_directories", kinds <= {"file", "dir"}, kinds=sorted(kinds))
-    record("snapshot_excludes_caches_and_singletons", not any(name.split("/")[-1] in ("Cache", "SingletonLock", "SingletonSocket", "SingletonCookie", "lockfile") for name, _ in names))
+    record("snapshot_excludes_caches_and_singletons", not any(name.split("/")[-1] in ("Cache", "SingletonLock", "SingletonSocket", "SingletonCookie", "lockfile", "optimization_guide_model_store") for name, _ in names))
     missing = control.request("snapshot", generation=77)
     record("snapshot_of_missing_generation_refused", missing.get("ok") is False and missing.get("kind") == "host", reply=missing)
 

@@ -482,6 +482,12 @@ impl Init {
             "--disable-crash-reporter".to_owned(),
             "--disable-quic".to_owned(),
             "--disk-cache-size=1048576".to_owned(),
+            // No Optimization Guide hints or on-device models: Chrome 157
+            // otherwise downloads about 47 MB of TFLite models (history
+            // embeddings, omnibox, page classifiers) into the profile tmpfs,
+            // where they stay resident, and runs them on visited pages.
+            // Invisible to sites.
+            "--disable-features=OptimizationHints,OptimizationTargetPrediction".to_owned(),
             "--password-store=basic".to_owned(),
             "--lang=en-US".to_owned(),
             "--window-position=0,0".to_owned(),

@@ -347,8 +347,9 @@ nothing is configurable from outside beyond the argument vector.
    `--user-data-dir=/mnt/profile --no-first-run --no-default-browser-check
    --disable-sync --disable-background-networking --disable-component-update
    --disable-extensions --disable-breakpad --disable-crash-reporter
-   --disable-quic --disk-cache-size=1048576 --password-store=basic
-   --lang=en-US --window-position=0,0 --window-size=WxH
+   --disable-quic --disk-cache-size=1048576
+   --disable-features=OptimizationHints,OptimizationTargetPrediction
+   --password-store=basic --lang=en-US --window-position=0,0 --window-size=WxH
    --force-device-scale-factor=<scale> chrome://newtab`.
 7. **Managed policy.** The policy file is part of the signed artifact and
    turns off everything a sign-in browser must not do, enforced by the
