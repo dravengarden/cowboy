@@ -512,6 +512,27 @@ mod tests {
         assert!(frames.take(&token).is_none());
     }
 
+    /// A lease that ran out is over on the Controller whatever the page does:
+    /// a stalled parent cannot keep renewing it, and nothing authorizes an
+    /// effect (`apps_bridge::authorized` starts from `live`) or serves a view.
+    #[test]
+    fn an_expired_lease_authorizes_nothing_even_if_the_page_still_holds_it() {
+        let frames = Frames::default();
+        let (token, lease) = frames
+            .issue(scope(), Arc::new("<p>x</p>".to_owned()))
+            .unwrap();
+        assert!(frames.live("s", &lease).is_some());
+        frames.state.lock().leases.get_mut(&lease).unwrap().expires =
+            Instant::now() - Duration::from_millis(1);
+        assert!(frames.live("s", &lease).is_none(), "no effect under it");
+        assert!(!frames.leased("s", "suger"), "its view scope closes");
+        assert!(
+            !frames.renew(&lease, &scope()),
+            "a late renewal cannot revive it"
+        );
+        assert!(frames.take(&token).is_none(), "its token serves nothing");
+    }
+
     #[test]
     fn renewal_requires_the_same_scope_and_frames_are_bounded() {
         let frames = Frames::default();
