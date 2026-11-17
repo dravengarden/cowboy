@@ -1,8 +1,8 @@
 # Codex runtime upgrade — 2026-11-17
 
-Status: source and pins updated on `claude/codex-deps-2026-11-17`. Not yet in a
-component release, signed, published or installed; the integrating component
-release bumps the Plugin versions.
+Status: released in component release 3.109.0 (codex 3.5.30, codex-deepseek
+3.1.60); see [the combined record](agent-runtimes-2026-11-17.md) for
+publication and installation.
 
 ## Dependency audit
 

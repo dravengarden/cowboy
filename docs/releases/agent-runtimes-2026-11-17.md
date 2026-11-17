@@ -1,7 +1,7 @@
 # Agent runtime upgrades — 2026-11-17
 
-Status: component release 3.109.0 in source. Publication and installation are
-recorded below once they complete.
+Status: published from `f472723d`; installed on Hawk and OVH. Falcon and
+macbook-air wait for a Machine that supports Plugin SDK 1.15.0.
 
 ## Dependency audit
 
@@ -86,3 +86,49 @@ used a loopback scripted API and fake credentials.
 | Claude managed conformance | Accepted, 7 checks |
 | Claude TaskStop conformance | Accepted, four topologies |
 | Codex worker / turn / child-stop / hooks / image | See the Codex record |
+
+## Publication
+
+All six releases were built, bound, signed (`cowboy-first-party-v1`) and
+verified from clean source `f472723d9d6c4ad1e06283c2f8f49f0b7a00c552`.
+
+| Plugin | Artifact digest |
+| --- | --- |
+| claude-code 3.20.41 | `sha256:7ae26ef5709c60615934ab4b11edf7fb2eb40699be57743ed0b8321da18fc3a4` |
+| claude-deepseek 3.1.60 | `sha256:d57eed27f800ba8fc284b26d22d11f42157d9b9d66c355f1478771d0c2402496` |
+| codex 3.5.30 | `sha256:4c862c3dfe75dcf1db9e093825df903345d2c43d5f34f90ed68e5756af957441` |
+| codex-deepseek 3.1.60 | `sha256:30b4a27c9a70a13703f3b62759c4ded50a07dac40038649cf4ea744a9794fe36` |
+| grok 3.1.60 | `sha256:b06ff29f82670e88876a566192873088152e6be3a571a4013ef250f22c8d5b1b` |
+| deepseek-harness 1.0.18 | `sha256:0339a338dd49c5e2308bf17025965bc894b29664057373eb8738e176ef78674e` |
+
+| Gate | Result |
+| --- | --- |
+| `provider-check`, `check-compact` at `f472723d` | Passed |
+| Linux old/new generation coexistence with the resident worker | Passed for all six (previous: the installed 3.20.39/3.1.58/3.5.28/1.0.16 releases) |
+| Real macOS arm64 CLI/adapter/gateway probes on macbook-air | Passed for all six |
+| Catalog readers before publication | Active (controller profile 618) and rollback (617) each read an isolated copy with all six twice: identical, 70 releases readable |
+| Public package and runtime URLs | 26 URLs resolve to their bound digests |
+| `provider-release-coverage` | Passed |
+| Live Controller Catalog | All six `ready`, component release 3.109.0 |
+
+## Installation
+
+| Machine | Result |
+| --- | --- |
+| Hawk | claude-deepseek 3.1.60, codex 3.5.30, codex-deepseek 3.1.60, deepseek-harness 1.0.18, grok 3.1.60 |
+| OVH | claude-code 3.20.41, codex 3.5.30, grok 3.1.60 |
+| Falcon, macbook-air | Refused, `plugin_sdk_unsupported`: their Machines report Plugin SDK 1.14.0, and component release 3.108.0 moved every Plugin to 1.15.0 |
+
+On OVH the Machine's control connection was replaced during the codex
+installation. `ovh-codex-3-5-30-converge` returned an unknown outcome; two
+`reconcile-install` calls under the same identity recorded the Machine's
+`Unknown/Staging` (`authorization_ended`) receipt and resolved the staging
+failure without replaying it. `ovh-codex-3-5-30-after-staging-resolution` then
+applied 3.5.30. The grok request had not been sent and converged under its
+original identity.
+
+OVH keeps its undeclared deepseek-harness 1.0.15, and macbook-air's undeclared
+1.0.15 was left out of the bounded run so convergence would not remove it.
+OVH's claude-code inventory reports `materialization_state=failed` for the
+legacy default account ("Provider runtime credentials are incomplete"), as it
+did before this release; named-account sessions are unaffected.
