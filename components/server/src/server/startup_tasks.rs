@@ -164,32 +164,62 @@ pub(super) async fn start_scheduler(
 /// Machine WebSockets can only reconnect after Axum starts listening. Keep
 /// this timer independent of the request task: real worker snapshots remove
 /// their sessions from the reconciliation set, while the remainder become
-/// genuine interruptions after the Machine's maximum reconnect delay plus
-/// a bounded snapshot-settlement window. Interrupted turns stay stopped
+/// genuine interruptions once their own Machine has been connected for a
+/// bounded snapshot-settlement window. A session whose Machine has not
+/// reconnected yet is not judged on the Controller's grace (see
+/// [`RUNTIME_RECONCILIATION_MACHINE_ABSENCE_LIMIT`]). In-process `local`
+/// sessions have no Machine to wait for. Interrupted turns stay stopped
 /// until the user submits work.
 pub(super) fn spawn_runtime_reconciliation(
     hub: Hub,
+    machine_control: Arc<MachineControl>,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        tokio::select! {
-            () = tokio::time::sleep(RUNTIME_RECONCILIATION_GRACE) => {
-                let interrupted = hub.finalize_runtime_reconciliation();
-                if !interrupted.is_empty() {
-                    tracing::warn!(
-                        count = interrupted.len(),
-                        grace_seconds = RUNTIME_RECONCILIATION_GRACE.as_secs(),
-                        "runtime reconciliation grace expired without detached owners"
-                    );
+        let started = tokio::time::Instant::now();
+        let mut wait = RUNTIME_RECONCILIATION_GRACE;
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep(wait) => {}
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        tracing::info!("runtime reconciliation cancelled by shutdown");
+                        return;
+                    }
+                    continue;
                 }
             }
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    tracing::info!("runtime reconciliation cancelled by shutdown");
-                }
+            let absence_expired = started.elapsed() >= RUNTIME_RECONCILIATION_MACHINE_ABSENCE_LIMIT;
+            let interrupted = hub.finalize_settled_runtime_reconciliation(|machine_id| {
+                runtime_machine_settled(&machine_control, machine_id, absence_expired)
+            });
+            if !interrupted.is_empty() {
+                tracing::warn!(
+                    count = interrupted.len(),
+                    elapsed_seconds = started.elapsed().as_secs(),
+                    "runtime reconciliation settled without detached owners"
+                );
             }
+            if !hub.runtime_reconciliation_pending() {
+                return;
+            }
+            wait = MACHINE_RECONNECT_SWEEP_INTERVAL;
         }
     })
+}
+
+fn runtime_machine_settled(
+    machine_control: &MachineControl,
+    machine_id: &str,
+    absence_expired: bool,
+) -> bool {
+    machine_id == "local"
+        || absence_expired
+        || machine_control
+            .connection_age(machine_id)
+            .is_some_and(|age| {
+                age >= std::time::Duration::from_secs(RUNTIME_SNAPSHOT_SETTLEMENT_SECONDS)
+            })
 }
 
 /// Starts notification delivery with the Controller's shutdown signal.

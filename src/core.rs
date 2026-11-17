@@ -2449,15 +2449,56 @@ impl Hub {
     /// within the server's bounded grace period. Returns exactly the sessions
     /// newly marked Interrupted for observability.
     pub fn finalize_runtime_reconciliation(&self) -> Vec<String> {
-        let pending = std::mem::take(&mut *self.inner.runtime_reconciliation.lock());
-        let interrupted: Vec<String> = pending
-            .into_iter()
-            .filter(|id| self.status(id) == Some(Status::Busy))
+        self.finalize_settled_runtime_reconciliation(|_| true)
+    }
+
+    /// Finalize only restored Busy sessions whose runtime Machine has had
+    /// its chance to replay worker snapshots (`settled(machine_id)`). A
+    /// Machine that is itself restarting can reconnect long after the
+    /// Controller's grace; judging its sessions before then reports turns
+    /// whose workers survived as cut off. Unsettled sessions stay pending.
+    pub fn finalize_settled_runtime_reconciliation(
+        &self,
+        settled: impl Fn(&str) -> bool,
+    ) -> Vec<String> {
+        let pending: Vec<String> = self
+            .inner
+            .runtime_reconciliation
+            .lock()
+            .iter()
+            .cloned()
             .collect();
-        for id in &interrupted {
-            self.record_restart_interruption(id);
+        let mut interrupted = Vec::new();
+        for id in pending {
+            let placement = self
+                .inner
+                .sessions
+                .lock()
+                .get(&id)
+                .map(|session| (session.meta.status, session.meta.machine_id.clone()));
+            let finalize = match &placement {
+                Some((Status::Busy, machine_id)) => settled(machine_id),
+                _ => true,
+            };
+            // A snapshot accepted meanwhile removed the id and owns the turn;
+            // only the remover decides it.
+            if !finalize || !self.inner.runtime_reconciliation.lock().remove(&id) {
+                continue;
+            }
+            if matches!(placement, Some((Status::Busy, _)))
+                && self.status(&id) == Some(Status::Busy)
+            {
+                self.record_restart_interruption(&id);
+                interrupted.push(id);
+            }
         }
         interrupted
+    }
+
+    /// Whether restored Busy sessions still await their Machine's snapshots.
+    #[must_use]
+    pub fn runtime_reconciliation_pending(&self) -> bool {
+        !self.inner.runtime_reconciliation.lock().is_empty()
     }
 
     fn record_restart_interruption(&self, session_id: &str) {
