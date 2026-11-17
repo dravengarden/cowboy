@@ -23,8 +23,22 @@ pub(in crate::server) fn subscription(state: &AppState, provider: &str) -> bool 
         })
 }
 
-/// Identity evidence of a refreshed subscription credential, when its
-/// recipe reads a credential file: it must be the account's identity.
+/// A subscription refresh (own or a redirected legacy rotation) must carry
+/// identity evidence; an entered key has none to carry.
+fn require_evidence(
+    subscription: bool,
+    identity: Option<&crate::provider_account::NativeIdentity>,
+) -> Result<(), &'static str> {
+    if subscription && identity.is_none() {
+        Err("native_identity_evidence_required")
+    } else {
+        Ok(())
+    }
+}
+
+/// Identity evidence of a refreshed subscription credential (read from its
+/// credential file with the signed recipe) must fit that recipe; binding
+/// then checks it is the account's identity.
 fn refresh_identity(
     package: &cowboy_provider_sdk::ProviderPackage,
     account: &ProviderAccountId,
@@ -69,7 +83,7 @@ pub(in crate::server) async fn route_refresh(
                 package,
                 bundle,
                 moved.account_generation,
-                None,
+                identity,
             )
             .await,
         );
@@ -89,6 +103,39 @@ pub(in crate::server) async fn route_refresh(
     )
 }
 
+/// A stale Service-account refresh: the root generation may have moved
+/// into an account meanwhile, so forward the rotation there; otherwise
+/// restore the Service generation on the Machine.
+pub(in crate::server) async fn forward_or_restore(
+    (request_id, current_generation): (&str, u64),
+    state: &Arc<AppState>,
+    machine_id: &str,
+    package: &cowboy_provider_sdk::ProviderPackage,
+    bundle: &crate::machine_protocol::PortableCredentialBundle,
+    expected_generation: u64,
+    identity: Option<&crate::provider_account::NativeIdentity>,
+) -> Result<(), String> {
+    tracing::info!(%request_id, %machine_id, provider = %package.manifest.id, expected_generation,
+        current_generation, "stale Provider credential refresh: forwarding a moved rotation or restoring the Service generation");
+    let default = ProviderAccountId::default();
+    if let Some(routed) = route_refresh(
+        state,
+        machine_id,
+        &default,
+        package,
+        bundle,
+        expected_generation,
+        identity,
+    )
+    .await
+    {
+        return routed;
+    }
+    sync_provider_auth_to_machine(state, machine_id, &package.manifest.id)
+        .await
+        .map(drop)
+}
+
 pub(in crate::server) async fn refresh(
     state: &Arc<AppState>,
     machine_id: &str,
@@ -100,6 +147,9 @@ pub(in crate::server) async fn refresh(
 ) -> Result<(), String> {
     let provider = package.manifest.id.as_str();
     let vault = scope(state, account, provider).ok_or("account_credentials_unavailable")?;
+    // A subscription refresh must prove it is still the account's identity:
+    // without evidence it could carry another user's sign-in into the vault.
+    require_evidence(subscription(state, provider), identity)?;
     refresh_identity(package, account, bundle, identity)?;
     let owner = state
         .store
@@ -183,6 +233,13 @@ mod tests {
             tenant: Some("org".into()),
         };
         assert_eq!(refresh_identity(&package, &account, &bundle, None), Ok(()));
+        // Without evidence a subscription refresh never reaches the vault.
+        assert_eq!(
+            require_evidence(true, None),
+            Err("native_identity_evidence_required")
+        );
+        assert_eq!(require_evidence(true, Some(&identity)), Ok(()));
+        assert_eq!(require_evidence(false, None), Ok(()));
         assert_eq!(
             refresh_identity(&package, &account, &bundle, Some(&identity)),
             Ok(())

@@ -19,6 +19,9 @@ pub(in crate::server) async fn generation(
         );
     }
     if portable::provider(state, provider) {
+        if !portable::machine_ready(state, machine, provider) {
+            return Err(MACHINE_UPDATE_REQUIRED.into());
+        }
         // Never falls back to the default account or a native login.
         let status = portable::admitted_status(state, owner, account, provider).await?;
         return resolve_provider_generation_with_auth(
@@ -59,6 +62,10 @@ pub(in crate::server) async fn generation(
         .await
         .map_err(|error| error.to_string())
 }
+
+/// A vault subscription session needs a Machine that runs account replicas.
+pub(in crate::server) const MACHINE_UPDATE_REQUIRED: &str =
+    "The selected Machine needs a Cowboy update to run this subscription.";
 
 /// Creation errors are shown to people; keep other codes for diagnostics.
 fn login_message(code: &str) -> String {

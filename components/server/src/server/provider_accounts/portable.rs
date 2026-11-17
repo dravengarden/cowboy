@@ -12,7 +12,7 @@ use crate::store::provider_accounts::portable::Use;
 mod refresh;
 mod release;
 pub(in crate::server) mod revocation;
-pub(in crate::server) use refresh::{machine_ready, route_refresh};
+pub(in crate::server) use refresh::{forward_or_restore, machine_ready, route_refresh};
 pub(in crate::server) use release::{register, upgrade_target, with_release_admission};
 
 const MAX_SECRET_BYTES: usize = 16 * 1024;

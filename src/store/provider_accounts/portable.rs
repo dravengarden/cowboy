@@ -123,6 +123,18 @@ impl Store {
                 "portable_session_scope_mismatch"
             );
         }
+        match usage {
+            Use::Commit => self
+                .mark_portable(owner, account, None, &serves, None, || Ok(()))
+                .await
+                .map(drop)?,
+            Use::SignIn(identity) => {
+                self.mark_portable(owner, account, Some(identity), &serves, None, || Ok(()))
+                    .await
+                    .map(drop)?;
+            }
+            Use::Insert(_) | Use::Existing(_) => {}
+        }
         macro_rules! admit { ($db:expr) => {{
             let mut tx = $db.pool.begin().await?;
             let locked = sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")
@@ -130,23 +142,18 @@ impl Store {
             ensure!(locked.rows_affected() == 1, "account_unavailable");
             let value: String = sqlx::query_scalar("SELECT value FROM provider_account_registries WHERE owner_user_id=$1")
                 .bind(owner).fetch_one(&mut *tx).await?;
-            let mut registry: Registry = serde_json::from_str(&value)?;
+            let registry: Registry = serde_json::from_str(&value)?;
             let index = registry.accounts.iter().position(|a| &a.id == account && a.available() && serves(a));
             let index = index.ok_or_else(|| anyhow::anyhow!("account_unavailable"))?;
             match usage {
                 Use::Commit | Use::SignIn(_) => {
-                    let (revision, marked) = (registry.revision, registry.accounts[index].portable_credentials);
+                    // Marked (and bound) durably by `mark_portable` before this
+                    // lock: a vault write never precedes its revocation mark.
+                    let current = &registry.accounts[index];
+                    ensure!(current.portable_credentials, "portable_credentials_unmarked");
                     if let Use::SignIn(identity) = usage {
-                        let provider_id = registry.accounts[index].provider_id.clone();
-                        registry.apply(&super::Change::BindIdentity { id: account.clone(), provider_id, identity: identity.clone() })
-                            .map_err(|code| anyhow::anyhow!(code))?;
-                    }
-                    // Durable before the vault write. Marking alone bumps no
-                    // revision, as no owner-visible field changes.
-                    registry.accounts[index].portable_credentials = true;
-                    if registry.revision != revision || !marked {
-                        sqlx::query("UPDATE provider_account_registries SET revision=$1,value=$2 WHERE owner_user_id=$3")
-                            .bind(registry.revision).bind(serde_json::to_string(&registry)?).bind(owner).execute(&mut *tx).await?;
+                        let fingerprint = identity.fingerprint(&current.provider_id).map_err(|code| anyhow::anyhow!(code))?;
+                        ensure!(current.identity_fingerprint.as_ref() == Some(&fingerprint), "native_identity_mismatch");
                     }
                 }
                 Use::Insert(m) => {
@@ -303,6 +310,8 @@ impl Store {
     }
 }
 
+mod sign_in;
+pub use sign_in::SignInLogin;
 #[cfg(test)]
 mod sign_in_tests;
 #[cfg(test)]

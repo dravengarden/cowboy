@@ -57,11 +57,14 @@ pub(in crate::server) fn cards_value(
             .any(|member| live(state.provider_auth.status(member)));
         let id = crate::store::provider_accounts::legacy_browsers::account(owner, card);
         let adopted = registry.accounts.iter().any(|account| account.id == id);
-        let adoption = match (adopted, root) {
-            (false, false) => continue,
-            (false, true) => "available",
-            (true, true) => "resumable",
-            (true, false) => "completed",
+        // Completed only once the account is the default and the legacy
+        // credential is gone; anything short of that stays resumable.
+        let defaulted = registry.defaults.get(provider) == Some(&id);
+        let adoption = match (adopted, root, defaulted) {
+            (false, false, _) => continue,
+            (false, true, _) => "available",
+            (true, false, true) => "completed",
+            (true, _, _) => "resumable",
         };
         cards.insert(
             card.into(),
@@ -167,7 +170,11 @@ async fn move_credential(
         })?;
     let outcome = moved.ok_or("unavailable")?.map_err(|error| {
         tracing::warn!(account = id.as_str(), %error, "legacy credential not adopted");
-        "legacy_credential_unavailable"
+        match error.to_string().as_str() {
+            "legacy_adoption_in_progress" => "legacy_adoption_in_progress",
+            "account_already_holds_a_credential" => "account_already_holds_a_credential",
+            _ => "legacy_credential_unavailable",
+        }
     })?;
     distribute_and_mark_scope(state, &vault, id, outcome.account).await;
     if !outcome.wiped.is_empty() {
@@ -186,6 +193,17 @@ pub(in crate::server) async fn adopt(
 ) -> Result<Value, &'static str> {
     let provider = primary_provider(card)?;
     let store = state.store.as_ref().ok_or("unavailable")?;
+    // A finished operation replays its receipt and never repeats an effect.
+    if let Some(done) = store
+        .provider_account_receipt(owner, &format!("{operation}-final"))
+        .await
+        .map_err(|_| "unavailable")?
+    {
+        return Ok(
+            json!({"status":"completed","account_id":done.account_id,"card":card,
+            "provider_id":provider,"replayed":true}),
+        );
+    }
     let members = state.provider_catalog.portable_account_scope(provider);
     if members.is_empty() {
         return Err("named_account_provider_unavailable");

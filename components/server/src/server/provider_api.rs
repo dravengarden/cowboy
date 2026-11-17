@@ -699,11 +699,12 @@ pub(super) async fn accept_provider_auth_refresh_candidate(
         .iter()
         .find(|method| method.id == auth_method)
         .ok_or("unknown refresh method")?;
+    // Default-account evidence only serves a redirected legacy rotation.
     refresh_identity_evidence(
         provider_id,
         account_id,
         method.native_identity.as_ref(),
-        native_identity,
+        native_identity.filter(|_| !account_id.is_default()),
     )?;
     let scope = provider_auth_scope_for_machine(state, machine_id, account_id).await?;
     let result = if account_id.is_default() {
@@ -728,15 +729,16 @@ pub(super) async fn accept_provider_auth_refresh_candidate(
     }
     match result {
         crate::provider_service::ProviderAuthRefreshResult::Stale { current_generation } => {
-            tracing::info!(
-                %request_id,
-                %machine_id,
-                %provider_id,
+            return provider_accounts::portable::forward_or_restore(
+                (request_id, current_generation),
+                state,
+                machine_id,
+                &package,
+                &bundle,
                 expected_generation,
-                current_generation,
-                "discarding stale Provider credential refresh and restoring Service generation"
-            );
-            sync_provider_auth_to_machine(state, machine_id, provider_id).await?;
+                native_identity,
+            )
+            .await;
         }
         crate::provider_service::ProviderAuthRefreshResult::Unchanged(_) => {
             tracing::debug!(

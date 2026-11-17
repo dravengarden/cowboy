@@ -48,6 +48,9 @@ pub(in crate::server) async fn register(
     let provider = registration.provider.clone();
     let key = (registration.machine_id.clone(), provider.clone());
     let scope = scope(state, &account, &provider).ok_or("account_credentials_unavailable")?;
+    if !super::machine_ready(state, &registration.machine_id, &provider) {
+        return Err(super::super::registration::MACHINE_UPDATE_REQUIRED.into());
+    }
     let (connection, _) = state
         .machine_control
         .connection_protocol(&registration.machine_id)

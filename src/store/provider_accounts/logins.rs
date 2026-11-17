@@ -52,6 +52,10 @@ pub struct Receipt {
     /// Original account admission revision; recovery must not adopt a newer one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch_registry_revision: Option<i64>,
+    /// The account vault generation this sign-in committed: durable completion
+    /// evidence that survives a Controller restart (vault sign-ins only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_generation: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -342,7 +346,7 @@ impl Store {
                     .bind(owner).bind(input.account_id.as_str()).bind(&input.machine_id).fetch_one(&mut *tx).await?;
                 Some(u64::try_from(generation)?)
             } else { None };
-            let receipt = Receipt { request_id:format!("provider-login-{}", uuid::Uuid::new_v4()), provider_id:account.provider_id.clone(), input:input.clone(), cancel_requested:false, dispatch_rejection:None, native_completion:None, native_logout:None, native_generation, native_binding_revision:None, dispatch_recipient_fingerprint:None, dispatch_registry_revision:None };
+            let receipt = Receipt { request_id:format!("provider-login-{}", uuid::Uuid::new_v4()), provider_id:account.provider_id.clone(), input:input.clone(), cancel_requested:false, dispatch_rejection:None, native_completion:None, native_logout:None, native_generation, native_binding_revision:None, dispatch_recipient_fingerprint:None, dispatch_registry_revision:None, vault_generation:None };
             sqlx::query("INSERT INTO provider_login_operations (owner_user_id,operation_id,request_hash,request_id,value) VALUES ($1,$2,$3,$4,$5)")
                 .bind(owner).bind(operation).bind(&hash).bind(&receipt.request_id).bind(serde_json::to_string(&receipt)?).execute(&mut *tx).await?;
             tx.commit().await?;

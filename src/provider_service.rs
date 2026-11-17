@@ -672,6 +672,7 @@ impl ProviderAuthService {
             "credential bundle is too large"
         );
         let mut providers = self.providers.write();
+        self.ensure_no_pending_move(packages)?;
         let current = providers.get(requested_provider_id).cloned();
         if let Some(expected) = expected_generation {
             ensure!(
@@ -746,6 +747,7 @@ impl ProviderAuthService {
             validate_refresh_request(packages, bundle, requested_provider_id)?;
 
         let mut providers = self.providers.write();
+        self.ensure_no_pending_move(packages)?;
         let current = providers
             .get(requested_provider_id)
             .cloned()

@@ -136,7 +136,13 @@ pub(super) async fn observation(
                     "active"
                 }
             });
-    let mut value = json!({"status":native_status.unwrap_or(status),"dispatch_reserved":true,"cancel_requested":receipt.cancel_requested,"request_id":receipt.request_id,
+    // A vault sign-in's durable commit outlives its in-memory executor.
+    let status = if status == "unknown" && receipt.vault_generation.is_some() {
+        "completed"
+    } else {
+        status
+    };
+    let mut value = json!({"status":native_status.unwrap_or(status),"vault_generation":receipt.vault_generation,"dispatch_reserved":true,"cancel_requested":receipt.cancel_requested,"request_id":receipt.request_id,
     "provider_id":receipt.provider_id,"account_id":receipt.input.account_id,"machine_id":receipt.input.machine_id,
         "historical_grant":grant,"native_generation":receipt.native_generation,
         "native_binding_revision":receipt.native_binding_revision,
@@ -168,6 +174,7 @@ pub(in crate::server) async fn operation_receipt(
         .map_err(|_| "unavailable")?;
     match receipt {
         Some(receipt) => {
+            super::candidate::finalize_committed(state, &receipt).await;
             let recovered = super::native_recovery::observe(state, owner, &receipt).await?;
             observation(state, owner, &recovered).await
         }
@@ -291,6 +298,7 @@ mod tests {
             native_binding_revision: None,
             dispatch_recipient_fingerprint: None,
             dispatch_registry_revision: None,
+            vault_generation: None,
             input: Request {
                 account_id: account,
                 machine_id: "machine".into(),

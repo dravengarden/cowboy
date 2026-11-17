@@ -629,6 +629,7 @@ fn native_dispatch_uses_reserved_generation_without_portable_scope() {
             native_binding_revision: None,
             dispatch_recipient_fingerprint: None,
             dispatch_registry_revision: None,
+            vault_generation: None,
         },
     };
     let requests = parking_lot::Mutex::new(HashMap::new());

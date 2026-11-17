@@ -8,7 +8,6 @@
 //! account lock and delivers it to every enrolled Machine. Refresh then
 //! follows the Service compare-and-swap lineage like the default account.
 use super::*;
-use crate::store::provider_accounts::portable::Use;
 
 pub(in crate::server) struct Candidate<'a> {
     pub machine: &'a str,
@@ -116,50 +115,107 @@ pub(in crate::server) fn scope_packages(
     packages
 }
 
-/// Bind `identity` and commit `bundle` to the account vault under the owner's
-/// account lock, above every native generation of the account. `commit`
-/// runs inside the lock and returns `None` when the work already happened.
+/// The executor is still this live request for exactly this candidate.
+fn admitted(
+    state: &AppState,
+    executor: &ProviderAuthExecutor,
+    request: &str,
+    method: &str,
+) -> bool {
+    state
+        .provider_auth_executors
+        .lock()
+        .get(request)
+        .is_some_and(|current| {
+            current.active(&state.machine_control, now_ms())
+                && current.accepts_candidate(
+                    &executor.machine_id,
+                    &executor.account_id,
+                    &executor.provider_id,
+                    method,
+                    &executor.provider_version,
+                    &executor.generation_digest,
+                    &executor.auth_contract_fingerprint,
+                )
+        })
+}
+
+/// Bind `identity` and commit `bundle` to the account vault, above every
+/// native generation of the account (`Store::commit_subscription_sign_in`):
+/// the request, its dispatch admission and enrollment, and the live
+/// candidate are rechecked under the owner lock before anything binds, and
+/// the login's receipt records the committed generation. `None` when this
+/// request already committed.
 async fn commit_signed_in(
     state: &AppState,
-    owner: &str,
-    account: &ProviderAccountId,
-    provider: &str,
-    identity: &crate::provider_account::NativeIdentity,
-    commit: impl FnOnce(
-        u64,
-    ) -> Result<
-        Option<Vec<crate::provider_service::ProviderAuthenticationStatus>>,
-        String,
-    >,
+    executor: &ProviderAuthExecutor,
+    request: &str,
+    (method, identity): (&str, &crate::provider_account::NativeIdentity),
+    (packages, bundle): (
+        &[cowboy_provider_sdk::ProviderPackage],
+        &crate::machine_protocol::PortableCredentialBundle,
+    ),
 ) -> Result<Option<Vec<crate::provider_service::ProviderAuthenticationStatus>>, String> {
     let store = state.store.as_ref().ok_or("persistence_required")?;
-    let floor = store
-        .native_generation_floor(owner, account)
-        .await
-        .map_err(|error| error.to_string())?;
-    let mut committed = None;
+    let login = executor
+        .named_login
+        .as_ref()
+        .ok_or("named_login_required")?;
     store
-        .with_portable_account(
-            owner,
-            account,
-            Use::SignIn(identity),
-            |current| current.provider_id == provider,
+        .commit_subscription_sign_in(
+            &executor.owner_user_id,
+            &executor.account_id,
+            identity,
+            crate::store::provider_accounts::portable::SignInLogin {
+                request_id: request,
+                machine_id: &executor.machine_id,
+            },
             || {
-                committed = Some(commit(floor));
-                std::future::ready(Ok(()))
+                anyhow::ensure!(
+                    admitted(state, executor, request, method),
+                    "authentication_request_expired"
+                );
+                Ok(())
+            },
+            |floor| {
+                let mut executors = state.provider_auth_executors.lock();
+                let current = executors
+                    .get_mut(request)
+                    .context("authentication_request_expired")?;
+                let statuses = current
+                    .promote_once(|_| {
+                        login
+                            .scope
+                            .commit_account(packages, bundle, &executor.provider_id, floor)
+                    })
+                    .inspect_err(|error| {
+                        tracing::warn!(account = executor.account_id.as_str(), %error,
+                            "rejected subscription sign-in credential");
+                    })
+                    .context("credential_rejected")?;
+                let generation = login
+                    .scope
+                    .status(&executor.provider_id)
+                    .map(|status| status.auth_generation)
+                    .context("credential_rejected")?;
+                Ok((statuses, generation))
             },
         )
         .await
         .map_err(|error| {
-            let error = error.to_string();
-            match error.as_str() {
+            let code = error.to_string();
+            match code.as_str() {
                 "native_identity_mismatch"
                 | "native_identity_already_bound"
-                | "account_unavailable" => error,
+                | "account_unavailable"
+                | "authentication_request_expired"
+                | "authentication_request_unavailable"
+                | "machine_enrollment_changed"
+                | "login_admission_revision_changed"
+                | "credential_rejected" => code,
                 _ => "unavailable".into(),
             }
-        })?;
-    committed.ok_or_else(|| "unavailable".to_owned())?
+        })
 }
 
 pub(in crate::server) async fn accept(
@@ -192,38 +248,10 @@ pub(in crate::server) async fn accept(
         .complete(|| ensure_active(state, request), async {
             let statuses = commit_signed_in(
                 state,
-                &executor.owner_user_id,
-                &executor.account_id,
-                &executor.provider_id,
-                &identity,
-                |floor| {
-                    let mut executors = state.provider_auth_executors.lock();
-                    let current = executors
-                        .get_mut(request)
-                        .filter(|current| {
-                            current.active(&state.machine_control, now_ms())
-                                && current.accepts_candidate(
-                                    &executor.machine_id,
-                                    &executor.account_id,
-                                    &executor.provider_id,
-                                    &method,
-                                    &executor.provider_version,
-                                    &executor.generation_digest,
-                                    &executor.auth_contract_fingerprint,
-                                )
-                        })
-                        .ok_or_else(|| "authentication_request_expired".to_owned())?;
-                    current.promote_once(|_| {
-                        login
-                            .scope
-                            .commit_account(&packages, &bundle, &executor.provider_id, floor)
-                            .map_err(|error| {
-                                tracing::warn!(account = executor.account_id.as_str(), %error,
-                                        "rejected subscription sign-in credential");
-                                "credential_rejected".to_owned()
-                            })
-                    })
-                },
+                &executor,
+                request,
+                (&method, &identity),
+                (&packages, &bundle),
             )
             .await?;
             if let Some(statuses) = statuses {
@@ -296,6 +324,47 @@ pub(super) fn record_completion(
             detail: Some("Signed in for every Machine; temporary login credentials removed".into()),
         },
     );
+}
+
+/// After a Controller restart a committed vault sign-in has no executor:
+/// its durable receipt still lets the Machine remove the candidate home.
+/// Best effort and idempotent; delivery recovers on Machine reconnect.
+pub(super) async fn finalize_committed(
+    state: &AppState,
+    receipt: &crate::store::provider_accounts::logins::Receipt,
+) {
+    if receipt.vault_generation.is_none()
+        || state
+            .provider_auth_executors
+            .lock()
+            .contains_key(&receipt.request_id)
+    {
+        return;
+    }
+    let Ok(connection) = state
+        .machine_control
+        .operation_connection(&receipt.input.machine_id)
+    else {
+        return;
+    };
+    let correlation = machine_request_id("provider-auth-finalize");
+    if let Err(error) = state
+        .machine_control
+        .command_on_connection(
+            &connection,
+            correlation.clone(),
+            crate::machine_protocol::MachineCommand::FinalizeProviderAuthCandidate {
+                request_id: correlation,
+                account_id: receipt.input.account_id.clone(),
+                provider_id: receipt.provider_id.clone(),
+                auth_method: receipt.input.method.clone(),
+                candidate_request_id: receipt.request_id.clone(),
+            },
+        )
+        .await
+    {
+        tracing::debug!(detail = %error.detail, "committed sign-in cleanup remains pending");
+    }
 }
 
 pub(super) async fn finalize(

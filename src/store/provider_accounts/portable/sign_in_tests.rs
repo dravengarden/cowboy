@@ -195,3 +195,153 @@ async fn claude_sign_ins_stay_native_per_machine() {
         .unwrap();
     assert_eq!(claim.receipt.native_generation, Some(1));
 }
+
+/// A dispatched Codex login of `account` on the enrolled `ovh`.
+async fn dispatched(store: &Store, account: &ProviderAccountId, operation: &str) -> String {
+    let claim = store
+        .claim_provider_login(
+            OWNER,
+            operation,
+            &crate::store::provider_accounts::logins::Request {
+                account_id: account.clone(),
+                machine_id: "ovh".into(),
+                provider_version: "1".into(),
+                generation_digest: "digest".into(),
+                method: "chatgpt-subscription".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let key = {
+        use base64::Engine as _;
+        let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from([8; 32]));
+        base64::engine::general_purpose::STANDARD.encode(public.as_bytes())
+    };
+    let scope = crate::store::provider_accounts::logins::DispatchScope {
+        registry_revision: store.provider_accounts(OWNER).await.unwrap().revision,
+        recipient_fingerprint: crate::digest::hex_sha256(key.as_bytes()),
+    };
+    store
+        .with_provider_login_dispatch(OWNER, operation, &claim, &scope, || Ok(()))
+        .await
+        .unwrap();
+    claim.receipt.request_id
+}
+
+async fn commit(
+    store: &Store,
+    account: &ProviderAccountId,
+    request: &str,
+    who: &crate::provider_account::NativeIdentity,
+    admitted: bool,
+    write: Result<u64>,
+) -> Result<()> {
+    store
+        .commit_subscription_sign_in(
+            OWNER,
+            account,
+            who,
+            SignInLogin {
+                request_id: request,
+                machine_id: "ovh",
+            },
+            || {
+                ensure!(admitted, "authentication_request_expired");
+                Ok(())
+            },
+            |_floor| write.map(|generation| ((), generation)),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn a_sign_in_binds_and_commits_only_for_its_admitted_live_request() {
+    let root = tempfile::tempdir().unwrap();
+    let store = store(root.path()).await;
+    let pika = create(&store, 0, "Pika").await;
+    let request = dispatched(&store, &pika, "login-1").await;
+    let bound = |store: &Store| {
+        let (store, pika) = (store.clone(), pika.clone());
+        async move {
+            let registry = store.provider_accounts(OWNER).await.unwrap();
+            let account = registry
+                .accounts
+                .into_iter()
+                .find(|a| a.id == pika)
+                .unwrap();
+            (
+                account.identity_fingerprint.is_some(),
+                account.portable_credentials,
+            )
+        }
+    };
+    // An expired candidate binds nothing.
+    let error = commit(&store, &pika, &request, &identity("pika"), false, Ok(1)).await;
+    assert_eq!(
+        error.unwrap_err().to_string(),
+        "authentication_request_expired"
+    );
+    assert_eq!(bound(&store).await, (false, false));
+    // A failing vault write leaves the binding and revocation mark durable.
+    assert!(
+        commit(
+            &store,
+            &pika,
+            &request,
+            &identity("pika"),
+            true,
+            Err(anyhow::anyhow!("x"))
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(bound(&store).await, (true, true));
+    // The committed generation is durable completion evidence.
+    commit(&store, &pika, &request, &identity("pika"), true, Ok(7))
+        .await
+        .unwrap();
+    let receipt = store
+        .provider_login_receipt(OWNER, "login-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.vault_generation, Some(7));
+    // Disabling and re-enabling the account fences the old login.
+    let fenced = create(
+        &store,
+        store.provider_accounts(OWNER).await.unwrap().revision,
+        "Fox",
+    )
+    .await;
+    let old = dispatched(&store, &fenced, "login-2").await;
+    for (index, enabled) in [false, true].into_iter().enumerate() {
+        let revision = store.provider_accounts(OWNER).await.unwrap().revision;
+        let input = Mutation {
+            expected_revision: revision,
+            change: Change::SetEnabled {
+                id: fenced.clone(),
+                enabled,
+            },
+        };
+        store
+            .mutate_provider_accounts(OWNER, &format!("toggle-{index}"), &input)
+            .await
+            .unwrap();
+    }
+    let error = commit(&store, &fenced, &old, &identity("fox"), true, Ok(1)).await;
+    assert_eq!(
+        error.unwrap_err().to_string(),
+        "login_admission_revision_changed"
+    );
+    // A cancelled login never commits.
+    let cancelled = dispatched(&store, &fenced, "login-3").await;
+    store.cancel_provider_login(OWNER, "login-3").await.unwrap();
+    let error = commit(&store, &fenced, &cancelled, &identity("fox"), true, Ok(1)).await;
+    assert_eq!(
+        error.unwrap_err().to_string(),
+        "authentication_request_unavailable"
+    );
+    let registry = store.provider_accounts(OWNER).await.unwrap();
+    let fox = registry.accounts.iter().find(|a| a.id == fenced).unwrap();
+    assert!(fox.identity_fingerprint.is_none());
+}

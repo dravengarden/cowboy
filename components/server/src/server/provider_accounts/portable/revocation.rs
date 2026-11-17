@@ -93,7 +93,7 @@ async fn deliver(
     target: &crate::store::provider_accounts::portable::Target,
 ) -> anyhow::Result<RemoteWipe> {
     let store = state.store.as_ref().context("store unavailable")?;
-    let (connection, _) = state
+    let (connection, protocol) = state
         .machine_control
         .connection_protocol(&target.machine_id)
         .context("machine offline")?;
@@ -110,7 +110,21 @@ async fn deliver(
         .existing_account(account)
         .context("portable vault missing")?;
     let mut acknowledged = u64::MAX;
-    for status in scope.replica_statuses() {
+    let absent = absent(protocol, &scope.replica_statuses(), |provider| {
+        super::refresh::subscription(state, provider)
+    });
+    if absent {
+        // Supported absence evidence: the Controller delivers account-scope
+        // subscription replicas only at protocol 47, and older Machines refuse
+        // them (and their wipes), so this connected Machine holds none.
+        acknowledged = local.generation;
+    }
+    let statuses = if absent {
+        Vec::new()
+    } else {
+        scope.replica_statuses()
+    };
+    for status in statuses {
         let envelope = scope.seal_for_machine(&status.provider_id, &key)?;
         anyhow::ensure!(
             envelope.action == crate::machine_protocol::ProviderAuthAction::Wipe
@@ -143,9 +157,52 @@ async fn deliver(
         .await
 }
 
+/// A Machine below protocol 47 cannot hold any of these account replicas:
+/// every one is a vault subscription (Codex, Grok) it never received.
+fn absent(
+    protocol: u16,
+    statuses: &[crate::provider_service::ProviderAuthenticationStatus],
+    subscription: impl Fn(&str) -> bool,
+) -> bool {
+    protocol < crate::machine_protocol::PORTABLE_SUBSCRIPTION_PROTOCOL_VERSION
+        && !statuses.is_empty()
+        && statuses
+            .iter()
+            .all(|status| subscription(&status.provider_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_subscription_replicas_are_known_absent_from_an_older_machine() {
+        let status = |provider: &str| crate::provider_service::ProviderAuthenticationStatus {
+            provider_id: provider.into(),
+            account_id: ProviderAccountId::default(),
+            recipient_key: None,
+            auth_generation: 2,
+            authentication_state: crate::provider_service::ServiceAuthenticationState::SignedOut,
+            distribution_state: crate::provider_service::ServiceDistributionState::Revoking,
+            auth_contract_fingerprint: "sha256:x".into(),
+            authentication_scope: "s".into(),
+            portable_schema: "s".into(),
+            projection_schema: "p".into(),
+            account_label: None,
+            updated_at_ms: 0,
+        };
+        let subscription = |provider: &str| provider == "codex" || provider == "grok";
+        let current = crate::machine_protocol::PORTABLE_SUBSCRIPTION_PROTOCOL_VERSION;
+        assert!(absent(current - 1, &[status("codex")], subscription));
+        // A current Machine acknowledges its own wipe; keys reach older ones.
+        assert!(!absent(current, &[status("codex")], subscription));
+        assert!(!absent(
+            current - 1,
+            &[status("claude-deepseek")],
+            subscription
+        ));
+        assert!(!absent(current - 1, &[], subscription));
+    }
 
     #[test]
     fn the_vault_wipe_is_one_generation_and_replays_without_advancing() {

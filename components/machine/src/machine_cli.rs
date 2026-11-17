@@ -1862,7 +1862,11 @@ async fn publish_provider_auth_observations(
             continue;
         }
         let native_identity = match providers.validate_auth_refresh_candidate(&candidate).await {
-            Ok(identity) => identity,
+            // Older Controllers refuse default-account identity evidence.
+            Ok(identity) => identity.filter(|_| {
+                !candidate.account_id.is_default()
+                    || protocol >= crate::machine_protocol::PORTABLE_SUBSCRIPTION_PROTOCOL_VERSION
+            }),
             Err(error) => {
                 observations
                     .failed_provider_ids

@@ -153,35 +153,50 @@ impl MachinePluginStore {
         self: &std::sync::Arc<Self>,
         candidate: &ProviderAuthRefreshCandidate,
     ) -> Result<Option<crate::provider_account::NativeIdentity>> {
-        let named = !candidate.account_id.is_default();
-        let account = candidate.account_id.clone();
+        let store = std::sync::Arc::clone(self);
+        let probed = candidate.clone();
+        let probe =
+            tokio::task::spawn_blocking(move || store.prepare_refresh_probe(&probed)).await??;
+        if let Some(probe) = probe {
+            probe.validate(Duration::from_secs(5)).await?;
+        }
+        // Identity evidence never depends on an exit-only probe being signed.
         let store = std::sync::Arc::clone(self);
         let candidate = candidate.clone();
-        let probe =
-            tokio::task::spawn_blocking(move || store.prepare_refresh_probe(&candidate)).await??;
-        let Some(probe) = probe else {
-            return Ok(None);
+        tokio::task::spawn_blocking(move || store.refresh_identity(&candidate)).await?
+    }
+
+    /// The identity a refreshed subscription credential proves by itself: its
+    /// bundle names the portable twin of a native sign-in method whose signed
+    /// recipe reads a credential file (Codex, Grok). Read from a private
+    /// staged copy of the candidate, for the default account too, so the
+    /// Service can check a rotation still belongs to the account it lands in.
+    fn refresh_identity(
+        &self,
+        candidate: &ProviderAuthRefreshCandidate,
+    ) -> Result<Option<crate::provider_account::NativeIdentity>> {
+        let package =
+            self.package_for_generation(&candidate.provider_id, &candidate.generation_digest);
+        // A retained legacy default release keeps refreshing without evidence.
+        let (package, _) = match package {
+            Err(_) if candidate.account_id.is_default() => return Ok(None),
+            package => package?,
         };
-        probe.validate(Duration::from_secs(5)).await?;
-        if !named {
-            return Ok(None);
-        }
-        let (auth, bundle) = probe
-            .credentials
-            .as_ref()
-            .context("named refresh has no credential contract")?;
-        // A named bundle names the portable twin of its native sign-in
-        // method. The refreshed credential alone proves its identity only
-        // when the signed recipe reads a credential file; otherwise the
-        // Service's compare-and-swap lineage is the binding, as for the
-        // default account.
-        let Some(recipe) = portable_contract::native_method_for(auth, &bundle.method_id)
+        let auth = &package.manifest.authentication;
+        let Some(recipe) = portable_contract::native_method_for(auth, &candidate.bundle.method_id)
             .and_then(|method| method.native_identity.as_ref())
             .filter(|recipe| portable_contract::identity_in_credentials(auth, recipe))
         else {
             return Ok(None);
         };
-        native_identity::read(&probe.directory.0.join("home"), recipe, &account).map(Some)
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-auth-identity-{:032x}",
+            rand::random::<u128>()
+        ));
+        fs::DirBuilder::new().mode(0o700).create(&root)?;
+        let staged = StagedProbeHome(root);
+        restore_projected_bundle(auth, &staged.0, &candidate.bundle)?;
+        native_identity::read(&staged.0.join("home"), recipe, &candidate.account_id).map(Some)
     }
 }
 
