@@ -359,10 +359,7 @@ impl Store {
         action: impl FnOnce() -> F,
     ) -> Result<T> {
         let profile = &completion.profile;
-        anyhow::ensure!(
-            profile.provider_id == "claude-code" && !profile.account_id.is_default(),
-            "native_account_required"
-        );
+        anyhow::ensure!(!profile.account_id.is_default(), "native_account_required");
         let fingerprint = profile
             .identity
             .fingerprint(&profile.provider_id)

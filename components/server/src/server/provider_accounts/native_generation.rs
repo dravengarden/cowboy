@@ -10,7 +10,7 @@ pub(in crate::server) fn resolve(
     signed_in: Option<&ProviderManifest>,
 ) -> Result<u64, String> {
     if profile.account_id.is_default()
-        || profile.provider_id != "claude-code"
+        || !manifest.authentication.native_accounts()
         || profile.generation == 0
     {
         return Err("native_account_required".into());

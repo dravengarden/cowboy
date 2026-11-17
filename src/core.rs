@@ -370,7 +370,8 @@ impl SessionMeta {
     pub fn require_runtime_launch(&self) -> Result<(), String> {
         if !self.provider_account_id.is_default()
             && (self.closing
-                || self.provider != "claude-code"
+                || !crate::provider_account::NATIVE_ACCOUNT_PROVIDERS
+                    .contains(&self.provider.as_str())
                 || self.machine_id.is_empty()
                 || self.machine_id == "local"
                 || self.owner_user_id.as_ref().is_none_or(String::is_empty)

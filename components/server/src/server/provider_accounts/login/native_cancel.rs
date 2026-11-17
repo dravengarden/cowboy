@@ -7,8 +7,7 @@ pub(super) async fn recover(
     control: &MachineControl,
     receipt: &Receipt,
 ) -> Result<bool, &'static str> {
-    if receipt.provider_id != "claude-code"
-        || receipt.native_generation.is_none()
+    if receipt.native_generation.is_none()
         || receipt.input.account_id.is_default()
         || receipt.never_dispatched()
     {

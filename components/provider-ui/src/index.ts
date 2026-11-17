@@ -4,6 +4,12 @@ import {
   machinePluginKinds,
   pluginKinds,
 } from "./pluginKinds.ts";
+import {
+  NATIVE_IDENTITY_KEYS,
+  nativeIdentityPath,
+  optionalNativeIdentityPath,
+  usesExtendedNativeIdentityPaths,
+} from "./nativeIdentity.ts";
 import { type ProviderCapability, providerCapabilities } from "./providerCapabilities.ts";
 
 /**
@@ -21,7 +27,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.2.0" as const;
+export const PROVIDER_SDK_VERSION = "3.3.0" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,
@@ -434,6 +440,7 @@ export interface ProviderManifest {
         relative_path: string;
         subject_path: string[];
         tenant_path?: string[] | null;
+        subject_claim?: string[] | null;
       };
       native_logout?: { kind: "command_v1"; arguments: string[] };
     }>;
@@ -1520,32 +1527,21 @@ function validateNativeIdentityRecipe(
   executor: Record<string, unknown>,
   sdkVersion: string,
 ): void {
-  const fieldPath = (path: unknown): boolean =>
-    Array.isArray(path) &&
-    path.length > 0 &&
-    path.length <= 16 &&
-    path.every(
-      (part) =>
-        typeof part === "string" &&
-        part.length > 0 &&
-        new TextEncoder().encode(part).length <= 128 &&
-        !/[\p{Cc}]/u.test(part),
-    );
   if (
     compareProviderVersions(sdkVersion, "3.1.15") < 0 ||
     executor.kind !== "command_v1" ||
     !isRecord(identity) ||
-    !hasOnlyKeys(identity, ["kind", "authority", "relative_path", "subject_path", "tenant_path"]) ||
+    !hasOnlyKeys(identity, NATIVE_IDENTITY_KEYS) ||
     identity.kind !== "fresh_login_json_v1" ||
     typeof identity.authority !== "string" ||
     !isIdentifier(identity.authority) ||
     typeof identity.relative_path !== "string" ||
     new TextEncoder().encode(identity.relative_path).length > 512 ||
     !isSafeRelativePath(identity.relative_path) ||
-    !fieldPath(identity.subject_path) ||
-    (identity.tenant_path !== undefined &&
-      identity.tenant_path !== null &&
-      !fieldPath(identity.tenant_path))
+    !nativeIdentityPath(identity.subject_path) ||
+    !optionalNativeIdentityPath(identity.tenant_path) ||
+    !optionalNativeIdentityPath(identity.subject_claim) ||
+    (usesExtendedNativeIdentityPaths(identity) && compareProviderVersions(sdkVersion, "3.3.0") < 0)
   ) {
     throw new Error("Invalid Provider native identity recipe");
   }

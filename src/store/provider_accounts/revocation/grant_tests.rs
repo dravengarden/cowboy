@@ -111,7 +111,7 @@ async fn cleanup_admission_contract(store: &Store, process_tree_exited: bool) {
         observation: LoginStopObservation {
             request: LoginStopRequest {
                 account_id: account,
-                provider_id: "codex".into(),
+                provider_id: "portable-fixture".into(),
                 login_request_id: claim.receipt.request_id,
             },
             process_started: true,
@@ -286,7 +286,7 @@ pub(super) async fn fixture(store: &Store) -> Vec<(&'static str, grants::Receipt
             &Mutation {
                 expected_revision: 0,
                 change: Change::Create {
-                    provider_id: "codex".into(),
+                    provider_id: "portable-fixture".into(),
                     label: "Fixture".into(),
                 },
             },
@@ -300,7 +300,7 @@ pub(super) async fn fixture(store: &Store) -> Vec<(&'static str, grants::Receipt
     let base = grants::Receipt {
         operation_id: "pending".into(),
         account_id: account.clone(),
-        provider_id: "codex".into(),
+        provider_id: "portable-fixture".into(),
         machine_id: "offline-machine".into(),
         recipient_fingerprint: "recipient".into(),
         candidate_fingerprint: "candidate".into(),

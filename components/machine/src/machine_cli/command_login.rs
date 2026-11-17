@@ -81,10 +81,9 @@ pub(super) fn handle(command: MachineCommand, context: MachineCommandContext) {
             spec,
         } => {
             let scoped = login_account_store(&providers, &account_id, protocol).and_then(|store| {
-                anyhow::ensure!(
-                    !account_id.is_default() && provider == "claude-code",
-                    "native account required"
-                );
+                // The native login itself requires a signed identity recipe
+                // of the installed Provider; only named accounts own one.
+                anyhow::ensure!(!account_id.is_default(), "native account required");
                 Ok(store)
             });
             match scoped {

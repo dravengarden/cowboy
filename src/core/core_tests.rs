@@ -3316,7 +3316,7 @@ fn native_readmission_declaration_contract(
             1 => wrong.owner_user_id = Some(String::new()),
             2 => wrong.closing = true,
             3 => wrong.machine_id = "local".into(),
-            4 => wrong.provider = "codex".into(),
+            4 => wrong.provider = "claude-deepseek".into(),
             5 => wrong.provider_version.clear(),
             6 => wrong.provider_generation_digest.clear(),
             7 => wrong.provider_auth_generation = Some(0),

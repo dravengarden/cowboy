@@ -107,6 +107,25 @@ test("native identity recipes require the new SDK and bounded native output path
     });
     assertThrows(() => validateProviderManifest(broken));
   }
+  // JWT claims and sole-member paths are Provider SDK 3.3.0 recipes.
+  for (
+    const extended of [
+      { ...identity, subject_path: ["tokens", "id_token"], subject_claim: ["auth", "user_id"] },
+      { ...identity, subject_path: ["*", "user_id"], tenant_path: ["*", "team_id"] },
+    ]
+  ) {
+    const accepted = structuredClone(candidate);
+    Object.assign(accepted.authentication.methods[0]!, { native_identity: extended });
+    validateProviderManifest(accepted);
+    const older = structuredClone(accepted);
+    older.sdk_version = "3.2.0";
+    assertThrows(() => validateProviderManifest(older));
+  }
+  const badClaim = structuredClone(candidate);
+  Object.assign(badClaim.authentication.methods[0]!, {
+    native_identity: { ...identity, subject_claim: [] },
+  });
+  assertThrows(() => validateProviderManifest(badClaim));
   const secret = structuredClone(candidate);
   secret.authentication.methods[0]!.flow = "secret_input";
   secret.authentication.methods[0]!.required_bundle_keys = ["key"];

@@ -16,10 +16,7 @@ impl Store {
             .identity
             .fingerprint(&profile.provider_id)
             .map_err(anyhow::Error::msg)?;
-        anyhow::ensure!(
-            profile.provider_id == "claude-code" && !profile.account_id.is_default(),
-            "native_account_required"
-        );
+        anyhow::ensure!(!profile.account_id.is_default(), "native_account_required");
         macro_rules! bind { ($db:expr, $revoked:literal) => {{
             let mut tx = $db.pool.begin().await?;
             let locked = sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")

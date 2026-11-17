@@ -1069,25 +1069,8 @@ pub struct AuthMethod {
     pub native_logout: Option<NativeLogoutRecipe>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum NativeLogoutRecipe {
-    CommandV1 { arguments: Vec<String> },
-}
-
-/// Identity written by the native CLI into a newly created login home. Never
-/// read this recipe against an existing session or host configuration directory.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum NativeIdentityRecipe {
-    FreshLoginJsonV1 {
-        authority: String,
-        relative_path: String,
-        subject_path: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tenant_path: Option<Vec<String>>,
-    },
-}
+mod native_identity;
+pub use native_identity::{NATIVE_IDENTITY_SOLE_MEMBER, NativeIdentityRecipe, NativeLogoutRecipe};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1595,6 +1578,17 @@ impl ProviderManifest {
             ensure!(
                 semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 1, 15),
                 "native identity recipes require Provider SDK 3.1.15 or newer"
+            );
+        }
+        if self.authentication.methods.iter().any(|method| {
+            method
+                .native_identity
+                .as_ref()
+                .is_some_and(NativeIdentityRecipe::uses_extended_paths)
+        }) {
+            ensure!(
+                semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 3, 0),
+                "native identity claims and sole-member paths require Provider SDK 3.3.0 or newer"
             );
         }
         if self
@@ -2601,49 +2595,7 @@ impl AuthenticationContract {
         let mut methods = BTreeSet::new();
         for method in &self.methods {
             validate_id(&method.id, "authentication method")?;
-            if let Some(NativeLogoutRecipe::CommandV1 { arguments }) = &method.native_logout {
-                ensure!(
-                    method.native_identity.is_some()
-                        && matches!(method.executor, AuthExecutor::CommandV1 { .. }),
-                    "native logout requires native identity and command login"
-                );
-                ensure!(
-                    !arguments.is_empty()
-                        && arguments.len() <= 32
-                        && arguments.iter().all(|argument| !argument.is_empty()
-                            && argument.len() <= 1024
-                            && !argument.chars().any(char::is_control)),
-                    "invalid native logout arguments"
-                );
-            }
-            if let Some(NativeIdentityRecipe::FreshLoginJsonV1 {
-                authority,
-                relative_path,
-                subject_path,
-                tenant_path,
-            }) = &method.native_identity
-            {
-                ensure!(
-                    matches!(method.executor, AuthExecutor::CommandV1 { .. }),
-                    "native identity requires a native login command"
-                );
-                validate_id(authority, "native identity authority")?;
-                ensure!(
-                    !relative_path.is_empty() && relative_path.len() <= 512,
-                    "invalid native identity file"
-                );
-                validate_relative_path(relative_path)?;
-                for path in std::iter::once(subject_path).chain(tenant_path.iter()) {
-                    ensure!(
-                        !path.is_empty()
-                            && path.len() <= 16
-                            && path.iter().all(|part| !part.is_empty()
-                                && part.len() <= 128
-                                && !part.chars().any(char::is_control)),
-                        "invalid native identity JSON path"
-                    );
-                }
-            }
+            native_identity::validate_method(method)?;
             ensure!(
                 !method.label.trim().is_empty(),
                 "authentication method label is empty"
@@ -4093,6 +4045,7 @@ mod tests {
             relative_path: ".profile.json".into(),
             subject_path: vec!["account".into(), "uuid".into()],
             tenant_path: Some(vec!["tenant".into()]),
+            subject_claim: None,
         };
         auth.methods[0].native_identity = Some(recipe.clone());
         assert!(
@@ -4284,6 +4237,12 @@ mod tests {
     fn historical_packages_keep_structural_validation_without_current_authoring_sdk() {
         let source: StandardProviderSource =
             serde_json::from_str(include_str!("../../../plugins/codex/provider.json")).unwrap();
+        // Historical releases predate native subscription recipes.
+        let mut source = source;
+        source
+            .authentication
+            .methods
+            .retain(|method| method.native_identity.is_none());
         let mut package = build_package(source.compile().unwrap()).unwrap();
         // Historical releases predate managed launch profiles.
         package.manifest.runtime.managed_profiles.clear();

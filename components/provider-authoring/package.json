@@ -1,6 +1,6 @@
 {
   "name": "@cowboy/provider-authoring",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "type": "module",
   "exports": {
     ".": "./index.ts"
@@ -10,7 +10,7 @@
     "README.md"
   ],
   "peerDependencies": {
-    "@cowboy/provider-ui": "3.3.1"
+    "@cowboy/provider-ui": "3.4.0"
   },
   "publishConfig": {
     "access": "public"

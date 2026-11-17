@@ -40,8 +40,8 @@ pub(crate) struct NativeLogin {
 
 /// Rollout admission is independent of credential storage. Adding a signed
 /// identity recipe or upgrading a Machine must not open an unfinished lifecycle.
-fn public_login_allowed(provider: &str, enabled: bool) -> Result<(), &'static str> {
-    if provider == "claude-code" && !enabled {
+fn public_login_allowed(enabled: bool) -> Result<(), &'static str> {
+    if !enabled {
         Err("native_login_lifecycle_not_enabled")
     } else {
         Ok(())
@@ -54,17 +54,20 @@ enum LoginStorage {
 }
 
 impl LoginStorage {
+    /// `native` is whether the selected signed method carries a native
+    /// identity recipe; such credentials stay in the Machine's native home.
     fn prepare(
         root: &ProviderAuthService,
         account: &ProviderAccountId,
         provider: &str,
+        native: bool,
         recipient_key: String,
         registry_revision: i64,
     ) -> Result<Self, String> {
         if account.is_default() {
             return Err("named_account_required".into());
         }
-        if provider == "claude-code" {
+        if native {
             // In particular, never call account() or machine_grant(): they
             // create portable storage even before credentials are written.
             return Ok(Self::Native(NativeLogin {
@@ -395,7 +398,6 @@ async fn prepare(
         )
         .ok_or("release_unavailable")?;
     public_login_allowed(
-        &account.provider_id,
         state
             .service_config
             .get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_LOGIN),
@@ -436,6 +438,7 @@ async fn prepare(
         &state.provider_auth,
         &account_id,
         &account.provider_id,
+        true,
         recipient_key,
         registry.revision,
     )?;

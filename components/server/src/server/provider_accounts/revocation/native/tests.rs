@@ -22,7 +22,8 @@ fn native_logout_missing_generation_is_not_permission_to_clean_up() {
     login.native_generation = Some(7);
     assert_eq!(native_generation(&login).unwrap(), Some(7));
     login.native_generation = None;
-    login.provider_id = "grok".into();
+    // Only the portable named-account prototype has logins without one.
+    login.provider_id = "portable-fixture".into();
     assert_eq!(native_generation(&login).unwrap(), None);
 }
 

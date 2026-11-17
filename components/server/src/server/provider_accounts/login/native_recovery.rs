@@ -7,8 +7,7 @@ pub(super) async fn observe(
     owner: &str,
     receipt: &Receipt,
 ) -> Result<Receipt, &'static str> {
-    if receipt.provider_id != "claude-code"
-        || receipt.cancel_requested
+    if receipt.cancel_requested
         || receipt.dispatch_rejection.is_some()
         || receipt.native_generation.is_none()
         || receipt.input.account_id.is_default()

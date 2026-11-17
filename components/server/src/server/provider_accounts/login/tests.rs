@@ -470,7 +470,7 @@ fn native_login_preparation_never_creates_a_portable_account() {
     let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
     for key in ["machine-a", "machine-b"] {
         let LoginStorage::Native(login) =
-            LoginStorage::prepare(&root, &account, "claude-code", key.into(), 7).unwrap()
+            LoginStorage::prepare(&root, &account, "claude-code", true, key.into(), 7).unwrap()
         else {
             panic!("native-owned credentials must never use a portable scope")
         };
@@ -483,6 +483,7 @@ fn native_login_preparation_never_creates_a_portable_account() {
             &root,
             &ProviderAccountId::default(),
             "claude-code",
+            true,
             "machine".into(),
             7,
         )
@@ -490,12 +491,10 @@ fn native_login_preparation_never_creates_a_portable_account() {
     );
     // Internal preparation is not permission to expose the public workflow.
     assert_eq!(
-        public_login_allowed("claude-code", false),
+        public_login_allowed(false),
         Err("native_login_lifecycle_not_enabled")
     );
-    assert!(public_login_allowed("claude-code", true).is_ok());
-    assert!(public_login_allowed("claude-deepseek", false).is_ok());
-    assert!(public_login_allowed("claude-deepseek", true).is_ok());
+    assert!(public_login_allowed(true).is_ok());
 }
 
 #[test]

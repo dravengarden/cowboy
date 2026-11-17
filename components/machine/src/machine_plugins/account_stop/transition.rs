@@ -63,7 +63,8 @@ impl MachinePluginStore {
                 && crate::managed_calls::valid_id(&binding.operation)
                 && !request.account_id.is_default()
                 && binding.target.account_id == request.account_id
-                && binding.target.provider_id == "claude-code",
+                && package.manifest.id == binding.target.provider_id
+                && package.manifest.authentication.native_accounts(),
             "invalid prepared account binding scope"
         );
         let command = account_stop_command_id(
@@ -148,8 +149,8 @@ impl MachinePluginStore {
             self.account_id.is_default()
                 && !target.account_id.is_default()
                 && target.account_id == request.account_id
-                && target.provider_id == "claude-code"
                 && package.manifest.id == target.provider_id
+                && package.manifest.authentication.native_accounts()
                 && crate::managed_calls::valid_id(&binding.operation),
             "invalid readmission scope"
         );

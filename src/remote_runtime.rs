@@ -3838,8 +3838,15 @@ mod tests {
             .unwrap()
             .machine_grant(&recipient)
             .unwrap();
-        let source: cowboy_provider_sdk::StandardProviderSource =
+        // The portable named-account prototype needs a Provider without a
+        // native recipe; first-party OAuth Providers are now native.
+        let mut source: cowboy_provider_sdk::StandardProviderSource =
             serde_json::from_str(include_str!("../plugins/grok/provider.json")).unwrap();
+        source.id = "portable-fixture".into();
+        source
+            .authentication
+            .methods
+            .retain(|method| method.native_identity.is_none());
         let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
         let bundle = crate::machine_protocol::PortableCredentialBundle {
             portable_schema: package.manifest.authentication.portable_schema.clone(),
@@ -3852,7 +3859,7 @@ mod tests {
         let hub = Hub::new();
         hub.create_session(crate::core::SessionRegistration {
             id: "named".into(),
-            provider: "grok".into(),
+            provider: "portable-fixture".into(),
             provider_version: "fixture".into(),
             provider_generation_digest: "sha256:fixture".into(),
             provider_account_id: id,
@@ -3876,11 +3883,17 @@ mod tests {
             .provider_auth = Some(Arc::clone(&auth));
         let rejected = RuntimeEvent::Status {
             state: WorkerState::Crashed,
-            detail: Some(crate::provider::provider_auth_required_detail("grok", true)),
+            detail: Some(crate::provider::provider_auth_required_detail(
+                "portable-fixture",
+                true,
+            )),
         };
         mark_projected_provider_auth_expired(&runtime.shared, "named", &rejected);
         assert_eq!(
-            first.status("grok").unwrap().authentication_state,
+            first
+                .status("portable-fixture")
+                .unwrap()
+                .authentication_state,
             ServiceAuthenticationState::Ready
         );
         Arc::get_mut(&mut Arc::get_mut(&mut runtime).unwrap().shared)
@@ -3888,12 +3901,18 @@ mod tests {
             .auth_recipient_key = Some(recipient);
         mark_projected_provider_auth_expired(&runtime.shared, "named", &rejected);
         assert_eq!(
-            first.status("grok").unwrap().authentication_state,
+            first
+                .status("portable-fixture")
+                .unwrap()
+                .authentication_state,
             ServiceAuthenticationState::Expired
         );
         for scope in [&auth, &other_machine, &other_account] {
             assert_eq!(
-                scope.status("grok").unwrap().authentication_state,
+                scope
+                    .status("portable-fixture")
+                    .unwrap()
+                    .authentication_state,
                 ServiceAuthenticationState::Ready
             );
         }

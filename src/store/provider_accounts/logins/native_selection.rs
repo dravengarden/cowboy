@@ -240,8 +240,7 @@ impl Store {
         };
         let profile = &completion.profile;
         ensure!(
-            receipt.provider_id == "claude-code"
-                && profile.provider_id == receipt.provider_id
+            profile.provider_id == receipt.provider_id
                 && &receipt.input.account_id == account
                 && &profile.account_id == account
                 && receipt.input.machine_id == machine

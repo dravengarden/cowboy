@@ -309,7 +309,9 @@ impl Store {
             let registry: Registry = serde_json::from_str(&value)?;
             let account = registry.accounts.iter().find(|account| account.id == input.account_id && account.available())
                 .ok_or_else(|| anyhow::anyhow!("account_unavailable"))?;
-            let native_generation = if account.provider_id == "claude-code" {
+            // Native-account Providers keep credentials in a per-Machine native
+            // home; each login reserves its generation in the same transaction.
+            let native_generation = if crate::provider_account::NATIVE_ACCOUNT_PROVIDERS.contains(&account.provider_id.as_str()) {
                 let generation: i64 = sqlx::query_scalar("INSERT INTO provider_native_generations (owner_user_id,account_id,machine_id,generation) VALUES ($1,$2,$3,1) ON CONFLICT (owner_user_id,account_id,machine_id) DO UPDATE SET generation=provider_native_generations.generation+1 WHERE provider_native_generations.generation < 9223372036854775807 RETURNING generation")
                     .bind(owner).bind(input.account_id.as_str()).bind(&input.machine_id).fetch_one(&mut *tx).await?;
                 Some(u64::try_from(generation)?)

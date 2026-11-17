@@ -1372,10 +1372,7 @@ impl MachineControl {
         connection: &'a ConnectionToken,
         profile: &crate::provider_account::NativeProfileReceipt,
     ) -> Result<impl Future<Output = Result<serde_json::Value, String>> + 'a, String> {
-        if profile.account_id.is_default()
-            || profile.provider_id != "claude-code"
-            || profile.generation == 0
-        {
+        if profile.account_id.is_default() || profile.generation == 0 {
             return Err("named_native_profile_required".into());
         }
         let request_id = self.request_id("native-usage")?;

@@ -83,6 +83,20 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.110.0 records provider-sdk 3.3.0, plugin-sdk 1.16.0,
+provider-ui 3.4.0 and provider-authoring 1.0.15. Named subscription support is
+derived from the signed manifest: a Provider supports named native accounts
+exactly when an authentication method carries a native identity recipe.
+Recipes gain an optional `subject_claim` (the subject is a claim of a compact
+JWT the CLI wrote into the fresh login home) and the `*` path component (the
+sole member of an object). Both require Provider SDK 3.3.0. Codex 3.6.0 adds the
+native `chatgpt-subscription` method and Grok 3.2.0 adds `xai-subscription`;
+their legacy portable credential fingerprints are unchanged. Every other Plugin
+pins the SDKs and advances one patch version: claude-code 3.20.42,
+claude-deepseek 3.1.61, codex-deepseek 3.1.61, deepseek-harness 1.0.19, github
+0.2.11, machine-browser 1.0.6, matrix 1.0.9, review 1.0.12 and zed 1.39.5,
+without behavior changes.
+
 Component release 3.109.0 records provider-runtime 1.2.2: Claude Code 2.1.326
 with Claude Agent ACP 0.107.3, Codex ACP 2.7.0 with native Codex 0.166.0, Grok
 1.0.77 and dsh 0.2.2-rc.1. Every Plugin that pins provider-runtime advances one

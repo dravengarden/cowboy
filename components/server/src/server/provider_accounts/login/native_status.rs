@@ -7,7 +7,7 @@ pub(super) async fn observe(
     owner: &str,
     receipt: &Receipt,
 ) -> Result<Option<&'static str>, &'static str> {
-    if receipt.provider_id != "claude-code" || receipt.native_generation.is_none() {
+    if receipt.native_generation.is_none() {
         return Ok(None);
     }
     let current = if !receipt.cancel_requested
