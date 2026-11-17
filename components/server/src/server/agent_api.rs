@@ -26,6 +26,7 @@ use crate::managed_calls::service::Ledger;
 use crate::agent_api::MAX_REPLY_BYTES;
 
 const RUNNER: &str = include_str!("agent_api/runner.js");
+mod account_actions;
 mod actions;
 mod code_reads;
 pub(super) use code_reads::maintain_holdings;

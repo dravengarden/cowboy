@@ -88,6 +88,11 @@ pub(super) fn provider_routes() -> Router<Arc<AppState>> {
                 .delete(provider_accounts::login::http_continue_cancel),
         )
         .route(
+            "/api/provider-accounts/legacy/{card}/adopt",
+            post(provider_accounts::legacy_adoption::http_adopt)
+                .layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
             "/api/provider-accounts/{account_id}/credentials",
             post(provider_accounts::portable::http_commit).layer(DefaultBodyLimit::max(32 * 1024)),
         )

@@ -546,19 +546,22 @@ pub(super) async fn named_upgrade_target(
             "this session's Machine needs a Cowboy update to move it to another release".to_owned(),
         );
     }
-    if provider_accounts::portable::provider(state, &meta.provider) {
-        return provider_accounts::portable::upgrade_target(state, meta).await;
-    }
     let store = state.store.as_ref().ok_or("account_store_unavailable")?;
     let owner = meta
         .owner_user_id
         .as_deref()
         .ok_or("named session has no owner")?;
-    let (operation, completion) = store
+    // A session still bound to a native login moves on it; every other
+    // named session of an account-vault Provider moves on the vault.
+    let native = store
         .native_login_for_registered_session(owner, &meta.id)
         .await
-        .map_err(|error| error.to_string())?
-        .ok_or("this session's subscription login is no longer admitted")?;
+        .map_err(|error| error.to_string())?;
+    if native.is_none() && provider_accounts::portable::provider(state, &meta.provider) {
+        return provider_accounts::portable::upgrade_target(state, meta).await;
+    }
+    let (operation, completion) =
+        native.ok_or("this session's subscription login is no longer admitted")?;
     let auth_generation = meta
         .provider_auth_generation
         .filter(|generation| *generation == completion.profile.generation)

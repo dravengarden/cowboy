@@ -562,6 +562,12 @@ impl MachinePluginStore {
         Ok((directory, profile))
     }
 
+    /// Whether `generation` names a live (not revoked) native profile.
+    pub(super) fn native_profile_bound(&self, provider: &str, generation: u64) -> bool {
+        self.read_native_profile_metadata(provider, generation)
+            .is_ok()
+    }
+
     fn read_native_profile_metadata(
         &self,
         provider: &str,

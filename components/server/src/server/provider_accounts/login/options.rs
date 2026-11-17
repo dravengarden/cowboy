@@ -60,6 +60,13 @@ pub(in crate::server) async fn options_value(
         .machine_control
         .connection_protocol(machine_id)
         .map(|(_, protocol)| protocol);
+    // A vault sign-in needs Machine protocol 47; a native-only Provider's
+    // (Claude) native login needs the account protocol only.
+    let minimum = if crate::provider_account::native_only(&account.provider_id) {
+        crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION
+    } else {
+        crate::machine_protocol::PORTABLE_SUBSCRIPTION_PROTOCOL_VERSION
+    };
     let recipient = if machine.is_some() {
         store
             .machine_encryption_public_key(machine_id)
@@ -82,7 +89,7 @@ pub(in crate::server) async fn options_value(
                 .supervisor
                 .runtime_allowed(&account.provider_id, machine_id),
             machine.is_some(),
-            protocol,
+            protocol.map(|protocol| (protocol, minimum)),
             installed.is_some(),
             package.is_some(),
             recipient,
@@ -151,7 +158,7 @@ fn readiness_reason(
     enabled: bool,
     permitted: bool,
     enrolled: bool,
-    protocol: Option<u16>,
+    protocol: Option<(u16, u16)>,
     installed: bool,
     package: bool,
     recipient: bool,
@@ -162,6 +169,8 @@ fn readiness_reason(
         Some("machine_not_permitted")
     } else if !enrolled || protocol.is_none() {
         Some("machine_unavailable")
+    } else if protocol.is_some_and(|(version, minimum)| version < minimum) {
+        Some("machine_update_required")
     } else if !installed {
         Some("provider_not_installed")
     } else if !package {
@@ -179,7 +188,20 @@ mod tests {
 
     #[test]
     fn readiness_requires_each_local_admission_condition() {
-        let protocol = Some(crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION);
+        let current = crate::machine_protocol::PORTABLE_SUBSCRIPTION_PROTOCOL_VERSION;
+        let protocol = Some((current, current));
+        assert_eq!(
+            readiness_reason(
+                true,
+                true,
+                true,
+                Some((current - 1, current)),
+                true,
+                true,
+                true
+            ),
+            Some("machine_update_required")
+        );
         assert_eq!(
             readiness_reason(true, true, true, protocol, true, true, true),
             None

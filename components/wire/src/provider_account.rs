@@ -226,21 +226,32 @@ pub fn prepare_private_directory(path: &std::path::Path) -> anyhow::Result<()> {
 #[serde(try_from = "String", into = "String")]
 pub struct ProviderAccountId(String);
 
-/// Providers whose signed releases carry native identity recipes. Their named
-/// credentials live only in a Machine's per-account native home and must never
-/// enter a portable vault. Transitional: the Service vault has no signed package
-/// at hand, so this list fences it until the portable named-account prototype
-/// is removed. Session admission and login use the signed manifest instead.
+/// Providers whose named accounts stay native per Machine: the CLI signs in
+/// inside a per-account native home on one Machine, and the credentials
+/// never enter a Service vault or reach another Machine. Owner decision
+/// (2026-11-17): for safety, Claude named accounts run only on the Machines
+/// the host runtime policy admits Claude on (`--provider-runtime-machine`),
+/// which native login, session creation, registration and usage enforce.
+/// Every other Provider's named accounts keep their credential in the
+/// account's Service vault and sign in once for every Machine.
 #[cfg(any(feature = "full", feature = "machine-host", test))]
-pub const NATIVE_ACCOUNT_PROVIDERS: &[&str] = &["claude-code", "codex", "grok"];
+pub const NATIVE_ONLY_PROVIDERS: &[&str] = &["claude-code"];
 
-/// Legacy default accounts retain their existing migration boundary.
+/// Whether `provider`'s named accounts stay native per Machine.
+#[cfg(any(feature = "full", feature = "machine-host", test))]
+#[must_use]
+pub fn native_only(provider: &str) -> bool {
+    NATIVE_ONLY_PROVIDERS.contains(&provider)
+}
+
+/// A named account of a native-only Provider never holds portable
+/// credentials. The default account retains its existing boundary.
 #[cfg(any(feature = "full", feature = "machine-host", test))]
 pub fn portable_credentials_allowed(
     account: &ProviderAccountId,
     provider: &str,
 ) -> Result<(), &'static str> {
-    if !account.is_default() && NATIVE_ACCOUNT_PROVIDERS.contains(&provider) {
+    if !account.is_default() && native_only(provider) {
         Err("native_owned_credentials_required")
     } else {
         Ok(())
@@ -349,7 +360,10 @@ mod tests {
             Err("native_owned_credentials_required")
         );
         assert!(portable_credentials_allowed(&ProviderAccountId::default(), "claude-code").is_ok());
-        assert!(portable_credentials_allowed(&named, "claude-deepseek").is_ok());
+        // Every other named account keeps its credential in the vault.
+        for provider in ["claude-deepseek", "codex", "grok"] {
+            assert!(portable_credentials_allowed(&named, provider).is_ok());
+        }
     }
 
     #[test]

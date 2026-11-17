@@ -562,6 +562,9 @@ pub(super) async fn provider_account_auth_envelope_for_machine(
     // A named portable account's key lives at account scope and is sealed to
     // any enrolled Machine; native accounts keep their per-Machine grants.
     if let Some(scope) = provider_accounts::portable::scope(state, account_id, provider_id) {
+        if !provider_accounts::portable::machine_ready(state, machine_id, provider_id) {
+            return Err("machine_update_required".into());
+        }
         return scope
             .seal_for_machine(provider_id, &public_key)
             .map_err(|error| error.to_string());
@@ -676,6 +679,19 @@ pub(super) async fn accept_provider_auth_refresh_candidate(
     let packages = state
         .provider_catalog
         .packages_for_authentication_scope(portable_schema);
+    if let Some(routed) = provider_accounts::portable::route_refresh(
+        state,
+        machine_id,
+        account_id,
+        &package,
+        &bundle,
+        expected_generation,
+        native_identity,
+    )
+    .await
+    {
+        return routed;
+    }
     let method = package
         .manifest
         .authentication

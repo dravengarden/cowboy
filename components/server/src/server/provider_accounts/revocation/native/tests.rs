@@ -22,9 +22,11 @@ fn native_logout_missing_generation_is_not_permission_to_clean_up() {
     login.native_generation = Some(7);
     assert_eq!(native_generation(&login).unwrap(), Some(7));
     login.native_generation = None;
-    // Only the portable named-account prototype has logins without one.
-    login.provider_id = "portable-fixture".into();
-    assert_eq!(native_generation(&login).unwrap(), None);
+    // Vault sign-ins (Codex, Grok, DeepSeek) reserve no native profile.
+    for provider in ["codex", "portable-fixture"] {
+        login.provider_id = provider.into();
+        assert_eq!(native_generation(&login).unwrap(), None);
+    }
 }
 
 #[tokio::test]

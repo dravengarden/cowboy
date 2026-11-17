@@ -60,7 +60,7 @@ async fn refusal_contract(store: &Store) {
         panic!("create")
     };
     let claim = store
-        .claim_provider_login(
+        .claim_native_provider_login(
             "owner",
             "login",
             &Request {

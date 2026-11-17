@@ -1,20 +1,23 @@
-//! Named portable accounts: Providers whose only credential is a secret the
-//! owner enters once (for example a DeepSeek API key). The key is committed
-//! to the account's own Service vault, never to the default account or a
-//! Machine grant, and is sealed to every enrolled Machine on delivery.
-//! One account serves every portable Provider sharing its credential scope.
+//! Named account vaults. A Provider's named accounts keep their credential in
+//! the account's own Service vault, never in the default account or a Machine
+//! grant, sealed to every enrolled Machine on delivery: a secret the owner
+//! enters once (for example a DeepSeek API key), or a subscription signed in
+//! once on any Machine (`login::candidate`) and refreshed by Service
+//! compare-and-swap. One account serves every Provider sharing its scope.
 use super::*;
 use crate::provider_account::ProviderAccountId;
 use crate::provider_service::{ProviderAuthService, ProviderAuthenticationStatus};
 use crate::store::provider_accounts::portable::Use;
 
+mod refresh;
 mod release;
 pub(in crate::server) mod revocation;
+pub(in crate::server) use refresh::{machine_ready, route_refresh};
 pub(in crate::server) use release::{register, upgrade_target, with_release_admission};
 
 const MAX_SECRET_BYTES: usize = 16 * 1024;
 
-/// Whether `provider` takes named portable accounts at all.
+/// Whether `provider`'s named accounts keep their credential in the vault.
 pub(in crate::server) fn provider(state: &AppState, provider: &str) -> bool {
     !state
         .provider_catalog
@@ -22,14 +25,12 @@ pub(in crate::server) fn provider(state: &AppState, provider: &str) -> bool {
         .is_empty()
 }
 
-/// The account vault that holds `provider`'s portable credential, if any.
-/// Lookup-only; native-login Providers never resolve here.
+/// The account vault that holds `provider`'s credential, if any. Lookup-only.
 pub(in crate::server) fn scope(
     state: &AppState,
     account: &ProviderAccountId,
     provider: &str,
 ) -> Option<Arc<ProviderAuthService>> {
-    crate::provider_account::portable_credentials_allowed(account, provider).ok()?;
     state
         .provider_auth
         .existing_account(account)
@@ -66,7 +67,8 @@ fn ready(
                 == crate::provider_service::ServiceAuthenticationState::Ready
         })
         .ok_or_else(|| {
-            "This subscription has no API key. Enter one in Settings → Subscriptions.".into()
+            "This subscription has no credentials. Sign in or enter its API key in Settings → Subscriptions."
+                .into()
         })
 }
 
@@ -187,6 +189,11 @@ pub(in crate::server) async fn commit(
         .iter()
         .find(|package| package.manifest.id == account.provider_id)
         .ok_or("portable_account_provider_unavailable")?;
+    // A subscription account is signed in, never given a key: its vault
+    // identity is the verified sign-in's.
+    if !crate::provider_catalog::portable_account_contract(&package.manifest.authentication) {
+        return Err("sign_in_required");
+    }
     let bundle = secret_bundle(package, &request.method, &request.secret)?;
     let scope = state
         .provider_auth
@@ -271,7 +278,7 @@ pub(in crate::server) async fn adopt(state: &Arc<AppState>) {
                 .packages_for_authentication_scope(&authentication)
                 .into_iter()
                 .filter(|package| {
-                    crate::provider_catalog::portable_account_contract(
+                    crate::provider_catalog::account_vault_contract(
                         &package.manifest.authentication,
                     )
                 })
@@ -392,6 +399,7 @@ mod tests {
             status.authentication_state = state;
             let error = scheduling_generation(true, &status).unwrap_err();
             assert!(error.contains("Settings → Subscriptions"), "{error}");
+            assert!(error.contains("Sign in"), "{error}");
         }
         assert!(ready(None).is_err());
     }

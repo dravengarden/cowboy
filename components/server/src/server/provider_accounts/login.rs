@@ -1,4 +1,7 @@
-//! Named native login. Machine placement never selects a different account.
+//! Named sign-in: the Provider CLI logs in on one Machine the owner picks.
+//! A subscription's verified credential lands in the account's vault for
+//! every Machine; a native-only Provider (Claude) keeps it in that Machine's
+//! native home. Machine placement never selects a different account.
 use super::*;
 use crate::provider_account::ProviderAccountId;
 use crate::provider_service::ProviderAuthService;
@@ -21,7 +24,7 @@ pub(in crate::server) use operations::{cancel_operation, operation_receipt, star
 pub(in crate::server) use options::{options, options_value};
 #[cfg(test)]
 mod tests;
-pub(in crate::server) use candidate::{Candidate, accept, cancel, recover_pending};
+pub(in crate::server) use candidate::{Candidate, accept, cancel, recover_pending, scope_packages};
 
 #[derive(Clone)]
 pub(crate) struct NamedLogin {
@@ -31,7 +34,8 @@ pub(crate) struct NamedLogin {
     pub recipient_key: String,
 }
 
-/// Native credentials have no Controller vault scope.
+/// A native-only Provider's login: credentials stay in the Machine's native
+/// home and have no Controller vault scope.
 #[derive(Clone)]
 pub(crate) struct NativeLogin {
     pub recipient_key: String,
@@ -48,49 +52,51 @@ fn public_login_allowed(enabled: bool) -> Result<(), &'static str> {
     }
 }
 
-enum LoginStorage {
-    Native(NativeLogin),
-    Portable(NamedLogin, u64),
-}
-
-impl LoginStorage {
-    /// `native` is whether the selected signed method carries a native
-    /// identity recipe; such credentials stay in the Machine's native home.
-    fn prepare(
-        root: &ProviderAuthService,
-        account: &ProviderAccountId,
-        provider: &str,
-        native: bool,
-        recipient_key: String,
-        registry_revision: i64,
-    ) -> Result<Self, String> {
-        if account.is_default() {
-            return Err("named_account_required".into());
-        }
-        if native {
-            // In particular, never call account() or machine_grant(): they
-            // create portable storage even before credentials are written.
-            return Ok(Self::Native(NativeLogin {
-                recipient_key,
-                registry_revision,
-            }));
-        }
-        crate::provider_account::portable_credentials_allowed(account, provider)?;
-        let scope = root
-            .account(account)
-            .and_then(|account| account.machine_grant(&recipient_key))
-            .map_err(|error| error.to_string())?;
-        let generation = scope.status(provider).map_or(0, |s| s.auth_generation);
-        Ok(Self::Portable(
-            NamedLogin {
-                scope,
-                completion: Default::default(),
-                registry_revision,
-                recipient_key,
-            },
-            generation,
-        ))
+/// Where a sign-in's credential lands. A native-only Provider (Claude) signs
+/// in inside the Machine's per-account native home, whose generation the
+/// fresh DB claim assigns during dispatch; nothing reaches a vault. Every
+/// other sign-in runs on this Machine but lands in the account's own vault
+/// for every Machine (never a Machine grant), which needs Machine protocol 47.
+fn login_storage(
+    root: &ProviderAuthService,
+    account: &ProviderAccountId,
+    provider: &str,
+    vault_supported: bool,
+    recipient_key: String,
+    registry_revision: i64,
+) -> Result<(Option<NativeLogin>, Option<NamedLogin>, u64), String> {
+    if account.is_default() {
+        return Err("named_account_required".into());
     }
+    if crate::provider_account::native_only(provider) {
+        // In particular, never call account() or machine_grant(): they
+        // create portable storage even before credentials are written.
+        return Ok((
+            Some(NativeLogin {
+                recipient_key,
+                registry_revision,
+            }),
+            None,
+            0,
+        ));
+    }
+    if !vault_supported {
+        return Err("machine_update_required".into());
+    }
+    let scope = root.account(account).map_err(|error| error.to_string())?;
+    let expected_generation = scope
+        .status(provider)
+        .map_or(0, |status| status.auth_generation);
+    Ok((
+        None,
+        Some(NamedLogin {
+            scope,
+            completion: Default::default(),
+            registry_revision,
+            recipient_key,
+        }),
+        expected_generation,
+    ))
 }
 
 impl NamedLogin {
@@ -409,7 +415,13 @@ async fn prepare(
         .iter()
         .find(|m| m.id == request.method)
         .ok_or("authentication_method_unavailable")?;
-    if method.native_identity.is_none() {
+    if method.native_identity.is_none()
+        || crate::provider_account::portable_contract::portable_twin(
+            &package.manifest.authentication,
+            method,
+        )
+        .is_none()
+    {
         return Err("native_identity_verification_unavailable".into());
     }
     if !state
@@ -434,19 +446,17 @@ async fn prepare(
         .await
         .map_err(|e| e.to_string())?
         .ok_or("machine_recipient_unavailable")?;
-    let storage = LoginStorage::prepare(
+    let (native_login, named_login, expected_generation) = login_storage(
         &state.provider_auth,
         &account_id,
         &account.provider_id,
-        true,
+        state.machine_control.machine_supports(
+            &request.machine_id,
+            crate::machine_protocol::PORTABLE_SUBSCRIPTION_PROTOCOL_VERSION,
+        ),
         recipient_key,
         registry.revision,
     )?;
-    let (native_login, named_login, expected_generation) = match storage {
-        // The fresh DB claim assigns the native generation during dispatch.
-        LoginStorage::Native(login) => (Some(login), None, 0),
-        LoginStorage::Portable(login, generation) => (None, Some(login), generation),
-    };
     Ok((
         ProviderAuthExecutor {
             cancel_requested: false,

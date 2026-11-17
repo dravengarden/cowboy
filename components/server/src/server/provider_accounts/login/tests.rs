@@ -464,32 +464,46 @@ async fn native_observation_is_private_correlated_and_rechecks_connection() {
 }
 
 #[test]
-fn native_login_preparation_never_creates_a_portable_account() {
+fn claude_sign_ins_stay_native_and_others_land_in_the_account_vault() {
     let dir = tempfile::tempdir().unwrap();
     let root = ProviderAuthService::open(dir.path()).unwrap();
     let account = uuid::Uuid::new_v4().to_string().try_into().unwrap();
     for key in ["machine-a", "machine-b"] {
-        let LoginStorage::Native(login) =
-            LoginStorage::prepare(&root, &account, "claude-code", true, key.into(), 7).unwrap()
+        let (Some(native), None, 0) =
+            login_storage(&root, &account, "claude-code", true, key.into(), 7).unwrap()
         else {
-            panic!("native-owned credentials must never use a portable scope")
+            panic!("Claude credentials must never use a vault scope")
         };
-        assert_eq!(login.recipient_key, key);
+        assert_eq!(native.recipient_key, key);
     }
-    assert!(!dir.path().join("accounts").exists());
-    assert!(root.status("claude-code").is_none());
+    assert!(!dir.path().join("provider-auth-service/accounts").exists());
+    // Codex signs in once for every Machine, on a Machine at protocol 47.
+    assert_eq!(
+        login_storage(&root, &account, "codex", false, "machine-a".into(), 7).err(),
+        Some("machine_update_required".into())
+    );
+    let (None, Some(vault), 0) =
+        login_storage(&root, &account, "codex", true, "machine-a".into(), 7).unwrap()
+    else {
+        panic!("Codex sign-ins land in the account vault")
+    };
+    assert!(Arc::ptr_eq(&vault.scope, &root.account(&account).unwrap()));
     assert!(
-        LoginStorage::prepare(
+        login_storage(
             &root,
             &ProviderAccountId::default(),
-            "claude-code",
+            "codex",
             true,
-            "machine".into(),
-            7,
+            "m".into(),
+            7
         )
         .is_err()
     );
-    // Internal preparation is not permission to expose the public workflow.
+}
+
+#[test]
+fn public_sign_in_stays_behind_its_rollout_gate() {
+    // Preparation is not permission to expose the public workflow.
     assert_eq!(
         public_login_allowed(false),
         Err("native_login_lifecycle_not_enabled")
@@ -1340,4 +1354,77 @@ fn unrelated_login_cannot_reap_an_expired_request_when_cancel_dispatch_fails() {
     ));
     assert!(requests.lock().get("expired").unwrap().cancel_requested);
     assert_eq!(requests.lock().len(), 2);
+}
+
+#[test]
+fn a_sign_in_is_stored_under_its_portable_twin_only_with_matching_evidence() {
+    let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(include_str!(
+        "../../../../../../plugins/codex/provider.json"
+    ))
+    .unwrap();
+    let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
+    let account: ProviderAccountId = uuid::Uuid::new_v4().to_string().try_into().unwrap();
+    let identity = crate::provider_account::NativeIdentity {
+        authority: "chatgpt".into(),
+        subject: "lark".into(),
+        tenant: Some("org".into()),
+    };
+    let bundle = crate::machine_protocol::PortableCredentialBundle {
+        portable_schema: package.manifest.authentication.portable_schema.clone(),
+        method_id: "chatgpt-subscription".into(),
+        values: std::collections::BTreeMap::from([("auth_json".into(), "e30=".into())]),
+    };
+    let (bound, stored) = candidate::verified(
+        &package,
+        &account,
+        "chatgpt-subscription",
+        Some(&identity),
+        bundle.clone(),
+    )
+    .unwrap();
+    assert_eq!(bound, identity);
+    assert_eq!(stored.method_id, "chatgpt");
+    assert_eq!(stored.values, bundle.values);
+    let verified = |account: &ProviderAccountId,
+                    method: &str,
+                    identity: Option<&crate::provider_account::NativeIdentity>,
+                    bundle: crate::machine_protocol::PortableCredentialBundle| {
+        candidate::verified(&package, account, method, identity, bundle).unwrap_err()
+    };
+    // The Service account never signs in this way.
+    assert_eq!(
+        verified(
+            &ProviderAccountId::default(),
+            "chatgpt-subscription",
+            Some(&identity),
+            bundle.clone()
+        ),
+        "named_account_required"
+    );
+    // Only a native identity method signs a named account in.
+    for method in ["chatgpt", "api-key", "missing"] {
+        verified(&account, method, Some(&identity), bundle.clone());
+    }
+    // Missing or foreign identity evidence is refused.
+    assert_eq!(
+        verified(&account, "chatgpt-subscription", None, bundle.clone()),
+        "native_identity_evidence_required"
+    );
+    let mut foreign = identity.clone();
+    foreign.authority = "claude-ai".into();
+    assert_eq!(
+        verified(
+            &account,
+            "chatgpt-subscription",
+            Some(&foreign),
+            bundle.clone()
+        ),
+        "native_identity_contract_mismatch"
+    );
+    let mut other = bundle;
+    other.portable_schema = "grok-auth-v1".into();
+    assert_eq!(
+        verified(&account, "chatgpt-subscription", Some(&identity), other),
+        "authentication_contract_mismatch"
+    );
 }

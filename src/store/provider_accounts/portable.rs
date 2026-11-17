@@ -55,6 +55,10 @@ pub struct RemoteWipe {
 pub enum Use<'a> {
     /// A key commit: marks the account before its vault first holds a key.
     Commit,
+    /// A subscription credential commit (sign-in or native migration): marks
+    /// the account like `Commit` and binds the verified identity first. A
+    /// different identity than the bound one is refused.
+    SignIn(&'a crate::provider_account::NativeIdentity),
     /// Persist a new session row before it is projected or launched.
     Insert(&'a crate::model::SessionMeta),
     /// Lock an exact persisted binding for a bounded write or projection.
@@ -130,14 +134,21 @@ impl Store {
             let index = registry.accounts.iter().position(|a| &a.id == account && a.available() && serves(a));
             let index = index.ok_or_else(|| anyhow::anyhow!("account_unavailable"))?;
             match usage {
-                Use::Commit if !registry.accounts[index].portable_credentials => {
-                    // Durable before the vault write; no revision bump, as no
-                    // owner-visible field changes.
+                Use::Commit | Use::SignIn(_) => {
+                    let (revision, marked) = (registry.revision, registry.accounts[index].portable_credentials);
+                    if let Use::SignIn(identity) = usage {
+                        let provider_id = registry.accounts[index].provider_id.clone();
+                        registry.apply(&super::Change::BindIdentity { id: account.clone(), provider_id, identity: identity.clone() })
+                            .map_err(|code| anyhow::anyhow!(code))?;
+                    }
+                    // Durable before the vault write. Marking alone bumps no
+                    // revision, as no owner-visible field changes.
                     registry.accounts[index].portable_credentials = true;
-                    sqlx::query("UPDATE provider_account_registries SET value=$1 WHERE owner_user_id=$2")
-                        .bind(serde_json::to_string(&registry)?).bind(owner).execute(&mut *tx).await?;
+                    if registry.revision != revision || !marked {
+                        sqlx::query("UPDATE provider_account_registries SET revision=$1,value=$2 WHERE owner_user_id=$3")
+                            .bind(registry.revision).bind(serde_json::to_string(&registry)?).bind(owner).execute(&mut *tx).await?;
+                    }
                 }
-                Use::Commit => {}
                 Use::Insert(m) => {
                     ensure!(m.status == crate::agent_model::Status::Starting, "portable_session_scope_mismatch");
                     sqlx::query("INSERT INTO sessions(id,provider,provider_version,provider_generation_digest,provider_auth_generation,provider_behavior,machine_id,workspace_id,workspace_name,workspace_source_path,cwd,title,origin,status,next_seq,system,owner_user_id,execution_binding,provider_account_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,0,$15,$16,$17,$18)")
@@ -167,6 +178,59 @@ impl Store {
             StorageBackend::Postgres(db) => admit!(db),
             StorageBackend::Sqlite(db) => admit!(db),
         })
+    }
+
+    /// The owner of a named account. Machine refresh evidence names only the
+    /// account; it is admitted under this owner's lock, never another's.
+    pub async fn provider_account_owner(
+        &self,
+        account: &ProviderAccountId,
+    ) -> Result<Option<String>> {
+        let query =
+            "SELECT owner_user_id,value FROM provider_account_registries ORDER BY owner_user_id";
+        let rows: Vec<(String, String)> = match &self.backend {
+            StorageBackend::Postgres(db) => sqlx::query_as(query).fetch_all(&db.pool).await?,
+            StorageBackend::Sqlite(db) => sqlx::query_as(query).fetch_all(&db.pool).await?,
+        };
+        for (owner, value) in rows {
+            let registry: Registry = serde_json::from_str(&value)?;
+            if registry
+                .accounts
+                .iter()
+                .any(|candidate| &candidate.id == account)
+            {
+                return Ok(Some(owner));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The highest native login generation the account ever reserved on any
+    /// Machine (0 if none). Vault generations are issued above it, so a
+    /// vault-bound session never names a native profile.
+    pub async fn native_generation_floor(
+        &self,
+        owner: &str,
+        account: &ProviderAccountId,
+    ) -> Result<u64> {
+        let query = "SELECT MAX(generation) FROM provider_native_generations WHERE owner_user_id=$1 AND account_id=$2";
+        let value: Option<i64> = match &self.backend {
+            StorageBackend::Postgres(db) => {
+                sqlx::query_scalar(query)
+                    .bind(owner)
+                    .bind(account.as_str())
+                    .fetch_one(&db.pool)
+                    .await?
+            }
+            StorageBackend::Sqlite(db) => {
+                sqlx::query_scalar(query)
+                    .bind(owner)
+                    .bind(account.as_str())
+                    .fetch_one(&db.pool)
+                    .await?
+            }
+        };
+        Ok(u64::try_from(value.unwrap_or(0))?)
     }
 
     /// Record the wiped account vault generation and fix the Machines that
@@ -239,6 +303,8 @@ impl Store {
     }
 }
 
+#[cfg(test)]
+mod sign_in_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

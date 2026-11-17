@@ -15,7 +15,7 @@ pub(super) async fn contract(
         method: old.profile.method.clone(),
     };
     let claim = store
-        .claim_provider_login("login-owner", "migration-login", &input)
+        .claim_native_provider_login("login-owner", "migration-login", &input)
         .await
         .unwrap();
     let mut target = old.clone();

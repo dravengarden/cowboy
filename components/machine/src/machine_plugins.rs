@@ -13,6 +13,7 @@
 )]
 
 mod artifact_cache;
+mod auth_export;
 mod auth_refresh;
 pub mod auth_watch;
 #[cfg(all(test, target_os = "linux"))]
@@ -1626,7 +1627,10 @@ impl MachinePluginStore {
         // One credential source is shared by every auth-generation runtime
         // home. Bind its directory so a Provider CLI locks and re-reads
         // rotations there instead of inside its private generation home.
-        let credential_directories = self.credential_directories(package, home.as_deref())?;
+        let native =
+            auth_generation.is_some_and(|generation| self.native_session(package, generation));
+        let credential_directories =
+            self.credential_directories(package, native.then_some(home.as_deref()).flatten())?;
         if !credential_directories.is_empty() {
             environment.insert(
                 crate::provider_behavior::CREDENTIAL_DIRECTORIES_ENV.to_owned(),
@@ -1691,10 +1695,16 @@ impl MachinePluginStore {
         })
     }
 
-    /// A named account of a Provider with a signed native login recipe runs
-    /// from that account's native home, never from a Service replica.
-    fn native_account(&self, package: &ProviderPackage) -> bool {
-        !self.account_id.is_default() && package.manifest.authentication.native_accounts()
+    /// A named session of a native-only Provider (Claude), or one bound to a
+    /// live native login generation, runs from that account's native home,
+    /// never from a Service replica. Every other named session uses the
+    /// account's Service vault replica: the Service issues vault generations
+    /// above every native generation of the account.
+    fn native_session(&self, package: &ProviderPackage, generation: u64) -> bool {
+        !self.account_id.is_default()
+            && package.manifest.authentication.native_accounts()
+            && (crate::provider_account::native_only(&package.manifest.id)
+                || self.native_profile_bound(&package.manifest.id, generation))
     }
 
     /// Directory of each projected credential file in the one runtime
@@ -1710,11 +1720,8 @@ impl MachinePluginStore {
         if !auth.required || auth.credential_files.is_empty() {
             return Ok(BTreeMap::new());
         }
-        if self.native_account(package) {
-            return Self::native_credential_directories(
-                package,
-                native_home.context("native profile home required")?,
-            );
+        if let Some(native_home) = native_home {
+            return Self::native_credential_directories(package, native_home);
         }
         let Some(canonical) = self.canonical_runtime_projection(package)? else {
             return Ok(BTreeMap::new());
@@ -1744,7 +1751,7 @@ impl MachinePluginStore {
         generation: u64,
         generation_digest: &str,
     ) -> Result<PathBuf> {
-        if self.native_account(package) {
+        if self.native_session(package, generation) {
             self.ensure_native_release(package, generation, generation_digest)?;
             return self.native_profile_home(package, generation);
         }
@@ -1814,212 +1821,6 @@ impl MachinePluginStore {
         projected_credential_bundle(auth, &runtime, &bundle.method_id)
             .context("validating Provider runtime credentials")?;
         Ok(runtime.join("home"))
-    }
-
-    /// Export credentials created by a temporary login executor into the
-    /// Provider-declared portable bundle. The caller sends this once to the
-    /// Cowboy Service; the Machine is never the source of auth generation truth.
-    pub fn authentication_method(
-        &self,
-        provider_id: &str,
-        method_id: &str,
-    ) -> Result<cowboy_provider_sdk::AuthMethod> {
-        let (package, _) = self
-            .active_package(provider_id)?
-            .context("Provider must be installed before Service authentication")?;
-        portable_contract::contract(&package)
-            .methods
-            .iter()
-            .find(|method| method.id == method_id)
-            .cloned()
-            .context("authentication method is not declared by the active Provider")
-    }
-
-    pub fn authentication_component_command(
-        &self,
-        provider_id: &str,
-        component: &cowboy_provider_sdk::AuthComponent,
-    ) -> Result<PathBuf> {
-        let (package, digest) = self
-            .active_package(provider_id)?
-            .context("Provider must be installed before Service authentication")?;
-        let payload = matching_payload(&package, &self.platform, &self.architecture)?;
-        let requirement = payload
-            .private_components
-            .iter()
-            .find(|candidate| candidate.kind == component.kind && candidate.slot == component.slot)
-            .context("authentication component is not exported by the active Provider")?;
-        let (_, package_path) = self.package_for_generation(provider_id, &digest)?;
-        runtime_command(&package_path, &requirement.command)
-    }
-
-    pub fn export_auth_candidate(
-        &self,
-        provider_id: &str,
-        method_id: &str,
-        request_id: &str,
-    ) -> Result<ExportedAuthCandidate> {
-        crate::provider_account::portable_credentials_allowed(&self.account_id, provider_id)
-            .map_err(anyhow::Error::msg)?;
-        validate_auth_candidate_id(request_id)?;
-        let home = self
-            .auth_candidate_root(provider_id)
-            .join(request_id)
-            .join("home");
-        let (package, generation_digest) = self
-            .active_package(provider_id)?
-            .context("Provider must be installed before Service authentication")?;
-        let portable_auth = portable_contract::contract(&package);
-        let auth = &*portable_auth;
-        let method = auth
-            .methods
-            .iter()
-            .find(|method| method.id == method_id)
-            .context("authentication method is not declared by the active Provider")?;
-        let provider_version = package.manifest.version.clone();
-        let auth_contract_fingerprint = package
-            .manifest
-            .compatibility
-            .auth_contract_fingerprint
-            .clone();
-        let portable_schema = auth.portable_schema.clone();
-        let candidate_root = self.auth_candidate_root(provider_id);
-        ensure_within(&candidate_root, &home)?;
-        ensure!(
-            self.account_id.is_default() || method.native_identity.is_some(),
-            "named native login requires a signed identity recipe"
-        );
-        let native_identity = method
-            .native_identity
-            .as_ref()
-            .map(|recipe| native_identity::read(&home, recipe, &self.account_id))
-            .transpose()?;
-        let mut values = BTreeMap::new();
-        let mut total = 0_usize;
-        for credential in &auth.credential_files {
-            if !method.required_bundle_keys.contains(&credential.bundle_key) {
-                continue;
-            }
-            match native_identity::read_login_file(
-                &home,
-                &credential.relative_path,
-                MAX_CREDENTIAL_VALUE_BYTES.min(MAX_CREDENTIAL_BUNDLE_BYTES.saturating_sub(total)),
-            ) {
-                Ok(bytes) => {
-                    ensure!(
-                        bytes.len() <= MAX_CREDENTIAL_VALUE_BYTES,
-                        "credential value is too large"
-                    );
-                    total = total.saturating_add(bytes.len());
-                    ensure!(
-                        total <= MAX_CREDENTIAL_BUNDLE_BYTES,
-                        "credential bundle is too large"
-                    );
-                    values.insert(
-                        credential.bundle_key.clone(),
-                        base64::engine::general_purpose::STANDARD.encode(bytes),
-                    );
-                }
-                Err(error)
-                    if error
-                        .downcast_ref::<std::io::Error>()
-                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-                        && !credential.required => {}
-                Err(error)
-                    if error
-                        .downcast_ref::<std::io::Error>()
-                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-                {
-                    bail!(
-                        "login completed without required credential {}",
-                        credential.bundle_key
-                    )
-                }
-                Err(error) => {
-                    return Err(error).context("reading native login credentials");
-                }
-            }
-        }
-        // Native login exports only its isolated output files. Environment
-        // credentials enter through the explicit SecretInput executor instead
-        // of being borrowed from the Machine process after a login succeeds.
-        Ok(ExportedAuthCandidate {
-            provider_version,
-            native_identity,
-            generation_digest,
-            auth_contract_fingerprint,
-            bundle: PortableCredentialBundle {
-                portable_schema,
-                method_id: method_id.to_owned(),
-                values,
-            },
-        })
-        .and_then(|candidate| {
-            validate_portable_bundle(&portable_contract::contract(&package), &candidate.bundle)?;
-            Ok(candidate)
-        })
-    }
-
-    pub fn auth_candidate_from_secret(
-        &self,
-        provider_id: &str,
-        method_id: &str,
-        secret: &str,
-    ) -> Result<ExportedAuthCandidate> {
-        crate::provider_account::portable_credentials_allowed(&self.account_id, provider_id)
-            .map_err(anyhow::Error::msg)?;
-        let secret = secret.trim();
-        ensure!(!secret.is_empty(), "authentication secret is empty");
-        ensure!(
-            secret.len() <= MAX_CREDENTIAL_VALUE_BYTES && !secret.contains(['\0', '\r', '\n']),
-            "authentication secret is invalid"
-        );
-        let (package, generation_digest) = self
-            .active_package(provider_id)?
-            .context("Provider must be installed before Service authentication")?;
-        let method = package
-            .manifest
-            .authentication
-            .methods
-            .iter()
-            .find(|method| method.id == method_id)
-            .context("authentication method is not declared by the active Provider")?;
-        let cowboy_provider_sdk::AuthExecutor::SecretInputV1 { bundle_key, .. } = &method.executor
-        else {
-            bail!("authentication method does not accept a secret")
-        };
-        let bundle = PortableCredentialBundle {
-            portable_schema: package.manifest.authentication.portable_schema.clone(),
-            method_id: method_id.to_owned(),
-            values: BTreeMap::from([(
-                bundle_key.clone(),
-                base64::engine::general_purpose::STANDARD.encode(secret.as_bytes()),
-            )]),
-        };
-        validate_portable_bundle(&portable_contract::contract(&package), &bundle)?;
-        Ok(ExportedAuthCandidate {
-            provider_version: package.manifest.version.clone(),
-            native_identity: None,
-            generation_digest,
-            auth_contract_fingerprint: package
-                .manifest
-                .compatibility
-                .auth_contract_fingerprint
-                .clone(),
-            bundle,
-        })
-    }
-
-    pub fn prepare_auth_candidate_home(
-        &self,
-        provider_id: &str,
-        request_id: &str,
-    ) -> Result<PathBuf> {
-        crate::provider_account::portable_credentials_allowed(&self.account_id, provider_id)
-            .map_err(anyhow::Error::msg)?;
-        self.active_package(provider_id)?
-            .context("Provider must be installed before Service authentication")?;
-        self.create_auth_candidate_home(provider_id, request_id)
     }
 
     pub fn discard_auth_candidate(&self, provider_id: &str, request_id: &str) -> Result<()> {

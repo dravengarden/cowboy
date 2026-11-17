@@ -1,17 +1,33 @@
-//! Fresh named-account admission at runtime transport boundaries: a native
-//! login binding, or a portable account's own Service vault. Neither path
+//! Fresh named-account admission at runtime transport boundaries: the
+//! account's own Service vault, or (for a session created before its account
+//! migrated) the native login binding its generation names. Neither path
 //! ever falls back to the default account.
 use super::*;
 
-/// A named session whose credential is a portable account key (Service vault
-/// at account scope) rather than a Machine-native login.
-fn portable(meta: &crate::model::SessionMeta) -> bool {
-    !meta.provider_account_id.is_default()
-        && crate::provider_account::portable_credentials_allowed(
-            &meta.provider_account_id,
-            &meta.provider,
-        )
-        .is_ok()
+/// How a persisted named session is bound. Vault generations are issued
+/// above every native generation of the account, so a session names a
+/// native login only while it was registered (and not yet carried) on one.
+enum Binding {
+    Native(
+        String,
+        Box<crate::store::provider_accounts::logins::NativeCompletion>,
+    ),
+    Vault,
+}
+
+async fn binding(
+    store: &crate::store::Store,
+    owner: &str,
+    meta: &crate::model::SessionMeta,
+) -> Option<Binding> {
+    match store
+        .native_login_for_registered_session(owner, &meta.id)
+        .await
+    {
+        Ok(Some((operation, completion))) => Some(Binding::Native(operation, Box::new(completion))),
+        Ok(None) => Some(Binding::Vault),
+        Err(_) => None,
+    }
 }
 
 /// A Service-held lineage advances on every key change and the Machine
@@ -189,7 +205,10 @@ pub(super) async fn snapshot(
     if meta.machine_id != machine {
         return false;
     }
-    if portable(&meta) {
+    let Some(selection) = binding(&store, owner, &meta).await else {
+        return false;
+    };
+    let Binding::Native(operation, completion) = selection else {
         return with_portable(shared, &store, owner, &meta, || async {
             anyhow::ensure!(
                 !shared.shutdown.load(Ordering::Acquire)
@@ -206,12 +225,6 @@ pub(super) async fn snapshot(
         })
         .await
         .is_ok();
-    }
-    let Ok(Some((operation, completion))) = store
-        .native_login_for_registered_session(owner, &meta.id)
-        .await
-    else {
-        return false;
     };
     let profile = &completion.profile;
     if !shared.auth_recipient_key.as_ref().is_some_and(|key| {
@@ -398,14 +411,11 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
     if meta.machine_id != machine || meta.provider_account_id.is_default() {
         return Ok(false);
     }
-    if portable(&meta) {
-        return send_portable(shared, writer, &store, owner, &meta, command).await;
-    }
-    let selection = store
-        .native_login_for_registered_session(owner, &meta.id)
-        .await;
-    let Ok(Some((operation, completion))) = selection else {
+    let Some(selection) = binding(&store, owner, &meta).await else {
         return Ok(false);
+    };
+    let Binding::Native(operation, completion) = selection else {
+        return send_portable(shared, writer, &store, owner, &meta, command).await;
     };
     if !shared.auth_recipient_key.as_ref().is_some_and(|key| {
         crate::digest::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
@@ -659,7 +669,10 @@ mod tests {
         // One claude-deepseek account serves every member of its scope.
         for provider in ["claude-deepseek", "codex-deepseek", "deepseek-harness"] {
             let session = meta(provider, &id, 1);
-            assert!(portable(&session));
+            assert!(matches!(
+                binding(&store, OWNER, &session).await,
+                Some(Binding::Vault)
+            ));
             persist(&store, &session).await.unwrap();
             assert!(portable_admitted(shared, &store, OWNER, &session).await);
         }
@@ -670,13 +683,14 @@ mod tests {
         // An account without its own key is refused despite the default key.
         let other = meta("codex-deepseek", &unkeyed.account_id, 1);
         assert!(!portable_admitted(shared, &store, "other", &other).await);
-        // Native-login Providers keep the native binding path.
-        assert!(!portable(&meta("claude-code", &id, 1)));
-        assert!(!portable(&meta(
-            "codex-deepseek",
-            &crate::provider_account::ProviderAccountId::default(),
-            1
-        )));
+        // A subscription session without a native login is vault-bound too:
+        // it never falls back to the default account.
+        let subscription = meta("claude-code", &id, 1);
+        assert!(matches!(
+            binding(&store, OWNER, &subscription).await,
+            Some(Binding::Vault)
+        ));
+        assert!(!portable_admitted(shared, &store, OWNER, &subscription).await);
         // A newer key keeps older sessions admitted, like the Service account.
         auth.account(&id)
             .unwrap()

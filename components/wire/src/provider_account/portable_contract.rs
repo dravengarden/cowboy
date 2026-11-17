@@ -40,6 +40,64 @@ pub fn fingerprint(package: &ProviderPackage) -> Result<String> {
     }
 }
 
+/// The portable method a named subscription's vault bundle is stored under:
+/// the signed method without a native identity recipe that runs the same
+/// executor and requires the same bundle keys as the native sign-in method.
+/// The native method only signs in and proves identity; the credential it
+/// produces is byte-for-byte the legacy portable credential, so projection,
+/// refresh and delivery follow the default account's contract unchanged.
+#[must_use]
+pub fn portable_twin<'a>(
+    auth: &'a AuthenticationContract,
+    native: &cowboy_provider_sdk::AuthMethod,
+) -> Option<&'a cowboy_provider_sdk::AuthMethod> {
+    native.native_identity.as_ref()?;
+    auth.methods.iter().find(|method| {
+        method.native_identity.is_none()
+            && method.executor == native.executor
+            && method.required_bundle_keys == native.required_bundle_keys
+    })
+}
+
+/// The native sign-in method whose portable twin is `twin_id`.
+#[must_use]
+pub fn native_method_for<'a>(
+    auth: &'a AuthenticationContract,
+    twin_id: &str,
+) -> Option<&'a cowboy_provider_sdk::AuthMethod> {
+    auth.methods
+        .iter()
+        .find(|method| portable_twin(auth, method).is_some_and(|twin| twin.id == twin_id))
+}
+
+/// Whether every native sign-in method has a portable twin: its named
+/// accounts then keep credentials in the account's Service vault.
+#[must_use]
+pub fn subscription_accounts(auth: &AuthenticationContract) -> bool {
+    auth.native_accounts()
+        && auth
+            .methods
+            .iter()
+            .filter(|method| method.native_identity.is_some())
+            .all(|method| portable_twin(auth, method).is_some())
+}
+
+/// Whether `recipe` reads the identity from a file the portable bundle
+/// carries, so a refreshed credential alone proves which account it is.
+#[must_use]
+pub fn identity_in_credentials(
+    auth: &AuthenticationContract,
+    recipe: &cowboy_provider_sdk::NativeIdentityRecipe,
+) -> bool {
+    match recipe {
+        cowboy_provider_sdk::NativeIdentityRecipe::FreshLoginJsonV1 { relative_path, .. } => auth
+            .credential_files
+            .iter()
+            .any(|file| &file.relative_path == relative_path),
+        cowboy_provider_sdk::NativeIdentityRecipe::OwnerDeclaredV1 { .. } => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +140,54 @@ mod tests {
                 .iter()
                 .all(|method| method.native_identity.is_none())
         );
+    }
+
+    #[test]
+    fn every_subscription_signs_in_natively_and_stores_its_portable_twin() {
+        for (source, native, twin, in_credentials) in [
+            (
+                include_str!("../../../../plugins/claude-code/provider.json"),
+                "claude-subscription",
+                "claude-account",
+                false,
+            ),
+            (
+                include_str!("../../../../plugins/codex/provider.json"),
+                "chatgpt-subscription",
+                "chatgpt",
+                true,
+            ),
+            (
+                include_str!("../../../../plugins/grok/provider.json"),
+                "xai-subscription",
+                "xai-account",
+                true,
+            ),
+        ] {
+            let source: cowboy_provider_sdk::StandardProviderSource =
+                serde_json::from_str(source).unwrap();
+            let auth = source.compile().unwrap().authentication;
+            assert!(subscription_accounts(&auth));
+            let method = auth.methods.iter().find(|m| m.id == native).unwrap();
+            assert_eq!(portable_twin(&auth, method).unwrap().id, twin);
+            assert_eq!(native_method_for(&auth, twin).unwrap().id, native);
+            assert!(native_method_for(&auth, "api-key").is_none());
+            assert_eq!(
+                identity_in_credentials(&auth, method.native_identity.as_ref().unwrap()),
+                in_credentials
+            );
+            // The twin is part of the legacy portable contract.
+            let mut legacy = auth.clone();
+            legacy.methods.retain(|m| m.native_identity.is_none());
+            assert!(legacy.methods.iter().any(|m| m.id == twin));
+        }
+        let deepseek: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(
+            include_str!("../../../../plugins/claude-deepseek/provider.json"),
+        )
+        .unwrap();
+        assert!(!subscription_accounts(
+            &deepseek.compile().unwrap().authentication
+        ));
     }
 
     #[test]

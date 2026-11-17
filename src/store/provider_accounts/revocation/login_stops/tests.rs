@@ -35,7 +35,7 @@ async fn fixture(store: &Store) -> Evidence {
         .await
         .unwrap();
     let claim = store
-        .claim_provider_login(
+        .claim_native_provider_login(
             "owner",
             "login",
             &Request {

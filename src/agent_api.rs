@@ -108,6 +108,7 @@ pub const INVOKE_OPERATIONS: &[&str] = &[
     "accounts.login_start",
     "accounts.login_cancel",
     "accounts.login_cancel_request",
+    "accounts.adopt_legacy",
     "accounts.reconcile",
     "accounts.transition_plan",
     "accounts.transition_reconcile",
@@ -185,6 +186,15 @@ pub const ACCOUNTS_SDK: &str = r#"// Account metadata and explicit native login.
 // their own browser enabled. Members address the share through their own account_id; reset from any
 // member resets the share's profile (accounts.browser().share lists who is affected). Deleting a
 // share revokes its profile; members fall back to their own retained browsers.
+// Codex/Grok subscription sign-in runs on ONE chosen Machine but lands in the account's Service vault:
+// every Machine runs the account's sessions; refreshes are Service compare-and-swap. Claude named
+// accounts stay native per Machine and run only where the host runtime policy admits Claude (OVH).
+// Upgrade a legacy card to a named account without signing in again (Service-only copy, then the
+// legacy credential is wiped everywhere): cowboy_execute({action:"accounts.adopt_legacy",operation,
+// arguments:{card}}); card openai|xai|deepseek (anthropic: legacy_credential_expired). Account id = the
+// card's browser key; label, browser and share move; it becomes the default of its scope.
+// list().legacy_adoption is {card:{provider_id,state:available|resumable|completed,account_id}}.
+// Replay the SAME operation to resume. Receipt: cowboy_receipt({domain:"adoptions",operation}).
 // Write: cowboy_execute({action:"accounts.update",operation,arguments:{expected_revision,change:AccountChange}}).
 export type AccountChange =
  | {type:"create";provider_id:string;label:string}

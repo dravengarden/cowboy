@@ -156,7 +156,7 @@ pub(in crate::server) async fn upgrade_target(
     let auth_generation = meta
         .provider_auth_generation
         .filter(|generation| *generation > 0 && *generation <= status.auth_generation)
-        .ok_or("this subscription's API key changed; reopen the session and try again")?;
+        .ok_or("this subscription's credential changed; reopen the session and try again")?;
     let installed = current_machine_plugin(state, &meta.machine_id, &meta.provider).await?;
     let mut target = resolve_provider_generation_with_auth(
         &state.provider_catalog,
@@ -179,7 +179,7 @@ pub(in crate::server) async fn upgrade_target(
         );
     };
     if !release_keeps_key(&previous, &next, &status.auth_contract_fingerprint) {
-        return Err("Provider credential or session contract changed; enter the API key again and start a new session".to_owned());
+        return Err("Provider credential or session contract changed; sign in or enter the API key again and start a new session".to_owned());
     }
     target.named_carry = Some(NamedReleaseMove {
         carry: crate::core::NamedReleaseCarry {
@@ -201,7 +201,7 @@ fn release_keeps_key(
     key_contract: &str,
 ) -> bool {
     provider_reload_contract_compatible(&previous.manifest, &next.manifest)
-        && crate::provider_catalog::portable_account_contract(&next.manifest.authentication)
+        && crate::provider_catalog::account_vault_contract(&next.manifest.authentication)
         && crate::provider_account::portable_contract::fingerprint(next)
             .is_ok_and(|fingerprint| fingerprint == key_contract)
 }

@@ -194,10 +194,11 @@ pub(super) fn handle(
     }
 }
 
-/// A named envelope carries only a portable account's Service-held secret,
-/// applied into that account's own scope. Named credentials of a native-login
-/// Provider live solely in its native home and are never delivered this way;
-/// an old Controller cannot address account scopes at all.
+/// A named envelope carries an account vault's Service-held credential (an
+/// entered key or a subscription sign-in), applied into that account's own
+/// scope. Named credentials of a native-only Provider (Claude) live solely in
+/// its native home and are never delivered this way; an old Controller cannot
+/// address account scopes at all.
 fn named_auth_refusal(
     envelope: &crate::machine_protocol::SealedProviderAuth,
     protocol: u16,
@@ -219,7 +220,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_portable_named_accounts_receive_service_credentials() {
+    fn only_vault_named_accounts_receive_service_credentials() {
         let envelope = |provider: &str, account: crate::provider_account::ProviderAccountId| {
             serde_json::from_value::<crate::machine_protocol::SealedProviderAuth>(
                 serde_json::json!({
@@ -235,19 +236,24 @@ mod tests {
         let named: crate::provider_account::ProviderAccountId =
             uuid::Uuid::new_v4().to_string().try_into().unwrap();
         let current = crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION;
-        for provider in ["claude-deepseek", "codex-deepseek", "deepseek-harness"] {
+        for provider in [
+            "claude-deepseek",
+            "codex-deepseek",
+            "deepseek-harness",
+            "codex",
+            "grok",
+        ] {
             assert_eq!(
                 named_auth_refusal(&envelope(provider, named.clone()), current),
                 None
             );
             assert!(named_auth_refusal(&envelope(provider, named.clone()), current - 1).is_some());
         }
-        for provider in ["claude-code", "codex", "grok"] {
-            assert!(named_auth_refusal(&envelope(provider, named.clone()), current).is_some());
-            assert_eq!(
-                named_auth_refusal(&envelope(provider, Default::default()), 0),
-                None
-            );
-        }
+        // Claude named accounts stay native per Machine.
+        assert!(named_auth_refusal(&envelope("claude-code", named.clone()), current).is_some());
+        assert_eq!(
+            named_auth_refusal(&envelope("claude-code", Default::default()), 0),
+            None
+        );
     }
 }

@@ -218,20 +218,16 @@ async fn owned_account(
 }
 
 /// Machines holding the account's credentials: a named account's native
-/// generations, or the Machines with a legacy card's default credentials.
+/// generations or vault Machines, or a legacy card's default credentials.
 async fn credential_machines(
     state: &AppState,
     owner: &str,
     (account_id, account): (&ProviderAccountId, &BrowserAccount),
 ) -> Result<Vec<String>, &'static str> {
     match account {
-        BrowserAccount::Named(_) => state
-            .store
-            .as_ref()
-            .ok_or("unavailable")?
-            .native_generation_machines(owner, account_id)
-            .await
-            .map_err(|_| "unavailable"),
+        BrowserAccount::Named(named) => {
+            legacy::named_credential_machines(state, owner, account_id, &named.provider_id).await
+        }
         BrowserAccount::Legacy(card) => match &card.card {
             Some(card) => legacy::credential_machines(state, card).await,
             None => Ok(Vec::new()),

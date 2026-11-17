@@ -259,19 +259,45 @@ mod service_catalog {
                 .collect()
         }
 
-        /// The portable account Providers that share `provider`'s credential
+        /// Providers whose newest signed release keeps named subscription
+        /// accounts in the account's Service vault (one sign-in, every Machine).
+        /// Native-only Providers (Claude) keep native per-Machine accounts.
+        pub fn subscription_account_providers(&self) -> std::collections::BTreeSet<String> {
+            let ids: std::collections::BTreeSet<String> = self
+                .external
+                .read()
+                .values()
+                .map(|artifact| artifact.entry.provider_id.clone())
+                .collect();
+            ids.into_iter()
+                .filter(|id| {
+                    !crate::provider_account::native_only(id)
+                        && self.latest_package(id).is_some_and(|(_, _, package)| {
+                            subscription_account_contract(&package.manifest.authentication)
+                        })
+                })
+                .collect()
+        }
+
+        /// The account-vault Providers that share `provider`'s credential
         /// scope, `provider` included. Empty unless `provider` is itself one;
         /// a named account of any member serves every member.
         pub fn portable_account_scope(&self, provider: &str) -> Vec<String> {
+            if crate::provider_account::native_only(provider) {
+                return Vec::new();
+            }
             let Some((_, _, package)) = self.latest_package(provider) else {
                 return Vec::new();
             };
-            if !portable_account_contract(&package.manifest.authentication) {
+            if !account_vault_contract(&package.manifest.authentication) {
                 return Vec::new();
             }
             self.packages_for_authentication_scope(&package.manifest.authentication.portable_schema)
                 .into_iter()
-                .filter(|member| portable_account_contract(&member.manifest.authentication))
+                .filter(|member| {
+                    !crate::provider_account::native_only(&member.manifest.id)
+                        && account_vault_contract(&member.manifest.authentication)
+                })
                 .map(|member| member.manifest.id)
                 .collect()
         }
@@ -468,6 +494,26 @@ mod service_catalog {
             })
     }
 
+    /// A subscription Provider signs named accounts in natively (identity
+    /// verified with the signed recipe) and stores the credential, refreshed
+    /// by Service compare-and-swap, in the account's own Service vault.
+    #[must_use]
+    pub fn subscription_account_contract(
+        auth: &cowboy_provider_sdk::AuthenticationContract,
+    ) -> bool {
+        auth.required
+            && auth.refresh == cowboy_provider_sdk::RefreshOwnership::CompareAndSwap
+            && crate::provider_account::portable_contract::subscription_accounts(auth)
+    }
+
+    /// Named accounts of this Provider keep their credential in the account's
+    /// Service vault, delivered to every Machine: an entered key or a
+    /// subscription sign-in.
+    #[must_use]
+    pub fn account_vault_contract(auth: &cowboy_provider_sdk::AuthenticationContract) -> bool {
+        portable_account_contract(auth) || subscription_account_contract(auth)
+    }
+
     fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
         let left = semver::Version::parse(left).expect("validated Provider semantic version");
         let right = semver::Version::parse(right).expect("validated Provider semantic version");
@@ -624,6 +670,9 @@ mod service_catalog {
                 include_str!("../plugins/grok/provider.json"),
             ] {
                 assert!(!portable_account_contract(&contract(source)));
+                // Subscriptions keep named accounts in the vault too.
+                assert!(subscription_account_contract(&contract(source)));
+                assert!(account_vault_contract(&contract(source)));
             }
             let deepseek = include_str!("../plugins/claude-deepseek/provider.json");
             let mut machine_refresh = contract(deepseek);
@@ -811,7 +860,10 @@ mod service_catalog {
 }
 
 #[cfg(feature = "full")]
-pub use service_catalog::{ProviderCatalog, portable_account_contract};
+pub use service_catalog::{
+    ProviderCatalog, account_vault_contract, portable_account_contract,
+    subscription_account_contract,
+};
 
 #[cfg(test)]
 mod tests {

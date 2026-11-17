@@ -32,7 +32,7 @@ async fn login_discovery_contract(url: &str, artifacts: &std::path::Path) {
         method: "native".into(),
     };
     let old = store
-        .claim_provider_login("login-owner", "old", &input)
+        .claim_native_provider_login("login-owner", "old", &input)
         .await
         .unwrap()
         .receipt;
@@ -41,13 +41,13 @@ async fn login_discovery_contract(url: &str, artifacts: &std::path::Path) {
         .await
         .unwrap();
     let new = store
-        .claim_provider_login("login-owner", "new", &input)
+        .claim_native_provider_login("login-owner", "new", &input)
         .await
         .unwrap()
         .receipt;
     input.machine_id = "b".into();
     let other_machine = store
-        .claim_provider_login("login-owner", "second", &input)
+        .claim_native_provider_login("login-owner", "second", &input)
         .await
         .unwrap()
         .receipt;
@@ -116,7 +116,7 @@ async fn native_logout_receipt_is_scoped_idempotent_and_survives_restart() {
         method: "native".into(),
     };
     let claim = store
-        .claim_provider_login("login-owner", "logout-login", &input)
+        .claim_native_provider_login("login-owner", "logout-login", &input)
         .await
         .unwrap();
     let fingerprint = crate::digest::hex_sha256(key.as_bytes());
@@ -357,7 +357,7 @@ async fn fresh_dispatch_contract(
             .is_err()
     );
     let replay = store
-        .claim_provider_login("login-owner", "bind", input)
+        .claim_native_provider_login("login-owner", "bind", input)
         .await
         .unwrap();
     assert!(
@@ -429,7 +429,7 @@ async fn native_binding_contract(store: &Store, registration: Option<bool>) {
     };
     let key = enroll_binding_machine(store, &input.machine_id).await;
     let claim = store
-        .claim_provider_login("login-owner", "bind", &input)
+        .claim_native_provider_login("login-owner", "bind", &input)
         .await
         .unwrap();
     let dispatch_scope =
@@ -747,7 +747,7 @@ async fn native_binding_rejections(
 ) {
     let revision = bound.revision - 1;
     let replacement = store
-        .claim_provider_login("login-owner", "replacement", &input)
+        .claim_native_provider_login("login-owner", "replacement", &input)
         .await
         .unwrap();
     // A pending newer reservation must not fall back to the old successful one.
@@ -790,7 +790,7 @@ async fn native_binding_rejections(
             .is_err()
     );
     let fresh = store
-        .claim_provider_login("login-owner", "revoked", &input)
+        .claim_native_provider_login("login-owner", "revoked", &input)
         .await
         .unwrap();
     let mut revoked = completion;
@@ -859,8 +859,8 @@ async fn native_generations_are_monotonic_per_machine_and_survive_restart() {
         method: "native".into(),
     };
     let (a, b) = tokio::join!(
-        store.claim_provider_login("login-owner", "a", &input),
-        store.claim_provider_login("login-owner", "b", &input)
+        store.claim_native_provider_login("login-owner", "a", &input),
+        store.claim_native_provider_login("login-owner", "b", &input)
     );
     let a = a.unwrap();
     let b = b.unwrap();
@@ -875,7 +875,7 @@ async fn native_generations_are_monotonic_per_machine_and_survive_restart() {
         .await
         .unwrap();
     let replay = store
-        .claim_provider_login("login-owner", "a", &input)
+        .claim_native_provider_login("login-owner", "a", &input)
         .await
         .unwrap();
     assert!(!replay.fresh);
@@ -887,7 +887,7 @@ async fn native_generations_are_monotonic_per_machine_and_survive_restart() {
     another.machine_id = "b".into();
     assert_eq!(
         store
-            .claim_provider_login("login-owner", "other-machine", &another)
+            .claim_native_provider_login("login-owner", "other-machine", &another)
             .await
             .unwrap()
             .receipt
@@ -900,7 +900,7 @@ async fn native_generations_are_monotonic_per_machine_and_survive_restart() {
         .unwrap();
     assert_eq!(
         store
-            .claim_provider_login("login-owner", "next", &input)
+            .claim_native_provider_login("login-owner", "next", &input)
             .await
             .unwrap()
             .receipt
@@ -964,7 +964,7 @@ async fn sqlite_native_completion_is_exact_durable_evidence_not_a_grant() {
         method: "native".into(),
     };
     let claim = store
-        .claim_provider_login("login-owner", "native", &input)
+        .claim_native_provider_login("login-owner", "native", &input)
         .await
         .unwrap();
     assert_eq!(
@@ -1021,7 +1021,7 @@ async fn sqlite_native_completion_is_exact_durable_evidence_not_a_grant() {
             .is_none()
     );
     let cancelled = store
-        .claim_provider_login("login-owner", "cancel-first", &input)
+        .claim_native_provider_login("login-owner", "cancel-first", &input)
         .await
         .unwrap();
     store
@@ -1112,7 +1112,7 @@ async fn sqlite_native_completion_is_exact_durable_evidence_not_a_grant() {
     assert!(replay.cancel_requested);
     assert_eq!(replay.native_completion, Some(completion.clone()));
     let fresh = store
-        .claim_provider_login("login-owner", "revoked", &input)
+        .claim_native_provider_login("login-owner", "revoked", &input)
         .await
         .unwrap();
     let mut revoked = completion;
@@ -1157,8 +1157,8 @@ async fn contract(store: &Store) -> Request {
         method: "native".into(),
     };
     let (a, b) = tokio::join!(
-        store.claim_provider_login("login-owner", "start", &input),
-        store.claim_provider_login("login-owner", "start", &input)
+        store.claim_native_provider_login("login-owner", "start", &input),
+        store.claim_native_provider_login("login-owner", "start", &input)
     );
     let (a, b) = (a.unwrap(), b.unwrap());
     assert_ne!(a.fresh, b.fresh, "only one concurrent caller can dispatch");
@@ -1175,7 +1175,7 @@ async fn contract(store: &Store) -> Request {
         }
         assert!(
             store
-                .claim_provider_login("login-owner", "start", &changed)
+                .claim_native_provider_login("login-owner", "start", &changed)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -1191,7 +1191,7 @@ async fn contract(store: &Store) -> Request {
     );
     assert!(
         store
-            .claim_provider_login("other-owner", "start", &input)
+            .claim_native_provider_login("other-owner", "start", &input)
             .await
             .is_err()
     );
@@ -1213,7 +1213,7 @@ async fn contract(store: &Store) -> Request {
         panic!("disable account")
     };
     let replay = store
-        .claim_provider_login("login-owner", "start", &input)
+        .claim_native_provider_login("login-owner", "start", &input)
         .await
         .unwrap();
     assert!(
@@ -1223,7 +1223,7 @@ async fn contract(store: &Store) -> Request {
     assert_eq!(replay.receipt, a.receipt);
     assert!(
         store
-            .claim_provider_login("login-owner", "new-start", &input)
+            .claim_native_provider_login("login-owner", "new-start", &input)
             .await
             .is_err()
     );
@@ -1250,7 +1250,7 @@ async fn cancellation_contract(store: &Store, input: &Request, request_id: &str)
     }
     let (cancelled, concurrent) = tokio::join!(
         store.cancel_provider_login("login-owner", "start"),
-        store.claim_provider_login("login-owner", "start", input)
+        store.claim_native_provider_login("login-owner", "start", input)
     );
     let cancelled = cancelled.unwrap().unwrap();
     assert!(cancelled.cancel_requested);
@@ -1265,7 +1265,7 @@ async fn cancellation_contract(store: &Store, input: &Request, request_id: &str)
         Some(cancelled)
     );
     let replay = store
-        .claim_provider_login("login-owner", "start", input)
+        .claim_native_provider_login("login-owner", "start", input)
         .await
         .unwrap();
     assert!(!replay.fresh);
@@ -1293,7 +1293,7 @@ async fn sqlite_login_dispatch_survives_restart_without_redispatch() {
         .await
         .unwrap();
     let after = store
-        .claim_provider_login("login-owner", "start", &input)
+        .claim_native_provider_login("login-owner", "start", &input)
         .await
         .unwrap();
     assert!(!after.fresh);
@@ -1323,7 +1323,7 @@ async fn rejection_contract(store: &Store) -> (Request, Receipt) {
         method: "native".into(),
     };
     let claim = store
-        .claim_provider_login("login-owner", "rejected", &input)
+        .claim_native_provider_login("login-owner", "rejected", &input)
         .await
         .unwrap();
     assert!(
@@ -1374,7 +1374,7 @@ async fn rejection_contract(store: &Store) -> (Request, Receipt) {
             .is_err()
     );
     let replay = store
-        .claim_provider_login("login-owner", "rejected", &input)
+        .claim_native_provider_login("login-owner", "rejected", &input)
         .await
         .unwrap();
     assert!(!replay.fresh);
@@ -1390,7 +1390,7 @@ async fn rejection_contract(store: &Store) -> (Request, Receipt) {
             .is_err()
     );
     let other = store
-        .claim_provider_login("login-owner", "other", &input)
+        .claim_native_provider_login("login-owner", "other", &input)
         .await
         .unwrap();
     assert!(
@@ -1424,7 +1424,7 @@ async fn sqlite_definite_rejection_survives_restart_and_concurrent_cancel() {
         .await
         .unwrap();
     let after = store
-        .claim_provider_login("login-owner", "rejected", &input)
+        .claim_native_provider_login("login-owner", "rejected", &input)
         .await
         .unwrap();
     assert!(!after.fresh);

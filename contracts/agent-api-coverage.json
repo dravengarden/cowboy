@@ -140,6 +140,7 @@
     "projects::request": "projects.request",
     "projects::update_policy": "projects.policy_set",
     "prometheus_metrics": "diagnostics.metrics",
+    "provider_accounts::legacy_adoption::http_adopt": "accounts.adopt_legacy",
     "provider_accounts::lifecycle::http_resume": "accounts.reconcile",
     "provider_accounts::lifecycle::http_start": "accounts.revoke",
     "provider_accounts::lifecycle::http_status": "accounts.revocation_status",

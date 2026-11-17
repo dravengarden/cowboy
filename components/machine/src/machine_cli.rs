@@ -30,6 +30,7 @@ use crate::machine_protocol::{
 mod auth_watch;
 mod command_browser;
 mod command_login;
+use command_login::login_account_store;
 mod command_plugins;
 mod command_provider_auth;
 mod command_sessions;
@@ -2508,25 +2509,6 @@ struct MachineCommandContext {
     login_sessions: LoginSessions,
     runtime_commands: tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
     durable_state: crate::machine_broker::DurableStateView,
-}
-
-fn login_account_store(
-    providers: &Arc<MachinePluginStore>,
-    account: &crate::provider_account::ProviderAccountId,
-    protocol: u16,
-) -> anyhow::Result<Arc<MachinePluginStore>> {
-    if account.is_default() {
-        anyhow::ensure!(
-            providers.account_id().is_default(),
-            "login account scope mismatch"
-        );
-        return Ok(Arc::clone(providers));
-    }
-    anyhow::ensure!(
-        protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION,
-        "named account login requires an account-aware Controller"
-    );
-    Ok(Arc::new(providers.for_account(account)?))
 }
 
 fn provider_auth_roll_target(

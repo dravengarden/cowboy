@@ -160,7 +160,6 @@ impl MachinePluginStore {
         let probe =
             tokio::task::spawn_blocking(move || store.prepare_refresh_probe(&candidate)).await??;
         let Some(probe) = probe else {
-            ensure!(!named, "named refresh requires a signed native probe");
             return Ok(None);
         };
         probe.validate(Duration::from_secs(5)).await?;
@@ -171,12 +170,17 @@ impl MachinePluginStore {
             .credentials
             .as_ref()
             .context("named refresh has no credential contract")?;
-        let recipe = auth
-            .methods
-            .iter()
-            .find(|method| method.id == bundle.method_id)
+        // A named bundle names the portable twin of its native sign-in
+        // method. The refreshed credential alone proves its identity only
+        // when the signed recipe reads a credential file; otherwise the
+        // Service's compare-and-swap lineage is the binding, as for the
+        // default account.
+        let Some(recipe) = portable_contract::native_method_for(auth, &bundle.method_id)
             .and_then(|method| method.native_identity.as_ref())
-            .context("named refresh requires a signed identity recipe")?;
+            .filter(|recipe| portable_contract::identity_in_credentials(auth, recipe))
+        else {
+            return Ok(None);
+        };
         native_identity::read(&probe.directory.0.join("home"), recipe, &account).map(Some)
     }
 }
@@ -250,10 +254,6 @@ impl MachinePluginStore {
             .iter()
             .find(|method| method.id == candidate.bundle.method_id)
             .context("unknown refresh authentication method")?;
-        ensure!(
-            candidate.account_id.is_default() || method.native_identity.is_some(),
-            "named refresh requires a signed identity recipe"
-        );
         let cowboy_provider_sdk::AuthExecutor::CommandV1 { component, .. } = &method.executor
         else {
             return Ok(None);

@@ -9,6 +9,7 @@ pub mod browser_families;
 pub mod browser_placements;
 pub mod browser_shares;
 pub mod grants;
+pub mod legacy_adoption;
 pub mod legacy_browsers;
 pub mod logins;
 pub mod portable;
@@ -677,7 +678,7 @@ mod tests {
     async fn reserve_before_revocation(store: &Store, id: &ProviderAccountId) -> logins::Claim {
         let owner = "revocation-owner";
         store
-            .claim_provider_login(
+            .claim_native_provider_login(
                 owner,
                 "before-revoke",
                 &logins::Request {
@@ -798,7 +799,7 @@ mod tests {
         assert_eq!(store.provider_accounts(owner).await.unwrap(), registry);
         assert_eq!(
             store
-                .claim_provider_login(
+                .claim_native_provider_login(
                     owner,
                     "late-login",
                     &logins::Request {
@@ -985,7 +986,7 @@ mod tests {
                 panic!("create scoped account")
             };
             let claim = store
-                .claim_provider_login(
+                .claim_native_provider_login(
                     owner,
                     label,
                     &logins::Request {

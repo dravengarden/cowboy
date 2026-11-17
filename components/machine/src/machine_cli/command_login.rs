@@ -190,3 +190,24 @@ pub(super) fn handle(command: MachineCommand, context: MachineCommandContext) {
         ),
     }
 }
+
+/// The login scope of `account`: the default store, or a named account
+/// scope admitted only from an account-aware Controller.
+pub(super) fn login_account_store(
+    providers: &Arc<MachinePluginStore>,
+    account: &crate::provider_account::ProviderAccountId,
+    protocol: u16,
+) -> anyhow::Result<Arc<MachinePluginStore>> {
+    if account.is_default() {
+        anyhow::ensure!(
+            providers.account_id().is_default(),
+            "login account scope mismatch"
+        );
+        return Ok(Arc::clone(providers));
+    }
+    anyhow::ensure!(
+        protocol >= crate::machine_protocol::PROVIDER_ACCOUNT_PROTOCOL_VERSION,
+        "named account login requires an account-aware Controller"
+    );
+    Ok(Arc::new(providers.for_account(account)?))
+}

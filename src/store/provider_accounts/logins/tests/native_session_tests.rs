@@ -138,7 +138,7 @@ async fn replacement_login_preserves_pinned_session(
     input.provider_version = "next-version".into();
     input.generation_digest = "next-digest".into();
     let replacement = store
-        .claim_provider_login("login-owner", "replacement", &input)
+        .claim_native_provider_login("login-owner", "replacement", &input)
         .await
         .unwrap();
     assert!(replacement.receipt.native_generation.unwrap() > completion.profile.generation);
@@ -196,7 +196,7 @@ async fn replacement_login_preserves_pinned_session(
             .is_err()
     );
     transport_contract(store, hub, meta, true).await;
-    durable_binding_changes(store, completion, hub, meta).await;
+    Box::pin(durable_binding_changes(store, completion, hub, meta)).await;
     store
         .cancel_provider_login("login-owner", "replacement")
         .await
@@ -241,7 +241,7 @@ async fn abandoned_replacement_falls_back(
     transport_contract(store, hub, meta, true).await;
     // A newer pending replacement on top of a cancelled one still blocks.
     store
-        .claim_provider_login("login-owner", "replacement-2", input)
+        .claim_native_provider_login("login-owner", "replacement-2", input)
         .await
         .unwrap();
     assert!(

@@ -123,6 +123,42 @@ pub(in crate::server) async fn credential_machines(
     }))
 }
 
+/// Machines holding a named account's credentials: its retained native
+/// login generations, and, once its account vault holds a Ready credential,
+/// every Machine with its Provider installed (the vault serves them all).
+pub(in crate::server) async fn named_credential_machines(
+    state: &AppState,
+    owner: &str,
+    account: &ProviderAccountId,
+    provider: &str,
+) -> Result<Vec<String>, &'static str> {
+    let mut machines = state
+        .store
+        .as_ref()
+        .ok_or("unavailable")?
+        .native_generation_machines(owner, account)
+        .await
+        .map_err(|_| "unavailable")?;
+    let vault = super::super::portable::scope(state, account, provider)
+        .and_then(|vault| vault.status(provider))
+        .is_some_and(|status| status.authentication_state == ServiceAuthenticationState::Ready);
+    if vault {
+        let installed =
+            super::super::super::provider_auth_flow::catalogued_installations(state, false, false)
+                .await
+                .map_err(|()| "unavailable")?;
+        machines.extend(
+            installed
+                .into_iter()
+                .filter(|(_, installed)| installed.plugin_id == provider)
+                .map(|(machine, _)| machine),
+        );
+        machines.sort();
+        machines.dedup();
+    }
+    Ok(machines)
+}
+
 /// The sorted, distinct Machines among `installed` (Machine, Provider) pairs
 /// whose Provider has ready Service credentials.
 fn machines_with_ready_credentials(

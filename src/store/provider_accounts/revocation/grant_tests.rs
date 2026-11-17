@@ -64,7 +64,7 @@ async fn cleanup_admission_contract(store: &Store, process_tree_exited: bool) {
         .unwrap();
     let fingerprint = crate::digest::hex_sha256(key.as_bytes());
     let claim = store
-        .claim_provider_login(
+        .claim_native_provider_login(
             OWNER,
             "login",
             &Request {

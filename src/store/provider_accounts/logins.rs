@@ -275,6 +275,29 @@ impl Store {
         operation: &str,
         input: &Request,
     ) -> Result<Claim> {
+        self.claim_login(owner, operation, input, false).await
+    }
+
+    /// A login as reserved before the account vault: a native profile
+    /// generation per Machine for Codex and Grok too, which then signed in
+    /// natively. Tests of retained native profiles use it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn claim_native_provider_login(
+        &self,
+        owner: &str,
+        operation: &str,
+        input: &Request,
+    ) -> Result<Claim> {
+        self.claim_login(owner, operation, input, true).await
+    }
+
+    async fn claim_login(
+        &self,
+        owner: &str,
+        operation: &str,
+        input: &Request,
+        native: bool,
+    ) -> Result<Claim> {
         anyhow::ensure!(
             crate::managed_calls::valid_id(operation) && !input.account_id.is_default(),
             "invalid_login_operation"
@@ -309,9 +332,12 @@ impl Store {
             let registry: Registry = serde_json::from_str(&value)?;
             let account = registry.accounts.iter().find(|account| account.id == input.account_id && account.available())
                 .ok_or_else(|| anyhow::anyhow!("account_unavailable"))?;
-            // Native-account Providers keep credentials in a per-Machine native
+            // A native-only Provider (Claude) signs in inside a per-Machine native
             // home; each login reserves its generation in the same transaction.
-            let native_generation = if crate::provider_account::NATIVE_ACCOUNT_PROVIDERS.contains(&account.provider_id.as_str()) {
+            // Every other sign-in is a Service candidate committed to the
+            // account vault. Tests may reserve the historical native ones too.
+            let native_generation = if crate::provider_account::native_only(&account.provider_id)
+                || (native && ["codex", "grok"].contains(&account.provider_id.as_str())) {
                 let generation: i64 = sqlx::query_scalar("INSERT INTO provider_native_generations (owner_user_id,account_id,machine_id,generation) VALUES ($1,$2,$3,1) ON CONFLICT (owner_user_id,account_id,machine_id) DO UPDATE SET generation=provider_native_generations.generation+1 WHERE provider_native_generations.generation < 9223372036854775807 RETURNING generation")
                     .bind(owner).bind(input.account_id.as_str()).bind(&input.machine_id).fetch_one(&mut *tx).await?;
                 Some(u64::try_from(generation)?)

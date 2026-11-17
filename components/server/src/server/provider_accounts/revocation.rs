@@ -292,7 +292,7 @@ mod tests {
         };
         fixture_sessions(store, &created.account_id).await;
         store
-            .claim_provider_login(
+            .claim_native_provider_login(
                 OWNER,
                 "login",
                 &crate::store::provider_accounts::logins::Request {

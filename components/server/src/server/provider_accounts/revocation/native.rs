@@ -160,11 +160,11 @@ fn native_generation(
     login: &crate::store::provider_accounts::logins::Receipt,
 ) -> Result<Option<u64>> {
     // Old native receipts can predate generation reservations. Missing metadata
-    // is not proof that the native profile never existed.
+    // is not proof that the native profile never existed. Other sign-ins land
+    // in the account vault, which the vault wipe covers.
     ensure!(
         login.native_generation.is_some()
-            || (!crate::provider_account::NATIVE_ACCOUNT_PROVIDERS
-                .contains(&login.provider_id.as_str())
+            || (!crate::provider_account::native_only(&login.provider_id)
                 && login.native_completion.is_none()),
         "native_generation_unknown"
     );
