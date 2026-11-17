@@ -84,12 +84,20 @@ impl SqliteStore {
             }
             let db = Self::connection(&segment.path, false)?;
             query_deadline(&db, start);
+            let Some(rows) = segment_totals(&db, &totals, query, &mut coverage)? else {
+                return Ok(coverage);
+            };
             // Evidence rows arrive in the scan's (observed_ms, id) order, so
             // they name groups first and the 128-group cap picks the same ones.
-            if !segment_evidence(&db, &evidence, query, groups, &mut coverage)?
-                || !segment_totals(&db, &totals, query, groups, &mut coverage)?
+            // Newer segments usually fill every group's evidence: then the
+            // window query, most of a segment's cost, is skipped.
+            if rows.iter().any(|row| row.needs_evidence(groups))
+                && !segment_evidence(&db, &evidence, query, groups, &mut coverage)?
             {
                 return Ok(coverage);
+            }
+            for row in rows {
+                row.add(groups, &mut coverage);
             }
         }
         if coverage
@@ -104,21 +112,64 @@ impl SqliteStore {
     }
 }
 
-/// Adds one segment's groups; false once the budget interrupted SQLite.
+/// One group's totals in one segment.
+struct Totals {
+    key: (String, String, String),
+    counts: [u64; 4],
+    sum: f64,
+    max: Option<f64>,
+    cumulative: Vec<u64>,
+}
+
+impl Totals {
+    /// Whether this group may still gain an evidence ID from this segment.
+    fn needs_evidence(&self, groups: &BTreeMap<String, Series>) -> bool {
+        let (service, signal, event) = &self.key;
+        groups
+            .get(&format!("{service}/{signal}/{event}"))
+            .is_none_or(|series| {
+                series.evidence_ids.len() < EVIDENCE
+                    || (self.counts[1] + self.counts[2] > 0
+                        && series.failure_evidence_ids.len() < EVIDENCE)
+            })
+    }
+
+    fn add(self, groups: &mut BTreeMap<String, Series>, coverage: &mut Coverage) {
+        let (service, signal, event) = &self.key;
+        let [count, errors, warnings, durations] = self.counts;
+        let target = series(groups, service, signal, event);
+        target.count += count;
+        target.errors += errors;
+        target.warnings += warnings;
+        target.duration_count += durations;
+        target.duration_sum_ms += self.sum;
+        if let Some(max) = self.max {
+            target.duration_max_ms = target.duration_max_ms.max(max);
+        }
+        let mut below = 0;
+        for (index, at) in self.cumulative.iter().enumerate() {
+            target.duration_buckets[index] += at.saturating_sub(below);
+            below = *at;
+        }
+        target.duration_buckets[BUCKETS.len()] += durations.saturating_sub(below);
+        coverage.scanned = coverage.scanned.saturating_add(count as usize);
+    }
+}
+
+/// One segment's groups; `None` once the budget interrupted SQLite.
 fn segment_totals(
     db: &Connection,
     sql: &str,
     query: &Query,
-    groups: &mut BTreeMap<String, Series>,
     coverage: &mut Coverage,
-) -> Result<bool> {
+) -> Result<Option<Vec<Totals>>> {
     let limits: rusqlite::Result<(Option<i64>, Option<i64>)> = db.query_row(
         "SELECT min(observed_ms),max(observed_ms) FROM entries",
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     );
     let Some((lo, hi)) = query_step(limits, coverage)? else {
-        return Ok(false);
+        return Ok(None);
     };
     if let Some(lo) = lo {
         coverage.oldest_observed_ms = Some(coverage.oldest_observed_ms.map_or(lo, |v| v.min(lo)));
@@ -126,54 +177,34 @@ fn segment_totals(
     if let Some(hi) = hi {
         coverage.newest_observed_ms = Some(coverage.newest_observed_ms.map_or(hi, |v| v.max(hi)));
     }
+    let count = |value: Option<i64>| value.and_then(|v| u64::try_from(v).ok()).unwrap_or(0);
     let mut statement = db.prepare(sql)?;
     let rows = statement.query_map(filter_params!(query), |r| {
         let mut cumulative = Vec::with_capacity(BUCKETS.len());
         for index in 0..BUCKETS.len() {
-            cumulative.push(r.get::<_, Option<i64>>(9 + index)?.unwrap_or(0));
+            cumulative.push(count(r.get(9 + index)?));
         }
-        Ok((
-            (
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ),
-            [
-                r.get::<_, i64>(3)?,
-                r.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                r.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                r.get::<_, i64>(6)?,
+        Ok(Totals {
+            key: (r.get(0)?, r.get(1)?, r.get(2)?),
+            counts: [
+                count(r.get(3)?),
+                count(r.get(4)?),
+                count(r.get(5)?),
+                count(r.get(6)?),
             ],
-            (r.get::<_, f64>(7)?, r.get::<_, Option<f64>>(8)?),
+            sum: r.get(7)?,
+            max: r.get(8)?,
             cumulative,
-        ))
+        })
     })?;
+    let mut totals = Vec::new();
     for row in rows {
-        let Some(((service, signal, event), counts, (sum, max), cumulative)) =
-            query_step(row, coverage)?
-        else {
-            return Ok(false);
+        let Some(row) = query_step(row, coverage)? else {
+            return Ok(None);
         };
-        let [count, errors, warnings, durations] = counts.map(|v| u64::try_from(v).unwrap_or(0));
-        let target = series(groups, &service, &signal, &event);
-        target.count += count;
-        target.errors += errors;
-        target.warnings += warnings;
-        target.duration_count += durations;
-        target.duration_sum_ms += sum;
-        if let Some(max) = max {
-            target.duration_max_ms = target.duration_max_ms.max(max);
-        }
-        let mut below = 0;
-        for (index, at) in cumulative.iter().enumerate() {
-            let at = u64::try_from(*at).unwrap_or(0);
-            target.duration_buckets[index] += at.saturating_sub(below);
-            below = at;
-        }
-        target.duration_buckets[BUCKETS.len()] += durations.saturating_sub(below);
-        coverage.scanned = coverage.scanned.saturating_add(count as usize);
+        totals.push(row);
     }
-    Ok(true)
+    Ok(Some(totals))
 }
 
 /// Adds the newest evidence IDs, as a newest-first record scan would.
