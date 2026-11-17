@@ -1819,9 +1819,9 @@ async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
             );
             continue;
         }
-        let id = session.session_id.clone();
+        let declared = session.clone();
         if !native_admission::send(shared, writer, CoreCommand::EnsureSession { session }).await? {
-            native_admission::declaration_denied(shared, id);
+            native_admission::declaration_denied(shared, &declared);
         }
     }
     Ok(())

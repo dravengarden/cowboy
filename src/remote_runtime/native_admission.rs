@@ -207,18 +207,24 @@ fn mcp_launch_current(hub: &crate::core::Hub, command: &CoreCommand) -> bool {
 /// A Controller restart re-declares surviving workers before its in-memory MCP
 /// launch owners are recovered. That declaration is merely deferred: the
 /// Machine keeps its own, and recovery rebuilds the same content-addressed plan.
-pub(super) fn declaration_denied(shared: &Shared, session_id: String) {
-    let owner_pending = shared
-        .hub
-        .session_info(&session_id)
-        .is_some_and(|info| crate::controller_hooks::launch_mcp(&shared.hub, &info.meta).is_err());
-    if owner_pending {
-        tracing::info!(session = %session_id, "worker declaration deferred until its MCP launch owner recovers");
+/// A worker that launched with an MCP plan the session has since replaced (a
+/// policy edit or Plugin release) is deferred the same way: adoption can never
+/// move its plan, and the first send after its turn replaces it.
+pub(super) fn declaration_denied(shared: &Shared, session: &StartSession) {
+    let mcp_deferred = !mcp_launch_current(
+        &shared.hub,
+        &CoreCommand::EnsureSession {
+            session: session.clone(),
+        },
+    );
+    if mcp_deferred {
+        tracing::info!(session = %session.session_id, "worker declaration deferred until its MCP launch owner recovers or the worker is replaced");
         return;
     }
-    shared
-        .hub
-        .broadcast_error(Some(session_id), "Worker recovery admission denied".into());
+    shared.hub.broadcast_error(
+        Some(session.session_id.clone()),
+        "Worker recovery admission denied".into(),
+    );
 }
 
 /// False is a pre-write denial. Any failure after starting a write closes the
@@ -366,13 +372,17 @@ mod tests {
         .unwrap();
         hub.project_persisted_session(meta);
         let runtime = RemoteRuntime::for_test(hub.clone(), vec![]);
+        let declaration: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id":"s", "provider":"codex", "cwd":"/tmp", "generation":""
+        }))
+        .unwrap();
         let mut frames = hub.subscribe();
         let key = format!(
             "{}s",
             crate::core::settings_keys::SESSION_MCP_BINDINGS_PREFIX
         );
         hub.set_setting(key.clone(), serde_json::json!({"bindings":[]}));
-        declaration_denied(&runtime.shared, "s".into());
+        declaration_denied(&runtime.shared, &declaration);
         while let Ok(frame) = frames.try_recv() {
             assert!(
                 !matches!(**frame, crate::core::Outbound::Error { .. }),
@@ -380,11 +390,25 @@ mod tests {
             );
         }
         hub.set_setting(key, serde_json::Value::Null);
-        declaration_denied(&runtime.shared, "s".into());
+        declaration_denied(&runtime.shared, &declaration);
         let mut reported = false;
         while let Ok(frame) = frames.try_recv() {
             reported |= matches!(**frame, crate::core::Outbound::Error { .. });
         }
         assert!(reported);
+        // A surviving worker whose plan the session has since replaced.
+        let stale: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id":"s", "provider":"codex", "cwd":"/tmp", "generation":"",
+            "mcp_plan":{"schema":1,"command":"/bin/cowboy",
+                "bindings":[{"name":"suger","descriptor":"/old.json"}]}
+        }))
+        .unwrap();
+        declaration_denied(&runtime.shared, &stale);
+        while let Ok(frame) = frames.try_recv() {
+            assert!(
+                !matches!(**frame, crate::core::Outbound::Error { .. }),
+                "a stale plan is deferred, not reported"
+            );
+        }
     }
 }

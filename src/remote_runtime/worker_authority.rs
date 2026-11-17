@@ -48,9 +48,9 @@ impl RemoteRuntime {
     /// worker's plan, so a plain ensure would only be refused on every send;
     /// a reset re-declares the plan and relaunches with it. A prompt queued
     /// after this call waits for the replacement. A busy worker keeps its turn
-    /// and is not re-declared at all: the Machine would refuse the changed plan
-    /// and report it as a session error. The first send after the turn ends
-    /// replaces it.
+    /// and is not re-declared at all (nor is a worker whose owner has not
+    /// reconnected yet): the Machine would refuse the changed plan and report
+    /// it as a session error. The first send after the turn ends replaces it.
     pub fn ensure_current_mcp_plan(&self, session: crate::runtime_wire::StartSession) {
         let stale = self
             .shared
@@ -58,14 +58,20 @@ impl RemoteRuntime {
             .lock()
             .get(&session.session_id)
             .filter(|worker| {
-                worker.state == crate::runtime_wire::WorkerState::Running
-                    && worker.has_connected_owner()
-                    && worker
-                        .launch
-                        .as_ref()
-                        .is_some_and(|launch| launch.mcp_plan != session.mcp_plan)
+                matches!(
+                    worker.state,
+                    crate::runtime_wire::WorkerState::Running
+                        | crate::runtime_wire::WorkerState::Busy
+                ) && worker
+                    .launch
+                    .as_ref()
+                    .is_some_and(|launch| launch.mcp_plan != session.mcp_plan)
             })
-            .map(|worker| worker.current_turn_id.is_some());
+            .map(|worker| {
+                worker.state == crate::runtime_wire::WorkerState::Busy
+                    || worker.current_turn_id.is_some()
+                    || !worker.has_connected_owner()
+            });
         match stale {
             None => self.ensure(session),
             Some(true) => tracing::debug!(
@@ -148,8 +154,12 @@ mod tests {
     use serde_json::json;
 
     fn worker(plan: &str, turn: Option<&str>) -> WorkerSnapshot {
+        worker_in("running", plan, turn)
+    }
+
+    fn worker_in(state: &str, plan: &str, turn: Option<&str>) -> WorkerSnapshot {
         serde_json::from_value(json!({
-            "session_id":"s","worker_epoch":"worker-one","generation":"gen","state":"running",
+            "session_id":"s","worker_epoch":"worker-one","generation":"gen","state":state,
             "current_turn_id":turn,
             "launch":{"session_id":"s","provider":"codex","cwd":"/w","generation":"gen",
                 "mcp_plan":{"schema":1,"command":"/bin/cowboy",
@@ -188,6 +198,7 @@ mod tests {
         // A running turn is never interrupted to refresh its plan, nor sent a
         // declaration the Machine must refuse as a placement change.
         assert!(commands(worker("/old.json", Some("turn")), "/new.json").is_empty());
+        assert!(commands(worker_in("busy", "/old.json", None), "/new.json").is_empty());
         // A current busy worker still receives its idempotent ensure.
         assert!(
             commands(worker("/new.json", Some("turn")), "/new.json")
