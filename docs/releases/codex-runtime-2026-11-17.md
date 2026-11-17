@@ -99,7 +99,7 @@ Codex suites below.
 | `codex-turn` / `child-stop` / `codex-hooks` on 0.169.0 | Accepted (9 checks / 4 cases / 10 hooks) |
 | `codex-image` | Accepted, 13 checks |
 | `provider-check` (includes `plugin-check`) | Passed on a provisional component release; see below |
-| `check-compact` | See the integration report |
+| `check-compact` | Passed at `edea0efc` on the same provisional component release |
 
 The Codex turn and hooks probes ran under a user and PID namespace whose PID 1
 sits outside the probe's network namespace, as on 2026-10-30.
