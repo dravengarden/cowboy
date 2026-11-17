@@ -368,18 +368,29 @@ fn app_node<'v>(node: &'v Value, id: &str) -> Option<&'v Map<String, Value>> {
     super::node_edges(map).find_map(|(_, items)| items.iter().find_map(|child| app_node(child, id)))
 }
 
-/// The binding and view URI of the `mcp_app` node `node_id`, if it is one:
-/// its messages need a live lease of exactly that view.
+/// What an `mcp_app` node names: its binding, view URI and the digest of the
+/// signed view bytes it was published for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpAppRef {
+    pub binding: String,
+    pub uri: String,
+    pub sha256: String,
+}
+
+/// The `mcp_app` node `node_id`, if it is one: its runs and messages need a
+/// live lease of exactly that widget, view and signed digest.
 #[must_use]
-pub fn mcp_app_scope(document: &Value, node_id: &str) -> Option<(String, String)> {
+pub fn mcp_app_ref(document: &Value, node_id: &str) -> Option<McpAppRef> {
     let app = app_node(&document["root"], node_id)?;
     if app.get("type").and_then(Value::as_str) != Some("mcp_app") {
         return None;
     }
-    Some((
-        app.get("binding")?.as_str()?.to_owned(),
-        app.get("uri")?.as_str()?.to_owned(),
-    ))
+    let field = |name: &str| app.get(name).and_then(Value::as_str).map(str::to_owned);
+    Some(McpAppRef {
+        binding: field("binding")?,
+        uri: field("uri")?,
+        sha256: field("sha256")?,
+    })
 }
 
 /// The prompt id of one confirmation: one occurrence is one message.
@@ -486,12 +497,16 @@ mod tests {
             "a plain digest never names a signed view"
         );
         assert_eq!(
-            mcp_app_scope(&doc, "view"),
-            Some(("suger".into(), "ui://suger/status".into()))
+            mcp_app_ref(&doc, "view"),
+            Some(McpAppRef {
+                binding: "suger".into(),
+                uri: "ui://suger/status".into(),
+                sha256: view.clone(),
+            })
         );
         let app = json!({"title":"T","root":{"type":"app","id":"dash","title":"D",
             "fallback":"f","code":"x"}});
-        assert_eq!(mcp_app_scope(&app, "dash"), None);
+        assert_eq!(mcp_app_ref(&app, "dash"), None);
     }
 
     #[test]

@@ -144,7 +144,7 @@ pub fn validate_app_grants(
 }
 
 /// The signed contract's `ui://` form (Plugin SDK `McpAppsContract`).
-fn valid_ui_uri(uri: &str) -> bool {
+pub fn valid_ui_uri(uri: &str) -> bool {
     uri.len() <= 256
         && uri.strip_prefix("ui://").is_some_and(|path| {
             !path.is_empty()

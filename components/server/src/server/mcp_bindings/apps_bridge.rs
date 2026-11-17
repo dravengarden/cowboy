@@ -15,15 +15,17 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use super::apps::{Granted, Scope, current_grant, owner_session, refused};
+use super::apps::{Granted, Scope, owner_session, refused, scope_holds};
 use super::relay::view::{self, ViewCall, ViewError};
 use super::{super::AppState, super::AuthenticatedProductRequest};
 
 const ARGUMENT_BYTES: usize = 64 * 1024;
 const URL_BYTES: usize = 2048;
 
-/// The live lease of `session` and the grant it still holds.
-pub(in crate::server) fn authorized(
+/// The live lease of `session` and the grant it still holds: its row is open,
+/// names the same view and digest, and the owner still grants those exact
+/// bytes under the lease's epoch.
+pub(in crate::server) async fn authorized(
     state: &AppState,
     session: &str,
     lease: &str,
@@ -33,32 +35,28 @@ pub(in crate::server) fn authorized(
         .apps
         .live(session, lease)
         .ok_or("lease_ended")?;
-    let granted = current_grant(
-        &state.hub,
-        &state.plugin_catalog,
-        session,
-        &scope.binding,
-        &scope.uri,
-    )
-    .map_err(|_| "lease_ended")?;
-    if granted.epoch != scope.epoch {
-        return Err("lease_ended");
-    }
+    let granted = scope_holds(state, &scope)
+        .await
+        .map_err(|_| "lease_ended")?;
     Ok((scope, granted))
 }
 
 /// A view's `ui/message` (§4): allowed only under a live lease of that very
-/// view whose grant includes `message`. The text itself follows the phase A
-/// confirmation and durable send of `widget-apps.md` §7.
-pub(in crate::server) fn message_allowed(
+/// row's view whose grant includes `message`. The text itself follows the
+/// phase A confirmation and durable send of `widget-apps.md` §7.
+pub(in crate::server) async fn message_allowed(
     state: &AppState,
     session: &str,
     lease: &str,
-    binding: &str,
-    uri: &str,
+    widget: &str,
+    node: &crate::widgets::interactions::McpAppRef,
 ) -> Result<(), &'static str> {
-    let (scope, granted) = authorized(state, session, lease)?;
-    if scope.binding != binding || scope.uri != uri {
+    let (scope, granted) = authorized(state, session, lease).await?;
+    if scope.widget != widget
+        || scope.binding != node.binding
+        || scope.uri != node.uri
+        || scope.sha256 != node.sha256
+    {
         return Err("lease_ended");
     }
     if !granted.capabilities.message {
@@ -96,7 +94,7 @@ pub(super) async fn call(
     if let Err(status) = owner_session(&state, &auth, &session) {
         return status.into_response();
     }
-    let (scope, granted) = match authorized(&state, &session, &lease) {
+    let (scope, granted) = match authorized(&state, &session, &lease).await {
         Ok(authorized) => authorized,
         Err(code) => return refused(code),
     };
@@ -133,12 +131,13 @@ pub(super) async fn call(
             tools,
             name: request.name,
             arguments,
+            lease: lease.clone(),
         },
     )
     .await;
     // Delivery needs the same lease again: a result never reaches a frame
     // whose run ended while the call was out.
-    if authorized(&state, &session, &lease).is_err() {
+    if authorized(&state, &session, &lease).await.is_err() {
         return refused("lease_ended");
     }
     match outcome {
@@ -169,7 +168,7 @@ pub(super) async fn open_link(
     if let Err(status) = owner_session(&state, &auth, &session) {
         return status.into_response();
     }
-    let granted = match authorized(&state, &session, &lease) {
+    let granted = match authorized(&state, &session, &lease).await {
         Ok((_, granted)) => granted,
         Err(code) => return refused(code),
     };

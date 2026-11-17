@@ -28,6 +28,7 @@ const FEATURES = [
 export type McpAppFrame = {
   url: string;
   lease: string;
+  leaseMs: number;
   capabilities: McpAppCapabilities;
 };
 
@@ -63,18 +64,21 @@ const REFUSALS: Readonly<Record<string, string>> = {
   undeclared_view: "This server release no longer declares this view.",
   undeclared_tool: "The grant names a tool this release does not offer to views.",
   too_many_frames: "Too many views are open. Stop one, then run this again.",
+  no_row: "This view's row was closed or cleared.",
+  view_changed: "The server's view changed since this row was published; ask the agent again.",
   release_unavailable: "This server release is not available on the Controller.",
 };
 
-/** Opens a frame lease for `binding`'s view `uri`. */
+/** Opens a frame lease for the `mcp_app` node `nodeId` of a published row;
+ *  the Controller takes the view and its digest from the row itself. */
 export async function openMcpAppFrame(
   session: string,
-  binding: string,
-  uri: string,
+  widgetId: string,
+  nodeId: string,
 ): Promise<McpAppFrame | { refused: string }> {
   let reply: Reply;
   try {
-    reply = await transport("POST", framesUrl(session), { binding, uri });
+    reply = await transport("POST", framesUrl(session), { widget_id: widgetId, node_id: nodeId });
   } catch {
     return { refused: "The Controller could not be reached." };
   }
@@ -83,11 +87,17 @@ export async function openMcpAppFrame(
     return {
       url: body["url"],
       lease: body["lease"],
+      leaseMs: typeof body["lease_ms"] === "number" ? body["lease_ms"] : 30_000,
       capabilities: (body["capabilities"] ?? {}) as McpAppCapabilities,
     };
   }
   const code = typeof body["error"] === "string" ? body["error"] : "";
   return { refused: REFUSALS[code] ?? "This view cannot run now." };
+}
+
+/** Ends a lease nobody will run (a superseded or abandoned Run). */
+export function closeMcpAppFrame(session: string, lease: string): void {
+  void transport("DELETE", `${framesUrl(session)}/${part(lease)}`).catch(() => undefined);
 }
 
 export type McpAppConfirm = (call: { tool: string; arguments: unknown }) => Promise<boolean>;
@@ -105,8 +115,8 @@ export type McpAppEvents = {
   onHeight: (height: number) => void;
   /** A call that is not read-only: the person must confirm tool and arguments. */
   confirmCall: McpAppConfirm;
-  /** `ui/message`: opens the product confirmation; false if refused at once. */
-  message: (text: string, lease: string) => boolean;
+  /** `ui/message`: resolves once the person sent it (true) or did not. */
+  message: (text: string, lease: string) => Promise<boolean>;
   openLink: (url: string) => void;
   onStopped: (reason: string) => void;
 };
@@ -120,17 +130,21 @@ export type McpAppRun = {
 async function callTool(
   start: McpAppStart,
   events: McpAppEvents,
+  alive: () => boolean,
   name: string,
   args: Record<string, unknown>,
 ): Promise<ToolOutcome> {
   const url = `${framesUrl(start.session)}/${part(start.frame.lease)}/call`;
   const refused = (message: string): ToolOutcome => ({ error: { code: -32000, message } });
+  const stopped = refused("The view stopped.");
   try {
     let reply = await transport("POST", url, { name, arguments: args });
+    if (!alive()) return stopped;
     if (reply.status === 200 && reply.body["state"] === "confirm") {
-      if (!(await events.confirmCall({ tool: name, arguments: reply.body["arguments"] }))) {
-        return refused("The person declined this call.");
-      }
+      const confirmed = await events.confirmCall({ tool: name, arguments: reply.body["arguments"] });
+      // A run that ended while the person decided never submits the call.
+      if (!alive()) return stopped;
+      if (!confirmed) return refused("The person declined this call.");
       reply = await transport("POST", url, {
         name,
         arguments: args,
@@ -158,6 +172,8 @@ async function callTool(
   }
 }
 
+const RENEW_TIMEOUT_MS = 5_000;
+
 /** Mounts the view's frame into `container` under the lease in `start`. */
 export function startMcpApp(
   container: HTMLElement,
@@ -184,6 +200,7 @@ export function startMcpApp(
     bridge.end();
     globalThis.removeEventListener("message", onWindowMessage);
     clearInterval(renewal);
+    clearInterval(deadline);
     clearTimeout(readyTimer);
     cancelAnimationFrame(sizeFrame);
     frame.remove();
@@ -203,12 +220,13 @@ export function startMcpApp(
       if (!ended) frame.contentWindow?.postMessage(message, "*");
     },
     remove: end,
-    callTool: (name, args) => callTool(start, events, name, args),
-    message: async (text) => events.message(text, lease),
+    callTool: (name, args) => callTool(start, events, () => !ended, name, args),
+    message: async (text) => !ended && (await events.message(text, lease)) && !ended,
     openLink: async (url) => {
       try {
         const reply = await transport("POST", `${leaseUrl}/open-link`, { url });
-        if (reply.status !== 200 || typeof reply.body["url"] !== "string") return false;
+        // An approval that lands after the run ended opens nothing.
+        if (ended || reply.status !== 200 || typeof reply.body["url"] !== "string") return false;
         events.openLink(reply.body["url"]);
         return true;
       } catch {
@@ -244,14 +262,26 @@ export function startMcpApp(
   const readyTimer = setTimeout(() => {
     if (!bridge.running) end("The view did not start in time.");
   }, READY_TIMEOUT_MS);
+  // The lease is the Controller's; locally the run also ends when no renewal
+  // has succeeded within the lease, so a hung or lost connection cannot
+  // keep a frame and its confirmations alive.
+  let leaseUntil = Date.now() + start.frame.leaseMs;
   const renewal = setInterval(() => {
-    void transport("POST", `${leaseUrl}/renew`).then(
+    const sent = Date.now();
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("timeout")), RENEW_TIMEOUT_MS),
+    );
+    void Promise.race([transport("POST", `${leaseUrl}/renew`), timeout]).then(
       (reply) => {
         if (reply.status !== 200) end("This view's permission ended.");
+        else leaseUntil = sent + start.frame.leaseMs;
       },
-      () => end("Lost the connection to the Controller."),
+      () => undefined,
     );
   }, RENEW_MS);
+  const deadline = setInterval(() => {
+    if (Date.now() >= leaseUntil) end("Lost the connection to the Controller.");
+  }, 1000);
   globalThis.addEventListener("message", onWindowMessage);
   frame.src = start.frame.url;
   container.append(frame);

@@ -17,8 +17,9 @@ import { Fallback, useAppSend } from "../WidgetApp";
 import { reserveExternalRuntime } from "../apps/appRuntimes";
 import { openExternalUrl } from "../../openExternal";
 import { mcpAppsEnabled } from "./mcpAppsEnabled";
-import { claimFullApp } from "./fullAppOwner";
+import { claimFullApp, type FullAppClaim } from "./fullAppOwner";
 import {
+  closeMcpAppFrame,
   openMcpAppFrame,
   startMcpApp,
   type McpAppFrame,
@@ -27,7 +28,7 @@ import {
 import McpCallConfirm, { type PendingCall } from "./McpCallConfirm";
 
 type McpAppData = Extract<ParsedNode, { type: "mcp_app" }>;
-type Send = (text: string, code: string, kind: "mcp_app", lease: string) => boolean;
+type Send = (text: string, code: string, kind: "mcp_app", lease: string) => Promise<boolean>;
 
 const MAX_HEIGHT = 720;
 const OUT_OF_VIEW_GRACE_MS = 1500;
@@ -58,10 +59,12 @@ function RunningView({
   sendRef,
   onStopped,
   confirmCall,
+  claim,
 }: {
   node: McpAppData;
   session: string;
   frame: McpAppFrame;
+  claim: FullAppClaim;
   sendRef: { current: Send | undefined };
   onStopped: (reason: string) => void;
   confirmCall: (call: PendingCall["call"]) => Promise<boolean>;
@@ -73,6 +76,8 @@ function RunningView({
   useEffect(() => {
     const release = reserveExternalRuntime();
     if (!release) {
+      claim.release();
+      closeMcpAppFrame(session, frame.lease);
       onStopped("Too many apps are running on this page. Close one, then run this again.");
       return;
     }
@@ -80,11 +85,10 @@ function RunningView({
     const finish = (reason: string): void => {
       if (done) return;
       done = true;
-      ownership.release();
+      claim.release();
       release();
       onStopped(reason);
     };
-    const ownership = claimFullApp(() => run.current?.stop("Another full app started."));
     if (!container.current) {
       finish("closed");
       return;
@@ -116,7 +120,8 @@ function RunningView({
           started.frame.style.height = `${Math.min(MAX_HEIGHT, Math.max(80, height))}px`;
         },
         confirmCall,
-        message: (text, lease) => sendRef.current?.(text, node.sha256, "mcp_app", lease) ?? false,
+        message: (text, lease) =>
+          sendRef.current?.(text, node.sha256, "mcp_app", lease) ?? Promise.resolve(false),
         openLink: (url) => openExternalUrl(url),
         onStopped: finish,
       },
@@ -170,12 +175,21 @@ export default function WidgetMcpApp({ node }: { node: McpAppData }): React.JSX.
       ? { sessionId: interaction.sessionId, widgetId: interaction.widgetId, nodeId: node.id }
       : null;
   const send = useAppSend(node, target);
-  const sendRef = useRef<Send | undefined>(send.onSend);
-  sendRef.current = send.onSend;
+  const sendRef = useRef<Send | undefined>(send.onSendSettled);
+  sendRef.current = send.onSendSettled;
   const [state, setState] = useState<
-    "idle" | "opening" | { frame: McpAppFrame } | { stopped: string }
+    "idle" | "opening" | { frame: McpAppFrame; claim: FullAppClaim; generation: number } | { stopped: string }
   >("idle");
   const [call, setCall] = useState<PendingCall | null>(null);
+  // Each Run is one generation: a stop, a later Run or unmounting retires it,
+  // and anything that answers for a retired generation is dropped.
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      generation.current += 1;
+    },
+    [],
+  );
   // Only a published row, verified by the Controller, may run a view.
   if (!verified || !target)
     return <Fallback node={node} note={interaction?.closed ? "This view was closed." : null} />;
@@ -183,6 +197,7 @@ export default function WidgetMcpApp({ node }: { node: McpAppData }): React.JSX.
     return <Fallback node={node} note={`“${node.title}” is an MCP app view: not on this browser.`} />;
   }
   const stop = (reason: string): void => {
+    generation.current += 1;
     send.revoke();
     setCall((pending) => {
       pending?.answer(false);
@@ -191,9 +206,25 @@ export default function WidgetMcpApp({ node }: { node: McpAppData }): React.JSX.
     setState({ stopped: reason });
   };
   const run = async (): Promise<void> => {
+    const mine = (generation.current += 1);
+    // Ownership is taken when Run is tapped, so a slow earlier Run cannot
+    // displace a later app when its lease arrives.
+    const claim = claimFullApp(() => {
+      if (generation.current === mine) stop("Another full app started.");
+    });
     setState("opening");
-    const opened = await openMcpAppFrame(target.sessionId, node.binding, node.uri);
-    setState("refused" in opened ? { stopped: opened.refused } : { frame: opened });
+    const opened = await openMcpAppFrame(target.sessionId, target.widgetId, node.id);
+    if (generation.current !== mine || !claim.owns()) {
+      if (!("refused" in opened)) closeMcpAppFrame(target.sessionId, opened.lease);
+      claim.release();
+      return;
+    }
+    if ("refused" in opened) {
+      claim.release();
+      setState({ stopped: opened.refused });
+      return;
+    }
+    setState({ frame: opened, claim, generation: mine });
   };
   const confirmCall = (pending: PendingCall["call"]): Promise<boolean> =>
     new Promise((resolve) => {
@@ -202,7 +233,8 @@ export default function WidgetMcpApp({ node }: { node: McpAppData }): React.JSX.
         return { call: pending, answer: resolve };
       });
     });
-  const running = typeof state === "object" && "frame" in state ? state.frame : null;
+  const active = typeof state === "object" && "frame" in state ? state : null;
+  const running = active?.frame ?? null;
   return (
     <Box data-widget-mcp-app={node.binding} sx={{ display: "grid", gap: 1, minWidth: 0 }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -244,14 +276,17 @@ export default function WidgetMcpApp({ node }: { node: McpAppData }): React.JSX.
           {state.stopped}
         </Alert>
       ) : null}
-      {running ? (
+      {active ? (
         <RunningView
-          key={running.lease}
+          key={active.frame.lease}
           node={node}
           session={target.sessionId}
-          frame={running}
+          frame={active.frame}
+          claim={active.claim}
           sendRef={sendRef}
-          onStopped={stop}
+          onStopped={(reason): void => {
+            if (generation.current === active.generation) stop(reason);
+          }}
           confirmCall={confirmCall}
         />
       ) : (

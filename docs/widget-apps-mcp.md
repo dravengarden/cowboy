@@ -418,3 +418,20 @@ ready to implement.
 |---|---|
 | Closing the last view scope cancels a dispatched write (P1) | New calls refused at once; transport close deferred until the dispatched request answers or times out (§7) |
 | View processes are never initialized (P2) | The Controller completes and validates `initialize` before the first call on every new or reopened handle; failure refuses without replay (§7) |
+
+Step 3 implementation (Astra Max code review, `call-7015db4f9affc021c3e6cb22`):
+
+| Finding | Resolution |
+|---|---|
+| Automation credentials could mint leases and echo confirmation digests (high) | Every `/api/sessions/{id}/mcp-apps/…` route is human-only (`http_policy.rs`) |
+| The lease was not rechecked after scope opening waits (high) | The call carries its lease into the Controller-owned run and rechecks it immediately before dispatch |
+| Leases were not bound to the row or its signed digest (high) | `POST …/frames` names `{widget_id, node_id}`; binding, URI and digest come from the open row; renewal and every effect recheck that the row is open and the grant serves the same bytes; a changed view refuses as `view_changed` |
+| Replacing or sweeping a scope could cut off a dispatched write (high) | A scope is replaced only when nothing is in flight (otherwise `mcp_busy`); only authority loss closes at once |
+| A cancelled HTTP request could leak a half-opened scope (high) | Opening, handshake and dispatch run in one spawned, Controller-owned task |
+| Structured-clone payloads escaped the byte budget (high) | Only plain JSON is admitted, measured in UTF-8 bytes with early exit; anything else removes the frame |
+| Effects could complete after teardown (high) | Link opening, confirmation and confirmed submission check the run after every await |
+| `ui/message` was acknowledged before it was sent (medium) | The RPC answers once the person sent it (Controller accepted) or not |
+| Hung renewals kept a run alive (medium) | A local lease deadline and a 5 s renewal timeout end the run |
+| Full-app ownership was taken only after the lease arrived (medium) | Claimed at Run with a generation guard; a superseded Run deletes its late lease |
+| Any backend protocol version was accepted (medium) | Checked against the Agent API's supported list |
+| Row URIs were bounded at 200 characters (medium) | The signed-contract `ui://` rule and 256-byte bound on Controller and Web |

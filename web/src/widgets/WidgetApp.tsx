@@ -80,6 +80,12 @@ export function useAppSend(
   // prepared, or shown and not yet sent, is dropped (confirmed sends live on
   // in the outbox).
   const generation = useRef(0);
+  // Settles a caller waiting for the outcome (an MCP view's `ui/message`).
+  const settle = useRef<((sent: boolean) => void) | null>(null);
+  const finish = (sent: boolean): void => {
+    settle.current?.(sent);
+    settle.current = null;
+  };
   const onSend = target
     ? (
         text: string,
@@ -100,20 +106,40 @@ export function useAppSend(
         void prepareAppMessage({ ...target, code, kind, ...(lease ? { lease } : {}) }, text).then(
           (prepared) => {
             if (generation.current === current) setPending(prepared);
-            else slot.current = false;
+            else {
+              slot.current = false;
+              finish(false);
+            }
           },
           () => {
             slot.current = false;
+            finish(false);
           },
         );
         return true;
       }
     : undefined;
-  const close = (): void => {
+  /** Like `onSend`, resolving once the person sent the message or not. */
+  const onSendSettled = onSend
+    ? (
+        text: string,
+        code: string,
+        kind: "app" | "dom_app" | "mcp_app",
+        lease?: string,
+      ): Promise<boolean> => {
+        if (!onSend(text, code, kind, lease)) return Promise.resolve(false);
+        return new Promise((resolve) => {
+          settle.current = resolve;
+        });
+      }
+    : undefined;
+  const close = (sent = false): void => {
     slot.current = false;
     setPending(null);
+    finish(sent);
   };
   const revoke = (): void => {
+    finish(false);
     generation.current += 1;
     setPending((current) => {
       if (current?.state !== "confirming") return current;
@@ -130,7 +156,7 @@ export function useAppSend(
       {notice}
     </Typography>
   ) : null;
-  return { onSend, confirm, revoke };
+  return { onSend, onSendSettled, confirm, revoke };
 }
 
 export function WidgetApp({ node }: { node: AppNodeData }): React.JSX.Element {

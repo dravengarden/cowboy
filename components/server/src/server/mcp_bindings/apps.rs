@@ -30,13 +30,17 @@ const TOKEN_TTL: Duration = Duration::from_secs(30);
 const MAX_FRAMES: usize = 64;
 const MAX_FRAMES_PER_SESSION: usize = 8;
 
-/// What a live lease authorizes: one view of one binding under one epoch.
+/// What a live lease authorizes: one published row's view of one binding,
+/// under one epoch, for the exact signed bytes the row was published for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Scope {
     pub(crate) session: String,
     pub(crate) binding: String,
     pub(crate) uri: String,
     pub(crate) epoch: String,
+    pub(crate) widget: String,
+    pub(crate) node: String,
+    pub(crate) sha256: String,
 }
 
 struct Lease {
@@ -243,8 +247,51 @@ impl Frames {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FrameRequest {
-    binding: String,
-    uri: String,
+    widget_id: String,
+    node_id: String,
+}
+
+pub(crate) fn digest(html: &str) -> String {
+    use sha2::Digest as _;
+    format!("{:x}", sha2::Sha256::digest(html.as_bytes()))
+}
+
+/// The open published row `widget` names and its `mcp_app` node, if any.
+async fn open_row(
+    state: &AppState,
+    session: &str,
+    widget: &str,
+    node: &str,
+) -> Result<crate::widgets::interactions::McpAppRef, &'static str> {
+    let store = state.store.as_ref().ok_or("release_unavailable")?;
+    let row = store
+        .session_widget(session, widget)
+        .await
+        .map_err(|_| "release_unavailable")?
+        .filter(|row| !row.closed)
+        .ok_or("no_row")?;
+    crate::widgets::interactions::mcp_app_ref(&row.document, node).ok_or("no_row")
+}
+
+/// Whether `scope` still holds: its row is open and names the same view and
+/// digest, and the owner's current grant serves those exact bytes under the
+/// lease's epoch. Returns that grant.
+pub(crate) async fn scope_holds(state: &AppState, scope: &Scope) -> Result<Granted, &'static str> {
+    let node = open_row(state, &scope.session, &scope.widget, &scope.node).await?;
+    if node.binding != scope.binding || node.uri != scope.uri || node.sha256 != scope.sha256 {
+        return Err("lease_ended");
+    }
+    let granted = current_grant(
+        &state.hub,
+        &state.plugin_catalog,
+        &scope.session,
+        &scope.binding,
+        &scope.uri,
+    )?;
+    if granted.epoch != scope.epoch || digest(&granted.html) != scope.sha256 {
+        return Err("lease_ended");
+    }
+    Ok(granted)
 }
 
 pub(super) fn owner_session(
@@ -274,6 +321,7 @@ pub(super) fn refused(code: &'static str) -> Response {
         "too_many_frames" => StatusCode::TOO_MANY_REQUESTS,
         "release_unavailable" | "mcp_capacity" => StatusCode::SERVICE_UNAVAILABLE,
         "not_granted" => StatusCode::FORBIDDEN,
+        "no_row" => StatusCode::NOT_FOUND,
         "mcp_busy" => StatusCode::TOO_MANY_REQUESTS,
         _ => StatusCode::CONFLICT,
     };
@@ -290,21 +338,34 @@ pub(super) async fn open(
     if let Err(status) = owner_session(&state, &auth, &session) {
         return status.into_response();
     }
+    // The row is authoritative: binding, view and digest come from the
+    // published node, never from the request.
+    let node = match open_row(&state, &session, &request.widget_id, &request.node_id).await {
+        Ok(node) => node,
+        Err(code) => return refused(code),
+    };
     let granted = match current_grant(
         &state.hub,
         &state.plugin_catalog,
         &session,
-        &request.binding,
-        &request.uri,
+        &node.binding,
+        &node.uri,
     ) {
         Ok(granted) => granted,
         Err(code) => return refused(code),
     };
+    if digest(&granted.html) != node.sha256 {
+        // A newer generation's view never replays an older row's call.
+        return refused("view_changed");
+    }
     let scope = Scope {
         session,
-        binding: request.binding,
-        uri: request.uri,
+        binding: node.binding,
+        uri: node.uri,
         epoch: granted.epoch,
+        widget: request.widget_id,
+        node: request.node_id,
+        sha256: node.sha256,
     };
     match state.extensions.apps.issue(scope, granted.html) {
         Ok((token, lease)) => Json(json!({
@@ -332,14 +393,7 @@ pub(super) async fn renew(
     let Some(scope) = frames.live(&session, &lease) else {
         return refused("lease_ended");
     };
-    let current = current_grant(
-        &state.hub,
-        &state.plugin_catalog,
-        &session,
-        &scope.binding,
-        &scope.uri,
-    )
-    .is_ok_and(|granted| granted.epoch == scope.epoch);
+    let current = scope_holds(&state, &scope).await.is_ok();
     if current && frames.renew(&lease, &scope) {
         Json(json!({"lease_ms": LEASE.as_millis()})).into_response()
     } else {
@@ -435,6 +489,9 @@ mod tests {
             binding: "suger".into(),
             uri: "ui://suger/status".into(),
             epoch: "e".repeat(32),
+            widget: "w".into(),
+            node: "view".into(),
+            sha256: "a".repeat(64),
         }
     }
 
@@ -664,6 +721,9 @@ mod tests {
             binding: "view".into(),
             uri: "ui://view/status".into(),
             epoch: granted.epoch.clone(),
+            widget: "w".into(),
+            node: "view".into(),
+            sha256: digest(&granted.html),
         };
         let serve = |token: &str, headers: &HeaderMap, query: bool| {
             respond(

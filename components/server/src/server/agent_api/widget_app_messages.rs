@@ -134,20 +134,20 @@ pub(in crate::server) async fn api_widget_app_message(
     };
     // A signed view sends only under a live lease of that view whose grant
     // includes `message`; agent-written apps need none.
-    if let Some((binding, uri)) = interactions::mcp_app_scope(&widget.document, &node_id) {
-        let allowed = request
-            .lease
-            .as_deref()
-            .ok_or("lease_ended")
-            .and_then(|lease| {
+    if let Some(node) = interactions::mcp_app_ref(&widget.document, &node_id) {
+        let allowed = match request.lease.as_deref() {
+            Some(lease) => {
                 super::super::mcp_bindings::apps_bridge::message_allowed(
                     &state,
                     &session_id,
                     lease,
-                    &binding,
-                    &uri,
+                    &widget_id,
+                    &node,
                 )
-            });
+                .await
+            }
+            None => Err("lease_ended"),
+        };
         if let Err(code) = allowed {
             return refusal(StatusCode::CONFLICT, code, json!({}));
         }

@@ -4,12 +4,15 @@ import {
   INGRESS_MESSAGES_PER_SECOND,
   INGRESS_REQUESTS_PER_SECOND,
   MCP_APPS_PROTOCOL,
+  jsonBytes,
   McpBridge,
   type McpBridgeHost,
 } from "./mcpAppBridge";
 import { mcpAppsEnabledFor } from "./mcpAppsEnabled";
 
 type Sent = Record<string, unknown>;
+const err = (message: Sent | undefined): { message?: string; code?: number } =>
+  (message?.["error"] ?? {}) as { message?: string; code?: number };
 
 function harness(overrides: Partial<McpBridgeHost> = {}) {
   const sent: Sent[] = [];
@@ -71,7 +74,7 @@ describe("MCP Apps bridge", () => {
     h.bridge.receive(request(2, "tools/call", { name: "suger_status" }));
     await h.settle();
     expect(h.calls).toHaveLength(0);
-    expect((h.sent[1]?.["error"] as { message: string }).message).toBe("not initialized");
+    expect(err(h.sent[1]).message).toBe("not initialized");
     h.bridge.receive(notification("ui/notifications/initialized"));
     expect(h.sent.slice(2).map((message) => message["method"])).toEqual([
       "ui/notifications/tool-input",
@@ -95,15 +98,15 @@ describe("MCP Apps bridge", () => {
     h.bridge.receive(request(8, "ui/open-link", { url: "https://example.com" }));
     await h.settle();
     const byId = new Map(h.sent.map((message) => [message["id"], message]));
-    expect((byId.get(3)?.["result"] as { tools: unknown[] }).tools).toEqual([
-      { name: "suger_status", inputSchema: { type: "object" } },
-    ]);
+    expect(byId.get(3)?.["result"]).toEqual({
+      tools: [{ name: "suger_status", inputSchema: { type: "object" } }],
+    });
     expect(h.calls).toEqual([{ name: "suger_status", args: { a: 1 } }]);
     expect(byId.get(4)?.["result"]).toEqual({ content: [{ type: "text", text: "called" }] });
-    expect((byId.get(5)?.["error"] as { message: string }).message).toBe("tool not granted");
-    expect((byId.get(6)?.["error"] as { code: number }).code).toBe(-32601);
-    expect((byId.get(7)?.["error"] as { message: string }).message).toBe("not granted");
-    expect((byId.get(8)?.["error"] as { message: string }).message).toBe("not granted");
+    expect(err(byId.get(5)).message).toBe("tool not granted");
+    expect(err(byId.get(6)).code).toBe(-32601);
+    expect(err(byId.get(7)).message).toBe("not granted");
+    expect(err(byId.get(8)).message).toBe("not granted");
     expect(h.removed).toEqual([]);
   });
 
@@ -133,7 +136,12 @@ describe("MCP Apps bridge", () => {
   });
 
   test("malformed messages, a message flood, a byte flood and a request flood remove the frame", async () => {
-    for (const bad of [null, "text", { jsonrpc: "1.0", method: "ping" }, { jsonrpc: "2.0", id: {}, method: "ping" }]) {
+    for (const bad of [
+      null,
+      "text",
+      { jsonrpc: "1.0", method: "ping" },
+      { jsonrpc: "2.0", id: {}, method: "ping" },
+    ]) {
       const h = harness();
       h.bridge.receive(bad);
       expect(h.removed).toEqual(["This view sent malformed data."]);
@@ -180,6 +188,37 @@ describe("MCP Apps bridge", () => {
     const asked = harness();
     asked.bridge.receive(notification("ui/notifications/request-teardown"));
     expect(asked.removed).toEqual(["closed"]);
+  });
+});
+
+describe("ingress measurement", () => {
+  test("only plain JSON is measured; binary and exotic clones are refused", () => {
+    expect(jsonBytes({ a: "é" }, 1000)).toBeGreaterThan(0);
+    for (const exotic of [
+      new ArrayBuffer(8),
+      new Uint8Array(8),
+      new Map(),
+      new Date(),
+      { nested: [new ArrayBuffer(1)] },
+      Number.NaN,
+    ]) {
+      expect(jsonBytes(exotic, 1000)).toBe(Number.POSITIVE_INFINITY);
+    }
+    const cyclic: Record<string, unknown> = {};
+    cyclic["self"] = cyclic;
+    expect(jsonBytes(cyclic, 1000)).toBe(Number.POSITIVE_INFINITY);
+    expect(jsonBytes("x".repeat(2000), 1000)).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  test("a binary payload removes the frame instead of hiding in the log", () => {
+    const h = harness();
+    h.bridge.receive({
+      jsonrpc: "2.0",
+      method: "notifications/message",
+      params: { data: new ArrayBuffer(64 * 1024 * 1024) },
+    });
+    expect(h.removed).toHaveLength(1);
+    expect(h.bridge.log).toHaveLength(0);
   });
 });
 

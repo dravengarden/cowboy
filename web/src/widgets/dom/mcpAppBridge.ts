@@ -63,12 +63,46 @@ const isObject = (value: unknown): value is Message =>
 const validId = (id: unknown): id is string | number =>
   (typeof id === "string" && id.length <= 128) || (typeof id === "number" && Number.isSafeInteger(id));
 
-function size(data: unknown): number {
-  try {
-    return typeof data === "string" ? data.length : JSON.stringify(data)?.length ?? 0;
-  } catch {
-    return Number.POSITIVE_INFINITY;
-  }
+/** UTF-8 bytes of `data` as JSON, or Infinity when it is not plain JSON
+ *  (binary buffers, Maps, Blobs, Dates, cycles...) or exceeds `limit`.
+ *  Structured clone can carry what JSON.stringify would silently shrink, so
+ *  the walk stops early instead of measuring a serialization. */
+export function jsonBytes(data: unknown, limit: number): number {
+  let total = 0;
+  const seen = new Set<object>();
+  const encoder = new TextEncoder();
+  const walk = (value: unknown, depth: number): boolean => {
+    if (total > limit || depth > 64) return false;
+    if (value === null || typeof value === "boolean") {
+      total += 5;
+      return true;
+    }
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return false;
+      total += 24;
+      return true;
+    }
+    if (typeof value === "string") {
+      total += value.length > limit ? value.length : encoder.encode(value).length + 2;
+      return total <= limit;
+    }
+    if (typeof value !== "object" || seen.has(value)) return false;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      total += 2;
+      for (const item of value) if (!walk(item, depth + 1)) return false;
+      return true;
+    }
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return false;
+    total += 2;
+    for (const [key, item] of Object.entries(value)) {
+      total += key.length + 3;
+      if (!walk(item, depth + 1)) return false;
+    }
+    return true;
+  };
+  return walk(data, 0) && total <= limit ? total : Number.POSITIVE_INFINITY;
 }
 
 export class McpBridge {
@@ -114,7 +148,7 @@ export class McpBridge {
   receive(data: unknown): void {
     if (this.ended) return;
     if (!this.admit(data)) {
-      this.fail("This view stopped: it sent messages too fast.");
+      this.fail("This view stopped: it sent too much or unreadable data.");
       return;
     }
     if (!isObject(data) || data["jsonrpc"] !== "2.0") {
@@ -157,7 +191,7 @@ export class McpBridge {
       this.requests = 0;
     }
     this.messages += 1;
-    this.bytes += size(data);
+    this.bytes += jsonBytes(data, INGRESS_BYTES_PER_SECOND - this.bytes);
     return this.messages <= INGRESS_MESSAGES_PER_SECOND && this.bytes <= INGRESS_BYTES_PER_SECOND;
   }
 
@@ -206,7 +240,7 @@ export class McpBridge {
         if (this.log.length >= LOG_ENTRIES) this.log.shift();
         this.log.push({
           level: typeof params["level"] === "string" ? params["level"].slice(0, 16) : "info",
-          data: size(params["data"]) <= 2048 ? params["data"] : "[truncated]",
+          data: jsonBytes(params["data"], 2048) <= 2048 ? params["data"] : "[truncated]",
         });
         return;
       default:

@@ -463,7 +463,13 @@ fn mcp_app(node: &Map<String, Value>, path: &str, budget: &mut Budget) -> Checke
             return Err(Invalid::at(&field(name), "expected a name"));
         }
     }
-    line(node.get("uri"), &field("uri"), LABEL_CHARS, false)?;
+    if !node
+        .get("uri")
+        .and_then(Value::as_str)
+        .is_some_and(crate::mcp_binding::valid_ui_uri)
+    {
+        return Err(Invalid::at(&field("uri"), "expected a ui:// resource URI"));
+    }
     if !hex64(node.get("sha256")) {
         return Err(Invalid::at(&field("sha256"), "expected a SHA-256 digest"));
     }

@@ -15,8 +15,10 @@ use super::*;
 
 const IDLE: Duration = Duration::from_secs(60);
 const SWEEP: Duration = Duration::from_secs(5);
-/// The MCP revision the Controller speaks to the backend for a view scope.
+/// The MCP revision the Controller asks for, and the ones it accepts back
+/// (the Agent API's own list).
 const PROTOCOL_VERSION: &str = "2025-06-18";
+const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 #[derive(Default)]
 pub(in crate::server) struct Views {
@@ -47,6 +49,9 @@ pub(in crate::server) struct ViewCall {
     pub(in crate::server) tools: Vec<String>,
     pub(in crate::server) name: String,
     pub(in crate::server) arguments: Value,
+    /// The frame lease the call was admitted under; rechecked after every
+    /// opening wait, immediately before dispatch.
+    pub(in crate::server) lease: String,
 }
 
 /// Why a view call has no answer.
@@ -58,11 +63,20 @@ pub(in crate::server) enum ViewError {
     Uncertain(&'static str),
 }
 
-/// Runs `call` and returns the backend's JSON-RPC response object.
+/// Runs `call` and returns the backend's JSON-RPC response object. The whole
+/// run, opening included, is Controller-owned: a dropped HTTP request never
+/// leaves a half-opened scope or cancels a dispatched call.
 pub(in crate::server) async fn call(
     state: &Arc<AppState>,
     call: ViewCall,
 ) -> Result<Value, ViewError> {
+    let state = Arc::clone(state);
+    tokio::spawn(async move { run(&state, call).await })
+        .await
+        .map_err(|_| ViewError::Uncertain("mcp_unavailable"))?
+}
+
+async fn run(state: &Arc<AppState>, call: ViewCall) -> Result<Value, ViewError> {
     let view = scope(state, &call).await.map_err(ViewError::Refused)?;
     let guard = Arc::clone(&view.flight)
         .try_lock_owned()
@@ -70,21 +84,18 @@ pub(in crate::server) async fn call(
     if view.closing.load(Ordering::Acquire) {
         return Err(ViewError::Refused("mcp_view_closed"));
     }
+    // Opening may have waited: the run that asked must still hold its lease.
+    super::super::apps_bridge::authorized(state, &call.session, &call.lease)
+        .await
+        .map_err(ViewError::Refused)?;
     *view.last_used.lock() = std::time::Instant::now();
     let id = format!("view-{}", view.next_id.fetch_add(1, Ordering::Relaxed));
     let message = json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
         "params":{"name":call.name,"arguments":call.arguments}});
-    // Spawned: the Controller owns the request until it answers, even if
-    // the page that asked goes away.
-    let state = Arc::clone(state);
-    tokio::spawn(async move {
-        let response = send(&state, &view, message).await;
-        *view.last_used.lock() = std::time::Instant::now();
-        drop(guard);
-        response.map_err(ViewError::Uncertain)
-    })
-    .await
-    .map_err(|_| ViewError::Uncertain("mcp_unavailable"))?
+    let response = send(state, &view, message).await;
+    *view.last_used.lock() = std::time::Instant::now();
+    drop(guard);
+    response.map_err(ViewError::Uncertain)
 }
 
 fn retire_view(state: &AppState, view: &Arc<View>) {
@@ -107,14 +118,24 @@ async fn scope(state: &Arc<AppState>, call: &ViewCall) -> Result<Arc<View>, &'st
     let key = (call.session.clone(), call.binding.clone());
     let existing = views.scopes.lock().get(&key).cloned();
     if let Some(view) = existing {
-        if view.epoch == call.epoch
+        let authority = view.session.current(state).is_ok();
+        if authority
+            && view.epoch == call.epoch
             && view.tools == call.tools
             && !view.closing.load(Ordering::Acquire)
-            && view.session.current(state).is_ok()
         {
             return Ok(view);
         }
-        retire_view(state, &view);
+        // Authority loss closes at once; otherwise a scope is replaced only
+        // once nothing is in flight, so a confirmed write is never cut off.
+        if authority {
+            let _idle = Arc::clone(&view.flight)
+                .try_lock_owned()
+                .map_err(|_| "mcp_busy")?;
+            retire_view(state, &view);
+        } else {
+            retire_view(state, &view);
+        }
     }
     let (grant, connection) = super::super::super::managed_calls::mcp_parent(state, &call.session)
         .ok_or("mcp_parent_unavailable")?;
@@ -158,7 +179,10 @@ async fn handshake(state: &AppState, view: &Arc<View>) -> Result<(), &'static st
         "protocolVersion":PROTOCOL_VERSION,"capabilities":{},
         "clientInfo":{"name":"cowboy-view-scope","version":env!("CARGO_PKG_VERSION")}}});
     let reply = send(state, view, initialize).await?;
-    if reply["result"]["protocolVersion"].as_str().is_none() {
+    if !reply["result"]["protocolVersion"]
+        .as_str()
+        .is_some_and(|version| PROTOCOL_VERSIONS.contains(&version))
+    {
         retire_view(state, view);
         return Err("mcp_handshake_failed");
     }

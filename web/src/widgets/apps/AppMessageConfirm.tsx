@@ -15,7 +15,8 @@ export default function AppMessageConfirm({
 }: {
   pending: PendingAppMessage;
   title: string;
-  onClose: () => void;
+  /** `sent` is true only once the Controller accepted the message. */
+  onClose: (sent: boolean) => void;
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; outdated: boolean } | null>(null);
@@ -23,7 +24,7 @@ export default function AppMessageConfirm({
     setBusy(true);
     const reply = await sendAppMessage(pending);
     setBusy(false);
-    if (reply.kind === "sent") onClose();
+    if (reply.kind === "sent") onClose(true);
     else {
       const queued = !reply.final && reply.code !== "storage";
       setNotice({
@@ -37,7 +38,7 @@ export default function AppMessageConfirm({
   // Nothing was saved before Send; while a send is in flight the sheet
   // stays, and after a failure its outbox entry is retried in the background.
   const cancel = (): void => {
-    if (!busy) onClose();
+    if (!busy) onClose(false);
   };
   return (
     <ConfirmSheet

@@ -174,7 +174,16 @@ function mcpApp(node: Record<string, unknown>, path: string): void {
     if (typeof node[key] !== "string" || !WIDGET_ID_PATTERN.test(node[key] as string))
       fail(`${path}.${key}`, "expected a name");
   }
-  line(node["uri"], `${path}.uri`, WIDGET_LIMITS.labelChars);
+  // The signed-contract rule: `ui://` and lowercase path segments, ≤ 256 bytes.
+  const uri = node["uri"];
+  if (
+    typeof uri !== "string" ||
+    uri.length > 256 ||
+    !/^ui:\/\/[a-z0-9._-]+(\/[a-z0-9._-]+)*$/.test(uri) ||
+    uri.slice(5).split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    fail(`${path}.uri`, "expected a ui:// resource URI");
+  }
   if (typeof node["sha256"] !== "string" || !/^[0-9a-f]{64}$/.test(node["sha256"]))
     fail(`${path}.sha256`, "expected a digest");
   if (typeof node["epoch"] !== "string" || !/^[0-9a-f]{32}$/.test(node["epoch"]))
