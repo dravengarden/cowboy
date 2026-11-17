@@ -380,6 +380,33 @@ fi
 [ "$(digest_of "$3")" = "$5" ] || exit 1
 cat -- "$3" > "$3.cache" && mv -f -- "$3.cache" "$1"`;
 
+// A hook transcript delta small enough to travel inside its snapshot
+// command: valid UTF-8 without NUL (a shell argument), whose quoted form
+// stays far below Linux's 128 KiB argument limit. Otherwise undefined.
+export function hookInlineText(bytes, limit = HOOK_INLINE_INPUT) {
+  if (bytes.length > limit || bytes.includes(0)) return undefined;
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) return undefined;
+  return Buffer.byteLength(shellLiteral(text)) <= limit ? text : undefined;
+}
+
+// The snapshot command for one hook: writes an inline delta privately, runs
+// the snapshot and removes the delta and the snapshot's temporary copy on
+// every exit the snapshot defines, so no separate removal follows it.
+export function hookSnapshotScript(snapshot, delta, copy, inline) {
+  return [
+    ...(inline === undefined
+      ? []
+      : [
+          `(umask 077 && set -C && printf '%s' ${shellLiteral(inline)} > ${shellLiteral(delta)}) || exit 1`,
+        ]),
+    snapshot.map(shellLiteral).join(" "),
+    "s=$?",
+    `rm -f -- ${shellLiteral(delta)} ${shellLiteral(copy + ".cache")}`,
+    'exit "$s"',
+  ].join("\n");
+}
+
 // POSIX `cksum` of `bytes`, in the shell snapshot's digest form.
 const CKSUM_TABLE = Array.from({ length: 256 }, (_, index) => {
   let crc = index << 24;
@@ -1257,14 +1284,11 @@ export class WorkspaceTools {
       if (started && !settled) await this.cancelTasks([id]).catch(() => {});
       this.foreground.delete(id);
       if (call?.id) this.calls.delete(call.id);
+      // The hook has ended and its result is final: its files leave the
+      // target in the background instead of delaying the tool call it guards
+      // by one more round trip each.
       for (const path of [inline ? undefined : file, copy, agentCopy]) {
-        if (!path) continue;
-        await this.connection
-          .call("fs/remove", {
-            path: pathToFileURL(path).href,
-            force: true,
-          })
-          .catch(() => {});
+        if (path) this.removeTarget(path);
       }
     }
   }
@@ -1332,6 +1356,9 @@ export class WorkspaceTools {
         `transcript-${this.state.binding}-${key}.cache`,
       );
       const delta = copy + ".delta";
+      // Files a preparation may have left that its own command did not
+      // remove: only an interrupted one, whose files the caller removes.
+      let uncertain = false;
       try {
         for (;;) {
           const previous = this.state.hookTranscripts?.[key];
@@ -1342,23 +1369,34 @@ export class WorkspaceTools {
             transcript.length >= previous.length &&
             digestOf(transcript.subarray(0, previous.length)) === previous.digest;
           const digest = digestOf(transcript);
+          // One target command writes a small delta itself, prepares the
+          // snapshot and removes its own files, and its end lines settle it
+          // in one read. A delta in a file and its two removals were three
+          // more round trips to a distant target for every hook.
           const prepare = async (bytes, base) => {
-            await this.hookInputFile(delta, bytes, call);
-            return await this.command(
-              [
-                ...(this.fileHelper && kind === "sha256"
-                  ? [this.fileHelper, "snapshot", "--"]
-                  : [this.shell, "-c", SHELL_SNAPSHOT, this.shell]),
-                cache,
-                delta,
-                copy,
-                base,
-                digest,
-              ],
+            uncertain = true;
+            const inline = hookInlineText(bytes, this.hookInlineLimit);
+            if (inline === undefined) await this.hookInputFile(delta, bytes, call);
+            const snapshot = [
+              ...(this.fileHelper && kind === "sha256"
+                ? [this.fileHelper, "snapshot", "--"]
+                : [this.shell, "-c", SHELL_SNAPSHOT, this.shell]),
+              cache,
+              delta,
+              copy,
+              base,
+              digest,
+            ];
+            const end = randomUUID().replaceAll("-", "");
+            const result = await this.command(
+              endedCommand(this.shell, hookSnapshotScript(snapshot, delta, copy, inline), end),
               10000,
               call,
-              { cancelOnError: true },
+              { cancelOnError: true, end },
             );
+            // Every exit the snapshot defines ran the command's own removal.
+            uncertain = ![0, 3, 75].includes(result.exitCode);
+            return result;
           };
           let result = await prepare(
             append ? transcript.subarray(previous.length) : transcript,
@@ -1387,7 +1425,7 @@ export class WorkspaceTools {
           return;
         }
       } finally {
-        for (const path of [delta, copy + ".cache"]) {
+        for (const path of uncertain ? [delta, copy + ".cache"] : []) {
           await this.connection
             .call("fs/remove", {
               path: pathToFileURL(path).href,
