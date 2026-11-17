@@ -126,6 +126,56 @@ a disposable `HOME`/`XDG_*` and no D-Bus session:
 
 Remaining Phase 1 items need the dedicated test account.
 
+#### Phase 1 progress — Hawk, dedicated free-tier test account (2026-11-17)
+
+- Login: `antigravity acp --login` under a PTY printed a Google OAuth URL
+  (client `1071006060591-…`, PKCE, redirect `https://antigravity.google/oauth-callback`)
+  and accepted the pasted code: "Logged in as <email>." The flow fits the
+  existing `browser_code` challenge shape.
+- A new account first answered every prompt with an agent message
+  "⚠ Verification Required" and `stopReason: end_turn`; the log showed
+  `PERMISSION_DENIED (403) VALIDATION_REQUIRED` with a Google account
+  verification URL. Backend refusals are therefore not JSON-RPC errors: the
+  Provider must classify such turns (verification, suspension, quota) into
+  account state from a structured source, not from model text alone.
+- Credential custody: with `HOME` replaced but no explicit
+  `XDG_RUNTIME_DIR`, `agy` still reached the user's session bus and stored
+  "Password for 'antigravity' on 'gemini'" in the real GNOME login keyring
+  (one fixed item per UID, so a second account would overwrite it). That item
+  was deleted after the test. With `XDG_RUNTIME_DIR` set to a private
+  directory and no session bus, the log reports "Failed keyring SaveToken,
+  falling back to file" and the credential is written to
+  `$HOME/.gemini/antigravity-cli/antigravity-oauth-token` (mode 0600). A
+  prompt from that HOME succeeded while the real keyring stayed untouched.
+  Cowboy must always launch `agy` (login and runtime) with a per-generation
+  `HOME`, a private `XDG_RUNTIME_DIR` and no inherited D-Bus address. Cowboy
+  never opens the token file.
+- Free-tier models: Gemini 3.8 Flash (High/Medium/Low, default High), Claude
+  Sonnet 4.6, Claude Opus 4.6, GPT-OSS 120B. `session/new` returns
+  `models.availableModels`/`currentModelId`; ACP `usage_update` reports a
+  1,048,576-token window; each `session/prompt` result carries input, output,
+  cached-read, cached-write and thought token counts.
+- Permissions: `run_command` and `write_file` raise
+  `session/request_permission`; `read_file` does not.
+- Resume: a new process restored a session with `session/load`, replayed its
+  history and answered from it.
+- Tool delegation: with client `fs` and `terminal` capabilities declared,
+  `agy` still executed `read_file`, `run_command` and `write_file` locally; it
+  never called `fs/*` or `terminal/*`.
+- Facade: a global `~/.gemini/config/hooks.json` `PreToolUse` hook denied
+  built-in tools; an MCP server passed in ACP `session/new.mcpServers` exposed
+  `ReadFile` and `RunCommand` (seen as `mcp_cowboy_*`); the model fell back to
+  them and returned target-only content. The model first tries a built-in
+  tool each time; steering via `systemPrompt.append` is untested.
+- Context: asked without tools, the model reported the ACP session `cwd`, OS
+  Linux and no other path. A same-path mirror directory on OVH may therefore
+  present the target path; Git status and guidance discovery remain untested.
+
+Remaining Phase 1: OVH install, login and footprint; ACP logout; suspension
+and 429 shapes; concurrent refresh on two Machines; `systemPrompt.append`
+steering; Git/guidance context; disabling native subagents, browser and other
+tools that bypass the facade.
+
 ### Phase 2 — Native custody as a Provider declaration
 
 Replace the `claude-code` literals of the native-owned fence with a signed
