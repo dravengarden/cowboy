@@ -491,6 +491,21 @@ fn validate_delivery(
 mod tests {
     use super::*;
 
+    fn deepseek_packages() -> Vec<cowboy_provider_sdk::ProviderPackage> {
+        [
+            include_str!("../../plugins/claude-deepseek/provider.json"),
+            include_str!("../../plugins/codex-deepseek/provider.json"),
+            include_str!("../../plugins/deepseek-harness/provider.json"),
+        ]
+        .into_iter()
+        .map(|source| {
+            let source: cowboy_provider_sdk::StandardProviderSource =
+                serde_json::from_str(source).unwrap();
+            cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap()
+        })
+        .collect()
+    }
+
     #[tokio::test]
     async fn portable_named_sessions_need_their_own_available_ready_account_key() {
         use crate::store::provider_accounts::{Change, Mutation, MutationResult};
@@ -525,18 +540,7 @@ mod tests {
         let auth = Arc::new(
             crate::provider_service::ProviderAuthService::open(&root.path().join("auth")).unwrap(),
         );
-        let packages: Vec<_> = [
-            include_str!("../../plugins/claude-deepseek/provider.json"),
-            include_str!("../../plugins/codex-deepseek/provider.json"),
-            include_str!("../../plugins/deepseek-harness/provider.json"),
-        ]
-        .into_iter()
-        .map(|source| {
-            let source: cowboy_provider_sdk::StandardProviderSource =
-                serde_json::from_str(source).unwrap();
-            cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap()
-        })
-        .collect();
+        let packages = deepseek_packages();
         let bundle = crate::machine_protocol::PortableCredentialBundle {
             portable_schema: "deepseek-api-key-v1".into(),
             method_id: "api-key".into(),
@@ -579,7 +583,11 @@ mod tests {
         assert!(!portable_admitted(shared, &store, "other", &other).await);
         // Native-login Providers keep the native binding path.
         assert!(!portable(&meta("claude-code", &id, 1)));
-        assert!(!portable(&meta("codex-deepseek", &Default::default(), 1)));
+        assert!(!portable(&meta(
+            "codex-deepseek",
+            &crate::provider_account::ProviderAccountId::default(),
+            1
+        )));
         // A newer key keeps older sessions admitted, like the Service account.
         auth.account(&id)
             .unwrap()
