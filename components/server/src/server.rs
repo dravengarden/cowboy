@@ -1858,12 +1858,15 @@ struct ResolvedProviderGeneration {
 }
 
 /// A verified move of one named session to another release: the Hub proof
-/// and the exact login whose runtime admission must hold around the change.
+/// and the native login (operation, completion) whose runtime admission must
+/// hold around the change; `None` for a portable account's vault key.
 #[derive(Clone)]
 struct NamedReleaseMove {
     carry: crate::core::NamedReleaseCarry,
-    operation: String,
-    completion: crate::store::provider_accounts::logins::NativeCompletion,
+    native: Option<(
+        String,
+        crate::store::provider_accounts::logins::NativeCompletion,
+    )>,
 }
 
 /// Response body for `POST /api/sessions`.

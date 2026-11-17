@@ -20,6 +20,7 @@ fn named(provider: &str, label: &str, browser_enabled: bool) -> Account {
         identity_fingerprint: None,
         admission_revision: None,
         browser_enabled,
+        portable_credentials: false,
     }
 }
 

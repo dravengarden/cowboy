@@ -86,6 +86,13 @@ pub(in crate::server) async fn reconcile(
     } else {
         serde_json::json!({"state": if ready { "waiting_for_native_logout" } else { "waiting_for_session_stop" }})
     };
+    result["portable_credentials"] = if ready {
+        super::portable::revocation::run(state, owner, operation)
+            .await
+            .map_err(|_| "revocation_reconciliation_failed")?
+    } else {
+        serde_json::json!({"state":"waiting_for_session_stop"})
+    };
     if store
         .complete_provider_revocation(owner, operation)
         .await

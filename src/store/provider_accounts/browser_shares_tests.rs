@@ -14,6 +14,7 @@ fn named(provider: &str, label: &str) -> Account {
         identity_fingerprint: None,
         admission_revision: None,
         browser_enabled: true,
+        portable_credentials: false,
     }
 }
 

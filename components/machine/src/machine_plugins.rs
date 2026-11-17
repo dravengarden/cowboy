@@ -25,6 +25,7 @@ mod code_sync_conformance;
 mod extensions;
 mod installation;
 mod machine_browser;
+mod service_trust;
 pub use machine_browser::{
     BrowserDrain, DrainFuture, GenerationRetirement, MachineBrowserRuntimePlan,
 };
@@ -2129,7 +2130,7 @@ impl MachinePluginStore {
             signature_valid,
             "Service auth envelope signature is invalid"
         );
-        self.pin_service_key(&envelope.service_public_key)?;
+        self.pin_envelope_service_key(envelope)?;
         let provider_auth_root = self.auth_provider_root(&envelope.provider_id);
         let previous = self.latest_auth_envelope(&envelope.provider_id)?;
         validate_auth_replica_transition(previous.as_ref(), envelope)?;
@@ -3076,15 +3077,6 @@ impl MachinePluginStore {
         fs::create_dir_all(&trust)?;
         fs::set_permissions(&trust, fs::Permissions::from_mode(0o700))?;
         pin_key(&trust.join(format!("{publisher}.pub")), public_key)
-    }
-
-    fn pin_service_key(&self, public_key: &str) -> Result<()> {
-        let pin = self.auth_base.join("service.pub");
-        ensure!(
-            self.account_id.is_default() || pin.is_file(),
-            "named account requires an established Service trust root"
-        );
-        pin_key(&pin, public_key)
     }
 
     fn latest_auth_envelope(&self, provider_id: &str) -> Result<Option<SealedProviderAuth>> {
@@ -6121,7 +6113,8 @@ mod tests {
         let signer =
             crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("signer"))
                 .unwrap();
-        store.pin_service_key(signer.public_key()).unwrap();
+        // A fresh Machine: no default-account apply ever pinned the Service.
+        assert!(!store.auth_base.join("service.pub").exists());
         let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(
             include_str!("../../../plugins/claude-deepseek/provider.json"),
         )
@@ -6163,6 +6156,14 @@ mod tests {
             .prepare_launch_auth_home("claude-deepseek", &package, 3, &digest)
             .unwrap();
         assert_eq!(relaunch, home);
+        // The first portable apply pinned the Service; another Service key
+        // is refused for every scope.
+        assert!(store.auth_base.join("service.pub").is_file());
+        let other =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("other"))
+                .unwrap();
+        let forged = seal_auth_for_test(&scoped, &package, &other, 4, &bundle);
+        assert!(store.apply_auth(&forged).await.is_err());
     }
 
     #[tokio::test]

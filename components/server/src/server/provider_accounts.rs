@@ -342,12 +342,14 @@ mod tests {
                 logins: vec![],
                 grants: vec![],
                 browsers: vec![],
+                portable_credentials: false,
             }),
             remote_wipes: Default::default(),
             local_wipes: Default::default(),
             login_stops: Default::default(),
             browser_revocations: Default::default(),
             browser_share_id: None,
+            ..Default::default()
         };
         // An empty plan or a disabled account alone does not imply completion.
         assert_eq!(receipt_value(&receipt)["status"], "revoking");

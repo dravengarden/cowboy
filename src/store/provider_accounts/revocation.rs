@@ -56,9 +56,19 @@ pub struct Plan {
     /// Omitted while empty so an older Controller still reads the plan.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub browsers: Vec<BrowserTarget>,
+    /// The account held a portable key: its vault and every Machine replica
+    /// must be wiped (targets are fixed when the vault is wiped).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub portable_credentials: bool,
 }
 
 impl Plan {
+    #[must_use]
+    pub(super) fn with_portable(mut self, portable_credentials: bool) -> Self {
+        self.portable_credentials = portable_credentials;
+        self
+    }
+
     pub(super) fn capture(
         account: &ProviderAccountId,
         logins: Vec<(String, String)>,
@@ -67,6 +77,7 @@ impl Plan {
         browsers: Vec<(String, String)>,
     ) -> Result<Self> {
         let mut plan = Self {
+            portable_credentials: false,
             logins: Vec::new(),
             grants: Vec::new(),
             sessions: sessions

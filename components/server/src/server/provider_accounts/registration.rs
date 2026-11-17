@@ -120,31 +120,9 @@ pub(in crate::server) async fn register(
         return register_in_scope(state, &state.provider_auth, registration, scheduling);
     }
     if portable::provider(state, &registration.provider) {
-        // The account's own vault, rechecked at creation; never the default.
-        let owner = registration
-            .owner_user_id
-            .as_deref()
-            .ok_or("account_owner_required")?;
-        portable::admitted_status(
-            state,
-            owner,
-            &registration.provider_account_id,
-            &registration.provider,
-        )
-        .await?;
-        let scope = portable::scope(
-            state,
-            &registration.provider_account_id,
-            &registration.provider,
-        )
-        .ok_or("account_credentials_unavailable")?;
-        if !state
-            .supervisor
-            .runtime_allowed(&registration.provider, &registration.machine_id)
-        {
-            return Err("runtime_not_allowed".into());
-        }
-        return register_in_scope(state, &scope, registration, scheduling);
+        // The account's own vault, persisted under the owner lock first;
+        // never the default account.
+        return portable::register(state, registration, scheduling).await;
     }
     let owner = registration
         .owner_user_id

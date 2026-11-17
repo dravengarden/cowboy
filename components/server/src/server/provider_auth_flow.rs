@@ -546,6 +546,9 @@ pub(super) async fn named_upgrade_target(
             "this session's Machine needs a Cowboy update to move it to another release".to_owned(),
         );
     }
+    if provider_accounts::portable::provider(state, &meta.provider) {
+        return provider_accounts::portable::upgrade_target(state, meta).await;
+    }
     let store = state.store.as_ref().ok_or("account_store_unavailable")?;
     let owner = meta
         .owner_user_id
@@ -598,8 +601,7 @@ pub(super) async fn named_upgrade_target(
             version: target.version.clone(),
             digest: target.digest.clone(),
         },
-        operation,
-        completion,
+        native: Some((operation, completion)),
     });
     Ok(target)
 }
@@ -722,6 +724,12 @@ pub(super) async fn with_release_admission<T>(
     let Some(named) = target.named_carry.as_ref() else {
         return action(None);
     };
+    let Some((operation, completion)) = &named.native else {
+        return provider_accounts::portable::with_release_admission(state, meta, || {
+            action(Some(&named.carry))
+        })
+        .await;
+    };
     let store = state.store.as_ref().ok_or("account_store_unavailable")?;
     let owner = meta
         .owner_user_id
@@ -729,16 +737,10 @@ pub(super) async fn with_release_admission<T>(
         .ok_or("named session has no owner")?;
     let mut outcome = None;
     store
-        .with_native_session_release_binding(
-            owner,
-            &named.operation,
-            &named.completion,
-            meta,
-            || {
-                outcome = Some(action(Some(&named.carry)));
-                std::future::ready(Ok(()))
-            },
-        )
+        .with_native_session_release_binding(owner, operation, completion, meta, || {
+            outcome = Some(action(Some(&named.carry)));
+            std::future::ready(Ok(()))
+        })
         .await
         .map_err(|error| error.to_string())?;
     outcome.unwrap_or_else(|| Err("release admission did not run".to_owned()))

@@ -6,6 +6,11 @@
 use super::*;
 use crate::provider_account::ProviderAccountId;
 use crate::provider_service::{ProviderAuthService, ProviderAuthenticationStatus};
+use crate::store::provider_accounts::portable::Use;
+
+mod release;
+pub(in crate::server) mod revocation;
+pub(in crate::server) use release::{register, upgrade_target, with_release_admission};
 
 const MAX_SECRET_BYTES: usize = 16 * 1024;
 
@@ -117,29 +122,34 @@ pub(in crate::server) struct Credentials {
     secret: String,
 }
 
+/// A malformed body is refused with a constant code: Axum's own rejection
+/// text could quote the body, and with it the key.
 pub(in crate::server) async fn http_commit(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
     Path(account_id): Path<ProviderAccountId>,
-    Json(request): Json<Credentials>,
+    body: Result<Json<Credentials>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
-    match commit(&state, &auth.principal.user_id, &account_id, &request).await {
-        Ok(value) => (
-            StatusCode::CREATED,
-            [(header::CACHE_CONTROL, "no-store")],
-            Json(value),
-        )
-            .into_response(),
+    let result = match body {
+        Ok(Json(request)) => commit(&state, &auth.principal.user_id, &account_id, &request).await,
+        Err(_) => Err("invalid_request"),
+    };
+    commit_response(result)
+}
+
+fn commit_response(result: Result<Value, &'static str>) -> Response {
+    let (status, value) = match result {
+        Ok(value) => (StatusCode::CREATED, value),
+        Err("unavailable") => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":{"code":"unavailable"}}),
+        ),
         Err(code) => (
-            if code == "unavailable" {
-                StatusCode::SERVICE_UNAVAILABLE
-            } else {
-                StatusCode::UNPROCESSABLE_ENTITY
-            },
-            Json(json!({"error":{"code":code}})),
-        )
-            .into_response(),
-    }
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"error":{"code":code}}),
+        ),
+    };
+    (status, [(header::CACHE_CONTROL, "no-store")], Json(value)).into_response()
 }
 
 /// Commit a new key for every portable Provider in the account's scope at
@@ -182,12 +192,37 @@ pub(in crate::server) async fn commit(
         .provider_auth
         .account(account_id)
         .map_err(|_| "unavailable")?;
-    let statuses = scope
-        .commit_shared(&packages, &bundle, None, &account.provider_id, None)
+    // The owner's account lock serializes this commit with disabling and
+    // revocation: a revoking account never receives a key, and the account
+    // is durably marked before its vault first holds one.
+    let mut committed = None;
+    state
+        .store
+        .as_ref()
+        .ok_or("unavailable")?
+        .with_portable_account(
+            owner,
+            account_id,
+            Use::Commit,
+            |current| current.provider_id == account.provider_id,
+            || {
+                committed =
+                    Some(scope.commit_shared(&packages, &bundle, None, &account.provider_id, None));
+                std::future::ready(Ok(()))
+            },
+        )
+        .await
         .map_err(|error| {
-            tracing::warn!(account = account_id.as_str(), %error, "rejected portable account credential");
-            "credential_rejected"
+            if error.to_string() == "account_unavailable" {
+                "account_unavailable"
+            } else {
+                "unavailable"
+            }
         })?;
+    let statuses = committed.ok_or("unavailable")?.map_err(|error| {
+        tracing::warn!(account = account_id.as_str(), %error, "rejected portable account credential");
+        "credential_rejected"
+    })?;
     let (statuses, replicas) = distribute_and_mark_scope(state, &scope, account_id, statuses).await;
     let count = |field: fn(&ProviderDistributionOutcome) -> usize| -> usize {
         replicas.values().map(field).sum()
@@ -301,6 +336,23 @@ mod tests {
             secret_bundle(&native, &method, "sk-entered"),
             Err("authentication_method_unavailable")
         );
+    }
+
+    #[tokio::test]
+    async fn refusals_are_constant_and_never_cached() {
+        for (result, status) in [
+            (Err("invalid_request"), StatusCode::UNPROCESSABLE_ENTITY),
+            (Err("unavailable"), StatusCode::SERVICE_UNAVAILABLE),
+            (Ok(json!({"status":"committed"})), StatusCode::CREATED),
+        ] {
+            let response = commit_response(result);
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        }
+        let body = axum::body::to_bytes(commit_response(Err("invalid_request")).into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], br#"{"error":{"code":"invalid_request"}}"#);
     }
 
     #[test]

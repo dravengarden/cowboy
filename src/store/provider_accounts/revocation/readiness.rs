@@ -107,6 +107,11 @@ impl Store {
                 });
             }
         }
+        missing.extend(
+            super::super::portable::missing(&receipt)
+                .into_iter()
+                .map(|(kind, target)| Missing { kind, target }),
+        );
         Ok(Readiness {
             account_completed: receipt.revocation_completed,
             missing,

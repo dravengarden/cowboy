@@ -27,6 +27,9 @@ test("portable scopes and defaults mirror the Service resolution", () => {
   assertEquals(providerDefault(data, "deepseek-harness"), "h");
   assertEquals(providerDefault(data, "codex-deepseek"), "c");
   assertEquals(providerDefault(data, "codex"), undefined);
+  // An explicit Service-account choice is kept and is not overridden by a sibling.
+  data.registry.defaults["codex-deepseek"] = "default";
+  assertEquals(providerDefault(data, "codex-deepseek"), "default");
 });
 
 test("the account snapshot validates portable key state", () => {

@@ -27,46 +27,57 @@ fn vault_admits(
         && status.auth_generation >= generation
 }
 
-/// Fresh portable admission: the owner's registry account is available and
-/// serves the session Provider (its own, or one sharing its credential in
-/// the same vault), and that vault holds a Ready key at the session's
-/// generation or newer.
-async fn portable_admitted(
+/// The account vault holds a Ready key for this session at its generation or
+/// newer; returns the vault and the key's credential scope.
+fn portable_vault(
+    shared: &Shared,
+    meta: &crate::model::SessionMeta,
+) -> Option<(Arc<crate::provider_service::ProviderAuthService>, String)> {
+    let scope = shared
+        .provider_auth
+        .as_ref()?
+        .existing_account(&meta.provider_account_id)?;
+    let status = scope.status(&meta.provider)?;
+    meta.provider_auth_generation
+        .is_some_and(|generation| vault_admits(&status, generation))
+        .then_some((scope, status.authentication_scope))
+}
+
+/// Run `action` under fresh portable admission: the owner's account lock
+/// holds the exact persisted session row, the account is available and
+/// serves the session Provider (its own, or one sharing its key in the same
+/// vault), and the vault key is rechecked inside the lock. Disabling,
+/// revocation and key commits take that lock, so none completes during a
+/// bounded write or projection. Never consults the default account.
+async fn with_portable<T, F: std::future::Future<Output = Result<T>>>(
     shared: &Shared,
     store: &crate::store::Store,
     owner: &str,
     meta: &crate::model::SessionMeta,
-) -> bool {
-    let Some(scope) = shared
-        .provider_auth
-        .as_ref()
-        .and_then(|auth| auth.existing_account(&meta.provider_account_id))
-    else {
-        return false;
+    action: impl FnOnce() -> F,
+) -> Result<T> {
+    let (scope, credential) = portable_vault(shared, meta).context("portable_key_unavailable")?;
+    let serves = |account: &crate::store::provider_accounts::Account| {
+        account.provider_id == meta.provider
+            || scope
+                .status(&account.provider_id)
+                .is_some_and(|own| own.authentication_scope == credential)
     };
-    let Some(status) = scope.status(&meta.provider) else {
-        return false;
-    };
-    if !meta
-        .provider_auth_generation
-        .is_some_and(|generation| vault_admits(&status, generation))
-    {
-        return false;
-    }
-    let Ok(registry) = store.provider_accounts(owner).await else {
-        return false;
-    };
-    registry
-        .accounts
-        .iter()
-        .find(|account| account.id == meta.provider_account_id)
-        .is_some_and(|account| {
-            account.available()
-                && (account.provider_id == meta.provider
-                    || scope
-                        .status(&account.provider_id)
-                        .is_some_and(|own| own.authentication_scope == status.authentication_scope))
-        })
+    store
+        .with_portable_account(
+            owner,
+            &meta.provider_account_id,
+            crate::store::provider_accounts::portable::Use::Existing(meta),
+            serves,
+            || async {
+                anyhow::ensure!(
+                    portable_vault(shared, meta).is_some(),
+                    "portable_key_unavailable"
+                );
+                action().await
+            },
+        )
+        .await
 }
 
 /// The Service scope that owns a session's projected credentials, for
@@ -179,19 +190,22 @@ pub(super) async fn snapshot(
         return false;
     }
     if portable(&meta) {
-        if !portable_admitted(shared, &store, owner, &meta).await
-            || shared.shutdown.load(Ordering::Acquire)
-            || !shared.hub.session_info(&meta.id).is_some_and(|info| {
-                !info.meta.closing
-                    && info.meta.owner_user_id == meta.owner_user_id
-                    && info.meta.machine_id == machine
-                    && matches(&info.meta, launch)
-            })
-        {
-            return false;
-        }
-        project();
-        return true;
+        return with_portable(shared, &store, owner, &meta, || async {
+            anyhow::ensure!(
+                !shared.shutdown.load(Ordering::Acquire)
+                    && shared.hub.session_info(&meta.id).is_some_and(|info| {
+                        !info.meta.closing
+                            && info.meta.owner_user_id == meta.owner_user_id
+                            && info.meta.machine_id == machine
+                            && matches(&info.meta, launch)
+                    }),
+                "portable_session_binding_changed"
+            );
+            project();
+            Ok(())
+        })
+        .await
+        .is_ok();
     }
     let Ok(Some((operation, completion))) = store
         .native_login_for_registered_session(owner, &meta.id)
@@ -450,14 +464,22 @@ async fn send_portable<W: tokio::io::AsyncWrite + Unpin>(
     command: CoreCommand,
 ) -> Result<bool> {
     // Native readmission has no meaning for a Service-held key.
-    if matches!(command, CoreCommand::ReadmitAccountSession { .. })
-        || !portable_admitted(shared, store, owner, meta).await
-        || validate_delivery(shared, meta, &command).is_err()
-    {
+    if matches!(command, CoreCommand::ReadmitAccountSession { .. }) {
         return Ok(false);
     }
-    write_broker_frame(writer, &Frame::CoreCommand { command }).await?;
-    Ok(true)
+    let started = AtomicBool::new(false);
+    let result = with_portable(shared, store, owner, meta, || async {
+        validate_delivery(shared, meta, &command)?;
+        started.store(true, Ordering::Release);
+        write_broker_frame(writer, &Frame::CoreCommand { command }).await
+    })
+    .await;
+    match result {
+        Ok(()) => Ok(true),
+        // Any failure after starting a write closes the transport.
+        Err(error) if started.load(Ordering::Acquire) => Err(error),
+        Err(_) => Ok(false),
+    }
 }
 
 /// How long admission waits for a just-reloaded session's stored binding.
@@ -506,15 +528,89 @@ mod tests {
         .collect()
     }
 
+    const OWNER: &str = "0123456789abcdef0123456789abcdef";
+
+    /// A migrated store with the owner user and an enrolled `hawk` Machine.
+    async fn fixture_store(root: &std::path::Path) -> crate::store::Store {
+        let url = format!("sqlite://{}", root.join("db.sqlite3").display());
+        let store = crate::store::Store::connect(&url, root.join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        store
+            .insert_user(&crate::store::ProductUser {
+                id: OWNER.into(),
+                username: "owner".into(),
+                password_algo: "fixture".into(),
+                password_hash: "fixture".into(),
+                created_at_ms: 0,
+                updated_at_ms: 0,
+                disabled_at_ms: None,
+            })
+            .await
+            .unwrap();
+        let machine_key = {
+            use base64::Engine as _;
+            let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from([3; 32]));
+            base64::engine::general_purpose::STANDARD.encode(public.as_bytes())
+        };
+        let token = store
+            .create_machine_enrollment("hawk", "hawk", 60)
+            .await
+            .unwrap();
+        store
+            .consume_machine_enrollment(&token, &format!("ssh-ed25519 {machine_key}"), &machine_key)
+            .await
+            .unwrap();
+        store
+    }
+
+    fn meta(
+        provider: &str,
+        account: &crate::provider_account::ProviderAccountId,
+        generation: u64,
+    ) -> crate::model::SessionMeta {
+        serde_json::from_value(serde_json::json!({
+            "id":format!("s-{provider}"), "provider":provider, "machine_id":"hawk",
+            "workspace_id":"project", "cwd":"/tmp", "title":"named", "status":"starting",
+            "owner_user_id":OWNER, "provider_account_id":account,
+            "provider_auth_generation":generation, "provider_version":"1.0.0",
+            "provider_generation_digest":"sha256:fixture"
+        }))
+        .unwrap()
+    }
+
+    async fn persist(
+        store: &crate::store::Store,
+        session: &crate::model::SessionMeta,
+    ) -> Result<()> {
+        store
+            .with_portable_account(
+                OWNER,
+                &session.provider_account_id,
+                crate::store::provider_accounts::portable::Use::Insert(session),
+                |_| true,
+                || async { Ok(()) },
+            )
+            .await
+    }
+
+    async fn portable_admitted(
+        shared: &Shared,
+        store: &crate::store::Store,
+        owner: &str,
+        meta: &crate::model::SessionMeta,
+    ) -> bool {
+        with_portable(shared, store, owner, meta, || async { Ok(()) })
+            .await
+            .is_ok()
+    }
+
     #[tokio::test]
     async fn portable_named_sessions_need_their_own_available_ready_account_key() {
         use crate::store::provider_accounts::{Change, Mutation, MutationResult};
         let root = tempfile::tempdir().unwrap();
-        let url = format!("sqlite://{}", root.path().join("db.sqlite3").display());
-        let store = crate::store::Store::connect(&url, root.path().join("artifacts"))
-            .await
-            .unwrap();
-        store.migrate().await.unwrap();
+        let store = fixture_store(root.path()).await;
         let create = |provider: &str| Mutation {
             expected_revision: 0,
             change: Change::Create {
@@ -523,7 +619,7 @@ mod tests {
             },
         };
         let MutationResult::Applied(created) = store
-            .mutate_provider_accounts("owner", "create", &create("claude-deepseek"))
+            .mutate_provider_accounts(OWNER, "create", &create("claude-deepseek"))
             .await
             .unwrap()
         else {
@@ -558,26 +654,19 @@ mod tests {
             .unwrap()
             .provider_auth = Some(Arc::clone(&auth));
         let shared = &runtime.shared;
-        let meta = |provider: &str,
-                    account: &crate::provider_account::ProviderAccountId,
-                    generation: u64| {
-            serde_json::from_value::<crate::model::SessionMeta>(serde_json::json!({
-                "id":"s", "provider":provider, "machine_id":"hawk", "workspace_id":"project",
-                "cwd":"/tmp", "title":"named", "status":"running", "owner_user_id":"owner",
-                "provider_account_id":account, "provider_auth_generation":generation
-            }))
-            .unwrap()
-        };
+        let unpersisted = meta("claude-deepseek", &id, 1);
+        assert!(!portable_admitted(shared, &store, OWNER, &unpersisted).await);
         // One claude-deepseek account serves every member of its scope.
         for provider in ["claude-deepseek", "codex-deepseek", "deepseek-harness"] {
             let session = meta(provider, &id, 1);
             assert!(portable(&session));
-            assert!(portable_admitted(shared, &store, "owner", &session).await);
+            persist(&store, &session).await.unwrap();
+            assert!(portable_admitted(shared, &store, OWNER, &session).await);
         }
         let session = meta("codex-deepseek", &id, 1);
         assert!(!portable_admitted(shared, &store, "other", &session).await);
-        assert!(!portable_admitted(shared, &store, "owner", &meta("codex-deepseek", &id, 2)).await);
-        assert!(!portable_admitted(shared, &store, "owner", &meta("codex-deepseek", &id, 0)).await);
+        assert!(!portable_admitted(shared, &store, OWNER, &meta("codex-deepseek", &id, 2)).await);
+        assert!(!portable_admitted(shared, &store, OWNER, &meta("codex-deepseek", &id, 0)).await);
         // An account without its own key is refused despite the default key.
         let other = meta("codex-deepseek", &unkeyed.account_id, 1);
         assert!(!portable_admitted(shared, &store, "other", &other).await);
@@ -593,7 +682,7 @@ mod tests {
             .unwrap()
             .commit_shared(&packages, &bundle, None, "claude-deepseek", Some(1))
             .unwrap();
-        assert!(portable_admitted(shared, &store, "owner", &session).await);
+        assert!(portable_admitted(shared, &store, OWNER, &session).await);
         let disable = Mutation {
             expected_revision: 1,
             change: Change::SetEnabled {
@@ -602,10 +691,10 @@ mod tests {
             },
         };
         store
-            .mutate_provider_accounts("owner", "disable", &disable)
+            .mutate_provider_accounts(OWNER, "disable", &disable)
             .await
             .unwrap();
-        assert!(!portable_admitted(shared, &store, "owner", &session).await);
+        assert!(!portable_admitted(shared, &store, OWNER, &session).await);
     }
 
     #[tokio::test]

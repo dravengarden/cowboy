@@ -11,11 +11,13 @@ pub mod browser_shares;
 pub mod grants;
 pub mod legacy_browsers;
 pub mod logins;
+pub mod portable;
 pub mod revocation;
 pub mod transitions;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[allow(clippy::struct_excessive_bools)] // Independent, versioned admission facts.
 pub struct Account {
     pub id: ProviderAccountId,
     pub provider_id: String,
@@ -38,6 +40,10 @@ pub struct Account {
     /// false so an older Controller still reads the registry.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub browser_enabled: bool,
+    /// Set under the owner lock before a portable key is first committed to
+    /// this account's Service vault; revocation must then wipe it everywhere.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub portable_credentials: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -172,6 +178,12 @@ pub struct Receipt {
     /// The share a browser share change is about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_share_id: Option<String>,
+    /// Portable account key: the wiped vault generation and every Machine
+    /// enrolled when it was wiped, then each Machine's authenticated wipe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portable_wipe: Option<portable::LocalWipe>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub portable_remote_wipes: BTreeMap<String, portable::RemoteWipe>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -248,7 +260,9 @@ impl Registry {
             return Err("invalid_provider");
         }
         if id.is_default() {
-            self.defaults.remove(provider_id);
+            // Explicit: a portable scope member must not inherit a sibling's
+            // named default once its owner chose the Service account.
+            self.defaults.insert(provider_id.to_owned(), id.clone());
         } else {
             self.accounts
                 .iter()
@@ -338,6 +352,7 @@ impl Registry {
                         self.revision.checked_add(1).ok_or("revision_exhausted")?,
                     ),
                     browser_enabled: false,
+                    portable_credentials: false,
                 });
                 id
             }
@@ -516,7 +531,8 @@ impl Store {
                     .bind(owner).bind(account_id.as_str()).fetch_all(&mut *tx).await?;
                 let browsers: Vec<(String, String)> = sqlx::query_as("SELECT machine_id,instance_id FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 ORDER BY machine_id")
                     .bind(owner).bind(account_id.as_str()).fetch_all(&mut *tx).await?;
-                Some(revocation::Plan::capture(&account_id, logins, grants, sessions, browsers)?)
+                let portable = registry.accounts.iter().any(|account| account.id == account_id && account.portable_credentials);
+                Some(revocation::Plan::capture(&account_id, logins, grants, sessions, browsers)?.with_portable(portable))
             } else { None };
             if matches!(input.change, Change::BeginRevocation { .. }) {
                 // Same transaction and owner lock as the admission fence. This
@@ -538,7 +554,7 @@ impl Store {
             }
             sqlx::query("UPDATE provider_account_registries SET revision=$1,value=$2 WHERE owner_user_id=$3")
                 .bind(registry.revision).bind(serde_json::to_string(&registry)?).bind(owner).execute(&mut *tx).await?;
-            let receipt = Receipt { registry, account_id, revocation, revocation_completed: false, remote_wipes: BTreeMap::new(), local_wipes: BTreeMap::new(), login_stops: BTreeMap::new(), browser_revocations: BTreeMap::new(), browser_share_id: None };
+            let receipt = Receipt { registry, account_id, revocation, revocation_completed: false, remote_wipes: BTreeMap::new(), local_wipes: BTreeMap::new(), login_stops: BTreeMap::new(), browser_revocations: BTreeMap::new(), browser_share_id: None, ..Receipt::default() };
             sqlx::query("INSERT INTO provider_account_operations (owner_user_id,operation_id,request_hash,result) VALUES ($1,$2,$3,$4)")
                 .bind(owner).bind(operation).bind(&hash).bind(serde_json::to_string(&receipt)?).execute(&mut *tx).await?;
             tx.commit().await?;
@@ -579,6 +595,7 @@ mod tests {
             identity_fingerprint: None,
             admission_revision: None,
             browser_enabled: false,
+            portable_credentials: false,
         };
         let shared = account("claude-deepseek", true);
         let own = account("codex-deepseek", true);
@@ -623,6 +640,25 @@ mod tests {
             registry.resolve_in_scope("deepseek-harness", &scope, None),
             Ok(shared.id.clone())
         );
+        // Choosing the Service account for one member is explicit and stops
+        // inheritance from a sibling's named default.
+        registry
+            .apply(&Change::SetDefault {
+                provider_id: "deepseek-harness".into(),
+                id: ProviderAccountId::default(),
+            })
+            .unwrap();
+        assert_eq!(
+            registry.defaults.get("deepseek-harness"),
+            Some(&ProviderAccountId::default())
+        );
+        assert!(
+            registry
+                .resolve_in_scope("deepseek-harness", &scope, None)
+                .unwrap()
+                .is_default()
+        );
+        registry.defaults.remove("deepseek-harness");
         // An unavailable inherited default refuses; it never falls back.
         registry.accounts[0].enabled = false;
         assert_eq!(

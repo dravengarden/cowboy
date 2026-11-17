@@ -15,7 +15,7 @@ import { sharedBrowser } from "./machineBrowser/shareRules";
 import { browserErrorText } from "./machineBrowser/api";
 import { ProviderAccountIdentity, providerAccountCardSx } from "./ProviderAccountIdentity";
 import { legacySubscriptionLabel, validLegacyLabels, validSubscriptionLabel } from "./subscriptionDisplay";
-import { type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot } from "./subscriptionAccounts";
+import { providerDefault, type SubscriptionSnapshot as Snapshot, validSubscriptionSnapshot } from "./subscriptionAccounts";
 export { validSubscriptionSnapshot } from "./subscriptionAccounts";
 export { validSubscriptionLabel } from "./subscriptionDisplay";
 
@@ -225,8 +225,8 @@ export function SubscriptionManagement({ renderAccounts }: { renderAccounts?: (c
         <Button disabled={disabled || !snapshot?.display_preferences || !validSubscriptionLabel(draft ?? "") || draft?.trim() === current}
           onClick={() => save({ type: "set_legacy_labels", labels: { ...snapshot!.display_preferences!.values.legacy_labels, [id]: draft!.trim() } })}>Save</Button>
       </Stack>
-      <Typography variant="caption" color="text.secondary">{id} · Service account{!snapshot?.registry.defaults[id] ? " · Default" : ""}</Typography>
-      {snapshot?.registry.defaults[id] && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: id, id: "default" })}>Use by default</Button>}
+      <Typography variant="caption" color="text.secondary">{id} · Service account{(providerDefault(snapshot, id) ?? "default") === "default" ? " · Default" : ""}</Typography>
+      {(providerDefault(snapshot, id) ?? "default") !== "default" && <Button disabled={disabled} onClick={() => save({ type: "set_default", provider_id: id, id: "default" })}>Use by default</Button>}
       <LegacyBrowserActions snapshot={snapshot} provider={id} label={current} owner={owner} disabled={disabled} onSetBrowserEnabled={(card, enabled) => save({ type: "set_legacy_browser_enabled", card, enabled })} />
     </Stack> };
   };
