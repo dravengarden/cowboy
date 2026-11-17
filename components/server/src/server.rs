@@ -321,13 +321,6 @@ const RUNTIME_SNAPSHOT_SETTLEMENT_SECONDS: u64 = 15;
 const RUNTIME_RECONCILIATION_GRACE: std::time::Duration = std::time::Duration::from_secs(
     CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS + RUNTIME_SNAPSHOT_SETTLEMENT_SECONDS,
 );
-/// A restored Busy turn on a Machine that has not reconnected stays pending
-/// rather than being judged on the Controller's grace: a Machine replaced at
-/// the same time can take minutes to finish its hello (2026-11-17: OVH
-/// connected 104 s after a Controller restart and its 8 surviving turns were
-/// reported cut off). A Machine still absent after this bound is gone.
-const RUNTIME_RECONCILIATION_MACHINE_ABSENCE_LIMIT: std::time::Duration =
-    std::time::Duration::from_secs(10 * 60);
 const MACHINE_RECONNECT_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Let restore, listener binding, and Machine reconnection settle before the
@@ -568,11 +561,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
 
     let scheduler_task = start_scheduler(&hub, store.as_ref(), &runtime_health).await;
 
-    let runtime_reconciliation_task = spawn_runtime_reconciliation(
-        hub.clone(),
-        Arc::clone(&machine_control),
-        shutdown_rx.clone(),
-    );
+    let runtime_reconciliation_task =
+        spawn_runtime_reconciliation(&hub, &machine_control, &shutdown_rx);
 
     tracing::info!(
         workspace = %args.workspace_root.display(),

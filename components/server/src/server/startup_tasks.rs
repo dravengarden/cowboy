@@ -161,6 +161,14 @@ pub(super) async fn start_scheduler(
     scheduler_task
 }
 
+/// A restored Busy turn on a Machine that has not reconnected stays pending
+/// rather than being judged on the Controller's grace: a Machine replaced at
+/// the same time can take minutes to finish its hello (2026-11-17: OVH
+/// connected 104 s after a Controller restart and its 8 surviving turns were
+/// reported cut off). A Machine still absent after this bound is gone.
+const RUNTIME_RECONCILIATION_MACHINE_ABSENCE_LIMIT: std::time::Duration =
+    std::time::Duration::from_secs(10 * 60);
+
 /// Machine WebSockets can only reconnect after Axum starts listening. Keep
 /// this timer independent of the request task: real worker snapshots remove
 /// their sessions from the reconciliation set, while the remainder become
@@ -171,10 +179,12 @@ pub(super) async fn start_scheduler(
 /// sessions have no Machine to wait for. Interrupted turns stay stopped
 /// until the user submits work.
 pub(super) fn spawn_runtime_reconciliation(
-    hub: Hub,
-    machine_control: Arc<MachineControl>,
-    mut shutdown: watch::Receiver<bool>,
+    hub: &Hub,
+    machine_control: &Arc<MachineControl>,
+    shutdown: &watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
+    let (hub, machine_control, mut shutdown) =
+        (hub.clone(), Arc::clone(machine_control), shutdown.clone());
     tokio::spawn(async move {
         let started = tokio::time::Instant::now();
         let mut wait = RUNTIME_RECONCILIATION_GRACE;
@@ -213,11 +223,12 @@ fn runtime_machine_settled(
     machine_id: &str,
     absence_expired: bool,
 ) -> bool {
+    // The absence cap is for a Machine that never came back; one that did
+    // still gets its whole snapshot-settlement window.
     machine_id == "local"
-        || absence_expired
         || machine_control
             .connection_age(machine_id)
-            .is_some_and(|age| {
+            .map_or(absence_expired, |age| {
                 age >= std::time::Duration::from_secs(RUNTIME_SNAPSHOT_SETTLEMENT_SECONDS)
             })
 }
