@@ -11,11 +11,11 @@ Registry and release data were read from npm and GitHub on 2026-11-17.
 | Dependency | Previous | Accepted | Decision |
 | --- | --- | --- | --- |
 | Codex ACP | 2.5.0 | 2.7.0 (`7c98a160`) | Owned patch rebased (see `plugins/codex/runtime/README.md`) |
-| Codex | 0.165.0 | 0.169.0 | Outside ACP 2.7's `^0.166.0`; additive protocol delta, accepted below |
+| Codex | 0.165.0 | 0.166.0 | Inside ACP 2.7's `^0.166.0`; 0.167.0–0.169.0 wait for an ACP release that declares them |
 
 Both pins are shared by `codex` and `codex-deepseek`. ACP 2.7 moves the Agent
 Client Protocol SDK to 2.6.0. Recommended presets and new-session defaults are
-unchanged: the bundled model catalog of 0.169.0 is identical to 0.165.0's, with
+unchanged: the bundled model catalog of 0.166.0 is identical to 0.165.0's, with
 `gpt-6.1-sol`, `gpt-6-astra` and `gpt-6-luna` and the same reasoning efforts. No
 model request was made.
 
@@ -28,13 +28,14 @@ Sources:
 [0.168.0](https://github.com/openai/codex/releases/tag/rust-v0.168.0),
 [0.169.0](https://github.com/openai/codex/releases/tag/rust-v0.169.0).
 
-## Native Codex outside the ACP range
+## Retained: native Codex 0.169.0
 
-ACP 2.6 and 2.7 declare `@openai/codex ^0.166.0`, so the ACP package's own
-lock still resolves 0.166.0; that wrapper is not the executable Cowboy runs.
-Previous upgrades waited for an ACP release. This one takes 0.169.0 after
-comparing the app-server TypeScript schemas that 0.166.0 and 0.169.0 generate
-(`codex app-server generate-ts --experimental`):
+ACP 2.6 and 2.7 declare `@openai/codex ^0.166.0`. Following the established
+policy, native Codex stays inside that range; 0.169.0 stays unadopted until an
+ACP release declares it. It is ready to adopt then. A candidate built with
+0.169.0 passed the same Codex suites, and the app-server TypeScript schemas
+that 0.166.0 and 0.169.0 generate (`codex app-server generate-ts
+--experimental`) differ only by additions:
 
 - 30 new types, and the 32 changed types only add: new methods
   (model-provider configuration, Guardian review, approved-plan handoff),
@@ -47,7 +48,8 @@ comparing the app-server TypeScript schemas that 0.166.0 and 0.169.0 generate
   `humanCommand` approvals are sent only to an
   app-server client that sets `requiredHumanApproval`; ACP does not.
 - An offline probe of `thread/start` with two configured MCP servers reports
-  the same `mcpServer/startupStatus/updated` sequence on 0.165.0 and 0.169.0.
+  the same `mcpServer/startupStatus/updated` sequence on 0.165.0, 0.166.0 and
+  0.169.0.
 
 ## Upstream changes
 
@@ -65,9 +67,9 @@ comparing the app-server TypeScript schemas that 0.166.0 and 0.169.0 generate
 | Blocked or stopped hooks reported as a session notice | ACP 2.7 | Adopted; a hook block is no longer a silent `end_turn` |
 | Approval/permission settings preserved across resume and fork; thread startup races | 0.166 | Benefits durable resume; worker cold-resume checks pass |
 | GPT-6.1 Terra in the bundled catalog | 0.166 | Present since 0.165.0; no preset change |
-| Interrupted turns close cleanly; delayed aborts do not interrupt a later turn | 0.169 | Adopted; turn and child-stop suites pass |
-| `codex exec` keeps untrusted project config disabled | 0.169 | Not used by Cowboy (ACP app-server) |
-| TUI, Cloud, Bedrock/GCP, Windows and macOS changes | 0.166–0.169 | Not used by Cowboy |
+| Interrupted turns close cleanly; delayed aborts do not interrupt a later turn | 0.169 | Not yet adopted (outside the ACP range) |
+| `codex exec` keeps untrusted project config disabled | 0.169 | Not adopted; not used by Cowboy (ACP app-server) |
+| TUI, Cloud, Bedrock/GCP, Windows and macOS changes | 0.166 (0.167–0.169 not adopted) | Not used by Cowboy |
 
 ## Owned adapter patch
 
@@ -87,7 +89,8 @@ The 33 recorded AIR initialize fixtures again advertise
 
 ## Verification
 
-Receipts and logs are under `/srv/storage/fast0/agent/tmp/codex-deps-2026-11-17/`.
+Receipts and logs are under `/srv/storage/fast0/agent/tmp/codex-deps-2026-11-17/`;
+the accepted 0.166.0 receipts carry a `-0.166.0` suffix.
 Every fixture used scripted loopback APIs and fake credentials; no real model
 request was made. `tools/remote_impact.py --base HEAD~1` selected exactly the
 Codex suites below.
@@ -95,11 +98,12 @@ Codex suites below.
 | Gate | Result |
 | --- | --- |
 | Codex ACP typecheck and upstream tests with the patch (runtime builder) | 2,546 passed, 39 skipped upstream |
-| `codex-worker` (packaged 2.7.0 adapter and 0.169.0 CLI, executor 0.159.3) | Accepted, 34 checks |
-| `codex-turn` / `child-stop` / `codex-hooks` on 0.169.0 | Accepted (9 checks / 4 cases / 10 hooks) |
-| `codex-image` | Accepted, 13 checks |
+| `codex-worker` (packaged 2.7.0 adapter and 0.166.0 CLI, executor 0.159.3) | Accepted, 34 checks |
+| `codex-turn` / `child-stop` / `codex-hooks` on packaged 0.166.0 | Accepted (9 checks / 4 cases / 10 hooks) |
+| `codex-image` on packaged 0.166.0 | Accepted, 13 checks |
+| Same five suites on a 0.169.0 candidate (retained) | Accepted (34 / 9 / 4 / 10 / 13) |
 | `provider-check` (includes `plugin-check`) | Passed on a provisional component release; see below |
-| `check-compact` | Passed at `edea0efc` on the same provisional component release |
+| `check-compact` | Passed at `edea0efc` (0.169.0 pins) on the same provisional component release; the 0.166.0 switch changes only pins and docs |
 
 The Codex turn and hooks probes ran under a user and PID namespace whose PID 1
 sits outside the probe's network namespace, as on 2026-10-30.

@@ -95,7 +95,7 @@ primary phone/desktop product path.
 - [`releases/agent-runtimes-2026-10-28.md`](releases/agent-runtimes-2026-10-28.md) — Claude Code 2.1.312, Codex 0.164.0 with ACP 2.3.0 and Grok 1.0.70 upgrades
 - [`releases/agent-runtimes-2026-10-30.md`](releases/agent-runtimes-2026-10-30.md) — Claude Code 2.1.314 with ACP 0.99.1, Codex 0.165.0 with ACP 2.5.0 and dsh rc.5; component release 3.71.0
 - [`releases/agent-runtimes-2026-11-10.md`](releases/agent-runtimes-2026-11-10.md) — Claude Code 2.1.321 (Fable 5.2) with ACP 0.102.0, idle compaction kept off; component release 3.107.0
-- [`releases/codex-runtime-2026-11-17.md`](releases/codex-runtime-2026-11-17.md) — Codex 0.169.0 with ACP 2.7.0, rebased adapter patch, native pin outside ACP's range and Codex remote acceptance
+- [`releases/codex-runtime-2026-11-17.md`](releases/codex-runtime-2026-11-17.md) — Codex 0.166.0 with ACP 2.7.0, rebased adapter patch, 0.169.0 retained until ACP declares it, and Codex remote acceptance
 - [`releases/credential-probe-backoff-2026-10-31.md`](releases/credential-probe-backoff-2026-10-31.md) — failed credential probe backoff, usage after re-login, Ultra badge; Claude Code 3.20.22 and component release 3.73.0
 - [`releases/gemini-retirement-2026-10-30.md`](releases/gemini-retirement-2026-10-30.md) — Gemini retired from source, component release 3.72.0 and its fleet rollout
 - [`releases/acp-subagents-2026-10-31.md`](releases/acp-subagents-2026-10-31.md) — ACP subagents, form previews and countdowns, URL elicitation completion; fleet rollout
