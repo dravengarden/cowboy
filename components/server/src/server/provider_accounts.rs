@@ -7,6 +7,7 @@ pub(super) mod browser;
 pub(super) mod lifecycle;
 pub(super) mod login;
 pub(super) mod native_generation;
+pub(super) mod portable;
 pub(super) mod registration;
 mod revocation;
 pub(super) mod transitions;
@@ -69,19 +70,49 @@ pub(super) async fn resolve_for_create(
         }
         None => return Err("unavailable"),
     };
-    let id = registry.resolve(provider, explicit)?;
+    // A portable account serves every portable Provider of its credential
+    // scope; other accounts serve exactly their own Provider.
+    let scope = state.provider_catalog.portable_account_scope(provider);
+    let id = registry.resolve_in_scope(provider, &scope, explicit)?;
     if !id.is_default() {
         allow_named_creation(
-            state
-                .provider_catalog
-                .native_account_providers()
-                .contains(provider),
+            named_session_provider(state, provider),
             state
                 .service_config
                 .get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_SESSIONS),
         )?;
     }
     Ok(id)
+}
+
+/// Providers whose named accounts have a credential path: a signed native
+/// login, or a Service-held portable key at account scope.
+pub(super) fn session_providers(state: &AppState) -> BTreeSet<String> {
+    let mut providers = state.provider_catalog.native_account_providers();
+    providers.extend(state.provider_catalog.portable_account_providers());
+    providers
+}
+
+pub(super) fn named_session_provider(state: &AppState, provider: &str) -> bool {
+    session_providers(state).contains(provider)
+}
+
+/// Public key state of each available portable account, never the key.
+fn portable_credentials(
+    state: &AppState,
+    registry: &crate::store::provider_accounts::Registry,
+) -> Vec<Value> {
+    registry
+        .accounts
+        .iter()
+        .filter_map(|account| {
+            let status = portable::scope(state, &account.id, &account.provider_id)?
+                .status(&account.provider_id)?;
+            Some(json!({"account_id":account.id,"provider_id":account.provider_id,
+                "authentication_state":status.authentication_state,"auth_generation":status.auth_generation,
+                "distribution_state":status.distribution_state,"updated_at_ms":status.updated_at_ms}))
+        })
+        .collect()
 }
 
 pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &'static str> {
@@ -107,7 +138,11 @@ pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &
     let (shares, families) = browser::shares::list_value(state, owner).await?;
     Ok(
         json!({"registry":registry,"display_preferences":display,"revoked_accounts":revoked,"session_admission":if enabled {"enabled"} else {"not_enabled"},
-        "session_providers":if enabled {state.provider_catalog.native_account_providers().into_iter().collect()} else {Vec::<String>::new()},
+        "session_providers":if enabled {session_providers(state).into_iter().collect()} else {Vec::<String>::new()},
+        // Accounts of these Providers take an API key instead of a sign-in;
+        // each inner list is one credential scope an account serves whole.
+        "portable_providers":state.provider_catalog.portable_account_providers(),
+        "portable_scopes":portable_scopes(state),"portable_credentials":portable_credentials(state, &registry),
         // The Service gate of the optional Machine browser (`accounts.machine_browser`).
         "machine_browser":if browser::gate_open(state) {"enabled"} else {"not_enabled"},
         // Each legacy default usage card's own browser key and enablement.
@@ -118,13 +153,23 @@ pub(super) async fn read_value(state: &AppState, owner: &str) -> Result<Value, &
     )
 }
 
-/// `native` means the Provider signs a native login recipe; named accounts of
-/// other Providers have no credential path and never fall back to the default.
-fn allow_named_creation(native: bool, enabled: bool) -> Result<(), &'static str> {
+fn portable_scopes(state: &AppState) -> BTreeSet<Vec<String>> {
+    state
+        .provider_catalog
+        .portable_account_providers()
+        .iter()
+        .map(|provider| state.provider_catalog.portable_account_scope(provider))
+        .collect()
+}
+
+/// `supported` means the Provider has a named credential path (native login
+/// or portable key); named accounts of other Providers have none and never
+/// fall back to the default.
+fn allow_named_creation(supported: bool, enabled: bool) -> Result<(), &'static str> {
     if !enabled {
         return Err("named_account_runtime_unavailable");
     }
-    if !native {
+    if !supported {
         return Err("named_account_provider_unavailable");
     }
     Ok(())

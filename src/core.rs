@@ -367,12 +367,11 @@ impl SessionMeta {
     /// Binding identity alone cannot authorize execution. The selected exact
     /// signed Provider must also accept this executor contract. This is a
     /// structural check only: named dispatch and projection require the fresh
-    /// Store admission enforced by RemoteRuntime, never this cached metadata.
+    /// admission enforced by RemoteRuntime (a native login binding or a
+    /// portable account's Service vault), never this cached metadata.
     pub fn require_runtime_launch(&self) -> Result<(), String> {
         if !self.provider_account_id.is_default()
             && (self.closing
-                || !crate::provider_account::NATIVE_ACCOUNT_PROVIDERS
-                    .contains(&self.provider.as_str())
                 || self.machine_id.is_empty()
                 || self.machine_id == "local"
                 || self.owner_user_id.as_ref().is_none_or(String::is_empty)

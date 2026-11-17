@@ -142,7 +142,7 @@ pub(in crate::server) async fn options_value(
         "methods":methods,
         "native_profile":native_profile,
         "session_admission":if super::super::allow_named_creation(
-            state.provider_catalog.native_account_providers().contains(&account.provider_id),
+            super::super::named_session_provider(state, &account.provider_id),
             state.service_config.get(&crate::config::schema::ACCOUNT_NATIVE_CLAUDE_SESSIONS)).is_ok() {"enabled"} else {"not_enabled"},
     }))
 }

@@ -167,6 +167,10 @@ fn preferences_routes_and_announcements_are_account_scoped() {
         RouteAuth::ProductOperator
     );
     assert_eq!(
+        classify_route(&Method::POST, "/api/provider-accounts/account/credentials"),
+        RouteAuth::ProductOperator
+    );
+    assert_eq!(
         classify_route(&Method::GET, "/api/provider-accounts/account/login"),
         RouteAuth::ProductOperator
     );

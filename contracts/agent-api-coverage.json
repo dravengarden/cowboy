@@ -149,6 +149,7 @@
     "provider_accounts::login::http_receipt": "receipts.get",
     "provider_accounts::login::options": "accounts.login_options",
     "provider_accounts::login::start": "accounts.login_start",
+    "provider_accounts::portable::http_commit": "exception:identity — a named account's API key is a secret its owner enters; agents never upload credentials.",
     "provider_accounts::read": "accounts.list",
     "provider_accounts::update": "accounts.update",
     "provider_accounts::usage::list": "accounts.usage",

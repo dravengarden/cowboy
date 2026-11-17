@@ -3316,7 +3316,7 @@ fn native_readmission_declaration_contract(
             1 => wrong.owner_user_id = Some(String::new()),
             2 => wrong.closing = true,
             3 => wrong.machine_id = "local".into(),
-            4 => wrong.provider = "claude-deepseek".into(),
+            4 => wrong.machine_id.clear(),
             5 => wrong.provider_version.clear(),
             6 => wrong.provider_generation_digest.clear(),
             7 => wrong.provider_auth_generation = Some(0),
@@ -3324,6 +3324,11 @@ fn native_readmission_declaration_contract(
         }
         assert!(wrong.require_runtime_launch().is_err());
     }
+    // A portable account Provider is structurally launchable too; its fresh
+    // admission (the account vault) is RemoteRuntime's, as for native logins.
+    let mut portable = meta.clone();
+    portable.provider = "claude-deepseek".into();
+    assert!(portable.require_runtime_launch().is_ok());
     for field in 0..9 {
         let mut wrong = meta.clone();
         match field {

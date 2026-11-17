@@ -2944,15 +2944,8 @@ fn mark_projected_provider_auth_expired(shared: &Shared, session_id: &str, event
     else {
         return;
     };
-    let scope = if account_id.is_default() {
-        Ok(Arc::clone(provider_auth))
-    } else {
-        shared
-            .auth_recipient_key
-            .as_deref()
-            .context("runtime has no enrolled credential recipient")
-            .and_then(|key| provider_auth.existing_machine_grant(&account_id, key))
-    };
+    let scope =
+        native_admission::credential_scope(shared, provider_auth, &account_id, &provider_id);
     match scope.and_then(|scope| scope.mark_expired(&provider_id, generation)) {
         Ok(Some(status)) => tracing::warn!(
             session = session_id,

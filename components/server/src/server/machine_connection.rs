@@ -513,6 +513,7 @@ pub(super) async fn reconcile_machine_account_grants(
                 "account credential reconciliation remains pending");
         }
     }
+    provider_accounts::portable::reconcile_machine(state, machine_id).await;
     Ok(())
 }
 

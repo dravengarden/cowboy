@@ -1853,6 +1853,8 @@ struct ResolvedProviderGeneration {
     /// Set only by [`named_upgrade_target`]: authorizes moving one named
     /// session to this release on its existing login.
     named_carry: Option<NamedReleaseMove>,
+    /// The Service vault owns this credential lineage (no native sign-in).
+    service_lineage: bool,
 }
 
 /// A verified move of one named session to another release: the Hub proof
@@ -1862,13 +1864,6 @@ struct NamedReleaseMove {
     carry: crate::core::NamedReleaseCarry,
     operation: String,
     completion: crate::store::provider_accounts::logins::NativeCompletion,
-}
-
-enum SchedulingAuthentication<'a> {
-    /// Installation discovery only; never use this result to launch a session.
-    Discovery,
-    Service(Option<&'a crate::provider_service::ProviderAuthenticationStatus>),
-    Native(&'a crate::provider_account::NativeProfileReceipt),
 }
 
 /// Response body for `POST /api/sessions`.

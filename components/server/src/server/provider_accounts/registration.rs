@@ -18,6 +18,17 @@ pub(in crate::server) async fn generation(
             state.provider_auth.status(provider).as_ref(),
         );
     }
+    if portable::provider(state, provider) {
+        // Never falls back to the default account or a native login.
+        let status = portable::admitted_status(state, owner, account, provider).await?;
+        return resolve_provider_generation_with_auth(
+            &state.provider_catalog,
+            &state.plugin_catalog,
+            inventory,
+            provider,
+            SchedulingAuthentication::Portable(&status),
+        );
+    }
     let store = state.store.as_ref().ok_or("account_store_unavailable")?;
     let Some((operation, completion)) = store
         .native_login_for_session(owner, account, machine)
@@ -71,17 +82,19 @@ pub(in crate::server) const SIGNED_IN_AGAIN: &str =
     "This subscription was signed in again since the session started; use Continue in new agent";
 
 /// Keep a creation on an older `retained` auth generation (a native fork runs
-/// in its source's generation home). A Service-managed (default) account
-/// advances its generation on every token refresh, and each retained home is
-/// re-projected with the newest credentials, so the older generation is as
-/// current as resuming the source. Named subscriptions advance only on a new
-/// sign-in and are refused.
+/// in its source's generation home). A Service-managed lineage (the default
+/// account or a named portable account) advances its generation on every
+/// token refresh or key change, and each retained home is re-projected with
+/// the newest credentials, so the older generation is as current as resuming
+/// the source. Native subscriptions advance only on a new sign-in and are
+/// refused.
 pub(in crate::server) fn retain_auth_generation(
     generation: &mut ResolvedProviderGeneration,
     account: &crate::provider_account::ProviderAccountId,
     retained: u64,
 ) -> Result<(), String> {
-    if !retainable(generation.auth_generation, account.is_default(), retained) {
+    let service = account.is_default() || generation.service_lineage;
+    if !retainable(generation.auth_generation, service, retained) {
         return Err(SIGNED_IN_AGAIN.into());
     }
     generation.auth_generation = Some(retained);
@@ -104,30 +117,34 @@ pub(in crate::server) async fn register(
         registration.provider.clone(),
     );
     if registration.provider_account_id.is_default() {
-        let fence = state.plugin_lifecycle_fences.read();
-        if fence.contains_key(&key) {
-            return Err("Provider is changing on the selected Machine".into());
-        }
-        let provider = registration.provider.clone();
-        if let (Some(current), Some(retained)) = (scheduling, registration.provider_auth_generation)
-            && current != retained
+        return register_in_scope(state, &state.provider_auth, registration, scheduling);
+    }
+    if portable::provider(state, &registration.provider) {
+        // The account's own vault, rechecked at creation; never the default.
+        let owner = registration
+            .owner_user_id
+            .as_deref()
+            .ok_or("account_owner_required")?;
+        portable::admitted_status(
+            state,
+            owner,
+            &registration.provider_account_id,
+            &registration.provider,
+        )
+        .await?;
+        let scope = portable::scope(
+            state,
+            &registration.provider_account_id,
+            &registration.provider,
+        )
+        .ok_or("account_credentials_unavailable")?;
+        if !state
+            .supervisor
+            .runtime_allowed(&registration.provider, &registration.machine_id)
         {
-            return state
-                .provider_auth
-                .with_retained_scheduling_generation(&provider, current, retained, || {
-                    state.hub.create_session(registration)
-                })
-                .map_err(|error| error.to_string());
+            return Err("runtime_not_allowed".into());
         }
-        return state
-            .provider_auth
-            .with_scheduling_generation(
-                &provider,
-                registration.provider_auth_generation.is_some(),
-                registration.provider_auth_generation,
-                || state.hub.create_session(registration),
-            )
-            .map_err(|error| error.to_string());
+        return register_in_scope(state, &scope, registration, scheduling);
     }
     let owner = registration
         .owner_user_id
@@ -177,6 +194,41 @@ pub(in crate::server) async fn register(
             },
         )
         .await
+        .map_err(|error| error.to_string())
+}
+
+/// Register while the Service-held generation of `scope` stays immutable.
+fn register_in_scope(
+    state: &AppState,
+    scope: &crate::provider_service::ProviderAuthService,
+    registration: crate::core::SessionRegistration,
+    scheduling: Option<u64>,
+) -> Result<(), String> {
+    let key = (
+        registration.machine_id.clone(),
+        registration.provider.clone(),
+    );
+    let fence = state.plugin_lifecycle_fences.read();
+    if fence.contains_key(&key) {
+        return Err("Provider is changing on the selected Machine".into());
+    }
+    let provider = registration.provider.clone();
+    if let (Some(current), Some(retained)) = (scheduling, registration.provider_auth_generation)
+        && current != retained
+    {
+        return scope
+            .with_retained_scheduling_generation(&provider, current, retained, || {
+                state.hub.create_session(registration)
+            })
+            .map_err(|error| error.to_string());
+    }
+    scope
+        .with_scheduling_generation(
+            &provider,
+            registration.provider_auth_generation.is_some(),
+            registration.provider_auth_generation,
+            || state.hub.create_session(registration),
+        )
         .map_err(|error| error.to_string())
 }
 

@@ -650,6 +650,20 @@ the existing owner-checked authentication events, code submission and cancel
 routes. It neither rotates accounts nor falls back to default authentication.
 This interactive login is separate from metadata mutation.
 
+Portable account Providers (the newest signed release is Service-refreshed,
+has no native recipe and only secret-input methods, such as the DeepSeek
+Providers) take an API key instead: operator-only
+`POST /api/provider-accounts/{account_id}/credentials` with `method` and
+`secret`. The owner and Provider again come from the registry. The key is
+committed to that account's own Service vault for every portable Provider of
+its credential scope, never to the default account or a Machine grant, and is
+sealed to each enrolled Machine on commit and on reconnect. One such account
+serves every Provider of its scope. Registry defaults stay keyed by the
+account's own Provider; a scope member without its own default inherits the
+first member default in Provider-id order. Session admission rechecks that the
+account is available and its vault key is Ready at or after the session's
+generation. Agents never upload credentials (an owned identity exception).
+
 Login and receipt responses include a relative `continue_url`. Resolve it
 against the Cowboy origin and give it to the user to continue the same login on
 Desktop or Mobile. The fragment contains only account and request IDs, not

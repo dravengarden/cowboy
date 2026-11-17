@@ -1,5 +1,97 @@
-//! Fresh native-account admission at runtime transport boundaries.
+//! Fresh named-account admission at runtime transport boundaries: a native
+//! login binding, or a portable account's own Service vault. Neither path
+//! ever falls back to the default account.
 use super::*;
+
+/// A named session whose credential is a portable account key (Service vault
+/// at account scope) rather than a Machine-native login.
+fn portable(meta: &crate::model::SessionMeta) -> bool {
+    !meta.provider_account_id.is_default()
+        && crate::provider_account::portable_credentials_allowed(
+            &meta.provider_account_id,
+            &meta.provider,
+        )
+        .is_ok()
+}
+
+/// A Service-held lineage advances on every key change and the Machine
+/// re-projects the newest key into older generation homes, so an older
+/// session generation stays admitted like the default account's.
+fn vault_admits(
+    status: &crate::provider_service::ProviderAuthenticationStatus,
+    generation: u64,
+) -> bool {
+    generation > 0
+        && status.recipient_key.is_none()
+        && status.authentication_state == crate::provider_service::ServiceAuthenticationState::Ready
+        && status.auth_generation >= generation
+}
+
+/// Fresh portable admission: the owner's registry account is available and
+/// serves the session Provider (its own, or one sharing its credential in
+/// the same vault), and that vault holds a Ready key at the session's
+/// generation or newer.
+async fn portable_admitted(
+    shared: &Shared,
+    store: &crate::store::Store,
+    owner: &str,
+    meta: &crate::model::SessionMeta,
+) -> bool {
+    let Some(scope) = shared
+        .provider_auth
+        .as_ref()
+        .and_then(|auth| auth.existing_account(&meta.provider_account_id))
+    else {
+        return false;
+    };
+    let Some(status) = scope.status(&meta.provider) else {
+        return false;
+    };
+    if !meta
+        .provider_auth_generation
+        .is_some_and(|generation| vault_admits(&status, generation))
+    {
+        return false;
+    }
+    let Ok(registry) = store.provider_accounts(owner).await else {
+        return false;
+    };
+    registry
+        .accounts
+        .iter()
+        .find(|account| account.id == meta.provider_account_id)
+        .is_some_and(|account| {
+            account.available()
+                && (account.provider_id == meta.provider
+                    || scope
+                        .status(&account.provider_id)
+                        .is_some_and(|own| own.authentication_scope == status.authentication_scope))
+        })
+}
+
+/// The Service scope that owns a session's projected credentials, for
+/// recording a rejection: the root, a portable account, or a native grant.
+pub(super) fn credential_scope(
+    shared: &Shared,
+    provider_auth: &Arc<crate::provider_service::ProviderAuthService>,
+    account: &crate::provider_account::ProviderAccountId,
+    provider: &str,
+) -> Result<Arc<crate::provider_service::ProviderAuthService>> {
+    if account.is_default() {
+        return Ok(Arc::clone(provider_auth));
+    }
+    if let Some(scope) = provider_auth
+        .existing_account(account)
+        .filter(|scope| scope.status(provider).is_some())
+    {
+        return Ok(scope);
+    }
+    shared
+        .auth_recipient_key
+        .as_deref()
+        .context("runtime has no enrolled credential recipient")
+        .and_then(|key| provider_auth.existing_machine_grant(account, key))
+}
 
 /// Events carry no launch identity. Only the currently admitted worker's
 /// snapshot can supply it; an epoch from a replaced worker cannot borrow it.
@@ -85,6 +177,21 @@ pub(super) async fn snapshot(
     };
     if meta.machine_id != machine {
         return false;
+    }
+    if portable(&meta) {
+        if !portable_admitted(shared, &store, owner, &meta).await
+            || shared.shutdown.load(Ordering::Acquire)
+            || !shared.hub.session_info(&meta.id).is_some_and(|info| {
+                !info.meta.closing
+                    && info.meta.owner_user_id == meta.owner_user_id
+                    && info.meta.machine_id == machine
+                    && matches(&info.meta, launch)
+            })
+        {
+            return false;
+        }
+        project();
+        return true;
     }
     let Ok(Some((operation, completion))) = store
         .native_login_for_registered_session(owner, &meta.id)
@@ -277,6 +384,9 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
     if meta.machine_id != machine || meta.provider_account_id.is_default() {
         return Ok(false);
     }
+    if portable(&meta) {
+        return send_portable(shared, writer, &store, owner, &meta, command).await;
+    }
     let selection = store
         .native_login_for_registered_session(owner, &meta.id)
         .await;
@@ -331,6 +441,25 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin>(
     Ok(false)
 }
 
+async fn send_portable<W: tokio::io::AsyncWrite + Unpin>(
+    shared: &Shared,
+    writer: &mut W,
+    store: &crate::store::Store,
+    owner: &str,
+    meta: &crate::core::SessionMeta,
+    command: CoreCommand,
+) -> Result<bool> {
+    // Native readmission has no meaning for a Service-held key.
+    if matches!(command, CoreCommand::ReadmitAccountSession { .. })
+        || !portable_admitted(shared, store, owner, meta).await
+        || validate_delivery(shared, meta, &command).is_err()
+    {
+        return Ok(false);
+    }
+    write_broker_frame(writer, &Frame::CoreCommand { command }).await?;
+    Ok(true)
+}
+
 /// How long admission waits for a just-reloaded session's stored binding.
 const BINDING_ATTEMPTS: u32 = 40;
 const BINDING_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
@@ -361,6 +490,115 @@ fn validate_delivery(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn portable_named_sessions_need_their_own_available_ready_account_key() {
+        use crate::store::provider_accounts::{Change, Mutation, MutationResult};
+        let root = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", root.path().join("db.sqlite3").display());
+        let store = crate::store::Store::connect(&url, root.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let create = |provider: &str| Mutation {
+            expected_revision: 0,
+            change: Change::Create {
+                provider_id: provider.into(),
+                label: "DeepSeek".into(),
+            },
+        };
+        let MutationResult::Applied(created) = store
+            .mutate_provider_accounts("owner", "create", &create("claude-deepseek"))
+            .await
+            .unwrap()
+        else {
+            panic!("create");
+        };
+        let id = created.account_id;
+        let MutationResult::Applied(unkeyed) = store
+            .mutate_provider_accounts("other", "create", &create("codex-deepseek"))
+            .await
+            .unwrap()
+        else {
+            panic!("create");
+        };
+        let auth = Arc::new(
+            crate::provider_service::ProviderAuthService::open(&root.path().join("auth")).unwrap(),
+        );
+        let packages: Vec<_> = [
+            include_str!("../../plugins/claude-deepseek/provider.json"),
+            include_str!("../../plugins/codex-deepseek/provider.json"),
+            include_str!("../../plugins/deepseek-harness/provider.json"),
+        ]
+        .into_iter()
+        .map(|source| {
+            let source: cowboy_provider_sdk::StandardProviderSource =
+                serde_json::from_str(source).unwrap();
+            cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap()
+        })
+        .collect();
+        let bundle = crate::machine_protocol::PortableCredentialBundle {
+            portable_schema: "deepseek-api-key-v1".into(),
+            method_id: "api-key".into(),
+            values: std::collections::BTreeMap::from([("api_key".into(), "c2stbmFtZWQ=".into())]),
+        };
+        // The default account holds a key too; a named session never uses it.
+        auth.commit_shared(&packages, &bundle, None, "codex-deepseek", Some(0))
+            .unwrap();
+        auth.account(&id)
+            .unwrap()
+            .commit_shared(&packages, &bundle, None, "claude-deepseek", Some(0))
+            .unwrap();
+        let mut runtime = RemoteRuntime::for_test(crate::core::Hub::new(), vec![]);
+        Arc::get_mut(&mut Arc::get_mut(&mut runtime).unwrap().shared)
+            .unwrap()
+            .provider_auth = Some(Arc::clone(&auth));
+        let shared = &runtime.shared;
+        let meta = |provider: &str,
+                    account: &crate::provider_account::ProviderAccountId,
+                    generation: u64| {
+            serde_json::from_value::<crate::model::SessionMeta>(serde_json::json!({
+                "id":"s", "provider":provider, "machine_id":"hawk", "workspace_id":"project",
+                "cwd":"/tmp", "title":"named", "status":"running", "owner_user_id":"owner",
+                "provider_account_id":account, "provider_auth_generation":generation
+            }))
+            .unwrap()
+        };
+        // One claude-deepseek account serves every member of its scope.
+        for provider in ["claude-deepseek", "codex-deepseek", "deepseek-harness"] {
+            let session = meta(provider, &id, 1);
+            assert!(portable(&session));
+            assert!(portable_admitted(shared, &store, "owner", &session).await);
+        }
+        let session = meta("codex-deepseek", &id, 1);
+        assert!(!portable_admitted(shared, &store, "other", &session).await);
+        assert!(!portable_admitted(shared, &store, "owner", &meta("codex-deepseek", &id, 2)).await);
+        assert!(!portable_admitted(shared, &store, "owner", &meta("codex-deepseek", &id, 0)).await);
+        // An account without its own key is refused despite the default key.
+        let other = meta("codex-deepseek", &unkeyed.account_id, 1);
+        assert!(!portable_admitted(shared, &store, "other", &other).await);
+        // Native-login Providers keep the native binding path.
+        assert!(!portable(&meta("claude-code", &id, 1)));
+        assert!(!portable(&meta("codex-deepseek", &Default::default(), 1)));
+        // A newer key keeps older sessions admitted, like the Service account.
+        auth.account(&id)
+            .unwrap()
+            .commit_shared(&packages, &bundle, None, "claude-deepseek", Some(1))
+            .unwrap();
+        assert!(portable_admitted(shared, &store, "owner", &session).await);
+        let disable = Mutation {
+            expected_revision: 1,
+            change: Change::SetEnabled {
+                id: id.clone(),
+                enabled: false,
+            },
+        };
+        store
+            .mutate_provider_accounts("owner", "disable", &disable)
+            .await
+            .unwrap();
+        assert!(!portable_admitted(shared, &store, "owner", &session).await);
+    }
 
     #[tokio::test]
     async fn an_unrecovered_mcp_owner_defers_the_restart_declaration_silently() {

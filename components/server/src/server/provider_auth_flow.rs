@@ -322,6 +322,7 @@ pub(super) async fn cancel_provider_auth_request(
 /// after every Provider Catalog refresh and periodically; it never overwrites
 /// a Provider that already has durable authentication state.
 pub(super) async fn adopt_shared_provider_authentication(state: &Arc<AppState>) {
+    provider_accounts::portable::adopt(state).await;
     let mut adopted = Vec::new();
     for scope in state.provider_catalog.authentication_scopes() {
         let packages = state
@@ -349,23 +350,33 @@ pub(super) async fn distribute_and_mark_provider_auth(
     Vec<crate::provider_service::ProviderAuthenticationStatus>,
     BTreeMap<String, ProviderDistributionOutcome>,
 ) {
+    distribute_and_mark_scope(state, &state.provider_auth, &Default::default(), statuses).await
+}
+
+/// Deliver one Service-held credential scope (the default account or a named
+/// portable account) to every enrolled Machine and record the outcome.
+pub(super) async fn distribute_and_mark_scope(
+    state: &Arc<AppState>,
+    scope: &crate::provider_service::ProviderAuthService,
+    account: &crate::provider_account::ProviderAccountId,
+    statuses: Vec<crate::provider_service::ProviderAuthenticationStatus>,
+) -> (
+    Vec<crate::provider_service::ProviderAuthenticationStatus>,
+    BTreeMap<String, ProviderDistributionOutcome>,
+) {
     let mut next = Vec::with_capacity(statuses.len());
     let mut replicas = BTreeMap::new();
     for status in statuses {
         let provider_id = status.provider_id.clone();
-        let outcome = distribute_provider_auth(state, &provider_id).await;
-        match state.provider_auth.mark_distribution(
-            &provider_id,
-            status.auth_generation,
-            outcome.state(),
-        ) {
+        let outcome = distribute_account_auth(state, &provider_id, account).await;
+        match scope.mark_distribution(&provider_id, status.auth_generation, outcome.state()) {
             Ok(marked) => {
                 replicas.insert(provider_id, outcome);
                 next.push(marked);
             }
             Err(error) => {
                 tracing::warn!(%error, %provider_id, "ignoring stale Provider auth distribution result");
-                next.push(state.provider_auth.status(&provider_id).unwrap_or(status));
+                next.push(scope.status(&provider_id).unwrap_or(status));
             }
         }
     }
@@ -375,6 +386,14 @@ pub(super) async fn distribute_and_mark_provider_auth(
 pub(super) async fn distribute_provider_auth(
     state: &Arc<AppState>,
     provider_id: &str,
+) -> ProviderDistributionOutcome {
+    distribute_account_auth(state, provider_id, &Default::default()).await
+}
+
+async fn distribute_account_auth(
+    state: &Arc<AppState>,
+    provider_id: &str,
+    account: &crate::provider_account::ProviderAccountId,
 ) -> ProviderDistributionOutcome {
     let connected = state.machine_control.connected_machine_ids();
     let Some(store) = state.store.as_ref() else {
@@ -400,7 +419,8 @@ pub(super) async fn distribute_provider_auth(
             outcome.pending += 1;
             continue;
         }
-        match sync_provider_auth_to_machine(state, &machine_id, provider_id).await {
+        match sync_provider_account_auth_to_machine(state, &machine_id, provider_id, account).await
+        {
             Ok(auth_generation) => {
                 outcome.succeeded += 1;
                 outcome

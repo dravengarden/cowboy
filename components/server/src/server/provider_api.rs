@@ -559,6 +559,13 @@ pub(super) async fn provider_account_auth_envelope_for_machine(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("Machine {machine_id:?} has no enrolled encryption key"))?;
+    // A named portable account's key lives at account scope and is sealed to
+    // any enrolled Machine; native accounts keep their per-Machine grants.
+    if let Some(scope) = provider_accounts::portable::scope(state, account_id, provider_id) {
+        return scope
+            .seal_for_machine(provider_id, &public_key)
+            .map_err(|error| error.to_string());
+    }
     let scope = provider_auth_scope_for_machine(state, machine_id, account_id).await?;
     if account_id.is_default()
         || scope.status(provider_id).is_some_and(|status| {
@@ -861,6 +868,15 @@ pub(super) fn resolve_provider_generation(
     )
 }
 
+pub(super) enum SchedulingAuthentication<'a> {
+    /// Installation discovery only; never use this result to launch a session.
+    Discovery,
+    Service(Option<&'a crate::provider_service::ProviderAuthenticationStatus>),
+    Native(&'a crate::provider_account::NativeProfileReceipt),
+    /// A named portable account's own Service vault entry.
+    Portable(&'a crate::provider_service::ProviderAuthenticationStatus),
+}
+
 pub(super) fn resolve_provider_generation_with_auth(
     catalog: &crate::provider_catalog::ProviderCatalog,
     plugins: &crate::plugin_catalog::PluginCatalog,
@@ -910,8 +926,18 @@ pub(super) fn resolve_provider_generation_with_auth(
             "installed Provider contract fingerprint does not match the Catalog".to_owned(),
         );
     }
+    let service_lineage = matches!(
+        authentication,
+        SchedulingAuthentication::Service(_) | SchedulingAuthentication::Portable(_)
+    );
     let auth_generation = match authentication {
         SchedulingAuthentication::Discovery => None,
+        SchedulingAuthentication::Portable(status) => {
+            provider_accounts::portable::scheduling_generation(
+                package.manifest.authentication.required,
+                status,
+            )?
+        }
         SchedulingAuthentication::Service(service_auth) => resolve_scheduling_auth_generation(
             installed,
             package.manifest.authentication.required,
@@ -937,5 +963,6 @@ pub(super) fn resolve_provider_generation_with_auth(
         auth_generation,
         behavior: package.manifest.runtime.behavior,
         named_carry: None,
+        service_lineage,
     })
 }
