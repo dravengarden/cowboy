@@ -549,7 +549,9 @@ an idle worker's (policy changed, or the worker predates content-addressed
 descriptors), a send, queued wake or open replaces that worker through a reset
 instead of being refused. The broker accepts a new plan only in the adopt-only
 declaration that precedes such a reset; the execution binding stays exact and a
-busy worker keeps its turn. Source preparation is serialized; concurrent requests
+busy worker keeps its turn. A busy worker with a stale plan is not re-declared
+(the Machine would refuse the changed plan as a placement change); the first
+send after its turn ends replaces it. Source preparation is serialized; concurrent requests
 receive a retryable refusal, and valid owners are reused. Every attempt repeats
 keeper identity and live policy checks. Recovery prepares metadata only: it does
 not start/reset a worker or grant authority. Native-provider recovery/E2E remains unfinished. Grant eligibility alone does
