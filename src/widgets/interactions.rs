@@ -339,6 +339,14 @@ pub fn app_message(
 /// not separate them: any text can be an `app`'s code.)
 #[must_use]
 pub fn app_code_digest(app: &Map<String, Value>) -> String {
+    if app.get("type").and_then(Value::as_str) == Some("mcp_app") {
+        // A signed view is identified by the digest of its signed bytes.
+        let view = app
+            .get("sha256")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        return format!("mcp_app:{view}");
+    }
     let code = app.get("code").and_then(Value::as_str).unwrap_or_default();
     let digest = format!("{:x}", Sha256::digest(code.as_bytes()));
     if app.get("type").and_then(Value::as_str) == Some("dom_app") {
@@ -352,12 +360,26 @@ fn app_node<'v>(node: &'v Value, id: &str) -> Option<&'v Map<String, Value>> {
     let map = node.as_object()?;
     if matches!(
         map.get("type").and_then(Value::as_str),
-        Some("app" | "dom_app")
+        Some("app" | "dom_app" | "mcp_app")
     ) && map.get("id").and_then(Value::as_str) == Some(id)
     {
         return Some(map);
     }
     super::node_edges(map).find_map(|(_, items)| items.iter().find_map(|child| app_node(child, id)))
+}
+
+/// The binding and view URI of the `mcp_app` node `node_id`, if it is one:
+/// its messages need a live lease of exactly that view.
+#[must_use]
+pub fn mcp_app_scope(document: &Value, node_id: &str) -> Option<(String, String)> {
+    let app = app_node(&document["root"], node_id)?;
+    if app.get("type").and_then(Value::as_str) != Some("mcp_app") {
+        return None;
+    }
+    Some((
+        app.get("binding")?.as_str()?.to_owned(),
+        app.get("uri")?.as_str()?.to_owned(),
+    ))
 }
 
 /// The prompt id of one confirmation: one occurrence is one message.
@@ -448,6 +470,28 @@ mod tests {
             "app_updated",
             "no app code can carry a dom_app identity"
         );
+    }
+
+    #[test]
+    fn a_signed_view_sends_under_its_view_digest_and_names_its_scope() {
+        let view = "a".repeat(64);
+        let doc = json!({"title":"T","root":{"type":"mcp_app","id":"view","title":"V",
+            "fallback":"f","binding":"suger","tool":"suger_status","uri":"ui://suger/status",
+            "sha256":view,"epoch":"e".repeat(32),"input":"{}","result":null}});
+        let identity = format!("mcp_app:{view}");
+        assert!(app_message(&doc, "view", &identity, "hi").is_ok());
+        assert_eq!(
+            app_message(&doc, "view", &view, "hi").unwrap_err().code,
+            "app_updated",
+            "a plain digest never names a signed view"
+        );
+        assert_eq!(
+            mcp_app_scope(&doc, "view"),
+            Some(("suger".into(), "ui://suger/status".into()))
+        );
+        let app = json!({"title":"T","root":{"type":"app","id":"dash","title":"D",
+            "fallback":"f","code":"x"}});
+        assert_eq!(mcp_app_scope(&app, "dash"), None);
     }
 
     #[test]

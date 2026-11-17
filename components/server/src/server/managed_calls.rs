@@ -8,7 +8,7 @@ mod selection;
 
 pub(super) use coordinator::{
     Coordinator, authorize, code_changes, code_observation_head, delete_child, dispatch_calls,
-    dispatch_calls_from, handle, image_capabilities, mcp_ready, parent_deleted,
+    dispatch_calls_from, handle, image_capabilities, mcp_parent, mcp_ready, parent_deleted,
     touch_code_observation,
 };
 pub(super) use history::pin_bounds;

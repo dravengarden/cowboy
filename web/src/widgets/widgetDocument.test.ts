@@ -103,3 +103,31 @@ test("a button's action fields are checked before any renderer reads them", () =
     assert(!parsed.ok, JSON.stringify(action));
   }
 });
+
+test("an mcp_app row parses with its signed identity and bounded call data", () => {
+  const node = {
+    type: "mcp_app",
+    id: "view",
+    title: "suger · suger_status",
+    fallback: "green",
+    binding: "suger",
+    tool: "suger_status",
+    uri: "ui://suger/status",
+    sha256: "a".repeat(64),
+    epoch: "e".repeat(32),
+    input: "{}",
+    result: null,
+  };
+  const ok = parseWidgetValue({ schema: "cowboy.widget/1", title: "t", root: node });
+  assert(ok.ok);
+  assertEquals(ok.document.root.type, "mcp_app");
+  for (const bad of [
+    { ...node, sha256: "A".repeat(64) },
+    { ...node, epoch: "x" },
+    { ...node, binding: "a b" },
+    { ...node, result: 1 },
+    { ...node, input: "x".repeat(8 * 1024 + 1) },
+  ]) {
+    assert(!parseWidgetValue({ schema: "cowboy.widget/1", title: "t", root: bad }).ok);
+  }
+});

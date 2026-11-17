@@ -1,6 +1,7 @@
 # Widget apps, phase C: MCP Apps from bound Plugin servers
 
-Status: design, revision 5 (2026-11-11). Not implemented. It replaces the
+Status: design revision 5 (2026-11-11); steps 1-3 implemented, browser
+admission and step 4 open (§10). It replaces the
 direction recorded in [`widget-apps-dom.md`](widget-apps-dom.md) §10 and the
 phase C line of [`widget-apps.md`](widget-apps.md) §10. Owner decisions are
 in §11, the review record in §12.
@@ -88,7 +89,12 @@ Two projections replace "the granted tools":
 - **App projection**: the `"app"`-visible signed tools that the view's grant
   lists in `call_tools` (§4), whether or not the agent also holds them. The
   view scope's process profile carries exactly these (step 3); a view's call
-  to any other tool, including cross-binding calls, is refused.
+  to any other tool, including cross-binding calls, is refused. Current
+  Machines still apply the agent-visibility rule to every profile, so a view
+  scope carries only granted tools that are also `"model"`-visible, and a
+  call of an app-only tool is refused (`app_only_tool_unsupported`) before
+  anything is dispatched. Serving app-only tools needs a Machine release whose
+  view profiles replace that rule with the app-visibility rule.
 
 ## 4. Assignment: the owner's grant
 
@@ -259,13 +265,32 @@ already serves the document, so the spec's proxy frame adds nothing).
 
 When the relay delivers an **agent-originated** `tools/call` result for a
 tool whose signed `ui.resource` the session grants, the Controller publishes a
-system widget row with an `mcp_app` node `{binding, uri, sha256, epoch,
-scope, call}`; tool input and result (each ≤ 64 KiB of JSON, else a
-truncation marker) are stored with it. View-originated calls never publish
+system widget row with an `mcp_app` node `{binding, tool, uri, sha256, epoch,
+input, result, fallback}` (`components/server/src/server/mcp_bindings/apps_rows.rs`).
+The row is an ordinary `session_widgets` widget, so Clear, close, the
+transcript projection and the durable message path of phase A apply as they
+are; only `validate_cowboy` admits the node, so agents can neither publish nor
+patch one. The tool input (≤ 8 KiB) and result (≤ 12 KiB) are stored as JSON
+text inside the 24 KiB document, never as nested values; when the row would
+not fit, the result goes first (the view then receives the text result,
+marked truncated), then the input (a truncation marker), then most of the
+fallback. A result flagged `isError` publishes nothing. View-originated calls never publish
 rows; their results go to that frame only. The row shows the binding name,
 the granted capabilities in one line, and Run; a view starts only when
-tapped, counts against the page's runtime slots, and stops out of view.
-Where phase C is not admitted (§9) the row shows the tool's text result.
+tapped, counts against the page's runtime slots and the single full-app
+ownership it shares with `dom_app`, and stops out of view. Where phase C is
+not admitted (§9) the row shows the tool's text result.
+
+A view's `ui/message` reuses the phase A confirmation and outbox with the
+identity `mcp_app:<view sha256>` and carries its frame lease; the Controller
+requires a live lease of exactly that view whose grant includes `message`.
+A view's `tools/call` goes to `POST …/mcp-apps/frames/{lease}/call`: a
+read-only tool runs at once, any other answers `confirm` with a digest bound
+to the lease, tool and exact arguments, and runs only when the confirmed
+request carries it. A dispatched call whose outcome is unknown answers
+`uncertain` and is never retried. `ui/open-link` is admitted by
+`…/open-link` (HTTPS without credentials) and opened through Cowboy's
+opener.
 
 ## 9. Compatibility profile and admission
 
@@ -318,7 +343,16 @@ requires, on that browser:
       an undeclared tool or a revoked binding grants nothing. Done (this
       revision). The browser network and navigation rows need the bridge
       and move to step 3, where a frame is driven by the real Web host.
-3. Bridge, scope-bound `tools/call`, transcript row; the SDK fixture rows.
+3. Bridge, scope-bound `tools/call`, transcript row. Done (this revision):
+   view scopes (`mcp_bindings/relay/view.rs`: own process per session and
+   binding under the parent's grant and connection, backend handshake, one
+   request at a time, Controller-owned dispatch, idle and unleased close);
+   effects under the lease (`mcp_bindings/apps_bridge.rs`); transcript rows
+   (`apps_rows.rs`); the Web bridge (`web/src/widgets/dom/mcpAppBridge.ts`,
+   `mcpAppHost.ts`, `WidgetMcpApp.tsx`) with its protocol tests. Open: the
+   §9 browser rows (pinned SDK fixture view driven through a real Web host);
+   until a browser passes them `mcpAppsEnabled.ts` admits none and every row
+   shows its text result. App-only tools need the Machine change of §3.
 4. A real native-binding test with the retained execution executable (not a
    standalone SDK view), then the first view: a Suger status view granted on
    one session.

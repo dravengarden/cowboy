@@ -13,8 +13,11 @@ export type AppMessageTarget = {
   widgetId: string;
   nodeId: string;
   code: string;
-  /** A `dom_app` identity is `dom_app:<hex>`, never a plain digest. */
-  kind?: "app" | "dom_app";
+  /** A `dom_app` identity is `dom_app:<hex>`, never a plain digest. An
+   *  `mcp_app` passes its signed view's digest as `code` and its frame
+   *  lease: its identity is `mcp_app:<hex>`. */
+  kind?: "app" | "dom_app" | "mcp_app";
+  lease?: string;
 };
 
 /** One confirmation: frozen when the app asked, sent unchanged. */
@@ -30,6 +33,8 @@ export type PendingAppMessage = {
   state: "confirming" | "sending";
   /** When the person confirmed it; old uncertain sends are given up. */
   savedAtMs?: number;
+  /** An `mcp_app` view's frame lease (docs/widget-apps-mcp.md §6). */
+  lease?: string;
 };
 
 export type AppMessageResult =
@@ -97,10 +102,15 @@ export async function prepareAppMessage(
     widgetId: target.widgetId,
     nodeId: target.nodeId,
     codeSha256:
-      target.kind === "dom_app" ? `dom_app:${await sha256(target.code)}` : await sha256(target.code),
+      target.kind === "mcp_app"
+        ? `mcp_app:${target.code}`
+        : target.kind === "dom_app"
+          ? `dom_app:${await sha256(target.code)}`
+          : await sha256(target.code),
     text,
     textSha256: await sha256(text),
     state: "confirming",
+    ...(target.lease ? { lease: target.lease } : {}),
   };
 }
 
@@ -140,6 +150,8 @@ const REFUSALS: Readonly<Record<string, string>> = {
   invalid_message: "The app's message contains characters Cowboy will not send.",
   context_pending: "Finish the pending context change first.",
   session_unavailable: "This session cannot take messages now.",
+  lease_ended: "This view stopped, so its message was not sent.",
+  not_granted: "This view is not allowed to send messages.",
 };
 
 function url(pending: PendingAppMessage): string {
@@ -187,6 +199,7 @@ async function transmit(pending: PendingAppMessage): Promise<AppMessageResult> {
       occurrence: sending.occurrence,
       text: sending.text,
       message_sha256: sending.textSha256,
+      ...(sending.lease ? { lease: sending.lease } : {}),
     });
   } catch {
     // Uncertain: keep the outbox entry so a retry is the same prompt.

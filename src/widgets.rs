@@ -185,6 +185,9 @@ struct Budget {
     items: usize,
     images: usize,
     ids: HashSet<String>,
+    /// Set only for documents the Controller writes itself: `mcp_app` rows
+    /// (docs/widget-apps-mcp.md §8) are never written by an agent.
+    cowboy: bool,
 }
 
 fn cell(value: &Value, path: &str) -> Checked {
@@ -425,11 +428,78 @@ fn app(node: &Map<String, Value>, path: &str, budget: &mut Budget) -> Checked {
     )
 }
 
+/// Bounds of the tool input and result an `mcp_app` row carries, each as
+/// serialized JSON text so arbitrary server JSON never meets the depth rule.
+pub const MCP_APP_INPUT_BYTES: usize = 8 * 1024;
+pub const MCP_APP_RESULT_BYTES: usize = 12 * 1024;
+
+fn hex64(value: Option<&Value>) -> bool {
+    value.and_then(Value::as_str).is_some_and(|text| {
+        text.len() == 64
+            && text
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
+fn mcp_app(node: &Map<String, Value>, path: &str, budget: &mut Budget) -> Checked {
+    let field = |name: &str| format!("{path}.{name}");
+    budget.apps += 1;
+    if budget.apps > 1 {
+        return Err(Invalid::at(path, "at most one app per widget"));
+    }
+    if !node.get("id").and_then(Value::as_str).is_some_and(valid_id) {
+        return Err(Invalid::at(&field("id"), "required on an app"));
+    }
+    line(node.get("title"), &field("title"), TITLE_CHARS, false)?;
+    text(
+        node.get("fallback"),
+        &field("fallback"),
+        FALLBACK_CHARS,
+        false,
+    )?;
+    for name in ["binding", "tool"] {
+        if !node.get(name).and_then(Value::as_str).is_some_and(valid_id) {
+            return Err(Invalid::at(&field(name), "expected a name"));
+        }
+    }
+    line(node.get("uri"), &field("uri"), LABEL_CHARS, false)?;
+    if !hex64(node.get("sha256")) {
+        return Err(Invalid::at(&field("sha256"), "expected a SHA-256 digest"));
+    }
+    if !node
+        .get("epoch")
+        .and_then(Value::as_str)
+        .is_some_and(crate::mcp_binding::valid_epoch)
+    {
+        return Err(Invalid::at(&field("epoch"), "expected a policy epoch"));
+    }
+    text(
+        node.get("input"),
+        &field("input"),
+        MCP_APP_INPUT_BYTES,
+        false,
+    )?;
+    match node.get("result") {
+        Some(Value::Null) => {}
+        Some(Value::String(result)) if result.len() <= MCP_APP_RESULT_BYTES => {}
+        _ => {
+            return Err(Invalid::at(
+                &field("result"),
+                "expected bounded JSON text or null",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn leaf(node: &Map<String, Value>, kind: &str, path: &str, budget: &mut Budget) -> Checked {
     let field = |name: &str| format!("{path}.{name}");
     match kind {
         "divider" => Ok(()),
         "app" | "dom_app" => app(node, path, budget),
+        "mcp_app" if budget.cowboy => mcp_app(node, path, budget),
+        "mcp_app" => Err(Invalid::at(path, "mcp_app rows are written only by Cowboy")),
         "text" => {
             text(node.get("text"), &field("text"), TEXT_CHARS, false)?;
             one_of(
@@ -632,6 +702,19 @@ fn json_depth(value: &Value) -> usize {
 /// # Errors
 /// The first violated rule, addressed by path.
 pub fn validate(document: &Value) -> Result<(), Invalid> {
+    validate_with(document, false)
+}
+
+/// The rules of a document the Controller writes itself; it may carry an
+/// `mcp_app` node, which agents can neither publish nor patch.
+///
+/// # Errors
+/// The first violated rule, addressed by path.
+pub fn validate_cowboy(document: &Value) -> Result<(), Invalid> {
+    validate_with(document, true)
+}
+
+fn validate_with(document: &Value, cowboy: bool) -> Result<(), Invalid> {
     let map = object(document, "document")?;
     if map.get("schema").and_then(Value::as_str) != Some(SCHEMA) {
         return Err(Invalid::at("schema", "expected cowboy.widget/1"));
@@ -644,7 +727,10 @@ pub fn validate(document: &Value) -> Result<(), Invalid> {
     }
     line(map.get("title"), "title", TITLE_CHARS, false)?;
     line(map.get("summary"), "summary", SUMMARY_CHARS, true)?;
-    let mut budget = Budget::default();
+    let mut budget = Budget {
+        cowboy,
+        ..Budget::default()
+    };
     node(
         map.get("root").unwrap_or(&Value::Null),
         "root",

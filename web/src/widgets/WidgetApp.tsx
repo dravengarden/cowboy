@@ -81,18 +81,23 @@ export function useAppSend(
   // in the outbox).
   const generation = useRef(0);
   const onSend = target
-    ? (text: string, code: string, kind: "app" | "dom_app" = "app"): void => {
+    ? (
+        text: string,
+        code: string,
+        kind: "app" | "dom_app" | "mcp_app" = "app",
+        lease?: string,
+      ): boolean => {
         const now = Date.now();
-        if (slot.current || now - last.current < CONFIRM_INTERVAL_MS) return;
+        if (slot.current || now - last.current < CONFIRM_INTERVAL_MS) return false;
         const problem = appMessageProblem(text);
         if (problem) {
           setNotice(problem);
-          return;
+          return false;
         }
         slot.current = true;
         last.current = now;
         const current = generation.current;
-        void prepareAppMessage({ ...target, code, kind }, text).then(
+        void prepareAppMessage({ ...target, code, kind, ...(lease ? { lease } : {}) }, text).then(
           (prepared) => {
             if (generation.current === current) setPending(prepared);
             else slot.current = false;
@@ -101,6 +106,7 @@ export function useAppSend(
             slot.current = false;
           },
         );
+        return true;
       }
     : undefined;
   const close = (): void => {

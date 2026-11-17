@@ -17,6 +17,9 @@ pub(super) struct Admission {
     binding: Binding,
     deadline: Instant,
     pub(super) changes: tokio::sync::watch::Receiver<()>,
+    /// A view scope's app projection (docs/widget-apps-mcp.md §3): replaces
+    /// the agent's tools in the process profile; `None` for the agent scope.
+    view_tools: Option<Vec<String>>,
 }
 
 impl Policies {
@@ -48,6 +51,7 @@ impl Policies {
             stored,
             binding,
             deadline: Instant::now() + ADMISSION_LIFETIME,
+            view_tools: None,
         })
     }
 }
@@ -55,13 +59,30 @@ impl Policies {
 impl Admission {
     pub(super) fn renewal(&self, policies: &Policies, hub: &Hub) -> Result<Self, &'static str> {
         self.current(policies, hub)?;
-        policies.admit(
+        let mut renewed = policies.admit(
             hub,
             &self.session,
             &self.runtime_machine,
             &self.stored.epoch,
             &self.binding.name,
-        )
+        )?;
+        renewed.view_tools.clone_from(&self.view_tools);
+        Ok(renewed)
+    }
+
+    /// The session and binding this admission serves.
+    pub(super) fn names(&self) -> (&str, &str) {
+        (&self.session, &self.binding.name)
+    }
+
+    pub(super) fn is_view(&self) -> bool {
+        self.view_tools.is_some()
+    }
+
+    /// The same admission for a view scope whose process admits only `tools`.
+    pub(super) fn for_view(mut self, tools: Vec<String>) -> Self {
+        self.view_tools = Some(tools);
+        self
     }
 
     pub(super) fn commit_renewal(
@@ -76,6 +97,7 @@ impl Admission {
             || self.binding != candidate.binding
             || self.session != candidate.session
             || self.runtime_machine != candidate.runtime_machine
+            || self.view_tools != candidate.view_tools
         {
             return Err("binding_changed");
         }
@@ -99,7 +121,13 @@ impl Admission {
             execution_machine: self.stored.placement.execution_machine.clone(),
             workspace_id: self.stored.placement.workspace.clone(),
             epoch: self.stored.epoch.clone(),
-            binding: self.binding.clone(),
+            binding: match &self.view_tools {
+                Some(tools) => crate::mcp_binding::Binding {
+                    tools: tools.clone(),
+                    ..self.binding.clone()
+                },
+                None => self.binding.clone(),
+            },
         }
     }
 

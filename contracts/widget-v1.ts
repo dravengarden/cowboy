@@ -246,7 +246,8 @@ export type Node =
   | MediaNode
   | InputNode
   | AppNode
-  | DomAppNode;
+  | DomAppNode
+  | McpAppNode;
 
 // Layout. A container adapts to the width it is actually given (a phone, a
 // split Desktop pane, an inspector), never to a surface name; documents
@@ -409,6 +410,25 @@ export type DomAppNode = NodeBase &
   Omit<AppNode, "type"> & {
     type: "dom_app";
   };
+
+/** A signed MCP Apps view (docs/widget-apps-mcp.md §8). Written only by the
+ *  Controller, after an agent's call of a tool whose signed view the session
+ *  grants; agents can neither publish nor patch one. `input` and `result` are
+ *  that call's arguments and result as JSON text (`result` is null when it was
+ *  too large); `sha256` is the digest of the signed view's bytes. */
+export type McpAppNode = NodeBase & {
+  type: "mcp_app";
+  id: string;
+  title: string;
+  fallback: string;
+  binding: string;
+  tool: string;
+  uri: string;
+  sha256: string;
+  epoch: string;
+  input: string;
+  result: string | null;
+};
 
 // Input. A tap resolves to an `Action`. The only path back to the agent is
 // `prompt`, and it carries no hidden text: the Controller composes the user

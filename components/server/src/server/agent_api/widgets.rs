@@ -9,7 +9,7 @@ use crate::widgets;
 
 /// Orders each widget's store write before its transcript push, so a later
 /// snapshot can never be fanned out before an earlier one.
-pub(super) static WIDGET_WRITES: LazyLock<tokio::sync::Mutex<()>> =
+pub(in crate::server) static WIDGET_WRITES: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// A write whose commit state is unknown: log the cause, report it opaquely.
@@ -39,7 +39,7 @@ fn meta_view(widget: &StoredWidget) -> Value {
     })
 }
 
-pub(super) fn push(
+pub(in crate::server) fn push(
     state: &AppState,
     session_id: &str,
     widget: &StoredWidget,

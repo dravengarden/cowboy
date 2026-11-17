@@ -75,6 +75,14 @@ pub(crate) struct Granted {
     pub(crate) epoch: String,
     pub(crate) html: Arc<String>,
     pub(crate) capabilities: AppCapabilities,
+    /// The granted tools whose signed `readOnlyHint` is set: called without a
+    /// per-call confirmation (§4).
+    pub(crate) read_only: Vec<String>,
+    /// The granted tools a current Machine can serve in a view scope: those
+    /// also visible to the model. App-only tools need a Machine whose view
+    /// profiles skip the agent-visibility rule; until then they are refused
+    /// before anything is dispatched.
+    pub(crate) relayable: Vec<String>,
 }
 
 pub(crate) fn current_grant(
@@ -115,10 +123,26 @@ pub(crate) fn current_grant(
     {
         return Err("undeclared_tool");
     }
+    let read_only = grant
+        .capabilities
+        .call_tools
+        .iter()
+        .filter(|tool| contract.read_only(tool))
+        .cloned()
+        .collect();
+    let relayable = grant
+        .capabilities
+        .call_tools
+        .iter()
+        .filter(|tool| contract.model_visible(tool))
+        .cloned()
+        .collect();
     Ok(Granted {
+        relayable,
         epoch: stored.epoch,
         html: Arc::new(view.html.clone()),
         capabilities: grant.capabilities.clone(),
+        read_only,
     })
 }
 
@@ -180,6 +204,14 @@ impl Frames {
             .map(|entry| entry.scope.clone())
     }
 
+    /// Whether any frame of `binding` in `session` holds a live lease.
+    pub(crate) fn leased(&self, session: &str, binding: &str) -> bool {
+        let now = Instant::now();
+        self.state.lock().leases.values().any(|entry| {
+            entry.expires > now && entry.scope.session == session && entry.scope.binding == binding
+        })
+    }
+
     fn renew(&self, lease: &str, scope: &Scope) -> bool {
         let now = Instant::now();
         let mut state = self.state.lock();
@@ -215,7 +247,7 @@ pub(super) struct FrameRequest {
     uri: String,
 }
 
-fn owner_session(
+pub(super) fn owner_session(
     state: &AppState,
     auth: &AuthenticatedProductRequest,
     session: &str,
@@ -237,10 +269,12 @@ fn owner_session(
     }
 }
 
-fn refused(code: &'static str) -> Response {
+pub(super) fn refused(code: &'static str) -> Response {
     let status = match code {
         "too_many_frames" => StatusCode::TOO_MANY_REQUESTS,
-        "release_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+        "release_unavailable" | "mcp_capacity" => StatusCode::SERVICE_UNAVAILABLE,
+        "not_granted" => StatusCode::FORBIDDEN,
+        "mcp_busy" => StatusCode::TOO_MANY_REQUESTS,
         _ => StatusCode::CONFLICT,
     };
     (status, Json(json!({"error":code}))).into_response()
@@ -579,6 +613,47 @@ mod tests {
 
         let granted = current_grant(&hub, &catalog, &meta.id, "view", "ui://view/status").unwrap();
         assert_eq!(granted.html.as_str(), VIEW);
+        // `view_refresh` is app-only and not read-only: every call needs a
+        // confirmation, and a current Machine cannot serve it in a view scope.
+        assert!(granted.read_only.is_empty() && granted.relayable.is_empty());
+        // No agent call of a tool without a view publishes a row; the
+        // granted view's tool does, bound to the signed bytes and epoch.
+        let result = json!({"content":[{"type":"text","text":"green"}]});
+        let result = result.as_object().unwrap();
+        let params = json!({"name":"view_status","arguments":{"q":1}});
+        assert!(
+            super::super::apps_rows::row(
+                &hub,
+                &catalog,
+                &meta.id,
+                "view",
+                "view_refresh",
+                &params,
+                result
+            )
+            .is_none()
+        );
+        let row = super::super::apps_rows::row(
+            &hub,
+            &catalog,
+            &meta.id,
+            "view",
+            "view_status",
+            &params,
+            result,
+        )
+        .unwrap();
+        crate::widgets::validate_cowboy(&row).unwrap();
+        assert_eq!(row["root"]["uri"], "ui://view/status");
+        assert_eq!(row["root"]["epoch"], stored.epoch.as_str());
+        assert_eq!(row["root"]["fallback"], "green");
+        assert_eq!(
+            row["root"]["sha256"],
+            format!(
+                "{:x}",
+                <sha2::Sha256 as sha2::Digest>::digest(VIEW.as_bytes())
+            )
+        );
         assert_eq!(granted.epoch, stored.epoch);
         assert!(current_grant(&hub, &catalog, &meta.id, "view", "ui://view/other").is_err());
         assert!(current_grant(&hub, &catalog, &meta.id, "other", "ui://view/status").is_err());
@@ -649,7 +724,17 @@ mod tests {
         );
 
         // A grant naming a tool the signed contract does not offer to views grants nothing.
-        let mut model_only = super::super::tests::update(Some(replaced.epoch), vec![binding]);
+        let mut model_only =
+            super::super::tests::update(Some(replaced.epoch), vec![binding.clone()]);
+        model_only.apps = grant(json!(["view_status"]));
+        let both = policies
+            .replace(&hub, &store, &meta, model_only)
+            .await
+            .unwrap();
+        let granted = current_grant(&hub, &catalog, &meta.id, "view", "ui://view/status").unwrap();
+        assert_eq!(granted.read_only, ["view_status"]);
+        assert_eq!(granted.relayable, ["view_status"]);
+        let mut model_only = super::super::tests::update(Some(both.epoch), vec![binding]);
         model_only.apps = grant(json!(["view_status", "unsigned"]));
         let revoked = policies
             .replace(&hub, &store, &meta, model_only)
