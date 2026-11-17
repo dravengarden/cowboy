@@ -14,6 +14,7 @@ import { SubscriptionSignInHandoff } from "./SubscriptionSignInHandoff";
 import { SubscriptionLogin, SubscriptionLoginForm } from "./SubscriptionLogin";
 import { subscriptionLoginIsolationBrowser } from "./subscriptionLoginIsolationBrowser";
 import { accountIdentityBrowser } from "./accountIdentityBrowser";
+import { remoteClipboardBrowser } from "./machineBrowser/remoteClipboardBrowser";
 export { accountIdentityBrowser };
 
 function SubscriptionPicker({ desktop }: { desktop: boolean }): React.JSX.Element {
@@ -29,6 +30,7 @@ export async function runSubscriptionsBrowserConformance(observe?: (surface: str
     checks.push(...(await runSurface(surface, observe)).map((check) => `${surface}: ${check}`));
   }
   checks.push(...await accountIdentityBrowser(observe));
+  checks.push(...await remoteClipboardBrowser());
   return checks;
 }
 

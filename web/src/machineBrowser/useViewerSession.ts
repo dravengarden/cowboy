@@ -25,7 +25,7 @@ export interface ViewerCallbacks {
    * `resumable`: the connection dropped, nothing ended the browser or
    * refused this device. */
   onEnded(message: string, resumable: boolean): void;
-  onRemoteClipboard(text: string | undefined): void;
+  onRemoteClipboard(text: string): void;
   onNotice(message: string): void;
 }
 
@@ -154,7 +154,6 @@ export function useViewerSession({
       sessionRef.current = undefined;
       setConnected(false);
       setAttachmentId(undefined);
-      latest.current.onRemoteClipboard(undefined);
     };
   }, [account, containerRef, incarnation, instance_id, machineId, screenRef, takeover]);
   useEffect(() => {

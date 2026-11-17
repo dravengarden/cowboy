@@ -1160,7 +1160,7 @@ whose browser it displays and the Machine it runs on.
   connected, and act only on the viewer mounted for the shown account,
   Machine and instance. The "More" menu holds Hibernate, Save snapshot,
   Restart for this screen (on a scale mismatch), Stop viewing, Reset
-  profile, Paste from this device…, Copy remote clipboard to this device,
+  profile, Paste from this device…, Remote clipboard…,
   Refresh state and Close; inapplicable entries are disabled. Without an
   attached display the frame shows a browser-like empty page naming the
   state and Machine with one primary action (Open browser, the Machine
@@ -1350,11 +1350,24 @@ whose browser it displays and the Machine it runs on.
   Ctrl+V and Return, so a copied sign-in link opens without first tapping
   the address bar.
 - **Remote clipboard.** Xvnc forwards only explicit copies (`SendPrimary=0`).
-  A received cut text is held in viewer memory for the open attachment and
-  offered as the explicit "Copy remote clipboard (n characters) to this
-  device" menu action. It is never wired into any dialog or login: a sign-in
-  code field is filled only by the person pasting it. The held text is
-  dropped on attachment or incarnation change and when the viewer closes.
+  Each copy becomes a clip (`remoteClips.ts`) and raises a prompt at the
+  bottom of the frame ("Copied in the browser", a one-line preview, Copy and
+  dismiss) for 10 s. One tap copies it to this device; Safari and iOS allow
+  a clipboard write only inside a tap, so nothing is copied by itself. When
+  the device refuses the write, the clip opens in the "Remote clipboard"
+  sheet, selected in a read-only field for the system's own Copy (with a
+  Select all button). The sheet, also reachable from the menu, lists the
+  panel's last 10 copies (at most 1,000,000 characters together, the newest
+  always kept whole) with their length and age, each copyable or expandable
+  to its full text, and Clear all. The same text as the newest clip (the
+  display server re-announcing its clipboard after a reconnect) is not a new
+  copy, and text this device itself just put on the remote clipboard is not
+  offered back. Clips are held in panel memory only, never persisted or sent
+  anywhere and never wired into any dialog or login (a sign-in code field is
+  filled only by the person pasting it). They survive viewer reconnects,
+  hibernation and reopen, so a reclaim or a dropped connection does not lose
+  a copy, and are dropped when the panel closes or binds another account or
+  browser identity.
 - **Passkeys** are not transported by RFB; use the email or one-time-code
   path inside the browser.
 - **First Machine.** When the state read reports `choose_machine` (never
@@ -1633,7 +1646,7 @@ table, "account" means browser identity:
 | Abstract Unix sockets, UDP sockets of any kind, TCP listeners | denied by the sealed profile (DNS goes over TCP through the artifact's glibc); the Machine's recursive socket scan is the evidence |
 | Control and RFB sockets | per instance, inside the unit's 0700 `RuntimeDirectory`, read-only to every sealed process once created; reachable only through that host path (the same-user boundary below) |
 | Memory and CPU accounting | one systemd unit and cgroup per instance; `max_instances` may allow several at once, each in its own namespaces |
-| Remote clipboard | held per attachment in the viewer, never shared between accounts, dropped on attachment or incarnation change, never wired into a login; the owner's device clipboard is only ever pasted by an explicit action |
+| Remote clipboard | held in the open panel's memory (last 10 copies), never shared between accounts or browser identities, kept across reconnects and hibernation, dropped when the panel closes or re-binds, never persisted and never wired into a login; the owner's device clipboard is only ever pasted by an explicit action |
 | Runtime files (browser, fonts, policy, glibc) | shared read-only artifact; they carry no state |
 | Legacy default cards | each card has its own derived browser key, so its profile, placement, instance, unit and viewer are those of a distinct account; the key never equals a registry account, another card's key or the legacy default's native credential directory ([Legacy default cards](#legacy-default-cards)) |
 | Shared browser profiles | only by the owner's explicit choice, only between members of distinct families, and only through the share's own derived key; members' own profiles are never copied into it or deleted by it ([Shared browser profiles](#shared-browser-profiles)) |

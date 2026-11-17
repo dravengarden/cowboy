@@ -4,7 +4,7 @@
  * banners so the frame (and the framebuffer size it requests) never moves. */
 import { GroupsRounded, PublicOutlined } from "@mui/icons-material";
 import { Alert, Box, Button, Stack, Typography } from "@mui/material";
-import { type RefObject, Suspense, lazy } from "react";
+import { type ReactNode, type RefObject, Suspense, lazy } from "react";
 import { type BrowserStateEvent, browserErrorText } from "./api";
 import { type ViewerControls, browserStateSummary } from "./browserChrome";
 import { type BrowserModel, browserRunning } from "./browserModel";
@@ -187,6 +187,8 @@ export interface BrowserFrameProps {
   onKeyboard: (open: boolean) => void;
   /** The shared browser this card uses, if any. */
   shared?: SharedBrowser | undefined;
+  /** Floats over the bottom of the frame (the remote copy prompt). */
+  overlay?: ReactNode;
 }
 
 /** The frame is the measured area: opens request the screen mode for it and
@@ -226,7 +228,9 @@ export function BrowserFrame(props: BrowserFrameProps): React.JSX.Element {
             onEnded={(message, resumable) =>
               dispatch({ type: "viewer_ended", message, resumable, now: Date.now() })
             }
-            onRemoteClipboard={(text) => dispatch({ type: "remote_clipboard", text })}
+            onRemoteClipboard={(text) =>
+              dispatch({ type: "remote_clipboard", text, now: Date.now() })
+            }
             onNotice={commands.notice}
             onControls={props.onControls}
             onKeyboard={props.onKeyboard}
@@ -247,6 +251,7 @@ export function BrowserFrame(props: BrowserFrameProps): React.JSX.Element {
         />
       )}
       <BrowserBanners model={model} retry={props.retry} commands={commands} />
+      {props.overlay}
     </Box>
   );
 }

@@ -65,16 +65,16 @@ test("opening account A's panel then account B's never carries A's browser into 
   let a = send(A, {
     kind: "event",
     account: A,
-    event: { type: "remote_clipboard", text: "secret-of-A" },
+    event: { type: "remote_clipboard", text: "secret-of-A", now: 1 },
   });
   assertEquals(shownTarget(a)?.machine_id, "hawk");
-  assertEquals(a.remoteClipboard, "secret-of-A");
+  assertEquals(a.clips?.items[0]?.text, "secret-of-A");
 
   // Before the panel is bound to B, B is shown nothing of A's.
   assertEquals(modelFor(state, B), INITIAL_BROWSER_MODEL);
   let b = send(B, { kind: "bind", account: B });
   assertEquals(b, INITIAL_BROWSER_MODEL);
-  assertEquals(b.remoteClipboard, undefined);
+  assertEquals(b.clips, undefined);
   assertEquals(shownTarget(b), undefined);
   // B's first read is not pinned to A's Machine, and nothing can be reset
   // or commanded with A's revision or instance.
@@ -87,7 +87,7 @@ test("opening account A's panel then account B's never carries A's browser into 
     { type: "result", action: "open", result: openA, now: 2 },
     { type: "read", read: { ...openA, placements: [], admission: null }, now: 2 },
     { type: "stream_state", state: openA.state },
-    { type: "remote_clipboard", text: "late-secret-of-A" },
+    { type: "remote_clipboard", text: "late-secret-of-A", now: 2 },
     { type: "attach", takeover: true },
   ] as const) {
     b = send(B, { kind: "event", account: A, event });
@@ -104,7 +104,7 @@ test("opening account A's panel then account B's never carries A's browser into 
   const target = shownTarget(b);
   assertEquals(target?.machine_id, "ovh");
   assertEquals(target?.instance.instance_id, "b-bbbbbbbbbbbbbbbbbbbbbbbb");
-  assertEquals(b.remoteClipboard, undefined);
+  assertEquals(b.clips, undefined);
   const url = new URL(
     browserStreamUrl(B, target!, { width: 800, height: 600, scale: 1 }, false, {
       protocol: "https:",

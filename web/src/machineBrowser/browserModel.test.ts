@@ -120,14 +120,15 @@ test("hibernated, stopping and superseded states end the viewer and keep the las
     { type: "attach", takeover: true },
   );
   assertEquals(attached.viewer, { takeover: true, generation: 1, target: shown(), since: 1 });
-  const held = reduceBrowser(attached, { type: "remote_clipboard", text: "code-1" });
-  assertEquals(held.remoteClipboard, "code-1");
+  const held = reduceBrowser(attached, { type: "remote_clipboard", text: "code-1", now: 2 });
+  assertEquals(held.clips?.items[0]?.text, "code-1");
   const hibernated = reduceBrowser(held, {
     type: "stream_state",
     state: event("hibernated", { reason: "grace" }),
   });
   assertEquals(hibernated.viewer, undefined);
-  assertEquals(hibernated.remoteClipboard, undefined);
+  // A hibernation (memory reclaim, grace) keeps what was copied.
+  assertEquals(hibernated.clips, held.clips);
   assertEquals(hibernated.read?.state?.state, "hibernated");
   assertEquals(hibernated.notice.includes("Nobody was attached"), true);
   const superseded = reduceBrowser(held, {
@@ -142,10 +143,10 @@ test("hibernated, stopping and superseded states end the viewer and keep the las
     state: event("attached", { geometry: { width: 800, height: 600 } }),
   });
   assertEquals(running.viewer, attached.viewer);
-  assertEquals(running.remoteClipboard, "code-1");
+  assertEquals(running.clips, held.clips);
 });
 
-test("a closed stream clears the viewer and its clipboard with a visible message", () => {
+test("a closed stream clears the viewer, keeps the copies and shows a message", () => {
   // Nothing shown names an instance: there is nothing to attach to.
   assertEquals(
     reduceBrowser(INITIAL_BROWSER_MODEL, { type: "attach", takeover: false }).viewer,
@@ -155,12 +156,19 @@ test("a closed stream clears the viewer and its clipboard with a visible message
     reduceBrowser(INITIAL_BROWSER_MODEL, { type: "read", read: read(event("detached")), now: 1 }),
     { type: "attach", takeover: false },
   );
-  const ended = reduceBrowser(reduceBrowser(attached, { type: "remote_clipboard", text: "x" }), {
+  const copied = reduceBrowser(attached, { type: "remote_clipboard", text: "x", now: 2 });
+  const ended = reduceBrowser(copied, {
     type: "viewer_ended",
     message: "Sign in again to continue.",
   });
   assertEquals(ended.viewer, undefined);
-  assertEquals(ended.remoteClipboard, undefined);
+  assertEquals(ended.clips, copied.clips);
+  // Reattaching keeps them; the owner's clear (or closing the panel) drops them.
+  const reattached = reduceBrowser(ended, { type: "attach", takeover: false });
+  assertEquals(reattached.clips, copied.clips);
+  assertEquals(reduceBrowser(reattached, { type: "clips_clear" }).clips, undefined);
+  const offer = copied.clips?.offer ?? 0;
+  assertEquals(reduceBrowser(copied, { type: "clip_settled", id: offer }).clips?.offer, undefined);
   assertEquals(ended.notice, "Sign in again to continue.");
   assertEquals(reduceBrowser(ended, { type: "dismiss" }).notice, "");
   const failed = reduceBrowser(reduceBrowser(attached, { type: "busy", action: "reset" }), {

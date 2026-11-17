@@ -144,7 +144,7 @@ export function chromeState(
     restart: idle && running && state?.scale !== undefined && state.scale !== preferredScale,
     reset: idle && resettable,
     paste: connected,
-    copy: model.remoteClipboard !== undefined,
+    copy: (model.clips?.items.length ?? 0) > 0,
     refresh: idle,
   };
 }
